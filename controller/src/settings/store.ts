@@ -11,6 +11,7 @@ import { DEFAULTS } from './defaults.js';
 // The loaded settings. Null until load() has run. Only settings.ts writes it,
 // and only through setCache() — everything else reads via get()/peek().
 let cache: any = null;
+const cacheListeners = new Set<() => void>();
 
 // The raw cache, null included. Callers that must distinguish "not loaded yet"
 // from "loaded" want this; everyone else wants get(), which substitutes the
@@ -19,9 +20,24 @@ export function peek(): any {
   return cache;
 }
 
+// Subscribe to effective settings publication. Listeners run synchronously so
+// rapid A -> B -> A changes cannot collapse into one final-state observation.
+// A broken listener is isolated: publishing operator settings must still finish.
+export function onCacheChange(listener: () => void): () => void {
+  cacheListeners.add(listener);
+  return () => cacheListeners.delete(listener);
+}
+
 // The single writer, called by load() and update() in settings.ts.
 export function setCache(next: any): any {
   cache = next;
+  for (const listener of cacheListeners) {
+    try {
+      listener();
+    } catch (err) {
+      console.error('[settings] cache listener failed:', (err as Error).message);
+    }
+  }
   return cache;
 }
 

@@ -8,7 +8,8 @@
 import * as library from '../../music/library.js';
 import * as settings from '../../settings.js';
 import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
-import type { Track } from './types.js';
+import type { QueueItem, Track } from './types.js';
+import type { HostSpeechStamp } from '../session.js';
 
 interface TransitionItem {
   track: Track;
@@ -313,6 +314,28 @@ export function shouldDropStaleLink(
   if (!item?.linkPrev) return false;
   if (sameTrack(item.linkPrev, predecessor)) return false;   // names the right track → fine
   return mentionsTrack(item.introScript, item.linkPrev);     // wrong predecessor — only drop if it's actually named
+}
+
+// Ordinary speech explicitly owned by the live show's host becomes obsolete
+// when that host epoch changes. Legacy AI links have no revision stamp, so only
+// a known author mismatch within the same live show is safe to drop. Missing
+// legacy identity fails open and independent/manual speech never opts in.
+export function shouldDropObsoleteHostSpeech(
+  item: Pick<QueueItem, 'introHostSpeech' | 'aiPicked' | 'introKind' | 'requestedBy' | 'introPersona' | 'introSessionKey'> | null,
+  live: HostSpeechStamp | null,
+): boolean {
+  if (!item || !live) return false;
+  if (item.introHostSpeech) {
+    const stamp = item.introHostSpeech;
+    if (stamp.showKey !== live.showKey) return false;
+    return stamp.personaId !== live.personaId || stamp.revision !== live.revision;
+  }
+  const legacyOrdinaryLink = item.aiPicked === true
+    && item.introKind === 'link'
+    && !item.requestedBy;
+  if (!legacyOrdinaryLink || !item.introPersona?.id) return false;
+  if (item.introSessionKey && item.introSessionKey !== live.showKey) return false;
+  return item.introPersona.id !== live.personaId;
 }
 
 // A link is editorially written for one show session. Its audio may remain

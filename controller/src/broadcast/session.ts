@@ -16,6 +16,12 @@ import { nextShowBoundaryMs } from './show-boundary.js';
 // Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
 
+export interface HostSpeechStamp {
+  readonly showKey: string;
+  readonly personaId: string | null;
+  readonly revision: number;
+}
+
 interface Scenario {
   period: string | null;
   vibe: string | null;
@@ -107,6 +113,7 @@ interface Session {
   handoffAired?: boolean;
   rolledFrom?: RolledFrom | null;
   boundaryHandoff?: BoundaryHandoff | null;
+  hostRevision?: number;
 }
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
@@ -223,11 +230,67 @@ async function archive(s: Session | null) {
   } catch {}
 }
 
+function normalizedHostRevision(value: unknown): number {
+  const revision = Number(value);
+  return Number.isFinite(revision) && revision >= 0 ? Math.floor(revision) : 0;
+}
+
+// Refresh the compact host identity without rolling the editorial session. Only
+// the same active scheduled show is eligible; a look-ahead session on the other
+// side of a real boundary remains authoritative until the clock catches up.
+export function refreshHost(at: Date = new Date()): boolean {
+  const s = _session;
+  if (!s || !s.key.startsWith('show:')) return false;
+  const show = settings.resolveActiveShow(at);
+  if (!show || `show:${show.id}` !== s.key) return false;
+  const persona = settings.getEffectivePersona(at);
+  const previousId = s.persona?.id ?? null;
+  const nextId = persona?.id ?? null;
+  s.hostRevision = normalizedHostRevision(s.hostRevision);
+  if (previousId === nextId) return false;
+  const previousName = s.persona?.name ?? null;
+  s.persona = persona ? { id: persona.id, name: persona.name } : null;
+  s.hostRevision += 1;
+  appendTurn({
+    role: 'event',
+    kind: 'scenario',
+    text: `Host changed from ${previousName || 'the default DJ'} to ${persona?.name || 'the default DJ'} while the show continues.`,
+  });
+  logEvent('session.host-refresh', {
+    sessionId: s.id, key: s.key, previousPersonaId: previousId, personaId: nextId,
+    hostRevision: s.hostRevision,
+  });
+  schedulePersist();
+  return true;
+}
+
+export function captureHostSpeech(): HostSpeechStamp | null {
+  refreshHost();
+  const s = _session;
+  if (!s || !s.key.startsWith('show:')) return null;
+  return {
+    showKey: s.key,
+    personaId: s.persona?.id ?? null,
+    revision: normalizedHostRevision(s.hostRevision),
+  };
+}
+
+export function isHostSpeechCurrent(stamp: HostSpeechStamp | null | undefined): boolean {
+  if (!stamp) return true;
+  refreshHost();
+  const s = _session;
+  return !!s
+    && s.key === stamp.showKey
+    && (s.persona?.id ?? null) === stamp.personaId
+    && normalizedHostRevision(s.hostRevision) === stamp.revision;
+}
+
 // The persona currently ON AIR. Prefer this over settings.getEffectivePersona()
 // for anything voicing a line: the session leads the weekly grid by up to
 // PICK_SHOW_LOOKAHEAD_SEC after a look-ahead roll, and inside that window the
 // session is right. Falls back to the grid.
 export function onAirPersona() {
+  refreshHost();
   const id = _session?.persona?.id;
   return (id && settings.resolvePersonaById(id)) || settings.getEffectivePersona();
 }
@@ -290,6 +353,7 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     // mid-episode can't re-plan or double-air a beat.
     programme: null,
     messages: [],
+    hostRevision: 0,
   };
   // Debounced persist only. An immediate unawaited write here could land after
   // maybeRoll's awaited post-stampRolledFrom persist() and leave a stale file.
@@ -316,7 +380,10 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
-  if (_session.key === nextKey && !aged) return _session;
+  if (_session.key === nextKey) {
+    refreshHost(contextDate(ctx));
+    if (!aged) return _session;
+  }
 
   // A key change that only exists because the CALLER's clock is behind the
   // look-ahead roll is not a boundary. Rolling here would archive the
@@ -327,6 +394,7 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (bothAuto && !aged) return softShift(ctx, nextKey);
 
   const prev = _session;
+  const sameKeyRevision = prev.key === nextKey ? normalizedHostRevision(prev.hostRevision) : 0;
   // An armed final-track handoff may already have voiced (or, in
   // between-tracks mode, rendered and queued) this exact changeover. Do not
   // create a second mic-pass when the station clock reaches the boundary.
@@ -345,6 +413,7 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
+  if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
   if (boundaryProgramme) next.programme = boundaryProgramme;
   stampRolledFrom(next, prev);
   if (handoffAlreadyCovered) next.handoffAired = true;
@@ -633,8 +702,13 @@ export async function recover(ctx: SessionContext): Promise<Session> {
       if (stored?.id && !stored.endedAt && stored.key === sessionKeyFor(ctx)
           && Array.isArray(stored.messages)) {
         _session = stored as Session;
+        const normalizedRevision = normalizedHostRevision(_session.hostRevision);
+        const revisionRepaired = _session.hostRevision !== normalizedRevision;
+        _session.hostRevision = normalizedRevision;
         _resumedQueuedHandoff = _session.boundaryHandoff?.queued === true;
         appendTurn({ role: 'event', kind: 'scenario', text: 'Controller restarted — session resumed.' });
+        const repaired = refreshHost(contextDate(ctx));
+        if (repaired || revisionRepaired) await persist();
         return _session;
       }
       // The restart happened after the station clock crossed the boundary, so

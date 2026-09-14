@@ -476,11 +476,15 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   const clockAllowed = speakClockAllowed();
   const linkAirAt = clockAllowed ? linkClockAt(showAt, Date.now()) : null;
   let rawLink = '';
+  let linkPersona: ReturnType<typeof session.onAirPersona> = null;
+  let linkHostSpeech: ReturnType<typeof session.captureHostSpeech> = null;
   if (wantLink && pickAnchor) {
     try {
+      linkHostSpeech = session.captureHostSpeech();
+      linkPersona = session.onAirPersona();
       rawLink = await dj.generateLink({
         previous: pickAnchor, current: song, context: linkAirContext(ctx, linkAirAt),
-        clockIsAirTime: !!linkAirAt, persona: session.onAirPersona(),
+        clockIsAirTime: !!linkAirAt, persona: linkPersona,
         recap: queue.getDjRecap(), recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
         lastLink: queue.getLastLinkText(),
@@ -489,6 +493,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
+  if (linkHostSpeech && !session.isHostSpeechCurrent(linkHostSpeech)) rawLink = '';
   const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
@@ -520,7 +525,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // the captured pick anchor), instead of immediately over the current track (#189).
   // Stamp `pickAnchor` as the link's intended back-announce target so the queue
   // can drop the link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed) });
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -580,6 +585,8 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // intended predecessor, and the queue drops a stale back-announce if the
   // actual FIFO predecessor changes.
   let link: string | null = null;
+  let linkPersona: ReturnType<typeof session.onAirPersona> = null;
+  let linkHostSpeech: ReturnType<typeof session.captureHostSpeech> = null;
   // Resolved HERE rather than up in runTrackEvent: the pick call above has
   // already spent part of the runway, and linkClockAt reads the live clock, so
   // asking now is the most honest the forecast can be on this path (#1314).
@@ -587,6 +594,8 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   const airAt = linkClockAt(showAt, Date.now());
   if (wantLink && pickAnchor) {
     try {
+      linkHostSpeech = session.captureHostSpeech();
+      linkPersona = session.onAirPersona();
       link = await dj.generateLink({
         // ctx with the clock stepped to the link's air moment — showAt's own
         // clock carries the show-attribution padding and ran two minutes fast
@@ -600,7 +609,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
         // back to getEffectivePersona() on the wall clock, which disagrees with
         // the session inside the look-ahead window — the incoming DJ's line
         // written in the outgoing DJ's voice.
-        persona: session.onAirPersona(),
+        persona: linkPersona,
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
@@ -612,6 +621,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
+  if (linkHostSpeech && !session.isHostSpeechCurrent(linkHostSpeech)) link = null;
   // Talk-within-the-intro rides enqueuePick's trimLinkToIntro chokepoint —
   // the pool link needs no enforcement of its own here (#962 follow-up).
   // Transition effects ride the pool path too (pickNextTrack only offers the
@@ -649,6 +659,8 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // air time — "after dark" stays accurate even when the numerals are withheld.
   const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, pickAnchor, fx, {
     linkClockAt: linkClockStampFor(airAt, clockAllowed),
+    introPersona: linkPersona,
+    hostSpeech: linkHostSpeech,
   });
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the

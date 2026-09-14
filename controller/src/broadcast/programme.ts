@@ -230,7 +230,7 @@ export async function maybeRunIntro(
   if (!autoVoiceAllowed()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
   markIntroAired();
-  await runIntro(queue, ctx, now);
+  await runIntro(queue, ctx, now, { automaticHostSpeech: true });
   return true;
 }
 
@@ -247,7 +247,7 @@ export function markIntroAired() {
 
 // Gate-free intro core — also the manual /dj/segment runner (via scheduler's
 // wrapper, which re-marks the beat so the autonomous path never repeats it).
-export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<string> {
+export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new Date(), { automaticHostSpeech = false }: { automaticHostSpeech?: boolean } = {}): Promise<string> {
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
@@ -268,9 +268,11 @@ export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new D
         queue.log('error', `Programme intro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
-    const script = await dj.generateProgrammeIntro({ persona: roster.host, ...common });
+    const hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
+    const soloHost = settings.getOnAirRoster(now).host;
+    const script = await dj.generateProgrammeIntro({ persona: soloHost, ...common });
     await queue.announce(script, 'programme-intro', {
-      persona: roster.host, meta: { personaId: roster.host?.id, personaName: roster.host?.name },
+      persona: soloHost, meta: { personaId: soloHost?.id, personaName: soloHost?.name }, hostSpeech,
     });
     return script;
   });
@@ -289,7 +291,7 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
   await ensurePlan(ctx, now);  // late plan (budget freed up mid-show) still helps
   session.markProgrammeBeat(beat);
   try {
-    await runFeature(queue, ctx, { hourIndex: span.index, now });
+    await runFeature(queue, ctx, { hourIndex: span.index, now, automaticHostSpeech: true });
   } catch (err) {
     queue.log('error', `Programme feature failed: ${(err as Error).message}`);
   }
@@ -299,7 +301,7 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
 // else the plan's kind for this hour, both through the forced segment director
 // with the feature topic as the brief. Any miss falls to the straight-talk
 // floor so the beat still airs.
-export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourIndex = null, now = new Date() }: { hourIndex?: number | null; now?: Date } = {}): Promise<string> {
+export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourIndex = null, now = new Date(), automaticHostSpeech = false }: { hourIndex?: number | null; now?: Date; automaticHostSpeech?: boolean } = {}): Promise<string> {
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
@@ -310,7 +312,7 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   const kind = String(show.segmentSkill || '').trim() || feature?.kind || null;
 
   return withTrace({ kind: 'programme-feature', show: show.name, capability: kind || 'talk' }, async () => {
-    const speaker = settings.pickOnAirSpeaker(now);
+    let speaker = settings.pickOnAirSpeaker(now);
     if (kind) {
       try {
         const run = await runCapability(kind, ctx, {
@@ -328,12 +330,18 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
         queue.log('error', `Programme feature capability "${kind}" failed (${(err as Error).message}) — airing straight talk instead`);
       }
     }
+    let hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
+    if (hostSpeech && speaker?.id !== hostSpeech.personaId) {
+      const guests = settings.getOnAirRoster(now).guests;
+      if (!guests.some(guest => guest.id === speaker?.id)) speaker = settings.getEffectivePersona(now);
+      else hostSpeech = null;
+    }
     const script = await dj.generateProgrammeFeature({
       show, topic, plan, persona: speaker, context: ctx,
       recap: queue.getDjRecap(), recentOpeners: queue.getRecentOpeners(),
     });
     await queue.announce(script, 'programme-feature', {
-      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech,
     });
     return script;
   });
@@ -360,14 +368,14 @@ export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new 
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   session.markProgrammeBeat('outro');
   try {
-    await runOutro(queue, ctx, now);
+    await runOutro(queue, ctx, now, { automaticHostSpeech: true });
   } catch (err) {
     queue.log('error', `Programme outro failed: ${(err as Error).message}`);
   }
 }
 
 // Gate-free outro core.
-export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<string> {
+export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new Date(), { automaticHostSpeech = false }: { automaticHostSpeech?: boolean } = {}): Promise<string> {
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
@@ -391,9 +399,11 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
         queue.log('error', `Programme outro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
-    const script = await dj.generateProgrammeOutro({ persona: roster.host, ...common });
+    const hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
+    const soloHost = settings.getOnAirRoster(now).host;
+    const script = await dj.generateProgrammeOutro({ persona: soloHost, ...common });
     await queue.announce(script, 'programme-outro', {
-      persona: roster.host, meta: { personaId: roster.host?.id, personaName: roster.host?.name },
+      persona: soloHost, meta: { personaId: soloHost?.id, personaName: soloHost?.name }, hostSpeech,
     });
     return script;
   });

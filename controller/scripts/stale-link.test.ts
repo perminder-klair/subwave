@@ -17,7 +17,7 @@
 // node:assert-via-tsx style, matching scripts/request-dedup.test.ts.
 
 import assert from 'node:assert/strict';
-import { shouldDropCrossSessionLink, shouldDropStaleLink } from '../src/broadcast/queue.js';
+import { shouldDropCrossSessionLink, shouldDropObsoleteHostSpeech, shouldDropStaleLink } from '../src/broadcast/queue.js';
 
 const X = { id: 'song-X', title: 'Track Xenon', artist: 'Artist X' };
 const R = { id: 'song-R', title: 'Request Rondo', artist: 'Artist R' };
@@ -126,6 +126,35 @@ function main() {
       false,
     );
     assert.equal(shouldDropCrossSessionLink({ introKind: 'link' }, 'show:dante'), false);
+  });
+
+
+  console.log('\nsame-show host speech safety-net:');
+  const liveHost = { showKey: 'show:relay', personaId: 'p_sara', revision: 3 };
+
+  test('an explicit earlier host revision is obsolete even when the persona id returned', () => {
+    assert.equal(shouldDropObsoleteHostSpeech({
+      introHostSpeech: { showKey: 'show:relay', personaId: 'p_sara', revision: 1 },
+    }, liveHost), true);
+  });
+
+  test('current explicit host speech and independent speech remain eligible', () => {
+    assert.equal(shouldDropObsoleteHostSpeech({ introHostSpeech: liveHost }, liveHost), false);
+    assert.equal(shouldDropObsoleteHostSpeech({
+      introHostSpeech: { showKey: 'show:other', personaId: 'p_old', revision: 1 },
+    }, liveHost), false, 'cross-show links remain under the existing session-key policy');
+    assert.equal(shouldDropObsoleteHostSpeech({ introKind: 'station-id', introPersona: { id: 'p_old' } }, liveHost), false);
+  });
+
+  test('legacy known-author links drop only within the same live show', () => {
+    assert.equal(shouldDropObsoleteHostSpeech({
+      aiPicked: true, introKind: 'link', requestedBy: null,
+      introPersona: { id: 'p_old' }, introSessionKey: 'show:relay',
+    }, liveHost), true);
+    assert.equal(shouldDropObsoleteHostSpeech({
+      aiPicked: true, introKind: 'link', requestedBy: null,
+      introPersona: { id: 'p_old' }, introSessionKey: 'show:other',
+    }, liveHost), false);
   });
 
   if (failures > 0) {

@@ -4,6 +4,7 @@
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
+import type { HostSpeechStamp } from '../session.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -109,6 +110,8 @@ export interface QueueItem {
   // drops unrendered intros anyway, and a stale persona blob is worse than the
   // live fallback.
   introPersona?: Persona | null;
+  /** Explicit ownership of ordinary host speech, captured when its script was written. */
+  introHostSpeech?: HostSpeechStamp | null;
   // Editorial session that wrote a DJ link. A link may be rendered and held
   // beyond a show boundary, but it must never cross into the next show's
   // session — even when the same persona hosts both shows.

@@ -46,7 +46,7 @@ import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
-import type { TurnMeta } from './session.js';
+import type { HostSpeechStamp, TurnMeta } from './session.js';
 import type { PromptMemoryEntry } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
@@ -118,6 +118,7 @@ import {
   pickLinkInterval,
   playAlreadyRecorded,
   shouldDropCrossSessionLink,
+  shouldDropObsoleteHostSpeech,
   shouldDropStaleLink,
   sleep,
   voiceChannelFor,
@@ -237,6 +238,8 @@ interface PendingVoice {
   /** Do not air before this instant, even if an estimated final track ends
    * early. Used only by a between-tracks show handoff. */
   notBefore?: number | null;
+  /** Present only for ordinary automatic speech owned by the active show's host. */
+  hostSpeech?: HostSpeechStamp | null;
 }
 
 export interface AnnounceOutcome {
@@ -253,6 +256,7 @@ export {
   boundaryCarriesTrackVoice,
   playAlreadyRecorded,
   shouldDropCrossSessionLink,
+  shouldDropObsoleteHostSpeech,
   shouldDropStaleLink,
 } from './queue/pure.js';
 export { registerSkillKinds } from './queue/kinds.js';
@@ -335,6 +339,36 @@ class Queue {
   _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
   _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
 
+  // Drop only uncommitted ordinary host speech. The music item remains in the
+  // same position with all request and transition metadata intact.
+  invalidateObsoleteHostSpeech(): number {
+    const live = session.captureHostSpeech();
+    if (!live) return 0;
+    let dropped = 0;
+    for (const item of this.upcoming) {
+      if (item.sent || item.confirmedInLiquidsoap || item.introAired || item.bedded) continue;
+      if (!shouldDropObsoleteHostSpeech(item, live)) continue;
+      this._introRenders.invalidate(item);
+      item.introScript = null;
+      item.introKind = undefined;
+      item.introWav = null;
+      item.introPersona = null;
+      item.introHostSpeech = null;
+      item.introSessionKey = null;
+      item.linkPrev = null;
+      item.linkClockAt = null;
+      dropped += 1;
+    }
+    if (this._pendingVoice?.hostSpeech
+        && !session.isHostSpeechCurrent(this._pendingVoice.hostSpeech)) {
+      const before = this._pendingVoice;
+      this.dropPendingVoice('the active show host changed before air');
+      if (before !== this._pendingVoice) dropped += 1;
+    }
+    if (dropped) this.persist();
+    return dropped;
+  }
+
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
   // would drop tracks already handed to Liquidsoap's dj_queue — they'd still
@@ -412,6 +446,8 @@ class Queue {
       }
       this.log('scheduler',
         `Queue recovered: ${this.upcoming.length} upcoming, ${this.history.length} played`);
+
+      this.invalidateObsoleteHostSpeech();
 
       // Re-drain any items snapshotted as sent:false mid-TTS during a crash.
       if (this.upcoming.some(i => !i.sent)) {
@@ -696,7 +732,7 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
@@ -705,6 +741,7 @@ class Queue {
     introScript?: string | null;
     introKind?: string;
     introPersona?: Persona | null;
+    introHostSpeech?: HostSpeechStamp | null;
     aiPicked?: boolean;
     allowDuplicate?: boolean;
     linkPrev?: { id?: string | null; title?: string | null; artist?: string | null } | null;
@@ -742,11 +779,13 @@ class Queue {
       }
     }
     const item = {
-      track, requestedBy, operator, intent, introScript, introKind, introPersona,
+      track, requestedBy, operator, intent, introScript, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve
       // the key alongside the persona: persona alone cannot distinguish two
       // adjacent shows hosted by the same DJ.
-      introSessionKey: introScript && introKind === 'link' ? session.getSession()?.key ?? null : null,
+      introSessionKey: introScript && introKind === 'link'
+        ? introHostSpeech?.showKey ?? session.getSession()?.key ?? null
+        : null,
       aiPicked,
       block: block ?? undefined,
       // Only stamp a back-announce target when there's actually an intro/link to
@@ -1537,6 +1576,7 @@ class Queue {
   // advances; past the hard deadline the item drains with track-intrinsic
   // stamps only. transitions.pairDrain off → eager drain, today's behaviour.
   async drainToLiquidsoap(force = false) {
+    this.invalidateObsoleteHostSpeech();
     if (this.senderBusy) {
       // A forced drain (the clip-as-track recovery) must not vanish into a
       // busy sender — a stem-blend render or a slow TTS engine can hold the
@@ -1602,19 +1642,22 @@ class Queue {
             // the race: a render that lands after the budget still reaches the
             // item (airIntro then finds a WAV instead of re-rendering), and a
             // late rejection can never surface as an unhandled rejection.
-            const render = this._introRenders.start(item, () => speak(item.introScript!, {
-              kind: item.introKind || 'dj-speak',
-              // Voice it as whoever wrote it. Without this, speak() falls back
-              // to getEffectivePersona() at DRAIN time — minutes after the line
-              // was written, possibly the other side of a show boundary.
-              persona: item.introPersona || null,
-            }));
+            const script = item.introScript;
+            const kind = item.introKind || 'dj-speak';
+            const persona = item.introPersona || null;
+            const hostSpeech = item.introHostSpeech ? { ...item.introHostSpeech } : null;
+            const render = this._introRenders.start(item, () => speak(script!, { kind, persona }));
             // The tracker turns rejection into a result so a late failure can
             // never surface unhandled. This observer owns the item mutation and
             // error log even after the drain stops waiting.
             void render.then(result => {
               if (result.status === 'rendered') {
-                if (!item.introAired) item.introWav = result.wav;
+                const sameStamp = JSON.stringify(item.introHostSpeech ?? null) === JSON.stringify(hostSpeech);
+                if (!item.introAired
+                    && item.introScript === script
+                    && (item.introKind || 'dj-speak') === kind
+                    && (item.introPersona?.id ?? null) === (persona?.id ?? null)
+                    && sameStamp) item.introWav = result.wav;
               } else {
                 this.log('error', `TTS failed: ${(result.error as Error).message}`);
               }
@@ -1628,6 +1671,8 @@ class Queue {
             }
           }
         }
+
+        this.invalidateObsoleteHostSpeech();
 
         // An operator cancel (removeUpcoming) may have spliced this item out
         // while we were awaiting the TTS render above — don't hand a removed
@@ -1879,17 +1924,23 @@ class Queue {
   async announce(
     text,
     kind = 'announcement',
-    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null }:
-      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null } = {},
+    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null }:
+      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null } = {},
   ): Promise<AnnounceOutcome> {
     const safeText = normalizeForDisplay(text || '');
     if (!safeText) return { accepted: false, deferred: false, completed: Promise.resolve(false) };
+    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
+      return { accepted: false, deferred: false, completed: Promise.resolve(false) };
+    }
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} — the show handoff has already claimed this boundary`);
       return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     }
     try {
       const wavPath = await speak(safeText, { kind, persona });
+      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
+        return { accepted: false, deferred: false, completed: Promise.resolve(false) };
+      }
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} — the show handoff completed while it rendered`);
         return { accepted: false, deferred: false, completed: Promise.resolve(false) };
@@ -1914,6 +1965,7 @@ class Queue {
           sfx: selectedSfx,
           onCompleted: settle,
           notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null,
+          hostSpeech,
         });
         if (!accepted) settle(false);
         if (accepted && placement === 'pause-talk') void this.drainToLiquidsoap();
@@ -1926,6 +1978,9 @@ class Queue {
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
       const seg: SegmentDesc = { kind, channel, text: safeText, meta, persona };
+      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
+        return { accepted: false, deferred: false, completed: Promise.resolve(false) };
+      }
       const handoff = await airVoice(targetFile, wavPath, safeText, voiceGainDb(kind, persona), {
         onQueued: q => this.onQueued(q, seg),
       });
@@ -2100,20 +2155,22 @@ class Queue {
   // here. All bookkeeping (djLog → recap/opener anti-repeat, session turn,
   // webhook) happens at AIR time, so the DJ's memory reflects what reached the
   // stream, not what was merely scheduled.
-  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null } = {}) {
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null } = {}) {
     const safeText = normalizeForDisplay(text || '');
     if (!safeText) return;
+    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} — the show handoff has already claimed this boundary`);
       return;
     }
     try {
       const wavPath = await speak(safeText, { kind, persona });
+      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} — the show handoff completed while it rendered`);
         return;
       }
-      this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart });
+      this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart, hostSpeech });
     } catch (err) {
       this.log('error', `Deferred announce failed: ${(err as Error).message}`);
     }
@@ -2150,6 +2207,7 @@ class Queue {
       sfx: selectedSfx = null,
       onCompleted,
       notBefore = null,
+      hostSpeech = null,
     }: {
       exchange?: boolean;
       daypart?: string | null;
@@ -2157,6 +2215,7 @@ class Queue {
       sfx?: string | null;
       onCompleted?: (aired: boolean) => void;
       notBefore?: number | null;
+      hostSpeech?: HostSpeechStamp | null;
     } = {},
   ): boolean {
     if (!clips.length) return false;
@@ -2183,6 +2242,7 @@ class Queue {
       sfx: selectedSfx,
       onCompleted,
       notBefore,
+      hostSpeech,
     };
     if (superseded) {
       superseded.onCompleted?.(false);
@@ -2384,6 +2444,10 @@ class Queue {
     }
     const p = this._pendingVoice;
     if (!p) return;
+    if (p.hostSpeech && !session.isHostSpeechCurrent(p.hostSpeech)) {
+      this.dropPendingVoice('the active show host changed before air');
+      return;
+    }
     if (p.notBefore != null && Date.now() < p.notBefore) {
       this.log('scheduler', `Holding ${p.kind} — the show boundary has not arrived`);
       return;
@@ -4075,6 +4139,13 @@ class Queue {
 export type QueueApi = InstanceType<typeof Queue>;
 
 export const queue = new Queue();
+
+// Every settings writer publishes through the cache. Refresh the same-show host
+// and synchronously detach obsolete uncommitted speech before any later await.
+settings.onCacheChange(() => {
+  session.refreshHost();
+  queue.invalidateObsoleteHostSpeech();
+});
 
 // Handing the rotate to the controller starts a clean N-track cycle (#1619).
 // Registered here rather than called from settings.update() because settings.ts
