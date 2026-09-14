@@ -13,9 +13,10 @@ import { existsSync } from 'node:fs';
 import { createHmac, randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import { config } from '../config.js';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { createSerialFileWriter } from '../util/atomic-file.js';
 
 const STORE_FILE = join(config.stateDir, 'likes.json');
+const writeStore = createSerialFileWriter(STORE_FILE);
 // Hard cap on stored records, oldest trimmed first.
 const MAX_RECORDS = 5000;
 const FLUSH_DELAY_MS = 1500;
@@ -87,7 +88,7 @@ function scheduleFlush() {
 // of what still needs writing — music/id-rotation.ts consumes the rotation
 // manifest the moment its remap returns.
 async function flushStrict(): Promise<void> {
-  await writeFileAtomic(STORE_FILE, JSON.stringify({ secret, likes: records }, null, 2));
+  await writeStore(JSON.stringify({ secret, likes: records }, null, 2));
 }
 
 async function flush(): Promise<void> {

@@ -10,7 +10,7 @@
 import { config } from '../config.js';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { createSerialFileWriter } from '../util/atomic-file.js';
 import { zonedParts } from '../time.js';
 import { resolveActiveShow } from '../settings.js';
 import { resolvePlaylistMemberSets } from './show-playlist.js';
@@ -48,6 +48,7 @@ export interface BlockEntry {
 }
 
 const FILE_PATH = `${config.stateDir}/blocklist.json`;
+const writeStore = createSerialFileWriter(FILE_PATH);
 
 let entries: BlockEntry[] = [];
 let rules: BlockRule[] = [];
@@ -192,7 +193,7 @@ export async function load() {
 }
 
 async function persist() {
-  await writeFileAtomic(FILE_PATH, JSON.stringify({ entries, rules }, null, 2));
+  await writeStore(JSON.stringify({ entries, rules }, null, 2));
 }
 
 export function list(): BlockEntry[] {

@@ -28,6 +28,19 @@ export async function writeFileAtomic(
   }
 }
 
+// One instance per owning store, shared by ordinary saves and durable recovery
+// writes. Atomic rename prevents partial files, but only ordering prevents an
+// older snapshot from replacing a newer one after recovery is acknowledged.
+export function createSerialFileWriter(path: string) {
+  let pending: Promise<void> = Promise.resolve();
+  return (contents: string | Buffer): Promise<void> => {
+    const next = pending.then(() => writeFileAtomic(path, contents));
+    // Keep this caller's rejection while allowing subsequent saves to retry.
+    pending = next.catch(() => {});
+    return next;
+  };
+}
+
 // Synchronous twin for small state whose publication is itself a synchronous
 // commit boundary. It keeps the same adjacent-temp + rename contract, so a
 // reader can never observe a partial replacement.
