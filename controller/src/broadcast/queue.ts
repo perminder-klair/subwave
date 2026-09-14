@@ -831,6 +831,15 @@ class Queue {
         return -1;
       }
     }
+    // Last-line defence for every producer: an explicit ownership stamp may
+    // have gone stale while its caller awaited generation. Preserve the queue
+    // item and all listener/music metadata, but never store old words or
+    // relabel them as the current host.
+    if (introScript && introHostSpeech && !session.isHostSpeechCurrent(introHostSpeech)) {
+      introScript = null;
+      introPersona = null;
+      introHostSpeech = null;
+    }
     const item = {
       track, requestedBy, operator, intent, introScript, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve

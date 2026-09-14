@@ -206,8 +206,7 @@ ${findingCandidates}${dj.effectsGuidance()}`;
 }
 
 // Exported for scripts/llm-bench, like requestSchema above.
-export function requestSystem() {
-  const persona = session.onAirPersona();
+export function requestSystem(persona = session.onAirPersona()) {
   // Follows requestSchema() above: with the station voice off there IS no
   // "intro" field, and a prompt that keeps talking about one invites the model
   // to stuff the intro into "ack" instead.

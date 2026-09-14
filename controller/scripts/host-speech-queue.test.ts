@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -195,6 +195,78 @@ test('queue recovery invalidates legacy old-host speech before attempting a redr
 
   assert.equal(queue.upcoming.length, 1);
   assert.equal(queue.upcoming[0].track.title, 'Song');
+  assert.equal(queue.upcoming[0].introScript, null);
+});
+
+test('queue.push refuses stale request speech without losing listener provenance or music', async () => {
+  const oldHost = session.captureHostSpeech();
+  await settings.update({ shows: [show(B.id)] } as never);
+
+  const pos = await queue.push({
+    track: { id: 'listener-song', title: 'Listener Song', artist: 'Artist' },
+    requestedBy: 'alice',
+    intent: 'listener request',
+    introScript: 'Host A wrote this request intro.',
+    introKind: 'dj-speak',
+    introPersona: A,
+    introHostSpeech: oldHost,
+  });
+
+  assert.equal(pos, 1);
+  assert.equal(queue.upcoming[0].track.id, 'listener-song');
+  assert.equal(queue.upcoming[0].requestedBy, 'alice');
+  assert.equal(queue.upcoming[0].intent, 'listener request');
+  assert.equal(queue.upcoming[0].introScript, null);
+  assert.equal(queue.upcoming[0].introPersona, null);
+  assert.equal(queue.upcoming[0].introHostSpeech, null);
+});
+
+test('rapid A to B to A saves persist the speech epoch before a queue snapshot can outrun it', async () => {
+  // Let seed()'s ordinary debounced session snapshot land as revision 0, then
+  // recreate the reported crash window: queue.json lands at 500 ms while the
+  // changed session used to wait 1,000 ms.
+  await new Promise(resolve => setTimeout(resolve, 1_100));
+  const originalStamp = session.captureHostSpeech();
+  await settings.update({ shows: [show(B.id)] } as never);
+  await settings.update({ shows: [show(A.id)] } as never);
+  const freshStamp = session.captureHostSpeech();
+  assert.equal(freshStamp?.revision, 2);
+
+  const fresh = item(freshStamp);
+  fresh.track = { id: 'fresh-after-return', title: 'Fresh After Return', artist: 'Artist' };
+  fresh.introScript = 'Fresh Host A speech from revision two.';
+  queue.upcoming = [fresh];
+  queue.persist();
+  await new Promise(resolve => setTimeout(resolve, 600));
+
+  const sessionDisk = JSON.parse(readFileSync(config.session.currentFile, 'utf8'));
+  const queueDisk = JSON.parse(readFileSync(config.queue.file, 'utf8'));
+  assert.equal(sessionDisk.hostRevision, 2, 'the session epoch is durable before queue.json can carry it');
+  assert.equal(queueDisk.upcoming[0].introHostSpeech.revision, 2);
+
+  // Simulate the controller-only restart ordering in server.ts: session first,
+  // queue second. The valid final-A speech and its music must both survive.
+  queue.upcoming = [];
+  await session.recover(ctx());
+  queue.recover();
+  assert.equal(session.captureHostSpeech()?.revision, 2);
+  assert.equal(queue.upcoming[0].track.id, 'fresh-after-return');
+  assert.equal(queue.upcoming[0].introScript, 'Fresh Host A speech from revision two.');
+
+  // The matching persona id is not enough: speech from the first A epoch must
+  // still be removed after the A -> B -> A restart, without removing the
+  // listener-owned queue item around it.
+  const stale = item(originalStamp);
+  stale.track = { id: 'old-a-request', title: 'Old A Request', artist: 'Artist' };
+  stale.requestedBy = 'alice';
+  stale.intent = 'listener request';
+  writeFileSync(config.queue.file, JSON.stringify({
+    upcoming: [stale], current: null, history: [], savedAt: new Date().toISOString(),
+  }));
+  queue.upcoming = [];
+  queue.recover();
+  assert.equal(queue.upcoming[0].track.id, 'old-a-request');
+  assert.equal(queue.upcoming[0].requestedBy, 'alice');
   assert.equal(queue.upcoming[0].introScript, null);
 });
 

@@ -6,12 +6,13 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config.js';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { writeFileAtomic, writeFileAtomicSync } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
 import { nextShowBoundaryMs } from './show-boundary.js';
+import type { Persona } from './queue/types.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
@@ -212,8 +213,10 @@ function buildHandoff(prev: Session | null): string | null {
 async function persist() {
   if (!_session) return;
   try {
-    // Atomic: a crash mid-write must leave the previous snapshot, not a stub.
-    await writeFileAtomic(config.session.currentFile, JSON.stringify(_session, null, 2));
+    // Session state is small and some mutations are synchronous commit
+    // boundaries. Keep every current-session writer synchronous so an older
+    // async rename cannot land after a newer host epoch and roll it backwards.
+    writeFileAtomicSync(config.session.currentFile, JSON.stringify(_session, null, 2));
   } catch {}
 }
 
@@ -260,12 +263,15 @@ export function refreshHost(at: Date = new Date()): boolean {
     sessionId: s.id, key: s.key, previousPersonaId: previousId, personaId: nextId,
     hostRevision: s.hostRevision,
   });
-  schedulePersist();
+  // queue.json lands on a shorter debounce. Make the new epoch durable before
+  // a freshly stamped queue item can outrun it, including A -> B -> A where
+  // persona equality cannot reveal the missed transitions after restart.
+  void persist();
   return true;
 }
 
-export function captureHostSpeech(): HostSpeechStamp | null {
-  refreshHost();
+export function captureHostSpeech(at: Date = new Date()): HostSpeechStamp | null {
+  refreshHost(at);
   const s = _session;
   if (!s || !s.key.startsWith('show:')) return null;
   return {
@@ -293,6 +299,43 @@ export function onAirPersona() {
   refreshHost();
   const id = _session?.persona?.id;
   return (id && settings.resolvePersonaById(id)) || settings.getEffectivePersona();
+}
+
+export interface AutomaticHostSpeech {
+  persona: Persona | null;
+  hostSpeech: HostSpeechStamp | null;
+}
+
+// Resolve one automatic speaker and its ownership stamp before asynchronous
+// generation starts. Ordinary host speech belongs to the current same-show
+// host epoch. A rostered guest is independently owned and intentionally
+// unstamped; an unexpected speaker is repaired to the on-air host.
+export function captureAutomaticHostSpeech(
+  selected: Persona | null | undefined = undefined,
+  at: Date = new Date(),
+): AutomaticHostSpeech {
+  const hostSpeech = captureHostSpeech(at);
+  const hostPersona = (hostSpeech?.personaId && settings.resolvePersonaById(hostSpeech.personaId))
+    || settings.getEffectivePersona(at)
+    || null;
+  const persona = selected ?? hostPersona;
+  if (!hostSpeech || persona?.id === hostSpeech.personaId) return { persona, hostSpeech };
+  const guests = settings.getOnAirRoster(at).guests;
+  if (guests.some(guest => guest.id === persona?.id)) return { persona, hostSpeech: null };
+  return { persona: hostPersona, hostSpeech };
+}
+
+// Spend an asynchronously generated host-owned line only if the exact epoch
+// that commissioned it is still live. Persona and stamp are cleared with the
+// text so a caller cannot relabel old words as the new host.
+export function finalizeAutomaticHostSpeech(
+  text: string | null | undefined,
+  owner: AutomaticHostSpeech,
+): { text: string | null; persona: Persona | null; hostSpeech: HostSpeechStamp | null } {
+  const present = typeof text === 'string' && text.trim().length > 0;
+  const current = !owner.hostSpeech || isHostSpeechCurrent(owner.hostSpeech);
+  if (!present || !current) return { text: null, persona: null, hostSpeech: null };
+  return { text: text!, persona: owner.persona, hostSpeech: owner.hostSpeech };
 }
 
 export function getSession() {

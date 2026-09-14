@@ -12,10 +12,10 @@ import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
-import { autoVoiceAllowed } from '../broadcast/voice-policy.js';
+import { generateQueuedRequestIntro } from '../broadcast/request-intro.js';
 import * as webhooks from '../broadcast/webhooks.js';
 import * as settings from '../settings.js';
-import { stripScriptedOpener, cleanRequesterName, stillInFlight, screenAck, guardIntro, isNamedRequester, sorryNoMatch } from '../util/request-guard.js';
+import { stripScriptedOpener, cleanRequesterName, stillInFlight, screenAck, isNamedRequester, sorryNoMatch } from '../util/request-guard.js';
 import {
   checkRateLimit, checkGlobalRateLimit, commitRateLimit, commitGlobalRateLimit, clientIp,
   REQUESTS_DISABLED,
@@ -287,38 +287,26 @@ async function resolveRequest(entry) {
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
     // Station voice off: request still honoured and acked, no spoken intro and
     // no model call to write one.
-    let introScript = autoVoiceAllowed()
-      ? await dj.generateIntro({
-        track: pick,
-        context: ctx,
-        requestedBy: requester,
-        requestText: text,
-        recap: queue.getDjRecap(),
-        recentTracks: queue.getRecentTracks(),
-        recentOpeners: queue.getRecentOpeners(),
-      })
-      : null;
-    // Echo guard: a script that reads the request back is regenerated with the
-    // request text withheld.
-    const guardedMlt = await guardIntro(introScript, text, () => dj.generateIntro({
+    const generatedIntro = await generateQueuedRequestIntro({
       track: pick,
       context: ctx,
       requestedBy: requester,
       recap: queue.getDjRecap(),
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
-    }));
-    if (guardedMlt.guard) {
-      flagGuard(entry, guardedMlt.guard);
-      queue.log('request-guard', `more-like-this intro echoed request text — ${guardedMlt.guard}`);
+    }, text);
+    if (generatedIntro.guard) {
+      flagGuard(entry, generatedIntro.guard);
+      queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
     }
-    introScript = guardedMlt.script;
+    const introScript = generatedIntro.introScript;
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
       // Voice it as whoever wrote it: render and air happen later and would
       // otherwise re-resolve the speaker off the wall clock.
-      introPersona: session.onAirPersona(),
+      introPersona: generatedIntro.introPersona,
+      introHostSpeech: generatedIntro.introHostSpeech,
     });
     entry.pick = pick;
     if (pos === -2) {
@@ -621,20 +609,7 @@ async function resolveRequest(entry) {
   // 3. DJ intro. On a miss, pass the absent artist so the intro owns the
   // substitution. Station voice off means no intro and no model call; the ack
   // still reaches the listener.
-  let introScript = autoVoiceAllowed()
-    ? await dj.generateIntro({
-      track: pick,
-      context: ctx,
-      requestedBy: requester,
-      requestText: text,
-      artistMiss: entry.artistMiss || null,
-      recap: queue.getDjRecap(),
-      recentTracks: queue.getRecentTracks(),
-      recentOpeners: queue.getRecentOpeners(),
-    })
-    : null;
-  // Echo guard, as in the more-like-this path.
-  const guarded = await guardIntro(introScript, text, () => dj.generateIntro({
+  const generatedIntro = await generateQueuedRequestIntro({
     track: pick,
     context: ctx,
     requestedBy: requester,
@@ -642,12 +617,12 @@ async function resolveRequest(entry) {
     recap: queue.getDjRecap(),
     recentTracks: queue.getRecentTracks(),
     recentOpeners: queue.getRecentOpeners(),
-  }));
-  if (guarded.guard) {
-    flagGuard(entry, guarded.guard);
-    queue.log('request-guard', `intro echoed request text — ${guarded.guard}`);
+  }, text);
+  if (generatedIntro.guard) {
+    flagGuard(entry, generatedIntro.guard);
+    queue.log('request-guard', `intro echoed request text — ${generatedIntro.guard}`);
   }
-  introScript = guarded.script;
+  const introScript = generatedIntro.introScript;
 
   // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
   const pos = await queue.push({
@@ -656,7 +631,8 @@ async function resolveRequest(entry) {
     intent: matched.intent,
     introScript,
     introKind: 'dj-speak',
-    introPersona: session.onAirPersona(),
+    introPersona: generatedIntro.introPersona,
+    introHostSpeech: generatedIntro.introHostSpeech,
   });
   entry.pick = pick;
   if (pos === -2) {

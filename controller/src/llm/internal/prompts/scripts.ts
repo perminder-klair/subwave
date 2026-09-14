@@ -129,7 +129,8 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
   return sections.join("\n\n");
 }
 
-export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
+export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
+  const speaker = persona || settings.getEffectivePersona();
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   // Gate on isNamedRequester, not on truthiness: cleanRequesterName returns the
   // ledger stand-in 'anon' for every unsigned request, and that string is
@@ -179,10 +180,10 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   if (artistMiss) {
     rules.push(`The listener asked for "${artistMiss}", but we don't have them — briefly own that ("no ${artistMiss} in the crates", or similar), then introduce what's actually playing as a worthy stand-in. Never pretend the track is by "${artistMiss}".`);
   }
-  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''}\nRules:\n${rules.map((r) => `- ${r}`).join('\n')}\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write an intro for this track. ${lengthPhrase('intro', speaker)}${budget ? ' ' + budget : ''}\nRules:\n${rules.map((r) => `- ${r}`).join('\n')}\n\n${ctxLines.join('\n')}`;
 
   return djText({
-    system: djSystem(),
+    system: djSystem(speaker),
     prompt: decoratePrompt(prompt, { kind: 'intro', recap, recentOpeners }),
     temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
     kind: 'generateIntro',

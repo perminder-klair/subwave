@@ -7,6 +7,7 @@ import { defineAgent } from '../../llm/agent.js';
 import { buildPickerTools, type PickerScope } from '../../llm/tools.js';
 import { pickSchema, pickSystem, requestSchema, requestSystem } from './schemas.js';
 import { agentDeadline } from './breaker.js';
+import type { Persona } from '../queue/types.js';
 
 // What pickViaAgent hands the picker each run. `scope` is the whole constraint
 // set as ONE value, passed through to the discovery tools untouched. Do not
@@ -22,6 +23,9 @@ export interface PickerRunArgs {
 
 export interface RequestRunArgs {
   scope: PickerScope;
+  // Captured before the asynchronous request run so its prompt cannot switch
+  // hosts halfway through and then relabel the resulting intro.
+  persona: Persona | null;
 }
 
 // What buildTools hands back for the caller to resolve the chosen id against.
@@ -61,7 +65,7 @@ export const requestAgent = defineAgent<RequestRunArgs, PickerExtras>({
   maxSteps: 2,
   providerDiscoveryBudget: true,
   timeoutMs: agentDeadline,
-  buildSystem: () => requestSystem(),
+  buildSystem: ({ persona }) => requestSystem(persona),
   // resolveReferences adds the web-backed reference resolver (request path only;
   // no-op without a search provider) behind settings.llm.requestWebResolve.
   // Set here rather than at the call site: it is a property of THIS agent.
@@ -75,5 +79,4 @@ export const requestAgent = defineAgent<RequestRunArgs, PickerExtras>({
   // Same native-path acceptance as pickerAgent.
   validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),
 });
-
 

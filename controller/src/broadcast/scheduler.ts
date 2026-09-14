@@ -475,15 +475,10 @@ export async function runHourlyCheck({ showWelcome = false, automatic = false }:
     // from a guest. A show welcome belongs to the incoming host: it establishes
     // that show's voice, rather than making a guest appear to take it over.
     let speaker = showWelcome ? session.onAirPersona() : settings.pickOnAirSpeaker();
-    let hostSpeech = automatic ? session.captureHostSpeech() : null;
-    if (hostSpeech && speaker?.id !== hostSpeech.personaId) {
-      const guests = settings.getOnAirRoster().guests;
-      if (!guests.some(guest => guest.id === speaker?.id)) {
-        speaker = session.onAirPersona();
-      } else {
-        hostSpeech = null;
-      }
-    }
+    const speechOwner = automatic
+      ? session.captureAutomaticHostSpeech(speaker)
+      : { persona: speaker, hostSpeech: null };
+    speaker = speechOwner.persona;
     const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
@@ -492,7 +487,7 @@ export async function runHourlyCheck({ showWelcome = false, automatic = false }:
       showWelcome,
     });
     await queue.announce(script, 'hourly-check', {
-      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech,
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech: speechOwner.hostSpeech,
     });
     return script;
   });
@@ -698,12 +693,10 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     let speaker = settings.pickOnAirSpeaker();
-    let hostSpeech = automatic ? session.captureHostSpeech() : null;
-    if (hostSpeech && speaker?.id !== hostSpeech.personaId) {
-      const guests = settings.getOnAirRoster().guests;
-      if (!guests.some(guest => guest.id === speaker?.id)) speaker = session.onAirPersona();
-      else hostSpeech = null;
-    }
+    const speechOwner = automatic
+      ? session.captureAutomaticHostSpeech(speaker)
+      : { persona: speaker, hostSpeech: null };
+    speaker = speechOwner.persona;
     // A deferred ident can wait across several boundaries, so stamp the daypart
     // offered to the model and let the queue refuse the clip if it changed.
     const daypart = atNextTrack
@@ -715,7 +708,7 @@ export async function runStationId({ atNextTrack = false, automatic = false } = 
       recentOpeners: queue.getRecentOpeners(),
       persona: speaker,
     });
-    const opts = { persona: speaker, daypart, hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
+    const opts = { persona: speaker, daypart, hostSpeech: speechOwner.hostSpeech, meta: { personaId: speaker?.id, personaName: speaker?.name } };
     if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
     else await queue.announce(script, 'station-id', opts);
     return script;
@@ -1124,7 +1117,7 @@ export function syncSkillCrons() {
       try {
         await withTrace({ kind: 'segment' }, async () => {
           const ctx = await getFullContext();
-          await runCapability(cap.kind, ctx);
+          await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
         });
       } catch (err: any) {
         queue.log('error', `[skills] cron "${expr}" skill "${cap.kind}" failed: ${err.message}`);

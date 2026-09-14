@@ -59,6 +59,7 @@ import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
+import type { Persona } from './queue/types.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -131,8 +132,8 @@ async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = t
 // still runs when this misses too. Reuses requestSystem()/requestSchema()'s own
 // wording and the same autoVoiceAllowed() gate for `intro`, so a re-picked
 // request is consistent with a first-try one. Never throws.
-async function repickRequestFromSeen({ seen, badId, requester, text }:
-  { seen: Map<string, any>; badId: string | null; requester: string; text: string }) {
+async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
+  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const wantIntro = autoVoiceAllowed();
@@ -140,12 +141,12 @@ async function repickRequestFromSeen({ seen, badId, requester, text }:
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
     ...(wantIntro ? {
-      intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro')}`),
+      intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro', persona)}`),
     } : {}),
   }));
   try {
     return await djObject({
-      system: requestSystem(),
+      system: requestSystem(persona),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
         + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
       schema,
@@ -868,6 +869,7 @@ export async function runRequest(queue: any, ctx: any, { requester, text }: { re
 
 async function runRequestViaAgent(queue: any, { requester, text }: { requester: string; text: string }) {
   return withTrace({ kind: 'request', requester }, async () => {
+    const requestSpeech = session.captureAutomaticHostSpeech(session.onAirPersona());
     // Requests stay near-unfiltered — listeners must be able to re-request a
     // song from earlier in the day. 2h covers the "don't repeat the song still
     // ringing in their ears" case and nothing more.
@@ -903,6 +905,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const run = await requestAgent.run({
       messages,
       scope: pickerScope({ recentIds }),
+      persona: requestSpeech.persona,
     });
     const { toolCalls, extras } = run;
     // Reassigned when the unknown-id salvage below (repickRequestFromSeen)
@@ -948,7 +951,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // caller's stateless matcher cascade is still the fallback when this
     // misses too (empty seen, or the re-pick call itself fails).
     if (!song && extras.seen.size) {
-      const repicked = await repickRequestFromSeen({ seen: extras.seen, badId: object?.id ?? null, requester, text });
+      const repicked = await repickRequestFromSeen({
+        seen: extras.seen, badId: object?.id ?? null, requester, text,
+        persona: requestSpeech.persona,
+      });
       if (repicked) {
         logEvent('pick.repicked', { agent: 'request', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
         queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -996,9 +1002,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const rawIntro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
     const guarded = await guardIntro(rawIntro || null, text, () => dj.generateIntro({
       track: trackFields(song), context: null, requestedBy: requester,
+      persona: requestSpeech.persona,
     }));
     if (guarded.guard) queue.log('request-guard', `agent intro echoed request text — ${guarded.guard}`);
-    const intro = guarded.script || '';
+    const currentSpeech = session.finalizeAutomaticHostSpeech(guarded.script, requestSpeech);
+    const intro = currentSpeech.text || '';
     // The personalised line is screenAck's FALLBACK rather than a `||` on the
     // return below: screenAck already substitutes for an empty ack, so `ack`
     // is never falsy and a downstream `||` is unreachable. Threading it in here
@@ -1019,7 +1027,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       introScript: intro || null,
       introKind: 'dj-speak',
       // Voice the intro as whoever wrote it (see the pool-pick push above).
-      introPersona: session.onAirPersona(),
+      introPersona: currentSpeech.persona,
+      introHostSpeech: currentSpeech.hostSpeech,
     });
     // Never-play blocklist refused the pick — throw so the route's stateless
     // fallback cascade runs; its own resolution is blocklist-filtered, so the

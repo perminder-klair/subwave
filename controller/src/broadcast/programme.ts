@@ -268,11 +268,15 @@ export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new D
         queue.log('error', `Programme intro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
-    const hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
     const soloHost = settings.getOnAirRoster(now).host;
-    const script = await dj.generateProgrammeIntro({ persona: soloHost, ...common });
+    const speechOwner = automaticHostSpeech
+      ? session.captureAutomaticHostSpeech(soloHost, now)
+      : { persona: soloHost, hostSpeech: null };
+    const script = await dj.generateProgrammeIntro({ persona: speechOwner.persona, ...common });
     await queue.announce(script, 'programme-intro', {
-      persona: soloHost, meta: { personaId: soloHost?.id, personaName: soloHost?.name }, hostSpeech,
+      persona: speechOwner.persona,
+      meta: { personaId: speechOwner.persona?.id, personaName: speechOwner.persona?.name },
+      hostSpeech: speechOwner.hostSpeech,
     });
     return script;
   });
@@ -321,6 +325,7 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
           // Programme beats keep their established ducked/boundary placement;
           // pause-and-talk is for director/skill segments, not the feature arc.
           pauseTalkEligible: false,
+          automaticHostSpeech,
         });
         if (run.queued && run.text) return run.text;
         // Skill stood down for want of usable data (#1412). The beat is still
@@ -330,18 +335,18 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
         queue.log('error', `Programme feature capability "${kind}" failed (${(err as Error).message}) — airing straight talk instead`);
       }
     }
-    let hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
-    if (hostSpeech && speaker?.id !== hostSpeech.personaId) {
-      const guests = settings.getOnAirRoster(now).guests;
-      if (!guests.some(guest => guest.id === speaker?.id)) speaker = settings.getEffectivePersona(now);
-      else hostSpeech = null;
-    }
+    const speechOwner = automaticHostSpeech
+      ? session.captureAutomaticHostSpeech(speaker, now)
+      : { persona: speaker, hostSpeech: null };
+    speaker = speechOwner.persona;
     const script = await dj.generateProgrammeFeature({
       show, topic, plan, persona: speaker, context: ctx,
       recap: queue.getDjRecap(), recentOpeners: queue.getRecentOpeners(),
     });
     await queue.announce(script, 'programme-feature', {
-      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, hostSpeech,
+      persona: speaker,
+      meta: { personaId: speaker?.id, personaName: speaker?.name },
+      hostSpeech: speechOwner.hostSpeech,
     });
     return script;
   });
@@ -399,11 +404,15 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
         queue.log('error', `Programme outro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
-    const hostSpeech = automaticHostSpeech ? session.captureHostSpeech() : null;
     const soloHost = settings.getOnAirRoster(now).host;
-    const script = await dj.generateProgrammeOutro({ persona: soloHost, ...common });
+    const speechOwner = automaticHostSpeech
+      ? session.captureAutomaticHostSpeech(soloHost, now)
+      : { persona: soloHost, hostSpeech: null };
+    const script = await dj.generateProgrammeOutro({ persona: speechOwner.persona, ...common });
     await queue.announce(script, 'programme-outro', {
-      persona: soloHost, meta: { personaId: soloHost?.id, personaName: soloHost?.name }, hostSpeech,
+      persona: speechOwner.persona,
+      meta: { personaId: speechOwner.persona?.id, personaName: speechOwner.persona?.name },
+      hostSpeech: speechOwner.hostSpeech,
     });
     return script;
   });
