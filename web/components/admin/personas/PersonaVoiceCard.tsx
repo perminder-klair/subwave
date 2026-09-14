@@ -43,13 +43,13 @@ export function PersonaVoiceCard({
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
   const speed = tts.speed ?? 1;
-  // Only Piper/Kokoro/cloud honour speed, so the control is shown but disabled
-  // elsewhere. Asked of the RESOLVED engine: a persona on the station default
-  // has no engine of its own.
+  // Chatterbox/PocketTTS do not honour speed, so the control is shown but
+  // disabled there. Asked of the RESOLVED engine: a persona on the station
+  // default has no engine of its own.
   const resolved = effectiveTts({ tts }, data);
   const resolvedEngine = resolved?.engine;
   const speedSupported =
-    resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts' && resolvedEngine !== 'remote';
+    resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts';
 
   return (
     <Card flat title="Voice" sub="text-to-speech engine">
@@ -155,8 +155,10 @@ export function PersonaVoiceCard({
             </div>
             <div className="field-hint">
               {speedSupported
-                ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
-                : <>Not supported by this engine; only Piper, Kokoro and cloud honour speed.</>}
+                ? resolvedEngine === 'remote'
+                  ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change. Remote applies other rates locally with ffmpeg when available; otherwise it uses the original audio.</>
+                  : <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
+                : <>Not supported by this engine; Piper, Kokoro, cloud and Remote honour speed.</>}
             </div>
           </div>
         </div>

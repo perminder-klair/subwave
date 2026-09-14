@@ -128,12 +128,12 @@ function TtsGainField({
   );
 }
 
-// Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×). Only Piper/Kokoro/
-// cloud honour speed — chatterbox/pocket-tts/remote ignore it.
+// Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×). Piper, Kokoro,
+// Cloud and Remote honour speed; chatterbox/pocket-tts ignore it.
 const TTS_SPEED_MIN = 0.5;
 const TTS_SPEED_MAX = 2;
 const TTS_SPEED_STEP = 0.05;
-const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts', 'remote']);
+const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts']);
 
 function formatSpeed(v: number): string {
   return `${v.toFixed(2)}×`;
@@ -175,8 +175,10 @@ function TtsSpeedField({
       />
       <div className="field-hint">
         {supported
-          ? <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
-          : <>Not supported by this engine: only Piper, Kokoro and cloud honour speed.</>}
+          ? engineId === 'remote'
+            ? <>Slow down or speed up this engine. <code>1.00×</code> = no change. Remote applies other rates locally with ffmpeg when available; otherwise it uses the original audio.</>
+            : <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
+          : <>Not supported by this engine: Piper, Kokoro, cloud and Remote honour speed.</>}
       </div>
     </div>
   );

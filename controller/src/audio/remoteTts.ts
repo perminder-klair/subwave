@@ -20,6 +20,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { cachedHealthProbe } from '../util/health-probe.js';
+import { hasFfmpeg, transcodeAudio } from './audio-import.js';
 
 const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_INTERVAL_MS = 30_000;
@@ -82,7 +83,7 @@ export function isAvailable(): boolean {
 
 export async function speak(
   text: string,
-  { outPath: customPath, voice }: { outPath?: string; voice?: string },
+  { outPath: customPath, voice, speedScale }: { outPath?: string; voice?: string; speedScale?: number } = {},
 ): Promise<string> {
   const url = getUrl();
   if (!url) throw new Error('remote TTS URL not configured');
@@ -107,7 +108,27 @@ export async function speak(
   // a zero-byte file (a silent segment with no error).
   const audio = Buffer.from(await res.arrayBuffer());
   if (audio.length === 0) throw new Error('remote TTS returned an empty response body');
-  await writeFile(outPath, audio);
+
+  // The endpoint keeps its deliberately small { text, voice } contract. Apply
+  // the already-composed engine/persona/daypart rate locally, exactly once.
+  // Invalid direct-call values degrade to unity; the dispatcher owns the normal
+  // 0.5–2.0 bounds. Unity is an exact-byte fast path and does not probe ffmpeg.
+  const rate = Number.isFinite(speedScale) && speedScale! > 0 ? speedScale! : 1;
+  if (rate === 1) {
+    await writeFile(outPath, audio);
+  } else {
+    try {
+      if (!await hasFfmpeg()) throw new Error('ffmpeg is not available');
+      await transcodeAudio(audio, { outPath, format: 'wav', atempo: rate });
+    } catch (err) {
+      console.warn(
+        `[remote] could not apply speech rate ${rate}; using original 1x audio: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      // ffmpeg can leave a partial output before failing. Restore the endpoint's
+      // complete original bytes rather than handing that partial file onward.
+      await writeFile(outPath, audio);
+    }
+  }
 
   // Make a silent voice substitution visible (issue #238): the call succeeded
   // and audio plays, but NOT in the requested voice. Surfaced via optional

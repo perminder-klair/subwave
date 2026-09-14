@@ -77,6 +77,8 @@ own voice directory where Liquidsoap can read them.
 clip filename, a style prompt. SUB/WAVE passes the persona's configured voice
 string through untouched and never validates it against a list, precisely
 because that vocabulary is yours. An empty string means "use your default".
+The request always has exactly these two fields: speech rate is never sent to
+your server.
 
 Optional response headers make a silent voice substitution visible in the
 station log (issue #238) — set them if your server ever renders something other
@@ -135,10 +137,29 @@ the far side shouldn't lose the segment.
 
 ---
 
+## Speech rate
+
+Remote supports the same engine and persona speed controls as Piper, Kokoro and
+Cloud. SUB/WAVE composes the Remote engine rate with the persona's delivery rate
+and the current daypart or show's energy, then applies that effective rate
+locally with ffmpeg's pitch-preserving `atempo` filter. Live and admin preview
+rates use the same path.
+
+This means an upgrade can make pacing audible even when both saved sliders still
+show `1.00×`: automatic daypart rates normally range around unity, and an active
+show's selected energy can also supply a non-unity delivery rate. Remote speed
+values that were stored but previously ignored also begin taking effect. There
+is no settings migration or new server capability to enable.
+
+A final effective rate of exactly `1.00×` bypasses ffmpeg and writes the response
+bytes unchanged. For any other valid rate, local processing is best-effort: if
+ffmpeg is missing or the conversion fails, SUB/WAVE logs a warning and uses the
+server's original audio at 1× rather than changing to a fallback voice. The
+`POST /speak` body remains exactly `{ "text", "voice" }`; rate is never sent
+upstream.
+
 ## What Remote doesn't do
 
-- **Speed shaping** — the daypart speed dial is ignored (your server owns
-  pacing). Per-engine gain trim *is* applied.
 - **Voice previews by name** — the preview button works, but auditions your
   server's *default* voice: the panel can't enumerate a vocabulary it doesn't
   own.
