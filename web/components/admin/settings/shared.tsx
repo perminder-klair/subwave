@@ -20,6 +20,7 @@ export type { TransitionEffect } from '../../../lib/schemas.generated';
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
   OPENAI_API_KEY: 'sk-...',
+  AZURE_API_KEY: 'Azure portal → your resource → Keys and Endpoint',
   GOOGLE_GENERATIVE_AI_API_KEY: 'AIza...',
   DEEPSEEK_API_KEY: 'sk-...',
   OPENROUTER_API_KEY: 'sk-or-v1-...',
@@ -160,6 +161,7 @@ export interface LlmFallbackForm {
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
   reasoning: boolean;
+  reasoningModel: boolean;
   discoverySteps: number;
 }
 
@@ -172,6 +174,10 @@ export interface LlmForm {
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
   reasoning: boolean;
+  // Azure only: is the DEPLOYMENT behind `model` a reasoning model? Separate
+  // from `reasoning` (do we WANT a chain-of-thought) because the two are
+  // independent — see the controller default's comment.
+  reasoningModel: boolean;
   toolChoice: string;
   pickerAgent: boolean;
   noRepeatWindow: string;

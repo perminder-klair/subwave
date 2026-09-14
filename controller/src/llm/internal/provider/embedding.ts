@@ -13,12 +13,16 @@
 //   anthropic           → falls back to openai embeddings (Anthropic has no
 //                                                          first-party API as
 //                                                          of 2026-05)
+//   azure               → NO default: the id is a DEPLOYMENT name on the
+//                                     operator's own resource, which nothing can
+//                                     guess. A blank one is refused.
 
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS } from './registry.js';
+import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, azureEndpoint, OPENROUTER_APP_HEADERS } from './registry.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -28,9 +32,21 @@ const embedCache = new Map();
 function embeddingCfg() {
   const s: any = settings.get().embedding || {};
   const llm = llmCfg();
+  const provider = s.provider || llm.provider || 'ollama';
+  // `baseUrl` inherits the CHAT leg's flat field, which is what keeps a blank
+  // embedding URL working on a station whose DJ already points somewhere (#319).
+  // Azure is the one provider that must NOT take that inheritance from a
+  // different provider: its baseUrl is a RESOURCE endpoint, and azureEndpoint()
+  // would dutifully build `<some llama.cpp URL>/openai/v1` out of a chat leg's
+  // server — a plausible-looking endpoint that silently talks to the wrong box,
+  // where an honest "no Azure endpoint is set" is what the operator needs. When
+  // the chat leg IS azure the inheritance is exactly right and is kept, which is
+  // the common case (embedding.provider blank = follow the DJ).
+  const inheritedBaseUrl =
+    provider === 'azure' && llm.provider !== 'azure' ? '' : (llm.baseUrl || '');
   return {
     enabled: s.enabled !== false,
-    provider: s.provider || llm.provider || 'ollama',
+    provider,
     model: s.model || '',
     // Key precedence: the saved settings field wins, then a dedicated
     // `EMBEDDING_API_KEY` env var (the env path most installs use -- keys live in
@@ -42,7 +58,7 @@ function embeddingCfg() {
     // for OPENAI_API_KEY against an arbitrary self-hosted server).
     apiKey: s.apiKey || process.env.EMBEDDING_API_KEY || llm.apiKey || '',
     ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
-    baseUrl: s.baseUrl || llm.baseUrl || '',
+    baseUrl: s.baseUrl || inheritedBaseUrl,
   };
 }
 
@@ -64,6 +80,15 @@ function defaultEmbeddingModelFor(provider: string): string {
     case 'anthropic':
       // No first-party Anthropic embedding API. We resolve via openai.
       return 'text-embedding-3-small';
+    case 'azure':
+      // Deliberately blank. Azure's model id is the DEPLOYMENT name the operator
+      // chose, so 'text-embedding-3-small' would be a guess dressed as a default
+      // — and the same reasoning as registry.resolveModelId()'s azure branch
+      // applies: naming a deployment that may not exist fails worse than a clear
+      // error. buildEmbeddingModel refuses a blank one; this table stays TOTAL so
+      // the display paths (activeEmbeddingModelLabel / activeEmbeddingDim /
+      // embeddingInfoOf) never throw just to render a settings page.
+      return '';
     case 'locca':
       // Local llama.cpp embedding server — the homelab default model.
       return 'nomic-embed-text';
@@ -155,15 +180,24 @@ export interface EmbeddingCfg {
 
 export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
   const base = embeddingCfg();
+  // '' is meaningful for provider (= follow llm), so only override when a
+  // non-empty value is supplied.
+  const provider = overrides.provider || base.provider;
+  // The other half of embeddingCfg()'s azure rule, for the path that resolves
+  // the provider LATER: the admin's "Test embeddings" button sends unsaved form
+  // values, so an override can switch the provider to azure while `base.baseUrl`
+  // was still resolved for whatever is saved. Inheriting it there would hand
+  // azureEndpoint() a chat server's URL. The callers that HAVE an endpoint send
+  // one (the admin form forwards the LLM tab's azure slot), so an absent
+  // override here really does mean "no Azure endpoint configured".
+  const inheritable = provider === 'azure' && base.provider !== 'azure' ? '' : base.baseUrl;
   return {
     enabled: overrides.enabled ?? base.enabled,
-    // '' is meaningful for provider (= follow llm), so only override when a
-    // non-empty value is supplied.
-    provider: overrides.provider || base.provider,
+    provider,
     model: overrides.model ?? base.model,
     apiKey: overrides.apiKey || base.apiKey,
     ollamaUrl: overrides.ollamaUrl || base.ollamaUrl,
-    baseUrl: overrides.baseUrl || base.baseUrl,
+    baseUrl: overrides.baseUrl || inheritable,
   };
 }
 
@@ -188,6 +222,49 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
     case 'anthropic': {
       // Anthropic has no first-party embedding model; punt to OpenAI.
       const provider = createOpenAI(cfg.apiKey ? { apiKey: cfg.apiKey } : {});
+      return provider.textEmbeddingModel(id);
+    }
+    case 'azure': {
+      // Azure OpenAI: the same OpenAI embedding models, deployed on the
+      // operator's OWN resource. Everything about WHERE the request goes is
+      // already decided by azureEndpoint() — the modern `/openai/v1` surface vs
+      // the legacy `/openai/deployments/<dep>/…?api-version=` one — and that
+      // resolver stays the single owner of the choice, shared with the chat leg.
+      // @ai-sdk/azure's url() appends `/embeddings` to whichever it hands back.
+      //
+      // Note what is NOT wired: azureChatFetch. It exists to learn the three
+      // chat-completion parameter rejections (max_tokens / temperature / top_p),
+      // and an embeddings request carries none of them.
+      const ep = azureEndpoint(cfg);
+      if (!ep.baseURL) {
+        throw new Error(
+          'No Azure endpoint is set for embeddings. In /admin/settings → Library ' +
+            'tagger → Embedding, paste your resource endpoint ' +
+            '(https://<resource>.openai.azure.com).',
+        );
+      }
+      if (!id) {
+        throw new Error(
+          'embedding.provider is "azure" but no model is set — enter the ' +
+            'DEPLOYMENT name of your embedding deployment (what you called it in ' +
+            'Azure, e.g. text-embedding-3-small) in /admin/settings → Library ' +
+            'tagger → Embedding.',
+        );
+      }
+      // The inherited chain (settings.embedding.apiKey → EMBEDDING_API_KEY →
+      // the CHAT leg's key) misses one real case: a station whose DJ is on
+      // Ollama but which has an inline Azure key on file. Reaching for this
+      // provider's own key here is the same move the openrouter/requesty
+      // branches make with their env vars. Spread conditionally so that with
+      // nothing on file @ai-sdk/azure still reads AZURE_API_KEY itself, exactly
+      // as registry.ts does for the chat leg.
+      const apiKey = cfg.apiKey || settings.llmKeyFor('azure') || '';
+      const provider = createAzure({
+        baseURL: ep.baseURL,
+        ...(ep.apiVersion ? { apiVersion: ep.apiVersion } : {}),
+        ...(ep.useDeploymentBasedUrls ? { useDeploymentBasedUrls: true } : {}),
+        ...(apiKey ? { apiKey } : {}),
+      });
       return provider.textEmbeddingModel(id);
     }
     case 'openai-compatible':
@@ -258,7 +335,8 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       throw new Error(
         `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
           `embedding-capable provider in Settings → Library tagger → Embedding ` +
-          `(ollama, openai, google, openrouter, requesty, locca, or openai-compatible).`,
+          `(ollama, openai, azure, google, openrouter, requesty, locca, or ` +
+          `openai-compatible).`,
       );
   }
 }
@@ -278,7 +356,11 @@ export function embeddingModel() {
 
 export function activeEmbeddingModelLabel(): string {
   const cfg = embeddingCfg();
-  return `${cfg.provider}:${cfg.model || defaultEmbeddingModelFor(cfg.provider)}`;
+  // `(unset)` mirrors registry.activeModelLabel()'s catch branch: azure has no
+  // default deployment name, and a label reading `azure:` tells the operator
+  // nothing about why the doctor line looks wrong.
+  const id = cfg.model || defaultEmbeddingModelFor(cfg.provider) || '(unset)';
+  return `${cfg.provider}:${id}`;
 }
 
 export function activeEmbeddingDim(): number {

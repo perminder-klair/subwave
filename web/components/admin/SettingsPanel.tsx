@@ -526,6 +526,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         })(),
         headers: headerRows(v.llm?.headers),
         reasoning: !!v.llm?.reasoning,
+        reasoningModel: !!v.llm?.reasoningModel,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
         // Fallback must track the controller's default (config.ts, 250): a
@@ -560,6 +561,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           })(),
           headers: headerRows(v.llm?.fallback?.headers),
           reasoning: !!v.llm?.fallback?.reasoning,
+          reasoningModel: !!v.llm?.fallback?.reasoningModel,
         },
       },
       search: {

@@ -230,7 +230,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Show the Booth Sprite', section: 'theme', card: 'Booth Buddy', keywords: 'mascot sprite request box' },
 
   // ── llm provider ───────────────────────────────────────────────────────────
-  { label: 'Provider', section: 'llm', card: 'Provider', keywords: 'ollama anthropic openai google deepseek openrouter requesty gateway compatible' },
+  { label: 'Provider', section: 'llm', card: 'Provider', keywords: 'ollama locca anthropic openai azure google deepseek openrouter requesty gateway compatible deployment endpoint' },
   { label: 'Ollama server URL', section: 'llm', card: 'Provider', keywords: 'host docker internal 11434 local' },
   { label: 'API key', section: 'llm', card: 'Provider', keywords: 'token secret credential sk-' },
   { label: 'Model', section: 'llm', card: 'Provider', keywords: 'llama claude gpt gemini model id' },

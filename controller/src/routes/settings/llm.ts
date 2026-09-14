@@ -12,6 +12,7 @@ import { listenbrainzApiBase } from '../../broadcast/scrobble.js';
 import { generateText, createGateway } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -46,15 +47,18 @@ function briefLlmError(err: unknown): string {
 }
 
 // Non-mutating probe of one secret; builds a one-off client and never writes
-// process.env or secrets.env. `hint` disambiguates a key shared by several
-// providers (SEARCH_API_KEY is Tavily or Brave) because the UI tests before
-// saving, so the stored provider can't be trusted mid-edit; it falls back to
-// the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
-// Responses API rejects anything below 16.
+// process.env or secrets.env. `form` carries the two fields a probe may need
+// that saved settings cannot supply mid-edit — Azure's resource endpoint and
+// deployment name — since the UI tests a key BEFORE saving the form around it;
+// saved settings are the fallback. `hint` disambiguates a key shared by several
+// providers (SEARCH_API_KEY is Tavily or Brave) for the same reason, falling
+// back to the saved provider, then Tavily. maxOutputTokens stays at 32:
+// OpenAI's Responses API rejects anything below 16.
 async function probeKey(
   key: (typeof SECRET_ENV_KEYS)[number],
   value: string,
   hint?: string,
+  form?: { baseUrl?: string; model?: string },
 ): Promise<{ ok: boolean; message: string }> {
   const cfg = settings.get().llm || {};
   const activeModel = (provider: string) =>
@@ -75,6 +79,33 @@ async function probeKey(
         const m = createOpenAI({ apiKey: value })(model);
         await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenAI key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
+    }
+    case 'AZURE_API_KEY': {
+      // Azure has no hosted endpoint and no model list to default to: the probe
+      // needs the operator's resource endpoint AND a deployment name. Prefer the
+      // live form, fall back to whichever leg has azure selected.
+      const azureLeg = cfg.provider === 'azure'
+        ? cfg
+        : (cfg.fallback?.provider === 'azure' ? cfg.fallback : null);
+      const baseUrl = (form?.baseUrl || '').trim() || azureLeg?.providerBaseUrls?.azure || '';
+      const deployment = (form?.model || '').trim() || azureLeg?.model || '';
+      const ep = llmProvider.azureEndpoint({ baseUrl });
+      if (!ep.baseURL || !deployment) {
+        return {
+          ok: false,
+          message: 'Fill in the Azure endpoint and deployment name above first — the key is tested by calling that deployment',
+        };
+      }
+      try {
+        const m = createAzure({
+          baseURL: ep.baseURL,
+          apiKey: value,
+          ...(ep.apiVersion ? { apiVersion: ep.apiVersion } : {}),
+          ...(ep.useDeploymentBasedUrls ? { useDeploymentBasedUrls: true } : {}),
+        }).chat(deployment);
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ Azure OpenAI key valid · deployment "${deployment}" responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
     case 'GOOGLE_GENERATIVE_AI_API_KEY': {
@@ -197,10 +228,11 @@ async function probeKey(
   }
 }
 
-// Probe a key against its provider WITHOUT saving. Always 200s with
-// { ok, message, latencyMs }: a bad key is a normal, actionable answer.
+// Probe a key against its provider WITHOUT saving. Body may also carry
+// baseUrl/model — the unsaved Azure endpoint + deployment name. Always 200s
+// with { ok, message, latencyMs }: a bad key is a normal, actionable answer.
 router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
-  const { key, value, provider } = req.body || {};
+  const { key, value, provider, baseUrl, model } = req.body || {};
   if (!key || typeof key !== 'string') {
     return res.status(400).json({ ok: false, message: 'key is required', latencyMs: 0 });
   }
@@ -222,6 +254,10 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
       key as (typeof SECRET_ENV_KEYS)[number],
       targetValue,
       typeof provider === 'string' ? provider : undefined,
+      {
+        baseUrl: typeof baseUrl === 'string' ? baseUrl : undefined,
+        model: typeof model === 'string' ? model : undefined,
+      },
     );
     res.json({ ok: result.ok, message: result.message, latencyMs: Date.now() - t0 });
   } catch (err: unknown) {
@@ -337,6 +373,28 @@ function looksLikeEmbeddingModel(id: string): boolean {
   return /(^|[/:_-])(bge|gte|e5|all-minilm|minilm|instructor)([/:_-]|$)/.test(s);
 }
 
+// Shape Azure's deployment list into model ids for the picker. A deployment
+// carries both its operator-chosen name (`id`) and the model behind it
+// (`model`), which is why azure is deliberately NOT in
+// MIXED_MODEL_LIST_PROVIDERS: that set trims by the id alone, and `model` is
+// strictly better information — a deployment called "vectors" is still an
+// embedding deployment. Fall back to the name only when the API omits `model`.
+// Only the EMBEDDING scope filters: hiding a deployment from the chat picker
+// would be a separate behaviour change, and a hidden one cannot be picked.
+export function azureDeploymentIds(raw: unknown, scope: string): string[] {
+  if (!Array.isArray(raw)) return [];
+  return (raw as { id?: unknown; model?: unknown }[])
+    .filter((d) => {
+      if (scope !== 'embedding') return true;
+      const backing = typeof d?.model === 'string' ? d.model : '';
+      const name = typeof d?.id === 'string' ? d.id : '';
+      return looksLikeEmbeddingModel(backing || name);
+    })
+    .map((d) => d?.id)
+    .filter((id): id is string => typeof id === 'string')
+    .sort();
+}
+
 // Discover available models for any provider. Query: provider (required),
 // baseUrl, ollamaUrl, scope. Always 200s with { ok, models, provider, error? }.
 router.get('/settings/llm/models', requireAdmin, async (req, res) => {
@@ -403,6 +461,32 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
               .filter((id: string) => scope === 'embedding' ? id.startsWith('text-embedding-') : !id.startsWith('text-embedding-'))
               .sort()
           : [];
+        break;
+      }
+
+      case 'azure': {
+        // Azure's model list is per-RESOURCE (the deployments the operator
+        // created), so it needs their endpoint and key. The data-plane
+        // deployments list is a legacy api-version and some resources/policies
+        // do not serve it at all — a failure here is normal and lands the
+        // operator on the free-text deployment-name input, which is the same
+        // place they would be with no discovery at all. Never throw the key.
+        const apiKey = resolveKey('AZURE_API_KEY') || (await (async () => {
+          await settings.load();
+          return settings.llmKeyFor('azure');
+        })());
+        if (!apiKey) throw new Error('AZURE_API_KEY not set');
+        if (!baseUrl) throw new Error('Azure endpoint is required');
+        // Deployment listing lives under the resource root, NOT the /openai/v1
+        // chat path, so strip back to the root the operator pasted.
+        const root = baseUrl.replace(/\?.*$/, '').replace(/\/+$/, '').replace(/\/openai(\/v1)?$/i, '');
+        const r = await fetch(`${root}/openai/deployments?api-version=2023-03-15-preview`, {
+          signal: ctrl.signal,
+          headers: { 'api-key': apiKey },
+        });
+        if (!r.ok) throw new Error(`Azure HTTP ${r.status} — type the deployment name instead`);
+        const data = (await r.json()) as { data?: unknown };
+        models = azureDeploymentIds(data?.data, scope);
         break;
       }
 

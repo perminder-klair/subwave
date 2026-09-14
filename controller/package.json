@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.27",
+    "@ai-sdk/azure": "^4.0.63",
     "@ai-sdk/deepseek": "^3.0.19",
     "@ai-sdk/elevenlabs": "^3.0.19",
     "@ai-sdk/google": "^4.0.31",

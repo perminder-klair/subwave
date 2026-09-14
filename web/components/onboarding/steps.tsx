@@ -222,6 +222,12 @@ export function LlmStep({ w }: { w: WizardController }) {
   const isOllama = provider === 'ollama';
   const isLocca = provider === 'locca';
   const isCustom = provider === 'openai-compatible';
+  // Azure has no hosted endpoint — llmProbeSchema refuses a probe without one,
+  // so without this field the wizard cannot configure Azure at all. It shares
+  // the `baseUrl` slot with the other endpoint-bearing providers: the save path
+  // (applyLlmLegPatch) routes a flat baseUrl into providerBaseUrls[provider],
+  // which is how the CLI wizard's azure branch already works.
+  const isAzure = provider === 'azure';
   const isDjBrain = isCustom && baseUrl.trim() === DJ_BRAIN_BASE_URL;
 
   const providerField = useController({ control, name: 'provider' });
@@ -329,6 +335,15 @@ export function LlmStep({ w }: { w: WizardController }) {
             description="Blank → http://host.docker.internal:8080/v1 (the locca server on the host)"
           />
         )}
+        {isAzure && (
+          <TextField
+            control={control}
+            name="baseUrl"
+            label="Azure resource endpoint"
+            placeholder="https://my-resource.openai.azure.com"
+            description="From the Azure portal, your resource → Keys and Endpoint. Paste the bare root. The Model field below is your DEPLOYMENT name, not a model id."
+          />
+        )}
         {!isOllama && !isLocca && (
           <TextField
             control={control}
@@ -364,7 +379,7 @@ export function LlmStep({ w }: { w: WizardController }) {
                 onChange={e => modelField.field.onChange(e.target.value)}
                 onBlur={modelField.field.onBlur}
                 ref={modelField.field.ref}
-                placeholder={isOllama ? 'glm-5.1:cloud' : (isCustom || isLocca) ? 'model filename or id' : 'e.g. claude-sonnet-4 · gpt-4o-mini'}
+                placeholder={isOllama ? 'glm-5.1:cloud' : (isCustom || isLocca) ? 'model filename or id' : isAzure ? 'deployment name, e.g. gpt-4o-mini' : 'e.g. claude-sonnet-4 · gpt-4o-mini'}
                 className="max-w-[360px] flex-1"
               />
             )}

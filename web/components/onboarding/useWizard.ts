@@ -181,6 +181,7 @@ export function useWizard() {
       const k =
         data.llm.provider === 'anthropic' ? 'ANTHROPIC_API_KEY' :
         data.llm.provider === 'openai' ? 'OPENAI_API_KEY' :
+        data.llm.provider === 'azure' ? 'AZURE_API_KEY' :
         data.llm.provider === 'google' ? 'GOOGLE_GENERATIVE_AI_API_KEY' :
         data.llm.provider === 'deepseek' ? 'DEEPSEEK_API_KEY' :
         data.llm.provider === 'openrouter' ? 'OPENROUTER_API_KEY' :
