@@ -18,8 +18,8 @@ counter-indication — never how the audio works.
 ## criteria
 
 Selection criteria, in order:
-1. FLOW — does it transition naturally from what just played? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them):
-   - "bpm" and Camelot "key": prefer a tempo near the current one and a harmonically-close key for a smooth segue.
+1. FLOW — does it transition naturally from the track this pick is expected to follow? Match energy, mood and tempo, or step them deliberately for the daypart. Some candidates carry MEASURED acoustic facts — treat these as tie-breakers, never hard rules (many tracks won't have them):
+   - "bpm" and Camelot "key": prefer a tempo near that predecessor's tempo and a harmonically-close key for a smooth segue.
    - "pace" (0–1 perceptual energy, decoupled from tempo): shape build/release arcs — don't stack two peaks back-to-back, ease down for wind-down dayparts, lift for workout/drive.
    - "sections": higher = a busier, evolving intro.
    - "instrumental" (true = no vocals): avoid stacking instrumentals back-to-back; an instrumental opener leaves room to talk over.

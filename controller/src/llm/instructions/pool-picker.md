@@ -18,10 +18,10 @@ Pick the single best NEXT track from the candidate pool, given recent plays and 
 ## source-tags
 
 Each candidate carries a "source" tag — a hint about where it came from:
-- similar / similar-artist: flows from what's playing now
-- embedding-similar: closest in mood / lyric / metadata space to what's playing
-- audio-similar: SOUNDS closest to what's playing (timbre, instrumentation, production)
-- audio-journey: SOUNDS like where the set is heading — the next step of a deliberate drift toward a destination vibe, not necessarily the current track
+- similar / similar-artist: flows from the expected predecessor
+- embedding-similar: closest in mood / lyric / metadata space to the expected predecessor
+- audio-similar: SOUNDS closest to the expected predecessor (timbre, instrumentation, production)
+- audio-journey: SOUNDS like where the set is heading — the next step of a deliberate drift toward a destination vibe, not necessarily the expected predecessor
 - recent: newly added to the library
 - frequent / starred / playlist: an established favourite
 - mood-library: matches the room's mood
@@ -33,9 +33,11 @@ match you can lean on for a smooth segue.
 
 ## recent-plays
 
-recentPlays is context for judging flow (most recent first; now.current is the
-track on air right now) — every candidate is already guaranteed unplayed, so
-you never need to reject one for being recent.
+recentPlays contains only tracks that have already aired, most recent first.
+now.current is the expected predecessor: the last queued track this selection
+will follow, or the track on air when the queue is empty. It may not be on air yet.
+Every candidate is already guaranteed unplayed, so you never need to reject one
+for being recent.
 
 Pick exactly one candidate.
 

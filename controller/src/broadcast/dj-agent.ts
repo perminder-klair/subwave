@@ -121,7 +121,7 @@ async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = t
 // when the request agent returns an id outside its own discovery trail. Seen
 // live as the SAME hallucinated id recurring across independent requests hours
 // apart, which looks like the model copying an id out of a session event turn
-// (every pick event tags the current track `[id: …]`) rather than fabricating
+// (every pick event tags its expected predecessor `[id: …]`) rather than fabricating
 // one — the idInSessionWindow diagnostic on the pick.rejected event is what
 // turns that hunch into a number.
 //
@@ -346,9 +346,10 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     // live trace so agent-pick reliability is real.
     //
     // `cause` separates the three ways this lands (#1247) — most usefully the
-    // zero-candidate run, where the model's answer is a symptom of an index that
-    // couldn't answer rather than a model that couldn't choose. Classification
-    // lives in util/pick-seed.ts, never inline.
+    // zero-candidate run. An observed empty candidate set cannot produce a
+    // validated pick, but it does not by itself establish why discovery and
+    // recovery found nothing. Classification lives in util/pick-seed.ts, never
+    // inline.
     const failure = classifyPickFailure({
       pickedId: object?.id ?? null,
       seedId: pickAnchor?.id ?? null,
@@ -730,8 +731,8 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     const journeyClause = audioWaypoint && audioWaypoint.length
       ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
-    // Surface the current track's real Subsonic id so similarSongs /
-    // tracksLikeThis ("pass the currently-playing song id") actually have one
+    // Surface the expected predecessor's real Subsonic id so similarSongs /
+    // tracksLikeThis actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
     // (e.g. "lost-sultaan-romeo") and Navidrome answers "data not found".
     // Per-pick effects reminder: the system-prompt guidance alone loses to the
@@ -764,7 +765,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // source so both paths lean the same way — a lean, never a lock.
     const favClause = likes.favouritesClause(settings.get()?.likes);
     // Exploration nudge (ε-greedy seed break, music/airing.ts): every pick
-    // seeding discovery from the on-air track is a random walk that never
+    // seeding discovery from the expected predecessor is a random walk that never
     // leaves its similarity cluster, so a fraction of picks steer the round
     // toward the unaired shelf instead. Deliberately carries NO track id — a
     // raw id in the event message is the #1247 seed-echo trap (an id no tool
@@ -806,13 +807,14 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
         // if even the pool can only find an already-queued track).
         queue.log('picker', 'agent pick already queued — falling back to pool');
       } catch (err) {
-        // A run the agent DROVE correctly but couldn't answer from — every
-        // discovery call came back empty — is a library-coverage problem, not a
-        // model one (#1247). Counting it would open the breaker after three
-        // tracks, disable the session-aware picker for 10 minutes, and point the
-        // operator at "switch model", which repairs nothing. Same carve-out, and
-        // same reasoning, as the already-queued case just above; the pool
-        // fallback below still fills the slot either way.
+        // A run that made at least one real discovery call but ended with no
+        // observed candidates is deliberately breaker-exempt (#1247). The empty
+        // set proves this run cannot validate a pick; it does not by itself
+        // distinguish index coverage, filters, provider/service misses, or
+        // recovery behaviour, and therefore is not evidence that the model
+        // cannot drive tool calls. Require a real discovery call so a model that
+        // emits nothing still counts as a failure; the pool fallback below fills
+        // the slot either way.
         const failure = (err as any)?.pickFailure as PickFailure | undefined;
         if (failure && !failure.countsAgainstBreaker) {
           queue.log('picker', `${failure.message} — falling back to pool`);

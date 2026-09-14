@@ -255,7 +255,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     return out;
   };
 
-  // 1. Similar-songs from current track — strongest contextual signal.
+  // 1. Similar-songs from the expected predecessor — strongest contextual signal.
   if (currentTrack?.id) {
     try {
       const similar = await subsonic.getSimilarSongs(currentTrack.id, {
@@ -758,7 +758,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
             : undefined,
           unaired: neverAired,
           source: c._source || null,
-          // Cosine similarity to the current track, KNN sources only.
+          // Cosine similarity to the expected predecessor, KNN sources only.
           similarity: c._similarity != null ? Math.round(c._similarity * 100) / 100 : undefined,
         };
       }),
