@@ -70,6 +70,21 @@ FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "").strip() or
 FFMPEG_DECODE_TIMEOUT_S = float(
     os.environ.get("ANALYZE_FFMPEG_TIMEOUT_S", "").strip() or "120"
 )
+# A compressed source can expand far past its on-disk size, and a capped FLAC
+# prefix can still represent hours of audio. Keep every one-shot PCM predecode
+# bounded independently of the compressed input cap;
+# `-fs` limits bytes while ffmpeg is writing and the post-check below is the
+# hard acceptance boundary. 64 MiB retains several 40s analysis windows for
+# common stereo files without letting sparse audio expand until it fills the
+# analyzer's writable layer. There is deliberately no duration cap on FLAC
+# recovery: CLAP can still spread its windows across all recovered audio that
+# fits under the byte ceiling, while head analysis remains limited by
+# ANALYZE_SECONDS downstream.
+PREDECODE_MAX_BYTES = 64 * 1024 * 1024
+# ffmpeg documents that `-fs` may overshoot slightly because it stops at a mux
+# packet boundary. Leave bounded headroom, then enforce the exact ceiling above
+# before accepting the WAV.
+PREDECODE_FFMPEG_MAX_BYTES = PREDECODE_MAX_BYTES - 1024 * 1024
 
 # --- CLAP audio embedding (optional, opt-in) -------------------------------
 # Off unless ANALYZE_AUDIO_EMBEDDING is truthy. CLAP wants 48 kHz mono; the
@@ -1272,17 +1287,29 @@ class VocalActivityDetector:
             raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
 
     def separate(self, stereo):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. One apply_model
+        """audio: float32 array shaped (channels, N) at DEMUCS_SR. One apply_model
         pass → {stem_name: float32 ndarray (channels, N)} for all model stems
         (drums/bass/other/vocals for htdemucs). The single separation is
         shared by vocal-activity detection AND the stem cache (feature:
-        stem-blend transitions) — never run Demucs twice on one window."""
+        stem-blend transitions) — never run Demucs twice on one window.
+
+        Demucs itself accepts exactly two channels. Preserve a real stereo mix;
+        duplicate mono; and fold wider WAVEX layouts to mono before duplicating
+        so every source channel can contribute to vocal detection. This
+        conversion is private to Demucs — baseline loudness still sees the
+        native layout."""
         import numpy as np
         import torch
 
         wav = torch.from_numpy(np.ascontiguousarray(stereo, dtype=np.float32))
         if wav.ndim == 1:
             wav = wav.unsqueeze(0).repeat(2, 1)
+        elif wav.ndim != 2 or wav.shape[0] < 1:
+            raise ValueError(f"Demucs input has invalid shape {tuple(wav.shape)}")
+        elif wav.shape[0] == 1:
+            wav = wav.repeat(2, 1)
+        elif wav.shape[0] > 2:
+            wav = wav.mean(dim=0, keepdim=True).repeat(2, 1)
         from demucs.apply import apply_model
 
         with torch.no_grad():
@@ -1295,7 +1322,7 @@ class VocalActivityDetector:
         }
 
     def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        """audio: float32 array shaped (channels, N) at DEMUCS_SR. Returns a list of
         {startMs,endMs} where the isolated vocal stem is active — possibly empty
         (an instrumental). Raises on failure; the caller degrades to None.
         `min_loud` is an absolute RMS floor on the stem's loud reference, on top
@@ -1650,19 +1677,26 @@ def fetch_audio(url):
     analysis (the file's "tail" would be mid-song audio)."""
     suffix = ".audio"
     fd, path = tempfile.mkstemp(suffix=suffix, prefix="swanalyze_")
-    os.close(fd)
-    req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
-    with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp, open(path, "wb") as out:
-        read = 0
-        while True:
-            chunk = resp.read(65536)
-            if not chunk:
-                break
-            out.write(chunk)
-            read += len(chunk)
-            if read >= ANALYZE_MAX_BYTES:
-                break
-    return path, read < ANALYZE_MAX_BYTES
+    try:
+        with os.fdopen(fd, "wb") as out:
+            req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp:
+                read = 0
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    read += len(chunk)
+                    if read >= ANALYZE_MAX_BYTES:
+                        break
+        return path, read < ANALYZE_MAX_BYTES
+    except BaseException:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        raise
 
 
 def _is_native_flac(path):
@@ -1696,7 +1730,8 @@ def _has_readable_pcm(sf, path):
 
 def _usable_recovery_wav(sf, path):
     try:
-        return os.path.getsize(path) > 1024 and _has_readable_pcm(sf, path)
+        size = os.path.getsize(path)
+        return 1024 < size <= PREDECODE_MAX_BYTES and _has_readable_pcm(sf, path)
     except OSError:
         return False
 
@@ -1738,15 +1773,32 @@ def ensure_fast_decode(path, complete=None):
     fd, wav = tempfile.mkstemp(suffix=".wav", prefix="swanalyze_dec_")
     os.close(fd)
     try:
+        command = [ffmpeg, "-v", "error", "-y", "-i", path]
+        command.extend([
+            "-fs", str(PREDECODE_FFMPEG_MAX_BYTES),
+        ])
+        command.extend([
+            "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", wav,
+        ])
         subprocess.run(
-            [ffmpeg, "-v", "error", "-y", "-i", path,
-             "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", wav],
+            command,
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=FFMPEG_DECODE_TIMEOUT_S,
         )
-        if os.path.getsize(wav) > 1024:
+        wav_size = os.path.getsize(wav)
+        if wav_size > PREDECODE_MAX_BYTES:
+            log(
+                "ffmpeg pre-decode exceeded its decoded-size limit "
+                f"({wav_size} > {PREDECODE_MAX_BYTES}); falling back"
+            )
+        elif not recovery_eligible and wav_size >= PREDECODE_FFMPEG_MAX_BYTES:
+            # A complete/unknown legacy input must never masquerade as a short
+            # track merely because the temp WAV hit the disk guard. Preserve
+            # the old per-load decoder, which can still seek its real windows.
+            log("ffmpeg pre-decode reached its decoded-size limit; falling back")
+        elif wav_size > 1024:
             if not recovery_eligible or (sf is not None and _usable_recovery_wav(sf, wav)):
                 if recovery_eligible:
                     log("incomplete FLAC prefix pre-decoded once via ffmpeg")
@@ -1829,19 +1881,21 @@ def analyze(
     # None = unknown (old caller) → outro analysis still runs, relying on its
     # decode-length validation; False = definitively truncated → skipped.
     owned = path is None
-    if owned:
-        path, complete = fetch_audio(url)
-    # Pre-decode ONCE when libsndfile can't open the container (m4a, quirky
-    # MP3s — issue #1073), so every load below takes the fast soundfile path
-    # instead of audioread re-decoding the whole file per call. `src_path`
-    # keeps the original download for the ownership cleanup; the WAV is always
-    # ours to remove.
-    src_path = path
-    path, decoded_tmp = ensure_fast_decode(path, complete=complete)
+    src_path = None
+    decoded_tmp = None
     audio_embedding = None
     vocal_ranges = None
     outro = None
     try:
+        if owned:
+            path, complete = fetch_audio(url)
+        # Pre-decode ONCE when libsndfile can't open the container (m4a, quirky
+        # MP3s — issue #1073), so every load below takes the fast soundfile path
+        # instead of audioread re-decoding the whole file per call. `src_path`
+        # keeps the original download for the ownership cleanup; the WAV is
+        # always ours to remove.
+        src_path = path
+        path, decoded_tmp = ensure_fast_decode(path, complete=complete)
         # One header-duration probe shared by the CLAP windows and the outro
         # tail (both need to know where the file ends). 0.0 = unknown.
         try:
@@ -1964,7 +2018,7 @@ def analyze(
                 os.remove(decoded_tmp)
             except OSError:
                 pass
-        if owned:
+        if owned and src_path is not None:
             try:
                 os.remove(src_path)
             except OSError:
