@@ -1,7 +1,7 @@
 // The seed-vs-pick policy (#1247): the on-air track's id is a discovery SEED
 // and never a valid answer, plus the classification of a pick that came back
-// with an id no tool surfaced. The breaker carve-out is the difference between
-// "the index doesn't cover that seed" and "this model can't drive tool calls".
+// with an id no tool surfaced. The breaker carve-out distinguishes an observed
+// empty candidate set from a model that never drove a discovery tool.
 
 import assert from 'node:assert/strict';
 import { SEED_NOT_A_PICK_CLAUSE, classifyPickFailure } from '../src/util/pick-seed.js';
@@ -32,18 +32,17 @@ async function main() {
     assert.match(SEED_NOT_A_PICK_CLAUSE, /empty/i);
   });
 
-  console.log('classifyPickFailure (why the run was discarded, and whose fault):');
+  console.log('classifyPickFailure (why the run was discarded):');
 
   await test('zero candidates is NOT a breaker failure, even though the id was wrong', () => {
-    // One discovery call into an index that does not cover the seed, then a
-    // forced commit with nothing to commit.
+    // One real discovery call, then a forced commit with nothing to commit.
     const f = classifyPickFailure({ pickedId: SEED, seedId: SEED, candidates: 0, toolCalls: 1 });
     assert.equal(f.kind, 'no-candidates');
     assert.equal(f.countsAgainstBreaker, false);
     assert.match(f.message, /no candidates/i);
   });
 
-  await test('zero candidates stays a coverage miss whatever the model answered', () => {
+  await test('zero candidates stays breaker-exempt whatever the model answered', () => {
     // With an empty `seen` both salvage stages are unable to help, so the
     // answer is a symptom either way.
     const f = classifyPickFailure({ pickedId: 'made-up-id', seedId: SEED, candidates: 0, toolCalls: 1 });
@@ -68,8 +67,22 @@ async function main() {
     // Same verdict, different diagnosis in the booth log.
     const echoed = classifyPickFailure({ pickedId: SEED, seedId: SEED, candidates: 0, toolCalls: 1 });
     const other = classifyPickFailure({ pickedId: 'made-up-id', seedId: SEED, candidates: 0, toolCalls: 1 });
-    assert.match(echoed.message, /on-air track's own id/i);
+    assert.match(echoed.message, /discovery seed id/i);
     assert.notEqual(echoed.message, other.message);
+  });
+
+  await test('zero-candidate diagnostics state observations without diagnosing index or model fault', () => {
+    const echoed = classifyPickFailure({ pickedId: SEED, seedId: SEED, candidates: 0, toolCalls: 1 });
+    const other = classifyPickFailure({ pickedId: 'made-up-id', seedId: SEED, candidates: 0, toolCalls: 1 });
+    for (const message of [echoed.message, other.message]) {
+      assert.match(message, /no candidates available for selection/i);
+      assert.match(message, /empty candidate set alone does not establish missing index coverage/i);
+      assert.doesNotMatch(message, /every discovery call came back empty/i);
+      assert.doesNotMatch(message, /not a model fault/i);
+      assert.doesNotMatch(message, /seed is likely missing/i);
+    }
+    assert.match(echoed.message, /returned the discovery seed id/i);
+    assert.match(other.message, /did not match a discovered candidate/i);
   });
 
   await test('seed echo WITH candidates IS a breaker failure', () => {

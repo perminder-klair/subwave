@@ -136,10 +136,10 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   recentPlays: any;
   context: any;
   show?: ShowMusic | null;
-  // The track on air right now, with its measured facts when analysed
-  // ({ title, artist, bpm?, key?, pace? }). This is the anchor FLOW judges
-  // against — without it the criteria said "prefer a tempo near the current
-  // one" while the payload never stated the current tempo.
+  // The predecessor this selection is expected to follow, with its measured
+  // facts when analysed ({ title, artist, bpm?, key?, pace? }). This is the
+  // anchor FLOW judges against — without it the criteria said "prefer a tempo
+  // near the current one" while the payload never stated the anchor tempo.
   current?: any;
   // The model's recent transition asks (oldest first), for the same deliberate-
   // variety nudge the agent path gets — the queue's monoculture guard strips a

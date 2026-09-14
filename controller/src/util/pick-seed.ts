@@ -18,8 +18,7 @@ export interface PickFailure {
   // call site adds that.
   message: string;
   // Only true when the failure is evidence the model can't drive the tool-loop
-  // harness. A run that surfaced zero candidates is a library-coverage problem,
-  // so it must not open the breaker.
+  // harness. A run with an observed empty candidate set remains breaker-exempt.
   countsAgainstBreaker: boolean;
 }
 
@@ -41,13 +40,13 @@ export function classifyPickFailure(
   }
 
   // Zero candidates after real discovery: both salvage stages need a non-empty
-  // `seen`, so the run was lost when discovery came back empty (#1247).
+  // `seen`, so the run cannot produce a validated pick (#1247).
   if (candidates === 0) {
     return {
       kind: 'no-candidates',
       message: echoed
-        ? 'agent had no candidates — every discovery call came back empty, so it answered with the on-air track\'s own id. Not a model fault: the seed is likely missing from the index the tool it reached for is built on (check sounds-like / mood coverage on /admin/library)'
-        : 'agent had no candidates — every discovery call came back empty, so its answer could not match a real track. Not a model fault: check library coverage on /admin/library',
+        ? 'agent had no candidates available for selection; it returned the discovery seed id. Check the discovery/recovery trace; an empty candidate set alone does not establish missing index coverage'
+        : 'agent had no candidates available for selection; its answer did not match a discovered candidate. Check the discovery/recovery trace; an empty candidate set alone does not establish missing index coverage',
       countsAgainstBreaker: false,
     };
   }

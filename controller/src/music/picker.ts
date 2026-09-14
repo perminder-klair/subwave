@@ -604,7 +604,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
   // Album cooldown: operator-set hours, not library-scaled. 0 = empty set.
   const recentAlbums = queue.recentAlbumKeys(settings.get().picker?.albumHours ?? 0);
-  const currentTrack = queue.current?.track || null;
+  // Snapshot the predecessor this pick is expected to follow: the queued tail
+  // wins over the track on air. Later queue mutations are not revalidated here.
+  const currentTrack = queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
   // Prefer the show already resolved into ctx: near a boundary that is a
   // look-ahead, so the pool follows the show on air when the pick plays.
   const activeShow = ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow();
@@ -762,7 +764,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       }),
       recentPlays,
       context: ctx,
-      // The on-air anchor: the criteria ask the model to match its tempo.
+      // The expected predecessor: the criteria judge the transition from it.
       current: currentTrack ? (() => {
         const ca = analysisFor(currentTrack);
         const crec = currentTrack.id ? library.get(currentTrack.id) : null;

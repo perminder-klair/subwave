@@ -1,4 +1,4 @@
-// Three SHOW-source invariants in the pool picker's candidate builder
+// Source-wiring invariants in the pool picker's candidate builder
 // (music/picker.ts buildCandidates) and the coast's twin (scheduler.ts):
 //
 //   1. show-genre / show-playlist never-starve on recency; every other source
@@ -32,6 +32,11 @@ const here = dirname(fileURLToPath(import.meta.url));
 const picker = readFileSync(resolve(here, '../src/music/picker.ts'), 'utf8');
 const scheduler = readFileSync(resolve(here, '../src/broadcast/scheduler.ts'), 'utf8');
 const scope = readFileSync(resolve(here, '../src/llm/internal/tools/picker/scope.ts'), 'utf8');
+
+const currentTrackInitializer = picker.match(/^\s*const currentTrack = (.*);$/m)?.[1];
+assert.ok(currentTrackInitializer, 'no currentTrack initializer found in picker.ts');
+const resolveCurrentTrack = new Function('queue', `return (${currentTrackInitializer});`) as
+  (queue: Record<string, unknown>) => unknown;
 
 // The single line that adds a named source to the pool.
 const addLine = (src: string, label: string): string => {
@@ -160,6 +165,53 @@ test('scope.ts uncaps the agent tools under a playlistLock', () => {
     lockAt < scope.indexOf(m![0]),
     'the playlistLock intersection must run BEFORE the cap is lifted, or the lift uncaps an unfiltered discovery pool',
   );
+});
+
+console.log('\npool selection anchors on the expected predecessor at selection time:');
+
+const A = { id: 'a', title: 'On air', artist: 'Artist A' };
+const B = { id: 'b', title: 'Queued one', artist: 'Artist B' };
+const C = { id: 'c', title: 'Queued tail', artist: 'Artist C' };
+const IDLESS = { title: 'Queued without id', artist: 'Artist D' };
+
+for (const [name, queue, expected] of [
+  ['one queued track beats the on-air track', { current: { track: A }, upcoming: [{ track: B }] }, B],
+  ['the last of multiple queued tracks wins', { current: { track: A }, upcoming: [{ track: B }, { track: C }] }, C],
+  ['the on-air track remains the fallback', { current: { track: A }, upcoming: [] }, A],
+  ['a queued-only track is accepted', { current: null, upcoming: [{ track: B }] }, B],
+  ['neither predecessor safely resolves to null', { current: null, upcoming: [] }, null],
+  ['an empty lightweight queue safely resolves to null', {}, null],
+  ['a lightweight queue without upcoming uses current', { current: { track: A } }, A],
+  ['an id-less queue tail does not fall back to current', { current: { track: A }, upcoming: [{ track: IDLESS }] }, IDLESS],
+] as const) {
+  test(name, () => {
+    assert.equal(resolveCurrentTrack(queue), expected);
+  });
+}
+
+test('the captured predecessor fans out to candidates and the model payload', () => {
+  assert.match(picker, /buildCandidates\([^;]*\bcurrentTrack\s*,\s*rankTarget\s*,\s*audioWaypoint/);
+  assert.match(picker, /current:\s*currentTrack\s*\?/);
+  for (const field of ['title', 'artist', 'paceMean']) {
+    assert.match(picker, new RegExp(`\\bcurrentTrack\\.${field}\\b`));
+  }
+  assert.match(picker, /analysisFor\(currentTrack\)/);
+  assert.match(picker, /library\.get\(currentTrack\.id\)/);
+});
+
+test('candidate discovery and default ranking consume the captured predecessor', () => {
+  assert.match(picker, /getSimilarSongs\(currentTrack\.id/);
+  assert.match(picker, /tracksLikeThis\(currentTrack\.id/);
+  assert.match(picker, /getSonicSimilarTracks\(currentTrack\.id/);
+  assert.match(picker, /tracksLikeThisAudio\(currentTrack\.id/);
+  assert.match(picker, /searchArtists\(currentTrack\.artist/);
+  assert.match(picker, /rankTarget\s*\|\|\s*\(currentTrack\?\.id\s*\?\s*analysisFor\(currentTrack\)/);
+});
+
+test('explicit audio and rank targets still override predecessor-derived defaults', () => {
+  assert.match(picker, /if\s*\(audioWaypoint\s*&&\s*audioWaypoint\.length\)[\s\S]*?tracksByAudioVector\(audioWaypoint/);
+  assert.match(picker, /}\s*else if\s*\(currentTrack\?\.id\)[\s\S]*?tracksLikeThisAudio\(currentTrack\.id/);
+  assert.match(picker, /const curAnalysis = rankTarget\s*\|\|\s*\(currentTrack\?\.id/);
 });
 
 if (failures) {
