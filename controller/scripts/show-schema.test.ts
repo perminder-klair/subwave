@@ -263,20 +263,23 @@ test('load and save agree on which ids are valid', () => {
   assert.equal(strict({ id: 's_abc123' }).id, 's_abc123');
 });
 
-test('a null context field means "unchecked", not "reject everything"', () => {
+test('nullable context fields mean "unchecked", not "reject everything"', () => {
   const unchecked = showSchema({
-    personaIds, moodNames: null, themeIds: null, minTrackSeconds: null,
+    personaIds: null, moodNames: null, themeIds: null, minTrackSeconds: null,
   });
   const r = unchecked.safeParse(show({
+    personaId: 'p_missing_host', guestPersonaIds: ['p_missing_guest'],
     moods: ['whatever'], themeId: 'long-gone', maxTrackSeconds: 5,
   }));
   assert.equal(r.success, true, r.success ? '' : JSON.stringify(r.error.issues));
+  assert.equal(r.data!.personaId, 'p_missing_host');
+  assert.deepEqual(r.data!.guestPersonaIds, ['p_missing_guest']);
   assert.deepEqual(r.data!.moods, ['whatever']);
   assert.equal(r.data!.themeId, 'long-gone');
   assert.equal(r.data!.maxTrackSeconds, 5);
 });
 
-test('personaIds is never optional — both paths always check the host', () => {
+test('a concrete empty persona roster rejects every host', () => {
   const s = showSchema({ personaIds: [], moodNames: null, themeIds: null, minTrackSeconds: null });
   assert.equal(s.safeParse(show()).success, false);
 });
