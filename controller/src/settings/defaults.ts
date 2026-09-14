@@ -246,6 +246,11 @@ export const DEFAULTS = {
   // scheduled show change. Off preserves the established terse time check.
   djBehaviour: {
     showWelcome: false,
+    // The optional final-quarter-hour programme preview is independent of the
+    // presenter handoff. Keep the established preview on for existing stations;
+    // operators who prefer the handoff to be the only acknowledgement can turn
+    // it off in DJ Behaviour → Show changes.
+    previewNextShow: true,
     sameHostAcknowledgement: false,
     extendedSleeveNotes: false,
     releaseYearMentions: 'regular',

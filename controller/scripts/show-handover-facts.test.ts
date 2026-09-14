@@ -46,12 +46,13 @@ const context = {
 };
 const link = linkPrompt({ current: { title: 'Headlong', artist: 'Queen' }, context });
 assert.match(link, /Current show is approaching its scheduled close/);
-assert.match(link, /Following show: "Lunchtime Rocks" with Carrie/);
-assert.match(link, /do not make it a required signpost, state remaining minutes, describe it as a fraction of the show/);
+assert.match(link, /Following show: Carrie presents "Lunchtime Rocks"/);
+assert.match(link, /incoming presenter's show — never as your own or "our" show/);
+assert.match(link, /Do not make it a required signpost, state remaining minutes, describe it as a fraction of the show/);
 assert.doesNotMatch(link, /final 15 minutes/);
 
 const stationId = stationIdPrompt({ context, persona: { name: 'Chris', scriptLength: 'concise' } });
-assert.match(stationId, /The next scheduled show is "Lunchtime Rocks" with Carrie/);
+assert.match(stationId, /Carrie presents the next scheduled show, "Lunchtime Rocks"/);
 assert.match(stationId, /one brief nod/);
 assert.doesNotMatch(
   stationIdPrompt({ context: { activeShow: { name: 'The Scenic Route' } }, persona: { name: 'Chris' } }),

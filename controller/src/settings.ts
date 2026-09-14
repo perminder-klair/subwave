@@ -610,6 +610,9 @@ export async function load() {
       showWelcome: typeof stored.djBehaviour?.showWelcome === 'boolean'
         ? stored.djBehaviour.showWelcome
         : DEFAULTS.djBehaviour.showWelcome,
+      previewNextShow: typeof stored.djBehaviour?.previewNextShow === 'boolean'
+        ? stored.djBehaviour.previewNextShow
+        : DEFAULTS.djBehaviour.previewNextShow,
       sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
         ? stored.djBehaviour.sameHostAcknowledgement
         : DEFAULTS.djBehaviour.sameHostAcknowledgement,
@@ -1596,6 +1599,7 @@ export async function update(patch) {
   if ('djBehaviour' in patch) {
     const behaviour = parseSettingsPatchKey<{
       showWelcome?: boolean;
+      previewNextShow?: boolean;
       sameHostAcknowledgement?: boolean;
       extendedSleeveNotes?: boolean;
       releaseYearMentions?: string;
@@ -1605,7 +1609,7 @@ export async function update(patch) {
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {

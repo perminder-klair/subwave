@@ -70,6 +70,13 @@ identity; only the corresponding `now-playing.json` transition authorises the
 pair. `airIntro()` is awaited to the handoff-write boundary first, which puts the
 final track's own line ahead of the handoff on the shared voice serialiser.
 
+The pick forecast may look one attribution window beyond a track's expected
+start, but it is capped at one such window beyond the next real show boundary;
+it cannot accumulate through a run of picks into the following programme. A
+handoff is stricter still: its anchor's expected end must reach that boundary.
+When a track-start cycle arms its own current track, it re-checks that anchor in
+the same cycle because the normal start-marker pass has already occurred.
+
 The boundary must be driven by confirmed playback state where possible. A
 queued URI is only handed to Liquidsoap, not proof that a listener has reached
 the corresponding on-air moment.
@@ -122,6 +129,7 @@ Tests should cover at least:
 
 - a normal show transition with an outgoing linked intro;
 - a handoff that would previously have fired early due to look-ahead;
+- a long forecast capped at the next boundary and an anchor that ends before it;
 - no outgoing ordinary speech after the handoff;
 - a host/guest role reversal between adjacent shows;
 - no schedule-fact repetition outside an optional integration's cadence allowance;

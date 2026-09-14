@@ -88,6 +88,44 @@ export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
 // two early — is how real radio tees up a changeover anyway.
 export const PICK_SHOW_LOOKAHEAD_SEC = 120;
 
+// Resolve picker policy a little beyond the expected start so a genuine
+// changeover track can belong to the show it mostly airs in. That attribution
+// window is not permission for a long remaining track (or a sequence of short
+// ones) to walk arbitrarily far through the next programme: once a known show
+// boundary is crossed, the forecast stops one attribution window beyond it.
+//
+// `boundaryMs` is optional because the schedule can have no change inside the
+// scan horizon. Invalid inputs fail open to the historical forecast rather
+// than inventing a boundary or suppressing a pick.
+export function pickShowDate(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): Date | null {
+  if (!Number.isFinite(nowMs) || typeof leadSec !== 'number' || !Number.isFinite(leadSec)) return null;
+  const predicted = nowMs + (Math.max(0, leadSec) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  if (typeof boundaryMs !== 'number' || !Number.isFinite(boundaryMs)) return new Date(predicted);
+  const latest = boundaryMs + PICK_SHOW_LOOKAHEAD_SEC * 1000;
+  return new Date(Math.min(predicted, latest));
+}
+
+// A final-track handoff belongs only to a track whose expected END reaches the
+// real boundary. `showAt` deliberately includes the attribution window above,
+// so using it here would arm a handoff for a track that actually finishes
+// before the change.
+export function handoffAnchorReachesBoundary(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): boolean {
+  return Number.isFinite(nowMs)
+    && typeof leadSec === 'number'
+    && Number.isFinite(leadSec)
+    && typeof boundaryMs === 'number'
+    && Number.isFinite(boundaryMs)
+    && nowMs + Math.max(0, leadSec) * 1000 >= boundaryMs;
+}
+
 // The moment the pick — and its attached link — actually starts AIRING:
 // `showAt` minus the attribution padding above. `showAt` deliberately probes
 // past the start so show identity resolves right (#1205), but a link's spoken

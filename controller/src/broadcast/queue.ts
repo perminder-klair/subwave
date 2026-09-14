@@ -107,7 +107,7 @@ import type {
 import {
   BACKFILL_DEDUP_MAX_GAP_MS,
   EMPTY_DJ_QUEUE_CLEAR_THRESHOLD,
-  PICK_SHOW_LOOKAHEAD_SEC,
+  handoffAnchorReachesBoundary,
   boundaryCarriesTrackVoice,
   exchangeSegment,
   formatAgo,
@@ -117,6 +117,7 @@ import {
   pickLeadSec,
   pickLinkInterval,
   playAlreadyRecorded,
+  pickShowDate,
   shouldDropCrossSessionLink,
   shouldDropObsoleteHostSpeech,
   shouldDropStaleLink,
@@ -3368,25 +3369,29 @@ class Queue {
           this.remainingSecOnAir(),
           pickAnchorItem ? knownDurationSec(pickAnchorItem.track) : null,
         );
-        let showAt: Date | null = null;
-        if (leadSec != null) {
-          showAt = new Date(Date.now() + (leadSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
-        }
+        const forecastNow = Date.now();
+        const nextBoundaryAt = showBoundary.nextShowBoundaryMs(forecastNow, 6 * 3600);
+        const showAt = pickShowDate(forecastNow, leadSec, nextBoundaryAt);
         const pickCtx = await getFullContext(showAt ?? undefined);
         const liveCtx = await getFullContext();
         await session.maybeRoll(liveCtx);
         // Keep the live session and roster outgoing until the actual boundary.
         // The look-ahead context is only for selecting the track that follows.
-        const finalTrackHandoff = session.armBoundaryHandoff(
-          pickCtx,
-          pickAnchorItem?.track ?? this.current?.track ?? null,
-        );
+        const finalTrack = pickAnchorItem?.track ?? this.current?.track ?? null;
+        const finalTrackHandoff = handoffAnchorReachesBoundary(forecastNow, leadSec, nextBoundaryAt)
+          && session.armBoundaryHandoff(pickCtx, finalTrack);
         if (finalTrackHandoff) {
           try {
             await programme.prepareBoundaryPlan(pickCtx);
           } catch (err) {
             this.log('error', `Incoming programme plan failed: ${(err as Error).message}`);
           }
+          // A track-start cycle learns about the boundary only AFTER
+          // onTrackStarted has made its one normal confirmation pass. Re-check
+          // the freshly armed anchor here, otherwise this exact track can never
+          // start again and the handoff remains armed until some unrelated path
+          // releases it.
+          if (!pickAnchorItem) await this.runArmedBoundaryHandoff();
         }
         // Plan a programme episode BEFORE the mic-pass so a handoff into a
         // programme show can weave the episode angle into its greeting.

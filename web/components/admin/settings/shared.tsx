@@ -343,6 +343,7 @@ export interface DuckingForm {
 
 export interface DjBehaviourForm {
   showWelcome: boolean;
+  previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
@@ -355,6 +356,7 @@ export interface DjBehaviourForm {
  *  strings so a temporarily blank number input survives until Save. */
 export interface DjBehaviourValues {
   showWelcome?: boolean;
+  previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
