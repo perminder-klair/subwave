@@ -40,10 +40,8 @@ import {
 import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
-/* Opacity only, no transform, no exit. Because it IS opacity-only,
-   MotionConfig's reducedMotion="user" won't touch it (that setting drops
-   transforms and deliberately preserves opacity), so this is the one skin that
-   has to check useReducedMotion() for itself. */
+/* Opacity only, so MotionConfig's reducedMotion="user" won't touch it (it drops
+   transforms and preserves opacity); this skin checks useReducedMotion itself. */
 const LATCH = { opacity: [1, 0.25, 1, 0.4, 1] };
 const LATCH_TRANSITION = { duration: 0.18, times: [0, 0.2, 0.45, 0.7, 1] };
 const STEADY = { opacity: 1 };
@@ -53,13 +51,12 @@ const ART_FLASH = {
   exit: { opacity: 0 },
   transition: { duration: 0.09 },
 };
-/* Lite: mount straight at rest — a zero-duration transition still paints
-   `initial` for a frame, flashing an empty art panel on every change. */
+/* Lite: mount at rest; a zero-duration transition still paints `initial` for a
+   frame, flashing an empty art panel on every change. */
 const ART_CUT = {
   initial: false,
   animate: { opacity: 1 },
-  // Nothing on the way out either — a fade-to-zero on the outgoing
-  // node is still an animation, however brief.
+  // Nothing on the way out either: a fade-to-zero is still an animation.
   exit: {},
   transition: { duration: 0 },
 };
@@ -160,14 +157,13 @@ export default function SubampSkin(_props: SkinProps) {
 
   const digits = showTuneIn || offline ? '--:--' : fmtTime(elapsed);
 
-  // The latch fires when the keyed plate remounts, which would include the
-  // skin's own first paint — suppress that one so tuning in doesn't blink.
+  // The latch fires on every keyed-plate remount, including first paint;
+  // suppress that one so tuning in doesn't blink.
   const painted = useRef(false);
   useEffect(() => { painted.current = true; }, []);
-  // Lite mode's CSS kill can't reach motion; reduced motion can't reach an
-  // opacity-only animation. Both have to be asked here (see LATCH above), and
-  // both unconditionally — short-circuiting these into one && would make the
-  // second a conditional hook call.
+  // Lite mode's CSS kill can't reach motion and reduced motion can't reach an
+  // opacity-only animation, so both are asked here, unconditionally: combining
+  // them with && would make the second a conditional hook call.
   const mayAnimate = useSkinMotion();
   const reduced = useReducedMotion();
   const latching = mayAnimate && !reduced;

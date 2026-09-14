@@ -33,12 +33,8 @@ router.post('/sfx', requireAdmin, validateBody(sfxCreateSchema), async (req, res
   }
 });
 
-// Import an operator-supplied audio file as a sound effect (multipart `file`,
-// `name`, optional `description`). No ElevenLabs key needed — this is the
-// upload path that complements prompt-based generation.
-// validateBody sits AFTER audioUpload, and the order is load-bearing both
-// ways: multer is what parses the multipart body into req.body at all, and the
-// middleware replaces req.body ONLY — req.file rides through untouched.
+// validateBody must sit AFTER audioUpload, both ways: multer is what parses the
+// multipart body into req.body, and the middleware replaces req.body ONLY.
 router.post('/sfx/upload', requireAdmin, audioUpload('file'), validateBody(imagingImportSchema), async (req, res) => {
   const file = req.file;
   const { name, description } = req.body as { name: string; description: string };
@@ -64,8 +60,6 @@ router.delete('/sfx/:name', requireAdmin, async (req, res) => {
   }
 });
 
-// Admin preview — streams the rendered MP3 so the operator can audition an
-// effect before letting the agent reach for it.
 router.get('/sfx/:name/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await sfx.getPath(req.params.name);
@@ -76,9 +70,8 @@ router.get('/sfx/:name/audio', requireAdmin, async (req, res) => {
   }
 });
 
-// Fire an effect on-air now — the automation-facing trigger (MCP, webhooks,
-// an external alerting agent). Manual trigger, so it ignores the
-// settings.sfx.enabled autonomy toggle like every explicit operator press.
+// Manual trigger, so it ignores the settings.sfx.enabled autonomy toggle like
+// every explicit operator press.
 router.post('/sfx/:name/play', requireAdmin, async (req, res) => {
   try {
     if (!(await sfx.getPath(req.params.name))) {

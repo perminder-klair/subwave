@@ -1,18 +1,10 @@
 // Structural guard on the per-file picker tool registry
-// (llm/internal/tools/picker/).
+// (llm/internal/tools/picker/). Two failures are invisible at runtime: a
+// module whose `name` disagrees with index.ts, and a duplicate name
+// overwriting an earlier tool in the ToolSet.
 //
-// The registry is now a list of imported modules rather than one object
-// literal, which trades a merge-conflict-prone monolith for two new ways to be
-// wrong: a module whose `name` doesn't match what index.ts thinks it registered,
-// and a duplicate name silently overwriting an earlier tool in the ToolSet. Both
-// are invisible at runtime — the agent just never sees a tool it should have.
-//
-// Also pins the availability gates, because a tool offered without its backing
-// data is worse than a missing one: on a forced-tool provider the single
-// discovery call is spent on a tool that can only return empty, and the model is
-// then cornered with nothing to commit.
-//
-// Run: npm test -- picker-registry
+// Also pins the availability gates: on a forced-tool provider the single
+// discovery call spent on a guaranteed-empty tool corners the model.
 
 import assert from 'node:assert/strict';
 import { PICKER_TOOLS } from '../src/llm/internal/tools/picker/index.js';
@@ -72,8 +64,8 @@ test('every tool carries a description the model can act on', () => {
 console.log('\navailability gating:');
 
 test('the always-on core is offered on a bare install', () => {
-  // These need no embedding index, no playlist anchor and no journey, so a
-  // fresh station with nothing analysed still has a working picker.
+  // No embedding index, playlist anchor or journey needed, so a fresh station
+  // still has a working picker.
   const offered = namesOf(bareCtx());
   for (const n of ['searchLibrary', 'similarSongs', 'topSongsByArtist', 'recentByArtist',
     'songsByGenre', 'tracksByMood', 'tracksByEnergy', 'recentlyAdded', 'starredSongs', 'randomSongs']) {
@@ -109,19 +101,17 @@ test('path-scoped tools are off unless their scope field is set', () => {
 });
 
 test('deepCuts needs the library mirror, not an embedding index', () => {
-  // Airing memory reads the plays table joined against tracks — no vectors
-  // involved — so it lights up as soon as the library is synced, even on an
-  // install that never ran an embedding pass.
+  // Airing memory reads plays joined against tracks, no vectors, so it lights
+  // up as soon as the library is synced.
   assert.ok(!namesOf(bareCtx()).includes('deepCuts'),
     'deepCuts must be off with an empty library mirror');
   assert.ok(namesOf(bareCtx({ stats: { mirrorTotal: 100, total: 100 } })).includes('deepCuts'));
 });
 
 test('deepCuts reads the MIRROR size, not the tagged count', () => {
-  // `stats.total` counts only TAGGED tracks. db.deepCutTracks queries `tracks`
-  // unconditionally, so a synced-but-untagged install has rows to sample — and
-  // is the install that needs this tool most, since nothing else there knows
-  // anything about the library. Gating on `total` left it dark exactly there.
+  // `stats.total` counts only TAGGED tracks, but db.deepCutTracks queries
+  // `tracks` unconditionally, so gating on `total` leaves a synced-but-untagged
+  // install dark.
   assert.ok(
     namesOf(bareCtx({ stats: { mirrorTotal: 50000, total: 0 } })).includes('deepCuts'),
     'deepCuts must light up on a synced library the tagger has not reached',

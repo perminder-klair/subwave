@@ -9,14 +9,13 @@ import {
   getConnections,
   groupConnections,
 } from '../broadcast/listeners.js';
+import { currentTrustedProxies } from '../broadcast/trusted-proxies.js';
 
 export const router = express.Router();
 
 router.get('/listeners', requireAdmin, async (req, res) => {
   try {
-    // sinceMinutes caps at one week — past that the JSONL gets too big to
-    // parse in-memory comfortably, and the sparkline isn't useful at that
-    // resolution anyway.
+    // Caps at one week: past that the JSONL is too big to parse in-memory.
     const sinceMinutes = Math.max(
       5,
       Math.min(parseInt(String(req.query.sinceMinutes ?? ''), 10) || 1440, 7 * 1440),
@@ -35,17 +34,21 @@ router.get('/listeners', requireAdmin, async (req, res) => {
   }
 });
 
-// Admin-gated GET /listeners/connections — live per-listener detail (IP,
-// mount, user-agent, connected-for) read from Icecast's admin interface.
-// Feeds the admin connections table. 502 on a real Icecast auth/transport
-// failure so the UI can distinguish "nobody listening" (200, empty) from
-// "couldn't reach Icecast admin".
+// Live per-listener detail from Icecast's admin interface. 502 on an Icecast
+// auth/transport failure, so the UI can tell "nobody listening" (200, empty)
+// from "couldn't reach Icecast admin".
 router.get('/listeners/connections', requireAdmin, async (_req, res) => {
   try {
-    // Group by IP+UA so Safari's duplicate socket is one row + one count, not
-    // two — same dedup the headline listener count uses.
+    // Group by IP+UA (same dedup as the headline count), deliberately NOT by IP
+    // alone: the forwarded address may be untrusted and one NAT is many listeners.
     const connections = groupConnections(await getConnections());
-    res.json({ count: connections.length, connections });
+    // What the icecast render trusted (#1613), so the UI can explain rows that
+    // are all the edge's address. Advisory — it gates nothing.
+    res.json({
+      count: connections.length,
+      connections,
+      trustedProxies: currentTrustedProxies(),
+    });
   } catch (err: any) {
     res.status(502).json({ error: err.message });
   }

@@ -1,46 +1,29 @@
-// Shared schedule schema — the weekly grid (#shows) and the timed takeover
-// (#930), executed on BOTH sides. The controller runs it in
-// settings.validate.validateScheduleStrict / validateScheduleOverrideStrict
-// (the update() chokepoint), in settings.normalize.normalizeSchedule /
-// normalizeScheduleOverride (the lenient load path) and in the PUT /schedule +
-// POST /schedule/override route middleware; the browser runs the mirrored copy
-// (web/lib/schemas.generated.ts) for the takeover dialog's minute bounds.
+// Shared schedule schema — the weekly grid and the timed takeover (#930). Run
+// by validateScheduleStrict / validateScheduleOverrideStrict, the lenient load
+// path, the PUT /schedule + POST /schedule/override middleware, and the
+// mirrored browser copy.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// That includes OTHER schema modules — the mirror is one flat concatenation, so
-// gen-schemas.ts rejects every specifier but 'zod' and each module has to stand
-// alone.
+// A FACTORY, like shows: a slot either names a real show or names nothing, and
+// `showIds: null` means "this caller cannot check that rule". Three postures:
 //
-// WHY A FACTORY, like shows. A schedule slot cannot be validated against
-// itself: it either names a real show or it names nothing. That single input
-// travels as a ScheduleSchemaContext whose `showIds` is NULLABLE, and null
-// means the same thing it means for a show — **this caller cannot check that
-// rule**. It is what lets three postures share one schema:
+//   strict  (update())      showIds = live roster → unknown id THROWS
+//   lenient (load)          showIds = live roster → repaired away before parsing
+//   route   (PUT /schedule) showIds = null        → shape only; ids resolved
+//                                                   afterwards by
+//                                                   resolveScheduleSlots, which
+//                                                   DROPS and COUNTS
 //
-//   strict  (update())      showIds = the live roster  → unknown id THROWS
-//   lenient (load)          showIds = the live roster  → unknown id is REPAIRED
-//                                                        away before parsing
-//   route   (PUT /schedule) showIds = null             → shape only; the ids are
-//                                                        resolved afterwards by
-//                                                        resolveScheduleSlots,
-//                                                        which DROPS and COUNTS
-//
-// That third posture is not a schema rule and must not become one: the panel
-// can hold a locally-added show the operator has not saved yet, so PUT
-// /schedule deliberately answers 200 with a `dropped` count rather than 400.
+// The third posture must not become a schema rule: the panel can hold a
+// locally-added show the operator has not saved yet, so the route answers 200
+// with a `dropped` count.
 import { z } from 'zod';
 
 // 0 (Sunday) .. 6 (Saturday), matching JS Date.getDay(); 24 hours per day.
-// Previously written as bare 7 / 24 literals in six files across both packages.
 export const SCHEDULE_DAYS = 7;
 export const SCHEDULE_HOURS = 24;
 
-// Bounds for POST /schedule/override's `minutes` — long enough for an all-day
-// takeover, short enough that a forgotten pin can't shadow the grid for days.
-// Homed here because web/components/admin/dash/TakeoverCard.tsx carried a
-// hand-copied pair under a "Mirror the controller's OVERRIDE_MIN/MAX_MINUTES"
-// comment, which is exactly the drift these conversions exist to delete.
+// Bounds for POST /schedule/override's `minutes`: long enough for an all-day
+// takeover, short enough that a forgotten pin cannot shadow the grid for days.
 export const OVERRIDE_MIN_MINUTES = 15;
 export const OVERRIDE_MAX_MINUTES = 720;
 
@@ -54,35 +37,26 @@ export function emptyWeek(): ScheduleWeek {
 export type ScheduleWeek = Record<number, Array<string | null>>;
 
 export interface ScheduleSchemaContext {
-  /**
-   * The show ids a slot may name, or null when this caller cannot check.
-   *
-   * Non-null and a slot names something else → an issue. Null → the shape is
-   * checked and every id is taken on trust, for a caller that resolves ids
-   * itself (the route) or has no roster yet.
-   */
+  /** The show ids a slot may name, or null when this caller cannot check (the
+   *  shape is still checked and ids are taken on trust). */
   showIds: string[] | null;
 }
 
-// A stored slot: a show id, or any of the three ways "nothing" has been written
-// to settings.json over the years (null, undefined, empty string).
+// A show id, or any of the three ways "nothing" has been written to
+// settings.json (null, undefined, empty string).
 const scheduleSlotSchema = z
   .union([z.string(), z.null()], { error: 'must be a show id or null' })
   .optional();
 
-// Exactly 24 entries when the day is present at all — the rule the strict
-// validator has always enforced. An absent or null day is a blank day, not an
-// error, so a partial grid still loads.
+// Exactly 24 entries when the day is present at all. An absent or null day is a
+// blank day, not an error, so a partial grid still loads.
 const scheduleDaySchema = z
   .array(scheduleSlotSchema)
   .length(SCHEDULE_HOURS, `must be an array of exactly ${SCHEDULE_HOURS} entries`)
   .nullish();
 
-// The grid has always been persisted as an object keyed "0".."6". An ARRAY of
-// seven days is accepted here only because the hand-rolled validator it
-// replaces read `raw[d]` and therefore took one without noticing; z.object
-// rejects arrays outright, so without this a shape that used to load would
-// start failing at boot.
+// The grid is persisted as an object keyed "0".."6". An ARRAY of seven days is
+// still accepted because it always loaded; z.object rejects arrays outright.
 function toScheduleWeekRecord(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw;
   const out: Record<string, unknown> = {};
@@ -126,8 +100,7 @@ export function scheduleSchema(ctx: ScheduleSchemaContext) {
       ),
     )
     // Cross-slot rather than per-slot so the issue path is the real coordinate
-    // (`schedule.3.14`), which is what firstMessage prints and what an operator
-    // needs in order to find the cell.
+    // (`schedule.3.14`) an operator needs to find the cell.
     .check((c) => {
       if (!ctx.showIds) return;
       const ids = new Set(ctx.showIds);
@@ -152,18 +125,10 @@ export function scheduleSchema(ctx: ScheduleSchemaContext) {
 }
 
 /**
- * PUT /schedule's body — the bare grid, or one wrapped in `{ schedule }`.
- *
- * Both spellings were accepted by `req.body?.schedule ?? req.body` and both
- * still are. Ids are NOT checked here (see the header): the route resolves them
- * against the live roster with resolveScheduleSlots and reports a count.
- *
- * This DOES newly reject a day that is present but not exactly 24 entries long,
- * where the route silently padded it with nulls. Same call the stations
- * conversion made three times: a grid quietly reshaped server-side is a grid
- * the operator cannot tell was reshaped, and the strict validator behind
- * update() has always refused it — so accepting it at the route only meant the
- * two disagreed about the same data.
+ * PUT /schedule's body — the bare grid, or one wrapped in `{ schedule }`; both
+ * spellings are accepted. Ids are NOT checked here (see the header): the route
+ * resolves them with resolveScheduleSlots and reports a count. A day present but
+ * not exactly 24 entries is rejected rather than padded.
  */
 export const scheduleSaveSchema = z.preprocess((raw) => {
   if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'schedule' in raw) {
@@ -174,11 +139,8 @@ export const scheduleSaveSchema = z.preprocess((raw) => {
 
 /**
  * Resolve a shape-valid grid against the live roster, dropping and COUNTING
- * slots that name a show which isn't persisted.
- *
- * Pure, and deliberately not a schema rule — PUT /schedule answers 200 with
- * `dropped` because the editor can hold a locally-added show the operator
- * hasn't saved yet, and rejecting the save would strand it.
+ * slots naming a show that is not persisted. Deliberately not a schema rule:
+ * the editor can hold a locally-added show, so PUT /schedule answers 200.
  */
 export function resolveScheduleSlots(
   week: ScheduleWeek,
@@ -198,14 +160,9 @@ export function resolveScheduleSlots(
   return { schedule, dropped };
 }
 
-/**
- * The load path's repair: everything unrecognised becomes an empty slot.
- *
- * Lives beside the rule it repairs against, like repairShowForLoad — a repair
- * in normalize.ts restating ~5 schema rules inline is how the shows load path
- * ended up able to delete a whole show. Each repair lands on a value the strict
- * path would accept, and the schema is still run on the result.
- */
+/** The load path's repair: everything unrecognised becomes an empty slot. Lives
+ *  beside the rule it repairs against, and lands on a value the strict path
+ *  accepts (the schema is still run on the result). */
 export function repairScheduleForLoad(raw: unknown, showIds: string[]): ScheduleWeek {
   const week = emptyWeek();
   const src = toScheduleWeekRecord(raw);
@@ -223,26 +180,41 @@ export function repairScheduleForLoad(raw: unknown, showIds: string[]): Schedule
   return week;
 }
 
-// ── Timed takeover (#930) ────────────────────────────────────────────────────
-
-/** Pin one show for a bounded window, then the weekly grid resumes. */
+/**
+ * A bounded takeover target. `showId: null` means Default programming; an
+ * outer `scheduleOverride: null` means there is no takeover at all.
+ */
 export interface ScheduleOverride {
-  showId: string;
+  showId: string | null;
   startedAt: number;
   expiresAt: number;
 }
 
+/**
+ * The takeover target, read in ONE place — never inline a `showId` test. It is
+ * three-way: a show, explicit `null` for Default programming (#1507), or
+ * neither, and a target naming nothing real VOIDS the takeover. Both obvious
+ * inline spellings get that third case wrong.
+ *
+ * Deliberately loose in their parameter, so a request body and an admin form's
+ * submitted values can ask the same way a stored override does.
+ */
+export function takeoverShowId(ov: { showId?: unknown } | null | undefined): string | null {
+  const id = ov?.showId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/** True while `ov` is an explicit Default programming takeover (#1507). */
+export function isDefaultTakeover(ov: { showId?: unknown } | null | undefined): boolean {
+  return !!ov && ov.showId === null;
+}
+
 export interface ScheduleOverrideContext {
-  /** Show ids the pin may name, or null when this caller cannot check. */
+  /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
-  /**
-   * Epoch-ms "now", or null to not judge expiry at all.
-   *
-   * Only the LOAD path passes a clock: an override that has already run out is
-   * transient state worth dropping at boot, whereas update() persisting one
-   * with a past `expiresAt` is not an input error — the operator's own window
-   * simply ended, and throwing there would fail an unrelated settings save.
-   */
+  /** Epoch-ms "now", or null to not judge expiry. Only the LOAD path passes a
+   *  clock: a window that merely ran out is not update()'s input being wrong,
+   *  and throwing there would fail an unrelated settings save. */
   now: number | null;
 }
 
@@ -250,19 +222,20 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id'),
+        // `.nullable()` rather than a union: null is the Default programming
+        // target, and the string's own message is the actionable one.
+        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id').nullable(),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
-      // Explicit, so a non-object never reaches an operator as zod's own
-      // 'Invalid input: expected object, received number'. Phrased WITHOUT the
-      // key, like the field messages above, because every caller roots this
-      // schema at 'scheduleOverride' — self-naming here would double it.
+      // Explicit, and phrased WITHOUT the key: every caller roots this schema at
+      // 'scheduleOverride', so self-naming would double it.
       { error: 'must be an object' },
     )
     .check((c) => {
-      const { showId, startedAt, expiresAt } = c.value;
-      if (ctx.showIds && !ctx.showIds.includes(showId)) {
+      const { startedAt, expiresAt } = c.value;
+      const showId = takeoverShowId(c.value);
+      if (showId && ctx.showIds && !ctx.showIds.includes(showId)) {
         c.issues.push({
           code: 'custom',
           input: showId,
@@ -297,20 +270,57 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 }
 
 /**
- * POST /schedule/override's body.
- *
- * `minutes` is coerced because the hand-rolled route ran `Number(req.body
- * ?.minutes)` and therefore accepted the string "60". An EMPTY showId now 400s
- * where it used to reach the roster lookup and 404 as `no such show: ` — a
- * missing field is a malformed request, not a missing show. A real id that
- * isn't in the roster still 404s from the handler, which is the answer that
- * needs server state.
+ * How a takeover's end is chosen (#1601). `'fixed'` is `minutes` from now and is
+ * the DEFAULT; `'schedule-change'` asks the server to end the pin at the next
+ * weekly-grid boundary. It rides on the REQUEST and never on `ScheduleOverride`
+ * — `expiresAt` stays an absolute instant, so the resolved pin is an ordinary
+ * window every reader already understands.
  */
-export const scheduleOverrideRequestSchema = z.object({
-  showId: z.string({ error: 'pick a show to pin' }).min(1, 'pick a show to pin'),
-  minutes: z.coerce
-    .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
-    .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .min(OVERRIDE_MIN_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .max(OVERRIDE_MAX_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`),
-});
+export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
+export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
+
+// One string for four constraints, naming both ends whichever one a value missed.
+const OVERRIDE_MINUTES_MESSAGE =
+  `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`;
+
+/**
+ * POST /schedule/override's body. `showId: null` requests Default programming;
+ * an empty showId 400s rather than 404ing from the roster lookup. `minutes` is
+ * coerced, so the string "60" is accepted.
+ *
+ * `minutes` is REQUIRED under `until: 'fixed'` and REFUSED under
+ * `'schedule-change'`: the two fields must not be able to disagree about what
+ * the caller asked for.
+ */
+export const scheduleOverrideRequestSchema = z
+  .object({
+    showId: z
+      .string({ error: 'pick a show or Default programming' })
+      .min(1, 'pick a show or Default programming')
+      .nullable(),
+    until: z.enum(TAKEOVER_UNTIL, { error: "must be 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: OVERRIDE_MINUTES_MESSAGE })
+      .int(OVERRIDE_MINUTES_MESSAGE)
+      .min(OVERRIDE_MIN_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .max(OVERRIDE_MAX_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .optional(),
+  })
+  .check((c) => {
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: OVERRIDE_MINUTES_MESSAGE,
+      });
+    }
+    if (c.value.until === 'schedule-change' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: 'must be omitted when the window ends at the schedule change',
+      });
+    }
+  });

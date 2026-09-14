@@ -14,7 +14,7 @@ whole HTTP API (and a live playground), see [`api.md`](./api.md) or the admin
 
 ## The short version
 
-There are two ways to connect — both expose the **same nineteen tools** from
+There are two ways to connect — both expose the **same twenty tools** from
 the **same source** (`controller/src/mcp/`):
 
 ```
@@ -29,7 +29,7 @@ Local alternative — stdio (runs from a repo clone via tsx):
 The tools own no state and almost no logic of their own — each is a typed
 wrapper over one controller HTTP endpoint (the one exception:
 `subwave_request_song` polls the request receipt so the agent gets an outcome,
-not a ticket). The model gets nineteen tools; the controller does the real work
+not a ticket). The model gets twenty tools; the controller does the real work
 (LLM matching, track selection, TTS, queueing).
 
 **HTTP endpoint (recommended).** The controller serves MCP directly at
@@ -41,8 +41,10 @@ claude mcp add --transport http subwave https://your-station/api/mcp \
 ```
 
 Auth mirrors the REST API: read tools work unauthenticated; DJ-control tools
-need the station's admin credentials in the `Authorization` header. No clone, no
-build, no separate process.
+need the station's admin credentials in the `Authorization` header. A private
+station's `subwave_similar_tracks` takes its *listener* password in an
+`x-station-auth` header — a separate secret, forwarded the same way. No clone,
+no build, no separate process.
 
 It is the agent-facing twin of the listener request drawer: where a human types
 into the browser and hits `POST /request`, an agent calls `subwave_request_song`
@@ -74,6 +76,7 @@ intent-shaped tools.
 | `subwave_request_song` | `POST /request` + `GET /request/:id` | none | queues a track |
 | `subwave_request_status` | `GET /request/:id` | none | no |
 | `subwave_search_library` | `GET /dj/search` | admin | no |
+| `subwave_similar_tracks` | `GET /similar-tracks` | station | no |
 | `subwave_queue_track` | `POST /dj/queue-track` | admin | queues a track |
 | `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track |
 | `subwave_dj_announce` | `POST /dj/say` | admin | speaks now |
@@ -131,6 +134,30 @@ The deterministic path: search Navidrome by terms (12 queue-ready results with
 mood tags), then queue an exact result by id. Admin-gated, no LLM, no rate
 limit, no DJ intro. This is the right pair when the agent already knows the
 exact track; `subwave_request_song` is for vibes and natural language.
+
+### `subwave_similar_tracks`
+
+The sound-alike lookup the admin Library panel runs, exposed to an API caller.
+It KNNs the CLAP audio embedding — timbre, instrumentation, production, energy,
+derived from the waveform — so it is blind to tags and works on instrumentals
+and non-English tracks where a text search does not. Seed it with a track id
+(`subwave_now_playing`'s `subsonic_id` is the obvious one) or free text that
+resolves to one.
+
+Two things separate it from the other read tools:
+
+- **It is station-gated, not admin-gated.** A public station serves it with no
+  credential at all; a private one wants the listener password. An operator's
+  call-in agent gets library reads without the admin console.
+- **A library with no audio analysis is not an error.** `results` comes back
+  empty with a `reason` — `no-audio-index` (the station has no CLAP vectors at
+  all, so it needs the heavy analyzer), `seed-not-analysed` (this track
+  specifically), `seed-not-found`, or `no-neighbours`. An agent can tell "ask
+  again after the analysis pass" from "your track id is wrong", which a bare
+  empty list or a 503 does not allow.
+
+Never-play tracks are filtered out on the way, at the library's own blocklist
+chokepoint.
 
 ### `subwave_dj_announce`
 
@@ -206,6 +233,11 @@ The controller splits its surface in two (see
 
 - **Public** — `/health`, `/now-playing`, `/state`, `/schedule`, `/session`,
   `/request` (rate-limited), `/request/:id`. No auth.
+- **Station-password gated** — `/similar-tracks`. Gated by the station's
+  *listener* password (Settings → Privacy), a different secret from the admin
+  one, and a different failure direction: open on a public station (no locks
+  on), closed on a private one. That is what lets an operator point a call-in
+  agent at their library without handing it the admin console.
 - **Admin, Basic-auth gated** — `/dj/*`, `/sfx` and `/jingles`. Gated by the controller's
   `ADMIN_USER` / `ADMIN_PASS`.
 
@@ -225,6 +257,7 @@ prompt.
 | `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:7700/api`. |
 | `SUBWAVE_ADMIN_USER` | — | Matches the controller's `ADMIN_USER`. |
 | `SUBWAVE_ADMIN_PASS` | — | Matches the controller's `ADMIN_PASS`. |
+| `SUBWAVE_STATION_PASSWORD` | — | Matches `settings.privacy.password`. Only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 In dev the controller is exposed directly on `:7701`. In prod only Caddy binds
 a host port, so the server must target `:7700/api` — the `handle_path` rule

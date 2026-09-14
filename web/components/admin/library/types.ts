@@ -7,17 +7,15 @@ export interface Track {
   artist?: string;
   album?: string;
   year?: number | string | null;
-  // Era surface (#842/#1418). `year` is the FILE's year — on a reissue
-  // anthology that's the reissue's date. `originalYear` is the resolved
-  // recording year when one is known, and `originalYearSource` says who
-  // resolved it: 'album-tag' (the album's originalReleaseDate, which on a
-  // reissue is just the reissue again), 'musicbrainz', or 'manual' — the
-  // operator's own answer, which outranks both. Absent on an older controller.
+  // Era surface (#842/#1418). `year` is the FILE's year (a reissue's date on an
+  // anthology); `originalYear` is the resolved recording year and
+  // `originalYearSource` is 'album-tag' | 'musicbrainz' | 'manual' (manual wins).
+  // Absent on an older controller.
   originalYear?: number | null;
   originalYearSource?: string | null;
-  // Navidrome's raw compilation flag, and the station's own derived verdict
-  // (#1418) — an album can be an anthology with the flag unset, which is the
-  // whole defect. Era resolution treats either as "the year is the release's".
+  // Navidrome's raw compilation flag plus the station's derived verdict (#1418);
+  // an anthology can have the flag unset. Era resolution treats either as
+  // "the year is the release's".
   isCompilation?: boolean | null;
   eraUntrusted?: boolean | null;
   genre?: string | null;
@@ -39,9 +37,9 @@ export interface Track {
   likeCount?: number;
   likedByOperator?: boolean;
   lastLikedAt?: string;
-  // Which never-play entry keeps this row off air, null when clear. Stamped server-side
-  // (music/blocklist.ts) so the browser never re-implements the match rules. Absent on
-  // an older controller — treat undefined and null the same.
+  // Which never-play entry keeps this row off air, null when clear. Stamped
+  // server-side (music/blocklist.ts). Absent on an older controller: treat
+  // undefined and null the same.
   blockedBy?: BlockRef | null;
 }
 
@@ -69,6 +67,26 @@ export interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 // snapshots taken at block time, so rendering needs no Navidrome re-lookup.
 export type BlockType = 'track' | 'album' | 'artist';
 
+// What POST /dj/queue-block queues as one action (#1622 FR 4). Distinct from
+// BlockType above, which is the never-play list's granularity — one puts a
+// record ON air, the other keeps it off.
+export type QueueBlockKind = 'album' | 'artist';
+
+// POST /dj/queue-block's answer. Every caveat is a field rather than something
+// the caller re-derives: `skipped` is what the never-play list refused (a block
+// does NOT bypass it), `truncated` what the 30-track cap took, and
+// `runsPastShowChange` a warning only — nothing was cut.
+export interface QueueBlockResult {
+  kind: QueueBlockKind;
+  blockId: string;
+  label: string;
+  queued: number;
+  queuePosition: number | null;
+  truncated: number;
+  skipped: { title: string | null; artist: string | null; reason: string }[];
+  runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
+}
+
 // What blocks a row: an id entry or an attribute rule (#1300 FR 1). `kind` is
 // optional on the entry variant because an older controller omits it — treat
 // absent as 'entry'; `ref.kind === 'rule'` is the discriminant either way.
@@ -85,15 +103,10 @@ export interface BlockEntry {
   addedAt: string;
 }
 
-// Rule entries — attribute/tag predicates beside the id entries, with an
-// optional seasonal allow-window and show scope. `active`/`matchCount` are the
-// listing stats GET /library/blocklist stamps per rule.
-//
-// The SHAPE comes from the mirrored schema rather than being re-declared here.
-// Both of these were hand-copied from the controller, which is the drift the
-// mirror exists to prevent: the field vocabulary in particular is enumerated in
-// FIELD_OPTIONS on the card too, and a field added server-side would otherwise
-// typecheck cleanly here while being unreachable in the UI.
+// Rule entries: attribute/tag predicates beside the id entries, with an optional
+// seasonal allow-window and show scope. `active`/`matchCount` are listing stats
+// stamped per rule by GET /library/blocklist. The shape comes from the mirrored
+// schema, never re-declared here, so a server-side field addition cannot drift.
 export type { RuleField, SeasonWindow } from '@/lib/schemas.generated';
 
 import type { RuleField, SeasonWindow } from '@/lib/schemas.generated';
@@ -113,11 +126,10 @@ export interface BlockRuleStat extends BlockRule {
   matchCount: number;
 }
 
-// What a manual tag save or a single-track retag did, applied across every
-// cached row list by applyTagEvent (queries.ts). The lists disagree about what
-// it means: Search and the Tracks modes patch the row in place, Needs-tags
-// DROPS it (a tagged track is no longer untagged), and Browse refetches because
-// its MEMBERSHIP can change (a mood filter may stop matching).
+// What a manual tag save or single-track retag did, applied across every cached
+// row list by applyTagEvent (queries.ts). Handling differs per list: Search and
+// Tracks patch in place, Needs-tags drops the row, Browse refetches because its
+// membership can change.
 export interface TagEvent {
   track: Track;
   moods: string[];
@@ -192,3 +204,26 @@ export interface PlaylistSummary {
   owner: string;
   public: boolean;
 }
+
+
+// Scene vocabulary (#1577) — the genre tag set as one curatable list.
+// Mirrors controller `music/library-db/scenes.ts SceneCount` and
+// `music/scene-vocab.ts SceneAlias`.
+
+/** One distinct genre value in the mirror, with the tracks carrying it. */
+export interface SceneCount {
+  value: string;
+  tracks: number;
+}
+
+/** One consolidation rule. `from` is the FOLDED key (case-insensitive,
+ *  whitespace-collapsed) matched against ingested values, so it does not read
+ *  back as any one retired spelling; `to` is the stored value written. */
+export interface SceneAlias {
+  from: string;
+  to: string;
+  at: string;
+}
+
+/** The referenced-by warning a merge carries (#1593), from the schema mirror. */
+export type { SceneReference, SceneReferenceKind } from '@/lib/schemas.generated';

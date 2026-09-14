@@ -1,18 +1,12 @@
-// Bake micro edge fades into a rendered voice WAV, in place.
-//
-// Some TTS engines cut the file hard at the clip boundary; once the broadcast
-// mic-chain compressor's makeup gain lifts the clip, that hard edge lands on
-// air as an audible click. The head fade also exists in radio.liq (fade.in on
-// the voice queues), but the TAIL fade cannot live there: fade.out on a
-// request.queue source doesn't know the track's remaining time in this
-// Liquidsoap build and silences the entire clip (the 2026-07-04 silent-DJ
-// incident, PR #830). So both edges are baked into the file at render time —
-// the only place the clip's true length is known.
+// Bake micro edge fades into a rendered voice WAV, in place. A hard clip
+// boundary reaches air as a click once the mic-chain compressor's makeup gain
+// lifts it. The TAIL fade cannot live in radio.liq: fade.out on a request.queue
+// source doesn't know the remaining time and silences the whole clip (#830), so
+// both edges are baked at render time, the only place the length is known.
 //
 // Only canonical PCM WAVs are edited: 16-bit int (format 1) and 32-bit float
-// (format 3). Anything else — notably the cloud engine's mp3 output — is left
-// untouched: lossy encoders pad the stream with silence at both ends, so the
-// hard-edge click doesn't arise there.
+// (format 3). Everything else, notably the cloud engine's mp3, is left alone —
+// lossy encoders pad both ends, so the click doesn't arise.
 
 import { readFile, writeFile } from 'node:fs/promises';
 
@@ -81,9 +75,8 @@ function rampInPlace(buf: Buffer, fmt: Fmt, dataStart: number, dataLen: number, 
   return true;
 }
 
-// Public entry point — best-effort by design: a voice clip must never fail to
-// air because the edge polish couldn't be applied. Returns true when fades
-// were baked, false when the file was left untouched.
+// Best-effort by design: a clip must never fail to air because the edge polish
+// couldn't be applied. True when fades were baked, false when left untouched.
 export async function applyEdgeFades(filePath: string, ms = 40): Promise<boolean> {
   try {
     const buf = await readFile(filePath);

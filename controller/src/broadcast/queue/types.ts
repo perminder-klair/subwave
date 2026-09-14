@@ -51,6 +51,10 @@ export interface Track {
   loop?: boolean;
   loopBar?: number;
   crossSec?: number;
+  // Show-boundary fade (#1574): this track was cued out at a show change, so
+  // its ending is a cut rather than its own. radio.liq reads liq_show_fade off
+  // the OUTGOING track and suppresses the exit gestures above.
+  showFade?: boolean;
   [k: string]: unknown;
 }
 
@@ -60,6 +64,40 @@ export interface Track {
 export interface QueueItem {
   track: Track;
   requestedBy?: string | null;
+  // This item was queued by the OPERATOR, not by a listener. It exists because
+  // `requestedBy` cannot answer that question: the studio queue pushes
+  // `requestedBy: 'studio'` precisely so it inherits the four exemptions that
+  // discriminator carries (the #447 length cap, the show-boundary cut, the
+  // bed's request reason, the sub-crossfade warning), and every one of those
+  // is right for an operator push. What is NOT right is `routes/request.ts`
+  // reading the same truthiness as "a listener is waiting" — six manual Queue
+  // presses then filled `requests.maxPending` and shut the listener request
+  // line, with nothing in the refusal naming the cause.
+  //
+  // So the origin gets its own field rather than overloading that one, and the
+  // two questions stay separable. Read ONLY by `pendingListenerRequests()`;
+  // nothing on the air path may branch on it, or the exemptions above quietly
+  // acquire a second discriminator that can disagree with the first.
+  //
+  // ABSENT means "not known to be an operator push", which is what an item
+  // recovered from a `queue.json` written before this field reads as — i.e.
+  // exactly the old behaviour, for the ≤2h such a snapshot survives.
+  operator?: boolean;
+  // This item was queued as part of an operator BLOCK — a whole album, or a
+  // run of tracks for an artist show (#1622 FR 4).
+  //
+  // IDENTITY ONLY. Nothing on the air path may branch on it: the block airs as
+  // ordinary FIFO queue items, with exactly the exemptions `requestedBy:
+  // 'studio'` and `allowDuplicate` already carried, and adding a third
+  // discriminator here is how the drain would come to treat "in a block"
+  // as a fourth kind of track. It exists so three surfaces can say what a
+  // listener already hears — the booth log names the block once instead of
+  // thirty times, the admin queue badges the rows, and
+  // `DELETE /dj/queue/block/:id` can undo one press with one press.
+  //
+  // `index`/`size` are stamped from the PLAN, so they describe the block as it
+  // was queued and do not shrink as it plays out ("3 of 11" stays "3 of 11").
+  block?: { id: string; label: string; index: number; size: number };
   intent?: string | null;
   introScript?: string | null;
   introKind?: string;
@@ -71,6 +109,10 @@ export interface QueueItem {
   // drops unrendered intros anyway, and a stale persona blob is worse than the
   // live fallback.
   introPersona?: Persona | null;
+  // Editorial session that wrote a DJ link. A link may be rendered and held
+  // beyond a show boundary, but it must never cross into the next show's
+  // session — even when the same persona hosts both shows.
+  introSessionKey?: string | null;
   aiPicked?: boolean;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
@@ -85,13 +127,24 @@ export interface QueueItem {
   // this item, meaning its link airs over the BED rather than over this track
   // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
   // onBedStarted — so this is how that event finds the item it belongs to.
-  // Both bed fields ride persist()'s wholesale item snapshot, which is what
-  // makes the maybePushBed re-drain guard hold across a controller restart.
+  // All three bed fields ride persist()'s wholesale item snapshot, which is
+  // what makes the maybePushBed re-drain guard hold across a controller
+  // restart.
   bedded?: boolean;
   // The predecessor's exit canvas the bed fades in under. The bed's marker
   // fires at cross-FEED time, this many seconds before the bed is dominant —
   // onBedStarted holds the link for what remains of it.
   bedEntrySec?: number;
+  // Seconds the bed really pushes this item back: its own length less the two
+  // crosses it overlaps (the predecessor's exit canvas on the way in, its own
+  // on the way out). A bed is handed straight to next.txt and is NEVER an
+  // `upcoming` entry, so nothing that forecasts an air time from the queue can
+  // see it — this is how the show-boundary cut (#1574) accounts for it.
+  bedDelaySec?: number;
+  // Seconds a pause-and-talk silence pushes this item back after subtracting
+  // the two crossfades it overlaps. Like bedDelaySec, the silent request goes
+  // straight to next.txt and is otherwise invisible to queue forecasts.
+  pauseDelaySec?: number;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
@@ -123,6 +176,11 @@ export interface RecentPlay {
   id: string | null;
   title: string | null;
   artist: string | null;
+  // The record this play came off, for the album cooldown (#1485 FR 3).
+  // OPTIONAL because the sidecar is durable: every row written before the
+  // cooldown existed carries no album, and so takes no part in it — an upgrade
+  // starts remembering albums from the next play, never retroactively.
+  album?: string | null;
   endedAt: string;
 }
 

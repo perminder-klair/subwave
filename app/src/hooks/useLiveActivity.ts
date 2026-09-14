@@ -1,17 +1,10 @@
-// The on-air Live Activity — SUB/WAVE on the Lock Screen, in the Dynamic
-// Island, and on the Apple Watch Smart Stack (iOS 18+ mirrors the same card
-// there, which is the whole reason this exists: React Native does not run on
-// watchOS, so a real watch app is a second Swift codebase and this is the wrist
-// surface that costs one widget target).
+// Drives the on-air Live Activity (Lock Screen, Dynamic Island, watch Smart
+// Stack). It shows what the lock screen shows, via lib/air-card.ts, plus the
+// show/station identity and a heart.
 //
-// It shows exactly what the lock screen shows — both go through
-// lib/air-card.ts — plus the two things the OS Now Playing card cannot: the
-// show/station identity, and a heart.
-//
-// Cheap by construction. The card's clock ticks natively from `startedAt`, so
-// this pushes an update when the DISPLAYED VALUES change (a track, a link
-// starting, a like landing) and never on a timer. ActivityKit rate-limits
-// updates; a per-second push would be throttled away mid-song.
+// The card's clock ticks natively from `startedAt`, so this pushes an update
+// only when a displayed value changes, never on a timer: ActivityKit
+// rate-limits updates and a per-second push would be throttled away mid-song.
 
 import { useEffect, useMemo, useRef } from 'react';
 import {
@@ -30,23 +23,20 @@ import type { ActiveShow, NowPlayingTrack, SessionTurn } from '@/lib/types';
 
 export interface UseLiveActivityParams {
   api: StationApi | null;
-  /** LOCAL playback only. While casting there is no audio session on this
-   *  device, so an "on air, on your phone" card would be a lie — same reason
-   *  useNowPlayingInfo keys on the local player. */
+  /** LOCAL playback only: while casting there is no audio session on this
+   *  device, so the card would be a lie. */
   tunedIn: boolean;
   nowPlaying: NowPlayingTrack | null;
   activeShow?: ActiveShow | null;
   boothFeed?: SessionTurn[];
-  /** Epoch ms when the track became audible to THIS listener — already carries
-   *  the stream.bufferSeconds offset (useStationFeed owns that shift). Null
-   *  before the first track lands. */
+  /** Epoch ms when the track became audible to this listener; the
+   *  stream.bufferSeconds offset is already applied by useStationFeed. */
   trackStartedAt: number | null;
   /** Station display name for the eyebrow. */
   station: string;
   /** Station theme accent, `#rrggbb`. */
   accent: string;
-  /** The heart's live state. A tap on the card is routed straight back into
-   *  this same hook, so a wrist like and an in-app like are the same call. */
+  /** The heart's live state; a card tap routes back into this same hook. */
   like: TrackLike;
 }
 
@@ -61,17 +51,14 @@ export function useLiveActivity({
   accent,
   like,
 }: UseLiveActivityParams): void {
-  // iOS 17+, the widget target present, and the listener has not switched Live
-  // Activities off for us. None of that changes while the app is running, so it
-  // is read once — and on Android it is simply always false.
+  // None of what this gates on changes while the app runs, so read it once.
   const supported = useMemo(() => isLiveActivitySupported(), []);
 
   const talking = useTalking(boothFeed);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  // A credentialed station's cover needs the same Basic header the audio stream
-  // carries — URL userinfo is not honoured by the native fetch that downloads
-  // it (#764 is the AVPlayer half of the same lesson).
+  // The native fetch that downloads the cover ignores URL userinfo, so a
+  // credentialed station needs the same Basic header the stream carries.
   const artworkHeaders = useMemo(() => api?.streamHeaders() ?? {}, [api]);
 
   const state: LiveActivityState = useMemo(
@@ -105,8 +92,8 @@ export function useLiveActivity({
     ],
   );
 
-  // Declared BEFORE the lifecycle effect on purpose: effects run in order, so
-  // this seeds the ref that `start` reads on the very first mount.
+  // Must stay before the lifecycle effect: effects run in order, and this
+  // seeds the ref `start` reads on first mount.
   const stateRef = useRef(state);
   const startedRef = useRef(false);
   useEffect(() => {
@@ -115,10 +102,8 @@ export function useLiveActivity({
     void updateLiveActivity(state);
   }, [state]);
 
-  // Lifecycle. The cleanup covers every way the card should come down — tuning
-  // out, switching station (a new `api`), a theme change (the accent is baked
-  // into the activity's immutable attributes, so it restarts rather than
-  // updates), and unmount.
+  // The accent is baked into the activity's immutable attributes, so a theme
+  // change restarts the card rather than updating it.
   useEffect(() => {
     if (!supported || !api || !tunedIn) return;
     let cancelled = false;
@@ -133,11 +118,9 @@ export function useLiveActivity({
     };
   }, [supported, api, tunedIn, station, accent]);
 
-  // The heart, tapped from the card. Held in a ref so the listener registered
-  // once always calls the CURRENT like closure — `like.like` is rebuilt on
-  // every track change, and a stale one would silently like the previous song
-  // (the controller would reject it as a stale tap, which reads as "the button
-  // does nothing").
+  // Held in a ref so the once-registered listener always calls the current
+  // like closure: `like.like` is rebuilt every track change, and a stale one
+  // would like the previous song and be rejected as a stale tap.
   const likeRef = useRef(like);
   useEffect(() => {
     likeRef.current = like;

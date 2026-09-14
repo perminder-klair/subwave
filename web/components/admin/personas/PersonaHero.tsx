@@ -1,5 +1,5 @@
 'use client';
-import type { Persona } from './types';
+import type { Persona, SettingsResponse } from './types';
 import { engineLabel } from './helpers';
 import { Eyebrow } from '../ui';
 
@@ -13,10 +13,12 @@ interface PersonaHeroProps {
   onAirShow: { id: string; name: string } | null;
   defaultEngine: string;
   onAirCloudIssue: string | null;
+  // Needed only so engineLabel can resolve a persona on the station default.
+  data: SettingsResponse | null;
 }
 
 export function PersonaHero({
-  onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue,
+  onAirPersona, defaultPersona, onAirShow, defaultEngine, onAirCloudIssue, data,
 }: PersonaHeroProps) {
   const overridden = !!onAirShow && defaultPersona?.id !== onAirPersona?.id;
   return (
@@ -48,7 +50,7 @@ export function PersonaHero({
         <span className="caption sm:ml-4">
           frequency · {onAirPersona ? onAirPersona.frequency : '—'}
         </span>
-        <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona) : '—'}</span>
+        <span className="caption">voice · {onAirPersona ? engineLabel(onAirPersona, data) : '—'}</span>
         {onAirCloudIssue && (
           <span className="caption text-[var(--danger)]">
             ⚠ cloud voice inactive, speaking via {defaultEngine}

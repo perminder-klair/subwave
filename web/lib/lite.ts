@@ -1,14 +1,9 @@
-// Lite (low-power) mode.
-//
-// `backdrop-filter` blur and the always-on looping animations are cheap on a
-// laptop GPU but brutal on weak ones: a Raspberry Pi 4 re-compositing blurred
-// layers at ~50fps pegs Chromium at ~170% CPU. Lite mode adds a `lite` class to
-// <html> that drops every backdrop-filter and disables animations (globals.css).
+// Lite (low-power) mode: adds a `lite` class to <html> that drops every
+// backdrop-filter and disables animations (globals.css), for weak GPUs.
 //
 // Precedence: `?lite=1`/`?lite=0` in the URL (written through to localStorage so
-// a later param-less visit sticks), then the player theme-menu toggle, then off.
-// Applied pre-paint via LITE_INIT_SCRIPT so a pinned kiosk never flashes the
-// heavy build.
+// a later param-less visit sticks), then the theme-menu toggle, then off.
+// Applied pre-paint via LITE_INIT_SCRIPT so a kiosk never flashes the heavy build.
 
 const STORAGE_KEY = 'subwave-lite';
 const LITE_CLASS = 'lite';
@@ -42,9 +37,8 @@ export function saveLitePref(on: boolean): void {
 }
 
 // Pre-hydration <script> body: resolves lite mode from ?lite= then localStorage
-// and toggles the class before paint. A URL param writes through to
-// localStorage so the choice survives the next param-less load. Static string,
-// inlined via dangerouslySetInnerHTML; no untrusted input reaches it.
+// and toggles the class before paint. Static string, inlined via
+// dangerouslySetInnerHTML; no untrusted input reaches it.
 export const LITE_INIT_SCRIPT = `
   try {
     var KEY = '${STORAGE_KEY}';

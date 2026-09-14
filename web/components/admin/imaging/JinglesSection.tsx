@@ -9,13 +9,14 @@ import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
-import { Btn } from '../ui';
+import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
 import type { JingleImportFailure, JingleImportResult, ImagingSubmitResult } from './types';
 import { notify } from '../../../lib/notify';
 import {
   IMAGING_DESCRIPTION_MAX,
   JINGLE_RATIO_BOUNDS,
+  JINGLE_ROTATE_OWNERS,
   JINGLE_TEXT_MAX,
   jingleCreateSchema,
   jingleImportSchema,
@@ -51,9 +52,8 @@ function JingleCreateModal({
   onClose: () => void;
 }) {
   const form = useZodForm(jingleCreateSchema, { text: '' });
-  // text is a plain z.string() (no preprocess wrapper), so its z.input is a
-  // real string and form.control needs no cast here — unlike every other
-  // field in this file, which goes through imagingName/imagingDescription.
+  // text is a plain z.string(), so its z.input is a real string and
+  // form.control needs no cast -- unlike every other field in this file.
   const textValue = useWatch({ control: form.control, name: 'text' }) || '';
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -97,11 +97,9 @@ function JingleCreateModal({
   );
 }
 
-// `label` is jingleImportSchema's one field (z.preprocess-wrapped — unknown
-// z.input, cast once). `files` (a multi-file picker) is not part of that
-// schema at all — a jingle import's shape only ever describes the label a
-// single-file import may carry — so it's a plain Controller field read via
-// useWatch, the same raw-Controller case as every file picker in this task.
+// `label` is jingleImportSchema's one field (z.preprocess-wrapped, so unknown
+// z.input, cast once). `files` (a multi-file picker) is not part of that schema
+// at all, so it's a plain Controller field read via useWatch.
 interface JingleImportFormValues {
   label?: string;
   files: File[];
@@ -120,9 +118,8 @@ function JingleImportModal({
 }) {
   const form = useZodForm(jingleImportSchema, { label: '' });
   const control = form.control as unknown as Control<JingleImportFormValues>;
-  // `files` has no place in jingleImportSchema's own type (see the interface
-  // comment above), so clearing it after a batch needs the same widened cast
-  // `control` uses rather than the schema-typed `form.setValue`.
+  // `files` has no place in jingleImportSchema's own type, so clearing it after
+  // a batch needs the same widened cast `control` uses.
   const setFormValue = form.setValue as unknown as <K extends keyof JingleImportFormValues>(
     name: K, value: JingleImportFormValues[K],
   ) => void;
@@ -278,6 +275,11 @@ export function JinglesSection({
   const ratioRaw = data.values?.jingleRatio;
   const ratioDirty = jingleRatio !== String(ratioRaw);
   const ratioMetric = ratioRaw == null ? '—' : ratioRaw === 0 ? 'off' : `1 : ${ratioRaw}`;
+  // Who counts the tracks (#1619). Unlike the ratio this is not held in a
+  // dirty-string: a segmented control has no half-typed state, so it posts on
+  // click like every other toggle. Un-hydrated reads as the default, which is
+  // also what an older controller (no key in /settings) answers.
+  const rotateOwner = data.values?.jingleRotate === 'controller' ? 'controller' : 'mixer';
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -330,12 +332,8 @@ export function JinglesSection({
             onClick={() => {
               // Pre-flight against the controller's own schema, so an
               // out-of-range ratio reads the same message here and on the wire.
-              // The raw string goes in on purpose — the schema parses it the way
-              // update() does, including the string forms `type="number"` still
-              // hands back. This inline control is deliberately NOT react-hook-
-              // form — see ImagingPanel.tsx's saveSettings comment: it posts its
-              // own one-key /settings patch and needs restart handling the shared
-              // create/import forms don't.
+              // Deliberately NOT react-hook-form: it posts its own one-key
+              // /settings patch and needs restart handling.
               const parsed = jingleRatioSchema.safeParse(jingleRatio);
               if (!parsed.success) {
                 notify.err(parsed.error.issues[0]?.message || 'invalid value');
@@ -348,6 +346,31 @@ export function JinglesSection({
             Save · needs restart
           </Btn>
         </div>
+        <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
+          <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
+            <span className="font-mono text-[13px]">counted by</span>
+            <Seg
+              value={rotateOwner}
+              aria-label="Who counts the tracks between jingles"
+              options={JINGLE_ROTATE_OWNERS.map(id => ({
+                id,
+                label: id === 'mixer' ? 'Mixer' : 'Controller',
+              }))}
+              onChange={(id) => {
+                if (busy || id === rotateOwner) return;
+                void saveSettings({ jingleRotate: id });
+              }}
+            />
+          </div>
+          <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
+            The mixer has always counted for itself, and the DJ only found out afterwards.
+            Hand the count to the controller and a jingle becomes part of the same running
+            order as the station ID — nothing else speaks on the minute it takes, and it
+            waits its turn behind anything already queued for the next track.
+            {' '}<strong>Restart the mixer after switching</strong>, or both will count for a
+            while and you&rsquo;ll hear twice the jingles.
+          </p>
+        </div>
       </PanelBox>
 
       <PanelBox>
@@ -359,8 +382,8 @@ export function JinglesSection({
             {jingles.map(j => (
               <div
                 key={j.filename}
-                /* Mobile drops the play/delete cluster below the text: the two icon
-                   buttons eat 90px of the ~310px a panel has at 390px. */
+                /* Mobile drops the play/delete cluster below the text: the two
+                   icon buttons eat 90px of the ~310px at 390px. */
                 className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">

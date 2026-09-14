@@ -2,13 +2,14 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
 import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
 import type { ScheduleOverride } from '../../../lib/schemas.generated';
-import type {
-  ActResponse,
-  ConnectionsState,
-  DashStatus,
-  HealthStats,
-  QueueState,
-  RequestEntry,
+import {
+  UNKNOWN_TRUSTED_PROXIES,
+  type ActResponse,
+  type ConnectionsState,
+  type DashStatus,
+  type HealthStats,
+  type QueueState,
+  type RequestEntry,
 } from './types';
 import { scheduleKeys, type ScheduleLiveData } from '../schedule/queries';
 
@@ -20,6 +21,9 @@ export const dashKeys = {
   requests: () => ['dash', 'requests'] as const,
   suggestions: () => ['dash', 'suggestions'] as const,
   takeover: () => ['dash', 'takeover'] as const,
+  // Nested under takeover() on purpose: a pin write invalidates that prefix,
+  // and the preview it invalidates alongside is stale the moment one lands.
+  takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
 };
@@ -49,7 +53,13 @@ export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal)
   const body = await adminJson<Partial<ConnectionsState>>(
     fetcher, '/listeners/connections', undefined, signal,
   );
-  return { count: body?.count ?? 0, connections: body?.connections ?? [] };
+  return {
+    count: body?.count ?? 0,
+    connections: body?.connections ?? [],
+    // An older controller omits the key entirely; `known: false` is the same
+    // "say nothing" verdict the controller's own unknown case produces.
+    trustedProxies: body?.trustedProxies ?? UNKNOWN_TRUSTED_PROXIES,
+  };
 }
 
 export function fetchHealthStats(fetcher: AdminFetch, signal: AbortSignal): Promise<HealthStats> {
@@ -93,6 +103,26 @@ export interface TakeoverShow {
 export interface TakeoverData {
   shows: TakeoverShow[];
   override: ScheduleOverride | null;
+}
+
+/**
+ * What `until: 'schedule-change'` would resolve to right now (#1601) — the
+ * concrete end time the dialog shows before the operator commits.
+ *
+ * Advisory: POST /schedule/override resolves it again at its own `startedAt`,
+ * so this is what the pin would be, never what it is. `source` says which rule
+ * decided — the grid's own change (however near it is: there is no floor on
+ * this path), or the ceiling, under either of its two meanings.
+ */
+export interface TakeoverWindow {
+  expiresAt: number;
+  minutes: number;
+  source: 'schedule' | 'maximum' | 'ceiling';
+  nextChangeAt: number | null;
+}
+
+export function fetchTakeoverWindow(fetcher: AdminFetch, signal: AbortSignal): Promise<TakeoverWindow> {
+  return adminJson(fetcher, '/schedule/next-change', undefined, signal);
 }
 
 /** One `/schedule/override` write owns both route-specific views of the pin. */

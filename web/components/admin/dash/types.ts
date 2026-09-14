@@ -83,9 +83,51 @@ export interface ActResponse {
   error?: string;
 }
 
+// Mirrors broadcast/trusted-proxies-pure.ts. `known: false` is an older
+// broadcast image or a pair that has not rendered since the upgrade — the UI
+// must then show nothing at all, not a miss.
+export interface TrustedProxyState {
+  known: boolean;
+  count: number;
+  source: string | null;
+  proxies: string[];
+  dropped: string[];
+}
+
+/** The verdict for an absent marker or an older controller: show nothing. */
+export const UNKNOWN_TRUSTED_PROXIES: TrustedProxyState = {
+  known: false, count: 0, source: null, proxies: [], dropped: [],
+};
+
 export interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
+  /** What the icecast render trusted (#1613). Rides the connections response
+   *  so the hint cannot disagree with the rows it is explaining. */
+  trustedProxies: TrustedProxyState;
+}
+
+// The Listeners table shows the connecting peer whenever no proxy is trusted,
+// which on docker-compose.byo.yml is every boot: there is no `caddy` service
+// for the DNS path to resolve, so every row renders the edge's container
+// address. Say so where the symptom is, rather than only in the broadcast
+// container's log. Advisory only — nothing here changes what is displayed.
+export function trustedProxyHint(s: TrustedProxyState | undefined): string | null {
+  if (!s?.known) return null;
+  // Icecast matches an EXACT IP, so a subnet is accepted by the operator's
+  // editor and then never matches anything. Said whether or not something else
+  // resolved: an operator who set the var to a CIDR ALONE reads the miss below
+  // as "my setting was ignored" and has no way to learn why it was.
+  const dropped = s.dropped.length
+    ? ` Ignored ${s.dropped.join(', ')} — it matches an exact IP, so a subnet or hostname never matches.`
+    : '';
+  if (s.count === 0) {
+    const why = s.source === 'ICECAST_TRUSTED_PROXY_HOSTS'
+      ? 'no proxy hostname resolved, so Icecast can’t tell which address is the real client'
+      : 'no trusted proxy was resolved';
+    return `Showing the connecting peer: ${why}. Set ICECAST_TRUSTED_PROXY_IPS to your edge’s address and restart the broadcast container.${dropped}`;
+  }
+  return dropped.trim() || null;
 }
 
 // Mirrors the durable record the controller's request-log writes (GET /requests).

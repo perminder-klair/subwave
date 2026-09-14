@@ -1,21 +1,10 @@
 // settings.llm.discoverySteps — the operator override on how many discovery
 // rounds the DJ agent gets before `done` is forced.
 //
-// COLD LOAD, NOT AN IN-PROCESS CHECK. settings.load()'s llm block composes
-// explicitly and does NOT spread DEFAULTS, so a field missing from that
-// composition still validates, still saves to settings.json, and still works for
-// the rest of that process — then silently vanishes on the next restart with
-// nothing in the logs. That has shipped twice (tts.cloud.compatParams #1317,
-// llm.repeatPenalty #918 → #1327), and an in-process assertion passes on the
-// broken code both times. So every case here writes a settings.json, drops the
-// cache, and re-reads it the way a controller restart would.
-//
-// The second half checks the value actually reaches the consumers: the harness
-// (discoveryStepsFor / gatedMaxStepsFor) and the prompt (promptDiscoverySteps).
-// A setting that persists but never reaches the loop is the same bug wearing a
-// different hat.
-//
-// No credentials, no external host.
+// Every case COLD LOADS: load()'s llm block composes explicitly without
+// spreading DEFAULTS, so a field missing there works for the rest of the
+// process and vanishes on the next restart (#1317, #918 → #1327). The second
+// half checks the value reaches its consumers, the harness and the prompt.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -23,8 +12,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-// STATE_DIR is redirected at a throwaway dir BEFORE the first import of
-// anything config-derived (same pattern as scripts/llm-repeat-penalty.test.ts).
+// STATE_DIR is redirected before the first config-derived import.
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-discovery-steps-'));
 process.env.STATE_DIR = stateRoot;
 
@@ -36,8 +24,7 @@ const { promptDiscoverySteps } = await import('../src/llm/internal/provider/legs
 
 const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
-// A forced-tool provider (capability default 1) — the interesting side, since
-// raising it there is the main reason the override exists.
+// A forced-tool provider (capability default 1).
 const LOCAL_LLM = {
   provider: 'openai-compatible',
   model: 'qwen3-8b',
@@ -54,8 +41,7 @@ async function coldLoad(llm: Record<string, unknown>) {
 }
 
 test('0 means auto: an untouched install still follows the capability table', async () => {
-  // The whole point of the sentinel — upgrading to a build that has this
-  // setting must not change a single station's behaviour.
+  // Upgrading to a build with this setting must change no station's behaviour.
   const llm = await coldLoad({});
   assert.equal(llm.discoverySteps, 0, 'default is the auto sentinel');
   assert.equal(discoveryStepsFor(llm), 1, 'forced-tool provider keeps its 1');
@@ -65,7 +51,7 @@ test('0 means auto: an untouched install still follows the capability table', as
 test('an override survives a controller restart and reaches the harness', async () => {
   const llm = await coldLoad({ discoverySteps: 3 });
   assert.equal(llm.discoverySteps, 3);
-  // Persisting is only half of it — this is the consumer that decides the loop.
+  // Persisting is only half of it; this is the consumer deciding the loop.
   assert.equal(discoveryStepsFor(llm), 3);
 });
 
@@ -78,9 +64,7 @@ test('the override wins over the provider default in BOTH directions', async () 
 });
 
 test('the derived cap still leaves exactly one forced-done step at any override', async () => {
-  // The invariant the whole design rests on: widening discovery must never
-  // widen the number of `done` attempts, or a GLM-class model gets more turns
-  // to keep declining on an already-polluted trail.
+  // Widening discovery must never widen the number of `done` attempts.
   for (const n of [1, 2, 3, 4, 5]) {
     const llm = await coldLoad({ discoverySteps: n });
     assert.equal(gatedMaxStepsFor(llm) - discoveryStepsFor(llm), 1, `override ${n}`);
@@ -94,16 +78,15 @@ test('a stored override is clamped, and junk falls back to the default', async (
   assert.equal((await coldLoad({ discoverySteps: 0 })).discoverySteps, 0);
   // A fractional value floors rather than being refused.
   assert.equal((await coldLoad({ discoverySteps: 2.7 })).discoverySteps, 2);
-  // A string is not a number — the clamp refuses to guess, same as the others.
+  // A string is not a number; the clamp refuses to guess.
   assert.equal((await coldLoad({ discoverySteps: '3' })).discoverySteps, 0);
-  // Absent (settings.json written before the field existed) → the default.
+  // Absent (written before the field existed) → the default.
   assert.equal((await coldLoad({})).discoverySteps, 0);
 });
 
 test('a hand-edited settings.json can never corner the model at step 0', async () => {
-  // A 0-round budget would force `done` immediately with an empty `seen` map,
-  // where the model can only fabricate an id. The sentinel path and the clamp
-  // both have to make that unreachable.
+  // A 0-round budget forces `done` with an empty `seen` map, where the model
+  // can only fabricate an id.
   for (const junk of [0, -1, -99, 0.2, null, 'nope', undefined]) {
     const llm = await coldLoad({ discoverySteps: junk as any });
     assert.ok(discoveryStepsFor(llm) >= 1, `discoverySteps=${String(junk)} resolved below 1`);
@@ -111,8 +94,7 @@ test('a hand-edited settings.json can never corner the model at step 0', async (
 });
 
 test('the fallback leg carries its own override across a restart', async () => {
-  // Per-leg like toolChoice/numCtx: the backup may be a different provider
-  // running a different model, so it must resolve independently.
+  // Per-leg like toolChoice/numCtx: the backup may be a different provider.
   const llm = await coldLoad({
     discoverySteps: 3,
     fallback: { enabled: true, provider: 'ollama', model: 'qwen3', discoverySteps: 2 },
@@ -133,11 +115,9 @@ test('saving an override then restarting keeps it — the operator story', async
 });
 
 test('the per-provider budget reaches only the agents that opted in', async () => {
-  // The widening was designed for the pick/request pair; the segment
-  // director's maxSteps: 2 is load-bearing (skills/_agent.ts — a wider loop
-  // was measured burning the FULL agentTimeoutMs), so it must not opt in.
-  // runDiscoverySteps is the strategy's resolver: without the opt-in it pins
-  // the historical single step whatever the provider or operator override says.
+  // The director's maxSteps: 2 is load-bearing, so it must not opt in.
+  // Without the opt-in runDiscoverySteps pins the historical single step
+  // whatever the provider or override says.
   const { runDiscoverySteps } = await import('../src/llm/internal/provider/capabilities.js');
   const llm = await coldLoad({ ...CLOUD_LLM, discoverySteps: 5 });
   assert.equal(runDiscoverySteps(llm, true), 5, 'opted-in agents follow descriptor + override');
@@ -152,8 +132,7 @@ test('the per-provider budget reaches only the agents that opted in', async () =
 
 test('the prompt promises the MINIMUM across the legs that could run', async () => {
   // The system prompt is built before withFailover picks a leg, so promising
-  // the primary's budget can tell a model to plan a second look it will never
-  // get on the backup — which corners it at the forced commit.
+  // the primary's budget can promise a look the backup never gives.
   await coldLoad({ ...CLOUD_LLM, discoverySteps: 3 });
   assert.equal(promptDiscoverySteps(), 3, 'no fallback → the primary\'s own budget');
 
@@ -164,7 +143,7 @@ test('the prompt promises the MINIMUM across the legs that could run', async () 
   });
   assert.equal(promptDiscoverySteps(), 1, 'a narrower fallback pulls the promise down');
 
-  // A DISABLED fallback must not narrow anything — it can never run.
+  // A DISABLED fallback can never run, so it must not narrow anything.
   await coldLoad({
     ...CLOUD_LLM,
     discoverySteps: 3,

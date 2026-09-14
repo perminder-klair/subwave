@@ -18,7 +18,7 @@ import {
   type Theme,
 } from '@/lib/theme';
 // The theme registry belongs to *this* deployment, so it always goes through the
-// same-origin default client — never a showcase station's origin.
+// same-origin default client, never a showcase station's origin.
 import { defaultStationClient } from '@/lib/stationClient';
 
 interface ThemeContextValue {
@@ -40,8 +40,8 @@ interface ThemeContextValue {
   effectiveId: string | null;
   /** Save or clear the override and re-apply immediately. null clears it. */
   setOverride: (id: string | null) => void;
-  /** Re-read /themes now instead of waiting out the poll. For a caller that
-   *  just changed something the next poll would otherwise report 30s late. */
+  /** Re-read /themes now instead of waiting out the poll, for a caller that
+   *  just changed something. */
   refreshThemes: () => Promise<void>;
 }
 
@@ -54,26 +54,23 @@ export function useThemeSwitcher(): ThemeContextValue | null {
 
 // App-wide theme syncer, mounted from the root layout. The pre-paint <script> in
 // layout.tsx already applied the cached appearance, so this covers a first visit,
-// an operator switch since last visit, and the listener override (a stale id —
-// theme deleted — silently falls back to the station active).
-//
+// an operator switch since last visit, and the listener override (a stale id
+// silently falls back to the station active).
 // Light vs dark is a property of the palette, not a listener control: each theme
-// declares its own mode. There is no per-browser mode pin.
-//
-// The 30s poll is the upper bound on how long a listener sees the old theme
-// after an operator switch.
+// declares its own mode. The 30s poll is the upper bound on how long a listener
+// sees the old theme after an operator switch.
 export default function ThemeProvider({ children }: { children?: ReactNode }) {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [stationActiveId, setStationActiveId] = useState<string | null>(null);
   const [overrideId, setOverrideIdState] = useState<string | null>(null);
-  // Provenance rides the same poll as the palette, so a consumer showing "why
-  // is this the theme on screen" can't fall out of step with the paint itself.
+  // Provenance rides the same poll as the palette, so "why is this the theme on
+  // screen" can't fall out of step with the paint.
   const [activeSource, setActiveSource] = useState<ThemeContextValue['activeSource']>(null);
   const [stationDefault, setStationDefault] = useState<string | null>(null);
   const [activeShow, setActiveShow] = useState<ThemeContextValue['activeShow']>(null);
 
-  // localStorage is only safe to touch in an effect, so SSR renders through
-  // cleanly. The pre-paint <script> already painted, so the one-tick lag is invisible.
+  // localStorage is only safe to touch in an effect, so SSR renders cleanly. The
+  // pre-paint <script> already painted, so the one-tick lag is invisible.
   useEffect(() => {
     setOverrideIdState(loadThemeOverride());
   }, []);

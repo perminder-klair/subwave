@@ -14,6 +14,8 @@ import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
+import type { TransitionEffect, JingleRotateOwner } from '../../../lib/schemas.generated';
+export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -109,6 +111,45 @@ export interface TtsForm {
   corrections: { from: string; to: string }[];
 }
 
+/**
+ * One row of the custom-header editor (#1618). A LIST, not a map, because the
+ * editor has to hold a half-typed row — a map keyed by name loses the row the
+ * moment the name is blank or collides with another, which is every second
+ * keystroke while the operator types one. It is collapsed to the map the
+ * controller stores at save time.
+ *
+ * `value` may be the literal `'set'`: that is what GET /settings returns for a
+ * header already on file, and posting it back keeps the stored value.
+ */
+export interface LlmHeaderRow {
+  name: string;
+  value: string;
+}
+
+/**
+ * Wire map -> editor rows. Order is the stored order, so the list renders the
+ * way the operator left it.
+ */
+export function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
+  if (!raw || typeof raw !== 'object') return [];
+  return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
+}
+
+/**
+ * Editor rows -> the map the controller stores. A row with no name is a row
+ * still being typed and is dropped rather than sent; a LATER row wins a name
+ * collision, matching what the operator sees last in the list.
+ */
+export function headerMap(rows: LlmHeaderRow[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const name = (r.name || '').trim();
+    if (!name) continue;
+    out[name] = (r.value || '').trim();
+  }
+  return out;
+}
+
 export interface LlmFallbackForm {
   enabled: boolean;
   provider: string;
@@ -117,6 +158,7 @@ export interface LlmFallbackForm {
   numCtx: number;
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
+  headers: LlmHeaderRow[];
   reasoning: boolean;
   discoverySteps: number;
 }
@@ -128,6 +170,7 @@ export interface LlmForm {
   numCtx: number;
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
+  headers: LlmHeaderRow[];
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -149,6 +192,8 @@ export interface SearchForm {
   provider: string;
   apiKey: string;
   baseUrl: string;
+  /** Optional comma-separated SearXNG engine pin (#1353); '' = instance default. */
+  searxngEngines: string;
 }
 
 export interface EmbeddingEnrichmentForm {
@@ -187,12 +232,30 @@ export interface ScrobbleListenbrainzForm {
   baseUrl: string;
 }
 
+/** Navidrome play reporting (#1298). No credentials of its own — the station's
+ *  existing Navidrome connection is what it scrobbles through. */
+export interface ScrobbleNavidromeForm {
+  enabled: boolean;
+}
+
 export interface ScrobbleForm {
   lastfm: ScrobbleLastfmForm;
   listenbrainz: ScrobbleListenbrainzForm;
+  navidrome: ScrobbleNavidromeForm;
 }
 
 /** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
+// Track-selection windows read by BOTH pick paths. A separate top-level
+// settings key from `llm` because the album cooldown is not LLM config — the
+// stateless pool picker enforces it too.
+export interface PickerForm {
+  // Hours, as typed. 0/'' = off.
+  albumHours: string;
+  // Seconds, as typed. 0/'' = off (the shipped default). A show's own
+  // minTrackLengthSeconds overrides this; listener requests are exempt.
+  minTrackLengthSeconds: string;
+}
+
 export interface LikesForm {
   enabled: boolean;
   starInNavidrome: boolean;
@@ -219,6 +282,8 @@ export interface StreamForm {
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
   maxListeners: string;
+  countryHeader: string;
+  geoipDbPath: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -234,6 +299,9 @@ export interface TransitionsForm {
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
+  /** settings.transitions.effects — which gestures the DJ may reach for. Always
+   *  fully populated in the form; an absent stored field loads as `true`. */
+  effects: Record<TransitionEffect, boolean>;
 }
 
 export interface PrivacyForm {
@@ -265,9 +333,28 @@ export interface SilenceTrimForm {
   minGapMs: string;
 }
 
+// settings.ducking — the two smooth_add depths radio.liq reads at mixer
+// startup. Strings like every other number box: a blank input must reach
+// saveBlock as a field error, not as 0 (which is a full mute under the DJ).
+export interface DuckingForm {
+  voice: string;
+  intro: string;
+}
+
+export interface DjBehaviourForm {
+  showWelcome: boolean;
+  sameHostAcknowledgement: boolean;
+  extendedSleeveNotes: boolean;
+  releaseYearMentions: 'regular' | 'occasional' | 'rare';
+}
+
 export interface FormState {
   crossfadeDuration: string;
+  ducking: DuckingForm;
   maxTrackSeconds: string;
+  /** Station default for the show-boundary fade (#1574). A show's own
+   *  tri-state overrides it; this level is only ever on or off. */
+  fadeAtShowEnd: boolean;
   silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
   archive: ArchiveForm;
@@ -278,9 +365,16 @@ export interface FormState {
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
+  /** Talk placement switch — every scheduled segment waits for the next track
+   *  boundary. Flat, like djSpeakClock, and owned by DJ behaviour. */
+  djTalkOnlyBetweenTracks: boolean;
+  /** Station-wide minimum length before a show may use pause-and-talk. */
+  pauseTalkMinSeconds: string;
+  djBehaviour: DjBehaviourForm;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
+  picker: PickerForm;
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
@@ -301,11 +395,25 @@ export interface JingleEntry {
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
+    /** Who counts the tracks between jingles (#1619). Absent on an older
+     *  controller, which is the same thing as 'mixer'. The union comes from the
+     *  mirrored schema rather than being respelled here, so a value added to it
+     *  reaches this form. */
+    jingleRotate?: JingleRotateOwner;
     crossfadeDuration?: number;
+    ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
-    transitions?: { pairDrain?: boolean; stemBlends?: boolean };
+    /** Scheduled backups (#1570). No FormState entry and no settings section —
+     *  the schedule is edited from the Backup panel, beside Export/Restore, and
+     *  posts `{ backups }` through the same POST /settings chokepoint. */
+    backups?: { cadence?: string; keep?: number };
+    transitions?: {
+      pairDrain?: boolean;
+      stemBlends?: boolean;
+      effects?: Partial<Record<TransitionEffect, boolean>>;
+    };
     audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
       opusEnabled?: boolean;
@@ -319,13 +427,29 @@ export interface SettingsData {
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
       maxListeners?: number;
+      countryHeader?: string;
+      geoipDbPath?: string;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };
+    /** Absent on a settings.json predating the key — false, like the
+     *  controller's own coercion. */
+    fadeAtShowEnd?: boolean;
+    /** Shortest playable track a boundary cut can arm on (seconds), served by
+     *  the controller so the hint cannot drift from the drain's own floors. */
+    boundaryFadeMinTrackSeconds?: number;
     station?: string;
     stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
+    /** Absent on a settings.json predating the key — read it as false, which is
+     *  what the controller's own coercion does. */
+    djTalkOnlyBetweenTracks?: boolean;
+    pauseTalkMinSeconds?: number;
+    djBehaviour?: Partial<DjBehaviourForm>;
+    /** Absent on a settings.json predating the key — the controller's own
+     *  coercion reads it as the 5-minute default. */
+    handover?: { offsetMinutes?: number };
     theme?: { active?: string };
     weather?: {
       lat?: number;
@@ -349,7 +473,15 @@ export interface SettingsData {
       speed?: Record<string, number>;
       corrections?: { from?: string; to?: string }[];
     };
-    llm?: Partial<LlmForm>;
+    // The wire shape diverges from the form in one place: the controller stores
+    // and returns `headers` as a MAP (values redacted to 'set'), while the
+    // editor holds an ordered row list so a half-typed row survives.
+    llm?: Omit<Partial<LlmForm>, 'headers' | 'fallback'> & {
+      headers?: Record<string, string>;
+      fallback?: Omit<Partial<LlmFallbackForm>, 'headers'> & {
+        headers?: Record<string, string>;
+      };
+    };
     search?: Partial<SearchForm>;
     embedding?: {
       enabled?: boolean;
@@ -387,6 +519,11 @@ export interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+      navidrome?: Partial<ScrobbleNavidromeForm>;
+    };
+    picker?: {
+      albumHours?: number;
+      minTrackLengthSeconds?: number;
     };
     likes?: {
       enabled?: boolean;

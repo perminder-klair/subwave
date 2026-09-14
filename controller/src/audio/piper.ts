@@ -1,5 +1,4 @@
-// Piper TTS wrapper — generates a WAV file from text, returns the path.
-// Reuses the same setup from your Kaze project.
+// Piper TTS wrapper: generates a WAV file from text, returns the path.
 
 import { spawn } from 'node:child_process';
 import { mkdir, readdir, stat, unlink } from 'node:fs/promises';
@@ -10,14 +9,11 @@ import { config } from '../config.js';
 
 await mkdir(config.piper.outDir, { recursive: true });
 
-// Resolve a persona's per-persona Piper voice to a concrete .onnx + manifest
-// pair. `voice` is a bare filename (no path separators) the operator dropped
-// into the shared voice folder (config.voices.dir), e.g. `en_US-amy-medium.onnx`
-// alongside its `en_US-amy-medium.onnx.json` manifest — exactly the layout Piper
-// (and Home Assistant) ship voices in (issue #230). The legacy chatterbox dir is
-// scanned too for parity with the .wav voices, `dir` winning on clash. If the
-// pair isn't found (or no voice was requested), fall back to the baked-in
-// default so the DJ never goes silent.
+// Resolve a persona's Piper voice to a concrete .onnx + manifest pair. `voice`
+// is a bare filename in the shared voice folder, e.g. `en_US-amy-medium.onnx`
+// beside its `.onnx.json` manifest (#230). The legacy chatterbox dir is scanned
+// too, `dir` winning on clash. No pair found (or no voice requested) falls back
+// to the baked-in default so the DJ never goes silent.
 function resolvePiperVoice(voice?: string): { model: string; configPath: string } {
   const fallback = { model: config.piper.voice, configPath: config.piper.voiceConfig };
   if (!voice || path.isAbsolute(voice) || voice.includes('/') || voice.includes('\\')) {
@@ -52,12 +48,9 @@ export async function speak(
     '--config', configPath,
     '--output_file', outPath,
   ];
-  // Piper expresses speech rate as length_scale — the per-phoneme duration
-  // multiplier, where HIGHER is slower. We carry a "speed" multiplier
-  // everywhere (lower = slower), so invert it here. The per-call speedScale
-  // (daypart energy) composes on top of the configured speed; only passed to
-  // Piper when the result differs from 1.0 so unchanged stations behave
-  // identically.
+  // Piper's length_scale is a per-phoneme duration multiplier where HIGHER is
+  // slower; our "speed" multiplier is the inverse, so invert here. Passed only
+  // when the result differs from 1.0.
   const speed = config.piper.speed * (speedScale != null ? speedScale : 1);
   if (speed && speed > 0 && speed !== 1.0) {
     args.push('--length_scale', String(1 / speed));
@@ -95,12 +88,11 @@ export async function cleanupOldVoices(maxAgeMs = 60 * 60 * 1000) {
   }
 }
 
-// List the custom Piper voices the operator has dropped into the shared voice
-// folder — a voice counts only when BOTH the `.onnx` model and its `.onnx.json`
-// manifest are present (a model without a manifest can't be synthesised, so we
-// never offer it). Mirrors chatterbox.listReferenceVoices(): scans the canonical
-// dir plus the legacy chatterbox dir, deduped (canonical wins), sorted. Used by
-// the admin UI to populate the per-persona Piper voice dropdown (issue #230).
+// Custom Piper voices in the shared voice folder, for the admin dropdown
+// (#230). A voice counts only when BOTH the `.onnx` and its `.onnx.json`
+// manifest are present, since a model without a manifest can't be synthesised.
+// Like chatterbox.listReferenceVoices(): canonical dir plus legacy dir, deduped
+// (canonical wins), sorted.
 async function readPiperOnnx(dir: string): Promise<string[]> {
   try {
     const entries = await readdir(dir);

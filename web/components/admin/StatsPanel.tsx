@@ -173,9 +173,8 @@ interface AudienceResponse {
   error?: string;
 }
 
-// Already deduped one-row-per-listener by the server. `error` is set on a 502
-// (Icecast admin unreachable) so the UI can tell "nobody connected" from
-// "couldn't read the live detail".
+// Deduped one row per listener by the server. `error` is set on a 502 (Icecast
+// admin unreachable) so "nobody connected" stays distinct from "couldn't read".
 interface ConnectionsResponse {
   count?: number;
   connections?: ListenerConnection[];
@@ -226,8 +225,7 @@ const fmtTokens = (n: number | null | undefined): string => {
   return String(n);
 };
 
-// One-decimal mean for the listener average — counts are small integers, so a
-// single decimal reads better than a rounded whole.
+// One-decimal mean; counts are small integers.
 const fmtAvg = (n: number | null | undefined): string =>
   n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString('en-GB');
 
@@ -274,9 +272,8 @@ function MetricStrip({ children }: MetricStripProps) {
   const count = Array.isArray(children) ? children.length : 1;
   const ref = useRef<HTMLDivElement>(null);
   useDynamicStyle(ref, { gridTemplateColumns: `repeat(${count}, 1fr)` });
-  // `.strip-mobile` reflows to 2 columns under 640px, but StatCell divides with
-  // a RIGHT rule while that helper only clears LEFT ones, so the cell ending
-  // each mobile row left a divider dangling against the card edge.
+  // `.strip-mobile` reflows to 2 columns under 640px and clears LEFT rules only;
+  // StatCell divides with a RIGHT rule, so clear the row-ending one here.
   return (
     <div
       ref={ref}
@@ -318,9 +315,8 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
   if (!rows?.length) {
     return <span className="field-hint italic">{empty}</span>;
   }
-  // The wrapper is only a scroll container below sm:. From sm: up overflow-x
-  // must stay `visible`, because the sticky <thead> would otherwise resolve
-  // against this div instead of the ScrollBox viewport.
+  // Scroll container below sm: only. From sm: up overflow-x must stay `visible`
+  // or the sticky <thead> resolves against this div, not the ScrollBox viewport.
   return (
     <div className="w-full overflow-x-auto sm:overflow-x-visible">
       <table className="w-full border-collapse">
@@ -331,8 +327,7 @@ function Table<R>({ cols, rows, empty }: TableProps<R>) {
                 key={c.key}
                 className={cn(
                   'caption border-b border-separator-strong px-2 py-1 whitespace-nowrap',
-                  // Sticky so the header stays put when the table is wrapped in
-                  // a ScrollBox; the card-bg masks rows scrolling underneath.
+                  // Sticky for the ScrollBox case; card-bg masks rows underneath.
                   'sticky top-0 z-[1] bg-[var(--card-bg)]',
                   c.align === 'right' && 'text-right',
                   c.align === 'center' && 'text-center',
@@ -377,8 +372,7 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
   return (
     <div className="grid gap-1.5">
       {rows.map(r => (
-        // The label column gives up 22px on a phone so the bar and its trailing
-        // figure still fit on one line inside a 390px card.
+        // Narrower label on a phone so bar + figure fit one line in a 390px card.
         <div key={r.label} className="flex items-center gap-2.5 text-[12px]">
           <span className="w-[88px] shrink-0 truncate text-muted sm:w-[110px]" title={r.label}>
             {r.label}
@@ -391,9 +385,7 @@ function BarList({ rows, max }: { rows: BarRow[]; max: number }) {
   );
 }
 
-// Caps a breakdown to a scrollable area so a long tail can't stretch the card
-// down the page. Tables wrapped here keep their header visible via the sticky
-// <thead> in <Table>, which resolves against the ScrollArea viewport.
+// Caps a long-tail breakdown; the sticky <thead> resolves against this viewport.
 function ScrollBox({ children }: { children: ReactNode }) {
   return <ScrollArea className="max-h-[260px]">{children}</ScrollArea>;
 }
@@ -413,8 +405,7 @@ function ListenerChart({ samples }: { samples: ListenerSample[] }) {
   const H = 100;
   const counts = samples.map(s => s.count);
   const peak = Math.max(...counts);
-  // 12% headroom so the peak sits just below the top edge and the dashed peak
-  // line is visible rather than flush against the frame.
+  // 12% headroom so the dashed peak line is not flush against the frame.
   const drawMax = peak > 0 ? peak * 1.12 : 1;
   const n = samples.length;
   const x = (i: number) => (i / (n - 1)) * W;
@@ -457,8 +448,7 @@ function ListenerChart({ samples }: { samples: ListenerSample[] }) {
   );
 }
 
-// Height is per-hour dynamic, so it goes through useDynamicStyle — the lint
-// rule forbids `style={…}`.
+// Per-hour height goes through useDynamicStyle; the lint rule forbids `style={…}`.
 function HourColumn({ frac, title }: { frac: number; title: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { height: `${Math.max(2, Math.round(frac * 100))}%` });
@@ -534,9 +524,8 @@ export default function StatsPanel() {
     },
   });
 
-  // /listeners — durable time-series for the Audience chart, 30s (it reads the
-  // JSONL history file and moves slowly). Soft-fails: a miss leaves the last
-  // reading in place rather than erroring the page.
+  // /listeners — durable time-series for the Audience chart, 30s. Soft-fails:
+  // a miss leaves the last reading in place rather than erroring the page.
   const listenersQuery = useAdminQuery<ListenersResponse>({
     key: statsKeys.listeners(range), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
@@ -544,17 +533,15 @@ export default function StatsPanel() {
     request: (fetcher, signal) => adminJson(fetcher, `/listeners?sinceMinutes=${range}`, undefined, signal),
   });
 
-  // /audience — durable referral/geo rollup, 30s, soft-fail (same cadence and
-  // failure handling as /listeners).
+  // /audience — durable referral/geo rollup, 30s, soft-fail like /listeners.
   const audienceQuery = useAdminQuery<AudienceResponse>({
     key: statsKeys.audience(range), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
     placeholderData: previous => previous,
     request: (fetcher, signal) => adminJson(fetcher, `/audience?sinceMinutes=${range}`, undefined, signal),
   });
-  // Range is part of both cache keys. Keep a range-independent last success so
-  // a first-request failure for a newly selected range cannot blank the charts
-  // after TanStack releases the previous range's placeholder.
+  // Range is part of both cache keys, so keep a range-independent last success:
+  // a first failure on a new range would otherwise blank the charts.
   const [lastListeners, setLastListeners] = useState<ListenersResponse | null>(null);
   const [lastAudience, setLastAudience] = useState<AudienceResponse | null>(null);
   useEffect(() => {
@@ -564,9 +551,8 @@ export default function StatsPanel() {
     if (audienceQuery.data) setLastAudience(audienceQuery.data);
   }, [audienceQuery.data]);
 
-  // /listeners/connections — 30s, range-independent ("connected right now").
-  // A 502 is stored as an error rather than dropped, so the card can say "live
-  // detail unavailable" instead of silently blanking.
+  // /listeners/connections — 30s, range-independent. A 502 is stored as an
+  // error, not dropped, so the card can say "live detail unavailable".
   const connectionsQuery = useAdminQuery<ConnectionsResponse>({
     key: statsKeys.connections(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
@@ -585,8 +571,8 @@ export default function StatsPanel() {
     },
   });
 
-  // /system — per-container CPU/memory, 30s (it samples the Docker stats stream
-  // for ~1s per container). Soft-fails; range-independent.
+  // /system — per-container CPU/memory, 30s (~1s per container to sample).
+  // Soft-fails; range-independent.
   const systemQuery = useAdminQuery<SystemResponse>({
     key: statsKeys.system(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
@@ -613,8 +599,7 @@ export default function StatsPanel() {
   const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
 
-  // Same listener series as the trend chart, so it respects the range toggle.
-  // Local time.
+  // Same series as the trend chart, so it respects the range toggle. Local time.
   const hourBuckets = bucketSamplesByHour(samples);
 
   const audSessions = audience?.sessions ?? null;
@@ -693,9 +678,8 @@ export default function StatsPanel() {
         sub={`where listeners came from · last ${rangeLabel}`}
       >
         <div className="grid gap-0">
-          {/* Rendered independently of the durable beacon rollup below, so it
-              still shows on a fresh boot with zero recorded sessions. No IPs
-              here (unlike the Dash), only device class, counts and durations. */}
+          {/* Independent of the durable beacon rollup below, so it still shows on
+              a fresh boot. No IPs here — device class, counts and durations only. */}
           <div className="border-b border-separator-strong p-3.5">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
               <span className="caption">connected now · by device</span>

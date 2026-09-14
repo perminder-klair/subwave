@@ -8,17 +8,13 @@ export function fallbackTextFor(requested: string, cloudCueFamily: string | null
   return text.replace(/\s*\[[^\]\r\n]{1,80}\]\s*/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// A voice slot the dispatcher can speak with: an engine, plus an optional
-// persona-shaped override carrying the voice (and cloud provider) to use.
-//
-// `personaTts: null` on the hardcoded rungs is load-bearing. speakWith()'s
-// per-engine branches only read an override when its `engine` matches, so for
-// most rescues an override would be inert; the exception is a cloud persona
-// that was pre-flight-rerouted because its provider is unconfigured, where
-// forwarding it would re-apply the dead provider instead of the station
-// default's credentials the availability probe just validated. Only the
-// operator's OWN configured slot carries an override, because there the
-// provider/voice is an explicit instruction rather than a leftover.
+// A voice slot the dispatcher can speak with: an engine plus an optional
+// persona-shaped override carrying the voice (and cloud provider).
+// `personaTts: null` on the hardcoded rungs is load-bearing: a cloud persona
+// rerouted off an unconfigured provider and rescued onto `cloud` would
+// otherwise re-apply the dead provider instead of the credentials the
+// availability probe just validated. Only the operator's own configured slot
+// carries an override, where it is an explicit instruction.
 export interface RescueSlot {
   engine: string;
   personaTts: { engine: string; voice: string; cloudProvider: string } | null;
@@ -36,10 +32,9 @@ function slotTarget(slot: RescueSlot): TtsTarget {
   };
 }
 
-// Engines normally identify a render target on their own. Cloud is the one
-// exception: OpenAI-compatible/Fish, ElevenLabs, and OpenAI share the `cloud`
-// dispatcher but are independent failure domains. A failed provider must not
-// blacklist a healthy provider configured as the operator's rescue.
+// Cloud is the one engine that does not identify a render target on its own:
+// its providers share a dispatcher but are independent failure domains, so a
+// failed provider must not blacklist a healthy one used as the rescue.
 export function sameTtsTarget(
   left: TtsTarget,
   right: TtsTarget,
@@ -59,10 +54,8 @@ export interface TtsFallbackConfig {
 }
 
 // The operator's configured fallback (settings.tts.fallback) as a slot, or null
-// when the block is absent, disabled, or names an engine this build doesn't
-// know. Kept beside the chain so "what does a configured fallback look like"
-// has exactly one answer, shared by the pre-flight reroute and the mid-render
-// rescue.
+// when absent, disabled, or naming an engine this build doesn't know. One
+// answer shared by the pre-flight reroute and the mid-render rescue.
 export function configuredSlot(
   fallback: TtsFallbackConfig | null | undefined,
   engines: readonly string[],
@@ -80,34 +73,21 @@ export function configuredSlot(
   };
 }
 
-// Pure ordering logic for speak()'s runtime rescue chain — extracted from
-// tts.ts so scripts/tts-fallback.test.ts can pin it without dragging in the
-// engine modules (settings reads, venv existsSyncs, live /health probes).
+// Pure ordering for speak()'s runtime rescue chain, kept out of tts.ts so
+// scripts/tts-fallback.test.ts can pin it without the engine modules.
 //
-// Order: the operator's CONFIGURED fallback first (their explicit second
-// choice, engine AND voice), then the configured default engine, then Piper
-// (the universal local floor), then Kokoro (for the case where Piper itself was
-// the failed primary). The primary, duplicates, and anything the caller's
-// `usable` gate rejects are dropped — so the chain never re-attempts the engine
-// that just threw, and never attempts one the pre-flight gate already knows
-// can't speak. A disabled fallback (`configured` null) reproduces the
-// pre-fallback order exactly.
+// Order: operator's configured fallback (engine AND voice), the configured
+// default engine, Piper (universal local floor), Kokoro (for when Piper was the
+// failed primary). The primary, duplicates and anything `usable` rejects are
+// dropped. A disabled fallback reproduces the pre-fallback order exactly.
 //
-// Dedup is by ENGINE, first-wins: when the configured fallback and the default
-// engine name the same engine, the configured slot survives and its voice is
-// what speaks. Without that, the operator's chosen voice would be silently
-// replaced by the engine's global default on exactly the station where both
-// were pointed at the same engine.
+// Dedup is by ENGINE, first-wins, so the configured slot's voice survives when
+// it and the default name the same engine. Dedup stays engine-keyed even though
+// EXCLUSION is provider-keyed for cloud (sameTtsTarget): one cloud attempt per
+// rescue, since a second buys another round-trip while the local floor waits.
 //
-// Note dedup stays engine-keyed even though EXCLUSION is provider-keyed for
-// cloud (see sameTtsTarget). That asymmetry is deliberate: a failed provider
-// must not blacklist a healthy sibling, but once one cloud rung is in the
-// chain a second one buys another network round-trip on the same dispatcher
-// while the local floor is still waiting below. One cloud attempt per rescue.
-//
-// `usable` receives the slot's own cloud provider for the configured rung and
-// null for the hardcoded ones — the probe must agree with the call, and a
-// hardcoded cloud rung speaks with the station default's credentials.
+// `usable` gets the slot's own cloud provider for the configured rung and null
+// for the hardcoded ones, so the probe agrees with the call.
 export function orderedFallbacks(
   primary: string | TtsTarget,
   configured: RescueSlot | null,

@@ -9,13 +9,18 @@ import {
   BEDS_CROSS_SEC_BOUNDS,
   BEDS_TAIL_SEC_BOUNDS,
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+  BACKUP_KEEP_BOUNDS,
+  BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
+  DUCK_DEPTH_BOUNDS,
+  HANDOVER_OFFSET_BOUNDS,
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  type JingleRotateOwner,
 } from '../schemas/settings.js';
-import { SHOW_MAX_TRACK_SECONDS } from '../schemas/show.js';
+import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -33,16 +38,44 @@ import {
 
 export const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
+  // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
+  // radio.liq's own rotate draws the stinger and the controller finds out
+  // afterwards. 'controller' moves the count into the talk-slot planner and
+  // writes the mixer's ratio handoff as 0. Default 'mixer' so an upgrade is
+  // byte-identical; see broadcast/jingle-rotate.ts for why this is opt-in
+  // rather than the only mode. Needs a mixer restart either way — the ratio
+  // file is read once at startup.
+  jingleRotate: 'mixer' as JingleRotateOwner,
   crossfadeDuration: 10.0, // seconds
+  // How far the music drops under each spoken layer — `smooth_add`'s `p`, so
+  // the number is what is LEFT UP, not the cut: 0.22 is ~-13 dB, 0.30 is ~-10.
+  // These are exactly the literals radio.liq carried before they were settings,
+  // so an upgrade is byte-identical. Read once at mixer startup out of
+  // liquidsoap_duck_voice.txt / liquidsoap_duck_intro.txt — a change needs a
+  // mixer restart. `voice` is the heavy solo-DJ duck (say.txt: idents, hourly
+  // time, weather, request intros); `intro` is the light talk-over duck
+  // (intro.txt: between-track links) that leaves the song audible underneath.
+  ducking: { voice: 0.22, intro: 0.30 },
   // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  // Fade a long track out at the next show change instead of letting it spill
+  // into the following show (#1574). Off by default, and a show's own
+  // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
+  // the pre-existing behaviour, so an upgrade sounds byte-identical. The cut
+  // rides the #447 liq_cue_out stamp; the policy is broadcast/show-boundary.ts.
+  fadeAtShowEnd: false,
   // Hourly archive output. Off by default — the second MP3 encoder is the
   // largest constant CPU cost in the broadcast container (#137). retentionDays
   // bounds disk growth (~1.4 GB/day at 128 kbps); normalizeArchiveRetentionDays
   // keeps pre-existing keep-forever installs at 0 so upgrades never delete tapes.
   archive: { enabled: false, bitrate: 128, retentionDays: 30 },
+  // Scheduled, rotating config backups (#1570). OFF by default and that is
+  // load-bearing: this is the only scheduled job that DELETES operator files,
+  // so an upgrade that changes nothing must produce byte-identical behaviour —
+  // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
+  backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
@@ -80,6 +113,16 @@ export const DEFAULTS = {
     // took. The setting exists for AIO/Unraid, where there is no .env to put
     // the var in at all.
     maxListeners: 100,
+    // Listener-country fallbacks for the audience rollup (#1485). Both empty by
+    // default, which is byte-identical to the pre-existing behaviour: only
+    // `cf-ipcountry` is read and a station behind a plain reverse proxy records
+    // a blank country. `countryHeader` names whatever header that proxy sets
+    // instead (`x-country-code`, `x-geoip-country`, …); `geoipDbPath` points at
+    // an operator-supplied MaxMind-format database for an offline IP lookup
+    // when no header carries the answer. GEOIP_DB_PATH in the environment wins
+    // over the setting, like every other config path.
+    countryHeader: '',
+    geoipDbPath: '',
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
   // annotate time. maxBoostDb caps the upward direction only, and the boost is
@@ -184,6 +227,44 @@ export const DEFAULTS = {
   // time: off means "stop doing this unprompted". Policy lives in exactly one
   // place — broadcast/clock-policy.ts. Applies live; no restart.
   djSpeakClock: true,
+  // Talk placement switch (#1485 FR 5b). false = the pre-existing behaviour:
+  // every scheduled segment except the station ident airs the minute it is
+  // written, ducking whatever song is mid-play. true = every SCHEDULED spoken
+  // segment — hourly check, programme beats, banter, idents and the segment
+  // director's spots — is rendered now and held for the next track boundary,
+  // so the station only talks between songs. Manual /dj triggers stay exempt
+  // (an explicit press always fires, the same exemption djSpeakClock carries).
+  // The trade is stated where the operator can read it: a held segment may air
+  // a track later than the minute it was written for, so a time check can read
+  // the clock late — the daypart stamp and PENDING_VOICE_MAX_AGE_MS are what
+  // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
+  // Applies live; no restart.
+  djTalkOnlyBetweenTracks: false,
+  // Show opt-in only; clips shorter than this remain ordinary ducked speech.
+  pauseTalkMinSeconds: 20,
+  // Optional programme-opening line folded into the first hourly check after a
+  // scheduled show change. Off preserves the established terse time check.
+  djBehaviour: {
+    showWelcome: false,
+    sameHostAcknowledgement: false,
+    extendedSleeveNotes: false,
+    releaseYearMentions: 'regular',
+  },
+  // Show handover timing (#1576). How many station-clock minutes BEFORE a show
+  // boundary the outgoing host signs off — the programme outro beat's window.
+  // 5 is exactly where the beat has always fired (:55 of the final hour), so an
+  // upgrade is byte-identical; raise it to give the sign-off more room to
+  // breathe before the incoming host opens.
+  //
+  // Must be a multiple of HANDOVER_OFFSET_STEP_MINUTES: the talk table's
+  // programme row samples the station clock on that stride, and a window it
+  // cannot land on is a sign-off that never airs. Enforced at the save path and
+  // repaired at load.
+  //
+  // The ORDERING half of the handover carries no dial: the final outgoing track
+  // owns the complete sign-off/greeting pair, while between-tracks placement
+  // holds that pair for the first eligible seam at the boundary.
+  handover: { offsetMinutes: 5 },
   // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
@@ -245,6 +326,15 @@ export const DEFAULTS = {
       voiceStyle: 0,
       voiceSimilarityBoost: 0.75,
       voiceUseSpeakerBoost: true,
+      // openai-compatible only: send the computed speech `speed` upstream in the
+      // request body instead of applying it locally via ffmpeg atempo. Off by
+      // default because compat servers are uneven with the field (issue #942:
+      // some shims produced comb-filtered audio when `speed` was present), so we
+      // stretch locally when unsure. Turn it on when the server honours `speed`
+      // natively — e.g. the hosted DJ Brain voice — since native speed beats
+      // time-stretch artifacts. Inert for openai / elevenlabs (they always send
+      // speed). See speedDirective() in llm/internal/speech/cloud-speech.ts.
+      sendSpeed: false,
       // Fish Audio S2.1 controls. Persisted alongside the shared cloud config so
       // switching providers preserves the tuning, but sent only for fish-audio.
       temperature: 0.7,
@@ -289,6 +379,12 @@ export const DEFAULTS = {
     // load()/applyLlmLegPatch() and kept only as a migration source.
     providerBaseUrls: {} as Record<string, string>,
     baseUrl: '',
+    // Extra request headers sent on every openai-compatible / locca call (#1618).
+    // Empty by default, so an untouched station sends exactly what it did before
+    // the field existed. For gateways that route on a header rather than the
+    // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
+    // this was filed for). Ignored by every other provider.
+    headers: {} as Record<string, string>,
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -396,6 +492,9 @@ export const DEFAULTS = {
       ollamaUrl: '',
       providerBaseUrls: {} as Record<string, string>,
       baseUrl: '',
+      // Per-leg like providerBaseUrls: the backup may be a different gateway
+      // with its own routing header.
+      headers: {} as Record<string, string>,
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
@@ -467,6 +566,9 @@ export const DEFAULTS = {
     provider: 'duckduckgo',
     apiKey: '',
     baseUrl: '',
+    // Optional comma-separated SearXNG engine pin (#1353). Empty means "send no
+    // engines= param", i.e. the instance's own default engine set.
+    searxngEngines: '',
   },
   skills: {
     enabled: {},
@@ -485,7 +587,9 @@ export const DEFAULTS = {
     // Keep the Demucs stems the analysis pass already computes (head + tail
     // windows) as FLAC under state/stems/<id>/, so a transition render is a fast
     // mix instead of a fresh separation. Needs the demucs stack like
-    // vocalActivity; ~13-25 MB per track (#1257), LRU-swept to stemCacheGb.
+    // vocalActivity; ~13-25 MB per track (#1257), swept to stemCacheGb by the
+    // music/stem-priority.ts ranking (lowest value out first, mtime to break
+    // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
     // Pause the analysis pass while anyone is listening, resuming once the stream
@@ -505,6 +609,19 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
+    // before this block the only way to drop one gesture was to turn djMode off
+    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // reads an absent or malformed block as "all on" — so this default and a
+    // station that has never written the block are the same station.
+    effects: {
+      sweep: true,
+      washout: true,
+      blend: true,
+      dissolve: true,
+      chop: true,
+      loop: true,
+    },
   },
   // When disabled, the segment-director agent is never shown the effect
   // catalogue, so it stops garnishing spoken breaks with stingers. The files stay
@@ -578,6 +695,37 @@ export const DEFAULTS = {
       // `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
       baseUrl: '',
     },
+    // Navidrome play reporting (#1298) — Subsonic `scrobble`, so playCount and
+    // lastPlayed move and `.nsp` smart playlists rotate. No credentials of its
+    // own (it reuses config.navidrome) and, unlike the two above, no listener
+    // gate: see broadcast/scrobble-pure.ts. Off by default.
+    navidrome: {
+      enabled: false,
+    },
+  },
+
+  // Track-selection windows read by BOTH pick paths — the pool picker's
+  // candidate filter and the agent path's point-of-choice guard.
+  //
+  // `albumHours`: how long a record stays on cooldown after one of its tracks
+  // airs (#1485 FR 3). 0 = OFF, and that is deliberate rather than timid: the
+  // artist window already blocks everything an album window shorter than it
+  // would, so an album cooldown is only ever worth setting ABOVE the artist
+  // window — a number this code cannot pick for an operator, because it depends
+  // on how album-heavy their catalogue is. Off means an upgrade is
+  // byte-identical. See music/recency.ts albumKey.
+  picker: {
+    albumHours: 0,
+    // Minimum track length in SECONDS below which a track is never PICKED
+    // (#1573) — the floor operators with libraries full of 40-second skits,
+    // interludes and album intros want. 0 = OFF, and off is the shipped
+    // default so an upgrade picks byte-identically; a show's own
+    // `minTrackLengthSeconds` (when set) overrides it. Named apart from
+    // settings.minTrackSeconds(), which is the crossfade-derived floor and a
+    // different number entirely — that one is this key's LOWER BOUND.
+    //
+    // Listener requests are exempt: an explicit ask is not a pick.
+    minTrackLengthSeconds: 0,
   },
 
   // The player heart button (#991). `starInNavidrome` mirrors each first like
@@ -598,13 +746,20 @@ export const BOUNDS = {
   // non-mirrored one, so the schema has to own the constant.
   jingleRatio: { ...JINGLE_RATIO_BOUNDS, type: 'int' },
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
+  duckingVoice: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
+  duckingIntro: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
+  handoverOffsetMinutes: { ...HANDOVER_OFFSET_BOUNDS, type: 'int' },
   bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
   bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
   bedsTailSec: { ...BEDS_TAIL_SEC_BOUNDS, type: 'float' },
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  // The FLOOR's ceiling (#1573), from the same schema module for the same
+  // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
+  minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
+  backupsKeep: { ...BACKUP_KEEP_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };
@@ -641,6 +796,18 @@ export function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number 
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return allowNull ? null : 0;
   return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
+}
+
+// Coerce a stored/per-show minimum-track-length FLOOR to a clean integer SECOND
+// count (#1573). Same two callers and the same allowNull split as
+// coerceMaxTrackSeconds above — station default has no "unset" state (missing →
+// 0 = no floor), a per-show value uses null for "inherit". Clamps rather than
+// throws, so a hand-edited file bounds the show instead of deleting it.
+export function coerceMinTrackLengthSeconds(raw: unknown, allowNull: boolean): number | null {
+  if (raw == null || raw === '') return allowNull ? null : 0;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return allowNull ? null : 0;
+  return Math.min(BOUNDS.minTrackLengthSeconds.max, Math.max(0, n));
 }
 
 // Back-compat: this cap was stored in MINUTES (`maxTrackMinutes`) before it moved

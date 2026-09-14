@@ -5,9 +5,9 @@
 // ("seventy-six F", or an awkward beat where the asterisks were). Every
 // booth-bound string converges on normalizeForSpeech() in audio/tts.ts, so
 // the rules here must stay conservative: real artist/title text rides the
-// same lines ("Ke$ha", "AC/DC", "P!nk" must survive untouched), and
-// Chatterbox's paralinguistic [laugh]/[sigh] tags must keep their brackets —
-// bracketed text is deliberately left alone.
+// same lines ("Ke$ha", "AC/DC", "P!nk" must survive untouched). Expressive
+// engines may use bracketed performance cues, but they are structural input:
+// closing, excess or trailing cues must never reach TTS.
 //
 // Digit-to-word expansion is NOT done here: every engine already reads plain
 // numbers naturally. The scope is symbols and markup only.
@@ -71,6 +71,103 @@ const DOLLAR_MAGNITUDE = '(?:\\s+(?:thousand|million|billion|trillion)\\b)?';
 // The $ amount itself: digits with their own formatting ("1,200", "12.50").
 const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 
+// Fish/Chatterbox performance cues are deliberately loose in vocabulary — the
+// provider owns what it can express — but strict in position and purpose. A
+// cue must have spoken words before the next cue (or the end), and a segment
+// may carry at most two. Production directions are never useful TTS input:
+// they invite the engine to narrate a fade, a track change or a timing note.
+// This keeps a legitimate delivery change while dropping the common model
+// failure of appending `[softly]` after its final sentence. Closing tags have
+// no meaning to the supported engines and are always removed. Common bracketed
+// title/version qualifiers are literal speech, not control syntax: deleting
+// `[Live]` from a verified track title changes what the presenter says.
+const PERFORMANCE_CUE_RE = /\[[^\]\r\n]{1,80}\]/g;
+const SPOKEN_CHAR_RE = /[\p{L}\p{N}]/u;
+const PRODUCTION_CUE_RE = /\b(?:cue|square|stage|direction|fad(?:e|es|ed|ing)|music|track|vocals?|sounds?|intro(?:duction)?|outro|transition|paus(?:e|es|ed|ing)|riff(?:ing)?|build(?:ing|s)?|seconds?|\d+s)\b/i;
+const PRODUCTION_ACTION_RE = /\b(?:cue|stage|direction|fad(?:e|es|ed|ing)|intro(?:duction)?|outro|transition|paus(?:e|es|ed|ing)|riff(?:ing)?|build(?:ing|s)?|\d+s)\b/i;
+const TITLE_QUALIFIER_RE = /^(?:live\b.*|deluxe\b.*|remaster(?:ed)?\b.*|radio edit\b.*|single edit\b.*|album version\b.*|original version\b.*|mono\b.*|stereo\b.*|acoustic\b.*|demo\b.*|bonus track\b.*|anniversary\b.*|expanded edition\b.*)$/i;
+const BRACKETED_TITLE_RE = /^(?:untitled(?:\s+(?:track\s*)?(?:no\.?\s*)?#?\d+)?|track\s*(?:no\.?\s*)?#?\d+)$/i;
+const TITLE_CONTEXT_RE = /\b(?:from|with|called|titled|track|song|album|record|version|mix|cut)\s*$/i;
+
+function isTitleQualifier(body: string): boolean {
+  return TITLE_QUALIFIER_RE.test(body) && !PRODUCTION_ACTION_RE.test(body);
+}
+
+function isPerformanceCue(body: string): boolean {
+  return !isTitleQualifier(body)
+    && !body.startsWith('/')
+    && !body.startsWith('-')
+    && !/\d/.test(body)
+    && !PRODUCTION_CUE_RE.test(body);
+}
+
+// Real catalogue titles include names such as "[Untitled]". Preserve that
+// known form, common edition qualifiers, and any bracketed value introduced as
+// a title. Explicit title forms such as "from [Track 2]" are safe, but a title
+// context never overrides a recognised production direction. Everything else
+// keeps the existing loose performance-cue vocabulary and bounded removal.
+function isLiteralBracket(body: string, prefix: string): boolean {
+  return isTitleQualifier(body)
+    || BRACKETED_TITLE_RE.test(body)
+    || (TITLE_CONTEXT_RE.test(prefix) && !PRODUCTION_CUE_RE.test(body));
+}
+
+function stripUnmatchedCueBrackets(text: string): string {
+  const cues = [...text.matchAll(PERFORMANCE_CUE_RE)];
+  if (!cues.length) return text.replace(/[\[\]]/g, '');
+  let out = '';
+  let cursor = 0;
+  for (const cue of cues) {
+    const start = cue.index!;
+    out += text.slice(cursor, start).replace(/[\[\]]/g, '');
+    out += cue[0];
+    cursor = start + cue[0].length;
+  }
+  return out + text.slice(cursor).replace(/[\[\]]/g, '');
+}
+
+export function sanitizePerformanceCues(text: string, maxCues = 2): string {
+  if (!text) return text;
+  const safeText = stripUnmatchedCueBrackets(text);
+  const cues = [...safeText.matchAll(PERFORMANCE_CUE_RE)];
+  if (!cues.length) return safeText.replace(/\s+/g, ' ').trim();
+
+  let out = '';
+  let cursor = 0;
+  let kept = 0;
+  for (let i = 0; i < cues.length; i++) {
+    const cue = cues[i]!;
+    const start = cue.index!;
+    const end = start + cue[0].length;
+    const nextStart = cues[i + 1]?.index ?? safeText.length;
+    const body = cue[0].slice(1, -1).trim();
+    const hasFollowingWords = SPOKEN_CHAR_RE.test(safeText.slice(end, nextStart));
+    out += safeText.slice(cursor, start);
+    if (isLiteralBracket(body, safeText.slice(0, start))) {
+      out += cue[0];
+    } else if (isPerformanceCue(body) && hasFollowingWords && kept < maxCues) {
+      out += cue[0];
+      kept += 1;
+    } else if (!hasFollowingWords && nextStart === safeText.length) {
+      // A terminal cue can carry only punctuation after its closing bracket
+      // (`[sigh].`). The cue is not valid without following spoken words, and
+      // retaining its punctuation leaves a dangling full stop in the booth
+      // log and TTS input. Discard that suffix with the cue.
+      cursor = safeText.length;
+      continue;
+    }
+    cursor = end;
+  }
+  return (out + safeText.slice(cursor)).replace(/\s+/g, ' ').trim();
+}
+
+function literalizeBracketedSpeech(text: string): string {
+  return text.replace(PERFORMANCE_CUE_RE, (cue, offset: number) => {
+    const body = cue.slice(1, -1).trim();
+    return isLiteralBracket(body, text.slice(0, offset)) ? body : cue;
+  });
+}
+
 // Markup + entity cleanup — everything in the pipeline that is safe for a
 // READER as well as an engine. Shared by both public passes so display and
 // speech can never disagree about what the words are; only about how they're
@@ -78,7 +175,18 @@ const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 function stripMarkup(text: string): string {
   let t = text;
 
+  // Invisible format controls and soft hyphens have no spoken value but can
+  // confuse a provider tokenizer. NBSP is layout, so make it ordinary space.
+  t = t.replace(/\u00a0/g, ' ');
+  t = t.replace(/[\u00ad\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '');
+
   // --- markdown / display markup (before unit rules, so `**76°F**` works) ---
+  // Keep the reader-facing label from a generated Markdown link; neither its
+  // brackets nor URL belong in speech. This has to run before cue filtering.
+  t = t.replace(/\[([^\]\r\n]+)\]\([^\)\r\n]+\)/g, '$1');
+  // Strip actual HTML tags, but not ordinary comparison text such as "I <3
+  // this". Models occasionally return HTML even after being told not to.
+  t = t.replace(/<\/?[A-Za-z][^>\r\n]{0,120}>/g, '');
   // Paired emphasis: keep the words, drop the marks. Bold before italic so
   // `**x**` doesn't leave stray asterisks for the italic pass to mis-pair.
   t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
@@ -90,8 +198,8 @@ function stripMarkup(text: string): string {
   t = t.replace(/`([^`]+)`/g, '$1');
   // Leading markdown headings on any line.
   t = t.replace(/^#{1,6}\s+/gm, '');
-  // Leftover decorative marks that are never spoken. NOT brackets (Chatterbox
-  // [laugh] tags) and NOT lone underscores (titles/filenames).
+  // Leftover decorative marks that are never spoken. NOT lone underscores
+  // (titles/filenames).
   t = t.replace(/[*`]/g, '');
 
   // --- HTML entities (a model quirk: encoded text in place of the glyph) ---
@@ -103,13 +211,34 @@ function stripMarkup(text: string): string {
   t = t.replace(/&(?:#0*34|quot|#0*8220|ldquo|#0*8221|rdquo);/gi, '"');
   t = t.replace(/&nbsp;/gi, ' ');
 
-  return t;
+  return sanitizePerformanceCues(t);
 }
 
 // Markup removal can leave doubled spaces; neither speech nor a booth-log line
 // has layout to preserve.
 function collapseSpace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+// Provider-facing punctuation. These substitutions are intentionally NOT part
+// of normalizeForDisplay(): typographic quotes and dashes remain useful in the
+// booth log, while the TTS request gets the conservative ASCII-safe form that
+// previously lived in the Fish proxy.
+function normalizeTtsPunctuation(text: string): string {
+  let t = text
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u2011/g, '-')
+    .replace(/\u2026/g, '...');
+
+  // En/figure dashes between digits are ranges, not pauses. Sentence dashes
+  // stay intact: unlike commas, they reliably carry a natural pause in Fish
+  // and other expressive engines.
+  t = t.replace(/(?<=\d)\s*[\u2012\u2013]\s*(?=\d)/g, ' to ');
+  // Double quotes are purely display punctuation and have caused inconsistent
+  // cloud-TTS phrasing; apostrophes remain for contractions and possessives.
+  t = t.replace(/"/g, '');
+  return t.replace(/,(?:\s*,)+/g, ',');
 }
 
 // The READER's form of a line: markup and entities cleaned up, spelling left
@@ -126,6 +255,13 @@ export function normalizeForSpeech(
 ): string {
   if (!text) return text;
   let t = stripMarkup(text);
+
+  // Keep literal bracket content in the reader-facing form, but remove the
+  // cue-shaped delimiters before TTS so an expressive engine cannot interpret
+  // a real title/version such as "[Untitled]" or "[Live]" as direction.
+  t = literalizeBracketedSpeech(t);
+
+  t = normalizeTtsPunctuation(t);
 
   // --- operator corrections (settings.tts.corrections) ---
   // After markdown/entity cleanup so a rule matches the readable text the

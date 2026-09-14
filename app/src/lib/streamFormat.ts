@@ -1,11 +1,9 @@
-// Listener-selectable stream format. The station always serves the MP3 floor;
-// Opus / FLAC / AAC are optional mounts the operator enables per station (they
-// ride the `stream` flags on /now-playing). Which of them a listener can pick
-// is ALSO a platform question: iOS AVPlayer cannot demux the Ogg container, so
-// the Ogg-encapsulated mounts (Opus, FLAC) are Android/ExoPlayer-only; AAC
-// (ADTS) and MP3 decode everywhere. The preference is stored per station —
-// different stations enable different mounts — as one AsyncStorage JSON map
-// keyed by base URL (same swallow-failures contract as volume.ts).
+// Listener-selectable stream format. MP3 is the always-served floor; Opus /
+// FLAC / AAC are optional mounts the operator enables per station (the
+// `stream` flags on /now-playing). It is also a platform question: iOS
+// AVPlayer cannot demux Ogg, so Opus and FLAC are Android-only, while AAC and
+// MP3 decode everywhere. The preference is stored per station as one
+// AsyncStorage map keyed by base URL; failures are swallowed.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -33,16 +31,14 @@ export function isStreamFormat(v: unknown): v is StreamFormat {
   return typeof v === 'string' && (ALL_FORMATS as string[]).includes(v);
 }
 
-/** Icecast mount path for a format — matches the Liquidsoap outputs and the
- *  Caddy route table (`/stream.mp3`, `/stream.opus`, …). */
+/** Icecast mount path, matching the Liquidsoap outputs and the Caddy routes. */
 export function mountFor(format: StreamFormat): string {
   return `/stream.${format}`;
 }
 
-/** Can THIS device's player engine decode the format? ExoPlayer (Android)
- *  demuxes Ogg, so everything plays; AVPlayer (iOS) does not, which rules out
- *  the Ogg-encapsulated Opus and FLAC mounts. Anything else (defensive) gets
- *  the MP3 floor only. */
+/** Can this device's engine decode the format? ExoPlayer demuxes Ogg so
+ *  everything plays; AVPlayer does not, ruling out Opus and FLAC. Any other
+ *  platform gets the MP3 floor only. */
 export function platformSupports(format: StreamFormat): boolean {
   if (format === 'mp3') return true;
   if (Platform.OS === 'android') return true;
@@ -50,9 +46,8 @@ export function platformSupports(format: StreamFormat): boolean {
   return false;
 }
 
-/** Does the station advertise the mount as live? MP3 is the always-on floor;
- *  the rest need their explicit flag. Unknown info (pre-first-poll) counts as
- *  NOT advertised — pickers should only offer what's confirmed. */
+/** Does the station advertise the mount as live? MP3 always does; the rest
+ *  need their flag. Unknown info counts as NOT advertised. */
 export function stationEnables(info: StreamInfo | null | undefined, format: StreamFormat): boolean {
   if (format === 'mp3') return true;
   if (!info) return false;
@@ -67,12 +62,10 @@ export function availableFormats(info: StreamInfo | null | undefined): StreamFor
   return OPTION_META.filter((o) => platformSupports(o.format) && stationEnables(info, o.format));
 }
 
-/** The format to actually tune with. The stored preference wins while the
- *  platform can decode it and the station still (or plausibly) serves it;
- *  before the first poll lands (info null/undefined) the preference is trusted
- *  optimistically — if the mount is gone the reconnect loop self-corrects to
- *  MP3 once the poll arrives and this flips. Everything else falls back to the
- *  universal MP3 floor. */
+/** The format to tune with. The stored preference wins while the platform can
+ *  decode it and the station serves it; before the first poll the preference
+ *  is trusted optimistically and self-corrects to MP3 when the poll lands.
+ *  Everything else falls back to the MP3 floor. */
 export function effectiveFormat(
   pref: StreamFormat,
   info: StreamInfo | null | undefined,
@@ -86,8 +79,6 @@ export function formatLabel(format: StreamFormat): string {
   return OPTION_META.find((o) => o.format === format)?.label ?? format.toUpperCase();
 }
 
-// --- persistence -----------------------------------------------------------
-
 const STORAGE_KEY = 'subwave.streamFormat.v1';
 
 async function loadMap(): Promise<Record<string, string>> {
@@ -99,7 +90,7 @@ async function loadMap(): Promise<Record<string, string>> {
       return parsed as Record<string, string>;
     }
   } catch {
-    /* corrupt / unavailable — behave as unset */
+    /* corrupt or unavailable: behave as unset */
   }
   return {};
 }
@@ -113,9 +104,8 @@ export async function loadFormatPref(base: string): Promise<StreamFormat | null>
   return isStreamFormat(v) ? v : null;
 }
 
-/** Persist the format for a station base URL. MP3 (the default) removes the
- *  entry — an unset key and the default are the same thing. Failures are
- *  swallowed; playback is unaffected. */
+/** Persist the format for a station base URL. MP3 removes the entry: unset and
+ *  the default are the same thing. Failures are swallowed. */
 export async function saveFormatPref(base: string, format: StreamFormat): Promise<void> {
   if (!base) return;
   try {
@@ -124,6 +114,6 @@ export async function saveFormatPref(base: string, format: StreamFormat): Promis
     else map[base] = format;
     await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(map));
   } catch {
-    /* storage full / unavailable — non-fatal */
+    /* non-fatal */
   }
 }

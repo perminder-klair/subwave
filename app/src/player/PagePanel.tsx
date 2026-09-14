@@ -1,7 +1,6 @@
-// Scrollable page shell for the swipe-pager sections (Shows / Timeline / Booth /
-// Request). Provides the panel header — a serif title with a mono uppercase
-// sub-label under an ink rule — that the web mock draws on each section, then
-// scrolls its content. The Live section is bespoke and doesn't use this.
+// Scrollable page shell for the swipe-pager sections: a serif title with a
+// mono sub-label under an ink rule, then scrolling content. The Live section
+// is bespoke and doesn't use this.
 
 import type { ReactNode } from 'react';
 import { ScrollView, Text, View } from 'react-native';

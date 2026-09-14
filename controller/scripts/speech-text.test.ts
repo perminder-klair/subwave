@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  normalizeForDisplay, normalizeForSpeech, spokenWordScale,
+  normalizeForDisplay, normalizeForSpeech, sanitizePerformanceCues, spokenWordScale,
 } from '../src/audio/speech-text.js';
 
 let failures = 0;
@@ -75,7 +75,7 @@ async function main() {
   await test('HTML entities decode before the & rule', () => {
     assert.equal(normalizeForSpeech('Florence &amp; the Machine'), 'Florence and the Machine');
     assert.equal(normalizeForSpeech('it&#39;s a classic'), "it's a classic");
-    assert.equal(normalizeForSpeech('she said &quot;play it&quot;'), 'she said "play it"');
+    assert.equal(normalizeForSpeech('she said &quot;play it&quot;'), 'she said play it');
   });
   await test('undecoded entity shapes are not mangled into "and"', () => {
     assert.equal(normalizeForSpeech('4 &lt; 5'), '4 &lt; 5');
@@ -108,8 +108,44 @@ async function main() {
     assert.equal(normalizeForSpeech('a * b'), 'a b');
     assert.equal(normalizeForSpeech('track_01_final stays'), 'track_01_final stays');
   });
-  await test('Chatterbox paralinguistic tags keep their brackets', () => {
-    assert.equal(normalizeForSpeech('[laugh] good one [sigh]'), '[laugh] good one [sigh]');
+  await test('keeps up to two performance cues with speech after each cue', () => {
+    assert.equal(normalizeForSpeech('[laugh] good one [softly] let\'s move on'),
+      '[laugh] good one [softly] let\'s move on');
+  });
+  await test('drops trailing, closing and excess performance cues', () => {
+    assert.equal(normalizeForSpeech('Good one. [sigh]'), 'Good one.');
+    assert.equal(normalizeForSpeech('[warmly] Good one. [/warmly]'), '[warmly] Good one.');
+    assert.equal(normalizeForSpeech('[softly] One. [laughing] Two. [dryly] Three.'),
+      '[softly] One. [laughing] Two. Three.');
+  });
+  await test('does not preserve stacked or cue-only bracket tags', () => {
+    assert.equal(sanitizePerformanceCues('[softly] [warmly] Hello.'), '[warmly] Hello.');
+    assert.equal(sanitizePerformanceCues('[softly]'), '');
+  });
+  await test('drops production directions and malformed brackets, keeping spoken words', () => {
+    assert.equal(normalizeForSpeech('[Square cue - fade out vocals] Let\'s begin.'), 'Let\'s begin.');
+    assert.equal(normalizeForSpeech('[0s] This is on air.'), 'This is on air.');
+    assert.equal(normalizeForSpeech('[pause] Keep talking.'), 'Keep talking.');
+    assert.equal(normalizeForSpeech('[pausing briefly] Keep talking.'), 'Keep talking.');
+    assert.equal(normalizeForSpeech('[-whispering] Test words.'), 'Test words.');
+    assert.equal(normalizeForSpeech('Enough [sigh].'), 'Enough');
+    assert.equal(normalizeForSpeech('[Junkie fades back in] Let\'s begin.'), 'Let\'s begin.');
+    assert.equal(normalizeForSpeech('Hello [softly'), 'Hello softly');
+  });
+  await test('keeps delivery cues while rejecting production wording', () => {
+    assert.equal(normalizeForSpeech('[softly] A quiet word.'), '[softly] A quiet word.');
+    assert.equal(normalizeForSpeech('[gentle fade] A quiet word.'), 'A quiet word.');
+  });
+  await test('preserves bracketed title and edition qualifiers as spoken text', () => {
+    assert.equal(normalizeForSpeech('That was Song Title [Live].'), 'That was Song Title Live.');
+    assert.equal(normalizeForSpeech('Here is Album Cut [Deluxe].'), 'Here is Album Cut Deluxe.');
+    assert.equal(normalizeForSpeech('Next, Song Title [Remastered 2011].'),
+      'Next, Song Title Remastered 2011.');
+    assert.equal(normalizeForSpeech('[Live fade out] Keep talking.'), 'Keep talking.',
+      'a title-like prefix must not override the production-direction blocklist');
+  });
+  await test('cleans generated links, HTML and invisible controls for display', () => {
+    assert.equal(normalizeForDisplay('[listen here](https://example.test) <em>now</em>\u200b'), 'listen here now');
   });
 
   console.log('station branding + shape:');
@@ -119,6 +155,12 @@ async function main() {
   });
   await test('other slashes are untouched (AC/DC)', () => {
     assert.equal(normalizeForSpeech('AC/DC up next'), 'AC/DC up next');
+  });
+  await test('normalizes punctuation known to upset cloud TTS without changing display', () => {
+    const source = 'From 1991–1993 — \u201cquiet\u201d… and ready.';
+    assert.equal(normalizeForSpeech(source), 'From 1991 to 1993 — quiet... and ready.');
+    assert.equal(normalizeForDisplay(source), 'From 1991–1993 — “quiet”… and ready.');
+    assert.equal(normalizeForSpeech('A\u00a0soft\u00adhyphen\u200b stays tidy.'), 'A softhyphen stays tidy.');
   });
   await test('whitespace collapses, empty passes through', () => {
     assert.equal(normalizeForSpeech('two   spaces'), 'two spaces');
@@ -193,8 +235,9 @@ async function main() {
     assert.equal(normalizeForDisplay('Simon &amp; Garfunkel'), 'Simon & Garfunkel');
     assert.equal(normalizeForDisplay('## Late shift\n_finally_'), 'Late shift finally');
   });
-  await test('[laugh] tags and empty input behave as in the speech pass', () => {
+  await test('valid cues remain visible, while trailing cues are removed', () => {
     assert.equal(normalizeForDisplay('[laugh] anyway'), '[laugh] anyway');
+    assert.equal(normalizeForDisplay('That was lovely. [softly]'), 'That was lovely.');
     assert.equal(normalizeForDisplay(''), '');
   });
 

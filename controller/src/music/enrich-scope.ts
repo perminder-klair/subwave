@@ -1,19 +1,10 @@
-// Pure helper: which track IDs phase-0 enrichment (Last.fm tags + lyrics) runs
-// over for a given tagger run. Extracted from tag-library.main() so the scope
-// decision is unit-pinned (scripts/lastfm-enrich.test.ts) — kept in its own
-// module because tag-library.ts runs main() on import and so can't be imported
-// by a test.
+// Which track IDs phase-0 enrichment (Last.fm tags + lyrics) runs over. Its own
+// module because tag-library.ts runs main() on import and can't be test-imported.
 //
-// Normal runs enrich only the in-scope untagged tracks. A raw --re-enrich pass
-// is an explicit "refresh the whole library" request, so it widens to the full
-// walked catalogue (limit-capped). Passing the untagged set there is what made
-// re-enrich a silent no-op on a fully-tagged library — untagged is empty, so
-// phase 0 exited immediately (issue #531).
-//
-// A RE-SCAN re-enrich is narrower than that: it redoes metadata only for tracks
-// that were ALREADY enriched (`enrichedIds`), never the never-touched remainder —
-// the "redo what's done, not the rest" rule. `enrichedIds` is the captured
-// already-enriched set; it's only consulted when rescan && reEnrich.
+// Normal runs enrich only the in-scope untagged tracks. A raw --re-enrich widens
+// to the full walked catalogue (limit-capped) — passing the untagged set there
+// made re-enrich a no-op on a fully-tagged library (#531). A RE-SCAN re-enrich
+// redoes only tracks already enriched (`enrichedIds`), never the remainder.
 
 export function selectEnrichIds(opts: {
   reEnrich: boolean;

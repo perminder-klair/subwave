@@ -1,9 +1,7 @@
 'use client';
-// Radio-card grid for picking the primary LLM provider. The status badge makes key
-// availability visible before a switch is saved — the #1 LLM misconfiguration is
-// routing to a cloud provider whose key isn't set. Tailwind-only, no inline styles
-// (issue #50). The fallback leg keeps the dropdown, since cards there would double
-// the tab's height for a secondary control.
+// Radio-card grid for picking the primary LLM provider; the status badge shows
+// key availability before a switch is saved. Tailwind-only, no inline styles
+// (#50). The fallback leg keeps its dropdown.
 import { cn } from '../../../lib/cn';
 import { PROVIDER_META, providerStatus } from './providerMeta';
 

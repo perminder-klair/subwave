@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  createContext, useCallback, useContext, useMemo, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,7 +19,7 @@ import {
   type AdminFetch,
 } from '../../../lib/admin-query';
 import type {
-  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
+  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
 
@@ -34,15 +34,13 @@ const EMPTY_PLAYLISTS: PlaylistSummary[] = [];
 
 export interface LibraryShared {
   // Passed down from the page owner so every Library resource shares one
-  // feature boundary. useAdminAuth itself observes the module-owned auth store,
-  // so a 401 here also tears down the shell provider and its QueryClient.
+  // feature boundary.
   adminFetch: AdminFetch;
   ready: boolean;
 
-  // The two page-wide polls. They live here rather than in useTaggerControls
-  // because the coverage cadence depends on the tagger snapshot, and both are
-  // read outside the Tagging panel (Search gates its mode toggle on coverage) —
-  // one owner keeps them from being observed at two different intervals.
+  // The two page-wide polls live here, not in useTaggerControls: the coverage
+  // cadence depends on the tagger snapshot and both are read outside the
+  // Tagging panel, so one owner keeps them off two different intervals.
   coverage: Coverage | null;
   reloadCoverage: () => Promise<void>;
   tagger: TaggerState | null;
@@ -63,8 +61,7 @@ export interface LibraryShared {
   plBusy: boolean;
   addSelectedToPlaylist: (t: { playlistId?: string; name?: string }) => Promise<void>;
 
-  // Mood vocabulary for the inline editor. Only the browse response carries
-  // it, so other tabs trigger a one-row browse rather than bundling the list.
+  // Mood vocabulary for the inline editor. Only the browse response carries it.
   vocab: string[];
   seedVocab: (v: string[]) => void;
   ensureVocab: () => Promise<void>;
@@ -77,6 +74,7 @@ export interface LibraryShared {
   eraBusy: string | null;
   blocking: string | null;
   queueTrack: (t: Track) => Promise<void>;
+  queueBlock: (t: Track, kind: QueueBlockKind) => Promise<void>;
   retagTrack: (t: Track) => Promise<void>;
   onEditTrack: (t: Track) => void;
   cancelEdit: () => void;
@@ -109,13 +107,9 @@ export function LibraryProvider({
 }) {
   const qc = useQueryClient();
 
-  // --- the two page-wide polls --------------------------------------------
-  // Deliberately two queries, not one doing both: the fast loop carries only
-  // the tagger snapshot so a 3s running poll doesn't drag the whole heavy
-  // /settings body across each time, and neither writes the other's state —
-  // that is what keeps them from racing. Both stay silent on failure (their
-  // predecessors each carried a `/* transient */`): a 3s poll that toasts on a
-  // blip would bury the console.
+  // Two queries, not one: the fast loop carries only the tagger snapshot so a 3s
+  // poll doesn't drag the heavy /settings body across each time. Both stay
+  // silent on failure -- a 3s poll that toasts on a blip would bury the console.
   const taggerQuery = useQuery({
     queryKey: libraryKeys.tagger(),
     queryFn: async ({ signal }) => {
@@ -130,15 +124,23 @@ export function LibraryProvider({
   });
   const tagger = taggerQuery.data ?? null;
 
+  // GET /library/coverage is a cheap read (DB counts plus the last-known
+  // Navidrome total), so it runs on mount. It must NOT run on a timer: the total
+  // behind it is a full album-by-album walk of Navidrome (#1570). The count is
+  // now the operator's own press (useTaggerControls' countLibrary).
+  // No `staleTime` key on purpose: an explicit `staleTime: 0` made this refetch
+  // on every remount, so the client's 30s default is left alone.
   const coverageQuery = useQuery({
     queryKey: libraryKeys.coverage(),
     queryFn: ({ signal }) => adminJson<Coverage>(
       adminFetch, '/library/coverage', undefined, signal,
     ),
     enabled: ready,
-    staleTime: 0,
-    // While a run is live, poll faster so the % visibly climbs.
-    refetchInterval: tagger?.running ? 3_000 : 60_000,
+    // The two live states only: a tagging run whose % must climb, and a count
+    // the operator just asked for. Idle, nothing polls.
+    refetchInterval: q => (
+      tagger?.running || q.state.data?.scanning ? 3_000 : false
+    ),
   });
   const coverage = coverageQuery.data ?? null;
   const reloadCoverage = useCallback(
@@ -146,14 +148,20 @@ export function LibraryProvider({
     [qc],
   );
 
-  // Re-marks the rows already loaded: refetching every tab would lose
-  // pagination and re-hit Navidrome, and matching client-side would duplicate
-  // the normalised-name rules in music/blocklist.ts, free to drift.
-  //
-  // The rows come from the query cache rather than a registry of mounted lists,
-  // which is the whole point of the conversion — and it reaches lists a tab
-  // switch has unmounted but not yet evicted, so returning to one shows correct
-  // marks instead of stale ones.
+  // A finished tagger run has just written its tags AND kicked a fresh count
+  // server-side, but `running` going false is what stops the poll -- so refetch
+  // once here or the final figures sit unread until the next mount.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const now = !!tagger?.running;
+    if (wasRunning.current && !now) void reloadCoverage();
+    wasRunning.current = now;
+  }, [tagger?.running, reloadCoverage]);
+
+  // Re-marks the rows already loaded: refetching every tab would lose pagination
+  // and re-hit Navidrome, and matching client-side would duplicate the
+  // normalised-name rules in music/blocklist.ts. Rows come from the query cache,
+  // so this reaches lists a tab switch unmounted but hasn't evicted.
   const restampBlockMarks = useCallback(async () => {
     const byId = new Map<string, Track>();
     for (const [, data] of qc.getQueriesData({ queryKey: libraryKeys.rows })) {
@@ -178,12 +186,11 @@ export function LibraryProvider({
       }
       applyBlockMarks(qc, marks);
     } catch {
-      // Enrichment, not the operation — the block itself succeeded, so leave
-      // the last-known marks rather than toasting.
+      // Enrichment, not the operation: the block itself succeeded, so leave the
+      // last-known marks rather than toasting.
     }
   }, [adminFetch, qc]);
 
-  // --- likes (#1253) -------------------------------------------------------
   const [liking, setLiking] = useState<string | null>(null);
 
   const likeIndexQuery = useQuery({
@@ -196,14 +203,12 @@ export function LibraryProvider({
     },
     enabled: ready,
   });
-  // A missing index just means no hearts are lit — never toast this, and never
-  // let a failed fetch read as "some hearts unknown". Memoised because the
-  // fallback would otherwise be a fresh object per render, which invalidates
-  // the whole context value and re-renders every tab.
+  // A missing index just means no hearts are lit -- never toast, and never let a
+  // failed fetch read as "some hearts unknown". Memoised so the fallback doesn't
+  // invalidate the context value every render.
   const likeIndex = useMemo(() => likeIndexQuery.data ?? EMPTY_LIKES, [likeIndexQuery.data]);
 
   // Patches the index without a refetch so the heart responds immediately.
-  // The Liked list's own row removal rides applyLikeChange with a null `next`.
   const patchLike = useCallback((
     id: string, next: { count: number; operator: boolean } | null,
   ) => {
@@ -243,7 +248,7 @@ export function LibraryProvider({
             }),
           },
         );
-      // Settle on the server's count — it folds in listener likes that landed
+      // Settle on the server's count: it folds in listener likes that landed
       // between render and click.
       patchLike(track.id, { count: j.count ?? 0, operator: !isLiked });
     } catch (err) {
@@ -254,7 +259,7 @@ export function LibraryProvider({
     }
   }, [adminFetch, likeIndex, patchLike]);
 
-  // Wraps DELETE /likes/song/:id — drops LISTENER likes too, which the heart
+  // Wraps DELETE /likes/song/:id -- drops LISTENER likes too, which the heart
   // deliberately never does.
   const clearLikes = useCallback(async (track: Track) => {
     setLiking(track.id);
@@ -271,13 +276,11 @@ export function LibraryProvider({
     }
   }, [adminFetch, patchLike]);
 
-  // --- selection + playlists ----------------------------------------------
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [plBusy, setPlBusy] = useState(false);
 
-  // Fetched lazily, only once a row is selected — the Add-to-playlist bar is
-  // the only consumer, and it does not exist before then. `enabled` is what the
-  // old "if selected.size > 0 && playlists === null" effect said.
+  // Fetched lazily, only once a row is selected: the Add-to-playlist bar is the
+  // only consumer and does not exist before then.
   const playlistsQuery = useQuery({
     queryKey: libraryKeys.playlists(),
     queryFn: async ({ signal }) => {
@@ -290,15 +293,13 @@ export function LibraryProvider({
   });
   useQueryErrorToast(playlistsQuery.error, true);
   // An errored fetch reads as "no playlists", not "still loading", so the bar
-  // offers the create-new path rather than spinning forever. Memoised for the
-  // same reason as likeIndex above.
+  // offers the create-new path rather than spinning forever.
   const playlists = useMemo(
     () => playlistsQuery.data ?? (playlistsQuery.error ? EMPTY_PLAYLISTS : null),
     [playlistsQuery.data, playlistsQuery.error],
   );
-  // Selection is per-view: ids from another tab would be invisible, and
-  // "Add 12" with 9 off-screen rows is a foot-gun. The panel calls this on
-  // every tab change — the provider cannot see `tab`.
+  // Selection is per-view: ids from another tab would be invisible. The panel
+  // calls this on every tab change -- the provider cannot see `tab`.
   const clearSelection = useCallback(() => { setSelected(new Set()); }, []);
 
   const toggleSelect = useCallback((id: string) => {
@@ -354,7 +355,6 @@ export function LibraryProvider({
     }
   }, [adminFetch, selected, playlists, qc]);
 
-  // --- mood vocab ----------------------------------------------------------
   const vocabQuery = useQuery({
     queryKey: libraryKeys.moodVocab(),
     queryFn: async ({ signal }) => {
@@ -377,15 +377,13 @@ export function LibraryProvider({
     await vocabQuery.refetch();
   }, [vocab.length, vocabQuery]);
 
-  // --- per-row actions -----------------------------------------------------
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [manualBusy, setManualBusy] = useState<string | null>(null);
-  // Separate from manualBusy: the two saves share one panel but are two
-  // requests, and one spinner covering both would grey out the tag chips
-  // while a year is saving.
+  // Separate from manualBusy: one spinner covering both would grey out the tag
+  // chips while a year is saving.
   const [eraBusy, setEraBusy] = useState<string | null>(null);
   const [blocking, setBlocking] = useState<string | null>(null);
 
@@ -403,6 +401,43 @@ export function LibraryProvider({
         body: JSON.stringify(track),
       });
       notify.ok(`queued “${track.title}” · position ${j.queuePosition}`);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setQueuing(null);
+    }
+  }, [adminFetch]);
+
+  // Queue the whole record, or a set by the artist, in one press (#1622 FR 4).
+  //
+  // Only the track id goes over the wire: the server resolves the album/artist
+  // off it, exactly as POST /library/blocklist does, because a row never sees
+  // either id.
+  //
+  // The toast reports every caveat the response carries rather than just the
+  // count. A block does NOT bypass the never-play list, so a skipped track is
+  // the operator's own rule firing and must be visible; and
+  // `runsPastShowChange` is a warning, not a refusal — the block was queued in
+  // full and the operator decides what to do about the overrun.
+  const queueBlock = useCallback(async (track: Track, kind: QueueBlockKind) => {
+    setQueuing(track.id);
+    try {
+      const j = await adminJson<QueueBlockResult>(adminFetch, '/dj/queue-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, trackId: track.id }),
+      });
+      const notes = [
+        j.skipped?.length ? `${j.skipped.length} skipped (never-play)` : null,
+        j.truncated ? `${j.truncated} over the 30-track limit` : null,
+        j.runsPastShowChange
+          ? `runs ~${Math.round(j.runsPastShowChange.bySec / 60)}min past ${j.runsPastShowChange.show || 'the next show'}`
+          : null,
+      ].filter(Boolean);
+      notify.ok(
+        `queued ${j.queued} track${j.queued === 1 ? '' : 's'} · ${j.label}`
+        + (notes.length ? ` · ${notes.join(' · ')}` : ''),
+      );
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -473,11 +508,9 @@ export function LibraryProvider({
     }
   }, [adminFetch, qc, flash, reloadCoverage]);
 
-  // The manual era override (#1418). Deliberately does NOT touch coverage or
-  // the untagged list — an original year is not a tag, and the track's tagging
-  // state is unchanged by it. The editor stays OPEN afterwards, unlike a tag
-  // save: setting a year is often the first of several corrections on the same
-  // row, and the source note updating in place is the confirmation.
+  // The manual era override (#1418). Does NOT touch coverage or the untagged
+  // list -- an original year is not a tag. The editor stays OPEN afterwards
+  // because a year is often the first of several corrections on the same row.
   const saveEraYear = useCallback(async (
     track: Track, originalYear: number | null, applyToAlbum: boolean,
   ) => {
@@ -500,9 +533,8 @@ export function LibraryProvider({
       flash(track.id);
       applyEraYearEvent(qc, {
         originalYear,
-        // Current controllers return the authoritative target set. The
-        // fallback keeps a newer web build safe against an older controller:
-        // patch the selected row only instead of guessing album identity.
+        // Current controllers return the authoritative target set; the fallback
+        // keeps a newer web build safe against an older controller.
         trackIds: j.tracks?.map((t) => t.id) ?? [track.id],
       });
     } catch (err) {
@@ -512,7 +544,6 @@ export function LibraryProvider({
     }
   }, [adminFetch, qc, flash]);
 
-  // --- blocklist -----------------------------------------------------------
   // Shared by the Blocked tab's Unblock, the row-level unblock and the block
   // toast's Undo, so all three get the same list update and re-mark.
   const removeBlockEntry = useCallback(async (
@@ -528,9 +559,8 @@ export function LibraryProvider({
     } catch (error) {
       if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
     }
-    // The Blocked tab's list is a query like any other — invalidating reaches
-    // it whether or not that tab is mounted, which is what registerBlockList
-    // existed to do.
+    // The Blocked tab's list is a query like any other, so invalidating reaches
+    // it whether or not that tab is mounted.
     void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
     if (!quiet) notify.ok(`“${e.name || e.id}” can play again`);
     await restampBlockMarks();
@@ -567,10 +597,9 @@ export function LibraryProvider({
     }
   }, [adminFetch, qc, removeBlockEntry, restampBlockMarks]);
 
-  // Lifts whichever entry matched this row — possibly an album or artist block
-  // made from a different row entirely. Rule refs never reach here (TrackTable
-  // offers no one-click unblock for them — a rule can block hundreds of rows),
-  // so the guard is a type-level formality.
+  // Lifts whichever entry matched this row, possibly an album or artist block
+  // made from a different row. Rule refs never reach here, so the guard is a
+  // type-level formality.
   const unblockRow = useCallback(async (track: Track, ref: BlockRef) => {
     if (ref.kind === 'rule') return;
     setBlocking(track.id);
@@ -590,7 +619,7 @@ export function LibraryProvider({
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
     queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   }), [
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
@@ -599,7 +628,7 @@ export function LibraryProvider({
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
     queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   ]);
 

@@ -1,22 +1,9 @@
-// Pins the roster-wide public-read disclosure rule (util/public-persona.ts +
-// settings.privacy.publishPersonaSouls).
+// The roster-wide public-read disclosure rule (util/public-persona.ts +
+// settings.privacy.publishPersonaSouls). Three properties: souls are OPT-IN
+// (a non-boolean reads as off), `soul` is ABSENT rather than empty when off,
+// and only identity fields ever ride along.
 //
-// GET /schedule and GET /personas hand a listener the whole DJ roster in one
-// request. Three properties are load-bearing and easy to regress:
-//
-//  - Souls are OPT-IN. A settings.json written before the key existed (and any
-//    non-boolean written by hand) must read as OFF, or upgrading a station
-//    silently publishes every operator's system prompts.
-//  - `soul` is ABSENT, not empty, when off. A client has to be able to tell
-//    "this station doesn't publish souls" from "the soul is blank", otherwise
-//    it renders a wall of empty bio cards.
-//  - Only identity fields ever ride along. TTS config, skills and the
-//    behaviour dials are operator configuration and must never leak into a
-//    public read, at any setting.
-//
-// STATE_DIR is redirected at a throwaway dir BEFORE the first import, so
-// settings.load()/update() touch nothing real — hence the dynamic imports.
-// node:assert-via-tsx style, matching scripts/voice-policy.test.ts.
+// STATE_DIR is redirected before the first import, hence the dynamic imports.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -31,8 +18,7 @@ const { publicPersonaShape, publicGuestIds, soulsArePublic } = await import(
   '../src/util/public-persona.js'
 );
 
-// A stored persona carrying every field the admin UI can set — the point is
-// that only four of them survive the reduction.
+// Every field the admin UI can set; only four survive the reduction.
 const PERSONA = {
   id: 'p_nyx',
   name: 'Nyx',
@@ -49,13 +35,11 @@ const PERSONA = {
   skills: ['weather'],
 };
 
-// Anything beyond these must never appear on a public read, whatever the
-// toggle says. Kept as an explicit deny-list so a field added to the persona
-// schema and casually spread into the shape trips this test.
+// An explicit allow-list, so a field added to the persona schema and spread
+// into the shape trips this test.
 const ALLOWED = new Set(['id', 'name', 'tagline', 'avatar', 'soul']);
 
 try {
-  // ── The toggle defaults OFF, and only a real `true` turns it on ───────────
   await settings.load();
   assert.equal(
     soulsArePublic(settings.get()),
@@ -63,8 +47,7 @@ try {
     'a fresh install must not publish persona souls',
   );
 
-  // Every shape an older or hand-edited settings.json can present. All OFF —
-  // opting in has to be deliberate, never something a missing key does for you.
+  // Every shape an older or hand-edited settings.json can present: all OFF.
   for (const privacy of [
     undefined,
     {},
@@ -72,8 +55,7 @@ try {
     { publishPersonaSouls: null },
     { publishPersonaSouls: 0 },
     { publishPersonaSouls: '' },
-    // The string 'true' is the dangerous one: a hand-edited JSON or a form post
-    // that skipped coercion would flip disclosure on under a loose check.
+    // The string 'true' would flip disclosure on under a loose check.
     { publishPersonaSouls: 'true' },
     { publishPersonaSouls: 1 },
   ]) {
@@ -89,7 +71,6 @@ try {
     'an explicit boolean true is the only way in',
   );
 
-  // ── Souls OFF: the field is absent, not blank ─────────────────────────────
   const closed = publicPersonaShape(PERSONA, false, '/persona-avatar/p_nyx');
   assert.deepEqual(
     closed,
@@ -103,28 +84,26 @@ try {
   );
   assert.equal('soul' in closed, false, 'soul must be ABSENT when off, not empty-string');
 
-  // ── Souls ON: the blurb rides, nothing else does ──────────────────────────
   const open = publicPersonaShape(PERSONA, true, '/persona-avatar/p_nyx');
   assert.equal(open.soul, PERSONA.soul, 'souls-on publishes the stored soul verbatim');
   assert.equal(open.tagline, PERSONA.tagline, 'tagline rides either way');
 
-  // The real regression guard: operator configuration must never leak.
+  // Operator configuration must never leak, at any setting.
   for (const shape of [closed, open]) {
     for (const key of Object.keys(shape)) {
       assert.ok(ALLOWED.has(key), `public persona read leaked "${key}"`);
     }
   }
 
-  // ── Missing/odd fields degrade to '' rather than undefined ────────────────
-  // The wire shape has to stay stable for a half-filled persona, or clients
-  // start rendering "undefined" in a bio slot.
+  // The wire shape stays stable for a half-filled persona, so clients never
+  // render "undefined" in a bio slot.
   assert.deepEqual(
     publicPersonaShape({ id: 'p_x' }, true, ''),
     { id: 'p_x', name: '', tagline: '', avatar: '', soul: '' },
     'absent strings become empty strings, and soul is present-but-blank when ON',
   );
 
-  // ── Guest ids resolve against the LIVE roster ─────────────────────────────
+  // Guest ids resolve against the LIVE roster.
   const roster = [{ id: 'p_nyx' }, { id: 'p_frequency' }];
   assert.deepEqual(
     publicGuestIds(['p_frequency'], roster),
@@ -155,13 +134,11 @@ try {
     'non-string entries are dropped, never coerced',
   );
 
-  // ── The toggle round-trips through settings.update() and applies live ─────
   await settings.update({ privacy: { publishPersonaSouls: true } });
   assert.equal(soulsArePublic(settings.get()), true, 'update() turns disclosure on');
 
-  // It is a DISCLOSURE flag, not a lock: unlike privatePlayer/listenerAuth it
-  // must save with no station password set. If this ever throws, the toggle
-  // has been pulled inside the "a lock needs a password" invariant.
+  // A DISCLOSURE flag, not a lock: unlike privatePlayer/listenerAuth it must
+  // save with no station password set.
   assert.equal(
     settings.get().privacy.password,
     '',

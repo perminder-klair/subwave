@@ -1,21 +1,10 @@
 // Album/artist blocks must reach their EXACT id tiers on LIBRARY-sourced
-// candidates, not just on raw Subsonic songs.
+// candidates, not just on raw Subsonic songs. The name fallback keys on
+// (album name, THAT TRACK'S artist), so on a compilation every track but the
+// one the block was created from misses it.
 //
-// The reported failure: an operator blocks an album, and the station keeps
-// playing it — on a compilation, the whole thing back to back. Cause: the
-// `tracks` table carried only free-text `album`/`artist`, so blocklist.matchOf
-// could only reach an album entry through its normalised-name fallback, which
-// keys on (album name, THAT TRACK'S artist). A compilation gives every track a
-// different artist string, so every track but the one the block was created
-// from missed the key and aired. (Nothing catches the clustering either — the
-// pool builders cap by artist, and on a various-artists album every artist is
-// different.)
-//
-// These tests pin the fix from both ends: the walk's ids survive the round trip
-// through library.db, and a blocked album's OTHER tracks are blocked by id even
-// though the name fallback cannot see them.
-//
-// Run: npx tsx scripts/blocklist-album-id.test.ts (auto-discovered by npm test).
+// Pinned from both ends: the walk's ids survive the round trip through
+// library.db, and a blocked album's other tracks are blocked by id.
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,8 +21,7 @@ const blocklist = await import('../src/music/blocklist.js');
 await library.load();
 await blocklist.load();
 
-// One various-artists compilation: same album, same album id, DIFFERENT artist
-// strings — the shape the name fallback cannot match across.
+// One various-artists compilation: same album id, different artist strings.
 const COMP_ALBUM_ID = 'alb-comp-1';
 db.upsertTrackMeta('t1', {
   title: 'Opener', artist: 'First Act', album: 'Sunshine Sampler',
@@ -54,8 +42,8 @@ test("the walk's album/artist ids round-trip through library.db", () => {
 });
 
 test('a metadata write without ids never clears the walked ones', () => {
-  // The manual tag editor and the analyzer's top-up both write TrackMeta with
-  // no ids to offer. COALESCE, not overwrite.
+  // The manual tag editor and the analyzer's top-up write TrackMeta with no
+  // ids to offer, so this must COALESCE rather than overwrite.
   db.upsertTrackMeta('t2', { title: 'Second (Remaster)' });
   const rec = db.getTrack('t2');
   assert.equal(rec?.title, 'Second (Remaster)');
@@ -65,7 +53,7 @@ test('a metadata write without ids never clears the walked ones', () => {
 
 test('blocking a compilation album blocks EVERY track on it, not just the one it was created from', async () => {
   // The route resolves an album block from one track row, so the entry carries
-  // that track's artist — 'First Act' here.
+  // that track's artist.
   await blocklist.add({
     type: 'album', id: COMP_ALBUM_ID, name: 'Sunshine Sampler', artist: 'First Act',
   });
@@ -75,8 +63,7 @@ test('blocking a compilation album blocks EVERY track on it, not just the one it
   assert.equal(blocklist.isBlocked(t1), true);
   assert.equal(blocklist.isBlocked(t2), true, 'the other artists on the compilation are blocked too');
 
-  // ...and the id tier is what did it: strip the ids and the name fallback
-  // misses t2 exactly as it did before the fix. This is the regression.
+  // The id tier is what did it: strip the ids and the name fallback misses t2.
   const nameOnly = (r: any) => ({ id: r.id, title: r.title, artist: r.artist, album: r.album });
   assert.equal(blocklist.isBlocked(nameOnly(t1)), true, "name fallback still catches the block's own artist");
   assert.equal(blocklist.isBlocked(nameOnly(t2)), false, 'name fallback alone cannot see it — the id tier is load-bearing');
@@ -92,8 +79,11 @@ test('the public mood source filters a compilation sibling by its album id', () 
 });
 
 test('an artist block matches by id through a credit the name fallback cannot normalise', async () => {
+  // A DUO credit: #1603's fallback splits a feature credit but never on `&`,
+  // since Simon & Garfunkel is one act, so this is the shape only the id tier
+  // reaches.
   db.upsertTrackMeta('t3', {
-    title: 'Guest Spot', artist: 'Second Act feat. Somebody Else', album: 'Elsewhere',
+    title: 'Guest Spot', artist: 'Second Act & Somebody Else', album: 'Elsewhere',
     albumId: 'alb-other', artistId: 'art-second',
   });
   await blocklist.add({ type: 'artist', id: 'art-second', name: 'Second Act' });
@@ -101,10 +91,12 @@ test('an artist block matches by id through a credit the name fallback cannot no
   const t3 = db.getTrack('t3');
   assert.equal(blocklist.isBlocked(t3), true);
   assert.equal(
-    blocklist.isBlocked({ id: 't3', artist: 'Second Act feat. Somebody Else' }),
+    blocklist.isBlocked({ id: 't3', artist: 'Second Act & Somebody Else' }),
     false,
-    'the exact-name fallback cannot match a featured credit — the id tier is what does',
+    'the exact-name fallback cannot match a co-credit — the id tier is what does',
   );
+  // The feature shape it CAN now reach, with no id on the row at all (#1603).
+  assert.equal(blocklist.isBlocked({ id: 't4', artist: 'Somebody Else feat. Second Act' }), true);
 });
 
 test.after(() => {

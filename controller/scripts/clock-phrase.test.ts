@@ -4,7 +4,10 @@
 // Run: `npm test -- clock-phrase` (tsx scripts/clock-phrase.test.ts).
 
 import assert from 'node:assert/strict';
-import { clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenDaypartPhrase } from '../src/time.js';
+import { clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenTimePhrases, spokenDaypartPhrase } from '../src/time.js';
+
+// One minute inside each band, plus both edges of each band.
+const BAND_MINUTES = [0, 4, 5, 14, 15, 24, 25, 39, 40, 49, 50, 59];
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -98,6 +101,102 @@ async function main() {
     assert.equal(spokenTimePhrase(23, 50), 'coming up on midnight');
     assert.equal(spokenTimePhrase(11, 45), 'quarter to noon');
     assert.equal(spokenTimePhrase(0, 20), 'quarter past midnight');
+  });
+
+  console.log('spokenTimePhrases (#1602 — one rounded time, several wordings):');
+  await test('the canonical wording is still the first form of its band', () => {
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m++) {
+        assert.equal(spokenTimePhrases(h, m)[0], spokenTimePhrase(h, m), `${h}:${m}`);
+      }
+    }
+  });
+  // Three is the floor, not two: with the no-repeat picker a two-form band
+  // alternates deterministically, which is a different fixed pattern rather
+  // than variation. Dropping a form that overclaims its band's first minute is
+  // right, but it has to be replaced, not just removed.
+  await test('every band offers at least three distinct wordings', () => {
+    for (const m of BAND_MINUTES) {
+      const forms = spokenTimePhrases(18, m);
+      assert.ok(forms.length >= 3, `minute ${m} has ${forms.length} form(s)`);
+      assert.equal(new Set(forms).size, forms.length, `minute ${m} repeats a form`);
+    }
+  });
+  // The load-bearing pin: a wording may change the words, never the reading.
+  // Every form in a band must carry the hour spokenHourPhrase chose for that
+  // band — the one past :40 leans on the NEXT hour — and no other hour word.
+  await test('every wording in a band names the same hour as the canonical one', () => {
+    for (let h = 0; h < 24; h++) {
+      for (let m = 0; m < 60; m++) {
+        const expected = spokenHourPhrase(m <= 39 ? h : h + 1);
+        for (const form of spokenTimePhrases(h, m)) {
+          assert.ok(form.includes(expected), `${h}:${m} — "${form}" does not say "${expected}"`);
+          for (let other = 0; other < 24; other++) {
+            const otherPhrase = spokenHourPhrase(other);
+            if (otherPhrase === expected) continue;
+            // \b so "noon" doesn't match inside "afternoon".
+            assert.ok(!new RegExp(`\\b${otherPhrase}\\b`).test(form),
+              `${h}:${m} — "${form}" also says "${otherPhrase}"`);
+          }
+        }
+      }
+    }
+  });
+  // A SNAPSHOT, not a proof: it pins the lists so adding or changing a wording
+  // shows up as a deliberate diff. The equivalence rule itself — every form
+  // interchangeable at every minute in its band, including the minute the band
+  // opens on — is not mechanically checkable and stays a human check at review
+  // time; the only half that IS machine-checked is the hour word, by the test
+  // above. The two refusals the table spells out (no "a minute or so past" in
+  // a band that opens at :00, no "gone quarter past" in one that opens at :15,
+  // no "gone half past" in one that opens at :25) are what that human check
+  // looks like when it is done properly.
+  await test('the wordings are pinned per band — changing one must be a deliberate diff', () => {
+    assert.deepEqual(spokenTimePhrases(18, 2), [
+      'just gone six in the evening',
+      'just past six in the evening',
+      'just turned six in the evening',
+    ]);
+    assert.deepEqual(spokenTimePhrases(9, 8), [
+      'just after nine in the morning',
+      'a few minutes past nine in the morning',
+      'a little after nine in the morning',
+    ]);
+    // Nothing here may say "gone quarter past": the band opens ON :15.
+    assert.deepEqual(spokenTimePhrases(14, 17), [
+      'quarter past two in the afternoon',
+      'a quarter past two in the afternoon',
+      'around quarter past two in the afternoon',
+    ]);
+    // Nothing here may say "gone half past": the band opens at :25.
+    assert.deepEqual(spokenTimePhrases(18, 31), [
+      'half past six in the evening',
+      'around half past six in the evening',
+      'half past six in the evening, give or take',
+    ]);
+    assert.deepEqual(spokenTimePhrases(18, 45), [
+      'quarter to seven in the evening',
+      'a quarter to seven in the evening',
+      'around quarter to seven in the evening',
+    ]);
+    assert.deepEqual(spokenTimePhrases(18, 55), [
+      'coming up on seven in the evening',
+      'coming up to seven in the evening',
+      'nearly seven in the evening',
+      'almost seven in the evening',
+    ]);
+  });
+  await test('the day edge normalises in every wording, not just the canonical one', () => {
+    for (const form of spokenTimePhrases(23, 50)) {
+      assert.ok(form.includes('midnight'), form);
+      assert.ok(!/twenty-four|\btwelve\b/.test(form), form);
+    }
+    for (const form of spokenTimePhrases(11, 45)) assert.ok(form.includes('noon'), form);
+    for (const form of spokenTimePhrases(0, 20)) assert.ok(form.includes('midnight'), form);
+  });
+  await test('out-of-range hours and minutes normalise like the canonical phrase', () => {
+    assert.deepEqual(spokenTimePhrases(24, 60), spokenTimePhrases(0, 0));
+    assert.deepEqual(spokenTimePhrases(-1, -1), spokenTimePhrases(23, 59));
   });
 
   await test('daypart phrase — the only clock reading a station ident may speak', () => {

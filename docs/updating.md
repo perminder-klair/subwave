@@ -33,6 +33,42 @@ The tag database is the expensive thing in there. It represents every LLM
 enrichment pass over your library; rebuilding it costs hours and tokens, not
 just a rescan.
 
+### Or let the station take them for you
+
+The export above is a button someone has to press. **Admin → Settings → Backup
+→ Schedule** turns it into a cadence — `daily`, `weekly` or `monthly` — and the
+station writes the same archive to its own `state/` directory, keeping the last
+N (default 7) and deleting the rest.
+
+**Off by default**, and off means off: a station that upgrades and changes
+nothing writes nothing and deletes nothing.
+
+A few things worth knowing before you turn it on:
+
+- **The cadence is elapsed time, not a nightly cron.** The check runs hourly and
+  fires when enough time has passed since the newest backup on disk, so a box
+  that is only powered on for a few hours a day still gets its daily backup.
+- **Retention only ever deletes files the schedule itself wrote.** Those are
+  named `subwave-auto-backup-YYYY-MM-DD-HHMMSS.zip`, and nothing else is
+  counted or considered — a zip you copied into `state/` by hand to restore
+  past a proxy's upload cap (see [Recovery](#recovery-when-an-update-goes-wrong))
+  is invisible to the sweep, as is a manual `subwave-backup-<date>.zip` export.
+- **The backups live in the directory they protect.** That is fine for a bad
+  upgrade and useless for a dead disk. Copy them somewhere else on a schedule of
+  your own; the point of this feature is that there is always something recent
+  to copy.
+- **Download one without rebuilding it.** The Backup panel lists what is on disk
+  and each row has a download button (`GET /backup/file/:name` behind it). This
+  is not the same as **Export**, which builds a *fresh* archive from the station
+  as it is right now — if you want the snapshot from 04:23 last Tuesday, take it
+  from the list, not from Export.
+- **A schedule that is off does not tidy up.** A run killed mid-write (a
+  container restart, an OOM kill) leaves a `subwave-auto-backup-….zip.<hex>.tmp`
+  behind. Every *scheduled run* sweeps those on its way in, including runs that
+  find nothing due — but with the cadence set to `off` no run happens at all, so
+  an orphan from before you switched it off stays until you switch it back on.
+  It is inert, and safe to delete by hand.
+
 ### 2. Write down the version you're on
 
 ```bash

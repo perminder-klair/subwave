@@ -17,6 +17,18 @@ export { recordAgentRetry, agentDoneRetryCount } from './internal/telemetry/log.
 export { dailyTokensUsed, seedDailyUsageFromLog } from './internal/telemetry/budget.js';
 export { budgetMode } from './internal/core/pure.js';
 
+// Downloadable form of the ring buffer above (#1485). Pure serialisers only —
+// the /debug route pairs them with `dj.recentCalls`, which is the same array
+// this barrel exports. Exporting what is already rendered, verbatim: no field is
+// added and none is filtered.
+export {
+  llmCallExportFormat,
+  llmCallExportFilename,
+  serializeLlmCalls,
+  LLM_CALL_EXPORT_CONTENT_TYPE,
+  type LlmCallExportFormat,
+} from './internal/telemetry/export.js';
+
 // Raw-request debug log status (the rolling ${STATE_DIR}/logs/llm-debug.log).
 // Re-exported here so the /debug route can report the toggle state + file path
 // without reaching into internal/. The capture itself lives in the provider

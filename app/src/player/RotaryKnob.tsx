@@ -1,7 +1,6 @@
-// Rotary volume knob — the web player's knob rebuilt for native: a radial tick
-// ring (SVG), an ink knob body, and a vermilion pointer that sweeps -135°→+135°
-// with the level. Drag up/right to raise, down/left to lower (cumulative from
-// grab). Pure RN + react-native-svg, themes with the palette.
+// Rotary volume knob: an SVG tick ring and a pointer sweeping -135° to +135°
+// with the level. Drag up/right to raise, down/left to lower, cumulative from
+// the grab point.
 
 import { useRef } from 'react';
 import { PanResponder, View } from 'react-native';

@@ -23,8 +23,7 @@ export async function runStatusCommand(): Promise<void> {
     else err(`${svc} — ${pc.dim(state)}`);
   }
 
-  // The dev web server isn't a compose service, so it's absent from
-  // compose.services — add it so status covers the whole rig.
+  // The dev web server isn't a compose service, so add it by hand.
   if (compose.env === 'dev') {
     const holder = whoHolds7700();
     const trackedPid = readWebDevPid();

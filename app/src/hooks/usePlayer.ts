@@ -1,10 +1,6 @@
-// The native port of web/web/hooks/usePlayer.ts.
-//
-// Owns tune-in state, status, volume, and the stall watchdog — but backed by
-// react-native-track-player instead of an <audio> element. Tunes the MP3 floor
-// by default; an optional stream format (validated upstream by useStreamFormat
-// against platform + station support) selects the Opus/FLAC/AAC mounts. The
-// base URL comes from StationContext, not a build-time env.
+// Tune-in state, status, volume and the stall watchdog, backed by
+// react-native-track-player. Base URL comes from StationContext; the stream
+// format is validated upstream by useStreamFormat.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import TrackPlayer, {
@@ -21,8 +17,7 @@ import type { StationApi } from '@/lib/api';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
-// Dev-build diagnostics for the audio pipeline (route handoffs, watchdog
-// reloads). No-op in Release.
+// Dev-build only; no-op in Release.
 function plog(msg: string) {
   if (__DEV__) console.log(`[player ${new Date().toISOString().slice(11, 23)}] ${msg}`);
 }
@@ -42,35 +37,25 @@ export interface Player {
 
 const WATCHDOG_MS = 6000;
 
-// Reconnect backoff for the error path, mirroring the web player. The first
-// retry stays quick (a blip mid-broadcast should recover in half a second),
-// but repeated failures double the delay up to a minute — a phone left tuned
-// to a downed station must not hammer reconnects twice a second all night.
+// Error-path reconnect backoff: doubles from 500ms to a 60s ceiling.
 const RECONNECT_BASE_MS = 500;
 const RECONNECT_MAX_MS = 60_000;
 
-// Buffering-churn guard. On a throttled network (stream stalls right after
-// each connect burst), the native player retries the SAME URL internally
-// every ~9s forever: each retry gets a fresh Icecast burst, so from here it
-// looks like quick Buffering→Playing flaps — each too short for the 6s
-// watchdog, and never a PlaybackError for the backoff to catch. Meanwhile
-// every abandoned connection lingers at the origin as a phantom listener
-// (2026-07-31: one device held ~35 Icecast slots this way). ExoPlayer can't
-// be configured out of this from JS, so we count entries into Buffering:
-// past CHURN_LIMIT inside CHURN_WINDOW_MS, force a full reload — a fresh
-// cache-busted URL that also releases the wedged native source. Tune-in and
-// a one-off mid-song stall stay well under the limit.
+// Buffering-churn guard. On a throttled network the native player retries the
+// same URL internally every ~9s forever — Buffering→Playing flaps too short
+// for the watchdog and with no PlaybackError, each abandoned connection
+// lingering at Icecast as a phantom listener. Past CHURN_LIMIT entries into
+// Buffering inside CHURN_WINDOW_MS, force a full reload to release the wedged
+// native source.
 const CHURN_WINDOW_MS = 60_000;
 const CHURN_LIMIT = 4;
 
 export function usePlayer(
   api: StationApi | null,
   initialVolume = 1,
-  // Device-level reachability (from useConnectivity), threaded in so a regained
-  // link triggers an immediate reconnect rather than waiting for the watchdog.
+  // From useConnectivity: a regained link reconnects immediately rather than
+  // waiting out the watchdog.
   isConnected: boolean | null = null,
-  // The Icecast mount to tune (already platform- and station-validated by
-  // useStreamFormat — this hook just uses it). Defaults to the MP3 floor.
   streamFormat: StreamFormat = 'mp3',
 ): Player {
   const [tunedIn, setTunedIn] = useState(false);
@@ -82,16 +67,12 @@ export function usePlayer(
   const apiRef = useRef(api);
   const formatRef = useRef(streamFormat);
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Consecutive failed reconnects since the last successful 'playing' — drives
-  // the exponential backoff below.
   const retryCount = useRef(0);
-  // Timestamps of recent entries into Buffering — the churn guard's window.
-  // Deliberately NOT reset on 'playing': brief recoveries between flaps are
-  // exactly what the guard exists to see through.
+  // Recent entries into Buffering. Not reset on 'playing': brief recoveries
+  // between flaps are what the churn guard exists to see through.
   const bufferFlapsRef = useRef<number[]>([]);
-  // Last raw PlaybackState, so the guard counts only Playing→Buffering stalls
-  // (a ref, not `status` from the closure — two quick events can land between
-  // renders and read a stale value).
+  // Last raw PlaybackState. A ref, not `status` from the closure — two quick
+  // events can land between renders and read a stale value.
   const lastPlaybackStateRef = useRef<State | null>(null);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
@@ -99,15 +80,13 @@ export function usePlayer(
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
 
-  // Apply volume to the player engine whenever it changes.
   useEffect(() => {
     TrackPlayer.setVolume(volume).catch(() => {});
   }, [volume]);
 
-  // Restore the listener's last-used volume (#828). AsyncStorage is async, so
-  // the knob renders at the default first and snaps to the stored level once
-  // the read lands. Persistence is gated on `hydrated` so the restoring
-  // setVolume can't race the persist effect and write the default back.
+  // Restore the last-used volume (#828). Persistence is gated on `hydrated` so
+  // the restoring setVolume can't race the persist effect and write the
+  // default back.
   const hydratedRef = useRef(false);
   useEffect(() => {
     let alive = true;
@@ -122,16 +101,14 @@ export function usePlayer(
     return () => { alive = false; };
   }, []);
 
-  // Persist volume on change, debounced so a knob drag (dozens of setVolume
-  // calls) collapses to one write.
+  // Debounced so a knob drag collapses to one write.
   useEffect(() => {
     if (!hydratedRef.current) return;
     const id = setTimeout(() => { void saveVolumePref(volume); }, 300);
     return () => clearTimeout(id);
   }, [volume]);
 
-  // Next error-path reconnect delay: 500ms doubling to a 60s ceiling, reset on
-  // the next successful 'playing' (and on a fresh tune / regained link).
+  // Reset on the next successful 'playing', a fresh tune, or a regained link.
   const nextRetryDelay = useCallback(() => {
     const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
     retryCount.current += 1;
@@ -158,8 +135,7 @@ export function usePlayer(
       await loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() });
       await TrackPlayer.setVolume(volume);
     } catch {
-      // A throw here may not surface as a PlaybackError event — re-arm
-      // ourselves, with backoff, so a dead origin keeps retrying (slowly).
+      // A throw here may not surface as a PlaybackError event, so re-arm here.
       if (tunedInRef.current) armWatchdogRef.current(nextRetryDelay());
     }
   }, [clearWatchdog, volume, nextRetryDelay]);
@@ -175,12 +151,9 @@ export function usePlayer(
   useEffect(() => { armWatchdogRef.current = armWatchdog; }, [armWatchdog]);
 
   // Drive `status` from RNTP playback state + reconnect on error/stall.
-  //
-  // RemotePause/RemoteStop are handled HERE, not just in service.ts: on live
-  // radio a lock-screen/notification pause means "tune out", but the Stopped/
-  // Ended state it produces is indistinguishable from a stream failure — so
-  // without this, the watchdog "recovered" the stream 500ms after the user
-  // paused from the notification and the radio would not stay stopped.
+  // RemotePause/RemoteStop are handled here as well as in service.ts: the
+  // Stopped/Ended state a lock-screen pause produces is indistinguishable from
+  // a stream failure, so without this the watchdog reconnects 500ms later.
   useTrackPlayerEvents(
     [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop],
     (event) => {
@@ -190,9 +163,9 @@ export function usePlayer(
         }`,
       );
       if (event.type === Event.RemotePause || event.type === Event.RemoteStop) {
-        // Listener-initiated, from the OS — a tune-out, not a failure. The ref
-        // flips synchronously so the trailing Stopped event (which can land
-        // before the re-render) can't re-arm the watchdog.
+        // A tune-out, not a failure. The ref flips synchronously so the
+        // trailing Stopped event can't re-arm the watchdog before the
+        // re-render.
         clearWatchdog();
         retryCount.current = 0;
         bufferFlapsRef.current = [];
@@ -216,19 +189,18 @@ export function usePlayer(
         clearWatchdog();
         retryCount.current = 0;
         setStatus('playing');
-        // A lock-screen Play after a remote tune-out resumes via service.ts
-        // without touching this hook — re-adopt so the UI matches the audio.
-        // getLastLiveMeta() is null after an in-app stop (teardown), which
-        // keeps a stale in-flight Playing event from resurrecting tunedIn.
+        // A lock-screen Play resumes via service.ts without touching this
+        // hook; re-adopt so the UI matches the audio. getLastLiveMeta() is
+        // null after an in-app stop, so a stale Playing event can't resurrect
+        // tunedIn.
         if (!tunedInRef.current && getLastLiveMeta()) {
           tunedInRef.current = true;
           setTunedIn(true);
         }
       } else if (state === State.Buffering || state === State.Loading) {
         setStatus((s) => (s === 'playing' ? 'connecting' : s));
-        // Churn guard (see CHURN_* above). Only stalls out of Playing count —
-        // tune-in and watchdog reloads enter Loading without a preceding
-        // Playing, so they never feed the window.
+        // Churn guard: only stalls out of Playing count, so tune-in and
+        // watchdog reloads never feed the window.
         if (prevState === State.Playing && tunedInRef.current) {
           const now = Date.now();
           const flaps = bufferFlapsRef.current.filter((t) => now - t < CHURN_WINDOW_MS);
@@ -251,48 +223,38 @@ export function usePlayer(
     },
   );
 
-  // iOS audio-route changes. When the device we were playing to goes away
-  // (reason oldDeviceUnavailable: Bluetooth speaker powered off, CarPlay
-  // disconnected, headphones unplugged), treat it as a tune-out (#992). The
-  // longFormAudio session policy that keeps AirPlay routes sticky (see
-  // player.ts) also keeps AVPlayer "playing" to the vanished route — silent
-  // audio with the Icecast socket held open, a phantom listener. Every other
-  // reason is deliberately left alone: newDeviceAvailable / override /
-  // routeConfigurationChange are the AirPlay/HomePod handoffs that must keep
-  // playing (the 0b060a3a behavior). Also the dev-build forensic trail for
-  // route/handoff issues.
+  // iOS: an oldDeviceUnavailable route change (Bluetooth speaker off, CarPlay
+  // disconnected, headphones unplugged) is a tune-out (#992) — the
+  // longFormAudio session policy keeps AVPlayer "playing" to the vanished
+  // route, holding the Icecast socket open as a phantom listener. Every other
+  // reason must keep playing: newDeviceAvailable / override /
+  // routeConfigurationChange are the AirPlay/HomePod handoffs.
   useEffect(() => {
     const sub = addAudioRouteChangeListener((e) => {
       plog(`route change reason=${e.reason} outputs=${e.outputs}`);
       if (e.reason !== ROUTE_REASON_OLD_DEVICE_UNAVAILABLE || !tunedInRef.current) return;
-      // Same synchronous flip as the RemotePause handler above — the ref must
-      // read false before the trailing Stopped event lands, or the watchdog
-      // "recovers" the stream and the phantom listener is back.
+      // Same synchronous ref flip as the RemotePause handler above.
       clearWatchdog();
       retryCount.current = 0;
       bufferFlapsRef.current = [];
       tunedInRef.current = false;
       setTunedIn(false);
       setStatus('idle');
-      // stop() (not pause) unloads the item, so the stream connection drops
-      // and the listener count clears. lastLiveMeta survives (only teardown
-      // clears it), so a later Play resumes at the live edge via service.ts.
+      // stop(), not pause: unloads the item so the Icecast connection drops.
+      // lastLiveMeta survives (only teardown clears it) so a later Play
+      // resumes at the live edge via service.ts.
       TrackPlayer.stop().catch(() => {});
     });
     return () => sub?.remove();
   }, [clearWatchdog]);
 
-  // Proactive reconnect: when the device link returns (false → true) while
-  // we're tuned in but not already playing, reconnect immediately instead of
-  // waiting up to WATCHDOG_MS for the stall watchdog. The watchdog still covers
-  // stream-side deaths where the link never dropped. Keyed on the connectivity
-  // transition, so a steady-state `true` never fires it.
+  // Keyed on the false → true transition so a steady-state `true` never fires
+  // it. The watchdog still covers stream-side deaths where the link held.
   const prevConnectedRef = useRef(isConnected);
   useEffect(() => {
     const prev = prevConnectedRef.current;
     prevConnectedRef.current = isConnected;
     if (prev === false && isConnected === true && tunedInRef.current && status !== 'playing') {
-      // Fresh network — let the backoff start small again.
       retryCount.current = 0;
       reconnect();
     }
@@ -306,12 +268,10 @@ export function usePlayer(
     teardown().catch(() => {});
   }, [clearWatchdog]);
 
-  // When the station changes out from under us (switch / add / sign-out),
-  // selectStation has already torn the old stream down at the RNTP level —
-  // drop our local tuned-in state to match so the UI doesn't claim "on air"
-  // over dead audio. (RNTP lands in State.None after reset(); the event
-  // handler above deliberately ignores None because reset() also fires that
-  // mid tune-in and mid reconnect.)
+  // On a station switch selectStation has already torn the stream down at the
+  // RNTP level; drop local tuned-in state so the UI doesn't claim "on air"
+  // over dead audio. (The event handler ignores State.None because reset()
+  // also fires it mid tune-in and mid reconnect.)
   const prevBaseRef = useRef(api?.base ?? null);
   useEffect(() => {
     const nextBase = api?.base ?? null;
@@ -320,11 +280,8 @@ export function usePlayer(
     if (tunedInRef.current) stop();
   }, [api, stop]);
 
-  // Format change mid-listen — retune onto the new mount in place. Covers both
-  // a fresh pick in the format drawer and the effective format snapping back
-  // to MP3 when the station stops advertising the chosen mount. Keyed on the
-  // transition (like the station-change effect above) so a steady value never
-  // reloads the stream.
+  // Retune onto a new mount in place. Keyed on the transition so a steady
+  // value never reloads the stream.
   const prevFormatRef = useRef(streamFormat);
   useEffect(() => {
     if (prevFormatRef.current === streamFormat) return;
@@ -341,7 +298,6 @@ export function usePlayer(
     }
     const a = apiRef.current;
     if (!a) return;
-    // A fresh tune-in restarts the backoff ladder and the churn window.
     retryCount.current = 0;
     bufferFlapsRef.current = [];
     setTunedIn(true);
@@ -365,7 +321,6 @@ export function usePlayer(
     });
   }, []);
 
-  // Tear down on unmount of the owning screen.
   useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
   return {

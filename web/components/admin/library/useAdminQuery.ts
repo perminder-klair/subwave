@@ -19,6 +19,14 @@ export type { AdminFetch } from '../../../lib/admin-query';
 export interface AdminQueryOpts<T> {
   key: readonly unknown[];
   path: string | (() => string);
+  /**
+   * Request options for a read the controller only exposes as a POST — one
+   * whose inputs are too big for a query string (see `/library/scenes/
+   * references`). Omit it and this is the GET it has always been; the hook
+   * still owns the fetcher, the AbortSignal and `parse`, so a POST read does
+   * not need a second hook beside this one.
+   */
+  init?: RequestInit;
   enabled?: boolean;
   staleTime?: number;
   refetchInterval?: number | false;
@@ -37,7 +45,7 @@ export interface AdminQueryOpts<T> {
 }
 
 export function useAdminQuery<T>({
-  key, path, enabled = true, staleTime, refetchInterval, toastOnError = false, parse,
+  key, path, init, enabled = true, staleTime, refetchInterval, toastOnError = false, parse,
 }: AdminQueryOpts<T>): UseQueryResult<T> {
   const { adminFetch, ready } = useLibrary();
   return useSharedAdminQuery({
@@ -45,7 +53,7 @@ export function useAdminQuery<T>({
     adminFetch,
     request: async (fetcher, signal) => {
       const p = typeof path === 'function' ? path() : path;
-      const raw = await adminJson<unknown>(fetcher, p, undefined, signal);
+      const raw = await adminJson<unknown>(fetcher, p, init, signal);
       return (parse ? parse(raw) : raw) as T;
     },
     enabled: enabled && ready,

@@ -1,8 +1,6 @@
-// In-app AirPlay button (iOS only). Renders the native AVRoutePickerView; on
-// Android this exports a component that renders nothing — output routing there
-// is Google Cast's job (see src/hooks/useCast.ts). Also exposes the audio
-// route-change stream (AVAudioSession.routeChangeNotification) for
-// route-aware playback behaviour.
+// In-app AirPlay button (iOS only): the native AVRoutePickerView, rendering
+// nothing on Android where output routing is Google Cast's job. Also exposes
+// the AVAudioSession route-change stream.
 
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import type { ComponentType } from 'react';
@@ -26,11 +24,9 @@ export default function AirplayButton(props: AirplayButtonProps) {
   return <NativeView {...props} />;
 }
 
-/** AVAudioSession.RouteChangeReason.oldDeviceUnavailable — the output device
- *  the session was playing to went away (Bluetooth speaker powered off,
- *  CarPlay disconnected, headphones unplugged). The one route-change reason
- *  that means "pause"; every other reason is a handoff or reconfiguration to
- *  keep playing through. */
+/** AVAudioSession.RouteChangeReason.oldDeviceUnavailable: the output device
+ *  went away. The one reason that means "pause"; every other one is a handoff
+ *  or reconfiguration to keep playing through. */
 export const ROUTE_REASON_OLD_DEVICE_UNAVAILABLE = 2;
 
 export interface AudioRouteChange {
@@ -51,8 +47,8 @@ export function addAudioRouteChangeListener(
   listener: (event: AudioRouteChange) => void,
 ): RouteSubscription | null {
   if (Platform.OS !== 'ios') return null;
-  // NativeModule instances are EventEmitters in the Expo Modules API; the
-  // generic module type just doesn't carry our event map, hence the cast.
+  // NativeModule instances are EventEmitters; the generic type doesn't carry
+  // our event map, hence the cast.
   const mod = requireNativeModule('AirplayRoutePicker') as unknown as {
     addListener(event: 'onAudioRouteChange', fn: (e: AudioRouteChange) => void): RouteSubscription;
   };

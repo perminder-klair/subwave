@@ -34,14 +34,14 @@ export function ColorChip({ color, className }: { color: string | null; classNam
   );
 }
 
-export interface SlotOption {
-  key: string;
+export interface SlotOption<T extends string | null = string> {
+  key: T;
   label: ReactNode;
   chipColor?: string | null;
 }
 
 /** The sentence-editor "slot": an underlined value with a ▾ caret opening a menu. */
-export function SlotMenu({
+export function SlotMenu<T extends string | null = string>({
   label,
   chipColor,
   options,
@@ -53,8 +53,8 @@ export function SlotMenu({
   label: ReactNode;
   /** Set (even to null) to lead the value with a colour chip. */
   chipColor?: string | null;
-  options: SlotOption[];
-  onSelect: (key: string) => void;
+  options: SlotOption<T>[];
+  onSelect: (key: T) => void;
   disabled?: boolean;
   ariaLabel: string;
   className?: string;
@@ -80,7 +80,7 @@ export function SlotMenu({
       <DropdownMenuContent align="start" className="max-h-80 min-w-[9rem] overflow-y-auto">
         <DropdownMenuGroup>
           {options.map(o => (
-            <DropdownMenuItem key={o.key} onClick={() => onSelect(o.key)}>
+            <DropdownMenuItem key={o.key ?? '__default__'} onClick={() => onSelect(o.key)}>
               {o.chipColor !== undefined && <ColorChip color={o.chipColor} />}
               {o.label}
             </DropdownMenuItem>

@@ -35,10 +35,13 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
-import { effectiveShowNoRepeatWindow } from '../music/show-recency.js';
+import { showNoRepeatGuard } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
+import { runAlbumGuard } from './dj-agent/album-guard.js';
+import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
+import type { TransitionEffect } from '../settings/vocab.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed } from './clock-policy.js';
@@ -53,8 +56,6 @@ import {
 import { dropEchoedLink, enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
 import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js';
-import { buildLinkClause } from './dj-agent/link-clause.js';
-import { announceLine } from './announce-line.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
@@ -77,13 +78,13 @@ export { pickerAgent, requestAgent } from './dj-agent/agents.js';
 // candidates (`seen`), with the id constrained to that exact set — z.enum
 // becomes a decode-time grammar on local models and a Zod reject elsewhere,
 // the same closing move pickNextTrack already uses. Returns a full pick object
-// (id/reason/say/transition) or null; never throws, so a salvage failure falls
+// (id/reason/transition) or null; never throws, so a salvage failure falls
 // through to the caller's pick.rejected path unchanged.
 // `reason`, when given, replaces the default "you returned a bad id" framing —
-// the back-to-back artist guard (#1124) reuses this same constrained re-pick
-// but for a valid pick it wants to swap off the on-air artist, so the bad-id
+// the pick-anchor artist guard (#1124) reuses this same constrained re-pick
+// but for a valid pick it wants to swap off the anchor artist, so the bad-id
 // wording would be false and confuse the model.
-async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
+async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const schema = modelTolerant(pickSchemaBase().extend({
@@ -106,10 +107,7 @@ async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistRe
       // favourites-aware run this salvages.
       system: pickSystem(showAt, playlistResolved),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\n${why}`
-        + (wantLink
-            ? ' Write the "say" link for the track you choose, following the same rules.'
-            : ' Set "say" to null.'),
+        + `\n\n${why}`,
       schema,
       temperature: 0.5,
       kind: 'djAgentRepick',
@@ -163,7 +161,7 @@ async function repickRequestFromSeen({ seen, badId, requester, text }:
 // (#1187) — the agent's own run needs neither. They're the same values
 // runTrackEvent hands the ordinary pool fallback, so a rescued pick is built
 // from exactly the pool a failed agent run would have produced.
-async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, current = null, showAt = null, rankTarget = null, linkAirAt = null }: { wantLink: boolean; audioWaypoint?: number[] | null; current?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null; linkAirAt?: Date | null }): Promise<boolean> {
+async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAnchor = null, showAt = null, rankTarget = null }: { wantLink: boolean; audioWaypoint?: number[] | null; pickAnchor?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null }): Promise<boolean> {
   await library.load();
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total` (TAGGED tracks only) — see the same
@@ -239,12 +237,17 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     ? (activeShow.vocals as VocalMode)
     : null;
 
+  // The show's own minimum track length (#1573) — resolved here rather than at
+  // the pickerScope call below because the guard counts the rotation this floor
+  // has already thinned; the scope reads the same value further down.
+  const minTrackSec = settings.effectiveMinTrackSec(activeShow);
+
   // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
   // and (unlike recentIds/recentKeys above) this survives the tool-level
   // starvation cascade. A resolved strict playlist is its own catalogue, so
   // clamp to its real identity count using the same resolved genre lock as the
   // tools; 0 leaves the relaxable window in charge.
-  const effN = effectiveShowNoRepeatWindow(
+  const effN = showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
     {
@@ -252,8 +255,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
       playlistTracks,
       excludedIds,
       resolvedGenres: genreLock ?? [],
+      minTrackSec,
     },
-  );
+  ).window;
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // A pinned anchor that resolves to nothing (deleted/recreated playlist →
   // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
@@ -281,6 +285,13 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     moodLock,
     energyLock,
     vocalLock,
+    // Minimum track length (#1573) — the show's own floor when it sets one,
+    // else the station default. NOT gated on `strict`, unlike the five locks
+    // above: this is the twin of the max-track-length cap, which every show
+    // gets whether or not it opted into strict filters. The pool picker
+    // resolves the identical figure from the identical show object, so the two
+    // paths cannot disagree about how short is too short.
+    minTrackSec,
     playlistLock,
     playlistTracks,
     excludedIds,
@@ -318,7 +329,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     }
   }
   if (!song && extras.seen.size) {
-    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink, showAt, playlistResolved: !!playlistTracks?.length });
+    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, showAt, playlistResolved: !!playlistTracks?.length });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
       queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -340,7 +351,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     // lives in util/pick-seed.ts, never inline.
     const failure = classifyPickFailure({
       pickedId: object?.id ?? null,
-      seedId: current?.id ?? null,
+      seedId: pickAnchor?.id ?? null,
       candidates: extras.seen.size,
       // Real discovery calls only (flattenToolCalls drops the synthetic
       // `done`), so a zero here means the model never explored — which must
@@ -357,17 +368,17 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     throw Object.assign(new Error(failure.message), { pickFailure: failure });
   }
 
-  // Back-to-back artist guard (#1124). The discovery tools return a tight
-  // cluster around the current track — frequently a run of the SAME artist — and
+  // Pick-anchor artist guard (#1124). The discovery tools return a tight
+  // cluster around the pick anchor — frequently a run of the SAME artist — and
   // the agent path carries no recentArtists/maxPerArtist filter, because an
   // artist strip inside the tools gutted the similarity pool to ~1 survivor on
   // niche catalogues (#618). So variety is enforced at the point of choice: if
-  // the pick repeats the on-air artist and the run surfaced any other-artist
+  // the pick repeats the anchor artist and the run surfaced any other-artist
   // candidate, re-pick from just those (a constrained djObject over the run's
   // own `seen`, so it still reasons about flow and writes a coherent link).
   //
   // When that isn't possible, do NOT relax yet (#1187). `seen` is the RUN's view,
-  // not the library's — tracksLikeThis answering with eight tracks by the on-air
+  // not the library's — tracksLikeThis answering with eight tracks by the anchor
   // artist while no other tool contributed leaves it single-artist on a 50k
   // catalogue, and reading that as "no alternative exists" is the false negative
   // that put the repeats back on air. Ask the fallback pool for a pick that hard-
@@ -378,7 +389,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // Both sides of the comparison, and the alternative set, are keyed on the LEAD
   // artist (#1251), so "Marvin Gaye & Tammi Terrell" can't walk past a guard on
   // "Marvin Gaye". The alternatives also step around the artists of the last few
-  // plays, because a re-pick that knows only the on-air artist keeps returning to
+  // plays, because a re-pick that knows only the anchor artist keeps returning to
   // whoever ranks next-highest — the every-other-slot repeat this guard exists
   // to prevent.
   //
@@ -386,22 +397,25 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // narrowed the re-pick pool, so the guard never fired on a pick three slots
   // after the same artist and the window was never consulted — every occurrence
   // legal, and the same artist across a whole morning show. The two causes are
-  // escalated differently on purpose (see below): back-to-back is a fault worth
-  // a pool rescue, spacing is a preference that yields to the run.
+  // escalated differently on purpose (see below): an anchor match is worth a
+  // pool rescue, while spacing is a preference that yields to the run.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  // Read once: the album guard below steps around the same neighbours, and two
+  // reads of a live queue across two awaits could disagree.
+  const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
   const guarded = await runArtistGuard<any>({
-    song, object, current,
+    song, object, pickAnchor,
     seen: extras.seen,
     // Every queue read stays here; the policy module is handed values only.
-    recentRoots: queue.neighbourArtistRoots(varietyWindow),
+    recentRoots: neighbourRoots,
     window: varietyWindow,
     repick: (alt, reason) => repickFromSeen({
-      seen: alt, badId: null, wantLink, showAt,
+      seen: alt, badId: null, showAt,
       playlistResolved: !!playlistTracks?.length,
       reason,
     }),
     poolRescue: (avoidArtist) => pickViaPool(
-      queue, ctx, { wantLink, current, showAt }, rankTarget, audioWaypoint,
+      queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint,
       { avoidArtist },
     ),
     log: (line) => queue.log('picker', line),
@@ -415,36 +429,68 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     song = guarded.song;
   }
 
-  let rawSay = typeof object.say === 'string' ? object.say.trim() : '';
-  // Announce mode: the model's `say` only signals "speak" — the exact line
-  // (and its alternation with whatever aired before it) is composed in code
-  // by announce-line.ts, because a model cannot reliably hold to a fixed
-  // string and cannot alternate with a line it is never shown. Silence stays
-  // the model's call; wording never is.
+  // Album cooldown (#1485 FR 3), at the same point of choice and for the same
+  // reason: the discovery tools carry no album filter (#618), and around an
+  // album track `tracksLikeThis` frequently answers with that album.
   //
-  // Resolved off the ON-AIR persona, not the wall-clock effective one: this
-  // line is spoken by whoever enqueuePick pins it to (session.onAirPersona()),
-  // and inside the handoff look-ahead those two disagree — the incoming DJ's
-  // line would otherwise be written under the outgoing DJ's link contract.
-  // An empty compose means no English/Latin frame fits this persona or artist
-  // (announce-line.ts): the model's own line stands, written under the same
-  // fixed-form schema description and its language directives.
-  const linkSpeaker = session.onAirPersona();
-  if (rawSay && settings.announceLinks(linkSpeaker)) {
-    const composed = announceLine(song.artist, linkSpeaker, { lastLine: queue.getLastLinkText() });
-    if (composed) rawSay = composed;
+  // AFTER the artist guard, on whatever pick it left standing — an album
+  // re-pick that ran first could be reverted by the artist guard straight back
+  // onto a recent album, since the artist guard knows nothing about records.
+  // Nothing to do on a 'rescued' slot: that pick came from the pool, which
+  // applies this same cooldown itself.
+  //
+  // Zero cost when off (the default): albumHours 0 makes recentAlbumKeys empty
+  // and the guard is skipped outright, so no queue walk and no branch taken.
+  const albumHours = Number(settings.get().picker?.albumHours) || 0;
+  if (albumHours > 0) {
+    const albumGuarded = await runAlbumGuard<any>({
+      song, object,
+      seen: extras.seen,
+      recentAlbums: queue.recentAlbumKeys(albumHours),
+      avoidArtistRoots: neighbourRoots,
+      // The run's `seen` values are the MODEL's projection and carry no
+      // compilation flags (adding them would put them in a re-pick prompt), so
+      // the key is resolved against the library — the same resolver the pool
+      // path's filter uses, which is what makes the two paths agree.
+      albumKeyOf: albumKeyFor,
+      hours: albumHours,
+      repick: (alt, reason) => repickFromSeen({
+        seen: alt, badId: null, showAt,
+        playlistResolved: !!playlistTracks?.length,
+        reason,
+      }),
+      log: (line) => queue.log('picker', line),
+      logEvent,
+    });
+    if (albumGuarded.kind === 'repicked') {
+      object = albumGuarded.object;
+      song = albumGuarded.song;
+    }
   }
-  // Talk-within-the-intro (feature 3a): enqueuePick re-applies this trim at
-  // the chokepoint (near-idempotent — see the note there); it runs here too so
-  // the session turn below records the line as it will actually air — trimmed,
-  // and dropped links as null, never a line the listeners didn't hear.
-  // dropEchoedLink rides along for the same invariant: the echo guard also runs
-  // at the chokepoint, but a link nulled only in there would leave `meta.say`
-  // below quoting text no listener ever heard.
-  const say = dropEchoedLink(trimLinkToIntro(rawSay, song), queue) || '';
-  // Transition effects on this pick (persona djMode via settings.effectsActive),
-  // independent of whether a link airs.
-  const link = (wantLink && say) ? say : null;
+
+  // The picker has seen private selection context. Only after its final choice
+  // do we invoke the isolated listener-facing writer with safe prompt data.
+  // Recompute its expected air clock here, after discovery and both guards:
+  // an agent tool loop can spend enough of the runway to make the cycle-level
+  // estimate stale before this separate model call even begins.
+  const clockAllowed = speakClockAllowed();
+  const linkAirAt = clockAllowed ? linkClockAt(showAt, Date.now()) : null;
+  let rawLink = '';
+  if (wantLink && pickAnchor) {
+    try {
+      rawLink = await dj.generateLink({
+        previous: pickAnchor, current: song, context: linkAirContext(ctx, linkAirAt),
+        clockIsAirTime: !!linkAirAt, persona: session.onAirPersona(),
+        recap: queue.getDjRecap(), recentTracks: queue.getRecentTracks(),
+        recentOpeners: queue.getRecentOpeners(),
+        lastLink: queue.getLastLinkText(),
+      });
+    } catch (err: any) {
+      queue.log('error', `DJ link failed: ${err.message}`);
+    }
+  }
+  const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
+  const link = say || null;
   const fxActive = settings.effectsActive();
   // The no-FX schema tells the model to leave transition null, but a model can
   // ignore a field description — say so in the log instead of discarding
@@ -452,17 +498,29 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   if (!fxActive && object.transition && object.transition !== 'normal') {
     queue.log('mix', `transition "${object.transition}" ignored (persona not in DJ mode)`);
   }
-  const sweep = fxActive && object.transition === 'sweep';
-  const washout = fxActive && object.transition === 'washout';
-  const blend = fxActive && object.transition === 'blend';
-  const dissolve = fxActive && object.transition === 'dissolve';
-  const chop = fxActive && object.transition === 'chop';
-  const loop = fxActive && object.transition === 'loop';
+  // Per-effect operator switch (#1565). The agent's PICK_SCHEMA keeps the full
+  // enum whatever the switches say — it is session-anchored, so narrowing it
+  // mid-conversation would contradict the history already in it — and the
+  // prompt guidance names what is off. A model that reaches for a switched-off
+  // gesture anyway is logged for the same reason as the DJ-mode case above,
+  // rather than being dropped in silence.
+  if (fxActive && object.transition && object.transition !== 'normal'
+    && !settings.effectEnabled(object.transition as TransitionEffect)) {
+    queue.log('mix', `transition "${object.transition}" ignored (switched off in settings)`);
+  }
+  const wants = (kind: TransitionEffect) =>
+    fxActive && object.transition === kind && settings.effectEnabled(kind);
+  const sweep = wants('sweep');
+  const washout = wants('washout');
+  const blend = wants('blend');
+  const dissolve = wants('dissolve');
+  const chop = wants('chop');
+  const loop = wants('loop');
   // Attach the link to the pick so it airs as the pick starts (back-announcing
-  // the track on-air now), instead of immediately over that on-air track (#189).
-  // Stamp `current` as the link's back-announce target so the queue can drop the
-  // link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, current, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkAirAt });
+  // the captured pick anchor), instead of immediately over the current track (#189).
+  // Stamp `pickAnchor` as the link's intended back-announce target so the queue
+  // can drop the link if a request jumps ahead of this pick before it airs.
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed) });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -506,9 +564,9 @@ function linkAirContext(ctx: any, airAt: Date | null) {
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
-async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { wantLink: boolean; current?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
+async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
-  // tempo/key target instead of the current track. null → today's behaviour.
+  // tempo/key target instead of the pick-cycle anchor. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
   // run's current waypoint vector, drifting the pool toward the destination.
   const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint, opts);
@@ -517,15 +575,17 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
     return 'empty';
   }
   // Build the between-track link BEFORE enqueueing so it can ride on the queued
-  // item and air when the pick starts. It back-announces the track on-air right
-  // now (`current`) and leads into the pick — because by the time it airs,
-  // `current` will have just ended and the pick will be starting (#189).
+  // item and air when the pick starts. It back-announces the captured
+  // `pickAnchor` and leads into the pick — that track is the selection's
+  // intended predecessor, and the queue drops a stale back-announce if the
+  // actual FIFO predecessor changes.
   let link: string | null = null;
   // Resolved HERE rather than up in runTrackEvent: the pick call above has
   // already spent part of the runway, and linkClockAt reads the live clock, so
   // asking now is the most honest the forecast can be on this path (#1314).
+  const clockAllowed = speakClockAllowed();
   const airAt = linkClockAt(showAt, Date.now());
-  if (wantLink && current) {
+  if (wantLink && pickAnchor) {
     try {
       link = await dj.generateLink({
         // ctx with the clock stepped to the link's air moment — showAt's own
@@ -534,8 +594,8 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         // left for it to hold may the link speak the clock at all (issue #864:
         // generation-time clocks aired a track late; #1314: forecast clocks
         // aired a filler track early).
-        previous: current, current: result.song, context: linkAirContext(ctx, airAt),
-        clockIsAirTime: !!airAt,
+        previous: pickAnchor, current: result.song, context: linkAirContext(ctx, airAt),
+        clockIsAirTime: !!airAt && clockAllowed,
         // Name the speaker explicitly. Left unset, scripts.generateLink falls
         // back to getEffectivePersona() on the wall clock, which disagrees with
         // the session inside the look-ahead window — the incoming DJ's line
@@ -560,17 +620,24 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // time like the agent path does — the queue would strip a stale flag anyway
   // (applyMixTransition's dj-mode-off strip), but not stamping it keeps the
   // pick log honest.
+  // The per-effect switches (#1565) are re-checked here for the same reason as
+  // effectsActive: pickNextTrack already narrowed the enum it offered, but the
+  // pick and the enqueue are separated by a model call, so a switch flipped in
+  // between must not reach the annotation.
   const fxActive = settings.effectsActive();
+  const wants = (kind: TransitionEffect) =>
+    fxActive && result.transition === kind && settings.effectEnabled(kind);
   const fx = {
-    sweep: fxActive && result.transition === 'sweep',
-    washout: fxActive && result.transition === 'washout',
-    blend: fxActive && result.transition === 'blend',
-    dissolve: fxActive && result.transition === 'dissolve',
-    chop: fxActive && result.transition === 'chop',
-    loop: fxActive && result.transition === 'loop',
+    sweep: wants('sweep'),
+    washout: wants('washout'),
+    blend: wants('blend'),
+    dissolve: wants('dissolve'),
+    chop: wants('chop'),
+    loop: wants('loop'),
   };
-  // `current` is the link's back-announce target (passed to generateLink as
-  // `previous`); stamp it so the queue drops the link if a request jumps ahead.
+  // `pickAnchor` is the link's intended back-announce target (passed to
+  // generateLink as `previous`); stamp it so the queue drops the link if a
+  // request jumps ahead.
   //
   // The clock stamp is what linkClockDrifted (queue/pure.ts) drops a link on
   // when the real seam lands far from the forecast — so it must only be set
@@ -580,8 +647,8 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // whole link to protect a clock that isn't in it. Gated on the STAMP rather
   // than on `airAt` itself, so linkAirContext still steps the daypart tags to
   // air time — "after dark" stays accurate even when the numerals are withheld.
-  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx, {
-    linkClockAt: linkClockStampFor(airAt, speakClockAllowed()),
+  const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, pickAnchor, fx, {
+    linkClockAt: linkClockStampFor(airAt, clockAllowed),
   });
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
@@ -613,18 +680,16 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
 // the matching `showAt` clock, so both pick paths follow the show that will
 // actually be on air when the pick plays. `showAt` null → resolve at now,
 // exactly the pre-look-ahead behaviour.
-// `predecessor`/`prior` (feature: pair-aware transitions): when the pick is
-// fired by the pair-drain deadline, the track it will FOLLOW is the held
-// queue item — not queue.current, which is one track earlier at that moment.
-// The override flows everywhere the predecessor matters: the event text, the
-// mini-run anchor, the pool re-rank, and the link's back-announce target
-// (linkPrev). `prior` is the track before the predecessor (the on-air track
-// at deadline time). Omitted → queue.current/history, today's behaviour.
-export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, predecessor = null, prior = null }: {
+// `pickAnchor` is the selection snapshot captured when a pair-drain deadline
+// starts a pick — usually the held queue head, not a promise that it remains the
+// FIFO predecessor across later awaits. The anchor flows through the event,
+// mini-run, pool re-rank and link back-announce target. `anchorPrior` supplies
+// its context. Omitted means the cycle anchors to queue.current/history.
+export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickAnchor = null, anchorPrior = null }: {
   wantLink: boolean;
   showAt?: Date | null;
-  predecessor?: any | null;
-  prior?: any | null;
+  pickAnchor?: any | null;
+  anchorPrior?: any | null;
 }) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
     // Daily token cap. At the hard cap we make NO model call: skip the pick and
@@ -644,34 +709,20 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     // exactly what a "stay silent" pick has always cost.
     wantLink = wantLink && !cheap && autoVoiceAllowed();
 
-    const current = predecessor ?? queue.current?.track ?? null;
-    const previous = predecessor ? (prior ?? null) : (queue.history[0]?.track ?? null);
+    const explicitPickAnchor = pickAnchor != null;
+    pickAnchor = pickAnchor ?? queue.current?.track ?? null;
+    const anchorPriorTrack = explicitPickAnchor ? (anchorPrior ?? null) : (queue.history[0]?.track ?? null);
     const djMode = !!settings.getEffectivePersona()?.djMode;
-    // On-air persona, not the wall-clock effective one — same reason as the
-    // announce compose in pickViaAgent: the link belongs to whoever speaks it.
-    const announce = settings.announceLinks(session.onAirPersona());
-
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
     // waypoint for the pool's audio anchor.
-    const { rankTarget, audioWaypoint } = advanceRun(djMode, current);
+    const { rankTarget, audioWaypoint } = advanceRun(djMode, pickAnchor);
     const inRun = runActive();
 
-    // In DJ mode the link TEASES the next track — artist or feel — rather than
-    // just announcing it. The agent already knows its own pick when it writes
-    // `say`, so this costs nothing extra.
-    //
-    // FORWARD-LOOKING only, never a back-announce: the link airs when the pick
-    // starts, but a listener request can slip ahead in the meantime, so naming
-    // what "just played" goes stale. Introducing the pick is correct whatever
-    // aired before it.
-    //
-    // The "nod to it in the link" half is gated on wantLink, so a silent mid-run
-    // pick isn't told it may phrase something in a link that won't exist. The
-    // energy-direction guidance is pick selection, so it stays unconditional.
+    // Selection steering stays in this prompt, but it no longer shares a
+    // response schema with listener speech.
     const runClause = inRun
       ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
-        + (wantLink ? ' You may nod to it in the link, but never say tempo numbers.' : '')
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
@@ -679,59 +730,6 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     const journeyClause = audioWaypoint && audioWaypoint.length
       ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
       : '';
-    // Opener variety for the link. The free-text pool path gets a rotating angle
-    // + an anti-repeat opener list via decoratePrompt; the agent `say` path
-    // didn't, so its links settled into the same shape ("here's…", "coming
-    // up…"). Feed it the same two signals through the event message: one random
-    // forward-looking angle to vary the approach, and the recent openers to
-    // steer clear of. Only when a link is actually being written.
-    //
-    // Announce mode skips both: alternating between exactly two fixed forms
-    // ("This is <artist>." / "Next up, <artist>.") IS the variety, and an
-    // opener blocklist built from those same two forms would eventually
-    // forbid both allowed ones (the bug this feature exists to fix).
-    const linkAngle = wantLink && !announce ? dj.pickAngle('link') : null;
-    const recentOpeners = wantLink && !announce ? queue.getRecentOpeners() : [];
-    // Clock discipline for the link (#864). The agent path carries no clock of
-    // its own, so the model extrapolates one from stale stamped lines in its
-    // session window — and the link then airs a full track later, putting spoken
-    // times 10-20 minutes behind.
-    //
-    // With the look-ahead resolved (showAt) the air moment is knowable, but
-    // showAt's clock carries the show-attribution padding and ran two minutes
-    // FAST (#1282), so step it back to air time via linkAirDate before handing
-    // it over as the only time the link may speak. Without the look-ahead, ban
-    // the clock outright. linkClockAt bans it once more (#1314): with too little
-    // of the on-air track left for this round to land before the seam, the
-    // forecast is a coin flip and would name the wrong time for a whole filler
-    // track.
-    //
-    // The station may also be set to keep the clock out entirely
-    // (broadcast/clock-policy.ts). That is a different question from the
-    // accuracy cases above: off wins over accurate, and it gets its own clause,
-    // because "you can't know when it airs" explains a reason that no longer
-    // applies. This clause and the `say` schema description are the ONLY clock
-    // the agent path ever sees — it never builds context lines — so the ban has
-    // to be stated here or it does not reach the model at all.
-    const clockOff = !speakClockAllowed();
-    const airAt = clockOff ? null : linkClockAt(showAt, Date.now());
-    const airClock = airAt && ctx?.clock?.hhmm ? getClockContext(airAt) : null;
-    const clockClause = wantLink
-      ? (clockOff
-          ? ` Never state the clock time, the hour, or the time of day in the link.`
-          : airClock
-            ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
-            : ` Never state the clock time in the link — you can't know exactly when it airs.`)
-      : '';
-    // The full link contract (introduce the pick, no back-announce, vary the
-    // opener — or, in announce mode, the fixed two-form contract) lives in the
-    // "say" schema description (pickSchemaBase), which travels on every call —
-    // this clause only TRIGGERS the link and carries the per-pick extras the
-    // schema can't know (the intro_ms budget, the opener blocklist). Restating
-    // the contract here doubled it per pick. See dj-agent/link-clause.ts.
-    const linkClause = wantLink
-      ? buildLinkClause({ djMode, announce, angle: linkAngle, recentOpeners })
-      : ' Stay silent — no link this time.';
     // Surface the current track's real Subsonic id so similarSongs /
     // tracksLikeThis ("pass the currently-playing song id") actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
@@ -778,12 +776,16 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
       && Math.random() < EXPLORE_SEED_PROBABILITY
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
-    const eventText = `Now playing "${current?.title}" by ${current?.artist}`
-      + (current?.id ? ` [id: ${current.id}]` : '')
-      + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
-      + '. Pick the track to play next.'
-      + linkClause;
-    const promptSuffix = `${clockClause}${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
+    const eventText = explicitPickAnchor
+      ? `Pick-cycle anchor: "${pickAnchor?.title}" by ${pickAnchor?.artist}`
+        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
+        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
+        + '. This queued track is the intended predecessor for this selection. Pick the track intended to follow that anchor.'
+      : `Now playing "${pickAnchor?.title}" by ${pickAnchor?.artist}`
+        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
+        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
+        + '. Pick the track to play next.';
+    const promptSuffix = `${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
     session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},
@@ -793,14 +795,8 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     // and go straight to the one-call pool picker below to stretch the budget.
     if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
       try {
-        // `linkAirAt` mirrors the clause above: stamp the item with the air
-        // moment the model was TOLD to speak, and only when it was actually
-        // told one — a run given no clock makes no claim to go stale (#1314).
-        // `airClock` carries both reasons it might not have been: no forecastable
-        // air moment, and the station clock switch (which already nulled `airAt`).
         const queued = await pickViaAgent(queue, ctx, {
-          wantLink, audioWaypoint, current, showAt, rankTarget,
-          linkAirAt: linkClockStampFor(airAt, !!airClock),
+          wantLink, audioWaypoint, pickAnchor, showAt, rankTarget,
         });
         breakerSuccess();
         if (queued) return;
@@ -826,7 +822,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
         }
       }
     }
-    await pickViaPool(queue, ctx, { wantLink, current, showAt }, rankTarget, audioWaypoint);
+    await pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint);
   });
 }
 
@@ -1065,8 +1061,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 // (queue.announce → airVoice), so they play cleanly back to back.
 //
 // Never throws (callers still need to run the pick after it) and is idempotent:
-// it marks the handoff aired up front, so a concurrent second call — or a
-// mid-way failure — can't double-air or retry into the middle of the new show.
+// an in-process claim prevents concurrent renders, while final-track pairs are
+// durably marked queued and settle only when they actually reach the stream.
 // The two model calls are injectable for the same reason artist-guard's are:
 // the thing worth pinning here is the WIRING — which memory each side of the
 // mic-pass is handed — and that is only observable at the generator boundary.
@@ -1076,11 +1072,23 @@ export interface HandoffDeps {
   generateHandoffGreeting?: typeof dj.generateHandoffGreeting;
 }
 
+// The session record becomes durable only after queueing succeeds. Keep one
+// in-process claim while the LLM/TTS work is running so concurrent picker and
+// scheduler paths cannot render the same pair twice.
+const handoffRuns = new Set<string>();
+
 export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps = {}): Promise<void> {
   const generateSignoff = deps.generateSignoff ?? dj.generateSignoff;
   const generateHandoffGreeting = deps.generateHandoffGreeting ?? dj.generateHandoffGreeting;
   const pending = session.pendingHandoff();
   if (!pending) return;
+  const isBoundaryHandoff = 'incomingPersonaId' in pending;
+  const isSameHostAcknowledgement = !isBoundaryHandoff && pending.sameHost === true;
+  const claim = `${pending.personaId}:${pending.at ?? 'unstamped'}`;
+  if (handoffRuns.has(claim)) return;
+  handoffRuns.add(claim);
+
+  try {
 
   // Nobody listening → the mic-pass moment has passed; don't stack a stale
   // handoff for later. Budget: treated as an optional segment (muted in soft
@@ -1106,51 +1114,52 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     return;
   }
 
+  // The ordinary post-roll mic-pass has no rendered-audio recovery window, so
+  // retain its established claim-before-air behaviour. Final-track handoffs
+  // use the queued state below instead, because their WAVs may wait for a seam.
+  if (!isBoundaryHandoff) session.markHandoffAired();
+
   // Outgoing persona comes from the roll metadata — its clock slot is already
-  // over, so getEffectivePersona() no longer returns it. Incoming is the fresh
-  // session's persona. A persona deleted mid-shift → nothing to voice; drop it.
+  // over, so getEffectivePersona() no longer returns it. A final-track handoff
+  // has deliberately NOT rolled the session yet: use the incoming identity it
+  // captured at arm time, rather than reading the still-outgoing live session.
+  // A persona deleted mid-shift → nothing to voice; drop it.
   const personaOut = settings.resolvePersonaById(pending.personaId);
   const cur = session.getSession();
-  const personaIn = settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona();
+  const personaIn = (isBoundaryHandoff && settings.resolvePersonaById(pending.incomingPersonaId))
+    || settings.resolvePersonaById(cur?.persona?.id)
+    || settings.getEffectivePersona();
   if (!personaOut || !personaIn) {
     session.markHandoffAired();
     return;
   }
-  const showIn = cur?.show?.name || null;
-
-  // Mark aired BEFORE airing (see the idempotency note above).
-  session.markHandoffAired();
+  const showIn = (isBoundaryHandoff ? pending.incomingShowName : null) || cur?.show?.name || null;
+  const showOut = pending.showName || null;
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
-    // The sign-off closes the show that just ENDED, but maybeRoll has already
-    // hard-rolled by the time this runs — the live session holds nothing but its
-    // own scenario turn, so reading it would strip the outgoing DJ of the hour
-    // it is signing off from. Its memory is the ARCHIVED session's
-    // (session.priorPromptMemory). The greeting keeps the fresh session's empty
-    // memory on purpose: not inheriting the outgoing topic is the point of #1479.
-    const outgoingRecap = queue.getDjRecap({ prior: true });
-    const outgoingOpeners = queue.getRecentOpeners(6, { prior: true });
-    const recentOpeners = queue.getRecentOpeners();
+    // A boundary handoff is generated while the outgoing session is deliberately
+    // still live. Ordinary mic-passes run after a hard roll and therefore read
+    // the archived view. The incoming half always gets the fresh side: before a
+    // boundary roll that means an explicit clean slate, not the still-live hour.
+    const outgoingRecap = queue.getDjRecap({ prior: !isBoundaryHandoff });
+    const outgoingOpeners = queue.getRecentOpeners(6, { prior: !isBoundaryHandoff });
+    const incomingRecap = isBoundaryHandoff ? null : queue.getDjRecap();
+    const recentOpeners = isBoundaryHandoff ? [] : queue.getRecentOpeners();
     let aired = false;
 
-    // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
-    //    the outgoing persona's id + name — that id is what keeps the line out
-    //    of the new session's prompt memory (broadcast/prompt-memory.ts) and
-    //    what makes session.windowMessages() name the real speaker, so the
-    //    incoming DJ never reads the sign-off as its own words.
+    // Render both lines before publishing either. The exchange takes the voice
+    // chain as one unit, so nothing can slip between sign-off and greeting.
     let signoffText: string | null = null;
-    try {
-      signoffText = await generateSignoff({
-        personaOut, personaIn, showIn,
-        context: ctx, recap: outgoingRecap, recentOpeners: outgoingOpeners,
-      });
-      await queue.announce(signoffText, 'handoff', {
-        persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },
-      });
-      aired = true;
-    } catch (err: any) {
-      queue.log('error', `Handoff sign-off failed: ${err.message}`);
-      signoffText = null;
+    if (!isSameHostAcknowledgement) {
+      try {
+        signoffText = await generateSignoff({
+          personaOut, personaIn, showOut, showIn,
+          context: ctx, recap: outgoingRecap, recentOpeners: outgoingOpeners,
+        });
+      } catch (err: any) {
+        queue.log('error', `Handoff sign-off failed: ${err.message}`);
+        signoffText = null;
+      }
     }
 
     // 2. Greeting, in the INCOMING persona's voice. It acknowledges the
@@ -1160,22 +1169,45 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     //    On a programme show the greeting doubles as the episode's intro, so
     //    the producer's angle (planned before this runs — see the call sites)
     //    rides along; the standalone intro is then skipped (programme.ts).
+    let greeting: string | null = null;
     try {
-      const greeting = await generateHandoffGreeting({
+      greeting = await generateHandoffGreeting({
         personaIn, personaOut, showIn,
-        episodeAngle: session.getProgramme()?.plan?.angle || null,
-        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+        sameHost: isSameHostAcknowledgement,
+        episodeAngle: (isBoundaryHandoff
+          ? session.getBoundaryProgramme()
+          : session.getProgramme())?.plan?.angle || null,
+        context: ctx, recap: incomingRecap, recentOpeners,
       });
-      await queue.announce(greeting, 'handoff', {
-        persona: personaIn, meta: { personaId: personaIn.id, personaName: personaIn.name },
-      });
-      aired = true;
     } catch (err: any) {
       queue.log('error', `Handoff greeting failed: ${err.message}`);
     }
 
+    if (signoffText && greeting) {
+      aired = await queue.announceExchange([
+        { persona: personaOut, text: signoffText },
+        { persona: personaIn, text: greeting },
+      ], 'handoff');
+    } else if (signoffText) {
+      const outcome = await queue.announce(signoffText, 'handoff', {
+        persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },
+      });
+      // Older queue doubles return void; the integrated queue returns an
+      // explicit refusal only when an already-committed pause owns the seam.
+      aired = outcome?.accepted !== false;
+    } else if (greeting) {
+      const outcome = await queue.announce(greeting, 'handoff', {
+        persona: personaIn, meta: { personaId: personaIn.id, personaName: personaIn.name },
+      });
+      aired = outcome?.accepted !== false;
+    }
+
     if (aired) {
+      session.markHandoffQueued();
       logEvent('dj.handoff', { from: personaOut.name, to: personaIn.name, show: showIn });
     }
   });
+  } finally {
+    handoffRuns.delete(claim);
+  }
 }

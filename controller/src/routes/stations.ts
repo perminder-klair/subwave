@@ -18,12 +18,9 @@ import { restartLiquidsoap } from '../broadcast/liquidsoap-control.js';
 
 export const router = express.Router();
 
-// A switch whose mixer restart never landed is a SPLIT-BRAIN: broadcast keeps
-// serving the previous station's dir while this controller reboots into the
-// new one — and the admin UI reports success (the /state poll only watches
-// the controller). The old process can't warn anyone (it's about to exit), so
-// it leaves this marker and the NEXT boot logs it loudly, right where the
-// operator is looking after a switch.
+// A switch whose mixer restart never landed is a split brain: broadcast keeps
+// serving the previous station's dir. The exiting process can't warn anyone, so
+// it drops this marker and the next boot logs it.
 const MIXER_FAIL_MARKER = join(STATE_ROOT, 'stations', 'mixer-restart-failed.json');
 try {
   const m = JSON.parse(readFileSync(MIXER_FAIL_MARKER, 'utf8')) as { at?: string; error?: string };
@@ -34,17 +31,15 @@ try {
   );
   unlinkSync(MIXER_FAIL_MARKER); // warn once, on the boot right after the failed switch
 } catch {
-  // no marker — the normal case
+  // no marker: the normal case
 }
 
-// The switch: pointer already written → bounce the mixer (its container
-// entrypoint re-resolves + re-renders icecast on restart), then exit so the
-// compose restart policy boots this process against the new station dir.
+// Pointer is already written: bounce the mixer (its entrypoint re-renders icecast
+// on restart), then exit so the supervisor boots us against the new station dir.
 // setImmediate so the HTTP response flushes first.
 function scheduleSwitchExit(): void {
   setImmediate(async () => {
-    // Retry transient telnet failures before giving up — the mixer restart is
-    // what moves broadcast onto the new station dir (see MIXER_FAIL_MARKER).
+    // The mixer restart is what moves broadcast onto the new station dir.
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         await restartLiquidsoap();
@@ -63,24 +58,21 @@ function scheduleSwitchExit(): void {
               error: (err as Error).message,
             }));
           } catch {
-            // best-effort — the console.error above is the fallback trail
+            // best-effort; console.error above is the fallback trail
           }
         }
       }
     }
     console.log('[stations] exiting for station switch — supervisor restarts us');
-    // Dev runs under `tsx watch`, which does NOT respawn a cleanly-exited
-    // child — and the watch parent keeps the container alive, so docker's
-    // restart policy never fires either. Bump this module's own mtime so the
-    // watcher relaunches the server against the new pointer; the watcher's
-    // debounce fires after exit(0) below, so the port is already free. Prod
-    // (PID-1 node + restart policy) needs none of this and is gated out.
+    // `tsx watch` does not respawn a cleanly-exited child and keeps the container
+    // alive, so bump this module's mtime to make the watcher relaunch us. Prod
+    // (PID-1 node + restart policy) needs none of this.
     if (process.env.NODE_ENV !== 'production') {
       try {
         const now = new Date();
         utimesSync(fileURLToPath(import.meta.url), now, now);
       } catch {
-        // best-effort — worst case is the documented manual restart
+        // best-effort; worst case is a manual restart
       }
     }
     process.exit(0);
@@ -102,11 +94,8 @@ router.get('/stations', requireAdmin, (req, res) => {
   }
 });
 
-// validateBody runs the shared schema BEFORE the handler, so a bad name or an
-// unrecognised mode comes back as `{ error, fieldErrors }` keyed by dotted
-// path — which is react-hook-form's setError syntax, so the admin form lands
-// the message on the input rather than in a toast. createStation runs the same
-// schema again as the chokepoint (it is reachable without this route).
+// createStation runs the same schema again as the chokepoint, since it is
+// reachable without this route.
 router.post('/stations', requireAdmin, validateBody(stationCreateSchema), async (req, res) => {
   try {
     const { name, mode } = req.body as StationCreate;
@@ -114,8 +103,7 @@ router.post('/stations', requireAdmin, validateBody(stationCreateSchema), async 
       name,
       mode,
       currentName: currentName(),
-      // Fresh installs may never have opened library.db — a duplicate without
-      // the analysis cache is still a valid station, so tolerate failure.
+      // A duplicate without the analysis cache is still a valid station.
       backupLibraryDb: async (dest) => {
         try {
           await libraryDb.backup(dest);
@@ -124,19 +112,15 @@ router.post('/stations', requireAdmin, validateBody(stationCreateSchema), async 
         }
       },
     });
-    // Conversion moved the running station's files under stations/main — this
-    // process is now reading a stale root and must restart (spec §6).
+    // Conversion moved this station's files under stations/main, so the process
+    // is now reading a stale root and must restart.
     res.status(converted ? 202 : 201).json({ ok: true, id, converted, switching: converted });
     if (converted) scheduleSwitchExit();
   } catch (err) {
-    // A StationCreateError with converted:true means the legacy-root
-    // conversion completed before something afterward failed — that
-    // conversion is durable (pointer + stations/main already on disk), so the
-    // restart must happen regardless of this create() failing, or the
-    // running process keeps writing into the now-stale root forever.
-    // A rule only the server could check (the live station's own state) still
-    // reaches the input it belongs to — same `fieldErrors` contract
-    // validateBody emits, so the panel handles both with one code path.
+    // converted:true means the legacy-root conversion is already durable on disk,
+    // so the restart must happen even though create() failed; otherwise this
+    // process keeps writing into the stale root. `field` rides the same
+    // fieldErrors contract validateBody emits.
     const field = err instanceof manager.StationCreateError ? err.field : undefined;
     const fieldErrors = field ? { [field]: (err as Error).message } : undefined;
     if (err instanceof manager.StationCreateError && err.converted) {
@@ -154,10 +138,9 @@ router.patch('/stations/:id', requireAdmin, validateBody(stationRenameSchema), a
   try {
     const id = String(req.params.id);
     const resolved = manager.renameStation(STATE_ROOT, id, String(req.body.name));
-    // The active station's settings live in the running process, not just on
-    // disk — route the name through settings.update() so /state (the player's
-    // name source) flips immediately. It also rewrites settings.json from
-    // memory, which is why renameStation's fs patch alone can't cover this.
+    // The active station's settings live in the running process too, and
+    // update() rewrites settings.json from memory, so renameStation's fs patch
+    // alone would be overwritten.
     let requiresRestart = false;
     if (manager.activeIdOnDisk(STATE_ROOT) === id) {
       ({ requiresRestart } = await settings.update({ station: resolved }));

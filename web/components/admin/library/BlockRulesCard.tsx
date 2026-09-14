@@ -1,11 +1,8 @@
 'use client';
 
-// Rule entries on the Blocked tab (#1300 FR 1) — attribute/tag "never air"
-// predicates beside the id-entry table: genre/tag/mood/artist/album/title
-// values, an optional seasonal allow-window ("Christmas tracks only air
-// Dec 1–26"), and an optional show scope. Self-contained (own fetching + CRUD
-// against /library/blocklist/rules, modelled on FestivalsSection) so
-// LibraryPanel only mounts it and re-marks rows after a change.
+// Attribute/tag "never air" predicates on the Blocked tab (#1300), with an
+// optional seasonal allow-window and show scope. Self-contained: owns its
+// fetching and CRUD against /library/blocklist/rules.
 
 import { useId, useState } from 'react';
 import { CalendarRange, Plus, ShieldBan, Snowflake } from 'lucide-react';
@@ -53,20 +50,15 @@ const FIELD_OPTIONS: Array<{ value: RuleField; label: string; hint: string }> = 
   { value: 'tag', label: 'Any tag', hint: 'exact match across genre tags, moods, audio moods and Last.fm tags — the widest net' },
   { value: 'genre', label: 'Genre', hint: 'blocking a genre also blocks its refinements — "Punk" covers "Punk Rock"' },
   { value: 'mood', label: 'Mood', hint: 'editorial + audio moods' },
-  { value: 'artist', label: 'Artist name', hint: 'exact name match — for one specific artist, the row action is more precise' },
+  { value: 'artist', label: 'Artist name', hint: "exact name match against every act credited on a track, so it also blocks tracks they're only featured on — acts joined by & or , stay separate. For one specific artist, the row action is more precise" },
   { value: 'album', label: 'Album name', hint: 'exact name match' },
   { value: 'title', label: 'Track title', hint: 'exact title match' },
   { value: 'playlist', label: 'Playlist', hint: 'blocks every member of the selected Navidrome playlists' },
 ];
 
-// The RHF-bound shape of one rule form — matches blockRuleSchema's OUTPUT
-// (z.output), which is also close enough to its input to serve as
-// defaultValues: every field that isn't structurally typed in the schema
-// (label/values/season/showIds are z.unknown()/z.preprocess() so the schema
-// coerces and reports rather than requiring a shaped input) collapses to
-// `unknown` on the input side, same as FestivalsSection/SkillEditModal — so
-// `form.control` is cast to `Control<RuleForm>` once below rather than fought
-// at every call site.
+// The RHF-bound shape of one rule form: blockRuleSchema's OUTPUT, which also
+// serves as defaultValues. Loosely-typed input fields collapse to `unknown`, so
+// `form.control` is cast to `Control<RuleForm>` once below.
 interface RuleForm {
   label: string;
   field: RuleField;
@@ -89,8 +81,7 @@ const XMAS_PRESET: RuleForm = {
 const fmtSeason = (s: SeasonWindow) =>
   `${MONTH_SHORT[s.from.month - 1]} ${s.from.day} – ${MONTH_SHORT[s.to.month - 1]} ${s.to.day}`;
 
-// Chip-style multi-value input: type, Enter/comma commits. A plain text field
-// split on save would hide the any-of semantics the chips make visible.
+// Chip-style multi-value input: type, Enter/comma commits.
 function ValuesInput({ id, values, onChange, placeholder, suggestions }: {
   id: string;
   values: string[];
@@ -149,14 +140,12 @@ function ValuesInput({ id, values, onChange, placeholder, suggestions }: {
 
 export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
   const [busy, setBusy] = useState(false);
-  // Whether the editor modal is open — separate from the form's own state
-  // now that the rule being edited lives in react-hook-form rather than a
-  // `RuleForm | null` useState.
+  // Modal open state, separate from the form's own (the rule lives in RHF).
   const [formOpen, setFormOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  // Picker vocab, loaded once alongside the rules. Failures degrade to free
-  // text (genres) / an empty list with a hint (shows, playlists).
+  // Picker vocab, loaded with the rules. Failures degrade to free text
+  // (genres) or an empty list with a hint (shows, playlists).
   const fieldId = useId();
 
   const form = useZodForm(
@@ -231,23 +220,13 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
     toastOnError: false,
   });
 
-  // The form is bound to blockRuleSchema via react-hook-form/zodResolver —
-  // the SAME schema the route runs (validateBody(blockRuleSchema) on both
-  // POST and PUT) — so the FORM is react-hook-form shaped now. The
-  // individual CONTROLS underneath it still mostly aren't: the "Match on"
-  // picker needs a side effect plain SelectField can't express (clearing
-  // `values` when the field type changes — see its own comment below), and
-  // the chip `values` input plus the two month/day season pickers stay on
-  // raw `Controller` because ValuesInput's commit-on-Enter/blur behaviour and
-  // the season toggle/month-day cascade are real work none of the five bound
-  // field components expose. Form: react-hook-form shaped. Controls: mostly
-  // not, same as before.
+  // Bound to blockRuleSchema, the same schema the POST/PUT routes run. The
+  // controls stay on raw Controller: the "Match on" picker, the chip input and
+  // the season pickers all need behaviour the five bound field components lack.
   const onSubmit = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      // `values` is the TRANSFORMED (z.output) payload — trimmed label,
-      // blank values dropped, duplicates collapsed — so what the operator
-      // sees accepted is what gets stored.
+      // TRANSFORMED (z.output) payload, so what is accepted is what is stored.
       const j = await saveMutation.mutateAsync({ id: editId, values });
       setFormOpen(false);
       setEditId(null);
@@ -415,13 +394,8 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
           <div className="grid gap-4">
             <TextField control={control} name="label" label="Name" placeholder="e.g. Christmas songs" maxLength={RULE_TEXT_MAX} />
 
-            {/* Raw Controller, not SelectField: switching "Match on" has to clear
-                `values` too. Without it, leftover chip values from one field type
-                (e.g. genre names) would silently ride along as extra, meaningless
-                entries in a rule that's now scoped to `playlist` — the playlist
-                checkbox branch below only ever ADDS to `values`, so nothing else
-                would ever clear the stale ones. That's real work SelectField's
-                plain field.onChange passthrough doesn't expose. */}
+            {/* Raw Controller, not SelectField: switching "Match on" must also
+                clear `values`, or chips from the old field type ride along. */}
             <Controller
               control={control}
               name="field"
@@ -455,11 +429,9 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
               }}
             />
 
-            {/* Raw Controller: a chip input (commit-on-Enter/blur, its own draft
-                state) and a checkbox list are both group controls with no single
-                labelable element — house policy per lib/form-fields.tsx's header
-                scopes chip inputs to Controller, and aria-labelledby/groupProps
-                (not htmlFor) is how a Field wrapping a GROUP names itself. */}
+            {/* Raw Controller: chip input and checkbox list are group controls
+                with no labelable element, so they use aria-labelledby/groupProps
+                rather than htmlFor. */}
             <Controller
               control={control}
               name="values"
@@ -491,14 +463,9 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
                           ))}
                         </div>
                       )}
-                      {/* Same group, same `values` field — `values` resets to
-                          [] on every switch INTO playlist mode (see the field
-                          Controller above), so an unchecked list is the
-                          default state here, not a rare edge case. Rendering
-                          the error is the better answer to "why is Save
-                          disabled": the alternative (stop spreading
-                          aria-describedby) would leave a screen-reader user
-                          with aria-invalid and no explanation at all. */}
+                      {/* `values` resets to [] on every switch into playlist
+                          mode, so an empty list is the normal state; render the
+                          error or aria-invalid has no explanation. */}
                       {fieldState.error && <FieldError {...aria.errorProps} errors={[fieldState.error]} />}
                     </div>
                   );

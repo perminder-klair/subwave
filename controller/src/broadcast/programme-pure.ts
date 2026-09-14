@@ -1,11 +1,9 @@
-// Pure programme-arc helpers — no imports, unit-tested in
-// scripts/programme.test.ts (same seam pattern as auto-pool.ts). The episode
-// runner (broadcast/programme.ts) is the only production consumer.
+// Pure programme-arc helpers. Deliberately import-free.
 
 // Position of the (day, hour) slot inside its show's consecutive run on the
-// 7×24 schedule grid: index = hours since the show started, total = the run's
-// length. Walks across midnight and the week seam; capped at a full week so a
-// grid painted wall-to-wall with one show can't loop forever.
+// 7x24 grid: index = hours since the show started, total = the run's length.
+// Walks across midnight and the week seam; capped at a week so a grid painted
+// wall-to-wall with one show can't loop forever.
 export function showSpan(schedule: any, day: number, hour: number): { index: number; total: number } {
   const id = schedule?.[day]?.[hour];
   if (!id) return { index: 0, total: 1 };
@@ -25,11 +23,9 @@ export function showSpan(schedule: any, day: number, hour: number): { index: num
   return { index: before, total: before + 1 + after };
 }
 
-// Episode span for a timed takeover (#930). A pinned show usually isn't in the
-// grid at the pinned hours, so showSpan can't see it — the override window
-// itself is the episode: total = the window rounded up to whole hours, index =
-// whole hours elapsed since the pin (clamped inside the window, so a tick
-// arriving fractionally past expiry can't index off the end).
+// Episode span for a timed takeover (#930): the override window itself is the
+// episode, since a pinned show usually isn't in the grid. Index is clamped
+// inside the window so a tick past expiry can't index off the end.
 export function overrideSpan(
   ov: { startedAt: number; expiresAt: number },
   nowMs: number,
@@ -40,23 +36,31 @@ export function overrideSpan(
   return { index, total };
 }
 
-// Which beat a STATION-ZONE minute belongs to. The arc's placement is a
-// station-clock fact (":55 of the final hour" must be the show's closing
-// minutes), but crons fire on fixed process-local minutes — and station zones
-// sit at :30/:45 offsets (IST, Nepal), so a process-minute :55 cron can land
-// mid-show on the station clock. The scheduler therefore ticks every 5
-// minutes and dispatches on this window instead: offsets are multiples of 15,
-// so a 5-minute cadence always lands inside each 5-minute station window
-// exactly once (the beat flags make repeats no-ops).
-export function beatWindow(stationMinute: number): 'feature' | 'outro' | null {
-  if (stationMinute >= 55) return 'outro';
+// Which beat a STATION-ZONE minute belongs to. Placement is a station-clock
+// fact but crons fire on process-local minutes, and station zones sit at
+// :30/:45 offsets — so the scheduler ticks on the stride and dispatches on this
+// window, which each tick samples exactly once (beat flags make repeats no-ops).
+//
+// `handoverOffsetMinutes` (#1576) moves the OUTRO window earlier; both windows
+// are one stride wide and open on a multiple of it, which is what keeps the
+// one-sample-per-window property. Both numbers are REQUIRED, never defaulted,
+// so the canonical 5 lives only in the settings default and
+// HANDOVER_OFFSET_STEP_MINUTES; the bounds are enforced at the save path, since
+// this file stays import-free. Outro is tested first, so a bound that ever let
+// the windows meet closes the show rather than repeating its middle.
+export function beatWindow(
+  stationMinute: number,
+  handoverOffsetMinutes: number,
+  sampleStrideMinutes: number,
+): 'feature' | 'outro' | null {
+  const outroOpens = 60 - handoverOffsetMinutes;
+  if (stationMinute >= outroOpens && stationMinute < outroOpens + sampleStrideMinutes) return 'outro';
   if (stationMinute >= 35 && stationMinute < 40) return 'feature';
   return null;
 }
 
-// The plan's feature for a given show hour. The producer writes one per hour,
-// but a degraded/short plan just reuses its last feature rather than going
-// silent for the tail hours.
+// The plan's feature for a show hour. A short plan reuses its last feature
+// rather than going silent for the tail hours.
 export function planFeature(plan: any, hourIndex: number): { topic: string; kind: string | null } | null {
   const features = plan?.features;
   if (!Array.isArray(features) || !features.length) return null;

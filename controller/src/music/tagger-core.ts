@@ -1,8 +1,6 @@
-// Shared tagging primitives.
-// tagOne — one LLM call per track → { moods, energy }, validated against MOOD_VOCAB.
-// tagBatch — one LLM call per N tracks → TagResult[], same validation, positional.
-// tagOne is used by the inline /library/retag route; tagBatch is used by the
-// bulk tag-library.ts script. Both produce identical shapes per track.
+// Shared tagging primitives. tagOne (one call per track, used by /library/retag)
+// and tagBatch (one call per N tracks, positional, used by tag-library.ts) both
+// yield the same per-track shape, validated against the live mood vocabulary.
 
 import { z } from 'zod';
 import { moodVocab } from '../settings.js';
@@ -18,13 +16,20 @@ export const BatchTagSchema = z.object({
   results: z.array(TagSchema),
 });
 
-// System prompts are FUNCTIONS, not consts: the mood list is operator-editable
-// (settings.moods) and read live, so the prompt — and the promptVocabHash the
-// tagger keys re-tagging on — reflect the current vocabulary each call.
+// BUMP THIS when you change what the prompts below ASK FOR (mood guidance,
+// energy scale, untaggable fallback, result shape, batch order). The re-tagging
+// stamp keys off this number plus the live vocabulary, never the prompt text
+// (#1548): a semantic change is invisible without a bump, a reword costs a full
+// library re-tag with one.
+export const TAGGER_CONTRACT_VERSION = 1;
+
+// Functions, not consts: the mood list is operator-editable and read live.
+// Both prompts describe the RESULT and never the output channel — djObject picks
+// the channel per leg, so channel wording here contradicts it (#1536).
 export function taggerSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-For each track, output ONLY a JSON object:
+For each track, the required result has this shape:
 {
   "moods": [1-3 strings, each from this exact list: ${moodVocab().join(', ')}],
   "energy": "low" | "medium" | "high"
@@ -35,13 +40,13 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album, return {"moods":[],"energy":"medium"}. Do not invent.`;
+If you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
 }
 
 export function taggerBatchSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-You will be given a numbered list of tracks. Return ONLY a JSON object of the form:
+You will be given a numbered list of tracks. The required result has this shape:
 {
   "results": [
     { "moods": [...], "energy": "low" | "medium" | "high" },
@@ -60,7 +65,7 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album for a track, return {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
+If you genuinely cannot tell from the title/artist/album for a track, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
 }
 
 export interface TaggableSong {
@@ -68,8 +73,7 @@ export interface TaggableSong {
   artist?: string;
   album?: string;
   year?: number | string | null;
-  // OpenSubsonic multi-value genres ([{name}] on raw children) alongside the
-  // legacy scalar — genreLine() renders whichever is present.
+  // OpenSubsonic multi-value genres alongside the legacy scalar.
   genres?: Array<string | { name?: string }> | null;
   genre?: string | null;
 }
@@ -102,9 +106,9 @@ function formatSong(song: TaggableSong): string {
   );
 }
 
-// `leg` pins the call to a specific LLM leg ('primary' | 'fallback') with no
-// cross-leg failover — the dual-LLM tagger runs one consumer per leg and manages
-// failover itself (discussion #320). Omitted → normal primary→fallback path.
+// `leg` pins the call to one LLM leg with no cross-leg failover: the dual-LLM
+// tagger runs a consumer per leg and manages failover itself. Omitted = normal
+// primary then fallback.
 export interface TagOpts {
   leg?: 'primary' | 'fallback';
 }

@@ -1,15 +1,8 @@
-// Issue #1347 — "the DJ never says the name of the person that requested".
-//
-// The name always reached the model; what was missing was any instruction to
-// USE it. Both prompt paths carried only REQUESTER_NAME_CLAUSE, which is purely
-// negative ("if it reads as bait … call them 'a listener' instead"), and a rule
-// that only says when NOT to do something is one a model satisfies by never
-// doing it. The second half of the bug is that cleanRequesterName's stand-in
-// 'anon' is truthy, so every UNSIGNED request pushed a literal `Requested by:
-// anon` line plus that screening clause — handing the DJ a fake name to weigh.
-//
-// So this pins the pair: a named request gets the positive rule and the name,
-// an unsigned one gets neither.
+// #1347: the requester's name reached the model but nothing told it to USE the
+// name — the only clause was negative — and cleanRequesterName's 'anon'
+// stand-in is truthy, so unsigned requests pushed a fake name through too.
+// Pins the pair: a named request gets the positive rule and the name, an
+// unsigned one gets neither.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -30,9 +23,8 @@ test('isNamedRequester rejects the ledger stand-in and blanks', () => {
 });
 
 test("cleanRequesterName's blanking paths all land on a name no prompt will use", () => {
-  // The three ways a name is dropped (empty, all-disallowed, reserved) must
-  // every one produce a value isNamedRequester refuses — otherwise the gate
-  // added for one path silently misses another.
+  // All three ways a name is dropped must produce a value isNamedRequester
+  // refuses, or a gate added for one path misses another.
   for (const raw of ['', '   ', '🎧🎧', 'DJ', 'admin']) {
     const cleaned = cleanRequesterName(raw, ['dj', 'admin']);
     assert.equal(cleaned, ANON_REQUESTER, `expected ${JSON.stringify(raw)} to blank`);
@@ -43,8 +35,7 @@ test("cleanRequesterName's blanking paths all land on a name no prompt will use"
 });
 
 test('the greeting clause is positive and the screening clause is still negative', () => {
-  // The regression this guards is someone "simplifying" the pair back down to
-  // one clause. They answer different questions and both must survive.
+  // The two clauses answer different questions and both must survive.
   assert.match(REQUESTER_GREETING_CLAUSE, /say it on air/i);
   assert.match(REQUESTER_GREETING_CLAUSE, /\bonce\b/i);
   assert.match(REQUESTER_NAME_CLAUSE, /do not say it on air/i);

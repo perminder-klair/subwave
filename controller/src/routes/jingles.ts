@@ -12,9 +12,6 @@ import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
 export const router = express.Router();
 
-// ---------------------------------------------------------------------------
-// JINGLES — list / create / delete pre-recorded TTS stingers
-// ---------------------------------------------------------------------------
 router.get('/jingles', requireAdmin, async (req, res) => {
   try {
     res.json({ jingles: await jingles.list() });
@@ -34,10 +31,8 @@ router.post('/jingles', requireAdmin, validateBody(jingleCreateSchema), async (r
   }
 });
 
-// Import an operator-supplied mp3/wav as a jingle (multipart `file`, optional
-// `label`). Transcoded + level-matched server-side (see broadcast/jingles.js).
-// validateBody AFTER audioUpload — multer parses the multipart body, the
-// middleware replaces req.body only, req.file rides through untouched.
+// validateBody must run AFTER audioUpload: multer parses the multipart body, and
+// the middleware replaces req.body only, leaving req.file untouched.
 router.post('/jingles/upload', requireAdmin, audioUpload('file'), validateBody(jingleImportSchema), async (req, res) => {
   const file = req.file;
   if (!file) return res.status(400).json({ error: 'file is required' });
@@ -61,9 +56,8 @@ router.delete('/jingles/:filename', requireAdmin, async (req, res) => {
   }
 });
 
-// Admin preview — streams the rendered WAV so the operator can audition a
-// jingle before it goes on air. Resolved through jingles.getPath so the
-// filename has to match a sidecar entry (no path traversal).
+// Resolved through jingles.getPath so the filename must match a sidecar entry
+// (no path traversal).
 router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await jingles.getPath(req.params.filename);
@@ -74,22 +68,10 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
   }
 });
 
-// Air a jingle on-air now — the automation-facing trigger (MCP, webhooks, an
-// operator's own dashboard) for a station ident or an event announcement that
-// shouldn't have to wait for the rotate to draw it.
-//
-// This is the endpoint to reach for when the clip is longer than a stinger.
-// /sfx/:name/play mixes UNDER the programme with a light duck and is capped at
-// SFX_MAX_SEC precisely because a long clip there keeps droning over the music;
-// a jingle rides the music chain instead, at full level and with no length cap.
-//
-// Manual trigger, so it ignores the jingleRatio autonomy dial the same way
-// /sfx/:name/play ignores settings.sfx.enabled — an explicit press always fires.
-// It is queued, not immediate: the priority source takes the next safe track
-// boundary. Active speech or a bed/track pair defers it rather than mixing over
-// the DJ or splitting the pair (there is no skip; Liquidsoap owns pacing).
-// 409 if the same jingle is already queued and hasn't aired — the priority queue
-// has no remove path, so a retried call would air the announcement twice.
+// Airs a jingle on the music chain at full level, with no length cap (unlike
+// /sfx/:name/play, which ducks under the programme and is capped). Manual
+// trigger, so it ignores jingleRatio. Queued, not immediate: it takes the next
+// safe track boundary, deferring behind speech or a bed/track pair.
 router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
   try {
     if (!(await jingles.getPath(req.params.filename))) {
@@ -98,9 +80,8 @@ router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
     }
     const result = await queue.playJingle(req.params.filename);
     if (!result.ok) {
-      // Not a rate limit — a repeat of something already queued and unaired.
-      // See queue.playJingle: the priority queue has no remove path, so a
-      // retried tool call would otherwise air the same announcement twice.
+      // Not a rate limit: the priority queue has no remove path, so a retried
+      // call would air the same announcement twice.
       const msg = result.reason === 'already-queued'
         ? `"${req.params.filename}" is already queued and hasn't aired yet`
         : 'too many jingles are already queued and haven\'t aired yet';
@@ -112,10 +93,7 @@ router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// TAG-LIBRARY — kick off the tagger as a background child process.
-// Polls /settings to see progress (library.total grows; tagger.running flips).
-// ---------------------------------------------------------------------------
+// Kicks off the tagger as a background child; callers poll /settings for progress.
 router.post('/tag-library', requireAdmin, (req, res) => {
   if (tagger.running) return res.status(409).json({ error: 'tagger already running', tagger });
   const limit = parseInt(req.body?.limit, 10);
@@ -123,14 +101,11 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   const reEnrich = req.body?.reEnrich === true;
   const reAnalyze = req.body?.reAnalyze === true;
   const upgrade = req.body?.upgrade === true;
-  // "Re-embed, then continue tagging" — only acted on when reseed is the sole
-  // re-* pass (startTagger enforces this); drops --rescan so the raw --reseed
-  // forward pass re-embeds the whole library then tags the untagged remainder.
+  // "Re-embed, then continue tagging". Only acted on when reseed is the sole re-*
+  // pass, which startTagger enforces.
   const thenTag = req.body?.thenTag === true;
-  // Forward-run step toggles from the admin Run tab. Only an explicit boolean
-  // is forwarded; absent fields stay undefined → that phase runs (a full run,
-  // back-compat with callers that don't send steps). A reconcile-*only*
-  // selection is routed by the client to POST /library/reconcile instead.
+  // Only an explicit boolean is forwarded; undefined means that phase runs, so
+  // callers that send no steps get a full run.
   const stepBool = (v: unknown) => (typeof v === 'boolean' ? v : undefined);
   startTagger({
     limit: Number.isFinite(limit) ? limit : undefined,
@@ -148,7 +123,6 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   res.json({ ok: true, tagger });
 });
 
-// Stop the running tagger child (SIGTERM). Returns 409 if no run is active.
 router.post('/tag-library/stop', requireAdmin, (req, res) => {
   if (!tagger.running) return res.status(409).json({ error: 'tagger is not running', tagger });
   const result = stopTagger();

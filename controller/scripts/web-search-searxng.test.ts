@@ -1,13 +1,15 @@
-// Unit tests for the pure SearXNG response parser. SearXNG's JSON shape is
-// non-trivial (results[], answers[], infoboxes[], suggestions[]) so we pin
-// the mapping with recorded fixtures rather than handwritten objects.
+// Unit tests for the two pure halves of the SearXNG backend: the response
+// parser and the query-URL builder. SearXNG's JSON shape is non-trivial
+// (results[], answers[], infoboxes[], suggestions[]) so we pin the mapping
+// with recorded fixtures rather than handwritten objects; the URL builder is
+// pinned directly so the query shape needs no fetch mock.
 // Run: `tsx scripts/web-search-searxng.test.ts` (folded into `npm test`).
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { parseSearxngResponse } from '../src/skills/web-search.js';
+import { buildSearxngUrl, parseSearxngResponse } from '../src/skills/web-search.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = (name: string) =>
@@ -88,6 +90,48 @@ async function main() {
     assert.equal(expected('searxng', 'week', 'Foo'), 'searxng:week:foo');
     assert.equal(expected('searxng', '', 'Foo'), 'searxng::foo');
   });
+
+  console.log('buildSearxngUrl:');
+
+  // #1353. The engine pin is optional and must be invisible when unset — an
+  // `engines=` param sent empty is NOT the same as no param: SearXNG's
+  // parse_generic() reads an empty list as "no engines matched" and answers
+  // with nothing, where omitting the param uses the instance defaults.
+  await test('omits engines= entirely when the pin is unset', () => {
+    for (const engines of [undefined, '', '   ']) {
+      const url = buildSearxngUrl({ baseUrl: 'http://searx.lan:8888', query: 'Aphex Twin', engines });
+      assert.equal(url.searchParams.has('engines'), false, `engines=${JSON.stringify(engines)}`);
+      assert.equal(url.toString(), 'http://searx.lan:8888/search?q=Aphex+Twin&format=json');
+    }
+  });
+
+  await test('sends the pin verbatim, spaces and commas intact', () => {
+    const url = buildSearxngUrl({
+      baseUrl: 'http://searx.lan:8888',
+      query: 'Aphex Twin',
+      engines: '  google, duckduckgo web, wikipedia  ',
+    });
+    // Trimmed at the ends only. The inner spaces are load-bearing: a SearXNG
+    // engine name is its `name:` field, e.g. 'duckduckgo web'.
+    assert.equal(url.searchParams.get('engines'), 'google, duckduckgo web, wikipedia');
+  });
+
+  await test('the pin rides alongside time_range, not instead of it', () => {
+    const url = buildSearxngUrl({
+      baseUrl: 'http://searx.lan:8888',
+      query: 'Aphex Twin',
+      recency: 'week',
+      engines: 'wikipedia',
+    });
+    assert.equal(url.searchParams.get('time_range'), 'week');
+    assert.equal(url.searchParams.get('engines'), 'wikipedia');
+    assert.equal(url.searchParams.get('format'), 'json');
+  });
+
+  await test('a base URL with a path still resolves to /search', () => {
+    const url = buildSearxngUrl({ baseUrl: 'http://searx.lan:8888/', query: 'x' });
+    assert.equal(url.pathname, '/search');
+  });
 }
 
 main().then(() => {
@@ -95,5 +139,5 @@ main().then(() => {
     console.error(`\n${failures} test(s) failed`);
     process.exit(1);
   }
-  console.log('\nAll parseSearxngResponse tests passed.');
+  console.log('\nAll SearXNG web-search tests passed.');
 });

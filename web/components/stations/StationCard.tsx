@@ -4,15 +4,10 @@ import { useEffect, useState } from 'react';
 import { AnimatedLink } from '@/components/ui/animated-link';
 import type { Station } from '@/lib/stations';
 
-// One station in the directory: static fields rendered server-side, plus a live
-// strip that probes the station's own public now-playing API from the
-// listener's browser. The SUB/WAVE controller serves /api/now-playing with
-// wide-open CORS, so this works cross-origin without a proxy. Same response
-// shape as web/hooks/useStationFeed.ts ({ nowPlaying: { title, artist }, ... }).
-//
-// The probe NEVER throws to render — any failure (down host, CORS, timeout,
-// non-SUB/WAVE site) just resolves to "offline". We poll a little lazily (30s)
-// since this is a directory, not the player.
+// One station in the directory: server-rendered static fields plus a live strip
+// that probes the station's own /api/now-playing from the listener's browser
+// (wide-open CORS, so no proxy). Same response shape as hooks/useStationFeed.ts.
+// The probe never throws to render: any failure resolves to "offline". 30s poll.
 
 type LiveStatus = 'loading' | 'on-air' | 'offline';
 

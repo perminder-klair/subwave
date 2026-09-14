@@ -18,8 +18,19 @@ import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
-  type SectionProps,
+  headerMap,
+  type SectionProps, type LlmHeaderRow,
 } from './shared';
+// The floor's ceiling and the custom-header grammar, from the same schema
+// module the server bounds-checks against — a hardcoded copy here is a client
+// hint that can disagree with the save it is meant to pre-empt.
+import {
+  PICKER_MIN_TRACK_LENGTH_BOUNDS,
+  LLM_HEADER_NAME_RE,
+  LLM_HEADER_VALUE_RE,
+  LLM_HEADER_VALUE_MAX,
+  LLM_HEADERS_MAX,
+} from '@/lib/schemas.generated';
 
 // Provider descriptors, the cloud-key env-var map and the badge logic live in
 // ./llm/providerMeta — don't redefine them here.
@@ -30,6 +41,79 @@ import {
 // without an explicit override.
 const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
 const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
+
+// Custom request headers for an openai-compatible gateway (#1618). A row list
+// rather than a map: the operator types a name one character at a time, and a
+// map keyed by that name loses the row on every blank or duplicate key.
+//
+// Values already on file arrive redacted as the literal 'set' (getRedacted),
+// and posting that back keeps the stored value — so an untouched row shows as
+// "on file" and is left alone rather than being re-typed to survive a save.
+function HeaderRowsEditor({
+  rows, onChange, disabled, idPrefix,
+}: {
+  rows: LlmHeaderRow[];
+  onChange: (next: LlmHeaderRow[]) => void;
+  disabled?: boolean;
+  idPrefix: string;
+}) {
+  const setRow = (i: number, patch: Partial<LlmHeaderRow>) =>
+    onChange(rows.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+
+  const problem = (r: LlmHeaderRow): string => {
+    const name = (r.name || '').trim();
+    const value = (r.value || '').trim();
+    if (!name && !value) return '';
+    if (!name) return 'Name a header';
+    if (!LLM_HEADER_NAME_RE.test(name)) return 'Letters, digits and - . _ only, up to 64 chars';
+    if (value === 'set') return ''; // the redaction sentinel — the real value is on file
+    if (value.length > LLM_HEADER_VALUE_MAX) return `Value must be ${LLM_HEADER_VALUE_MAX} chars or fewer`;
+    if (value && !LLM_HEADER_VALUE_RE.test(value)) return 'Value must be printable ASCII on a single line';
+    return '';
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      {rows.map((r, i) => {
+        const err = problem(r);
+        return (
+          <div key={`${idPrefix}-${i}`} className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+              <Input
+                value={r.name}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { name: e.target.value })}
+                placeholder="x-my-gateway-session"
+                disabled={disabled}
+                aria-label="Header name"
+                className="max-w-[220px]"
+              />
+              <Input
+                value={r.value}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setRow(i, { value: e.target.value })}
+                placeholder={r.value === 'set' ? '•••••• (on file)' : 'value'}
+                disabled={disabled}
+                aria-label="Header value"
+                className="max-w-[260px]"
+              />
+              <Btn onClick={() => onChange(rows.filter((_, n) => n !== i))} disabled={disabled}>
+                Remove
+              </Btn>
+            </div>
+            {err && <div className="text-xs text-vermilion">{err}</div>}
+          </div>
+        );
+      })}
+      <div>
+        <Btn
+          onClick={() => onChange([...rows, { name: '', value: '' }])}
+          disabled={disabled || rows.length >= LLM_HEADERS_MAX}
+        >
+          Add header
+        </Btn>
+      </div>
+    </div>
+  );
+}
 
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -187,6 +271,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     model: string,
     setTesting: (v: boolean) => void,
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
+    // The leg's custom headers as currently edited. A gateway that routes on a
+    // header rejects a probe without it, so a test that omitted them would fail
+    // against exactly the server being configured (#1618). Unsaved rows are
+    // tested as typed; a row still showing the redaction sentinel resolves
+    // server-side against the stored value.
+    customHeaders: LlmHeaderRow[] = [],
   ) => {
     if (!baseUrl.trim()) { setResult({ ok: false, message: 'Set a Base URL first', latencyMs: 0 }); return; }
     if (!model.trim()) { setResult({ ok: false, message: 'Set a Model first', latencyMs: 0 }); return; }
@@ -196,7 +286,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       const r = await adminResponse(adminFetch, '/settings/llm/probe-compat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: apiKey.trim(), baseUrl: baseUrl.trim(), model: model.trim() }),
+        body: JSON.stringify({
+          apiKey: apiKey.trim(),
+          baseUrl: baseUrl.trim(),
+          model: model.trim(),
+          headers: headerMap(customHeaders),
+        }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
@@ -218,6 +313,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
         providerBaseUrls: form.llm.providerBaseUrls,
+        headers: headerMap(form.llm.headers),
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
@@ -243,11 +339,19 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           repeatPenalty: form.llm.fallback.repeatPenalty,
           discoverySteps: form.llm.fallback.discoverySteps,
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
+          headers: headerMap(form.llm.fallback.headers),
           reasoning: form.llm.fallback.reasoning,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
+      },
+      // Its own top-level key, not part of `llm`: the album cooldown is read by
+      // the stateless pool picker too, so it is picking config rather than LLM
+      // config. It rides in the same PATCH because it is edited on this card.
+      picker: {
+        albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
+        minTrackLengthSeconds: Math.max(0, parseInt(form.picker.minTrackLengthSeconds, 10) || 0),
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
@@ -435,6 +539,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                         form.llm.model,
                         setCompatKeyTesting,
                         setCompatKeyTest,
+                        form.llm.headers,
                       )
                     }
                     disabled={compatKeyTesting || !primaryTestBaseUrl.trim()}
@@ -450,6 +555,27 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               </div>
               {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
             </>
+          )}
+
+          {INLINE_KEY_PROVIDERS.includes(form.llm.provider) && (
+            <div className="field">
+              <Label>Custom request headers</Label>
+              <HeaderRowsEditor
+                idPrefix="llm-primary-header"
+                rows={form.llm.headers}
+                onChange={rows => setForm(f => ({ ...f, llm: { ...f.llm, headers: rows } }))}
+              />
+              <div className="field-hint">
+                Sent on every request to this server, on top of the bearer token.
+                Only needed for gateways that route on a header of their own —
+                e.g. OpenCode Zen Go requires <code>x-opencode-session</code>,
+                whose value only has to be opaque and stable. Leave empty for a
+                plain llama.cpp / vLLM / LM Studio server. Values are hidden once
+                saved; a row showing <code>•••••• (on file)</code> keeps its
+                stored value unless you retype it, and clearing a row&apos;s
+                value or removing the row drops the header.
+              </div>
+            </div>
           )}
 
           {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
@@ -753,6 +879,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                             form.llm.fallback.model,
                             setCompatFallbackKeyTesting,
                             setCompatFallbackKeyTest,
+                            form.llm.fallback.headers,
                           )
                         }
                         disabled={compatFallbackKeyTesting || !fallbackTestBaseUrl.trim()}
@@ -767,6 +894,19 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     </div>
                   </div>
                   {compatFallbackKeyTest && <KeyTestResult result={compatFallbackKeyTest} />}
+                  <div className="field">
+                    <Label>Custom request headers</Label>
+                    <HeaderRowsEditor
+                      idPrefix="llm-fallback-header"
+                      rows={form.llm.fallback.headers}
+                      onChange={rows => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, headers: rows } } }))}
+                    />
+                    <div className="field-hint">
+                      Per-leg, like the base URL: the backup may be a different
+                      gateway with its own routing header. Same rules as the
+                      primary leg above.
+                    </div>
+                  </div>
                 </>
               )}
 
@@ -1124,6 +1264,57 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             keeps circling back; lower it if the DJ is reaching too far from the
             show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
             never follow itself whatever this says. 0&ndash;25.
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Album cooldown (hours)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={72}
+            step={0.5}
+            value={form.picker.albumHours}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, picker: { ...f.picker, albumHours: e.target.value } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            How long a <strong>record</strong> rests after one of its tracks airs, on
+            both pickers. Only worth setting <em>above</em> the artist spacing above
+            &mdash; below it, the artist guard already covers the same ground. Like
+            that one it yields rather than starving the pool, and compilations and
+            various-artists albums are exempt, since two tracks off one sampler is
+            ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Minimum track length (seconds)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={PICKER_MIN_TRACK_LENGTH_BOUNDS.max}
+            step={1}
+            value={form.picker.minTrackLengthSeconds}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, picker: { ...f.picker, minTrackLengthSeconds: e.target.value } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            The shortest a track can be to get picked, on both pickers and the
+            offline fallback playlist &mdash; the way to keep 40-second skits,
+            interludes and album intros off air. The mirror of the max track
+            length in Broadcast, but a <em>selection</em> filter: a short track is
+            never chosen, where a long one is simply faded out at the cap. A show
+            can set its own; listener requests are always exempt.
+            {' '}<strong>0 = off</strong> (the default). A non-zero value has to
+            be at least {data?.values?.minTrackSeconds ?? 30}s &mdash; the same
+            crossfade-derived minimum the track-length cap clears.
           </div>
         </div>
       </Card>

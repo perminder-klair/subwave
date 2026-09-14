@@ -35,6 +35,17 @@ The examples use the default ports and a proxy on the same host. Replace
 `127.0.0.1` with an address or Docker service name reachable from your proxy
 when it runs elsewhere.
 
+### Optional: a listener-country header
+
+Admin → Stats rolls listener sessions up by country, and the value it reads
+first is `CF-IPCountry` — which only Cloudflare sets. If your proxy can add a
+country header of its own (nginx with the GeoIP2 module, Traefik behind a CDN),
+forward it and name it in Admin → Settings → Danger zone → **Listener country**.
+Where it can't, point the same card at an offline `.mmdb` database instead.
+Neither is required: with no country, sessions are still counted, just without
+geography. Full recipe, including where to get a database:
+[deployment.md → Listener country on the Stats page](deployment.md#listener-country-on-the-stats-page).
+
 ## nginx
 
 Put these directives inside the existing `server` block for
@@ -89,6 +100,24 @@ If this nginx server is itself behind another trusted edge, configure nginx's
 real-IP module with only that edge's addresses first. `$remote_addr` will then
 hold the resolved client address and the rule above will still replace any
 client-supplied forwarding chain.
+
+**Name this proxy in SUB/WAVE's `.env` too.** Sending the header is only half
+the job: Icecast ignores `X-Forwarded-For` unless the peer that sent it is on
+its own trusted list, and on `docker-compose.byo.yml` there is no bundled Caddy
+for it to find by name. Without this, Admin → Listeners shows the same private
+address on every row.
+
+```bash
+# .env — the address nginx reaches Icecast from. On a host-network nginx
+# talking to the container, that is usually the Docker bridge gateway.
+ICECAST_TRUSTED_PROXY_IPS=172.17.0.1
+```
+
+Icecast matches an **exact IP**, so a subnet like `172.17.0.0/16` is accepted
+and then never matches anything; list the addresses. If you are unsure what
+Icecast is seeing, the current (wrong) IP in the Listeners table *is* the
+address to trust. Restart the broadcast container to apply it — Admin →
+Listeners says so itself when nothing was trusted.
 
 Reload only after nginx accepts the configuration:
 
@@ -148,6 +177,9 @@ location /api/ {
 NPM's generated `/` location continues to send the web UI to the Proxy Host's
 port `7700`. The Advanced locations override only the API, tune-in files, and
 stream mounts.
+
+Set `ICECAST_TRUSTED_PROXY_IPS` for real listener IPs here too — the NPM
+container's own address, exactly as in [nginx](#nginx) above.
 
 ## Traefik with Docker labels
 
@@ -227,6 +259,21 @@ networks:
   proxy:
     external: true
 ```
+
+Traefik sets `X-Forwarded-For` itself, but Icecast only reads it from a peer on
+its own trusted list — and on `docker-compose.byo.yml` there is no bundled
+Caddy for it to resolve by name, so real listener IPs need Traefik's own
+container address named in SUB/WAVE's `.env`:
+
+```bash
+# .env — Traefik's address on the `proxy` network (docker network inspect proxy).
+ICECAST_TRUSTED_PROXY_IPS=172.18.0.2
+```
+
+Icecast matches an **exact IP**, so a subnet is accepted and then never
+matches. Pin Traefik's address on that network if it moves between restarts.
+Without this every row in Admin → Listeners shows Traefik's container address
+instead of the listener's; the Listeners card says so when nothing was trusted.
 
 Traefik forwards response bodies as they arrive unless a buffering middleware
 is added, so the stream router needs no buffering option. Do not attach

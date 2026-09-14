@@ -6,6 +6,11 @@
 
 import * as library from '../../../music/library.js';
 import { shiftOnsetMs } from '../../../music/silence-trim.js';
+// The band inside which a measured runway binds. Imported rather than restated
+// so the phrase, the backstop and the boundary-deferred segment's own timing
+// rule can never disagree about where "too early to talk" starts and where a
+// runway stops constraining at all (broadcast/vocal-runway.ts).
+import { VOCAL_RUNWAY_FLOOR_MS, VOCAL_RUNWAY_CEILING_MS } from '../../../broadcast/vocal-runway.js';
 
 // Intro runway (ms to where the track 'comes in') for a track, from the track
 // object or a library lookup. Null when un-analysed.
@@ -46,11 +51,11 @@ export function bpmKeyFor(track: any): { bpm: number | null; key: string | null 
 // tells the model to skip the line the deterministic backstop would drop
 // anyway. Omitted/null (un-analysed or instrumental) changes nothing.
 export function introBudgetPhrase(introMs: number | null | undefined, firstVocalMs?: number | null): string {
-  if (typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs < 2500) {
+  if (typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs < VOCAL_RUNWAY_FLOOR_MS) {
     return 'The vocals start almost immediately on this one — skip the spoken intro and let the track speak.';
   }
-  if (!introMs || introMs < 2500) return '';
-  if (introMs >= 18000) return '';
+  if (!introMs || introMs < VOCAL_RUNWAY_FLOOR_MS) return '';
+  if (introMs >= VOCAL_RUNWAY_CEILING_MS) return '';
   const sec = Math.floor(introMs / 1000);
   if (introMs < 6000) {
     return `The track's vocals come in around ${sec}s — keep this to a single short phrase that finishes before then; never run past it.`;
@@ -94,9 +99,9 @@ export function enforceIntroBudget(
   const measured = typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
     ? firstVocalMs
     : null;
-  if (measured != null && measured < 2500) return '';
+  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) return '';
   const runway = measured ?? introMs;
-  if (!runway || runway < 2500 || runway >= 18000) return t;
+  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS || runway >= VOCAL_RUNWAY_CEILING_MS) return t;
   const BASE_WORDS_PER_SEC = 2.5;
   const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
   const maxWords = Math.max(3, Math.floor((runway / 1000) * BASE_WORDS_PER_SEC * pace));

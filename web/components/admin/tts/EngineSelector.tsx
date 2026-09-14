@@ -16,8 +16,7 @@ interface EngineSelectorProps {
   // Call-site wording for the "how to fix it" note; see EngineStatusOpts.
   statusOpts?: EngineStatusOpts;
   // Off where the call site already shows a more specific notice for the same
-  // fault — the generic "no key for the selected provider" line otherwise
-  // stacks under a red alert that has just said it with the provider named.
+  // fault, so the generic line doesn't stack under it.
   showStatusHint?: boolean;
   onChange: (id: string) => void;
   className?: string;

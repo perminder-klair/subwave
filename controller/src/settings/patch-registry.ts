@@ -1,8 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 42 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 49 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
-// forty-two shapes doesn't fit #1337's one-schema-per-form recipe.
+// forty-nine shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -31,18 +31,27 @@ import { ZodError, type ZodType } from 'zod';
 import {
   archivePatchSchema,
   audioPatchSchema,
+  backupsPatchSchema,
   bedsPatchSchema,
   silenceTrimPatchSchema,
   crossfadeDurationSchema,
+  duckingPatchSchema,
+  handoverPatchSchema,
   djHouseRulesSchema,
+  djBehaviourPatchSchema,
   djSpeakClockSchema,
+  djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSecondsSchema,
+  fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
+  jingleRotateSchema,
   likesPatchSchema,
   localeSchema,
   loudnessPatchSchema,
   moodScheduleSchema,
   moodsSchema,
+  pickerPatchSchema,
   privacyPatchSchema,
   requestsPatchSchema,
   scrobblePatchSchema,
@@ -98,10 +107,14 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
  */
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
+  'jingleRotate',
   'crossfadeDuration',
+  'ducking',
+  'handover',
   'maxTrackSeconds',
   'maxTrackMinutes',
   'archive',
+  'backups',
   'stream',
   'loudness',
   'weather',
@@ -118,7 +131,11 @@ export const SETTINGS_PATCH_KEYS = [
   'activeDjPromptId',
   'djPrompt',
   'djHouseRules',
+  'djBehaviour',
   'djSpeakClock',
+  'djTalkOnlyBetweenTracks',
+  'pauseTalkMinSeconds',
+  'fadeAtShowEnd',
   'personas',
   'shows',
   'schedule',
@@ -126,6 +143,7 @@ export const SETTINGS_PATCH_KEYS = [
   'activePersonaId',
   'tts',
   'llm',
+  'picker',
   'search',
   'embedding',
   'skills',
@@ -186,16 +204,25 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
  */
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
+  jingleRotate: jingleRotateSchema,
   crossfadeDuration: crossfadeDurationSchema,
+  ducking: duckingPatchSchema,
+  handover: handoverPatchSchema,
   archive: archivePatchSchema,
+  backups: backupsPatchSchema,
   stream: streamPatchSchema,
   loudness: loudnessPatchSchema,
   weather: weatherPatchSchema,
+  picker: pickerPatchSchema,
   station: stationSchema,
   stationDescription: stationDescriptionSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
+  djBehaviour: djBehaviourPatchSchema,
   djSpeakClock: djSpeakClockSchema,
+  djTalkOnlyBetweenTracks: djTalkOnlyBetweenTracksSchema,
+  pauseTalkMinSeconds: pauseTalkMinSecondsSchema,
+  fadeAtShowEnd: fadeAtShowEndSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
   transitions: transitionsPatchSchema,

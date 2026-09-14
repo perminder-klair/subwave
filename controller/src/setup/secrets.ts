@@ -1,26 +1,14 @@
-// Secrets file — state/secrets.env, mode 0600, sourced into process.env on
-// controller boot. The first-run wizard writes cloud LLM / TTS API keys here
-// when the operator supplies them through the form. Mode 0600 matches the
-// posture of state/icecast-secrets.env (root-owned, in-container only readers).
+// state/secrets.env — shell-style KEY=value, mode 0600, sourced into process.env
+// on boot. The first-run wizard writes cloud LLM / TTS API keys here.
 //
-// Format is shell-style KEY=value lines. The file is deliberately hand-editable
-// — the header says so and operators do it — which is why reading it goes
-// through `dotenv` rather than a bespoke line splitter. The splitter it replaces
-// understood only `KEY=value` plus one pair of surrounding quotes, so ordinary
-// .env syntax silently produced the WRONG SECRET: `export KEY=…` was skipped
-// entirely (key absent → the provider 401s), and a trailing `# note` became part
-// of the value. Nothing in that failure points at this file.
+// The file is deliberately hand-editable, so reading it goes through `dotenv`,
+// never a bespoke splitter: a misread is a wrong SECRET, and that surfaces only
+// as a provider 401 pointing nowhere near this file.
 //
-// `readSecretsFile` is the ONE parse. It used to exist twice — once in
-// loadSecretsIntoEnv and once inside saveSecrets' merge — which is the load-path
-// / save-path split this codebase treats as a defect everywhere else, and here
-// the two must agree by construction: saveSecrets READS THEN REWRITES, so a
-// value the merge misreads is a value written back misread.
-//
-// The reader stays paired with envEscape at the bottom of this file: the writer
-// quotes anything outside a conservative safe set precisely so the reader gets
-// it back verbatim. Two things dotenv does that the old splitter did not, both
-// warned about rather than silently accepted — see readSecretsFile.
+// `readSecretsFile` is the ONE parse. saveSecrets READS THEN REWRITES the whole
+// file, so a value a second parse misread would be destroyed on disk. Reader and
+// `envEscape` at the bottom are a designed pair: the writer quotes anything
+// outside a conservative safe set so the reader gets it back verbatim.
 
 import { existsSync } from 'node:fs';
 import { chmod, readFile } from 'node:fs/promises';
@@ -30,8 +18,8 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
-// Keys the wizard is allowed to write. Anything else passed in gets ignored —
-// defense against the form being abused as a generic env-var setter.
+// Keys the wizard may write; anything else is ignored, so the form cannot be
+// abused as a generic env-var setter.
 export const SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
@@ -43,12 +31,10 @@ export const SECRET_ENV_KEYS = [
   'ELEVENLABS_API_KEY',
   'FISH_API_KEY',
   'SEARCH_API_KEY',
-  // Embeddings. Only needed when the embedding provider uses a different key
-  // than chat (e.g. OpenRouter for embeddings, a local proxy for chat) — see
-  // embedding.ts embeddingCfg(). Blank → embeddings inherit settings.llm.apiKey.
+  // Only needed when embeddings use a different provider than chat. Blank →
+  // embeddings inherit settings.llm.apiKey.
   'EMBEDDING_API_KEY',
-  // Scrobbling. See broadcast/scrobble.ts. Env always wins over settings.json,
-  // so a host with these in compose env_file works without ever touching the UI.
+  // Scrobbling (broadcast/scrobble.ts). Env wins over settings.json.
   'LASTFM_API_KEY',
   'LASTFM_API_SECRET',
   'LASTFM_SESSION_KEY',
@@ -56,15 +42,10 @@ export const SECRET_ENV_KEYS = [
   'LISTENBRAINZ_API_URL',
 ];
 
-// An unquoted value carrying a `#`. dotenv reads that as the start of an inline
-// comment and truncates there, which is correct .env semantics and is what makes
-// `KEY=sk-abc # my key` work — but it is ALSO how a secret that genuinely
-// contains a `#` loses its tail. The old splitter kept the tail, so this is the
-// one place the swap could trade a silent wrong value for a different silent
-// wrong value. It doesn't: the case is detected and warned, and the fix (quote
-// it) is named. The writer never produces this shape — envEscape single-quotes
-// anything outside `[A-Za-z0-9_./:@,+\-]`, `#` included — so this can only come
-// from a hand edit.
+// An unquoted value carrying a `#`: dotenv truncates there (correct .env
+// semantics), which is also how a secret containing a `#` loses its tail. Warned
+// rather than silently accepted. Only a hand edit can produce this shape —
+// envEscape single-quotes `#`.
 const UNQUOTED_HASH_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?!['"])[^#\r\n]*#/;
 
 export interface SecretsRead {
@@ -72,18 +53,16 @@ export interface SecretsRead {
   warnings: string[];
 }
 
-// The single parse of secrets.env. Returns only the keys this module owns, plus
-// any warnings worth surfacing — never throws, because a hand-edited secrets
-// file must not be able to wedge boot.
+// The single parse of secrets.env. Returns only the keys this module owns plus
+// any warnings. Never throws: a hand-edited file must not wedge boot.
 export function readSecretsFile(text: string): SecretsRead {
   const warnings: string[] = [];
   let parsed: Record<string, string> = {};
   try {
     parsed = parseDotenv(text);
   } catch (err: any) {
-    // dotenv.parse is not documented to throw, but this runs on the boot path
-    // for a file the operator edits by hand — an unreadable file costs the
-    // stored keys, not the station.
+    // dotenv.parse is not documented to throw, but this is the boot path: an
+    // unreadable file costs the stored keys, not the station.
     return { values: {}, warnings: [`secrets.env could not be parsed (${err?.message || err})`] };
   }
 
@@ -100,10 +79,9 @@ export function readSecretsFile(text: string): SecretsRead {
   const values: Record<string, string> = {};
   for (const [key, value] of Object.entries(parsed)) {
     if (!SECRET_ENV_KEYS.includes(key)) continue;
-    // dotenv supports multi-line quoted values; envEscape refuses to persist
-    // one. Carrying such a value would put the live env and the file out of
-    // lockstep and make the NEXT saveSecrets throw on a key the operator never
-    // touched, so it is dropped here — loudly, at the point of the edit.
+    // dotenv supports multi-line quoted values; envEscape cannot persist one, so
+    // carrying it would make the NEXT saveSecrets throw on an untouched key.
+    // Dropped loudly instead.
     if (/[\r\n]/.test(value)) {
       warnings.push(`${key} spans multiple lines, which this file cannot store — ignoring it.`);
       continue;
@@ -113,10 +91,7 @@ export function readSecretsFile(text: string): SecretsRead {
   return { values, warnings };
 }
 
-// Read state/secrets.env and merge into process.env for keys that aren't
-// already set there. Real env vars (from .env via compose env_file) always
-// win — the secrets file is just a fallback / persistence layer for keys the
-// wizard collected.
+// Merge into process.env for keys not already set there: real env vars always win.
 export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped: string[]; warnings: string[] }> {
   const loaded: string[] = [];
   const skipped: string[] = [];
@@ -134,13 +109,11 @@ export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped:
   return { loaded, skipped, warnings };
 }
 
-// Persist a batch of API keys to state/secrets.env. Merges with whatever is
-// already there so a wizard re-run that only changes one key doesn't clobber
-// the others. Empty values are written through as `KEY=` rather than deleting
-// the entry — the next boot then sees an empty string and falls back to env.
+// Persist a batch of API keys, merged over what is already there. An empty value
+// is written as `KEY=` rather than deleted, so the next boot falls back to env.
 export async function saveSecrets(patch: Record<string, string>): Promise<void> {
-  // Same reader as the boot path, deliberately: this merge rewrites the whole
-  // file, so a value read wrong here is a stored secret destroyed on disk.
+  // Same reader as the boot path: this rewrites the whole file, so a value read
+  // wrong here is a stored secret destroyed on disk.
   const current: Record<string, string> = existsSync(PATH)
     ? readSecretsFile(await readFile(PATH, 'utf8')).values
     : {};
@@ -155,27 +128,22 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
     ...Object.entries(current).map(([k, v]) => `${k}=${envEscape(v)}`),
     '',
   ].join('\n');
-  // Atomic replace, created 0600 — the temp file never exists with looser
-  // permissions, and a crash mid-write can't truncate existing secrets.
+  // Atomic replace at 0600: the temp never exists with looser permissions, and a
+  // crash mid-write can't truncate existing secrets.
   await writeFileAtomic(PATH, body, { mode: 0o600 });
   await chmod(PATH, 0o600);
-  // Only now — after the file is safely on disk — mutate the live process env,
-  // so any subsequent AI SDK call sees the new key without a restart. Doing this
-  // after the write (rather than in the merge loop above) means a value rejected
-  // by envEscape (newline/quote) never takes effect in-process while being absent
-  // from the file: the live env and disk stay in lockstep.
+  // Only after the file is on disk, so a value envEscape rejected never takes
+  // effect in-process while being absent from the file. Live env and disk stay in
+  // lockstep, and a later AI SDK call sees the new key without a restart.
   for (const [key, value] of Object.entries(patch)) {
     if (!SECRET_ENV_KEYS.includes(key) || !value) continue;
     process.env[key] = value;
   }
 }
 
-// Same shape as cli/src/util.ts:envEscape — keep them in sync. We single-quote
-// any value that isn't ASCII-alphanumeric-plus-a-few-punct so the reader's
-// "strip one pair of surrounding quotes" path takes effect. Strictly speaking
-// the controller's loader doesn't interpolate, so this is mostly cosmetic /
-// defence-in-depth here; it matters more when the same file ever gets read by
-// something that does interpolate.
+// Same shape as cli/src/util.ts:envEscape — keep them in sync. Single-quotes any
+// value outside `[A-Za-z0-9_./:@,+-]` so the reader gets it back verbatim, and so
+// it survives a consumer that does interpolate.
 function envEscape(value: string): string {
   if (value.includes('\n') || value.includes('\r')) {
     throw new Error('Secret value contains a newline; refuse to persist (would corrupt line-based parser)');

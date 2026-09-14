@@ -16,6 +16,10 @@
  *                       prod behind Caddy is http://localhost:7700/api)
  *   SUBWAVE_ADMIN_USER  admin Basic-auth user  — required for DJ control tools
  *   SUBWAVE_ADMIN_PASS  admin Basic-auth pass  — required for DJ control tools
+ *   SUBWAVE_STATION_PASSWORD
+ *                       the station's listener password — only needed when the
+ *                       station is private (privacy.privatePlayer /
+ *                       privacy.listenerAuth); gates the listener-facing reads
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -27,6 +31,7 @@ export async function startStdioServer(): Promise<void> {
     baseUrl: (process.env.SUBWAVE_API_URL || "http://localhost:7701").replace(/\/$/, ""),
     adminUser: process.env.SUBWAVE_ADMIN_USER,
     adminPass: process.env.SUBWAVE_ADMIN_PASS,
+    stationPassword: process.env.SUBWAVE_STATION_PASSWORD,
   });
 
   const version = process.env.SUBWAVE_VERSION || "latest";

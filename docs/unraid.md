@@ -169,8 +169,20 @@ container, which **starts by default** (a lean, multi-arch image, so it also
 runs on arm64 Unraid boxes). On the split stack it comes up with the rest of the
 services; on the **all-in-one** image it's baked in-process. Nothing to enable —
 just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
-engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
-stack) or check its logs.
+engine reads "off"** on the split stack, first check whether you turned it off
+on purpose: `ANALYZER_REPLICAS=0` (below) keeps the container gone across every
+`Pull & Up`. If you did not, the container stopped on its own — `Pull & Up`
+brings it back, or check its logs.
+
+**Don't want it at all?** On the split stack, add `ANALYZER_REPLICAS=0` to your
+**.env**, **Save**, then **Pull & Up** — the container is removed and stays gone.
+That's the one to use if analysis runs on another machine (point `ANALYZE_URL` at
+it). **Only `0` and `1` are valid** — the service has a fixed `container_name`,
+so `2` fails every Compose command rather than scaling. On the **all-in-one**
+image the variable does nothing at all (there is no analyzer service; the
+supervisor logs a warning if you set `0`) — to stop analysis there, blank the
+`ANALYZE_PYTHON` variable instead. Full notes in
+[`tts-heavy.md`](tts-heavy.md#turning-the-analyzer-off).
 
 **"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
 that isn't in the lean image (the `-heavy` images are ~1.9 GB):
@@ -388,6 +400,15 @@ path. For most people the single-upstream setup above is the easier win.
   so on Unraid it was unsettable. It is a station setting now. (Adding
   `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
   field; the broadcast log names which source it used on every boot.)
+- **Listener country in Stats:** **admin → Settings → Danger zone → Listener
+  country**. `CF-IPCountry` only exists behind Cloudflare, so a station reached
+  over the LAN or a plain reverse proxy shows sessions with no geography. Name
+  your proxy's own country header there, or point the same card at an offline
+  `.mmdb` database (put it under the appdata path — the container already sees
+  it). Both are settings rather than variables for the same reason max listeners
+  is: the AIO image has no `.env`. `GEOIP_DB_PATH` as a custom container
+  variable still overrides the field. Full recipe in
+  [`deployment.md`](deployment.md#listener-country-on-the-stats-page).
 - **Backups:** everything lives under the appdata path
   (`/mnt/user/appdata/subwave`) — settings, library cache, archives, voices.
   Back that path up (it's already on your pool/array).

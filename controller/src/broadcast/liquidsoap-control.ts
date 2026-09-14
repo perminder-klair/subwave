@@ -1,7 +1,6 @@
-// Liquidsoap server (telnet) client — sends commands to the running mixer
-// via TCP. radio.liq enables this and registers a "restart" command that
-// triggers shutdown(); the container's restart-policy brings it right back
-// with whatever updated settings the controller just wrote to disk.
+// Liquidsoap telnet client. radio.liq registers a "restart" command that calls
+// shutdown(); the container restart-policy brings the mixer back with whatever
+// settings files the controller just wrote.
 
 import net from 'node:net';
 import { cachedAsync } from '../util/ttl-cache.js';
@@ -11,10 +10,8 @@ import {
   type ResolveProbeOutcome,
 } from './resolve-probe.js';
 
-// Liquidsoap shares a container with icecast2 under the `broadcast` service
-// (see docker-compose.yml). The legacy `liquidsoap` hostname is still honoured
-// for operators with a pinned override in their .env, but the default reflects
-// the merged image.
+// Liquidsoap shares the `broadcast` container with icecast2; the legacy
+// `liquidsoap` hostname still works as a pinned .env override.
 const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
 const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
@@ -35,10 +32,8 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
     sock.setTimeout(timeoutMs);
     sock.on('timeout', () => finish(new Error('liquidsoap telnet timeout')));
     sock.on('error', err => {
-      // ENOTFOUND means the controller can't resolve the liquidsoap hostname —
-      // almost always because it's running outside the compose network. Surface
-      // a hint instead of the raw DNS error so the next operator doesn't have
-      // to dig (see issue #62).
+      // ENOTFOUND usually means the controller is outside the compose network;
+      // give the hint rather than the raw DNS error (#62).
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
         finish(new Error(
@@ -60,11 +55,8 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Quick liveness probe — can we open a TCP connection to the telnet port?
-// Used to confirm a restart actually took: Liquidsoap must drop before the
-// container restart-policy brings it back, so a port that stops accepting
-// connections is proof the shutdown landed. Any connect error (refused,
-// timeout) counts as "down".
+// TCP liveness probe. A port that stops accepting is proof the shutdown landed;
+// any connect error counts as down.
 function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
   return new Promise(resolve => {
     const sock = net.createConnection({ host: HOST, port: PORT });
@@ -83,31 +75,22 @@ function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
 }
 
 export async function restartLiquidsoap() {
-  // The custom "restart" command in radio.liq calls shutdown(); the container
-  // restart-policy then brings Liquidsoap back with the freshly-written
-  // settings files. We can't trust sendCommand resolving as proof the command
-  // landed: the telnet socket can close cleanly with an empty buffer (e.g. it
-  // raced a concurrent stream_status poll), which still resolves — so a bare
-  // "no error" would let /restart-mixer report success while pending settings
-  // silently never apply. Confirm by watching the port actually go down, and
-  // resend if it doesn't.
-  //
-  // The mixer is about to disappear and come back, so any cached on-air reading
-  // is about to be wrong either way.
+  // sendCommand resolving is NOT proof the restart landed — the telnet socket
+  // can close cleanly with an empty buffer. Confirm by watching the port go
+  // down, and resend if it doesn't.
   invalidateStreamStatus();
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await sendCommand('restart', 2000);
     } catch (err) {
-      // A reset/timeout is expected — Liquidsoap is tearing the socket down.
-      // Anything else (e.g. an unresolved host) is a real failure to surface.
+      // A reset/timeout is expected as Liquidsoap tears the socket down;
+      // anything else is a real failure.
       if (!/ECONNRESET|EPIPE|timeout/i.test(err.message)) throw err;
       lastErr = err as Error;
     }
-    // shutdown() is asynchronous; poll until the process actually drops. A
-    // genuine restart goes down within a couple of seconds, so if the port is
-    // still accepting after the window the command was dropped — retry it.
+    // shutdown() is async; a genuine restart drops within a couple of seconds,
+    // so a port still accepting after the window means the command was dropped.
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
       if (!(await isLiquidsoapReachable())) return; // confirmed down → restart took
@@ -119,16 +102,14 @@ export async function restartLiquidsoap() {
   );
 }
 
-// Skip the currently playing track via the custom "skip" command in radio.liq.
-// Unlike restart, this returns a normal "OK" response — Liquidsoap stays up.
+// Unlike restart, this returns a normal "OK" — Liquidsoap stays up.
 export async function skipTrack() {
   return sendCommand('skip', 2000);
 }
 
-// What a skip would air next from dj_queue (the custom "dj_queue_status"
-// command — see skip-policy.ts for the states). 'unknown' covers a telnet
-// failure and an older radio.liq without the command, so the commit-then-skip
-// wait can degrade to its grace path rather than throw mid-skip.
+// What a skip would air next from dj_queue. 'unknown' covers a telnet failure
+// and an older radio.liq without the command, so the commit-then-skip wait
+// degrades to its grace path rather than throwing mid-skip.
 export async function djQueueStatus(): Promise<DjQueueStatus> {
   try {
     return parseDjQueueStatus(await sendCommand('dj_queue_status', 2000));
@@ -150,15 +131,10 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
-// Force the auto.m3u fallback playlist to re-read from disk. The playlist
-// (id="auto" in radio.liq) uses reload_mode="watch", but that inotify watch can
-// silently orphan itself — the controller rewrites auto.m3u via atomic rename,
-// which swaps the inode each time, and a single missed watch means Liquidsoap
-// loops the last-loaded ~30-track snapshot forever until the container restarts
-// (issue #874). Calling the playlist's built-in `auto.reload` telnet command
-// after every write makes the reload deterministic instead of trusting inotify.
-// Best-effort: swallow errors (telnet may be unreachable in dev or mid-restart)
-// so a refresh never fails on the reload.
+// Force auto.m3u to re-read from disk. The playlist's reload_mode="watch"
+// inotify watch orphans itself because the controller rewrites the file by
+// atomic rename (new inode), and a missed watch loops the last snapshot forever
+// (#874). Best-effort: errors are swallowed so a refresh never fails here.
 export async function reloadAutoPlaylist(): Promise<boolean> {
   try {
     await sendCommand('auto.reload', 2000);
@@ -168,10 +144,8 @@ export async function reloadAutoPlaylist(): Promise<boolean> {
   }
 }
 
-// Start / stop / query the broadcast. radio.liq registers stream_on /
-// stream_off / stream_status server commands: stream_off shuts the Icecast
-// output down so the /stream.mp3 mount disconnects (the station goes off
-// air); stream_on recreates it. The mixer process keeps running throughout.
+// stream_off disconnects the Icecast mounts (station off air); stream_on
+// recreates them. The mixer process keeps running throughout.
 export async function startStream() {
   try {
     return await sendCommand('stream_on', 2000);
@@ -188,19 +162,11 @@ export async function stopStream() {
   }
 }
 
-// How long an on-air reading is reused. Every telnet take costs a connection and
-// radio.liq logs a `New client`/`Client disconnected` pair for each at its
-// default log level, so with the admin UI polling GET /settings every 3s an
-// uncached read filled the mixer log forever for anyone with a tab open (#1300
-// bug 16b). 10s keeps the badge honest — the operator's own toggle invalidates
-// below, so a deliberate change is never stale — while making the connect rate
-// independent of how many admin tabs are watching.
-//
-// What the TTL does NOT cover: a mixer that goes off air OUTSIDE the controller
-// (`docker compose restart broadcast`, an OOM kill, the restart policy cycling
-// it) invalidates nothing, so the badge can lag the truth by up to the TTL. That
-// is bounded and self-correcting — and anything that needs the live answer
-// instead of the cheap one reads through streamStatusFresh() below.
+// How long an on-air reading is reused. Each telnet take logs a client
+// connect/disconnect pair in the mixer log, and /settings is polled every 3s
+// per admin tab (#1300 bug 16b). A mixer that goes off air outside the
+// controller invalidates nothing, so the badge can lag by up to the TTL;
+// callers needing the live answer use streamStatusFresh().
 const STREAM_STATUS_TTL_MS = 10_000;
 
 const streamStatusCache = cachedAsync(
@@ -208,40 +174,29 @@ const streamStatusCache = cachedAsync(
   { ttlMs: STREAM_STATUS_TTL_MS },
 );
 
-// Returns true when on air, false otherwise. `stream_status` replies "on" /
-// "off". Cached — see STREAM_STATUS_TTL_MS. A telnet failure still rejects
-// (never cached, never served stale), so callers keep deciding what an
-// unreachable mixer means.
+// True when on air. Cached; a telnet failure still rejects (never cached, never
+// served stale) so callers decide what an unreachable mixer means.
 export async function streamStatus() {
   return streamStatusCache.get();
 }
 
-// The same reading, but guaranteed to be a real telnet round-trip: invalidating
-// first drops any in-flight take too, so this can't be handed a poll that was
-// already running. For callers whose whole point is proving the mixer is alive
-// RIGHT NOW — Doctor's mixer check reports "telnet reachable", and served from
-// a warm cache it would report that for a process that died seconds ago,
-// precisely when an operator is running diagnostics to find that out.
-//
-// Operator-triggered surfaces only. Putting this on a poll would reinstate the
-// per-request connection this cache exists to remove.
+// Guaranteed real telnet round-trip: invalidating first drops any in-flight
+// take too. Operator-triggered surfaces only (Doctor) — putting this on a poll
+// reinstates the per-request connection the cache exists to remove.
 export async function streamStatusFresh(): Promise<boolean> {
   streamStatusCache.invalidate();
   return streamStatusCache.get();
 }
 
-// Drop the cached reading. Called by anything that changes what stream_status
-// would report, so an operator toggle shows up immediately rather than after
-// the TTL.
+// Called by anything that changes what stream_status would report, so an
+// operator toggle shows up immediately rather than after the TTL.
 export function invalidateStreamStatus(): void {
   streamStatusCache.invalidate();
 }
 
-// Pause / resume / query the idle gate (radio.liq `idle_gate`). Unlike
-// stream_off, the Icecast mounts stay up serving silence — new listeners
-// connect normally, which is what lets the stream-idle monitor wake the
-// programme when someone tunes in. Both commands are idempotent, so the
-// monitor can re-assert the desired state after a mixer restart.
+// Idle gate (radio.liq `idle_gate`). Unlike stream_off the Icecast mounts stay
+// up serving silence, so new listeners still connect and can wake the
+// programme. Idempotent, so the monitor can re-assert state after a restart.
 export async function idleOn() {
   return sendCommand('idle_on', 2000);
 }
@@ -258,22 +213,15 @@ export async function idleStatus() {
 
 interface DjQueueSnapshot {
   ids: Set<string>;
-  // subsonic_id → Liquidsoap request id. First occurrence wins on the off
-  // chance of a duplicate (queue.push dedupes by track id, so there shouldn't
-  // be one).
+  // subsonic_id → Liquidsoap request id; first occurrence wins.
   ridBySubsonicId: Map<string, string>;
-  // Pre-rendered transition clips (stem-blend transitions): a clip carries
-  // the INCOMING track's subsonic_id AND sits earlier in dj_queue, so
-  // without this split the first-occurrence rule would bind that id to the
-  // CLIP's rid — an operator cancel would then remove the clip and leave the
-  // real track playing untracked. Clips are keyed here instead and excluded
-  // from ids/ridBySubsonicId entirely.
+  // Pre-rendered transition clips carry the INCOMING track's subsonic_id and
+  // sit earlier in dj_queue, so first-occurrence would bind that id to the
+  // clip's rid and a cancel would remove the clip, not the track. Kept here
+  // instead and excluded from ids/ridBySubsonicId.
   clipRidBySubsonicId: Map<string, string>;
-  // Request ids in queue order — needed to find the entry pushed immediately
-  // ahead of a given track (a bed rides that slot; see resolveDjQueueRidWithBed).
-  // Relies on `dj_queue.queue` listing pending rids in FIFO push order, which
-  // is what request.queue's telnet command does (Liquidsoap 2.x: the queue
-  // command prints the ready/pending list oldest-first).
+  // Request ids in FIFO push order, so the entry immediately ahead of a track
+  // (where a bed rides) can be found. dj_queue.queue lists oldest-first.
   orderedRids: string[];
   // Request ids whose annotate URI carries subwave_kind="bed" — beds have no
   // subsonic_id, so this is the only way to recognise them in the queue.
@@ -285,9 +233,7 @@ interface DjQueueCache extends DjQueueSnapshot {
 let _djQueueCache: DjQueueCache | null = null;
 let _djQueueInflight: Promise<Set<string>> | null = null;
 
-// Query Liquidsoap's dj_queue using two telnet hops:
-// 1. dj_queue.queue returns space-separated request IDs.
-// 2. request.metadata <rid> returns metadata for each request ID.
+// Two telnet hops: dj_queue.queue for the rids, request.metadata per rid.
 async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   const res = await sendCommand('dj_queue.queue', 2000);
   const rids = res.trim().split(/\s+/).filter(Boolean);
@@ -299,17 +245,12 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   for (const rid of rids) {
     try {
       const meta = await sendCommand(`request.metadata ${rid}`, 2000);
-      // A pending request that Liquidsoap hasn't prepared yet is `status=idle`
-      // with no resolved top-level metadata — but its annotate URI is still
-      // there as `initial_uri="annotate:...,subsonic_id=\"…\"..."`. So match the
-      // id anywhere in the blob (tolerating the escaped quotes inside
-      // initial_uri), not just an anchored top-level `subsonic_id=` line — the
-      // furthest-out queued track (the one most likely to be cancelled) is
-      // exactly the one that's still idle. See #? / queue-cancel.
+      // An unprepared request is status=idle with no top-level metadata, but
+      // its annotate URI survives inside initial_uri with escaped quotes — so
+      // match the id anywhere in the blob, not on an anchored top-level line.
       const match = /subsonic_id=\\?"([^"\\]+)/.exec(meta);
       if (match && match[1]) {
-        // Transition clips masquerade as their incoming track (same
-        // subsonic_id) — route them to the clip map, never the track maps.
+        // Clips masquerade as their incoming track; route to the clip map.
         if (/subwave_clip=\\?"1/.test(meta)) {
           if (!clipRidBySubsonicId.has(match[1])) clipRidBySubsonicId.set(match[1], rid);
         } else {
@@ -348,14 +289,9 @@ export async function getDjQueueIds(): Promise<Set<string>> {
   return _djQueueInflight;
 }
 
-// Resolve the Liquidsoap request id for a queued track, plus the bed queued
-// immediately ahead of it, if any. Always a fresh read — cancel decisions
-// can't ride a 4s-stale cache (the track may have gone on air since); `rid` is
-// null when the track is no longer pending in dj_queue.
-//
-// A bed is a separate dj_queue entry with no subsonic_id (queue.maybePushBed
-// writes it right before the track URI), so an id-keyed cancel can't see it —
-// this is how removeUpcoming finds it to cancel it along with its track.
+// The rid for a queued track plus the bed queued immediately ahead of it.
+// Always a fresh read — cancel decisions can't ride the 4s cache. A bed has no
+// subsonic_id, so this is the only way an id-keyed cancel can find it.
 export async function resolveDjQueueRidWithBed(
   subsonicId: string,
 ): Promise<{ rid: string | null; bedRid: string | null }> {
@@ -376,12 +312,8 @@ export async function resolveClipRid(subsonicId: string): Promise<string | null>
   return snap.clipRidBySubsonicId.get(subsonicId) ?? null;
 }
 
-// Remove a pending request from dj_queue via the custom "dj_queue_remove"
-// command in radio.liq. Returns false when Liquidsoap replies NOT_FOUND —
-// the request already left the queue (playing, played, or mid-prefetch for
-// the next slot — a request the source has popped for resolution is
-// invisible to dj_queue.queue(), and refusing it is right: it's about to
-// air), so there is nothing left to cancel.
+// False when Liquidsoap replies NOT_FOUND: the request already left the queue
+// (playing, played, or popped for prefetch), so there is nothing to cancel.
 export async function removeFromDjQueue(rid: string): Promise<boolean> {
   const res = await sendCommand(`dj_queue_remove ${rid}`, 2000);
   _djQueueCache = null; // the queue just changed under the cache

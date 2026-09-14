@@ -1,8 +1,7 @@
 'use client';
-// The global system-prompt library: templates shared by every persona, one active
-// at a time ('' = the built-in default). Two views — the library list and a single
-// template's editor. Form data lives in the container; this holds only which view
-// is showing.
+// The global system-prompt library: templates shared by every persona, one
+// active at a time ('' = the built-in default). Form data lives in the
+// container; this holds only which of the two views is showing.
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useFormState, useWatch, type Control, type UseFormSetValue } from 'react-hook-form';
@@ -58,12 +57,9 @@ export function SystemPromptModal({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   // The schema's own per-row verdict — not a local reimplementation of it.
   const { errors } = useFormState({ control, name: 'djPrompts' });
-  // `promptFields` (useFieldArray) is the ROW identity list (_rhfKey, order,
-  // id) — it is not guaranteed to reflect a live keystroke on an already-
-  // mounted row's name/text (those are written by TextField's OWN
-  // useController elsewhere in the tree). `useWatch` reads the live values
-  // from the same central RHF store every writer updates, regardless of
-  // which component performed the write.
+  // `promptFields` is the row identity list (_rhfKey, order, id) and does not
+  // reflect live keystrokes written by TextField's own useController.
+  // `useWatch` reads the current values from the central RHF store.
   const watchedPrompts = useWatch({ control, name: 'djPrompts' });
 
   // Re-opening always lands on the library list, never a stale editor.
@@ -138,9 +134,8 @@ export function SystemPromptModal({
     </div>
   );
 
-  // Both footers own a full-width wrapping row rather than sitting as bare children
-  // of the modal's non-wrapping footer flex: on a phone the status line plus two
-  // buttons has to break onto two lines.
+  // Full-width wrapping row rather than bare children of the modal's
+  // non-wrapping footer flex, so phones can break onto two lines.
   const libraryFooter = (
     <div className="flex w-full flex-wrap items-center justify-end gap-2">
       <span

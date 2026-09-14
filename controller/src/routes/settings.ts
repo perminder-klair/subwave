@@ -8,13 +8,7 @@ import { router as stationRoutes } from './settings/station.js';
 
 export const router = express.Router();
 
-// Mounted in order, though the paths are disjoint so order is only a matter of
-// readability. Each sub-router owns one concern:
-//
-//   core.ts     the settings read/write surface + credential writes
-//   llm.ts      provider probing and model discovery (read-only)
-//   tts.ts      voice preview and the voice catalogue
-//   station.ts  station actions: mixer, stream, themes, search probe
+// Paths are disjoint, so mount order is readability only.
 router.use(coreRoutes);
 router.use(llmRoutes);
 router.use(ttsRoutes);

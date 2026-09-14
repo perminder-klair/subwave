@@ -1,28 +1,12 @@
-// fetch() with a request deadline — the one place the controller's
-// AbortController + setTimeout(abort) + clearTimeout dance lives, replacing
-// ~20 hand-rolled copies scattered across the audio / broadcast / music /
-// routes / skills / mcp modules.
+// fetch() with a request deadline: the one place the AbortController +
+// setTimeout(abort) + clearTimeout dance lives. Never hand-roll another copy.
 //
-// Semantics match the copies it replaces: the timeout bounds ESTABLISHING the
-// response (the fetch() call), and the timer is ALWAYS cleared in a finally —
-// including when fetch throws. Several copies cleared it only on the success
-// path (e.g. routes/public.ts, routes/onboarding.ts), leaving a timer armed for
-// the full timeout on a network error; routing them through here fixes that.
-//
-// By default the caller reads the body (res.json()/.text()/.arrayBuffer())
-// AFTER this resolves, so the body drain is not itself bounded — matching the
-// copies whose timer only wrapped the fetch() call. Copies whose finally sat at
-// the end of the whole function had a deadline over the body read too; those
-// sites pass `bodyDeadline: true`, which keeps the (unref'd) timer armed past
-// resolution so a body read that outlives the deadline aborts instead of
-// hanging on undici's ~300s default. A site that must stream a large body with
-// its own cap (the capped analyzer download) keeps its own controller and does
-// NOT use this helper.
-//
-// On timeout the underlying fetch rejects with an AbortError (DOMException
-// name 'AbortError'), so call sites that special-case err.name === 'AbortError'
-// keep working. Pass `signal` to compose an outer abort (a request-scoped
-// cancel) with the timeout — whichever fires first aborts the fetch.
+// The timeout bounds ESTABLISHING the response and the timer is always cleared,
+// including when fetch throws. The body drain is NOT bounded by default; pass
+// `bodyDeadline: true` to keep the (unref'd) timer armed past resolution so a
+// slow body aborts instead of hanging on undici's ~300s default. A timeout
+// rejects with an AbortError, so `err.name === 'AbortError'` call sites work.
+// `signal` composes an outer abort with the timeout: whichever fires first wins.
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;

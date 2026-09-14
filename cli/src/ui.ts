@@ -1,10 +1,7 @@
-// Shared UI helpers, wrapping @clack/prompts + picocolors. Two things beyond
-// styling: "menu mode", where Esc throws MENU_BACK for the menu loop to catch
-// and redraw; and an explicit `input` stream on every interactive prompt,
-// because on macOS Bun's process.stdin delivers no bytes when launched from a
-// piped parent (oven-sh/bun#13374) — exactly the `curl|sh → exec subwave init
-// </dev/tty` path. Opening /dev/tty ourselves sidesteps the broken pipeline.
-// See cli/src/tty.ts and cli/scripts/patch-clack.mjs.
+// Shared UI helpers over @clack/prompts + picocolors. Two things beyond styling:
+// "menu mode", where Esc throws MENU_BACK for the menu loop to catch; and an
+// explicit `input` stream on every prompt, working around oven-sh/bun#13374
+// (see cli/src/tty.ts and cli/scripts/patch-clack.mjs).
 
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
@@ -19,11 +16,7 @@ function withInput<T>(opts: T): T {
   return { ...opts, input: interactiveInput };
 }
 
-// Defense-in-depth against oven-sh/bun#13374, where a prompt under a piped
-// parent hangs un-killably — Bun delivers no stdin bytes, not even on the fresh
-// /dev/tty stream. Nothing drives prompts through the pipe today (the installer
-// uses `--yes`), but if that regresses this turns a silent hang into a fast,
-// actionable exit; process.exit still works with a dead stdin. Armed lazily and
+// Turns a #13374 unkillable hang into a fast, actionable exit. Armed lazily and
 // only in the danger zone, so a direct-terminal operator can sit at a prompt
 // indefinitely.
 const HANG_WATCHDOG_MS = Number(process.env.SUBWAVE_PROMPT_WATCHDOG_MS) || 60_000;
@@ -63,9 +56,8 @@ export { p, pc };
 
 export const MENU_BACK = Symbol('menu-back');
 
-// Matches the web UI's `--accent` token (oklch(0.62 0.22 25) ≈ #d94b2a). None of
-// picocolors' 16 ANSI colors land near vermilion, hence the raw truecolor SGR —
-// guarded so pipes / NO_COLOR / dumb terminals never see escape codes.
+// Matches the web UI's `--accent` token (≈ #d94b2a). Raw truecolor SGR because
+// no picocolors ANSI color is close; guarded so NO_COLOR/pipes see no escapes.
 const VERMILION = '\x1b[38;2;217;75;42m';
 export function accent(text: string): string {
   return pc.isColorSupported ? `${VERMILION}${text}\x1b[39m` : text;
@@ -74,9 +66,8 @@ export function accent(text: string): string {
 let menuMode = false;
 let rlInstalled = false;
 
-// Clack has no Esc concept, but it treats Ctrl-C as a cancel sentinel — which
-// the menu loop reads as "back one screen". Outside menu mode Esc stays inert
-// and prompts behave as Clack ships them.
+// Clack has no Esc concept, so map Esc onto its Ctrl-C cancel sentinel, which
+// the menu loop reads as "back one screen". Outside menu mode Esc stays inert.
 function installEscHandler(): void {
   if (rlInstalled) return;
   rlInstalled = true;

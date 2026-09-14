@@ -1,9 +1,6 @@
-// Stream-format sheet: pick which Icecast mount this radio pulls. Everyone
-// hears the same broadcast — this only changes the encoding between the
-// station and this device. Options are already filtered upstream
-// (useStreamFormat) to what the platform can decode AND what the station has
-// enabled, so every row here is genuinely tunable. Follows the SleepDrawer/
-// ThemesDrawer row styling so the bottom sheets read as one family.
+// Stream-format sheet: which Icecast mount this device pulls. Everyone hears
+// the same broadcast; only the encoding changes. useStreamFormat has already
+// filtered the options to what is decodable and enabled.
 
 import { Check } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';

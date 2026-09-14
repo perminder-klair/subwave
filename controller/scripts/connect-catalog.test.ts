@@ -70,6 +70,18 @@ async function main() {
     const opCount = Object.values(doc.paths).reduce((n, ops) => n + Object.keys(ops).length, 0);
     assert.equal(opCount, ENDPOINTS.length, 'every catalog endpoint should map to one operation');
   });
+  // The /api prefix lives on the SERVER url and NOT on each path key. Putting
+  // it in both resolves to /api/api/..., and a doc that disagrees with the
+  // module's own header comment is how a client gets generated against the
+  // wrong base — this pins which half carries it.
+  await test('the /api prefix rides on servers[0], never on the path keys', () => {
+    const doc = toOpenApi('https://radio.example.com');
+    assert.equal(doc.servers[0].url, 'https://radio.example.com/api');
+    const prefixed = Object.keys(doc.paths).filter(p => p.startsWith('/api/'));
+    assert.deepEqual(prefixed, [], 'path keys are prefix-free');
+    assert.ok(doc.paths['/similar-tracks'], 'station-gated read is keyed prefix-free');
+    assert.ok(doc.paths['/health'], 'public read is keyed prefix-free');
+  });
   await test('Express :id path params become {id}', () => {
     const doc = toOpenApi('https://radio.example.com');
     assert.ok(doc.paths['/request/{id}'], ':id should be rewritten to {id}');
@@ -81,6 +93,15 @@ async function main() {
     assert.deepEqual(search.security, [{ basicAuth: [] }], '/dj/search is admin');
     const health = doc.paths['/health']?.get as any;
     assert.equal(health.security, undefined, '/health is public');
+  });
+  // A station-gated read is open on a public station, so its requirement must
+  // be OPTIONAL — the empty object first. Emitting only { stationAuth: [] }
+  // makes every generated client demand a password most stations don't have.
+  await test('station-gated endpoints declare an OPTIONAL apiKey requirement', () => {
+    const doc = toOpenApi('https://radio.example.com');
+    const similar = doc.paths['/similar-tracks']?.get as any;
+    assert.deepEqual(similar.security, [{}, { stationAuth: [] }], '/similar-tracks is station-gated');
+    assert.equal(doc.components.securitySchemes.stationAuth.name, 'x-station-auth');
   });
 
   // MCP_TOOLS is a hand-maintained mirror of the tools registerSubwaveTools

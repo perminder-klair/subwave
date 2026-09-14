@@ -55,7 +55,7 @@ Rules:
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.
 - No greetings or sign-offs — the show is already rolling. No invented listener messages, callers, or events.
-- Plain spoken words only: no stage directions, no asterisks, no emoji.${langClause}${settings.castHouseRulesBlock()}`;
+- Plain spoken words only: no stage directions, no asterisks, no emoji. Speaker names in supplied recap are reference-only: never prefix a spoken line with any speaker name or a name-and-colon label; the separate speaker field already routes each line to the right voice.${langClause}${settings.castHouseRulesBlock()}`;
 }
 
 // Returns air-ready lines [{ persona, text }] in order, or null when the model
@@ -71,7 +71,7 @@ export async function generateBanter({
   const schema = z.object({
     lines: z.array(z.object({
       speaker: z.enum(ids as [string, ...string[]]).describe('the persona id of who says this line, from the cast list'),
-      text: z.string().min(1).max(400).describe('the spoken line — one or two short conversational sentences, plain speech, no stage directions or sound effects'),
+      text: z.string().min(1).max(400).describe('the spoken line only — one or two short conversational sentences, with no speaker name or label prefix; the separate speaker field selects the voice'),
     })).min(MIN_LINES).max(MAX_LINES).describe('the exchange, in air order'),
   });
 

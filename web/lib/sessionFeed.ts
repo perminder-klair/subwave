@@ -1,27 +1,19 @@
-// Shared display helpers for live-session turns from GET /session.
+// Shared display helpers for live-session turns from GET /session, the source
+// for every listener-facing booth log (player Booth feed, ticker, /admin/dash);
+// `djLog` is operator diagnostics behind /admin/debug.
 //
-// The live session is the single source of truth for the booth log wherever
-// it's shown to people (player Booth feed, broadcast ticker, /admin/dash). The
-// controller's in-memory `djLog` is operator diagnostics only and stays behind
-// /admin/debug.
-//
-// role → display class: voice (spoken on-air verbatim), dj (the agent's pick /
-// request reasoning), track (a track that aired), system (session events).
+// role → display class: voice (spoken on-air verbatim), dj (pick / request
+// reasoning), track (a track that aired), system (session events).
 
 import type { SessionTurn } from './types';
 
 export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
 
-// A spoken turn is stamped with `meta.airedAt` — the LIVE-EDGE moment the words
-// left the mixer (issue #1382). This listener is `leadMs` behind that edge for
-// their whole connection (#1114), so a line shown the moment it appears in the
-// feed is shown before it is spoken *here*, which is exactly the complaint the
-// air-time stamp exists to answer. Same trick useStationFeed already plays with
-// the track switch: hold the line until its audio has actually arrived.
-//
-// Turns with no stamp (every non-voice turn, and any voice turn from a mixer
-// that couldn't measure its air time) are shown immediately — degrading to the
-// old behaviour, never to a line that is hidden forever.
+// A spoken turn carries `meta.airedAt`, the live-edge moment it left the mixer
+// (#1382); this listener sits `leadMs` behind that edge (#1114), so hold the
+// line until its audio has arrived, as useStationFeed does for track switches.
+// An unstamped turn (every non-voice turn, or a mixer that could not measure)
+// is shown immediately rather than hidden.
 const MAX_HOLD_MS = 120_000;
 
 export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
@@ -44,10 +36,8 @@ export function splitAudibleTurns(
   for (const turn of messages || []) {
     const at = airedAtMs(turn);
     const audibleAt = at == null ? null : at + Math.max(0, leadMs);
-    // A stamp far enough in the future to be implausible (a skewed station
-    // clock, an absurd buffer setting) is treated as unknown rather than
-    // withheld — the failure mode of this hold must always be "shown early",
-    // never "never shown".
+    // An implausibly future stamp (skewed clock, absurd buffer) counts as
+    // unknown: this hold fails towards "shown early", never "never shown".
     if (audibleAt == null || audibleAt <= nowMs || audibleAt - nowMs > MAX_HOLD_MS) {
       visible.push(turn);
       continue;
@@ -85,8 +75,7 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   return text;
 }
 
-// The `pick` event turn is the literal prompt posted to the DJ agent — ~700
-// chars of coaching the model needs verbatim but that drowns the booth log.
+// The `pick` event turn is the literal ~700-char prompt posted to the DJ agent.
 // Returns a one-liner for long event turns; null means render the turn as-is.
 export function eventTurnSummary(turn: SessionTurn | null | undefined): string | null {
   if (turn?.role !== 'event') return null;
@@ -109,12 +98,10 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
 }
 
 // The single voice/dj turn to surface as the DJ "thinking" line under
-// now-playing. Walk newest→oldest and skip `dj`/pick turns whose `meta.trackId`
-// isn't what's on air: a pick turn is written at the *previous* track's start,
-// so its trackId is the NEXT track, and showing it reads as this song's
-// reasoning when it isn't (#546). Voice/segment turns carry no trackId and are
-// whatever was last spoken, so they always qualify. A null/unknown
-// currentTrackId yields the latest voice turn, since no pick can be confirmed.
+// now-playing. Walks newest→oldest, skipping `dj`/pick turns whose
+// `meta.trackId` isn't on air: a pick turn is written at the previous track's
+// start, so its trackId is the NEXT track (#546). Voice turns carry no trackId
+// and always qualify; an unknown currentTrackId yields the latest voice turn.
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,

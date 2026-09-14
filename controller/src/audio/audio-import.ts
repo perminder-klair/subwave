@@ -1,13 +1,9 @@
 // Shared helpers for operator-imported audio (jingles + sound effects).
-//
-// Imported files are run through ffmpeg so the library stays uniform with the
-// generated assets: jingles become WAV (matching Piper TTS output), effects
-// become MP3 (matching ElevenLabs output). ffmpeg also validates the upload —
-// it exits non-zero on anything that isn't decodable audio. When ffmpeg is
-// absent (a bare-host `npm start` dev box rather than the Docker image, which
-// ships ffmpeg) we fall back to storing the raw bytes with their original
-// extension so the feature still works; preview routes pick the content type
-// off the extension either way.
+// Imports go through ffmpeg so the library stays uniform with the generated
+// assets (jingles WAV, effects MP3); ffmpeg also validates the upload by exiting
+// non-zero on undecodable audio. Without ffmpeg (a bare-host dev box) the raw
+// bytes are stored under their original extension instead; preview routes pick
+// the content type off the extension either way.
 
 import { spawn } from 'node:child_process';
 import { writeFile, mkdir, unlink } from 'node:fs/promises';
@@ -66,9 +62,8 @@ export async function hasFfmpeg(): Promise<boolean> {
   return ffmpegOk;
 }
 
-// Duration of an audio file in seconds via ffprobe (ships alongside ffmpeg in
-// the Docker image). Returns null when ffprobe is missing or the file can't be
-// probed — callers treat unknown length as acceptable rather than fail.
+// Duration in seconds via ffprobe; null when ffprobe is missing or the file
+// can't be probed. Callers treat unknown length as acceptable, never a failure.
 export function probeDurationSec(filePath: string): Promise<number | null> {
   return new Promise((resolve) => {
     try {
@@ -117,13 +112,11 @@ function runFfmpeg(args: string[]): Promise<void> {
   });
 }
 
-// Transcode an in-memory upload to outPath in the given format. The input is
-// written to a temp file (not piped) so seek-dependent containers like m4a/mp4
-// decode correctly. `loudnorm` applies EBU R128 levelling — appropriate for
-// speech-length jingles, left off for short transient effects where a one-pass
-// loudnorm on <2s of audio is unreliable. `sampleRate`/`channels` pin the
-// output format — voice-clone references are stored mono 24 kHz so every
-// cloning worker gets the same canonical shape.
+// Transcode an in-memory upload to outPath. The input goes to a temp file (not
+// piped) so seek-dependent containers like m4a/mp4 decode correctly. `loudnorm`
+// is EBU R128 levelling, on for speech-length jingles and off for short
+// transient effects where one-pass loudnorm under 2s is unreliable.
+// `sampleRate`/`channels` pin the output shape.
 export async function transcodeAudio(
   input: Buffer,
   { outPath, format, loudnorm = false, atempo, sampleRate, channels }: {

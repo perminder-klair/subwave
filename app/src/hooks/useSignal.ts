@@ -1,8 +1,5 @@
-// Native port of web/web/hooks/useSignal.ts.
-//
-// Times a cheap GET /health every few seconds while tuned in, surfacing a
-// measured round-trip latency + a derived quality band for the signal meter.
-// `performance.now()` → `Date.now()` (RN has no high-res perf timer guarantee).
+// Times a cheap GET /health every few seconds while tuned in, surfacing the
+// round-trip latency and a derived quality band for the signal meter.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
@@ -11,15 +8,13 @@ import type { PlayerStatus } from './usePlayer';
 
 export const SCALE_MAX = 250;
 const PROBE_INTERVAL_MS = 5000;
-// After a few consecutive failures the link is just down — probe gently
-// instead of hammering a dead origin every 5s.
+// After a few consecutive failures the link is down; probe gently instead of
+// hammering a dead origin every 5s.
 const PROBE_BACKOFF_MS = 15000;
 const PROBE_BACKOFF_AFTER = 3;
 const PROBE_TIMEOUT_MS = 4000;
-// One full ruler width. 200–300ms is a normal phone→CDN→origin round trip and
-// irrelevant to a buffered live stream, so "good" spans the whole scale; the
-// original 120ms threshold was LAN-calibrated and read "Poor" on healthy
-// real-world networks.
+// One full ruler width. 200-300ms is a normal phone-to-origin round trip and
+// irrelevant to a buffered live stream, so "good" spans the whole scale.
 const GOOD_MS = SCALE_MAX;
 
 export type SignalQuality =
@@ -91,10 +86,9 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
     };
   }, [api, tunedIn, offline, appActive]);
 
-  // The label grades PLAYBACK health, not raw HTTP latency: audio playing +
-  // station reachable is never worse than "fair" (slow API ≠ bad audio — the
-  // stream is buffered); "poor" is reserved for real distress, i.e. the
-  // station stops answering probes entirely.
+  // The label grades playback health, not HTTP latency: audio playing and the
+  // station reachable is never worse than "fair", and "poor" is reserved for
+  // the station not answering probes at all.
   const quality = useMemo<SignalQuality>(() => {
     if (offline) return 'offline';
     if (!tunedIn) return 'idle';

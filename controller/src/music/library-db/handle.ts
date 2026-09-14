@@ -1,7 +1,5 @@
-// The open database handle and the constants every other library-db module
-// shares. This is the seam that keeps the rest of library-db/ free of an import
-// cycle: lifecycle.ts owns opening and closing the handle, everyone else reaches
-// it through requireDb().
+// The open database handle and shared constants. lifecycle.ts owns open/close;
+// everyone else reaches the handle through requireDb(). Keeps library-db/ acyclic.
 
 import Database from 'better-sqlite3';
 import { STATE_DIR } from '../../config.js';
@@ -10,15 +8,12 @@ import { STATE_DIR } from '../../config.js';
 export const DB_PATH = `${STATE_DIR}/library.db`;
 export const LEGACY_MOODS_JSON = `${STATE_DIR}/moods.json`;
 
-// Tagger version stored on every row inserted by the new pipeline. Bumping
-// this is a signal that the on-disk shape changed; older rows can be filtered
-// with WHERE tagger_version < N for upgrade scripts.
+// Stored on every row the tagger writes. Bump when the on-disk shape changes;
+// upgrade scripts filter on WHERE tagger_version < N.
 export const TAGGER_VERSION = 3;
 
-// Acoustic-analysis schema version, stored on every row the analyze pass
-// writes (music/analyze-library.ts). Independent of TAGGER_VERSION — mood
-// tagging and acoustic analysis run separately. Bump when the analysis shape
-// or method changes so `--re-analyze` / staleness checks can target old rows.
+// Stored on every row the analyze pass writes, independent of TAGGER_VERSION.
+// Bump when the analysis shape or method changes.
 // v2: added integrated loudness (loudness_lufs) + peak (peak_db).
 // v3: added structural sections (structure_json).
 // v4: added the pace curve (pace_json).
@@ -27,31 +22,23 @@ export const TAGGER_VERSION = 3;
 // v7: added edge dead air (lead_silence_ms, tail_silence_ms, tail_start_ms).
 export const ANALYSIS_VERSION = 7;
 
-// CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
-// is 512-d), so — unlike the text index in track_vectors — there's no per-model
-// dim negotiation. Audio vectors are a DIFFERENT space (waveform-derived, not
-// metadata/lyric-derived) and live in their own vec0 table.
+// CLAP audio-embedding dim, fixed by the model — no per-model negotiation, and a
+// different space from the text vectors, in its own vec0 table.
 export const AUDIO_EMBEDDING_DIM = 512;
 
-// A track counts as "tagged" only when it carries at least one mood. An empty
-// array ('[]') is written by the legacy moods.json migration and by the tagger
-// when the LLM returns no moods for a track — and an analysis-only track that
-// went through the bulk pipeline can end up the same way. `moods IS NOT NULL`
-// alone treats those as tagged, so they leak into the browse index and inflate
-// the tagged count even though they have no usable tags. Gate on a non-empty
-// JSON array everywhere instead.
+// A track is "tagged" only with at least one mood. '[]' is written by the legacy
+// migration, by the tagger on an empty LLM answer and by analysis-only rows, so
+// `moods IS NOT NULL` alone would count those. Gate on a non-empty array.
 export const SQL_HAS_MOODS = `moods IS NOT NULL AND json_array_length(moods) > 0`;
 export const SQL_NO_MOODS = `(moods IS NULL OR json_array_length(moods) = 0)`;
 
 let db: Database.Database | null = null;
 let currentEmbeddingDim: number | null = null;
-// Minted per open() — makes change tokens from different handles (restart,
-// reload, restore-from-backup) never comparable, so a stale 304 can't happen
-// across a swap even though both counters below restart from scratch.
+// Minted per open(), so change tokens from different handles are never
+// comparable and a stale 304 can't survive a swap.
 let dbNonce = '0';
 
-// The handle, null included — for callers that need to distinguish "never
-// opened" from "open". Everyone who needs a live handle wants requireDb().
+// For callers distinguishing "never opened" from "open"; otherwise use requireDb().
 export function getDb(): Database.Database | null {
   return db;
 }
@@ -69,9 +56,8 @@ export function getDbNonce(): string {
   return dbNonce;
 }
 
-// Written only by lifecycle.ts's open()/close(). It lives here rather than
-// there so no other module has to import lifecycle just to reach the handle,
-// which is what would reintroduce the cycle.
+// Written only by lifecycle.ts's open()/close(); it lives here so nothing else has
+// to import lifecycle to reach the handle.
 export function setHandle(next: {
   db?: Database.Database | null;
   embeddingDim?: number | null;

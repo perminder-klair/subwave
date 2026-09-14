@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { fmtClockMinute, normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type {
@@ -253,6 +253,220 @@ function StationHeader({
   );
 }
 
+/**
+ * Whether a clamped block is actually cut off.
+ *
+ * The affordance only earns its place when the text overflows, so this
+ * measures rather than guesses: a two-word topic must not grow a "more"
+ * button. Measurement happens only while COLLAPSED — expanding removes the
+ * clamp, so `scrollHeight === clientHeight` there and a live measurement
+ * would immediately report "fits" and pull the control out from under the
+ * finger that just used it. The last collapsed reading therefore stands for
+ * the whole expanded pass. Re-measures on resize (the drawer is a sheet that
+ * changes width) and whenever the text itself changes.
+ *
+ * The handle is a CALLBACK ref held in state, not a `useRef`, and that is
+ * load-bearing: finding overflow swaps `ExpandableText`'s root from a `<div>`
+ * to a `<button>`, so React unmounts the measured span and mounts a fresh
+ * one. With an object ref the effect's deps would not have changed, so it
+ * would never re-run — leaving the ResizeObserver attached to a node that had
+ * left the DOM, and every later width change unmeasured. The node itself is
+ * therefore a dependency, and the observer follows the live span.
+ */
+function useClampOverflow(text: string, expanded: boolean) {
+  const [node, setNode] = useState<HTMLSpanElement | null>(null);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    if (!node || expanded) return;
+    // Sub-pixel line boxes make an exact compare flap; 1px of slack is below
+    // one line of any of these type sizes.
+    const measure = () => setOverflows(node.scrollHeight - node.clientHeight > 1);
+    measure();
+    let cancelled = false;
+    // A web font landing late re-flows the text without resizing the box, so
+    // the observer below cannot see it: at `line-clamp-3` the height is
+    // already pinned to three lines, and a 3→4 line growth changes nothing it
+    // watches. That is exactly the case where the affordance is needed and
+    // would silently never appear, so measure once more when the faces are in.
+    const fonts: FontFaceSet | undefined = document.fonts;
+    if (fonts) {
+      fonts.ready.then(
+        () => {
+          if (!cancelled) measure();
+        },
+        () => {},
+      );
+    }
+    if (typeof ResizeObserver === 'undefined') {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const ro = new ResizeObserver(measure);
+    ro.observe(node);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
+  }, [text, expanded, node]);
+  return { ref: setNode, overflows };
+}
+
+/**
+ * A show topic, clamped until tapped.
+ *
+ * The whole paragraph is the control (that is the gesture #1621 asks for), so
+ * it is a real `<button>` with `aria-expanded` — keyboard reachable, and
+ * announced as a collapsed/expanded disclosure rather than as decorative
+ * text. When the text fits it renders as a plain block with no control at
+ * all. Clamping is visual only: the full topic is in the DOM either way, so a
+ * screen reader never loses the tail.
+ */
+function ExpandableText({
+  text,
+  clampClass,
+  className,
+}: {
+  text: string;
+  /** Tailwind `line-clamp-N` applied while collapsed. */
+  clampClass: string;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { ref, overflows } = useClampOverflow(text, expanded);
+  // The ARGUMENT ORDER here is load-bearing, and silently so. Tailwind emits
+  // `.block{display:block}` AFTER `.line-clamp-N{display:-webkit-box;…}`, so
+  // on raw cascade `block` would win and there would be no clamp at all — no
+  // overflow, no control, the whole feature inert. It works because twMerge
+  // resolves the pair, and it resolves it ONE-DIRECTIONALLY: `line-clamp`
+  // declares `display` as a conflicting group, so 'block' first is dropped,
+  // while 'line-clamp-N' first keeps both and hands the win back to `block`.
+  // Swapping these two arguments therefore disables the feature with no lint
+  // error, no type error and nothing to see in review.
+  const body = (
+    <span ref={ref} className={cn('block', !expanded && clampClass)}>
+      {text}
+    </span>
+  );
+  if (!overflows && !expanded) {
+    return <div className={className}>{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      onClick={() => setExpanded(v => !v)}
+      className={cn('v3-focus block w-full cursor-pointer text-left', className)}
+    >
+      {body}
+      <span className="mt-0.5 block text-[10px] tracking-[0.2em] text-vermilion uppercase">
+        {expanded ? 'Less' : 'More'}
+      </span>
+    </button>
+  );
+}
+
+/** What the public roster read gives us to show about a DJ. `soul` is present
+ *  only when the operator opted into `privacy.publishPersonaSouls`; absent is
+ *  not the same as empty, so it is never invented here. */
+function personaBlurbs(persona: SchedulePersona | null | undefined): string[] {
+  if (!persona) return [];
+  return [persona.tagline, persona.soul].map(v => (v || '').trim()).filter(Boolean);
+}
+
+/**
+ * A persona name that opens that DJ's roster entry underneath it.
+ *
+ * Nothing here reads a field `/schedule` does not already publish — the
+ * disclosure is the payload's own persona index (`tagline`, plus `soul` only
+ * when the station published souls), never a second fetch and never a wider
+ * public shape. A persona with nothing to say stays plain text: no control
+ * that opens an empty panel.
+ */
+function PersonaName({
+  persona,
+  fallbackName,
+  className,
+  panelClassName,
+  trailing,
+  truncateName = false,
+}: {
+  persona: SchedulePersona | null;
+  /** Used when the slot has a show but no matching roster entry. */
+  fallbackName: string;
+  className?: string;
+  panelClassName?: string;
+  /** Rendered beside the name, outside the control (guest credits). */
+  trailing?: React.ReactNode;
+  /** Ellipsise a long name onto one line (the schedule rows do; the on-now
+   *  card has the width to wrap). It rides the NAME rather than the line that
+   *  wraps it, because `truncate`'s `overflow: hidden` on an ancestor would
+   *  clip the button's own `v3-focus` ring — which sits 2px outside its box —
+   *  and take the keyboard focus indicator with it. */
+  truncateName?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const name = persona?.name || fallbackName;
+  const blurbs = personaBlurbs(persona);
+  if (blurbs.length === 0) {
+    return (
+      <div className={className}>
+        {truncateName ? (
+          <span className="inline-block max-w-full truncate align-bottom">{name}</span>
+        ) : (
+          name
+        )}
+        {trailing}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className={className}>
+        <button
+          type="button"
+          aria-expanded={open}
+          // Never name an id that is not in the DOM — the panel is rendered
+          // only while open, so the reference has to come and go with it.
+          aria-controls={open ? panelId : undefined}
+          onClick={() => setOpen(v => !v)}
+          className={cn(
+            'v3-focus max-w-full cursor-pointer text-left underline decoration-dotted underline-offset-4',
+            truncateName && 'truncate align-bottom',
+          )}
+        >
+          {name}
+        </button>
+        {trailing}
+      </div>
+      {open && (
+        <div
+          id={panelId}
+          className={cn(
+            'mt-1.5 grid gap-1.5 border-l border-separator-strong pl-2.5 text-xs leading-relaxed text-muted',
+            panelClassName,
+          )}
+        >
+          {blurbs.map((b, i) => (
+            // A published soul is a system prompt, so it can run long; the
+            // same overflow-only affordance keeps it from burying the row.
+            // `whitespace-pre-line` is inherited by the clamped span inside:
+            // operators write souls as several short paragraphs, and the
+            // default collapse would run the whole thing together.
+            <ExpandableText
+              key={i}
+              text={b}
+              clampClass="line-clamp-4"
+              className="[overflow-wrap:anywhere] whitespace-pre-line"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="pb-[10px] text-[9px] tracking-[0.3em] text-muted uppercase">
@@ -338,19 +552,31 @@ function OnNowCard(props: {
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] tracking-[0.3em] text-vermilion uppercase">
-            {personaName}
-            {guestNames.length > 0 && (
-              <span className="text-muted"> · with {guestNames.join(' & ')}</span>
-            )}
-          </div>
+          {/* Keyed on the show so the hour rolling over resets both
+              disclosures. Without it the card keeps its identity across the
+              change and the incoming show arrives with its topic already
+              expanded, under the outgoing DJ's opened panel. */}
+          <PersonaName
+            key={`persona-${onNow.show.id}`}
+            persona={onNow.persona}
+            fallbackName={personaName}
+            className="text-[10px] tracking-[0.3em] text-vermilion uppercase"
+            trailing={
+              guestNames.length > 0 ? (
+                <span className="text-muted"> · with {guestNames.join(' & ')}</span>
+              ) : null
+            }
+          />
           <div className="mt-0.5 text-lg leading-tight font-semibold">
             {onNow.show.name}
           </div>
           {onNow.show.topic && (
-            <div className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted">
-              {onNow.show.topic}
-            </div>
+            <ExpandableText
+              key={`topic-${onNow.show.id}`}
+              text={onNow.show.topic}
+              clampClass="line-clamp-3"
+              className="mt-1.5 text-xs leading-relaxed text-muted"
+            />
           )}
         </div>
       </div>
@@ -366,11 +592,11 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
   return (
     <li
       className={cn(
-        'flex items-center gap-3 border-b border-separator-soft py-[11px]',
+        'flex items-start gap-3 border-b border-separator-soft py-[11px]',
         isNow && 'bg-[var(--ink-softer)]',
       )}
     >
-      <span className="v3-tab-num w-[88px] shrink-0 text-[11px] tracking-[0.2em] text-muted uppercase">
+      <span className="v3-tab-num w-[88px] shrink-0 pt-[3px] text-[11px] tracking-[0.2em] text-muted uppercase">
         {time}
       </span>
       {slot.show ? (
@@ -381,7 +607,20 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
               {slot.show.name}
             </div>
             {personaName && (
-              <div className="truncate text-[11px] text-muted">{personaName}</div>
+              <PersonaName
+                persona={slot.persona}
+                fallbackName={personaName}
+                className="text-[11px] text-muted"
+                panelClassName="text-[11px]"
+                truncateName
+              />
+            )}
+            {slot.show.topic && (
+              <ExpandableText
+                text={slot.show.topic}
+                clampClass="line-clamp-2"
+                className="mt-1 text-[11px] leading-relaxed text-muted"
+              />
             )}
           </div>
         </>

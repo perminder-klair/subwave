@@ -1,45 +1,21 @@
-// Mixing helpers — the pure, I/O-free maths behind "DJ mode feels mixed".
-//
-// Everything here is a pure function of {bpm, key} analysis pairs (the values
-// music/analyzer.ts writes into the library DB). No imports, no library
-// lookups — callers resolve analysis (via library.get) and hand it in, so this
-// module stays trivially testable and free of cycles.
-//
-// `bpmCompat` / `keyCompat` / `parseCamelot` live here as the single source of
-// truth; music/picker.ts re-imports them for its pool re-rank. The DJ-mix
-// features (adaptive blend, transition FX, mini-runs) build on top.
+// Pure mixing maths over {bpm, key} analysis pairs. Keep it import-free:
+// callers resolve analysis (via library.get) and hand it in.
 
 export interface Analysis {
   bpm: number | null;
   key: string | null;
-  // Boundary keys (feature: key ranges) — the key the track OPENS in and the
-  // key it ENDS in, resolved from the measured per-region key ranges via
-  // openingKeyFrom / endingKeyFrom. Optional; consumers fall back to the
-  // whole-window dominant `key`, so un-analysed tracks behave as before.
+  // Keys the track OPENS / ENDS in, from the measured per-region key ranges.
+  // Optional; consumers fall back to the whole-window dominant `key`.
   keyStart?: string | null;
   keyEnd?: string | null;
-  // Measured ending of the track (outro analysis): 'fade' = winds down to
-  // silence, 'cold' = ends at level. Optional — absent/null means "no outro
-  // signal" and every consumer behaves exactly as before.
+  // Measured ending: 'fade' = winds down to silence, 'cold' = ends at level.
+  // absent/null = no signal.
   ending?: 'fade' | 'cold' | null;
-  // Whether the track's ENDING is sung (tail vocal ranges overlapping the
-  // measured wind-down): true = vocals ride the ending, false = measured
-  // instrumental tail, absent/null = unknown → consumers behave as before.
+  // Whether the ENDING is sung. absent/null = unknown.
   vocalTail?: boolean | null;
 }
 
-// --- Boundary keys (feature: key ranges) -------------------------------------
-// The analyzer stores per-region keys as {startMs,endMs,tonic,mode} over the
-// ANALYSED WINDOW (the first ANALYZE_SECONDS, ~40s — not the whole file).
-// These helpers turn them into the two keys a transition actually meets: the
-// incoming track's OPENING key (the first range — the window starts at t=0,
-// so this is always a real measurement) and the outgoing track's ENDING key
-// (only trusted when the ranges genuinely reach the track's end, i.e. the
-// track fits inside the window — otherwise the whole-window dominant key is
-// the best available estimate and the fallback wins).
-
-// Duck-typed mirror of library-db's TrackKeyRange, so this module keeps its
-// no-imports invariant.
+// Duck-typed mirror of library-db's TrackKeyRange (no imports here).
 export interface KeyRangeLike {
   startMs: number;
   endMs: number;
@@ -47,9 +23,8 @@ export interface KeyRangeLike {
   mode: string;
 }
 
-// Camelot code for a tonic + mode — indexed by pitch class, mirroring the
-// analyze worker's MAJOR_CAMELOT / MINOR_CAMELOT tables exactly (the worker
-// spells tonics with sharps: C, C#, D, …, B).
+// Camelot code for a tonic + mode, indexed by pitch class. Mirrors the analyze
+// worker's tables, which spell tonics with sharps.
 const PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const MAJOR_CAMELOT = ['8B', '3B', '10B', '5B', '12B', '7B', '2B', '9B', '4B', '11B', '6B', '1B'];
 const MINOR_CAMELOT = ['5A', '12A', '7A', '2A', '9A', '4A', '11A', '6A', '1A', '8A', '3A', '10A'];
@@ -73,15 +48,13 @@ export function openingKeyFrom(
   return (first && camelotFor(first.tonic, first.mode)) ?? fallback;
 }
 
-// Slack for "the ranges reach the end": codecs pad/truncate a little and the
-// duration is Subsonic's rounded seconds, so demand coverage only to within
-// this many ms of the reported end.
+// Slack for "the ranges reach the end": codecs pad/truncate and the duration is
+// Subsonic's rounded seconds.
 const ENDING_KEY_SLACK_MS = 5000;
 
-// The key the track ends in — the last measured range, but ONLY when the
-// ranges actually cover the track's ending (short tracks that fit inside the
-// analysis window). Anything longer falls back: the window is leading-only,
-// so its last range is the key at ~40s, not the ending.
+// The key the track ends in — the last measured range, but only when the ranges
+// cover the track's ending. The analysis window is leading-only (~40s), so on a
+// longer track the last range is the key at ~40s and the fallback wins.
 export function endingKeyFrom(
   ranges: KeyRangeLike[] | null | undefined,
   durationMs: number | null,
@@ -93,28 +66,20 @@ export function endingKeyFrom(
   return camelotFor(last.tonic, last.mode) ?? fallback;
 }
 
-// --- Loudness normalisation ------------------------------------------------
-// Target integrated loudness; streaming-standard −14 LUFS (Spotify, YouTube)
-// by default, operator-tunable via settings.loudness. The two directions are
-// clamped asymmetrically because they carry different risk: cutting a loud
-// track is always safe (wide fixed clamp), while boosting a quiet one can
-// drive high-crest material (classical, jazz) into the broadcast limiter — so
-// the boost is capped by the operator's maxBoostDb AND by the track's own
-// measured peak headroom when the analyzer has one.
+// Target integrated loudness (streaming standard), operator-tunable via
+// settings.loudness. The clamps are asymmetric on purpose: cutting a loud track
+// is safe, boosting a quiet one can drive high-crest material into the
+// broadcast limiter, so boost is capped by maxBoostDb AND by peak headroom.
 export const LOUDNESS_TARGET_LUFS = -14;
 export const LOUDNESS_MAX_BOOST_DB = 6;
 export const LOUDNESS_CUT_CLAMP_DB = 12;
-// Boost never pushes the measured sample peak past this ceiling — it matches
-// the brick-wall limiter threshold (−1 dBFS in radio.liq) so normal catalogue
-// audio stays clear of it. Peak is measured over the analysis window (~the
-// first 2 min), not the whole file, so the limiter remains the backstop for
-// peaks later in the track.
+// Boost never pushes the measured sample peak past this ceiling, which matches
+// radio.liq's brick-wall limiter threshold. Peak covers the analysis window
+// only, so the limiter stays the backstop for later peaks.
 export const LOUDNESS_PEAK_CEILING_DBFS = -1;
 
-// dB gain to bring a track measured at `lufs` toward the target, clamped.
-// Returns null when the track has no loudness measurement (→ unity gain on the
-// playback side, i.e. today's behaviour). Result is rounded to 0.1 dB — finer
-// is inaudible and just bloats the annotate string.
+// dB gain toward the target, clamped. null when the track has no loudness
+// measurement (→ unity gain). Rounded to 0.1 dB.
 export function gainForLoudness(
   lufs: number | null | undefined,
   opts: { peakDb?: number | null; targetLufs?: number | null; maxBoostDb?: number | null } = {},
@@ -141,19 +106,15 @@ export function gainForLoudness(
   return Math.round(gain * 10) / 10;
 }
 
-// ReplayGain 2.0 reference level (EBU R128). A tag's trackGain is the dB
-// offset that brings the track TO this reference, so the track's own
-// integrated loudness is reference − trackGain.
+// ReplayGain 2.0 reference level (EBU R128). A tag's trackGain is the dB offset
+// that brings the track TO this reference, so the track's own integrated
+// loudness is reference − trackGain.
 export const REPLAYGAIN_REFERENCE_LUFS = -18;
 
-// OpenSubsonic `replayGain` field (Navidrome exposes it on every song Child
-// when the file carries RG tags) → the same {lufs, peakDb} shape the analyzer
-// measures, so gainForLoudness treats both sources identically. Preferred over
-// the analyzer's own measurement when present (issue #998): the tag is a
-// whole-file, stereo R128 scan, while the measured value covers only the
-// leading analysis window. trackPeak is linear (1.0 = FS) → dBFS. Returns null
-// when there's no usable trackGain — untagged files serialise as `{}` or omit
-// the field entirely.
+// OpenSubsonic `replayGain` → the same {lufs, peakDb} shape the analyzer
+// measures, and preferred over it when present (#998): the tag is a whole-file
+// R128 scan, the measurement covers only the leading window. trackPeak is
+// linear (1.0 = FS) → dBFS. null when there is no usable trackGain.
 export function loudnessFromReplayGain(
   rg: unknown,
 ): { lufs: number; peakDb: number | null } | null {
@@ -168,34 +129,20 @@ export function loudnessFromReplayGain(
   return { lufs: Math.round((REPLAYGAIN_REFERENCE_LUFS - gain) * 100) / 100, peakDb };
 }
 
-// True when a track carries at least one measured value. An un-analysed track
-// (both null) makes every consumer below a no-op, so an un-analysed library
-// behaves exactly as before.
+// True when a track carries at least one measured value. Both null makes every
+// consumer below a no-op.
 function analysed(a: Analysis): boolean {
   return a.bpm != null || a.key != null;
 }
 
-// Broadcast crossfade bounds (seconds). The floor keeps every blend audible —
-// shorter than this and a transition reads as a hard cut / "no crossfade".
+// Broadcast crossfade bounds (seconds). Below the floor a transition reads as a
+// hard cut.
 export const CROSS_MIN_SECONDS = 6;
 export const CROSS_MAX_SECONDS = 14;
 
-// Tempo estimators can describe the same pulse at N or 2N. The measured
-// #1417 failure is one-directional — librosa doubles slow material — so timing
-// uses the slower member of any pair at or above 110 BPM. This does NOT rewrite
-// or reinterpret the stored BPM: a genuine 160 BPM track simply times effects
-// at 80 BPM, where every pulse is still aligned to every other real beat.
-// Never multiply a low reading; doing that could turn a genuine slow bar into
-// a half-bar. Keeping the fold here means every duration consumer agrees.
-//
-// The 110 line is the MEASURED one (#1417 saw 62–88 BPM stored at 124–176), so
-// a double that lands below it — a true 52 read as 104 — is deliberately left
-// alone rather than guessed at. That residue only reaches the BAR-SNAPPED
-// canvases (adaptive/ending/washout), which size a whole number of bars and so
-// do change with the octave. The effect PERIODS (chop, washout tap, loop bar)
-// each fold their own result onto the beat grid by powers of two, which is
-// octave-invariant by construction — they are correct on either side of this
-// threshold and do not depend on it. Don't widen the threshold to "fix" them.
+// Octave-safe timing pulse (#1417): librosa doubles slow material, so halve any
+// reading at or above 110 BPM. Never multiply a low reading — that could turn a
+// genuine slow bar into a half-bar. The stored BPM is untouched.
 function timingBpm(bpm: number | null): number | null {
   if (typeof bpm !== 'number' || !Number.isFinite(bpm) || bpm <= 0) return null;
   let folded = bpm;
@@ -241,25 +188,17 @@ export function keyCompat(a: string | null, b: string | null): number {
   return 0;
 }
 
-// Overall mix compatibility 0..1 — tempo weighted a touch over key, matching
-// the pool re-rank's intent (a beat that locks matters more to a blend than a
-// key that's merely adjacent). Key compares the pair the seam actually meets:
-// the outgoing track's ENDING key against the incoming track's OPENING key
-// (feature: key ranges), falling back to the whole-window dominant keys.
+// Overall mix compatibility 0..1, tempo weighted a touch over key. Key compares
+// the pair the seam meets: outgoing ENDING vs incoming OPENING, falling back to
+// the whole-window dominant keys.
 export function mixCompat(cur: Analysis, next: Analysis): number {
   return 0.6 * bpmCompat(cur.bpm, next.bpm) + 0.4 * keyCompat(cur.keyEnd ?? cur.key, next.keyStart ?? next.key);
 }
 
-// --- Feature 1: adaptive blend ---------------------------------------------
-// Compatibility → cross-buffer SECONDS for the transition INTO `next`.
-// Compatible tracks get a short, tight blend; clashes get a long wash that
-// hides the seam. Returns null when EITHER track is un-analysed, so the caller
-// omits the liq_cross_duration override and Liquidsoap keeps its startup
-// crossfade_duration() — today's behaviour, byte-for-byte.
-//
-// `opts.energyDelta` is a small daypart nudge (energyForDaypart().speed - 1,
-// roughly -0.08..+0.06): lower-energy dayparts stretch the wash slightly,
-// brisker ones tighten it. Kept subtle so the compatibility curve dominates.
+// Compatibility → cross-buffer SECONDS for the transition INTO `next`. null
+// when EITHER track is un-analysed, so the caller omits the liq_cross_duration
+// override and Liquidsoap keeps its startup crossfade_duration().
+// `opts.energyDelta` is a small daypart nudge (roughly -0.08..+0.06).
 export function crossSecondsFor(
   cur: Analysis,
   next: Analysis,
@@ -280,15 +219,12 @@ export function crossSecondsFor(
     secs = 12; // clash → long wash to hide the seam
   }
 
-  // Daypart nudge: lower energy → longer, brisker → shorter. Subtle (±~0.5s).
+  // Daypart nudge (±~0.5s): lower energy → longer, brisker → shorter.
   const energyDelta = opts.energyDelta ?? 0;
   secs += -energyDelta * 4;
 
-  // Beat-grid snap (feature: beat/bar grid): round the blend to a whole number
-  // of the OUTGOING track's octave-safe bars (4 beats at the folded pulse) so
-  // the fade.out spans a musical unit instead of an arbitrary count. Only when
-  // the outgoing tempo is known
-  // and the snap stays in range; the intro cap below still wins over it.
+  // Snap to whole bars of the OUTGOING track so fade.out spans a musical unit.
+  // The intro cap below still wins over it.
   const curTimingBpm = timingBpm(cur.bpm);
   if (curTimingBpm != null) {
     const barSec = (4 * 60) / curTimingBpm;
@@ -299,64 +235,40 @@ export function crossSecondsFor(
     }
   }
 
-  // Structure-aware cap (feature: song structure): the incoming track plays
-  // from t=0 at the start of the cross buffer and its fade.in spans the whole
-  // buffer, so a buffer longer than the incoming track's instrumental intro
-  // would fade up over the first vocals. Cap the blend to the intro length so
-  // the fade-in completes before the song proper. Absent intro → no cap, i.e.
-  // today's behaviour. Floor at CROSS_MIN_SECONDS so a short intro still leaves
-  // an audible blend — a tighter cap collapsed most transitions to ~3s and read
-  // as "no crossfade".
+  // The incoming fade.in spans the whole buffer, so a buffer longer than its
+  // instrumental intro fades up over the first vocals. Cap to the intro length
+  // (absent → no cap), floored at CROSS_MIN_SECONDS so short intros don't
+  // collapse most transitions to ~3s.
   const introSec = typeof opts.nextIntroMs === 'number' && opts.nextIntroMs > 0
     ? opts.nextIntroMs / 1000
     : null;
   if (introSec != null) secs = Math.min(secs, Math.max(CROSS_MIN_SECONDS, introSec));
 
-  // Clamp to the broadcast range and quantise to 0.1s. The upper bound is the
-  // operator's admin crossfade length (settings.crossfadeDuration, passed as
-  // opts.maxSec) so the adaptive blend never exceeds what they configured;
-  // falls back to CROSS_MAX_SECONDS when unset. An admin value below the audible
-  // floor wins as the ceiling — an explicit short crossfade is the operator's
-  // call — so the floor yields to it.
+  // Clamp to the broadcast range, quantise to 0.1s. Upper bound is the
+  // operator's settings.crossfadeDuration (opts.maxSec), else
+  // CROSS_MAX_SECONDS, and it wins even below the audible floor.
   const maxSec = typeof opts.maxSec === 'number' && opts.maxSec > 0 ? opts.maxSec : CROSS_MAX_SECONDS;
   const minSec = Math.min(CROSS_MIN_SECONDS, maxSec);
   secs = Math.max(minSec, Math.min(maxSec, secs));
   return Math.round(secs * 10) / 10;
 }
 
-// --- Ending-aware exit canvas (feature: outro analysis) ---------------------
-// Canvas for a track's OWN exit, sized by its measured ENDING. Unlike the
-// pair-sized crossSecondsFor above — which cannot be applied at annotation time
-// (#749: liq_cross_duration governs the stamped track's own end, and its
-// successor is unknown then) — the ending is a property of the track alone, so
-// this CAN be stamped correctly. A measured fade earns a long canvas that rides
-// the wind-down out under whatever follows; a cold end cuts tight, because the
-// short cross IS the intent and stretching a hard ending smears it. Null when
-// the ending is unknown, so the caller leaves crossSec unset and Liquidsoap
-// keeps the operator's default.
+// Exit canvas sized by a track's OWN measured ending, so unlike the pair-sized
+// crossSecondsFor it can be stamped at annotation time (#749). null when the
+// ending is unknown, so the caller leaves crossSec unset. `windDownSec` is
+// duration − outro.startMs; a fade's canvas spans it, clamped 8..12 and
+// bar-snapped.
 //
-// `windDownSec` is the measured wind-down (duration − outro.startMs); a fade's
-// canvas spans it, clamped 8..12 so the wash stays broadcast-shaped, and
-// bar-snapped to the TAIL tempo (outro.bpm) where the caller has it — outros
-// drift.
-//
-// Tail-loudness shaping: how far the tail drops below the body decides how much
-// of the wind-down deserves overlap. Below the drop the "fade" barely recedes
-// and a full-length overlap would double two near-full-level tracks, so the
-// canvas trims toward its 8s floor; at or past FADE_DROP_DEEP_DB it is a true
-// fade and keeps the full ride. Linear in between. Needs BOTH tailLufs and
-// bodyLufs — either missing → no shaping.
+// Tail-loudness shaping: below FADE_DROP_SHALLOW_DB the canvas trims toward its
+// 8s floor, at/past FADE_DROP_DEEP_DB it keeps the full ride, linear between.
+// Needs BOTH tailLufs and bodyLufs, else no shaping.
 export const FADE_DROP_SHALLOW_DB = 3;
 export const FADE_DROP_DEEP_DB = 12;
 
-// Derive Analysis.vocalTail from a track's measured tail vocal spans (outro
-// vocalRanges, absolute ms) and its wind-down start (outro.startMs): the
-// ending is "sung" when any vocal span reaches into the wind-down region.
-// A plain end-of-file cutoff ("ends within Ns of duration") false-negatives
-// on exactly the fades this targets — the detector's relative threshold loses
-// a fading voice seconds before the file ends — so overlap-with-wind-down is
-// the honest test. Duck-typed spans keep this module's no-imports invariant.
-// null = not measured (absent data) → consumers behave as before.
+// Analysis.vocalTail from the measured tail vocal spans (absolute ms) and the
+// wind-down start: the ending is "sung" when any span reaches into the
+// wind-down, not merely to end-of-file, which false-negatives on exactly the
+// fades this targets. null = not measured.
 export function vocalTailFor(
   vocalRanges: Array<{ startMs: number; endMs: number }> | null | undefined,
   windDownStartMs: number | null | undefined,
@@ -389,11 +301,8 @@ export function endingCrossSecondsFor(
       const t = Math.max(0, Math.min(1, (drop - FADE_DROP_SHALLOW_DB) / (FADE_DROP_DEEP_DB - FADE_DROP_SHALLOW_DB)));
       secs = 8 + (secs - 8) * t;
     }
-    // Vocal-tail shaping (feature: vocal-aware transitions): a fade whose
-    // wind-down is still SUNG shouldn't earn the full wind-down ride — a long
-    // overlap puts the next track under a still-singing voice. Pull to the 8s
-    // floor (the same place shallow-drop shaping lands); the bar-snap below
-    // keeps it musical. Unknown (null/absent) changes nothing.
+    // A still-sung wind-down pulls to the 8s floor: a long overlap puts the
+    // next track under a singing voice. Unknown (null/absent) changes nothing.
     if (opts.vocalTail === true) secs = 8;
   } else {
     secs = 4; // tight, intentional cut — same length as a locked beat-blend
@@ -410,25 +319,16 @@ export function endingCrossSecondsFor(
   return Math.round(secs * 10) / 10;
 }
 
-// --- DJ transition effects (sweep / washout) --------------------------------
-// The DJ agent proposes `transition: sweep|washout` on a pick; these helpers
-// are how the data disposes. All pure — broadcast/queue.ts applies them.
-//
-// Cross-duration physics (see radio.liq's fade == buffer invariant): a track's
-// `liq_cross_duration` governs the crossfade at its own END. The washout flag
-// rides the track that ends, so its canvas can be stamped on that same track
-// and it lands on exactly the transition the wash fires on. The sweep (the
-// transition INTO the flagged pick) cannot be given a canvas — the previous
-// track's stamp is already sent to Liquidsoap when the pick happens — so its
-// envelope scales to whatever `d` that transition already earned.
+// DJ transition effects, applied by broadcast/queue.ts. A track's
+// `liq_cross_duration` governs the crossfade at its own END, so a washout
+// (which rides the track that ends) can be given a canvas while a sweep (the
+// transition INTO the pick) cannot — the previous track's stamp is already sent.
 
 export const WASHOUT_CROSS_TARGET_SECONDS = 12;
 
-// Blend canvas for a washout: target 12 s snapped to whole bars of the flagged
-// track's octave-safe timing pulse, clamped to [8, min(14, admin ceiling)].
-// Unknown BPM → fixed 10 s. No incoming-intro cap: the next track isn't known
-// when this track is annotated — a tail decaying over the next track's opening
-// is an accepted (and DJ-authentic) hazard.
+// Snapped to whole bars of the flagged track's octave-safe pulse, clamped to
+// [8, min(14, admin ceiling)]. Unknown BPM → 10s. No incoming-intro cap: the
+// next track isn't known when this one is annotated.
 export function washoutCrossSecondsFor(a: Analysis, maxSec: number | null = null): number {
   const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
   const lo = Math.min(8, ceil);
@@ -443,20 +343,10 @@ export function washoutCrossSecondsFor(a: Analysis, maxSec: number | null = null
   return Math.round(secs * 10) / 10;
 }
 
-// Comb tap spacing for the washout tail — a dotted eighth of the flagged
-// track's octave-safe timing pulse (the classic dub-throw subdivision), HALVED
-// into the audible-echo range so extreme tempi stay usable. Unknown BPM →
-// 0.30 s (the neutral default radio.liq also falls back to when the stamp is
-// absent).
-//
-// The range is reached by halving, never by clamping: a clamped tap is a
-// number inside the window that is no longer a subdivision of anything, so the
-// comb drifts against the tail it is supposed to echo. Halving keeps every tap
-// on the grid — at 128 BPM the tap is a dotted eighth of the raw reading and a
-// dotted sixteenth of the folded pulse, which is the same instant either way.
-// Descending from above lands on the one dyadic point in (0.225, 0.45], so the
-// result is identical for a reading and its octave twin at ANY tempo — this
-// consumer does not depend on timingBpm's 110 threshold at all.
+// Comb tap spacing for the washout tail — a dotted eighth of the octave-safe
+// pulse, HALVED into the audible-echo range. Unknown BPM → 0.30s (radio.liq's
+// own fallback). Halve, never clamp: a clamped tap is no longer a subdivision
+// of anything and the comb drifts against the tail it echoes.
 export function washoutDelayFor(bpm: number | null): number {
   const folded = timingBpm(bpm);
   if (folded == null) return 0.3;
@@ -466,13 +356,9 @@ export function washoutDelayFor(bpm: number | null): number {
   return Math.round(tap * 100) / 100;
 }
 
-// Loop tap for the exit loop — one bar (4 beats, 4/4) of the flagged track's
-// octave-safe timing pulse, halved/doubled into a 1.2–3.4 s window so extreme
-// tempi still yield a musical, comb-sized loop (a half-bar at very slow tempi,
-// two bars at very fast ones — both still whole beat multiples, so the loop
-// repeats in time). Unknown BPM → 2.0 s, but the queue strips the effect before
-// that matters (a loop without a measured bar is noise); 2.0 is only the
-// radio.liq fallback when the stamp is somehow absent.
+// One bar (4 beats, 4/4) of the octave-safe pulse, halved/doubled into a
+// 1.2–3.4s window (whole beat multiples either way, so the loop repeats in
+// time). Unknown BPM → 2.0s, radio.liq's own fallback.
 export function loopBarFor(bpm: number | null): number {
   const folded = timingBpm(bpm);
   if (folded == null) return 2.0;
@@ -484,12 +370,8 @@ export function loopBarFor(bpm: number | null): number {
 
 export const LOOP_CROSS_TARGET_SECONDS = 12;
 
-// Canvas for a loop exit — like the washout's, but snapped to a whole number
-// of LOOPS (not bars) so the ride-out holds an integral repeat count before
-// the release; the [8, ceiling] clamp still wins at the edges (an off-grid
-// last repeat under the master fade beats a canvas outside the broadcast
-// range). Same no-incoming-cap rationale as washoutCrossSecondsFor: the next
-// track isn't known when this track is annotated.
+// Like the washout canvas, but snapped to whole LOOPS (not bars) so the
+// ride-out holds an integral repeat count; the [8, ceiling] clamp still wins.
 export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): number {
   const ceil = typeof maxSec === 'number' && maxSec > 0 ? Math.min(maxSec, CROSS_MAX_SECONDS) : CROSS_MAX_SECONDS;
   const lo = Math.min(8, ceil);
@@ -503,66 +385,39 @@ export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): 
   return Math.round(secs * 10) / 10;
 }
 
-// The LLM proposes, the data disposes. A sweep hides a seam, so it survives only
-// a real clash — between tempo/key-locked tracks a tight beat-blend is better
-// and a filter ride reads as gratuitous. Un-analysed tracks pass, since the data
-// can't contradict the DJ. Washout is an editorial "close the chapter" gesture
-// rather than a compatibility repair, so it is always allowed and the caller's
-// cooldown rations it.
-//
-// The effects map onto a small grid:
+// Whether the measured pair supports the effect the agent proposed. Un-analysed
+// tracks pass. The grid:
 //   blend    rhythmic, for COMPATIBLE pairs
-//   washout  rhythmic exit (always allowed)
+//   washout  rhythmic exit (always allowed; the caller's cooldown rations it)
 //   sweep    dramatic textural move across a clash
-//   dissolve smooth textural move across a clash — the reverb wash, hiding the
-//            seam the sweep would announce
-//   chop     percussive move across a clash — the crossfader cut, announcing the
-//            seam on the beat instead of choking it like the sweep
+//   dissolve smooth textural move across a clash (reverb wash, hides the seam)
+//   chop     percussive move across a clash (crossfader cut, on the beat)
 export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
-  // loop (exit loop) is editorial like the washout — an intentful way to
-  // leave a track, not a compatibility repair. The queue separately requires
-  // the flagged track's own measured tempo (a loop needs a bar length).
+  // Editorial like the washout. The queue separately requires the flagged
+  // track's own measured tempo (a loop needs a bar length).
   if (kind === 'loop') return true;
-  // chop gates the OUTGOING track rhythmically — over a measured fade-out the
-  // stabs are stabs of near-silence, so a fade ending vetoes it outright
-  // (feature: outro analysis). Checked before the analysed() pass-through:
-  // the ending is measured independently of bpm/key.
+  // Over a measured fade-out the chop's stabs are stabs of near-silence, and
+  // over a sung ending it stutters a voice mid-word. Checked before the
+  // analysed() pass-through: both are measured independently of bpm/key.
   if (kind === 'chop' && cur.ending === 'fade') return false;
-  // ...and over a SUNG ending the gate stutters a voice mid-word — broken,
-  // not percussive (feature: vocal-aware transitions). Same early check: the
-  // vocal tail is measured independently of bpm/key.
   if (kind === 'chop' && cur.vocalTail === true) return false;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
-  // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE
-  // tracks feel like one continuous piece — between clashing tracks the
-  // complementary-band trade just exposes the clash, so a long wash (or a
-  // sweep) serves better there.
+  // blend (spectral handover) needs a compatible pair; between clashing tracks
+  // the complementary-band trade just exposes the clash. dissolve is its mirror:
+  // beatless glue for a measurable clash.
   if (kind === 'blend') return compat >= 0.4;
-  // dissolve: exact mirror of blend — beatless ambience is the tempo-agnostic
-  // glue for a pair that measurably clashes; between compatible tracks a
-  // blend keeps the groove alive and a wash just kills it.
   if (kind === 'dissolve') return compat < 0.4;
-  // sweep and chop are both gear-change moves — musically wrong between
-  // locked tracks where a tight beat-blend serves better.
+  // sweep and chop are gear-change moves, wrong between locked tracks.
   return compat < 0.6;
 }
 
 // Gate period for the chop — one beat of the OUTGOING track's octave-safe
-// timing pulse (the one being cut), HALVED into the stab-audible range so
-// extreme tempi stay usable. Unknown BPM → 0.5 s (the neutral default radio.liq
-// also falls back to when the stamp is absent). Unlike the washout's
-// dotted-eighth echo tap, the chop cuts ON the beat: the gate opens at each
-// beat start so the downbeat transient survives.
-//
-// Halving, never clamping — same reason as washoutDelayFor, and load-bearing
-// here because the clamp bound over the whole 110–160 band once the fold was
-// applied first: every one of those tempi returned a flat 0.75 s, which is 1.4
-// to 1.9 beats and lands on nothing. The gate then walks the grid and cuts
-// mid-note, which is exactly what the "opens at each beat start" promise above
-// rules out. Descending from above lands on the one dyadic point in
-// (0.375, 0.75], so this is octave-invariant at any tempo.
+// pulse, HALVED into the stab-audible range. Unknown BPM → 0.5s (radio.liq's
+// own fallback). Unlike the washout's echo tap the chop cuts ON the beat, so
+// the gate must open at each beat start. Halve, never clamp (see
+// washoutDelayFor).
 export function chopPeriodFor(bpm: number | null): number {
   const folded = timingBpm(bpm);
   if (folded == null) return 0.5;
@@ -572,29 +427,23 @@ export function chopPeriodFor(bpm: number | null): number {
   return Math.round(period * 100) / 100;
 }
 
-// --- Feature 2: transition FX ----------------------------------------------
-// Pick a flourish to fire across the blend, or null for "no garnish". Only
-// fires on a NOTABLE upward tempo jump (the moment a DJ would ride a riser);
-// most transitions return null. Caller still gates on djMode, sfx.enabled and
-// a cooldown — this only decides *whether the transition is worth a sound*.
-// Returned names are built-in SFX (broadcast/sfx.ts).
+// A flourish to fire across the blend, or null (the common case). Caller still
+// gates on djMode, sfx.enabled and a cooldown. Names are built-in SFX
+// (broadcast/sfx.ts).
 export function transitionSfxFor(
   cur: Analysis,
   next: Analysis,
 ): 'whoosh' | 'drum-roll' | null {
   if (cur.bpm == null || next.bpm == null || cur.bpm <= 0) return null;
   const ratio = next.bpm / cur.bpm;
-  // Only meaningful upward jumps (and not just a half/double-time artefact).
+  // Only meaningful upward jumps, and not a half/double-time artefact.
   if (ratio < 1.18 || ratio >= 1.9) return null;
-  // A big leap earns the bigger flourish.
   return ratio >= 1.4 ? 'drum-roll' : 'whoosh';
 }
 
-// --- Feature 4: mini-runs ---------------------------------------------------
-// Daypart-signed target for a short tempo/key run. Nudges BPM up when the
-// daypart energy is rising (speed > 1), down when winding down, and holds the
-// current key so the run stays harmonically coherent. Returns null when the
-// current track is un-analysed (nothing to anchor a run to).
+// Target for a short tempo/key run: nudges BPM with the daypart's energy
+// direction, holding the current key. null when the current track is
+// un-analysed (nothing to anchor to).
 export function pickRunTarget(
   current: Analysis,
   energy: { speed: number; register?: string },

@@ -20,18 +20,21 @@ import { Card, Btn, Pill, Seg } from './ui';
 import { SkeletonForm } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
+import { fieldAria } from '../../lib/form';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
 import {
   SETTINGS_AAC_BITRATES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
+  TRANSITION_EFFECTS,
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
   SectionHeader, SaveBar, SettingsFieldError, ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS,
+  headerRows,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type LoudnessSource, type LlmForm, type LlmFallbackForm,
+  type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
 import {
   SECTIONS, SECTION_GROUPS, RESTART_PATHS, sectionById, type SectionId,
@@ -39,7 +42,9 @@ import {
 import { Advanced, SectionChromeProvider } from './settings/section-chrome';
 import { SettingsSearch, type SettingsJump } from './settings/SettingsSearch';
 import { TtsSection } from './settings/TtsSection';
+import { DjBehaviourSection } from './settings/DjBehaviourSection';
 import { LlmSection } from './settings/LlmSection';
+import { BrainSection } from './settings/BrainSection';
 import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
@@ -51,6 +56,41 @@ import {
   useSettingsMutation,
   useSettingsQuery,
 } from './settings/queries';
+
+// Operator copy for the shared transition vocabulary. The drift test keeps
+// these labels in the schema's order and ensures every gesture has a hint.
+const TRANSITION_EFFECT_FIELDS = [
+  {
+    id: 'sweep',
+    label: 'Sweep',
+    hint: 'The outgoing track sinks under a closing filter while the next one rises clean — the dramatic gear-change across a clashing pair.',
+  },
+  {
+    id: 'washout',
+    label: 'Washout',
+    hint: 'A track dissolves into a tempo-synced echo tail as it ends. Also what makes an over-length track cut by the length cap sound intentional, so switching it off leaves those cuts as plain crossfades.',
+  },
+  {
+    id: 'blend',
+    label: 'Blend',
+    hint: 'A spectral handover between two tempo- and key-locked tracks, so the pair reads as one continuous piece.',
+  },
+  {
+    id: 'dissolve',
+    label: 'Dissolve',
+    hint: 'The outgoing track melts into a beatless reverb wash under the incoming one — the smooth way to hide a jump. The most expensive gesture in the kit: it runs on Liquidsoap\u2019s single streaming thread, so switch it off first if the mixer reports catch-up warnings on a slow host.',
+  },
+  {
+    id: 'chop',
+    label: 'Chop',
+    hint: 'The outgoing track is cut on its own beat, stabs thinning as the next rises through the gaps — the percussive way to lift the energy.',
+  },
+  {
+    id: 'loop',
+    label: 'Exit loop',
+    hint: 'A track\u2019s final bar repeats under whatever follows before it cuts away. Needs the track\u2019s measured tempo.',
+  },
+] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
 
 /**
  * Read one dotted path out of the form. Returns undefined for a missing branch
@@ -252,7 +292,11 @@ function rebaselineSavedPatch(
   return next;
 }
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabled?: boolean }) {
+  const sections = useMemo(
+    () => SECTIONS.filter(s => s.id !== 'brain' || djBrainEnabled),
+    [djBrainEnabled],
+  );
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const settingsQuery = useSettingsQuery<SettingsData>({
     adminFetch,
@@ -302,15 +346,24 @@ export default function SettingsPanel() {
       router.replace(`/admin/imaging?tab=${s}`);
       return;
     }
-    if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, [router, searchParams]);
+    if (s === 'brain' && !djBrainEnabled) {
+      setActiveSection('station');
+      return;
+    }
+    if (s && sections.some(x => x.id === s)) setActiveSection(s as SectionId);
+  }, [router, searchParams, sections, djBrainEnabled]);
 
   useEffect(() => {
     if (!data?.values) return;
     const v = data.values;
     const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      ducking: {
+        voice: String(v.ducking?.voice ?? 0.22),
+        intro: String(v.ducking?.intro ?? 0.3),
+      },
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      fadeAtShowEnd: v.fadeAtShowEnd === true,
       silenceTrim: {
         enabled: v.silenceTrim?.enabled ?? false,
         minGapMs: String(v.silenceTrim?.minGapMs ?? 1500),
@@ -318,6 +371,12 @@ export default function SettingsPanel() {
       transitions: {
         pairDrain: v.transitions?.pairDrain ?? true,
         stemBlends: v.transitions?.stemBlends ?? false,
+        // Absent reads as ON, matching the controller's resolver
+        // (settings/transition-effects.ts) — a station that has never saved
+        // this block has the whole kit.
+        effects: Object.fromEntries(
+          TRANSITION_EFFECTS.map(k => [k, v.transitions?.effects?.[k] !== false]),
+        ) as Record<TransitionEffect, boolean>,
         stemCache: v.audio?.stemCache ?? false,
         stemCacheGb: String(v.audio?.stemCacheGb ?? 15),
       },
@@ -338,6 +397,8 @@ export default function SettingsPanel() {
         idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
         idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
         maxListeners: String(v.stream?.maxListeners ?? 100),
+        countryHeader: v.stream?.countryHeader ?? '',
+        geoipDbPath: v.stream?.geoipDbPath ?? '',
       },
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
@@ -365,6 +426,16 @@ export default function SettingsPanel() {
         onePendingPerIp: v.requests?.onePendingPerIp !== false,
       },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
+      // Absent (a settings.json predating the key) reads as OFF, matching the
+      // controller's own coercion in settings.load().
+      djTalkOnlyBetweenTracks: v.djTalkOnlyBetweenTracks === true,
+      pauseTalkMinSeconds: String(v.pauseTalkMinSeconds ?? 20),
+      djBehaviour: {
+        showWelcome: v.djBehaviour?.showWelcome === true,
+        sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
+        extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
+        releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',
+      },
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -443,13 +514,14 @@ export default function SettingsPanel() {
         // Stored providerBaseUrls win; otherwise the legacy single baseUrl seeds
         // the current provider's slot so no URL is lost.
         providerBaseUrls: (() => {
-          const llmAny = v.llm as (Partial<LlmForm> & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+          const llmAny = v.llm as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
           const stored = llmAny?.providerBaseUrls;
           if (stored && typeof stored === 'object') return { ...stored };
           const legacy = llmAny?.baseUrl ?? '';
           const prov = llmAny?.provider ?? 'ollama';
           return legacy ? { [prov]: legacy } : {};
         })(),
+        headers: headerRows(v.llm?.headers),
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -476,13 +548,14 @@ export default function SettingsPanel() {
           repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
           discoverySteps: typeof v.llm?.fallback?.discoverySteps === 'number' ? v.llm.fallback.discoverySteps : 0,
           providerBaseUrls: (() => {
-            const fbAny = v.llm?.fallback as (LlmFallbackForm & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+            const fbAny = v.llm?.fallback as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
             const stored = fbAny?.providerBaseUrls;
             if (stored && typeof stored === 'object') return { ...stored };
             const legacy = fbAny?.baseUrl ?? '';
             const prov = fbAny?.provider ?? 'ollama';
             return legacy ? { [prov]: legacy } : {};
           })(),
+          headers: headerRows(v.llm?.fallback?.headers),
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
@@ -492,6 +565,7 @@ export default function SettingsPanel() {
         // round-trips through POST harmlessly (settings.update ignores 'set').
         apiKey: v.search?.apiKey ?? '',
         baseUrl: v.search?.baseUrl ?? '',
+        searxngEngines: v.search?.searxngEngines ?? '',
       },
       embedding: {
         enabled: v.embedding?.enabled ?? true,
@@ -534,6 +608,19 @@ export default function SettingsPanel() {
           username: v.scrobble?.listenbrainz?.username ?? '',
           baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
+        navidrome: {
+          enabled: !!v.scrobble?.navidrome?.enabled,
+        },
+      },
+      picker: {
+        // 0 = off, and that IS the shipped default — an absent key must read as
+        // off rather than inventing a cooldown the operator never asked for.
+        albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),
+        // Same rule: absent reads as 0 = no floor, which is the shipped
+        // default and today's behaviour.
+        minTrackLengthSeconds: String(
+          typeof v.picker?.minTrackLengthSeconds === 'number' ? v.picker.minTrackLengthSeconds : 0,
+        ),
       },
       likes: {
         enabled: v.likes?.enabled ?? true,
@@ -668,7 +755,12 @@ export default function SettingsPanel() {
     const n = numberFields();
     saveBlock(n, {
       crossfadeDuration: n.float('crossfadeDuration', form.crossfadeDuration),
+      ducking: {
+        voice: n.float('ducking.voice', form.ducking.voice),
+        intro: n.float('ducking.intro', form.ducking.intro),
+      },
       maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
+      fadeAtShowEnd: form.fadeAtShowEnd,
       silenceTrim: {
         enabled: form.silenceTrim.enabled,
         minGapMs: n.int('silenceTrim.minGapMs', form.silenceTrim.minGapMs),
@@ -676,6 +768,7 @@ export default function SettingsPanel() {
       transitions: {
         pairDrain: form.transitions.pairDrain,
         stemBlends: form.transitions.stemBlends,
+        effects: form.transitions.effects,
       },
       audio: {
         stemCache: form.transitions.stemCache,
@@ -698,6 +791,8 @@ export default function SettingsPanel() {
         bitrate: n.int('stream.bitrate', form.stream.bitrate),
         bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
         maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
+        countryHeader: form.stream.countryHeader,
+        geoipDbPath: form.stream.geoipDbPath,
       },
     });
   };
@@ -747,6 +842,7 @@ export default function SettingsPanel() {
 
   /** Search result → switch section, open Advanced if needed, scroll and flash. */
   const jumpTo = useCallback(({ section, anchor, advanced }: SettingsJump) => {
+    if (!sections.some(s => s.id === section)) return;
     setActiveSection(section);
     if (advanced) setAdvOpen(prev => ({ ...prev, [section]: true }));
     // The section swap and the disclosure both have to commit before the target
@@ -766,7 +862,7 @@ export default function SettingsPanel() {
       window.setTimeout(() => el.removeAttribute('data-flash'), 2600);
     };
     window.requestAnimationFrame(settle);
-  }, []);
+  }, [sections]);
 
   const chrome = useMemo(() => ({
     saveSlot,
@@ -782,7 +878,7 @@ export default function SettingsPanel() {
         {SECTION_GROUPS.map(group => (
           <div key={group} className="grid gap-1">
             <span className="caption pb-1">{group}</span>
-            {SECTIONS.filter(s => s.group === group).map(s => {
+            {sections.filter(s => s.group === group).map(s => {
               const isActive = activeSection === s.id;
               const Icon = s.icon;
               // A section not on screen can only be dirty in form paths — its
@@ -824,7 +920,7 @@ export default function SettingsPanel() {
       </aside>
 
       <div className="grid gap-4">
-        <SettingsSearch onJump={jumpTo} />
+        <SettingsSearch onJump={jumpTo} sections={sections} />
         {err && <ErrorState error={err} onRetry={refresh} />}
         {pendingRestart && (
           <div
@@ -887,6 +983,18 @@ export default function SettingsPanel() {
           <>
             {activeSection === 'tts' && data.tts && (
               <TtsSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {activeSection === 'behaviour' && (
+              <DjBehaviourSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} fieldErrors={fieldErrors}
+              />
+            )}
+            {djBrainEnabled && activeSection === 'brain' && (
+              <BrainSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
               />
@@ -1131,7 +1239,7 @@ export default function SettingsPanel() {
               </Card>
             )}
 
-            <Advanced note="crossfade, transitions, loudness and the extra stream mounts">
+            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
             {form && (
               <Card title="Crossfade" sub="track transition overlap">
                 <div className="field">
@@ -1157,6 +1265,70 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Duck depth" sub="how far the music drops under the DJ">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over silence</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for solo DJ speech"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.voice}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The heavy duck: station IDs, the hourly time, weather and request intros
+                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
+                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
+                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
+                      apply it with the Mixer card below.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over a track</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for talk-over links"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.intro}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The light duck for between-track links, which talk over the song rather
+                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
+                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1284,6 +1456,51 @@ export default function SettingsPanel() {
             )}
 
             {form && (
+              <Card title="DJ transition effects" sub="which gestures the DJ may reach for">
+                <div className="field-hint">
+                  Only ever heard when the on-air persona is in DJ mode — this switches off
+                  individual gestures without giving up the rest of the kit. The station still
+                  validates every choice against the audio analysis, so switching one on is
+                  permission, not a guarantee. Applies live; no restart.
+                </div>
+                <div className="grid gap-3">
+                  {TRANSITION_EFFECT_FIELDS.map(({ id, label, hint }) => {
+                    const aria = fieldAria(`transition-effect-${id}`, undefined, { hasDescription: true });
+                    return (
+                      <div className="field" key={id}>
+                        <Label {...aria.labelledByProps}>{label}</Label>
+                        <div className="flex items-center gap-2">
+                          <Seg
+                            {...aria.groupProps}
+                            options={[
+                              { id: 'on', label: 'On' },
+                              { id: 'off', label: 'Off' },
+                            ]}
+                            value={form.transitions.effects[id] ? 'on' : 'off'}
+                            onChange={v =>
+                              setForm(f =>
+                                f
+                                  ? {
+                                    ...f,
+                                    transitions: {
+                                      ...f.transitions,
+                                      effects: { ...f.transitions.effects, [id]: v === 'on' },
+                                    },
+                                  }
+                                  : f,
+                              )
+                            }
+                          />
+                        </div>
+                        <div {...aria.descriptionProps} className="field-hint">{hint}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {form && (
               <Card title="Max track length" sub="cut over-length tracks on air">
                 <div className="field">
                   <Label>Maximum track length</Label>
@@ -1311,6 +1528,50 @@ export default function SettingsPanel() {
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
                   </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Show boundaries" sub="stop a long track spilling into the next show">
+                <div className="field">
+                  <Label>Fade out at a show change</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.fadeAtShowEnd ? 'on' : 'off'}
+                      onChange={id => setForm(f => (f ? { ...f, fadeAtShowEnd: id === 'on' } : f))}
+                    />
+                  </div>
+                  <SettingsFieldError path="fadeAtShowEnd" errors={fieldErrors} />
+                  <div className="field-hint">
+                    On a schedule built from long records — ambient, classical, prog — the last
+                    track of a show can still be playing well into the next one, so the incoming
+                    host talks over the outgoing show&rsquo;s music. With this on, a track that
+                    would run past the boundary is faded out there instead. A short overrun is
+                    left alone, a track is never cut down to a stub, and listener requests always
+                    play in full. Each show can override this. Applies on the next pick; no
+                    restart needed.
+                  </div>
+                  {(() => {
+                    // The minimum play time plus overrun tolerance prevents boundary
+                    // cuts at this cap. Shows can override the station cap.
+                    const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
+                    const cap = Number(form.maxTrackSeconds);
+                    if (!form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
+                    return (
+                      <div className="field-hint italic">
+                        With <b>Maximum track length</b> at {cap}s, boundary fading cannot apply
+                        to tracks using this cap: it requires more than {floor}s of playable
+                        music. The cap limits track length, but a track starting near the end
+                        of a show can still run into the next one. Shows that override this
+                        cap may still use boundary fading.
+                      </div>
+                    );
+                  })()}
                 </div>
               </Card>
             )}
@@ -1811,6 +2072,60 @@ export default function SettingsPanel() {
               </Card>
             )}
 
+            {form && (
+              <Card title="Listener country" sub="where the Stats rollup gets geography from">
+                <div className="field">
+                  <Label>Country header</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Proxy header carrying the listener country"
+                    placeholder="x-country-code"
+                    value={form.stream.countryHeader}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, countryHeader: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.countryHeader" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Stats reads <code>CF-IPCountry</code> first, which only Cloudflare sets.
+                    If your own proxy adds a country header, name it here and it is read
+                    when Cloudflare&apos;s is absent. Leave blank if you have neither —
+                    an unknown country is simply left out of the rollup.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>GeoIP database</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Path to an offline GeoIP database"
+                    placeholder="/var/sub-wave/geoip/GeoLite2-Country.mmdb"
+                    value={form.stream.geoipDbPath}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, geoipDbPath: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.geoipDbPath" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Last resort when no header carries the answer: the path, inside the
+                    controller container, of a MaxMind-format <code>.mmdb</code> country
+                    database you supply — GeoLite2, DB-IP Lite and IP2Location LITE all
+                    work. Nothing is bundled; each has its own licence and attribution
+                    terms. An unreadable file is logged once and then ignored, so a wrong
+                    path costs the lookup, never a listener.{' '}
+                    <strong>GEOIP_DB_PATH</strong>{' '}in the environment overrides this.
+                  </div>
+                </div>
+              </Card>
+            )}
+
 
             </Advanced>
 
@@ -1836,7 +2151,7 @@ export default function SettingsPanel() {
               onSave={saveDanger}
               saveLabel="Save danger zone"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
             />
           </>
         )}

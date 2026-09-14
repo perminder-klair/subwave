@@ -63,10 +63,8 @@ function thinkingText(turn: SessionTurn): string {
   return cls === 'voice' ? `"${text}"` : text;
 }
 
-// Total enter time stays under ~600 ms regardless of line length. The type-on
-// is word-by-word rather than per character: near-identical under the blur ramp
-// at a fraction of the animated element count (a long script used to mount
-// hundreds of motion spans).
+// Total enter time stays under ~600 ms regardless of line length. Type-on is
+// word-by-word, not per character, to keep the animated element count down.
 function staggerFor(count: number): number {
   if (count <= 0) return 0;
   return Math.min(0.08, 0.5 / count);
@@ -81,10 +79,9 @@ export interface DjThinkingLineProps {
   /** Live session messages, oldest first. */
   feed: SessionTurn[] | undefined;
   enabled: boolean;
-  /** Subsonic id of the track on air. A `dj`/pick turn's `meta.trackId` is the
-   *  *picked* song — which, because picks run at the previous track's start, is
-   *  the track to play NEXT, not the one playing now. Used to skip pick
-   *  reasoning that isn't about the current track (#546). */
+  /** Subsonic id of the track on air. A pick turn's `meta.trackId` is the
+   *  NEXT track (picks run at the previous track's start), so this filters
+   *  out reasoning that isn't about the current track (#546). */
   currentTrackId?: string | null;
   /** Station-wide Booth Sprite toggle; falls back to the classic marker when
    *  false. Defaults off (operator opts in). */

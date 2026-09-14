@@ -1,8 +1,6 @@
-// The control deck, rebuilt to match the web player's console: a bordered
-// three-cell box — Power (hollow ring that lights accent on air), the analog
-// Signal meter (label + listener/latency read, a 26-tick scale with a vermilion
-// grip, and a 0–250 latency ruler), and Volume (rotary knob + dot-grille mute).
-// Docked below the FM-dial pager, so it stays at the foot of every band stop.
+// The control deck: a bordered three-cell box of Power, the analog Signal
+// meter (26-tick scale, 0-250ms latency ruler) and Volume. Docked below the
+// pager so it stays at the foot of every band stop.
 
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
@@ -25,9 +23,8 @@ export interface TransportBarProps {
   latencyMs: number | null;
   signalQuality: SignalQuality;
   listeners: number | null;
-  /** Cast device name while a Google Cast session is active, else null.
-   *  Swaps the Signal label for a "Cast · <device>" read so the deck says
-   *  where the audio actually is. */
+  /** Cast device name while a session is active, else null. Swaps the Signal
+   *  label for a "Cast · <device>" read. */
   castingTo?: string | null;
 }
 
@@ -233,8 +230,7 @@ export default function TransportBar({
   );
 }
 
-// Speaker-grille: a 4×4 grid of evenly-spaced dots filling the square, matching
-// the web player's radial-dot grille.
+// Speaker grille: a 4x4 grid of evenly-spaced dots filling the square.
 function DotGrille({ color }: { color: string }) {
   return (
     <View style={{ width: 26, height: 26, justifyContent: 'space-between' }}>

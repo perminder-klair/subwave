@@ -1,22 +1,18 @@
 'use client';
 
-// First-paint tune-in gate, shared by every skin. Browsers only allow audio
-// after a user gesture, so the gate's tap doubles as the audio unblock —
-// skins must funnel their initial tune-in affordance through this hook.
-//
-// Shown on every fresh load until the listener taps it; dismissed permanently
-// for the rest of the session once they've tuned in, so a later Tune Out
-// doesn't bring the overlay back. When the idle cutoff tears playback down
-// (usePlayer, issue #343), the gate returns as the one-tap resume.
+// First-paint tune-in gate, shared by every skin. The tap is the browser's
+// required audio-unblock gesture, so skins must funnel their initial tune-in
+// affordance through this hook. Shown on every fresh load until tapped, then
+// dismissed for the session; the idle cutoff (usePlayer, #343) brings it back
+// as the one-tap resume.
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { usePlayerActions, usePlayerAudio, usePlayerFeed } from './PlayerCore';
 
 export interface TuneInGate {
-  /** The gate is up — the listener hasn't tuned in yet. Skins key their
-   *  un-tuned state off this (paused time display, keyboard focus, etc.),
-   *  regardless of whether the full-bleed overlay is shown. */
+  /** The gate is up. Skins key their un-tuned state off this whether or not
+   *  the full-bleed overlay is shown. */
   showTuneIn: boolean;
   /** Render the skin's full-bleed tune-in overlay: the gate is up AND the
    *  operator hasn't disabled it (settings.ui.tuneInOverlay). When off,
@@ -33,14 +29,11 @@ export function useTuneInGate(): TuneInGate {
   const { tunedIn, idleStopped } = usePlayerAudio();
   const { tune } = usePlayerActions();
   const { state } = usePlayerFeed();
-  // Operator toggle (station-wide, live via /state). Default ON — anything
-  // other than an explicit false (including undefined before /state resolves)
-  // keeps the full-bleed gate, preserving pre-toggle behavior.
+  // Operator toggle (station-wide, live via /state). Default ON: only an
+  // explicit false drops the full-bleed gate.
   const overlayEnabled = state.ui?.tuneInOverlay !== false;
   // Seeded from the live tune state, not `true`: the hook remounts on every
-  // skin switch (gate state is per-skin), and a fresh instance while playback
-  // is already running must not paint the gate for a frame before the
-  // tunedIn effect below drops it.
+  // skin switch, and a fresh instance during playback must not flash the gate.
   const [showTuneIn, setShowTuneIn] = useState(() => !tunedIn);
 
   const tuneInFromOverlay = () => {
@@ -56,9 +49,8 @@ export function useTuneInGate(): TuneInGate {
     toast('Tuned out while you were away — tap to keep listening.');
   }, [idleStopped]);
 
-  // Whenever playback is actually running, the gate has done its job — drop
-  // it. Covers resume paths that bypass the overlay tap (lock-screen Play
-  // after an idle cutoff goes straight through tune()).
+  // Drop the gate whenever playback is running; covers resume paths that
+  // bypass the overlay tap (lock-screen Play goes straight through tune()).
   useEffect(() => {
     if (tunedIn) setShowTuneIn(false);
   }, [tunedIn]);

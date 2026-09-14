@@ -1,44 +1,29 @@
-// Direct MusicBrainz client (read-only) — resolves a track's ORIGINAL release
-// year (issue #842).
-//
-// Compilation albums carry the compilation's release date, not each song's —
-// "100 Hits: 70s Chartbusters" (2013) is full of 1970s recordings tagged 2013,
-// so era-bounded shows both mis-include it (a "2010s" show) and miss it (a
-// "70s" show). Per-track original-date tags aren't standard practice and
-// Navidrome doesn't surface them per-song anyway, so the enrichment pass asks
-// MusicBrainz: every MB recording carries `first-release-date`, the earliest
-// release known to contain that recording.
-//
-// One recording search returns MANY distinct recordings for a title+artist
-// (studio, live, remaster, cover-adjacent noise), each with its own
-// first-release-date — the studio original is rarely the top hit. So the
-// resolver filters to candidates that genuinely match (score + normalised
-// title/artist) and takes the EARLIEST plausible year across them. When
-// Navidrome supplies a per-song recording MBID (musicBrainzId), that exact
-// recording is looked up first — no fuzzy matching needed.
+// Read-only MusicBrainz client resolving a track's ORIGINAL release year (#842),
+// from each recording's `first-release-date`. One search returns many distinct
+// recordings for a title+artist (studio, live, remaster, noise) and the studio
+// original is rarely the top hit, so the resolver filters to genuine matches and
+// takes the EARLIEST plausible year. A per-song recording MBID is looked up
+// first and needs no fuzzy matching.
 //
 // API etiquette (https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting):
-// keyless, but strictly 1 request/second per client with a descriptive
-// User-Agent. All calls funnel through a module-level throttle chain so
-// callers can fire concurrently and still emit ≤1 req/s. Failures return null
-// with no retry (project convention — the enrichment loop is resumable and a
-// miss is stamped so it isn't re-queried every pass).
+// keyless, but strictly 1 req/s per client with a descriptive User-Agent, so
+// every call funnels through the module-level throttle chain below. Failures
+// return null with no retry — the enrichment loop is resumable and a miss is
+// stamped so it isn't re-queried every pass.
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 const MB_API = 'https://musicbrainz.org/ws/2';
-// MB asks for app + contact in the UA; version intentionally coarse so it
-// doesn't drift from package.json.
+// MB asks for app + contact in the UA; version stays coarse so it can't drift
+// from package.json.
 const USER_AGENT = 'subwave/1.0 ( https://github.com/perminder-klair/subwave )';
 const TIMEOUT_MS = 8000;
 const MIN_GAP_MS = 1100; // 1 req/s with a safety margin
 const MIN_SCORE = 90;    // Lucene match score floor for search candidates
 const MIN_YEAR = 1900;   // sanity window for a "real" recording year
 
-// ── 1 req/s throttle ─────────────────────────────────────────────────────────
 // Serialise every MB request on one promise chain, spacing request STARTS by
-// MIN_GAP_MS. The enrichment pool runs tracks concurrently; this keeps the
-// station a polite MB citizen regardless of pool width.
+// MIN_GAP_MS, so a concurrent enrichment pool still emits <=1 req/s.
 let gate: Promise<void> = Promise.resolve();
 let lastStart = 0;
 
@@ -49,22 +34,20 @@ function throttled<T>(fn: () => Promise<T>): Promise<T> {
     lastStart = Date.now();
     return fn();
   });
-  // Keep the chain alive past failures — a rejected link would poison every
-  // queued caller behind it.
+  // Keep the chain alive past failures: a rejected link poisons every queued
+  // caller behind it.
   gate = run.then(() => undefined, () => undefined);
   return run;
 }
 
-// ── Pure candidate filtering (unit-pinned in scripts/original-year.test.ts) ──
-
-// Normalised comparison token — same shape as show-filter.normGenre so titles
-// like "Dancing Queen (Remastered)" still contain "dancingqueen".
+// Normalised comparison token, same shape as show-filter.normGenre, so
+// "Dancing Queen (Remastered)" still contains "dancingqueen".
 function norm(s: unknown): string {
   return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-// The slice of an MB recording the resolver reads. Search results carry all of
-// it; the shape is loose because it's third-party JSON.
+// The slice of an MB recording the resolver reads; loose because it's
+// third-party JSON.
 export interface MbRecording {
   score?: number;
   title?: string;
@@ -79,13 +62,10 @@ function creditNames(r: MbRecording): string[] {
 }
 
 // Earliest plausible original year across the recordings that genuinely match
-// title+artist. `trusted: true` (MBID lookup — the id IS the match) skips the
-// score/title/artist gate and only sanity-checks the year. `maxYear` is the
-// track's own file year when known — a hard upper bound, since the song
-// evidently existed by then: without it, a 2022 song on a DJ-mix compilation
-// resolved to 2025 because a later mix release carries a recording with the
-// exact suffixed title. Returns null when nothing usable matches — the caller
-// records a checked-but-missed.
+// title+artist. `trusted: true` (an MBID lookup, where the id IS the match)
+// skips the score/title/artist gate and only sanity-checks the year. `maxYear`
+// is the track's own file year: a hard upper bound, since the song evidently
+// existed by then. Null when nothing matches; the caller stamps a miss.
 export function earliestOriginalYear(
   recordings: MbRecording[],
   match: { title: string; artist: string; trusted?: boolean; maxYear?: number | null },
@@ -114,23 +94,18 @@ export function earliestOriginalYear(
   return earliest;
 }
 
-// Which tracks are worth an MB round-trip (shared by phase-0 enrichment and
-// the single-track retag route so the two can't drift; `idsNeedingOriginalYear`
-// is the SQL twin and must agree).
+// Which tracks are worth an MB round-trip. Shared by phase-0 enrichment and the
+// single-track retag route; `idsNeedingOriginalYear` is the SQL twin and must
+// agree.
 //
-// The gate is era SUSPICION, not Navidrome's compilation flag (#1418). Keying
-// it on the flag limited the pass to 27 tracks out of 27,860 on the reported
-// library, because the reissue anthologies it exists for arrive as
-// `isCompilation: false` — see music/era-suspect.ts for what counts instead.
+// The gate is era SUSPICION, not Navidrome's compilation flag (#1418) — the
+// reissue anthologies it exists for arrive as `isCompilation: false`.
 // `yearUntrusted` is composed once in the row mapper (flag OR derived
-// judgement); a caller passing the raw flag would silently reopen the gap, so
-// this reads only the composed field.
+// judgement); passing the raw flag would silently reopen the gap.
 //
-// A resolved year (from anywhere — album tag, a previous lookup, or the
-// operator) means there is nothing to ask. A prior checked-but-missed stamp
-// skips the track unless the operator asked for a re-enrich; a MANUAL answer
-// is never re-asked at all, since it is not something MusicBrainz can improve
-// on.
+// Any resolved year means there is nothing to ask. A checked-but-missed stamp
+// skips the track unless the operator asked for a re-enrich; a MANUAL answer is
+// never re-asked.
 export function needsOriginalYearLookup(
   t: {
     yearUntrusted?: boolean | null;
@@ -146,14 +121,10 @@ export function needsOriginalYearLookup(
   return reEnrich || !t.originalYearCheckedAt;
 }
 
-// ── Lookup ───────────────────────────────────────────────────────────────────
-
 async function searchRecordings(query: string): Promise<MbRecording[]> {
-  // limit=100 (the API max) matters: results are relevance-ranked with no
-  // date sort, and a heavily re-released track ("Le Freak") has so many
-  // recordings that the ORIGINAL often falls outside the top 25 — a 25-cap
-  // resolved it to 1988 instead of 1978. The earliest-year fold below wants
-  // the widest candidate set one request can carry.
+  // limit=100 (the API max): results are relevance-ranked with no date sort, so
+  // a heavily re-released track's original often falls outside the top 25 and
+  // the earliest-year fold wants the widest set one request can carry.
   const url = `${MB_API}/recording?query=${encodeURIComponent(query)}&fmt=json&limit=100`;
   const res = await fetchWithTimeout(url, {
     timeoutMs: TIMEOUT_MS,
@@ -169,12 +140,10 @@ function phrase(s: string): string {
   return `"${s.replace(/[\\"]/g, '\\$&')}"`;
 }
 
-// Strip trailing parenthetical/bracket noise from a compilation track title —
-// "(Mixed)", "[feat. Doja Cat] [Mixed]", "(Remix)", etc. The search query is a
-// Lucene PHRASE, so "Super Gremlin (Mixed)" matches nothing even though MB has
-// "Super Gremlin" — DJ-mix albums missed wholesale until the retry searched
-// the stripped title. Loops so stacked suffixes all come off; never strips a
-// title down to nothing.
+// Strip trailing parenthetical/bracket noise ("(Mixed)", "[feat. X]") from a
+// title. The query is a Lucene PHRASE, so "Super Gremlin (Mixed)" matches
+// nothing even when MB has "Super Gremlin". Loops for stacked suffixes; never
+// strips a title down to nothing.
 export function stripTitleNoise(title: string): string {
   let t = (title ?? '').trim();
   for (;;) {
@@ -185,21 +154,18 @@ export function stripTitleNoise(title: string): string {
   return t;
 }
 
-// First credited artist — "DJ Khaled feat. Future & Lil Baby" → "DJ Khaled".
-// Used only for the retry QUERY; the candidate matcher still compares against
-// the full artist string (its normalised-containment check handles joint
-// credits like "Future & Gunna" against MB's split artist-credit).
+// First credited artist ("DJ Khaled feat. Future & Lil Baby" -> "DJ Khaled").
+// Used only for the retry QUERY; the candidate matcher still compares the full
+// artist string, whose containment check handles joint credits.
 export function primaryArtist(artist: string): string {
   const cut = (artist ?? '').split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+|\s*[,&]\s*|\s+x\s+/i)[0];
   return (cut || artist || '').trim();
 }
 
-// Resolve the original release year for one track. MBID first (exact), then a
-// title+artist phrase search, then — because compilation titles carry noise
-// the phrase search can't see past — a retry with suffixes stripped and the
-// primary artist only. `year` (the file's own year, when known) caps every
-// candidate: the original can't post-date the release the file came from.
-// Returns null on no confident match or any request failure — never throws.
+// Resolve the original release year for one track: MBID first (exact), then a
+// title+artist phrase search, then a retry with suffixes stripped and the
+// primary artist only. `year` (the file's own) caps every candidate. Returns
+// null on no confident match or any request failure; never throws.
 export async function lookupOriginalYear(track: {
   title?: string | null;
   artist?: string | null;
@@ -225,9 +191,8 @@ export async function lookupOriginalYear(track: {
       const recs = await throttled(() =>
         searchRecordings(`recording:${phrase(at.t)} AND artist:${phrase(at.a)}`),
       );
-      // Match against the ATTEMPT's title (the stripped retry must compare
-      // stripped-to-stripped) but always the full artist string — the
-      // containment check handles joint credits either way.
+      // Match the ATTEMPT's title (stripped-to-stripped on the retry) but always
+      // the full artist string.
       const y = earliestOriginalYear(recs, { title: at.t, artist, maxYear });
       if (y != null) return y;
     }

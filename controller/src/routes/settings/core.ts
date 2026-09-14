@@ -1,8 +1,5 @@
-// The settings surface proper: the single GET the admin UI hydrates from, the
-// POST that validates and persists a patch, and the two credential writes
-// (cloud secrets, Navidrome) that land outside settings.json.
-//
-// Part of the settings/ route split - see ../settings.ts.
+// The settings GET/POST plus the two credential writes (cloud secrets,
+// Navidrome) that land outside settings.json.
 
 import express from 'express';
 import { config } from '../../config.js';
@@ -14,12 +11,14 @@ import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
+import { BOUNDARY_MIN_PLAY_SEC, BOUNDARY_TOLERANCE_SEC } from '../../broadcast/show-boundary.js';
 import * as tts from '../../audio/tts.js';
 import * as remoteTts from '../../audio/remoteTts.js';
 import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
@@ -31,37 +30,28 @@ import { skillCatalog } from '../../skills/_agent.js';
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
 
-// ---------------------------------------------------------------------------
-// SETTINGS — single endpoint that returns everything the /settings UI needs
-// ---------------------------------------------------------------------------
+// Everything the /settings UI needs, in one response.
 router.get('/settings', requireAdmin, async (req, res) => {
   try {
     await library.load();
     await settings.load();
-    // Redacted view — masks llm.apiKey / tts.cloud.apiKey so secrets never
-    // leave the process. The UI shows "set"/"" and round-trips it harmlessly.
+    // Redacted: secrets come back as "set"/"" and round-trip harmlessly.
     const s = settings.getRedacted();
-    // On-air status — a telnet failure must not 500 the whole settings load.
+    // A telnet failure must not 500 the whole settings load.
     let streamOnAir: boolean | null = null;
     try { streamOnAir = await streamStatus(); } catch {}
-    // The persona actually on air right now — the same resolution the listener
-    // side uses (getEffectivePersona): a scheduled show's owner when a show is
-    // live this hour, otherwise the admin-selected default. The roster marks
-    // "on air" by THIS, not by activePersonaId, so a show override surfaces the
-    // real voice instead of the static default.
+    // On air is resolved through getEffectivePersona (a live show's owner, else
+    // the default), never activePersonaId, so a show override surfaces.
     const onAirPersona = settings.getEffectivePersona();
     const activeShow = settings.resolveActiveShow();
     const onAir = {
       personaId: onAirPersona?.id || '',
-      // The show reassigning the hour, present only when a show actually owns a
-      // persona this hour — null means the default persona is on air.
+      // null means the default persona is on air.
       show: activeShow?.persona?.id ? { id: activeShow.id, name: activeShow.name } : null,
     };
-    // Reference-WAV voices are shared by chatterbox + pocket-tts (issue #213);
-    // read once and reuse for both dropdowns.
+    // Reference-WAV voices are shared by chatterbox + pocket-tts (#213).
     const customVoices = await chatterbox.listReferenceVoices();
-    // Custom Piper .onnx voices the operator dropped into the same shared folder
-    // (issue #230) — only those with a matching .onnx.json manifest are listed.
+    // Custom Piper voices in the same folder (#230), .onnx + .onnx.json pairs.
     const piperVoices = await piper.listPiperVoices();
     const voiceDir = chatterbox.voiceDir();
     res.json({
@@ -72,15 +62,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
       jingles: await jingles.list(),
       libraryStats: library.stats(),
       tagger: taggerView(),
-      // Current daily-token-budget tier (normal|soft|hard) — reads 'normal' on the
-      // default cap-off install. The library Tagging modal warns before a run when
-      // this is soft/hard (LLM steps will spend more, or fail until UTC midnight).
+      // Daily-token-budget tier (normal|soft|hard); 'normal' when the cap is off.
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
-      // Navidrome connection — read state for the Settings "Music source"
-      // section. The password never leaves the process (passSet only). Env
-      // flags are per-field because server.ts applies setup-config per-field:
-      // url can be env-managed while user/pass come from the wizard/admin.
+      // Password never leaves the process (passSet only). Env flags are
+      // per-field because server.ts applies setup-config per-field.
       navidrome: {
         url: config.navidrome.url,
         user: config.navidrome.user,
@@ -91,28 +77,40 @@ router.get('/settings', requireAdmin, async (req, res) => {
           pass: !!process.env.NAVIDROME_PASS,
         },
       },
-      // What the configured zone resolves to when timezone is '' (Auto) —
-      // lets the UI label the Auto option with the actual server zone.
+      // What timezone '' (Auto) resolves to, for the UI's Auto label.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       values: {
         jingleRatio: s.jingleRatio,
+        // Who counts the tracks between jingles (#1619) — the admin control that
+        // hands the rotate to the controller and writes the mixer's ratio 0.
+        jingleRotate: s.jingleRotate,
         crossfadeDuration: s.crossfadeDuration,
+        ducking: s.ducking,
+        // Repaired on the way out via the same function the air path uses: a
+        // profile switch or backup restore can seed an off-step value (#1576).
+        handover: { offsetMinutes: handoverOffsetMinutes() },
+        djBehaviour: s.djBehaviour,
         maxTrackSeconds: s.maxTrackSeconds,
-        // Crossfade-relative floor for a non-zero cap — one rule, shared with the
-        // admin/show UI so client hints match server validation.
+        // Crossfade-relative floor, shared with the admin/show UI so client
+        // hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
+        // Edited from the Backup panel, but saved through POST /settings.
+        backups: s.backups,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
+        fadeAtShowEnd: s.fadeAtShowEnd,
+        // Shortest playable track a boundary cut can arm on; a maxTrackSeconds
+        // cap at or below this disables the feature. Served, never restated in
+        // the UI, so the hint uses the number the drain uses.
+        boundaryFadeMinTrackSeconds: BOUNDARY_MIN_PLAY_SEC + BOUNDARY_TOLERANCE_SEC,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,
         locale: s.locale,
         theme: s.theme,
         festivals: s.festivals,
-        // Editable mood system (/admin/moods): the vocabulary + CLAP prompts,
-        // and the time/weather → mood maps.
         moods: s.moods,
         moodSchedule: s.moodSchedule,
         weatherMoods: s.weatherMoods,
@@ -125,23 +123,28 @@ router.get('/settings', requireAdmin, async (req, res) => {
         activePersonaId: s.activePersonaId,
         shows: s.shows,
         schedule: s.schedule,
+        djTalkOnlyBetweenTracks: s.djTalkOnlyBetweenTracks,
+        pauseTalkMinSeconds: s.pauseTalkMinSeconds,
         tts: s.tts,
         llm: s.llm,
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // The admin form hydrates the album-cooldown/min-length inputs from
+        // this; omit it and the next save on that card zeroes them.
+        picker: s.picker,
         audio: s.audio,
         transitions: s.transitions,
         sfx: s.sfx,
         beds: s.beds,
         ui: s.ui,
         scrobble: s.scrobble,
-        // privacy.password arrives redacted ('set'/'') from getRedacted().
+        // privacy.password arrives redacted ('set'/'').
         privacy: s.privacy,
         requests: s.requests,
       },
       defaults: {
-        // The built-in prompt template — the UI shows this when djPrompt is "".
+        // Shown by the UI when djPrompt is "".
         djPrompt: settings.DEFAULT_DJ_PROMPT_TEMPLATE,
         personas: settings.getDefaults().personas,
         tts: settings.getDefaults().tts,
@@ -158,15 +161,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
         voiceDir,
         piperVoices,
         chatterboxVoices: customVoices,
-        // `chatterboxVoiceDir` kept as an alias of `voiceDir` so older UI
-        // builds that haven't picked up the new field don't break.
+        // Alias of voiceDir, kept for older UI builds.
         chatterboxVoiceDir: voiceDir,
         pocketTtsVoices: settings.POCKET_TTS_VOICES,
         pocketTtsCustomVoices: customVoices,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
         frequencies: settings.FREQUENCIES,
-        // The live mood NAMES, for the show/festival mood dropdowns. Now driven
-        // by the operator-editable vocabulary rather than the static default.
+        // Live mood names from the operator-editable vocabulary.
         moods: settings.moodVocab(),
       },
       llm: {
@@ -174,17 +175,15 @@ router.get('/settings', requireAdmin, async (req, res) => {
         active: llmProvider.activeModelLabel(),
       },
       embedding: {
-        // Embedding-capable providers only — a strict subset of llm.providers.
-        // The picker maps over this so chat-only providers (deepseek, gateway)
-        // can't be chosen as an embedding source (#493).
+        // Embedding-capable providers only, a strict subset of llm.providers,
+        // so a chat-only provider can't be chosen here (#493).
         providers: settings.EMBEDDING_PROVIDERS,
       },
       search: {
         providers: settings.SEARCH_PROVIDERS,
       },
-      // Which provider API keys are present in the controller's environment.
-      // The UI keys its "key missing" alerts off this — keys are configured
-      // via controller/.env, never typed into the admin surface.
+      // Which provider API keys are present in the environment; the UI keys
+      // its "key missing" alerts off this.
       env: {
         OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
         ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
@@ -203,8 +202,6 @@ router.get('/settings', requireAdmin, async (req, res) => {
         LISTENBRAINZ_USER_TOKEN: !!process.env.LISTENBRAINZ_USER_TOKEN,
         LISTENBRAINZ_API_URL: !!process.env.LISTENBRAINZ_API_URL,
       },
-      // Skill catalogue — consumed by the Skills page and by Personas for the
-      // per-persona skill-assignment checklist.
       skills: { catalog: skillCatalog() },
     });
   } catch (err) {
@@ -212,24 +209,15 @@ router.get('/settings', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /settings — update values. Returns { requiresRestart } so the UI can
-// prompt the user to restart the mixer for jingle freq / crossfade changes.
-//
-// validateSettingsBody() runs the per-key registry first, so a failure on a
-// converted key comes back with `fieldErrors` the admin panel can map onto the
-// input that caused it — the channel every form here has been missing (#1348).
-// It also rejects unknown top-level keys, which used to save nothing and still
-// answer 200. That check is deliberately HERE and not in settings.update():
-// backup restore hands update() a whole settings.json, and a key from a newer
-// version must cost one setting, not the entire restore.
-// ---------------------------------------------------------------------------
+// Update values; returns { requiresRestart } for mixer-affecting keys.
+// validateSettingsBody() rejects unknown top-level keys HERE and not in
+// settings.update(): backup restore hands update() a whole settings.json, and
+// a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
   try {
     const result = await settings.update(req.body || {});
-    // context.ts reads the live settings cache and keys its forecast cache by
-    // this block, so every settings.update() writer applies immediately — the
-    // route only owns the operator-facing log.
+    // context.ts reads the live settings cache, so the update already applies;
+    // the route only owns the operator-facing log.
     if ('weather' in (req.body || {})) {
       queue.log(
         'scheduler',
@@ -239,9 +227,7 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
     }
-    // A changed remote-TTS URL re-probes immediately so availability (and the
-    // admin "ready/unreachable" badge) reflects the new endpoint on the next
-    // /settings fetch instead of waiting for the 30s probe tick.
+    // Re-probe now so the admin badge doesn't wait out the 30s probe tick.
     if (req.body?.tts?.remote?.url !== undefined) {
       await remoteTts.refresh();
     }
@@ -251,12 +237,8 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /settings/secrets — write one or more API keys to state/secrets.env.
-// Only keys listed in SECRET_ENV_KEYS are accepted; blank values are skipped
-// (blank = "leave existing key in place"). Takes effect in-process immediately
-// via saveSecrets(); no controller restart needed.
-// ---------------------------------------------------------------------------
+// Writes API keys to state/secrets.env. Only SECRET_ENV_KEYS are accepted and
+// a blank value means "keep the existing key". Applies in-process immediately.
 router.post('/settings/secrets', requireAdmin, async (req, res) => {
   try {
     const body = req.body || {};
@@ -283,19 +265,10 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /settings/navidrome — change the Navidrome connection from the admin
-// Settings "Music source" section. Persists to state/setup-config.json (the
-// same overlay the wizard and `subwave setup` write — settings.json is NOT
-// the store for these; see setup/config.ts) and applies live, so Subsonic
-// calls use the new creds with no restart.
-//
-// Body { url?, user?, pass? } — submitted fields are validated merged over the
-// currently-effective values (blank pass = keep the one on file), but only the
-// submitted fields are persisted, so an env-shadowed value never gets copied
-// into setup-config.json. Env-managed fields are rejected outright rather than
-// silently persisting a value env would shadow again on next boot.
-// ---------------------------------------------------------------------------
+// Persists to state/setup-config.json (not settings.json) and applies live.
+// Body { url?, user?, pass? } is validated MERGED over the effective values
+// (blank pass = keep), but only submitted fields are persisted, so an
+// env-shadowed value is never copied in; env-managed fields are refused.
 router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
@@ -318,8 +291,8 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
       }
     }
 
-    // Validate the MERGED result — the connection must stay complete. A blank
-    // submitted url/user is a cleared field, not "keep", and is rejected here.
+    // The merged connection must stay complete; a blank url/user is a cleared
+    // field, not "keep".
     const merged = {
       url: submitted.url ?? config.navidrome.url,
       user: submitted.user ?? config.navidrome.user,
@@ -331,15 +304,13 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
 
     await saveSetupConfig({ navidrome: submitted });
     applyNavidromeToLiveConfig(submitted);
-    // The doctor's cached ping and the picker's memoised Subsonic pools both
-    // describe the OLD server — drop them so the banner clears promptly and
-    // the picker can't draw song ids that no longer resolve.
+    // Both caches describe the OLD server; drop them so the picker can't draw
+    // song ids that no longer resolve.
     clearNavidromeCache();
     clearPoolCache();
     queue.log('scheduler', `Navidrome connection updated → ${merged.url} (user ${merged.user})`);
-    // auto.m3u entries carry annotated URIs whose auth tokens derive from the
-    // old password — rebuild it with the new connection. Fire-and-forget so
-    // the save response isn't held up by Navidrome round-trips.
+    // auto.m3u URIs carry auth tokens derived from the old password; rebuild.
+    // Fire-and-forget so the save isn't held up by Navidrome round-trips.
     refreshAutoPlaylist().catch(err =>
       queue.log('error', `Post-save playlist refresh failed: ${err.message}`),
     );
@@ -349,13 +320,9 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /settings/navidrome/test — non-mutating connection test. Merges the
-// body over the effective values exactly like save, so "Test" works with the
-// stored password without the browser ever seeing it. (The wizard keeps its
-// own /onboarding/test-navidrome, which deliberately has NO stored-cred
-// fallback — it tests creds that aren't saved anywhere yet.)
-// ---------------------------------------------------------------------------
+// Non-mutating test. Merges over the effective values like save does, so Test
+// works with the stored password. The wizard's /onboarding/test-navidrome has
+// no stored-cred fallback on purpose.
 router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
   const b = req.body || {};
   const url =
@@ -369,4 +336,3 @@ router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
   }
   res.json(await subsonic.pingWith({ url, user, pass, client: 'sub-wave-admin' }));
 });
-

@@ -1,7 +1,6 @@
-// Provides the active station's runtime API client to the whole tree, plus the
-// recents list and the switch/forget actions. This is the native replacement
-// for the web's build-time NEXT_PUBLIC_API_URL — `api` here is rebuilt whenever
-// the active station changes, and every hook/screen reads `api`/`base` from it.
+// The active station's runtime API client for the whole tree, plus recents and
+// the switch/forget actions. `api` is rebuilt whenever the active station
+// changes; every hook and screen reads `api`/`base` from here.
 
 import React, {
   createContext,
@@ -64,9 +63,9 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
           ? await loadStationCredentials(s.activeStation)
           : null;
       } catch {
-        // A locked/corrupt keychain must not strand the app behind the native
+        // A locked or corrupt keychain must not strand the app behind the
         // splash. Start without the login; later station actions surface the
-        // read failure and never overwrite the vault.
+        // failure and never overwrite the vault.
       }
       if (alive) {
         setStore(s);
@@ -88,15 +87,15 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
     const nextCredentials = suppliedCredentials === undefined
       ? await loadStationCredentials(ref.url)
       : suppliedCredentials;
-    // A saved-station switch has already loaded its credential, so do not
-    // rewrite the same vault entry. New/edited onboarding credentials are
-    // persisted before current playback is interrupted.
+    // A saved-station switch already loaded its credential, so don't rewrite
+    // the same vault entry. New credentials are persisted before playback is
+    // interrupted.
     const next = await setActiveStation(
       ref,
       suppliedCredentials === undefined ? undefined : nextCredentials,
     );
-    // Single choke point for re-pointing the runtime app: stop the current
-    // station before changing the context base every screen consumes.
+    // The one choke point for re-pointing the app: stop the current station
+    // before changing the base every screen consumes.
     await teardown();
     setCredentials(nextCredentials);
     setStore(next);

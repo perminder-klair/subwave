@@ -285,6 +285,33 @@ await test('applyStrictLocks: empty locks are a full passthrough (no constraint)
   assert.deepEqual(applyStrictLocks(pool, {}, { starve: false }), pool);
 });
 
+await test('applyStrictLocks NEVER returns its input array', () => {
+  // THE DEFECT THIS GUARDS. The auto.m3u coast rebuilds its pool in place
+  // (`pool.length = 0; pool.push(...filtered)`), so a passthrough that hands
+  // the input array straight back clears the very array being spread back in
+  // and writes an empty auto.m3u. Reachable today: a strict show whose only
+  // genre resolves to no library tag runs ZERO lock steps and passes through.
+  // Same contract as music/track-floor.applyTrackFloor.
+  const pool = [t({ id: '1', genre: 'Jazz' }), t({ id: '2', genre: 'Rock' })];
+  // no locks at all — every step skipped
+  assert.notEqual(applyStrictLocks(pool, {}, { starve: true }), pool);
+  assert.notEqual(applyStrictLocks(pool, { genres: [], eras: [] }, { starve: false }), pool);
+  // never-starve reverted every step it tried
+  assert.notEqual(applyStrictLocks(pool, { genres: ['Nonexistent'] }, { starve: false }), pool);
+  // contents unchanged on all of them
+  assert.deepEqual(applyStrictLocks(pool, {}, { starve: true }).map(x => x.id), ['1', '2']);
+  assert.deepEqual(
+    applyStrictLocks(pool, { genres: ['Nonexistent'] }, { starve: false }).map(x => x.id),
+    ['1', '2'],
+  );
+  // and the coast's in-place rebuild survives it
+  const coast = [t({ id: '1', genre: 'Jazz' }), t({ id: '2', genre: 'Rock' })];
+  const filtered = applyStrictLocks(coast, { genres: [] }, { starve: false });
+  coast.length = 0;
+  coast.push(...filtered);
+  assert.deepEqual(coast.map(x => x.id), ['1', '2'], 'passthrough must not empty the coast');
+});
+
 if (failures) {
   console.error(`\n${failures} show-filter test(s) failed.`);
   process.exit(1);

@@ -1,15 +1,10 @@
 'use client';
 
-// The chrome SettingsPanel wraps around whichever section is on screen: the one
-// sticky save bar, and the Advanced disclosure.
-//
-// Both need to be owned by the panel (the bar is sticky against the panel's
-// scroll container; the search box has to be able to open a disclosure it is
-// jumping into) while being AUTHORED inside the section, next to the fields
-// they belong to. The bar solves that with a portal — SaveBar still renders in
-// the section's tree, its output lands in the panel's sticky slot — so a
-// section keeps its own save closure, its own note and its own error scoping,
-// and no section had to hand a patch builder upwards.
+// The chrome SettingsPanel wraps around the active section: the sticky save bar
+// and the Advanced disclosure. Both are owned by the panel (the bar is sticky
+// against its scroll container, search must be able to open a disclosure) but
+// authored inside the section; the bar portals out of the section's tree, so a
+// section keeps its own save closure, note and error scoping.
 
 import {
   Children,
@@ -25,14 +20,13 @@ import { Pill } from '../ui';
 
 export interface SectionChromeValue {
   /**
-   * Portal target for the sticky save bar's buttons, or null when the bar is
-   * hidden (nothing unsaved). A SaveBar with nowhere to render renders nothing,
-   * which is what makes "no changes → no save button" fall out for free.
+   * Portal target for the sticky save bar's buttons, null when nothing is
+   * unsaved. A SaveBar with nowhere to render renders nothing.
    */
   saveSlot: HTMLElement | null;
   /**
-   * Report dirtiness for a section whose editable state does NOT live in
-   * FormState — the panel cannot diff what it does not hold. See
+   * Report dirtiness for a section whose editable state does not live in
+   * FormState; the panel cannot diff what it does not hold. See
    * `SectionSpec.formKeys`.
    */
   reportDirty: (id: string, dirty: boolean) => void;
@@ -53,17 +47,15 @@ const SectionChromeContext = createContext<SectionChromeValue>(NOOP_CHROME);
 export const SectionChromeProvider = SectionChromeContext.Provider;
 
 /**
- * Outside a provider this returns a chrome with no save slot and Advanced
- * permanently OPEN. That is the safe default in both directions: a section
- * rendered somewhere else (a dialog, a test) shows all of its fields rather
- * than hiding half of them behind a disclosure that nothing can open.
+ * Outside a provider: no save slot, Advanced permanently OPEN, so a section
+ * rendered elsewhere shows every field rather than hiding some behind a
+ * disclosure nothing can open.
  */
 export const useSectionChrome = () => useContext(SectionChromeContext);
 
 /**
- * Register a section's dirtiness with the panel for as long as this component
- * is mounted, and withdraw it on unmount so a section left dirty and navigated
- * away from does not keep the previous section's bar alive.
+ * Register a section's dirtiness with the panel while mounted; withdrawn on
+ * unmount so a dirty section navigated away from does not keep the bar alive.
  */
 export function useReportDirty(dirty: boolean | undefined) {
   const { reportDirty } = useSectionChrome();
@@ -76,22 +68,15 @@ export function useReportDirty(dirty: boolean | undefined) {
 }
 
 interface AdvancedProps {
-  /**
-   * What the closed row says the disclosure holds. Section-specific, because
-   * "thresholds and fallbacks" is right for the tagger and wrong for the
-   * danger zone.
-   */
+  /** What the closed row says the disclosure holds; section-specific. */
   note?: string;
   children?: ReactNode;
 }
 
 /**
- * The per-section Advanced disclosure.
- *
- * Open/closed state lives in the panel, not here, so a search result can open
- * the disclosure it is scrolling into. The count on the right is the number of
- * cards inside — a straight `Children.count`, which is honest as long as
- * sections put one card per child (they do).
+ * The per-section Advanced disclosure. Open/closed state lives in the panel so a
+ * search result can open the one it scrolls into. The count assumes sections put
+ * one card per child.
  */
 export function Advanced({ note, children }: AdvancedProps) {
   const { advOpen, setAdvOpen } = useSectionChrome();

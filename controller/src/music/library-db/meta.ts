@@ -4,13 +4,8 @@
 
 import { requireDb } from './handle.js';
 
-// ---------------------------------------------------------------------------
-// Embedding meta
-// ---------------------------------------------------------------------------
-
-// `textMode` records whether the vectors were embedded with the model's
-// document prefix ('prefixed') or bare ('plain'); null = legacy row from
-// before mode tracking (equivalent to 'plain' — see resolveIndexTextMode).
+// Whether the vectors were embedded with the model's document prefix
+// ('prefixed') or bare ('plain'); null = pre-tracking, equivalent to 'plain'.
 type EmbeddingTextMode = 'plain' | 'prefixed';
 
 export function getEmbeddingMeta(): {
@@ -29,18 +24,16 @@ export function getEmbeddingMeta(): {
     model: row.model,
     dim: row.dim,
     textMode: row.text_mode === 'prefixed' || row.text_mode === 'plain' ? row.text_mode : null,
-    // NULL (pre-#1246 rows) reads as format 1 — the head + Last.fm + lyrics
-    // shape every index carried before the Sound line existed. Deliberately not
-    // null-as-unknown: an index written by an older build is a KNOWN shape.
+    // NULL (pre-#1246 rows) reads as format 1, the shape every index carried
+    // before the Sound line. Not null-as-unknown: an older build's index is a
+    // KNOWN shape.
     textFormat: Number.isFinite(row.text_format as number) ? Number(row.text_format) : 1,
   };
 }
 
-// `textFormat` is deliberately required, not defaulted: a NULL write reads
-// back as format 1 (see getEmbeddingMeta), so a caller that forgot the arg
-// would silently regress the recorded shape to v1 and re-fire the re-embed
-// advisory even after a reseed. Callers must resolve it explicitly
-// (embeddings.resolveIndexTextFormat).
+// `textFormat` is required, not defaulted: a NULL write reads back as format 1,
+// so a forgotten arg would regress the recorded shape and re-fire the re-embed
+// advisory after a reseed. Resolve it via embeddings.resolveIndexTextFormat.
 export function setEmbeddingMeta(
   model: string,
   dim: number,
@@ -58,9 +51,8 @@ export function setEmbeddingMeta(
     .run(model, dim, new Date().toISOString(), textMode, textFormat);
 }
 
-// Audio-embedding provenance — which CLAP model wrote the current audio
-// vectors. Distinct table from embedding_meta (text); the two spaces are
-// independent. Null until the first audio vector is written.
+// Which CLAP model wrote the current audio vectors. Its own table: the audio and
+// text spaces are independent. Null until the first audio vector is written.
 export function setAudioEmbeddingMeta(model: string, dim: number): void {
   requireDb()
     .prepare(

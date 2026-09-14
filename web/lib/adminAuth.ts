@@ -81,11 +81,10 @@ function subscribeAuth(listener: () => void): () => void {
   return () => authListeners.delete(listener);
 }
 
-// The controller protects /settings, /debug and the admin POST endpoints with
-// HTTP Basic. Every hook instance observes this one same-tab store: a 401 from
-// a page query must reach AdminShell so its QueryClient is unmounted with the
-// authenticated branch. The storage listener adds cross-tab propagation;
-// same-tab writes publish directly because browsers do not emit storage there.
+// The controller protects /settings, /debug and the admin POSTs with HTTP
+// Basic. Every hook instance observes this one store so a 401 from any page
+// query reaches AdminShell and unmounts its QueryClient. Same-tab writes
+// publish directly; browsers emit `storage` only in other tabs.
 export function useAdminAuth(): AdminAuth {
   const snapshot = useSyncExternalStore(
     subscribeAuth,
@@ -97,9 +96,8 @@ export function useAdminAuth(): AdminAuth {
     startBrowserStore();
   }, []);
 
-  // Verify against the controller BEFORE caching. Caching unverified creds
-  // silently "succeeds" on a wrong password, and every later admin call 401s,
-  // which reads as a random logout.
+  // Verify against the controller BEFORE caching: cached-but-wrong creds look
+  // like a successful login and then 401 every later call.
   const signIn = useCallback(async (user: string, pass: string): Promise<SignInResult> => {
     const encode = (s: string) =>
       typeof window !== 'undefined' ? window.btoa(s) : Buffer.from(s).toString('base64');
@@ -136,11 +134,10 @@ export function useAdminAuth(): AdminAuth {
     if (token) headers.Authorization = `Basic ${token}`;
     const r = await fetch(`${API_URL}${path}`, { ...init, headers });
     if (r.status === 401) {
-      // localStorage is the cross-tab source of truth even before scheduling
-      // delivers its StorageEvent. Read it first: a delayed B rejection cannot
-      // remove an already-committed C merely because the external-store
-      // snapshot still says B. Re-read immediately before removal to narrow
-      // the check/clear window as far as synchronous browser storage permits.
+      // localStorage is the cross-tab source of truth even before the
+      // StorageEvent lands, so read it first and re-read immediately before
+      // removing that exact value: a delayed B rejection must not remove an
+      // already-committed C. Best-effort — there is no compare-and-delete.
       const stored = readStoredAuthState();
       const memoryOnlyOwner = stored.available
         && stored.auth == null
@@ -152,9 +149,8 @@ export function useAdminAuth(): AdminAuth {
             if (localStorage.getItem(STORAGE_KEY) !== token) return r;
             localStorage.removeItem(STORAGE_KEY);
           } catch {
-            // Storage became unavailable between check and clear. The browser
-            // offers no atomic compare-and-delete, so fall back to the still-
-            // matching in-memory owner and leave persistence best-effort.
+            // Storage became unavailable between check and clear; fall back
+            // to the still-matching in-memory owner.
             if (authSnapshot.auth !== token) return r;
           }
         }

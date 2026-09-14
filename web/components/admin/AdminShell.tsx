@@ -116,9 +116,8 @@ interface NavSubItem {
   id: string;
   label: string;
   icon: NavIcon;
-  // `tab` is the ?tab= value this item selects; `defaultTab` marks the one
-  // shown when the URL carries no (or an unknown) tab. Route children leave
-  // both unset.
+  // `tab` is the ?tab= value this item selects; `defaultTab` marks the one shown
+  // when the URL carries no (or an unknown) tab. Route children leave both unset.
   tab?: string;
   defaultTab?: boolean;
 }
@@ -199,11 +198,8 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      // Three separate "where is the stream URL?" reports (#1300, #1485) landed
-      // while /admin/connect already served exactly that, on its third tab,
-      // behind a nav label that never says so. The panel was never the problem;
-      // the two words in the rail were. Expanding its tabs as children puts the
-      // literal phrase "Stream URLs" in the sidebar, and that tab now leads.
+      // Expanding /admin/connect's tabs as children puts the literal phrase
+      // "Stream URLs" in the sidebar (#1300, #1485).
       {
         href: '/admin/connect',
         id: 'connect',
@@ -247,7 +243,7 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
 ];
 
-// Playlists, DJ Doc, and Stations aren't sidebar items, so they're resolved
+// Playlists, DJ Doc and Stations aren't sidebar items, so they're resolved
 // explicitly; their crumb sections mirror where the rail stays lit.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
@@ -324,7 +320,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   return (
     <AdminQueryProvider key={auth}>
       <div className="admin-root paper">
-        {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
         <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
           <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
           <SidebarInset className="min-w-0 bg-transparent">
@@ -338,7 +333,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
                   : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
               }
             >
-              {/* No y translate — vertical drift feels twitchy on a list of panels. */}
               <AnimatePresence mode="wait" initial={false}>
                 <m.div
                   key={pathname}
@@ -361,8 +355,8 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   );
 }
 
-// ⌘K / Ctrl+K panel jump list. The chord is a modifier combo, so it is safe to
-// honour even while a field is focused (it never intercepts a bare keystroke).
+// Cmd/Ctrl+K panel jump list. A modifier combo, so it is safe to honour even
+// while a field is focused.
 function AdminCommandMenu() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -429,7 +423,7 @@ function AdminSidebar({
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   // The shell lives in the persistent layout, so a client-side nav doesn't
-  // remount it — the mobile Sheet would stay open over the new page.
+  // remount it and the mobile Sheet would stay open over the new page.
   const closeOnMobileNav = () => {
     if (isMobile) setOpenMobile(false);
   };
@@ -485,8 +479,8 @@ function AdminSidebar({
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
             {/* Non-modal: a modal Radix menu locks body scroll, and the lock's
-                15px scrollbar-compensation margin pulls the sticky top bar off
-                the right edge while the menu is open. */}
+                15px scrollbar compensation pulls the sticky top bar off the
+                right edge. */}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
@@ -566,8 +560,8 @@ function AdminSidebar({
   );
 }
 
-// Only ever ONE row may render this at a time (sub-items use their own
-// highlight), or the shared-layoutId animation doubles up.
+// Only ever ONE row may render this at a time, or the shared-layoutId animation
+// doubles up.
 function NavActiveBg() {
   return (
     <m.span
@@ -605,8 +599,8 @@ function NavItemRow({
   );
 }
 
-// In the icon-collapsed rail both the chevron and the sub-list hide (built into
-// SidebarMenuAction / SidebarMenuSub), so the parent icon links straight through.
+// In the icon-collapsed rail both the chevron and the sub-list hide, so the
+// parent icon links straight through.
 function CollapsibleNavItem({
   item,
   pathname,
@@ -620,8 +614,7 @@ function CollapsibleNavItem({
   const searchParams = useSearchParams();
 
   // Tab-based groups share the parent page, so a child is active when the page
-  // matches and its tab is the effective one (falling back to the group's
-  // default). Route-based groups just prefix-match their child's own path.
+  // matches and its tab is the effective one. Route-based groups prefix-match.
   const tabChildren = children.filter(c => c.tab != null);
   const validTabs = tabChildren.map(c => c.tab as string);
   const rawTab = searchParams.get('tab');
@@ -636,13 +629,12 @@ function CollapsibleNavItem({
 
   const hasActiveChild = children.some(childActive);
   const onSection = (!!pathname && pathname.startsWith(item.href)) || hasActiveChild;
-  // Parent takes the pill only with no child selected; tab groups always have
-  // one, so there the pill moves to the child.
+  // Parent takes the pill only with no child selected.
   const parentActive = onSection && !hasActiveChild;
 
   const [open, setOpen] = useState(onSection);
-  // The shell is persistent, so open state survives route changes — re-reveal
-  // the group whenever a nav lands on one of its pages.
+  // The shell is persistent, so open state survives route changes: re-reveal the
+  // group whenever a nav lands on one of its pages.
   useEffect(() => {
     if (onSection) setOpen(true);
   }, [onSection]);
@@ -712,7 +704,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
       : 'none',
   });
 
-  // Pulse only on the false → true transition, not on steady-state polls.
+  // Pulse only on the false -> true transition, not on steady-state polls.
   const wasOnAirRef = useRef(onAir);
   useEffect(() => {
     if (onAir && !wasOnAirRef.current && dotRef.current) {
@@ -727,10 +719,8 @@ function TopBar({ pathname }: { pathname: string | null }) {
 
   return (
     <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--line)] bg-[var(--sidebar)] px-4 py-2.5 sm:px-6">
-      {/* Roomier hit box on a phone, where this is the only way back to the nav. */}
       <SidebarTrigger className="-ml-1 size-9 shrink-0 sm:size-7" />
       <Separator orientation="vertical" className="hidden h-5 sm:block" />
-      {/* Hidden on mobile — space is tight next to the hamburger. */}
       <Breadcrumb className="hidden sm:block">
         <BreadcrumbList className="gap-1.5 text-[10px] tracking-[0.28em] uppercase sm:gap-2">
           {section && (
@@ -775,8 +765,8 @@ function TopBar({ pathname }: { pathname: string | null }) {
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        {/* modal={false} for the same reason as the sidebar's More menu — no
-            body scroll lock, so no scrollbar-compensation margin shift. */}
+        {/* modal={false} for the same reason as the sidebar's More menu: no body
+            scroll lock, so no scrollbar-compensation margin shift. */}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex min-h-9 cursor-pointer items-center gap-1 text-muted focus:outline-none sm:min-h-0"

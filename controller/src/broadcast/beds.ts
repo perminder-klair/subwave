@@ -1,25 +1,10 @@
-// Bed library — instrumental beds the DJ talks over BETWEEN songs, so a long
-// link doesn't have to be talked over the song it's introducing.
-//
-// Mirrors broadcast/sfx.ts: audio files on disk plus a JSON sidecar, with admin
-// CRUD on top. Files live at <stateDir>/beds/<name>.mp3 — on the shared
-// /var/sub-wave mount, so the path the controller writes into next.txt is one
-// the broadcast container can actually open. The sidecar <stateDir>/beds.json
-// maps name → { name, description, prompt?, durationSec, file, source, builtin,
-// createdAt }.
-//
-// The bundled default is a protected built-in, exactly like sfx: remove() refuses
-// it and the admin UI disables its delete button. The escape hatch for a bed the
-// operator finds annoying is the FEATURE TOGGLE (settings.beds.enabled, off by
-// default), not deletion — turning beds off silences it without losing the asset.
-// (An earlier design made defaults deletable, remembered via a `retired` list;
-// that list is gone now that the default can't be deleted. loadMeta still tolerates
-// a stale `retired` key so old sidecars don't error — it's simply dropped on the
-// next save.)
-//
-// Generation: unlike an sfx stinger (rendered via sound-generation, ≤22s), a bed
-// needs ≥30s of instrumental music, so create() uses the ElevenLabs Music API
-// (audio/bed-gen.ts, force_instrumental) rather than the sfx path.
+// Bed library — instrumental beds the DJ talks over between songs. Mirrors
+// broadcast/sfx.ts: files at <stateDir>/beds/<name>.mp3 (on the shared
+// /var/sub-wave mount, so the broadcast container can open what we write into
+// next.txt) plus the <stateDir>/beds.json sidecar. The bundled default is a
+// protected built-in; settings.beds.enabled is the way to silence beds, not
+// deletion. Generation uses the ElevenLabs Music API, not the sfx sound path,
+// because a bed needs >=30s of instrumental music.
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
@@ -30,26 +15,15 @@ import { escAnnotate } from '../music/subsonic.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { slugify } from '../util/slug.js';
 
-// Floor on any bed's length. A bed is only ever cut SHORTER (liq_cue_out) and
-// never looped, so it has to outlast the script it carries — bed-policy filters
-// per-link on the real number, and this is the upload-time footgun guard. 30s
-// covers a typical link with room; anything shorter is almost certainly a
-// stinger that wandered into the wrong library. The figure lives in the shared
-// imaging schema so the admin form and this module can't disagree.
+// Upload-time floor: a bed is only ever cut shorter (liq_cue_out), never looped,
+// so it must outlast the script it carries. Shared with the admin form via the
+// imaging schema; bed-policy still filters per-link on the real number.
 export const MIN_DURATION_SEC = BED_MIN_SEC;
 
 const DIR = `${STATE_DIR}/beds`;
 const META = `${STATE_DIR}/beds.json`;
 
-// The one bundled default. sounds/bed.mp3 is a 71s ambient loop already
-// committed and baked into both the controller and broadcast images.
-//
-// NB: this is the same asset radio.liq's studio bed was disabled over
-// ("audible/annoying under the DJ's voice during links", radio.liq bed_enabled).
-// The reuse is deliberate: that failure was CONTINUOUS playback — a drone
-// running forever underneath both the music and the voice. Here it plays alone
-// for the length of one link and stops, which is a different exposure entirely.
-// If it still grates, turn beds off (settings.beds.enabled) — the asset stays.
+// sounds/bed.mp3 is a 71s ambient loop baked into both images.
 const DEFAULT_BEDS = [
   {
     name: 'ambient-room',
@@ -59,9 +33,7 @@ const DEFAULT_BEDS = [
 ];
 
 async function loadMeta(): Promise<any> {
-  // A legacy sidecar may carry a `retired` array (from when defaults were
-  // deletable); it's intentionally not read back — the built-in can't be
-  // deleted now, so nothing retires. Old keys just fall away on the next save.
+  // A legacy sidecar may carry a `retired` array; deliberately not read back.
   try {
     const m = JSON.parse(await readFile(META, 'utf8'));
     return { items: m.items || {} };
@@ -71,9 +43,8 @@ async function loadMeta(): Promise<any> {
 }
 
 async function saveMeta(meta: any) {
-  // Atomic: the drain path reads this sidecar at track transitions (catalog/
-  // getPath in queue.maybePushBed), concurrently with admin upload/delete
-  // saves — a torn write would momentarily read as an empty library.
+  // Atomic: the drain path reads this sidecar at track transitions concurrently
+  // with admin saves, and a torn write reads as an empty library.
   await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
@@ -106,8 +77,7 @@ export async function list() {
   return out;
 }
 
-// The slim view bed-policy.pickBed selects over: a name and the real measured
-// length, which is the only thing selection actually gates on.
+// The slim view bed-policy.pickBed selects over.
 export async function catalog(): Promise<{ name: string; durationSec: number | null }[]> {
   return (await list()).map((b: any) => ({ name: b.name, durationSec: b.durationSec }));
 }
@@ -121,18 +91,10 @@ export async function getPath(name: string) {
   return (await statOrNull(filePath)) ? filePath : null;
 }
 
-// The Liquidsoap URI for a bed cut to `bedSec` and ramping into the next song
-// over `crossSec`. Three annotations, all of them mechanisms that already ship:
-//
-//   subwave_kind      — radio.liq's on_meta branches on this to keep the bed
-//                       out of now-playing.json and to announce bed-playing.json.
-//   liq_cue_out       — cue_cut(music) is already applied (radio.liq), so this
-//                       trims the bed to exactly the length of the DJ's script.
-//   liq_cross_duration— cross reads this to size the bed's OWN exit fade, which
-//                       is what ramps the next song in under the closing words.
-//
-// No title/artist deliberately: a bed is not a song, and metadata is exactly
-// what would leak it into the UI and the ICY title.
+// Liquidsoap URI for a bed cut to `bedSec`, ramping into the next song over
+// `crossSec`. subwave_kind is what radio.liq's on_meta branches on to keep the bed
+// out of now-playing.json and to write bed-playing.json. No title/artist on
+// purpose: metadata would leak the bed into the UI and the ICY title.
 export function bedUri(path: string, { bedSec, crossSec }: { bedSec: number; crossSec: number }): string {
   const fields = [
     'subwave_kind="bed"',
@@ -142,10 +104,8 @@ export function bedUri(path: string, { bedSec, crossSec }: { bedSec: number; cro
   return `annotate:${fields.join(',')}:${path}`;
 }
 
-// Import an operator-supplied audio file as a bed. Transcoded to MP3 when
-// ffmpeg is available, otherwise stored as-is. No loudnorm — the bed's level
-// against the voice is the operator's call, and the broadcast limiter catches
-// peaks either way.
+// Transcoded to MP3 when ffmpeg is available, otherwise stored as-is. No loudnorm:
+// the bed's level against the voice is the operator's call.
 export async function importAudio(
   buffer: Buffer,
   { name, description = '', originalName = '' }: { name: string; description?: string; originalName?: string },
@@ -170,10 +130,8 @@ export async function importAudio(
     await writeFile(`${DIR}/${file}`, buffer);
   }
 
-  // Length gate. Unlike sfx (where an unmeasurable duration is accepted), a bed
-  // with no measured length is useless: bed-policy.pickBed can't gamble on it,
-  // so it would sit in the library and never be selected. Reject it here with a
-  // real reason rather than let it look installed and never air.
+  // Unlike sfx, an unmeasurable duration is rejected: pickBed skips beds with no
+  // measured length, so it would sit in the library and never air.
   const measured = await probeDurationSec(`${DIR}/${file}`);
   if (measured == null) {
     await unlink(`${DIR}/${file}`).catch(() => {});
@@ -197,11 +155,9 @@ export async function importAudio(
   return meta.items[slug];
 }
 
-// Generate an instrumental bed from a text prompt via the ElevenLabs Music API
-// (audio/bed-gen.ts, force_instrumental). Mirrors sfx.create, with a length
-// resolved to the bed floor: default 45s, clamped to [MIN_DURATION_SEC,
-// BED_GEN_MAX_SEC]. A bed is trimmed per-link, so the exact length rarely
-// matters beyond "at least as long as the DJ's longest script".
+// Generate an instrumental bed from a prompt (ElevenLabs Music API,
+// force_instrumental). Length defaults to 45s, clamped to
+// [MIN_DURATION_SEC, BED_GEN_MAX_SEC].
 export async function create(
   { name, description = '', prompt, durationSec }:
     { name: string; description?: string; prompt: string; durationSec?: number | string },
@@ -211,8 +167,8 @@ export async function create(
   if (!prompt || !prompt.trim()) throw new Error('Bed generation prompt is required');
   await mkdir(DIR, { recursive: true });
 
-  // Reject an existing name so generation can't clobber another bed's audio —
-  // and, as with sfx, can't silently flip a protected built-in to deletable.
+  // Reject an existing name so generation can't clobber another bed's audio, or
+  // flip a protected built-in to deletable.
   const meta = await loadMeta();
   if (meta.items[slug]) throw new Error(`a bed named "${slug}" already exists`);
 
@@ -225,8 +181,7 @@ export async function create(
   const file = `${slug}.mp3`;
   await generateBed(prompt.trim(), { durationSec: wantSec, outPath: `${DIR}/${file}` });
 
-  // Same gate as importAudio: pickBed only trusts a real measured length. We
-  // force a ≥30s request, but the probe is the truth — reject anything short.
+  // Same gate as importAudio: the probe is the truth, not the requested length.
   const measured = await probeDurationSec(`${DIR}/${file}`);
   if (measured == null || measured < MIN_DURATION_SEC) {
     await unlink(`${DIR}/${file}`).catch(() => {});
@@ -249,9 +204,7 @@ export async function create(
   return meta.items[slug];
 }
 
-// Delete a bed. The bundled default is a protected built-in and refuses deletion
-// (mirrors sfx.remove) — the feature toggle is the way to silence a bed, not
-// deleting the asset.
+// The bundled default is protected and refuses deletion.
 export async function remove(name: string) {
   const meta = await loadMeta();
   const info = meta.items[name];
@@ -264,10 +217,8 @@ export async function remove(name: string) {
   return { ok: true };
 }
 
-// Called from server startup. Ensures the bundled default is present and
-// protected. Idempotent. An install that predates protection (item exists but
-// isn't flagged builtin) is upgraded in place — no re-copy. There's no `retired`
-// check any more: the default can't be deleted, so it's always (re)installed.
+// Called from server startup. Idempotent; an item that exists but isn't flagged
+// builtin is upgraded in place rather than re-copied.
 export async function ensureDefaults() {
   await mkdir(DIR, { recursive: true });
   const meta = await loadMeta();
@@ -276,8 +227,6 @@ export async function ensureDefaults() {
   for (const def of DEFAULT_BEDS) {
     const existing = meta.items[def.name];
     if (existing && (await statOrNull(`${DIR}/${existing.file}`))) {
-      // Already installed — just make sure it's flagged as the protected
-      // built-in (upgrades pre-protection sidecars in place).
       if (!existing.builtin) { existing.builtin = true; changed++; }
       continue;
     }
@@ -287,10 +236,8 @@ export async function ensureDefaults() {
       const file = `${def.name}.mp3`;
       await copyFile(def.bundled, `${DIR}/${file}`);
       const measured = await probeDurationSec(`${DIR}/${file}`);
-      // Same gate as importAudio: a bed with no measured length can never be
-      // selected (pickBed only trusts real numbers), so installing it would
-      // show a bed in the library that never airs. Skip instead — the item is
-      // never written, so the next boot retries once ffprobe is available.
+      // Same gate as importAudio. Nothing is written on a skip, so the next boot
+      // retries once ffprobe is available.
       if (measured == null || measured < MIN_DURATION_SEC) {
         await unlink(`${DIR}/${file}`).catch(() => {});
         console.warn(`[beds] default "${def.name}" skipped — ${

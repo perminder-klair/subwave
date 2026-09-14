@@ -1,16 +1,11 @@
-// Google Cast session state, merged over the local player.
+// Google Cast session state as a Player facade: with no session it is the
+// local player untouched; while connected, tune/stop/volume/status re-target
+// the Cast device and local playback stays torn down. Handoff is
+// bidirectional.
 //
-// Returns a Player facade: with no Cast session it IS the local RNTP-backed
-// player, untouched; while a session is connected, tune/stop/volume/status
-// re-target the Cast device (the Cast device fetches the stream itself, so
-// local playback stays torn down — a battery win for hours-long listening).
-// Handoff is bidirectional: connecting mid-listen moves the audio to the Cast
-// device; disconnecting while remote-tuned brings it back locally.
-//
-// Stations whose stream needs an Authorization header (#764 basic-auth bases)
-// can't cast — the Cast device fetches the URL itself and the header doesn't
-// ride along — so `castable` is false for them and the facade stays local
-// (TopBar also hides the cast button off `cast.available`).
+// A station whose stream needs an Authorization header (#764) can't cast — the
+// Cast device fetches the URL itself — so `castable` is false and the facade
+// stays local.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -56,12 +51,11 @@ export function useCast(
   const castable = !!api && !api.streamHeaders();
   const connected = castable && !!session && !!client;
 
-  // Remote-playback intent — the cast-side analog of usePlayer's tunedIn.
+  // Remote-playback intent, the cast-side analog of usePlayer's tunedIn.
   const [castTunedIn, setCastTunedIn] = useState(false);
   const [castVolume, setCastVolume] = useState(1);
   const preMuteVolume = useRef(1);
 
-  // Refs for callbacks/effects that must see current values without re-binding.
   const castTunedInRef = useRef(castTunedIn);
   useEffect(() => { castTunedInRef.current = castTunedIn; }, [castTunedIn]);
   const apiRef = useRef(api);
@@ -84,7 +78,6 @@ export function useCast(
     }
   }, []);
 
-  // Session connect/disconnect — the handoff in both directions.
   const prevClientRef = useRef<RemoteMediaClient | null>(null);
   useEffect(() => {
     const prev = prevClientRef.current;
@@ -102,16 +95,15 @@ export function useCast(
         void loadToCast(client);
       }
     } else if (prev && !client) {
-      // Disconnected — resume locally if we were remote-tuned.
+      // Disconnected: resume locally if we were remote-tuned.
       const wasTuned = castTunedInRef.current;
       setCastTunedIn(false);
       if (wasTuned) localRef.current.tune();
     }
   }, [client, castable, session, loadToCast]);
 
-  // Adopt an already-running session (app restart while the speaker plays):
-  // if the receiver is playing OUR stream and we don't think we're tuned in,
-  // sync up instead of showing a dark power ring over live audio.
+  // Adopt an already-running session (app restart while the speaker plays) so
+  // the UI doesn't show a dark power ring over live audio.
   useEffect(() => {
     if (!connected || castTunedInRef.current) return;
     const a = apiRef.current;
@@ -126,8 +118,7 @@ export function useCast(
     }
   }, [connected, mediaStatus]);
 
-  // The receiver went idle for a terminal reason (stream error, another sender
-  // loaded other media, …) — reflect tuned-out rather than spinning forever.
+  // Terminal receiver idle: reflect tuned-out rather than spinning forever.
   // idleReason is undefined outside a terminal idle (e.g. while loading).
   useEffect(() => {
     if (!castTunedIn) return;
@@ -136,8 +127,7 @@ export function useCast(
     }
   }, [mediaStatus, castTunedIn]);
 
-  // Station switch while casting: match the local player's behaviour (playback
-  // stops on a base change; the listener re-tunes on the new station).
+  // Station switch while casting stops playback, matching the local player.
   const prevBaseRef = useRef(api?.base ?? null);
   useEffect(() => {
     const next = api?.base ?? null;
@@ -176,9 +166,8 @@ export function useCast(
     [session],
   );
 
-  // Functional updater, like usePlayer.toggleMute — TransportBar's knob
-  // handler calls setVolume then toggleMute in one gesture, and the updater
-  // must see the just-queued value, not this render's.
+  // Functional updater: TransportBar's knob calls setVolume then toggleMute in
+  // one gesture, so this must see the just-queued value, not this render's.
   const castToggleMute = useCallback(() => {
     setCastVolume((v) => {
       const next = v > 0 ? 0 : preMuteVolume.current || 1;
@@ -192,9 +181,8 @@ export function useCast(
     });
   }, [session]);
 
-  // Status from the receiver's player state. `paused` maps to playing-side:
-  // the listener is still tuned (volume/stop work); a live mount has no
-  // meaningful pause and the only way into it is another sender's controls.
+  // `paused` maps to playing: a live mount has no meaningful pause and the
+  // listener is still tuned.
   let castStatus: PlayerStatus = 'idle';
   if (castTunedIn) {
     const ps = mediaStatus?.playerState;

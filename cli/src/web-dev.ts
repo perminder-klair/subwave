@@ -1,7 +1,6 @@
-// The Next.js web dev server, dev mode only. `next dev` is a long-running
-// foreground process, so it's spawned detached with output redirected to
+// The Next.js web dev server, dev mode only. Spawned detached with output to
 // state/logs/web-dev.log. Whoever holds :7700 is the source of truth for "is it
-// running?" — the pid file is a convenience and can go stale.
+// running?"; the pid file is a convenience and can go stale.
 
 import { existsSync, openSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -21,8 +20,7 @@ export interface PortHolder {
   command: string;
 }
 
-// Prefers `lsof` (present on macOS), falling back to `ss` — base Arch/Debian
-// ship the latter and often not the former.
+// Prefers `lsof` (macOS), falling back to `ss` (base Arch/Debian).
 export function whoHolds7700(): PortHolder | null {
   const lsof = spawnSync(
     'lsof',
@@ -48,9 +46,8 @@ export function whoHolds7700(): PortHolder | null {
       { encoding: 'utf8' },
     );
     if (ss.status === 0 && ss.stdout) {
-      // ss truncates the command to ~15 chars, so next dev arrives as
-      // `next-server (v1`. Strip the half-eaten version suffix to leave
-      // something stable for isWebDevCommand() to match.
+      // ss truncates the command to ~15 chars (`next-server (v1`); strip the
+      // half-eaten version suffix so isWebDevCommand() can match.
       const match = ss.stdout.match(/users:\(\("([^"]+)",pid=(\d+),/);
       if (match) {
         const command = match[1].replace(/\s*\(v\d.*$/, '').trim();
@@ -123,9 +120,8 @@ export async function waitForWebDev(
   return false;
 }
 
-// Keyed off the port holder rather than the pid file, which goes stale when the
-// operator kills `npm run dev` themselves. Refuses to kill anything that isn't
-// recognisably a dev server.
+// Keyed off the port holder, not the pid file, which goes stale. Refuses to
+// kill anything that isn't recognisably a dev server.
 export function stopWebDev(): { stopped: boolean; reason?: string } {
   const holder = whoHolds7700();
   if (!holder) {
@@ -154,8 +150,7 @@ function cleanupPidFile(): void {
   try { unlinkSync(getWebDevPid()); } catch { /* ignore */ }
 }
 
-// 'running' covers reusing a server that was already up, not just one we
-// started.
+// 'running' covers reusing a server that was already up.
 export type WebDevState = 'running' | 'skipped';
 
 export async function maybeStartWebDev(opts: { askFirst?: boolean } = {}): Promise<WebDevState> {

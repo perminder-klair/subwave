@@ -1,24 +1,9 @@
-// Shared never-play blocklist schema (#1300 FR 1) — the shape of a RULE entry
+// Shared never-play blocklist schema (#1300 FR 1): the rule-entry shape
 // (attribute predicate + optional seasonal allow-window + optional show scope)
-// and of the id-entry create body, executed on BOTH sides. The controller runs
-// it in music/blocklist-rules.ts's validateRulePatch (the store's chokepoint,
-// reached by POST and PUT alike) and at the route boundary; the browser runs
-// the mirrored copy so BlockRulesCard can pre-flight a save.
-//
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// music/blocklist-rules.ts itself cannot be a schema module — it imports
-// show-filter's genre/tag normalisers for the MATCHING half — which is exactly
-// why the validation half moved here and is re-exported from there.
-//
-// WHAT DELIBERATELY DID NOT MOVE
-// ------------------------------
-// Rule ids and `addedAt` are minted by the store, not submitted, so they are
-// absent from the schema entirely (rather than optional): a client that sends
-// one is not describing a rule, and z.object strips it before the store sees it
-// — the same posture as a show's server-minted id, one step stricter because
-// nothing downstream points at a rule id the way a schedule slot points at a
-// show id.
+// and the id-entry create body. Run by music/blocklist-rules.ts's
+// validateRulePatch, at the route boundary, and by the mirrored browser copy.
+// Rule ids and `addedAt` are minted by the store, so they are absent from the
+// schema entirely and z.object strips a submitted one.
 import { z } from 'zod';
 
 export const RULE_FIELDS = [
@@ -45,17 +30,15 @@ export interface SeasonWindow {
   to: { month: number; day: number };
 }
 
-/**
- * Trim, lowercase, collapse whitespace — the same normalisation the blocklist's
- * name fallback uses, so a `tag`/`artist` rule value compares the way an id
- * entry's name snapshot does. Used here only for DEDUPE; the stored value keeps
- * its original casing.
- */
-export const normText = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+// The name fold used for DEDUPE only; the stored value keeps its casing.
+// Must stay identical to `recency.nameKey` (restated, not imported — zod-only
+// module); pinned by scripts/blocklist-name-fold.test.ts. Punctuation beyond
+// the apostrophe is deliberately not folded (`trip-hop` != `trip hop`).
+export const normText = (s: unknown) =>
+  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
-// A month/day pair. Both halves are `Number(x)` + an integer/range test, not
-// z.number().int(), because the admin card posts them from <input type=number>
-// and a numeric STRING has always been accepted.
+// Number(x) + range test rather than z.number().int(): a numeric STRING from
+// <input type=number> has always been accepted.
 function blocklistMonthDay(where: string) {
   return z.unknown().optional().transform((raw, ctx) => {
     const o = (raw ?? {}) as Record<string, unknown>;
@@ -73,26 +56,16 @@ function blocklistMonthDay(where: string) {
   });
 }
 
-/**
- * A seasonal ALLOW-window: inclusive month/day bounds, `from > to` wrapping the
- * year end (Dec 1 → Jan 6). While in season the rule does NOT block.
- *
- * Deliberately NOT range-checked beyond each half: a wrapping window is the
- * feature, so "from after to" is meaningful rather than backwards — unlike a
- * show's era window, where the same shape IS an error.
- */
+// Seasonal ALLOW-window: inclusive month/day bounds, `from > to` wraps the year
+// end (Dec 1 → Jan 6); while in season the rule does NOT block. Deliberately not
+// range-checked across the pair — a wrapping window is the feature.
 export const blockSeasonSchema = z.object({
   from: blocklistMonthDay('rule.season.from'),
   to: blocklistMonthDay('rule.season.to'),
 });
 
-/**
- * The add/update payload for one rule, in the persisted shape minus the
- * store-owned id/addedAt.
- *
- * Every message names `rule.<field>` because the route surfaces it verbatim,
- * the same convention validateShowsStrict follows.
- */
+// One rule's add/update payload. Every message names `rule.<field>` because the
+// route surfaces it verbatim.
 export const blockRuleSchema = z.object({
   label: z
     .unknown()
@@ -118,10 +91,8 @@ export const blockRuleSchema = z.object({
   values: z
     .array(z.unknown(), { error: 'rule.values must be an array' })
     .transform((items, ctx) => {
-      // A blank entry is dropped and a duplicate is silently collapsed (same
-      // value twice is one value), but a NON-STRING entry and an over-long one
-      // are both refused — the operator typed something that isn't a value, and
-      // silently discarding it would block less than the card shows.
+      // Blanks dropped and duplicates collapsed, but a non-string or over-long
+      // entry is refused: dropping it would block less than the card shows.
       const out: string[] = [];
       const seen = new Set<string>();
       for (const v of items) {
@@ -158,9 +129,8 @@ export const blockRuleSchema = z.object({
     }),
   // Absent or null = no season, i.e. the rule always blocks.
   season: z.preprocess((v) => (v == null ? undefined : v), blockSeasonSchema.nullable().default(null)),
-  // Empty = station-wide. Stale ids are inert by design (resolved against the
-  // live roster at evaluation time), so a non-string entry is DROPPED rather
-  // than refused — the same call persona.skills makes for the same reason.
+  // Empty = station-wide. Stale ids are inert (resolved at evaluation time), so
+  // a non-string entry is DROPPED rather than refused.
   showIds: z.preprocess(
     (v) => (v == null ? undefined : v),
     z
@@ -176,16 +146,9 @@ export const blockRuleSchema = z.object({
 
 export type BlockRulePatch = z.output<typeof blockRuleSchema>;
 
-/**
- * `POST /library/blocklist` — the id-entry create body.
- *
- * TWO accepted forms, which is why nothing but `type` is required: the UI flow
- * posts `{type, trackId}` and the server resolves the album/artist ids and
- * display snapshots from the track row, while a direct entry posts a
- * pre-resolved `{type, id, …}`. Which of the two arrived is decided by the
- * route (it needs Subsonic to resolve one of them), so the schema's job is only
- * to pin the shape both share.
- */
+// `POST /library/blocklist` — the id-entry create body. Two accepted forms, so
+// only `type` is required: `{type, trackId}` (server resolves the rest) or a
+// pre-resolved `{type, id, …}`. The route decides which arrived.
 export const blockEntrySchema = z.object({
   type: z.enum(BLOCK_TYPES, { error: "type must be 'track', 'album' or 'artist'" }),
   trackId: z.preprocess(
@@ -196,8 +159,7 @@ export const blockEntrySchema = z.object({
     (v) => (v == null || v === '' ? undefined : v),
     z.string({ error: 'id must be a string' }).optional(),
   ),
-  // Display snapshots — free text captured at block time so the Blocked tab can
-  // name a row whose source has since vanished. Null is meaningful ("unknown"),
+  // Display snapshots captured at block time. Null is meaningful ("unknown"),
   // so it is preserved rather than folded to undefined.
   name: z.string().nullable().optional(),
   artist: z.string().nullable().optional(),

@@ -24,12 +24,15 @@ const {
   SCHEDULE_DAYS,
   SCHEDULE_HOURS,
   emptyWeek,
+  isDefaultTakeover,
   repairScheduleForLoad,
   resolveScheduleSlots,
   scheduleOverrideRequestSchema,
   scheduleOverrideSchema,
   scheduleSaveSchema,
   scheduleSchema,
+  takeoverShowId,
+  TAKEOVER_UNTIL,
 } = await import('../src/schemas/schedule.js');
 const { validateScheduleStrict, validateScheduleOverrideStrict } = await import(
   '../src/settings/validate.js'
@@ -234,10 +237,45 @@ test('repairScheduleForLoad lands on a value the strict path accepts', () => {
 
 const NOW = 1_800_000_000_000;
 const okOverride = { showId: 'night_loop', startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
+const defaultOverride = { showId: null, startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
 
-test('override: accepts a well-formed window', () => {
-  const r = scheduleOverrideSchema({ showIds: IDS, now: null }).parse(okOverride);
-  assert.deepEqual(r, okOverride);
+test('override: accepts named-show and Default programming windows', () => {
+  const schema = scheduleOverrideSchema({ showIds: IDS, now: null });
+  assert.deepEqual(schema.parse(okOverride), okOverride);
+  assert.deepEqual(schema.parse(defaultOverride), defaultOverride);
+});
+
+// The takeover target is THREE-way, and the two obvious inline spellings of the
+// question disagree about the third case. These pin which answer each predicate
+// gives, because every reader in the controller and the admin UI asks through
+// them — a drift here is a resolver and a /schedule route describing the same
+// stored override differently.
+test('takeover target: a show, Default programming, and neither', () => {
+  const win = { startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
+  assert.equal(takeoverShowId({ ...win, showId: 'night_loop' }), 'night_loop');
+  assert.equal(isDefaultTakeover({ ...win, showId: 'night_loop' }), false);
+
+  assert.equal(takeoverShowId({ ...win, showId: null }), null);
+  assert.equal(isDefaultTakeover({ ...win, showId: null }), true);
+
+  // Neither: a malformed target names nothing real, so it is not a show pin AND
+  // not Default programming. Pre-#1507 the roster lookup missed and the grid
+  // resumed; both predicates saying "no" is what keeps that behaviour.
+  for (const bad of [undefined, '', 0, 42, {}, []]) {
+    assert.equal(takeoverShowId({ ...win, showId: bad }), null, String(bad));
+    assert.equal(isDefaultTakeover({ ...win, showId: bad }), false, String(bad));
+  }
+
+  // No takeover at all is neither, and must not throw on the way there.
+  assert.equal(takeoverShowId(null), null);
+  assert.equal(isDefaultTakeover(null), false);
+  assert.equal(takeoverShowId(undefined), null);
+  assert.equal(isDefaultTakeover(undefined), false);
+});
+
+test('override: Default programming is distinct from a cleared outer override', () => {
+  assert.deepEqual(validateScheduleOverrideStrict(defaultOverride, SHOWS), defaultOverride);
+  assert.equal(validateScheduleOverrideStrict(null, SHOWS), null);
 });
 
 test('override: refuses an unknown show, a backwards window and an over-long one', () => {
@@ -286,19 +324,22 @@ test('lenient override: a dangling or expired pin loads as null', () => {
   assert.equal(normalizeScheduleOverride(null, IDS), null);
 });
 
-test('lenient override: a live pin survives the boot', () => {
+test('lenient override: live show and Default programming takeovers survive boot', () => {
   const live = {
     showId: 'night_loop',
     startedAt: Date.now() - 60_000,
     expiresAt: Date.now() + 60 * 60_000,
   };
+  const liveDefault = { ...live, showId: null };
   assert.deepEqual(normalizeScheduleOverride(live, IDS), live);
+  assert.deepEqual(normalizeScheduleOverride(liveDefault, IDS), liveDefault);
 });
 
 // --- POST /schedule/override ------------------------------------------------
 
-test('override request: accepts the bounds and coerces a numeric string', () => {
+test('override request: accepts named shows, Default programming, and coerces a numeric string', () => {
   assert.equal(scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: 60 }).minutes, 60);
+  assert.equal(scheduleOverrideRequestSchema.parse({ showId: null, minutes: 60 }).showId, null);
   // The hand-rolled route ran Number(req.body?.minutes), so "60" was accepted.
   assert.equal(scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: '60' }).minutes, 60);
 });
@@ -324,6 +365,46 @@ test('override request: refuses out-of-range and non-integer minutes', () => {
 test('override request: an empty showId is a 400, not a lookup that 404s on ""', () => {
   assert.equal(scheduleOverrideRequestSchema.safeParse({ minutes: 60 }).success, false);
   assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: '', minutes: 60 }).success, false);
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: undefined, minutes: 60 }).success, false);
+});
+
+test("override request: 'until' defaults to the fixed window every older client posts", () => {
+  // A body written before #1601 must parse to exactly what it used to mean.
+  const r = scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: 60 });
+  assert.equal(r.until, 'fixed');
+  assert.equal(r.minutes, 60);
+  assert.deepEqual([...TAKEOVER_UNTIL], ['fixed', 'schedule-change']);
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: 60, until: 'soon' }).success, false);
+});
+
+test("override request: 'schedule-change' needs no minutes, 'fixed' still does", () => {
+  // The server resolves the window itself, so demanding a duration it then
+  // ignores would let the two fields disagree about what was asked for.
+  const r = scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'schedule-change' });
+  assert.equal(r.success, true);
+  assert.equal(r.data!.minutes, undefined);
+  // Default programming asks the same way — the boundary belongs to the grid,
+  // not to what is pinned over it.
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: null, until: 'schedule-change' }).success, true);
+  // A minutes value alongside it is REFUSED, not silently discarded: the server
+  // resolves the window, so a caller that sent a duration has to learn its
+  // number went nowhere rather than watch a pin ignore it.
+  const withMinutes = scheduleOverrideRequestSchema.safeParse({
+    showId: 'x', until: 'schedule-change', minutes: 60,
+  });
+  assert.equal(withMinutes.success, false);
+  assert.equal(withMinutes.error!.issues[0]!.path[0], 'minutes');
+  assert.match(withMinutes.error!.issues[0]!.message, /must be omitted/);
+  // Out of range alongside it is refused too — by the bounds, before the rule
+  // above ever runs.
+  assert.equal(
+    scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'schedule-change', minutes: 1 }).success,
+    false,
+  );
+  // And the fixed window keeps its old refusal.
+  const fixed = scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'fixed' });
+  assert.equal(fixed.success, false);
+  assert.equal(fixed.error!.issues[0]!.path[0], 'minutes');
 });
 
 test('override request: the minutes message names the real bounds', () => {

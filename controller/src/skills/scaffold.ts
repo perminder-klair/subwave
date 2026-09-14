@@ -17,7 +17,7 @@
 // template, restoring the as-shipped skill (and pulling in a newer image's
 // tool.mjs). It backs the admin "Reset to default" button.
 
-import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { STATE_DIR, config } from '../config.js';
@@ -218,6 +218,20 @@ export async function resetBuiltinSkill(kind: string): Promise<void> {
   const dir = join(SKILLS_DIR, kind);
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, 'SKILL.md'), seedSkillMd(kind, tpl.skillMd), 'utf8');
-  if (tpl.toolPath) await copyFile(tpl.toolPath, join(dir, 'tool.mjs'));
+  if (tpl.toolPath) {
+    await copyFile(tpl.toolPath, join(dir, 'tool.mjs'));
+  } else {
+    // The template ships no tool.mjs, so neither may the reset copy. A station
+    // seeded before #1616 still has news' hand-written feed tool on disk, and
+    // leaving it would make "Reset to default" restore everything EXCEPT the one
+    // file that is now stale — the skill would keep running its own copy of a
+    // fetch the loader generates (skills/feed.ts). Removing it is the same
+    // posture as the overwrite above: reset means the shipped shape, whatever
+    // the operator's edits were.
+    try {
+      await rm(join(dir, 'tool.mjs'));
+      queue.log('scheduler', `[skills] reset removed the state-only "${kind}" tool.mjs — the shipped skill has none`);
+    } catch { /* no tool.mjs to remove — the normal case */ }
+  }
   queue.log('scheduler', `[skills] reset built-in "${kind}" to shipped default`);
 }

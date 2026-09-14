@@ -4,17 +4,12 @@ import { memo } from 'react';
 import type { CSSProperties } from 'react';
 import { cn } from '@/lib/cn';
 
-// Pure-CSS mascot leading the DJ thinking line, assembled from <span>s and
-// animated with CSS keyframes (globals.css `buddy-*`).
-//
-// Colours come from theme tokens, never hardcoded hex: head fill is `--bg` and
-// features are `--ink`, so the ink-on-bg pairing is legible on any palette by
-// construction.
-//
-// Decorative only — the whole sprite is aria-hidden; the DJ line carries the
-// readable text. Inline styles are intentional (geometry is computed per-mood
-// and per-size), so this file is exempt from `react/forbid-dom-props` (see
-// web/eslint.config.mjs).
+// Pure-CSS mascot leading the DJ thinking line, animated with CSS keyframes
+// (globals.css `buddy-*`). Colours come from theme tokens, never hardcoded hex:
+// head fill is `--bg` and features are `--ink`, so the pairing is legible on any
+// palette. Decorative only -- the whole sprite is aria-hidden. Inline styles are
+// intentional (geometry is computed per-mood and per-size), so this file is
+// exempt from `react/forbid-dom-props`.
 
 export type BuddyMood = 'content' | 'onair' | 'curious' | 'sleepy' | 'spooked';
 
@@ -59,8 +54,8 @@ export default memo(function BoothBuddy({ mood = 'content', size = 20, className
   const playing = mood === 'onair';
 
   // Outer wrapper owns the always-on "breathe", inner root the per-mood tilt.
-  // Separated so the tilt survives: a CSS animation overrides an inline
-  // transform on the same element for the property it animates.
+  // Separated because a CSS animation overrides an inline transform on the same
+  // element for the property it animates.
   const breatheWrap: CSSProperties = {
     display: 'inline-flex',
     transformOrigin: 'center bottom',

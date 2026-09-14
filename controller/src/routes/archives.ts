@@ -18,9 +18,7 @@ router.get('/archives', requireAdmin, async (req, res) => {
   }
 });
 
-// Wipe every hourly recording — the collection-level DELETE (there is no
-// per-file delete; the operator either keeps a download or clears the lot).
-// Safe on air: see clearAll() in broadcast/archives.ts.
+// Collection-level DELETE only (no per-file delete). Safe on air — see clearAll().
 router.delete('/archives', requireAdmin, async (_req, res) => {
   try {
     const result = await clearAll();
@@ -31,9 +29,8 @@ router.delete('/archives', requireAdmin, async (_req, res) => {
   }
 });
 
-// Stream the MP3 to the browser. Forces a download — listeners shouldn't be
-// confused into thinking these are live, and inline playback for hour-long
-// MP3s is awkward in browsers anyway.
+// Forces a download rather than inline playback: an hour-long MP3 played inline
+// reads as if it were the live stream.
 router.get('/archives/file/:date/:hour', requireAdmin, (req, res) => {
   const rel = `${req.params.date}/${req.params.hour}`;
   const abs = resolveEntry(rel);

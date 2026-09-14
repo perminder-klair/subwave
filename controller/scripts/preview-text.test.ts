@@ -35,6 +35,18 @@ async function main() {
     assert.equal(localizedPreviewText('हिन्दी'), localizedPreviewText('hi'));
   });
 
+  console.log('slovak (#1108):');
+  await test('Slovak matches by name, native name and ISO code', () => {
+    const sample = 'Počúvate SUB/WAVE. Toto je ukážka hlasu.';
+    assert.equal(localizedPreviewText('Slovak'), sample);
+    assert.equal(localizedPreviewText('slovenčina'), sample);
+    assert.equal(localizedPreviewText('sk'), sample);
+  });
+  await test('Slovak is not the English default and not the Czech sample', () => {
+    assert.notEqual(localizedPreviewText('Slovak'), localizedPreviewText('English'));
+    assert.notEqual(localizedPreviewText('Slovak'), localizedPreviewText('Czech'));
+  });
+
   console.log('fallback contract:');
   await test('empty / undefined → null (caller uses the English default)', () => {
     assert.equal(localizedPreviewText(''), null);
@@ -49,7 +61,7 @@ async function main() {
 
   console.log('table invariants:');
   await test('every sample keeps the station name untranslated', () => {
-    for (const lang of ['Spanish', 'French', 'German', 'Japanese', 'Chinese', 'Arabic', 'Hebrew', 'Hindi', 'Punjabi']) {
+    for (const lang of ['Spanish', 'French', 'German', 'Japanese', 'Chinese', 'Arabic', 'Hebrew', 'Hindi', 'Punjabi', 'Slovak']) {
       const sample = localizedPreviewText(lang);
       assert.ok(sample && sample.includes('SUB/WAVE'), `${lang} sample must mention SUB/WAVE verbatim`);
     }

@@ -9,12 +9,9 @@ export const PERSONA_SORT_LABELS: Record<PersonaSort, string> = {
   added: 'Date added',
 };
 
-// How often a persona speaks, most to least. Sorting on the stored STRING
-// would put 'aggressive' above 'quiet' alphabetically, which is the wrong end
-// of the dial and reads as a bug rather than a choice. Mirrors
-// PERSONA_FREQUENCIES' own order; an unrecognised value sorts last rather than
-// first, so a hand-edited settings.json can't quietly claim the top of the
-// roster.
+// How often a persona speaks, most to least; the stored string sorts wrong
+// alphabetically. Mirrors PERSONA_FREQUENCIES' order, and an unrecognised value
+// sorts last so a hand-edited settings.json can't claim the top of the roster.
 const FREQUENCY_RANK: Record<string, number> = {
   aggressive: 0, chatty: 1, moderate: 2, quiet: 3, silent: 4,
 };
@@ -23,12 +20,11 @@ const frequencyRank = (p: Persona): number =>
 
 export interface PersonaRosterEntry {
   persona: Persona;
-  // Position in the form array. RHF field paths, validation, deletion and
-  // editing all key off this — never off display order.
+  // Position in the form array: RHF field paths, validation, deletion and
+  // editing all key off this, never off display order.
   index: number;
-  // 1-based position in the DISPLAYED roster. Human-facing counters and the
-  // unnamed-persona placeholder read this, so what the operator is told
-  // matches what they are looking at.
+  // 1-based position in the DISPLAYED roster; every human-facing counter
+  // reads this.
   position: number;
 }
 
@@ -65,16 +61,12 @@ function matches(p: Persona, f: PersonaRosterFilter): boolean {
     || (p.tags || []).some(t => t.includes(q));
 }
 
-// Display order only: callers retain `index` for RHF field paths, validation,
-// deletion and editing. Reordering the form array itself would turn a visual
-// navigation aid into a persisted settings change.
+// Display order only: callers keep `index` for RHF field paths, validation,
+// deletion and editing. Reordering the form array itself would turn a navigation
+// aid into a persisted settings change.
 //
-// The on-air persona is pinned to the top under EVERY sort, filters included —
-// "who is speaking right now" is the one thing an operator scanning this page
-// is always looking for, and a sort that buries it makes the page worse the
-// moment it has enough rows to need sorting. It is pinned, not exempted: a
-// filter that excludes it still excludes it, because a roster that shows a row
-// the filter rules out is lying about what matched.
+// The on-air persona pins to the top under every sort, but is pinned, not
+// exempted: a filter that excludes it still excludes it.
 export function orderPersonaRoster(
   personas: Persona[],
   onAirPersonaId: string,
@@ -97,10 +89,7 @@ export function orderPersonaRoster(
 
       const byName = PERSONA_NAME_COLLATOR.compare(leftName, rightName);
 
-      // 'added' is the form-array order, which is what this roster showed
-      // before the name sort landed — kept as an explicit choice rather than
-      // dropped, so an operator who has learned where their DJs sit can have
-      // that back.
+      // 'added' is the form-array order, kept as an explicit choice.
       if (sort === 'added') return left.index - right.index;
       if (sort === 'frequency') {
         const byFreq = frequencyRank(left.persona) - frequencyRank(right.persona);

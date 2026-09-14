@@ -11,6 +11,15 @@
 //                   Zod-validate ourselves. Catches models that wrap the JSON
 //                   in reasoning the native parser chokes on.
 // Throws only if BOTH attempts fail.
+//
+// EACH branch states its own output rule, and no caller states one. A system
+// prompt is written once and then runs down whichever branch the LEG resolves
+// to (needsToolCallObject, per call), so an output-channel instruction written
+// at the call site is right on one branch and wrong on another — issue #1536,
+// where the tagger's "Return ONLY a JSON object" met the forced-tool branch and
+// a 12B local model deadlocked choosing between them. Keep the rules here:
+// EMIT_ANSWER_INSTRUCTION (tool), NATIVE_JSON_INSTRUCTION (native), and the
+// recovery prompt's own line below.
 
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
@@ -23,6 +32,25 @@ import { resolveMaxOutputTokens } from '../../../settings.js';
 // Operator-overridable via settings.llm.maxOutputTokens (issue #712); 0 keeps
 // this default.
 const MAX_TOKENS_OBJECT = 8000;
+
+// The output rule for the NATIVE branch. Output.object forwards the schema as
+// the provider's own structured-output mode, which is enforced by constrained
+// decoding on the first-party providers — but `openrouter` and `gateway` hand
+// response_format to whatever downstream model the id resolves to, and one that
+// doesn't implement structured output simply ignores it and answers in prose.
+// Until this PR the tagger's own "output ONLY a JSON object" was what carried
+// those legs; removing it from the prompt without restating it here would have
+// pushed every such call into the recovery attempt — a second billable call per
+// batch, against settings.llm.dailyTokenCap, on a bulk job that runs per track.
+//
+// Deliberately a FORMAT rule, not a channel rule: it says what the result must
+// look like and never where to put it. @ai-sdk/anthropic implements
+// responseFormat:'json' by forcing a synthesized `json` tool, so a line here
+// reading "reply with JSON, do not call a tool" would recreate #1536 on
+// Anthropic — the exact conflict this change exists to remove. One line, no
+// double quotes, same as EMIT_ANSWER_INSTRUCTION.
+export const NATIVE_JSON_INSTRUCTION =
+  'The result must be a single JSON object matching the required shape — no prose, no markdown fences.';
 
 export async function djObject({
   system,
@@ -63,7 +91,10 @@ export async function djObject({
             const result = await withTransientRetry(kind, () => generateText({
               model: l.model,
               instructions: system,
-              prompt,
+              // Appended to the PROMPT, not to `system` — same placement as the
+              // recovery branch below, and it leaves the caller's system prompt
+              // byte-identical (the tagger hashes its own into prompt_hash).
+              prompt: `${prompt}\n\n${NATIVE_JSON_INSTRUCTION}`,
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),

@@ -1,13 +1,10 @@
-// One bottom sheet, content switched by the active drawer — mirrors the single
-// <Sheet> in web PlayerApp.
+// One bottom sheet, content switched by the active drawer.
 //
-// Built on React Native's core <Modal>, NOT @gorhom/bottom-sheet. gorhom (and
-// the react-native-gesture-handler it rides on) installed a root touch
-// interceptor that swallowed every tap across the whole app on the New
-// Architecture on some Android devices — renders fine, no crash, just dead to
-// touch (issue #458). A core <Modal> renders in its own native window and
-// nothing at all when closed, so it can't intercept the app's touches. We lose
-// drag-to-dismiss; tap-the-scrim or the back button closes it.
+// Built on RN's core <Modal>, not @gorhom/bottom-sheet: gorhom and the
+// gesture-handler it rides on install a root touch interceptor that swallows
+// every tap on the New Architecture on some Android devices (#458). A core
+// <Modal> renders in its own native window and nothing when closed, so it
+// can't intercept touches. No drag-to-dismiss; scrim tap or back closes it.
 
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

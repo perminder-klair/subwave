@@ -34,12 +34,10 @@ interface VoicesSectionProps {
 // Mirrors ACCEPTED_AUDIO_EXTS in controller/src/audio/audio-import.ts.
 const ACCEPT = '.wav,.mp3,.ogg,.oga,.flac,.m4a,.aac,.opus,audio/*';
 
-// `name` is imagingName underneath (z.preprocess-wrapped, unknown z.input) —
-// cast once, same as SfxSection/BedsSection. `file` rides alongside it but
-// isn't part of voiceImportSchema (a File isn't something the zod-only shared
-// schema module can describe), so it's read via useWatch, not handleSubmit's
-// validated `values` — the file picker is the raw-Controller case lib/form-
-// fields.tsx's header calls out.
+// `name` is imagingName underneath (z.preprocess-wrapped, unknown z.input), so
+// cast once as SfxSection/BedsSection do. `file` isn't in voiceImportSchema (a
+// zod-only shared module can't describe a File), so read it via useWatch
+// rather than handleSubmit's validated values.
 interface VoiceImportFormValues {
   name: string;
   file: File | null;

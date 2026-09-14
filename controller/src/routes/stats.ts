@@ -1,10 +1,6 @@
-// Admin-gated GET /stats — usage-stats rollups for the admin Stats page.
-//
-// Aggregates four in-memory call rings — LLM (llm/log.js), TTS (stats.js),
-// the DJ-log (broadcast/queue.js) and listener requests (broadcast/request-log.js)
-// — into the breakdowns the Stats page renders. Everything is since-boot and
-// lossy on restart by design; the raw per-call lists stay on /debug, this
-// surface only carries the rollups.
+// Admin-gated GET /stats — rollups over four in-memory call rings (LLM, TTS,
+// DJ-log, listener requests) for the Stats page. Since-boot and lossy on
+// restart by design; the raw per-call lists stay on /debug.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { recentCalls } from '../llm/log.js';
@@ -22,14 +18,10 @@ router.get('/stats', requireAdmin, (req, res) => {
     const llm: any = summarizeLlm(recentCalls);
     llm.provider = llmProvider.providerName();
     llm.activeModel = llmProvider.activeModelLabel();
-    // The DJ-agent deadline (admin-tunable, default 45s): past it the agent is
-    // killed and falls back to the stateless pool picker. The dash latency gauge
-    // anchors its redline to this so "red" means "hitting fallbacks", not an
-    // arbitrary ceiling. Mirror of agentDeadline() in broadcast/dj-agent.ts.
+    // Mirror of agentDeadline() in broadcast/dj-agent.ts — the dash anchors its
+    // latency redline to it, so "red" means "hitting the pool-picker fallback".
     llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
-    // Daily token budget — today's usage vs the cap + the resulting tier. Unlike
-    // the rollups above (the 120-call ring, lost on restart) this is the durable
-    // per-UTC-day tally. `enabled:false` when no cap is set.
+    // Durable per-UTC-day tally, unlike the rings above. enabled:false with no cap.
     llm.budget = budgetStatus();
 
     res.json({

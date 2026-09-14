@@ -1,13 +1,7 @@
-// Onboarding's route-owned rules moved onto a shared zod schema
-// (controller/src/schemas/onboarding.ts), mirrored into
-// web/lib/schemas.generated.ts. Deliberately narrow: the settings pass-through
-// stays with settings.update() — converted is only the two probe bodies and
-// the rules the save handler had to hand-roll because update() does not own
-// them. These tests pin the strict/lenient pair (the probe REQUIRES the
-// credentials, save must not, both normalise identically) and the two rules
-// that used to live twice.
-//
-// Run: npx tsx scripts/onboarding-schema.test.ts (auto-discovered by npm test).
+// schemas/onboarding.ts covers the two probe bodies and the rules the save
+// handler used to hand-roll; the settings pass-through stays with
+// settings.update(). Pins the strict/lenient pair — the probe REQUIRES the
+// credentials, save must not, and both normalise identically.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -18,7 +12,6 @@ const {
   normalizeNavidromeCredentials,
 } = await import('../src/schemas/onboarding.js');
 
-// --- navidrome: one normalisation, two postures ------------------------------
 
 test('the probe requires all three credentials; save-side normalisation does not', () => {
   assert.equal(navidromeProbeSchema.safeParse({}).success, false);
@@ -27,16 +20,15 @@ test('the probe requires all three credentials; save-side normalisation does not
     navidromeProbeSchema.safeParse({ url: 'http://n:4533', user: 'a', pass: 'p' }).success,
     true,
   );
-  // Skipping Navidrome is a supported way through the wizard — the shell posts
-  // the block with empty strings, and the lenient normaliser accepts that.
+  // Skipping Navidrome is supported: the shell posts empty strings.
   assert.deepEqual(normalizeNavidromeCredentials({ url: '', user: '', pass: '' }), {
     url: '', user: '', pass: '',
   });
 });
 
 test('probe and save agree on the normalisation, byte for byte', () => {
-  // `${url}/rest/ping` against a stored `…:4533/` double-slashes, and some
-  // proxies 404 it — so the slash-strip has ONE home and both paths run it.
+  // `${url}/rest/ping` against a stored `…:4533/` double-slashes and some
+  // proxies 404 it, so the slash-strip has one home.
   const raw = { url: '  http://navi:4533//  ', user: '  admin ', pass: ' p ' };
   const probe = navidromeProbeSchema.parse(raw);
   const save = normalizeNavidromeCredentials(raw);
@@ -47,7 +39,6 @@ test('probe and save agree on the normalisation, byte for byte', () => {
   assert.equal(save.pass, ' p ');
 });
 
-// --- llm probe ---------------------------------------------------------------
 
 test('provider and model are required', () => {
   assert.equal(llmProbeSchema.safeParse({}).success, false);
@@ -56,9 +47,8 @@ test('provider and model are required', () => {
 });
 
 test('openai-compatible needs a baseUrl — in the schema, not a handler throw', () => {
-  // As a throw inside the probe's provider switch, the only way to discover
-  // the rule was to press Test and wait; as a schema rule it also holds the
-  // wizard's button shut.
+  // As a schema rule this also holds the wizard's button shut, rather than
+  // only throwing once Test is pressed.
   assert.equal(
     llmProbeSchema.safeParse({ provider: 'openai-compatible', model: 'm' }).success,
     false,
@@ -69,12 +59,10 @@ test('openai-compatible needs a baseUrl — in the schema, not a handler throw',
     }).success,
     true,
   );
-  // locca deliberately does NOT require one — the controller defaults to the
-  // host locca server.
+  // locca does not require one: the controller defaults to the host server.
   assert.equal(llmProbeSchema.safeParse({ provider: 'locca', model: 'm' }).success, true);
 });
 
-// --- fish audio --------------------------------------------------------------
 
 test('fishAudioIssue judges only an enabled fish-audio block', () => {
   assert.equal(fishAudioIssue(undefined), null);
@@ -83,8 +71,7 @@ test('fishAudioIssue judges only an enabled fish-audio block', () => {
 });
 
 test('fishAudioIssue reports the field-specific message from its ONE home', () => {
-  // The route ran '1-100' while the wizard ran '1–100' — same logic, drifted
-  // message. This is now the single copy both sides call.
+  // The route and the wizard drifted on the message; one copy now.
   const base = { enabled: true, provider: 'fish-audio', model: 'speech-1.6', voice: 'ref123' };
   assert.equal(fishAudioIssue(base), null);
   assert.match(fishAudioIssue({ ...base, model: '' })!, /model id must be 1-100/);

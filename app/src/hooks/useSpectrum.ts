@@ -1,33 +1,18 @@
-// Synthesised "musical" spectrum — the native visualizer's data source.
+// Synthesised spectrum for the visualizer. There is no real FFT available:
+// RNTP exposes no analyser and react-native-audio-api's only reads its own HLS
+// node, so the bars are modelled rather than measured (#298 is the same
+// problem on the web player).
 //
-// Native can't tap the live MP3 stream for a real FFT: react-native-track-player
-// exposes no analyser, and react-native-audio-api's analyser only reads its own
-// HLS StreamerNode (SUB/WAVE serves a raw Icecast MP3 mount). So, exactly as the
-// WEB player does on iOS (issue #298, where Web Audio yields silence on a live
-// MP3), we synthesise the bars. But where the old port emitted per-bin white
-// noise — the flat "random pattern" — this models how a real music spectrum
-// actually moves, so it reads as reacting to the track:
-//
-//   * a bass-heavy spectral envelope with a gentle mid-presence bump,
-//   * neighbouring bins that move together (a low-res control curve, not
-//     independent noise), so the shape ripples instead of flickering,
-//   * a kick/beat envelope that swells the low end on a drifting ~125 BPM pulse,
-//   * slow track-level "breathing" so energy builds and drops over time,
-//   * asymmetric attack/decay (fast rise, slow fall) like an AnalyserNode's
-//     smoothingTimeConstant.
-//
-// `active` (tuned in) drives full motion; idle it settles to a calm low shimmer
-// (ticked at a relaxed rate — the shimmer doesn't need 20Hz). `visible` lets the
-// owner pause the whole simulation when the bars are off-screen, and the app
-// being backgrounded pauses it too. The simulation is time-accumulated, so its
-// groove is independent of the React re-render cadence (`speed`) and it resumes
-// cleanly from any pause. Values in [0, 1].
+// `active` drives full motion, idle settles to a low shimmer on a slower tick;
+// `visible` and app-background pause the simulation entirely. Time is
+// accumulated, so the groove is independent of the render cadence (`speed`)
+// and resumes cleanly from a pause. Values in [0, 1].
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 
-// Low-resolution random curve, linearly interpolated across all bins — this is
-// what correlates neighbouring bars instead of letting each flicker on its own.
+// Low-resolution random curve interpolated across all bins, so neighbouring
+// bars move together instead of flickering independently.
 const CONTROL_POINTS = 18;
 
 const IDLE_TICK_MS = 150;
@@ -37,16 +22,14 @@ export function useSpectrum(bins = 120, active = true, speed = 50, visible = tru
   const appActive = useAppActive();
   const running = appActive && visible;
 
-  // Simulation state kept in refs so ticking it never triggers a re-render on
-  // its own — only the final setArr does.
+  // Simulation state in refs so ticking it re-renders only via setArr.
   const valuesRef = useRef<number[]>(Array(bins).fill(0.06));
-  // Seeded deterministically (no impure Math.random during render); the
-  // momentum random-walk in the tick diverges it within a few frames anyway.
+  // Seeded deterministically, no Math.random during render.
   const ctrlRef = useRef<number[]>(
     Array.from({ length: CONTROL_POINTS }, (_, c) => 0.4 + 0.2 * Math.sin(c * 1.3)),
   );
   const ctrlVelRef = useRef<number[]>(Array(CONTROL_POINTS).fill(0));
-  const tRef = useRef(0); // ms since mount (accumulated — render-rate independent)
+  const tRef = useRef(0); // accumulated ms, render-rate independent
   const beatPeriodRef = useRef(480); // ms/beat (~125 BPM), drifts slowly
   const activeRef = useRef(active);
 
@@ -62,8 +45,8 @@ export function useSpectrum(bins = 120, active = true, speed = 50, visible = tru
       tRef.current += dt;
       const t = tRef.current;
 
-      // --- beat envelope: a kick on every beat (decaying), plus a softer
-      // half-beat ghost. Drift the tempo so it never feels metronomic. ---
+      // Beat envelope: a decaying kick per beat plus a softer half-beat ghost,
+      // with a drifting tempo so it never feels metronomic.
       beatPeriodRef.current = Math.max(
         420,
         Math.min(560, beatPeriodRef.current + (Math.random() - 0.5) * 4),
@@ -74,12 +57,12 @@ export function useSpectrum(bins = 120, active = true, speed = 50, visible = tru
       const ghost = Math.exp(-(((phase - 0.5 + 1) % 1) * 6)) * 0.4; // half-beat
       const beat = on ? Math.min(1, kick + ghost) : 0;
 
-      // --- slow track-level energy "breathing" (builds and drops) ---
+      // Slow track-level energy breathing.
       const energy = on
         ? 0.55 + 0.35 * (0.5 + 0.5 * Math.sin(t / 2300)) + 0.1 * Math.sin(t / 770)
         : 0.18;
 
-      // --- random-walk the control curve (momentum-damped for smooth drift) ---
+      // Momentum-damped random walk of the control curve.
       const ctrl = ctrlRef.current;
       const vel = ctrlVelRef.current;
       const jitter = on ? 0.22 : 0.05;
@@ -93,8 +76,8 @@ export function useSpectrum(bins = 120, active = true, speed = 50, visible = tru
       for (let i = 0; i < bins; i++) {
         const f = lastBin > 0 ? i / lastBin : 0; // 0 (bass) .. 1 (treble)
 
-        // Spectral envelope: bass-heavy, a presence bump in the lower-mids, and
-        // a treble rolloff — the rough shape of most music on a log-ish meter.
+        // Spectral envelope: bass-heavy, a lower-mid presence bump, treble
+        // rolloff.
         const bass = Math.pow(1 - f, 1.35);
         const presence = 0.35 * Math.exp(-Math.pow((f - 0.32) / 0.18, 2));
         const shape = 0.12 + bass * 0.9 + presence;

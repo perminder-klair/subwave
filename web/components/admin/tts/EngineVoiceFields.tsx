@@ -1,8 +1,7 @@
 'use client';
-// Engine picker + engine-specific voice selector + sample button, for any
-// `{engine, voice, cloudProvider}` voice slot: a persona (`personas[].tts`) and
-// the station-wide TTS fallback (`settings.tts.fallback`, which the controller
-// hands to speakWith() as a synthetic persona).
+// Engine picker + voice selector + sample button for any
+// `{engine, voice, cloudProvider}` slot: a persona (`personas[].tts`) or the
+// station-wide TTS fallback (`settings.tts.fallback`).
 import type { ChangeEvent, ReactNode } from 'react';
 import Link from 'next/link';
 import type { VoiceOption } from '../personas/types';
@@ -20,7 +19,7 @@ import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
-import { ENGINES, type EngineAvailability } from './engineMeta';
+import { ENGINES, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -29,6 +28,8 @@ import {
 import { cn } from '../../../lib/cn';
 
 const ENGINE_IDS = ENGINES.map(e => e.id);
+// Personas may also follow the station default; the fallback slot may not.
+const PERSONA_ENGINE_IDS = PERSONA_ENGINES.map(e => e.id);
 
 // Matches the controller's shared voice-slot shape (settings/validate.ts
 // validateTtsBlock).
@@ -65,7 +66,7 @@ export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
   ),
 };
 
-// The slice of GET /settings this component reads. Structural on purpose — the
+// The slice of GET /settings this component reads. Structural on purpose: the
 // Personas and Settings pages model the rest of that payload differently.
 export interface EngineVoiceData {
   // Which provider keys the controller can see; feeds the Cloud provider badge.
@@ -87,8 +88,7 @@ interface EngineVoiceFieldsProps {
   onChange: (patch: Partial<VoiceSlot>) => void;
   data: EngineVoiceData | null;
   adminFetch: AdminAuth['adminFetch'];
-  // Omitted where the slot has no rate of its own (the fallback slot), which
-  // previews at the engine's pace.
+  // Omitted where the slot has no rate of its own (the fallback slot).
   previewSpeed?: number;
   previewLanguage?: string;
   // Body of the red notice when `engine` can't speak; wording is caller-supplied.
@@ -97,24 +97,45 @@ interface EngineVoiceFieldsProps {
   cloudIssue?: ReactNode;
   engineHint?: ReactNode;
   previewHint?: ReactNode;
+  // Personas only: offer "Station default" (the 'inherit' engine). The station
+  // rescue slot must not — 'inherit' there names the rung below it in the
+  // chain. When set, the caller also supplies the note shown while it is picked.
+  allowInherit?: boolean;
+  inheritNote?: ReactNode;
+  // What 'inherit' resolves to (resolvePersonaVoiceSlot(value, station)) —
+  // caller-supplied, since this component has no station block. The preview
+  // must post a real engine (the controller rejects 'inherit'), and only
+  // piper/kokoro carry the persona's own voice id, so only they offer a voice
+  // field while inheriting.
+  inheritResolvesTo?: VoiceSlot | null;
 }
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
   previewSpeed, previewLanguage,
   unavailableNote, cloudIssue, engineHint, previewHint,
+  allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
+  const inheriting = value.engine === INHERIT_ENGINE.id;
+  // What will actually speak. Identical to `value` unless the slot inherits.
+  const effective = inheriting && inheritResolvesTo ? inheritResolvesTo : value;
+  // Which engine's voice field to render. While inheriting that is only
+  // piper/kokoro, the shared id-space the stored voice belongs to (see
+  // TTS_INHERITABLE_VOICE_ENGINES in the controller's schemas/persona).
+  const voiceEngine = inheriting
+    ? (effective.engine === 'piper' || effective.engine === 'kokoro' ? effective.engine : '')
+    : value.engine;
   const kokoroVoices: string[] = data?.tts?.kokoroVoices || [];
   const kokoroLanguages = data?.tts?.kokoroVoiceLanguages || {};
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
-  // Mirrors the controller's TTS_CLOUD_PROVIDERS, so a payload that predates the
+  // Mirrors the controller's TTS_CLOUD_PROVIDERS, so a payload predating the
   // field still offers every provider the server accepts.
   const cloudProviders = data?.tts?.cloudProviders
     || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
 
-  // Every slot uses the station-wide server, so sending no base URL is right —
-  // the server falls back to the saved one. ElevenLabs and Fish are gated on a
-  // key being set, so we don't fire a request we know will fail.
+  // Every slot uses the station-wide server, so no base URL is sent and the
+  // server falls back to the saved one. ElevenLabs and Fish discovery is gated
+  // on a key being set.
   const cloudProvider = value.cloudProvider;
   const elevenLabsReady = data?.tts?.available?.cloudByProvider?.elevenlabs !== false;
   const fishReady = data?.tts?.available?.cloudByProvider?.['fish-audio'] !== false;
@@ -128,15 +149,22 @@ export function EngineVoiceFields({
   });
   const discoveredVoices = voiceDiscovery.voices;
 
-  // `voice` is one field shared across engines but each validates it
-  // differently, so normalize on engine change — a leftover value (a Kokoro id
-  // like "bm_george" under pocket-tts) fails the new engine's check on save.
+  // `voice` is one field shared across engines that each validate it
+  // differently, so normalize on engine change: a leftover value (a Kokoro id
+  // under pocket-tts) fails the new engine's check on save.
   const selectEngine = (v: string) => {
     const patch: Partial<VoiceSlot> = { engine: v };
     const cur = value.voice.trim();
+    if (v === INHERIT_ENGINE.id) {
+      // No engine known yet, so no rule to normalise against; the stored id is
+      // still wanted if the station is on a local engine, and
+      // resolvePersonaVoiceSlot drops it at speak time when it isn't.
+      onChange(patch);
+      return;
+    }
     if (v === 'cloud') {
-      // A discovered voice counts as valid too, or toggling the engine away and
-      // back destroys a voice the operator picked from the server's own list.
+      // A discovered voice counts as valid too, or toggling the engine away
+      // and back destroys a voice picked from the server's own list.
       if (!isKnownCloudVoice(cloudProvider, discoveredVoices, cur)) {
         const provVoices = CLOUD_VOICES[cloudProvider as keyof typeof CLOUD_VOICES] || [];
         patch.voice = provVoices[0]?.id || cur;
@@ -149,13 +177,13 @@ export function EngineVoiceFields({
     } else if (v === 'pocket-tts') {
       if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
     }
-    // Remote engine voices are free text — the sidecar decides. No default.
+    // Remote engine voices are free text; no default.
     onChange(patch);
   };
 
-  // Resolve Cloud against this slot's saved provider even before the Cloud card
-  // is selected. openai-compatible has no key-based availability entry and is
-  // trusted; unknown providers keep the global status.
+  // Resolve Cloud against this slot's saved provider even before the Cloud
+  // card is selected. openai-compatible has no key-based availability entry
+  // and is trusted; unknown providers keep the global status.
   const globalAvail = data?.tts?.available as EngineAvailability | undefined;
   let selectorAvailable = globalAvail;
   if (globalAvail) {
@@ -167,8 +195,7 @@ export function EngineVoiceFields({
     }
   }
 
-  // The caller's cloud alert names the provider and says what speaks instead,
-  // so it stands in for both generic "not configured" hints below it.
+  // The caller's cloud alert stands in for the generic "not configured" hints.
   const cloudAlerted = value.engine === 'cloud' && !!cloudIssue;
 
   const notice = (engine: string) => (
@@ -183,7 +210,7 @@ export function EngineVoiceFields({
         <Label>Engine</Label>
         <EngineSelector
           value={value.engine}
-          engineIds={ENGINE_IDS}
+          engineIds={allowInherit ? PERSONA_ENGINE_IDS : ENGINE_IDS}
           available={selectorAvailable}
           showStatusHint={!cloudAlerted}
           onChange={selectEngine}
@@ -191,7 +218,21 @@ export function EngineVoiceFields({
         {engineHint && <div className="field-hint max-w-[70ch]">{engineHint}</div>}
       </div>
 
-      {value.engine === 'piper' && (() => {
+      {inheriting && inheritNote && (
+        <div className="field-hint mb-4 max-w-[70ch]">{inheritNote}</div>
+      )}
+
+      {/* The cloud-key alarm renders inside the cloud block below, which an
+          inheriting slot never shows — so repeat it here. A persona following a
+          station whose cloud voice has no key is exactly the one the warning is
+          for, and it is the shipped default for the whole seed roster. */}
+      {inheriting && effective.engine === 'cloud' && cloudIssue && (
+        <div role="alert" className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+          {cloudIssue}
+        </div>
+      )}
+
+      {voiceEngine === 'piper' && (() => {
         const piperVoices: string[] = data?.tts?.piperVoices || [];
         const selected = value.voice || CB_DEFAULT_VOICE;
         // The default entry auditions with voice '' (the engine's built-in);
@@ -226,7 +267,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'kokoro' && (() => {
+      {voiceEngine === 'kokoro' && (() => {
         const voice = value.voice || 'bf_isabella';
         const langPrefix = voice.charAt(0);
         const filtered = kokoroVoices.filter(v => v.startsWith(langPrefix));
@@ -278,7 +319,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'chatterbox' && (() => {
+      {voiceEngine === 'chatterbox' && (() => {
         const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
         // Shared voice folder (issue #213).
         const cbDir = 'state/voices/';
@@ -314,7 +355,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'pocket-tts' && (() => {
+      {voiceEngine === 'pocket-tts' && (() => {
         const ptAvailable = data?.tts?.available?.['pocket-tts'] !== false;
         const customVoices: string[] = data?.tts?.pocketTtsCustomVoices || [];
         const selected = value.voice || 'alba';
@@ -348,8 +389,8 @@ export function EngineVoiceFields({
                     voices: customVoices.map(v => ({ id: v, label: v })),
                   }]
                   : []),
-                // Voice not currently present: keep it visible so a save
-                // round-trips without rewriting, but flag it.
+                // Voice not present: keep it visible so a save round-trips
+                // without rewriting, but flag it.
                 ...(!isBuiltin && !isCustom && value.voice
                   ? [{
                     label: 'Unknown',
@@ -371,7 +412,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'remote' && (() => {
+      {voiceEngine === 'remote' && (() => {
         const remoteAvail = data?.tts?.available?.remote;
         return (
           <div className="field max-w-[360px]">
@@ -502,9 +543,9 @@ export function EngineVoiceFields({
 
       <div className="mt-4">
         <VoicePreviewButton
-          engine={value.engine}
-          voice={value.voice}
-          cloudProvider={value.cloudProvider}
+          engine={effective.engine}
+          voice={effective.voice}
+          cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
           adminFetch={adminFetch}

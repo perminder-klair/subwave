@@ -1,21 +1,10 @@
-// Pins time.ts's timezone-change subscription — the hook the per-skill cron
-// tasks use to re-register themselves.
+// time.ts's timezone-change subscription, which the per-skill cron tasks use
+// to re-register. node-cron bakes the zone in at registration, so the
+// notification sits at the one place the zone changes rather than at each
+// writer (POST /settings, onboarding, a backup restore).
 //
-// node-cron bakes the zone into cron.schedule(..., { timezone }) at
-// registration, so a live timezone change leaves every registered task firing
-// on the OLD zone. The first fix checked `'timezone' in req.body` inside POST
-// /settings, which covers the admin panel and misses the other writers:
-// routes/onboarding.ts patches `timezone` through settings.update() too, and a
-// backup restore reaches update() directly. Putting the notification at the
-// one place the zone actually changes is what stops this having to be
-// remembered at each new writer.
-//
-// The no-change guard is the other half. settings.load() and every successful
-// update() push the zone in whether or not it moved, so firing unconditionally
-// would tear down and rebuild every station's crons on each unrelated settings
-// save.
-//
-// Run: `tsx scripts/station-timezone-listener.test.ts`.
+// The no-change guard is the other half: load() and every update() push the
+// zone in whether or not it moved.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -47,7 +36,7 @@ test('an invalid zone resolves to Auto and notifies once, not per bad value', ()
   seen.length = 0;
   setStationTimezone('Not/AZone');
   assert.equal(seen.length, 1, 'falling back to Auto is a real change');
-  // Auto = whatever the process resolved to, never the literal bad string.
+  // Auto is whatever the process resolved to, never the literal bad string.
   assert.notEqual(seen[0], 'Not/AZone');
   assert.equal(seen[0], getStationTimezone());
 

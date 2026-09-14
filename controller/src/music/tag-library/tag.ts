@@ -1,11 +1,4 @@
-// The LLM tagging worker pool, reused by phases 2 and 4.
-//
-// `pin` selects which leg each consumer targets (undefined = normal
-// primary->fallback failover, used in single-LLM mode); `label` is stamped on
-// every track a consumer tags, so per-track provenance stays honest when two
-// different models are working the same run (discussion #320).
-//
-// Part of the tag-library/ split - see ../tag-library.ts for main().
+// The LLM tagging worker pool, reused by phases 2 and 4 of tag-library.
 
 import * as db from '../library-db.js';
 import { primaryLeg, fallbackLeg, probeLegReachable } from '../../llm/provider.js';
@@ -14,15 +7,9 @@ import { tagBatch, tagOne, type TagResult } from '../tagger-core.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 
-
-// ---------------------------------------------------------------------------
-// LLM tagging helper (reused by phase 2 + phase 4)
-// ---------------------------------------------------------------------------
-
-// A single LLM worker the batch loop pulls through. `pin` selects which leg
-// each call targets (undefined → normal primary→fallback failover, used in
-// single-LLM mode); `label` is stamped on every track this consumer tags so the
-// per-track provenance is honest across two different models (discussion #320).
+// One LLM worker the batch loop pulls through. `pin` selects the leg (undefined
+// = normal primary/fallback failover, single-LLM mode); `label` is stamped on
+// every track it tags, so provenance stays honest in dual-LLM mode.
 interface TagConsumer {
   pin?: 'primary' | 'fallback';
   label: string;
@@ -32,25 +19,21 @@ interface TagState {
   tagged: number;
   callCount: number;
   processed: number;
-  // Tracks that came back null from the LLM (batch entry dropped / per-track
-  // salvage failed) — surfaced in the progress channel.
+  // Tracks that came back null from the LLM; surfaced in the progress channel.
   errors: number;
   byLeg: Record<string, number>;
 }
 
-// Which pipeline phase a runConsumer() call is tagging for — only used to
-// stamp the progress channel ('seed' = phase 2, 'learn' = phase 4 rounds).
+// Stamps the progress channel only: 'seed' = phase 2, 'learn' = phase 4 rounds.
 interface TagPhaseInfo {
   phase: 'seed' | 'learn';
   round?: number;
 }
 
-// Tag one batch with one consumer's leg. Returns the count actually tagged.
-// Throws ONLY when a pinned leg's host is unreachable — the caller requeues the
-// whole batch and drops the consumer. Upserts happen only after the batch fully
-// resolves, so a rethrow mid-batch persists nothing: the requeue is lossless.
-// Non-unreachable failures (small models dropping list entries) salvage per
-// track exactly as before, so one bad line never sinks 25 tracks.
+// Tag one batch on one consumer's leg; returns the count tagged. Throws only
+// when a pinned leg cannot recover this run, and the caller then requeues the
+// batch. Upserts happen only after the batch resolves, so the requeue is
+// lossless. Other failures salvage per track, so one bad line never sinks 25.
 async function processBatch(
   batch: string[],
   consumer: TagConsumer,
@@ -74,18 +57,12 @@ async function processBatch(
     results = await tagBatch(input, opts);
     state.callCount += 1;
   } catch (err: any) {
-    // A pinned leg that can't recover this run — host down, OR a
-    // quota/usage-limit/auth rejection (#438): rethrow BEFORE the per-track
-    // salvage, otherwise we'd grind 25 serial connect-timeouts (or 25 identical
-    // 429s) against a leg that won't answer. The surviving consumer redoes the
-    // requeued batch.
+    // Host down or a quota/auth rejection (#438): rethrow BEFORE the per-track
+    // salvage, or this grinds 25 serial timeouts against a leg that won't answer.
     if (consumer.pin && (isUnreachable(err) || isQuotaOrAuthError(err))) throw err;
-    // A "batch length mismatch" is NOT a failure. Some models (e.g. Mercury, and
-    // small local models) don't return one structured-output entry per input
-    // track, so we tag each track individually this batch — same seed set, same
-    // cost envelope (only the seeds ever hit the LLM), just slower. Log it as an
-    // expected degrade, not an error, so it doesn't read as something broken.
-    // Genuine batch errors keep the error-level line with their message.
+    // A "batch length mismatch" is an expected degrade, not a failure: some
+    // models don't return one entry per input track, so tag individually and log
+    // at warning. Genuine batch errors keep the error line.
     const perTrackDegrade = /batch length mismatch/i.test(err.message || '');
     if (perTrackDegrade) {
       logEvent(
@@ -105,8 +82,7 @@ async function processBatch(
         results.push(await tagOne(song, opts));
         state.callCount += 1;
       } catch (oneErr: any) {
-        // Leg unusable mid-salvage (host died, or quota/auth) — bail the whole
-        // batch (nothing upserted yet).
+        // Leg unusable mid-salvage: bail the batch, nothing is upserted yet.
         if (consumer.pin && (isUnreachable(oneErr) || isQuotaOrAuthError(oneErr))) throw oneErr;
         console.error(`[tag] per-track tag failed on ${consumer.label}: ${oneErr.message}`);
         results.push(null);
@@ -136,9 +112,8 @@ async function processBatch(
 }
 
 // Drain the shared `batches` queue with one consumer. `shift()` between awaits
-// is atomic (single-threaded event loop), so two consumers never pull the same
-// batch. In dual mode a pinned consumer whose host dies requeues its batch and
-// returns; `onDrop` reports how many legs remain.
+// is atomic, so two consumers never pull the same batch. A pinned consumer whose
+// leg dies requeues its batch and returns; `onDrop` reports the legs left.
 async function runConsumer(
   batches: string[][],
   consumer: TagConsumer,
@@ -157,11 +132,9 @@ async function runConsumer(
       state.tagged += n;
       state.byLeg[consumer.label] = (state.byLeg[consumer.label] || 0) + n;
     } catch (err: any) {
-      // processBatch rethrows only when a pinned leg can't recover this run:
-      // the host is down (isUnreachable) OR the provider refused the leg with a
-      // quota / credit / usage-limit / auth error (isQuotaOrAuthError, #438).
-      // Name the real reason — logging every drop as "unreachable" misdirected an
-      // operator whose OpenRouter credits had simply run out (Discord).
+      // processBatch rethrows only for an unreachable host or a quota/auth
+      // refusal (#438). Name which: logging every drop as "unreachable"
+      // misdirects an operator whose provider credits ran out.
       batches.unshift(batch);
       const remaining = onDrop ? onDrop(err) : 0;
       const reason = isQuotaOrAuthError(err) ? 'quota/credit/auth rejected' : 'host unreachable';
@@ -187,8 +160,8 @@ async function runConsumer(
   }
 }
 
-// Phase 2 + phase 4 LLM tagging. One consumer (single-LLM mode, failover-capable
-// calls) or two (dual-LLM mode, one pinned per leg) drain a shared batch queue.
+// Phase 2 + 4 LLM tagging: one failover-capable consumer, or two pinned ones in
+// dual-LLM mode, draining a shared batch queue.
 export async function llmTagInBatches(
   ids: string[],
   batchSize: number,
@@ -210,8 +183,8 @@ export async function llmTagInBatches(
   });
 
   if (consumers.length <= 1) {
-    // Single consumer — no requeue/drop; the unpinned call already fails over
-    // internally, so an error means the batch is genuinely unworkable this run.
+    // No requeue/drop: the unpinned call already fails over internally, so an
+    // error means the batch is genuinely unworkable this run.
     await runConsumer(batches, consumers[0], promptHash, source, ids.length, state, phaseInfo, null);
   } else {
     let alive = consumers.length;
@@ -234,10 +207,8 @@ export async function llmTagInBatches(
   return { tagged: state.tagged, callCount: state.callCount, byLeg: state.byLeg };
 }
 
-// Decide the LLM consumers for this run. Dual-LLM mode activates automatically
-// when a fallback is configured, distinct from the primary, and its host answers
-// a cheap probe — then both boxes tag in parallel off a shared queue. Otherwise a
-// single failover-capable consumer (discussion #320).
+// Dual-LLM mode activates when a fallback is configured, distinct from the
+// primary, and answers a cheap probe; otherwise one failover-capable consumer.
 export async function resolveTagConsumers(): Promise<TagConsumer[]> {
   const primary = primaryLeg();
   const fb = fallbackLeg();

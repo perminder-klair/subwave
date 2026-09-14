@@ -1,16 +1,9 @@
-// Drift guard for the Live Activity's data contract.
-//
-// SubwaveLiveAttributes is compiled TWICE — once into the widget extension and
-// once into the Expo module — because the two live in different Swift modules
-// and neither can import the other (ActivityKit's own guidance; it matches an
-// activity to its widget by the attributes type name, not its module). Two
-// copies of a wire format is exactly the shape that drifts silently: add a
-// field on one side and the activity simply stops rendering on device, with no
-// build error and no log.
-//
-// So the copies are asserted byte-identical here, the same move the controller
-// makes over its zod schema mirror. If this fails, you edited one and not the
-// other — copy it across, don't "fix" the test.
+// Drift guard for the Live Activity's data contract. SubwaveLiveAttributes is
+// compiled twice, into the widget extension and the Expo module, because the
+// two are different Swift modules and neither can import the other. A drifted
+// copy fails silently on device with no build error, so the two are asserted
+// byte-identical here. On failure, copy the edit across rather than changing
+// the test.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

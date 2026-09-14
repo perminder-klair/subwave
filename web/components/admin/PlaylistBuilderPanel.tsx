@@ -1,9 +1,7 @@
 'use client';
 
 /* Playlist Builder: a RECIPE rail (prompt + seeds + tuning) beside a RESULT
-   pane state machine (result / empty / generating / no-match / error). Saves
-   land in Navidrome via the /playlists routes, so the set feeds the Shows
-   picker immediately. */
+   pane state machine. Saves land in Navidrome via the /playlists routes. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebounceValue } from 'usehooks-ts';
@@ -93,23 +91,14 @@ import {
   usePlaylistSearchQuery,
 } from './playlist-builder/queries';
 
-// ─── The generate-vs-save split ────────────────────────────────────────────
-//
 // Two request bodies, two forms. The recipe rail (RecipeFormValues) feeds both
-// POST /playlists/generate and the `recipe` field of POST /playlists, since the
-// two share a shape. `seedArtist` and `genreInput` stay plain state: the latter
-// is an uncommitted text buffer, and neither carries a schema rule.
-//
-// `formState.isValid` on the recipe form is inert and never read. The only
-// whole-object rule is `playlistHasIntent`, which the schema's `.refine` reads
-// off the NESTED wire shape (`knobs.moods`, `sources.recentlyAdded`), while
-// this form's fields are flat to match the rail's own UI concepts. So
-// `playlistHasIntent(buildBody())` stays the real Generate gate.
-//
-// The SAVE modal is a separate form bound to playlistSaveSchema, where `name`
-// is the one real rule — songIds/playlistId/recipe are assembled at submit time
-// from live component state. `saveMode` isn't a schema key at all; it travels
-// here anyway as a save-time choice, and is read off raw form state.
+// POST /playlists/generate and the `recipe` field of POST /playlists.
+// `seedArtist` and `genreInput` stay plain state (uncommitted buffers, no rule).
+// `formState.isValid` on the recipe form is inert: the only whole-object rule,
+// `playlistHasIntent`, reads the NESTED wire shape while this form is flat, so
+// `playlistHasIntent(buildBody())` is the real Generate gate.
+// The SAVE modal is a separate form bound to playlistSaveSchema; `saveMode`
+// isn't a schema key and is read off raw form state.
 interface RecipeFormValues {
   prompt: string;
   seeds: SeedChip[];
@@ -179,8 +168,8 @@ export default function PlaylistBuilderPanel() {
   const queryEnabled = hydrated && !needsAuth;
 
   // Both playlist schemas are `z.preprocess(...)`-wrapped, so their inferred
-  // `_input` is `unknown` and can't satisfy useZodForm's generic bound. Cast to
-  // the form's own field shape; the resolver still runs the real schema.
+  // `_input` is `unknown`. Cast to the form's field shape; the resolver still
+  // runs the real schema.
   const recipeForm = useZodForm(
     playlistGenerateSchema as unknown as z.ZodType<RecipeFormValues, RecipeFormValues>,
     RECIPE_DEFAULTS,
@@ -206,8 +195,7 @@ export default function PlaylistBuilderPanel() {
   const [usedFallback, setUsedFallback] = useState(false);
   const [poolSize, setPoolSize] = useState<number | null>(null);
   // Frozen at the last generation so manual deck edits don't rewrite the
-  // "chose N from M in pool" line. 'more' reports 'added', since its pool
-  // excludes the current deck and the figure is never a mixed total.
+  // "chose N from M in pool" line. 'more' reports 'added'.
   const [chosenCount, setChosenCount] = useState(0);
   const [poolVerb, setPoolVerb] = useState<'chose' | 'added'>('chose');
   const [errorMsg, setErrorMsg] = useState('');
@@ -232,10 +220,9 @@ export default function PlaylistBuilderPanel() {
   const [artistQuery, setArtistQuery] = useState('');
   const [genreRequested, setGenreRequested] = useState(false);
 
-  // The three suggestion boxes below all search /dj/search on a 250ms debounce
-  // and all ignore a query under two characters. Blanking the term is what
-  // clears the dropdown, and it happens off the RAW query so backspacing feels
-  // instant; only a term long enough to search waits for the debounce.
+  // The three suggestion boxes search /dj/search on a 250ms debounce and ignore
+  // queries under two characters. Blanking the term clears the dropdown off the
+  // RAW query, so backspacing feels instant.
   const [debouncedSeedQuery] = useDebounceValue(seedQuery, 250);
   const [debouncedAddQuery] = useDebounceValue(addQuery, 250);
   const [debouncedArtistQuery] = useDebounceValue(artistQuery, 250);
@@ -276,9 +263,9 @@ export default function PlaylistBuilderPanel() {
   const lastMode = useRef<GenMode>('fresh');
   const generatingRef = useRef(false);
 
-  // Header height, Navidrome banner and breadcrumb wrap all vary, so the frame
-  // top is measured and stretched to the viewport bottom less the 24px page
-  // gutter. The class-based calc() is only the first-paint estimate.
+  // Header height and banners vary, so the frame top is measured and stretched
+  // to the viewport bottom less the 24px gutter. The class-based calc() is only
+  // the first-paint estimate.
   const frameRef = useRef<HTMLDivElement>(null);
   const [frameH, setFrameH] = useState<number | null>(null);
   useEffect(() => {
@@ -304,8 +291,7 @@ export default function PlaylistBuilderPanel() {
     toastTimer.current = window.setTimeout(() => setToast(''), 4200);
   }, []);
 
-  // Document-level rather than on the dialog markup, so Escape fires wherever
-  // focus happens to be.
+  // Document-level, not on the dialog, so Escape fires wherever focus is.
   useEffect(() => {
     if (!modal) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null); };
@@ -314,15 +300,13 @@ export default function PlaylistBuilderPanel() {
   }, [modal]);
 
   // Already-selected moods union in, so retiring a mood at /admin/moods can't
-  // make a picked chip vanish from under the operator.
+  // make a picked chip vanish.
   const moodOptions = useMemo(() => {
     const out = [...liveMoods];
     for (const m of recipeValues.moods) if (!out.includes(m)) out.push(m);
     return out;
   }, [liveMoods, recipeValues.moods]);
 
-  // Without this the modal is only reachable by tabbing through the page behind
-  // it, and closing leaves focus on <body>.
   const modalPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!modal) return;
@@ -331,11 +315,11 @@ export default function PlaylistBuilderPanel() {
     return () => restoreTo?.focus?.();
   }, [modal]);
 
-  // Centres the row inside the LIST's own scroll context — scrollIntoView would
+  // Centres the row inside the LIST's own scroll context; scrollIntoView would
   // drag the page along.
   const jumpToRow = useCallback((i: number) => {
-    // ScrollArea scrolls its internal radix viewport, not the Root that listRef
-    // points at — resolve it so scrollTop/scrollTo act on the right element.
+    // ScrollArea scrolls its internal radix viewport, not the Root listRef
+    // points at.
     const root = listRef.current;
     const list = root?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? root;
     const row = list?.querySelector<HTMLElement>(`[data-row="${i}"]`);
@@ -385,9 +369,8 @@ export default function PlaylistBuilderPanel() {
     excludeTrackIds,
   }), [recipeValues, seedArtist]);
 
-  // The same intent rule the /generate route enforces — exported as a predicate
-  // rather than living only inside the schema, because the Generate button needs
-  // the answer before a request exists. See the split comment at the top.
+  // Same intent rule the /generate route enforces; the Generate button needs
+  // the answer before a request exists.
   const hasIntent = useMemo(() => playlistHasIntent(buildBody()), [buildBody]);
 
   const generating = view === 'generating';
@@ -487,13 +470,10 @@ export default function PlaylistBuilderPanel() {
   };
   const removeAt = (i: number) => setTracks(prev => prev.filter((_, idx) => idx !== i));
 
-  // A sortable id has to be unique and survive a reorder, and a track id is
-  // neither: the same song can legitimately sit in the deck twice (that is what
-  // the DUPLICATE badge marks), and an index-derived id renames every row below
-  // the one that moved. The deck's own objects are the stable identity — a move
-  // splices them, it doesn't rebuild them — so the uid is minted per object and
-  // parked in a WeakMap. It doubles as the React key, which is why a reorder no
-  // longer remounts the rows below it and re-fetches their artwork.
+  // A track id can't be the sortable id: the same song can sit in the deck
+  // twice, and an index-derived id renames every row below a move. The deck's
+  // own objects are the stable identity, so the uid is minted per object into a
+  // WeakMap and doubles as the React key.
   const uids = useRef(new WeakMap<DraftTrack, string>());
   const nextUid = useRef(0);
   const uidOf = (t: DraftTrack): string => {
@@ -503,10 +483,8 @@ export default function PlaylistBuilderPanel() {
   };
   const rowIds = tracks.map(uidOf);
 
-  // Mouse and touch are separate sensors on purpose. One PointerSensor would
-  // have to claim the touch gesture the moment a finger lands to be able to
-  // drag, which costs the list its scroll; the delay makes a press-and-hold the
-  // drag and leaves a plain swipe scrolling.
+  // Mouse and touch are separate sensors: one PointerSensor would have to claim
+  // the touch gesture on finger-down to drag, costing the list its scroll.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
@@ -521,8 +499,8 @@ export default function PlaylistBuilderPanel() {
     move(from, to);
   };
 
-  // dnd-kit announces "item 3" by default; a deck of songs should say which
-  // song. Positions are 1-based to match the number column on screen.
+  // dnd-kit announces "item 3" by default. Positions are 1-based to match the
+  // number column on screen.
   const announce = (id: string, at: number | null): string => {
     const i = rowIds.indexOf(id);
     const name = tracks[i]?.title || 'Track';
@@ -609,8 +587,7 @@ export default function PlaylistBuilderPanel() {
       saveMode: existingId ? 'overwrite' : 'create',
     });
     // reset() doesn't validate, so an empty default would leave `isValid`
-    // stale-true until the field is touched, and the Save button wrongly
-    // enabled on first paint.
+    // stale-true and the Save button wrongly enabled on first paint.
     void saveForm.trigger();
     setModal('save');
   }, [tracks.length, name, existingId, keepInSync, flash, saveForm]);
@@ -641,10 +618,8 @@ export default function PlaylistBuilderPanel() {
 
   const onSaveSubmit = saveForm.handleSubmit(async (values) => {
     try {
-      // Read off raw form state, NOT off `values`: `saveMode` is not a key of
-      // playlistSaveSchema, so the resolver's parsed output drops it and
-      // `values.saveMode` is always undefined — which once made every
-      // "Overwrite existing" save create a new playlist instead.
+      // Read off raw form state, NOT `values`: `saveMode` is not a key of
+      // playlistSaveSchema, so the resolver's parsed output drops it.
       const saveMode = saveForm.getValues('saveMode');
       const overwrite = saveMode === 'overwrite' && existingId;
       const j = await savePlaylistMutation.mutateAsync({
@@ -717,8 +692,6 @@ export default function PlaylistBuilderPanel() {
     <div className="min-w-0">
       <div ref={frameRef} className="flex min-w-0 flex-col lg:h-[calc(100dvh-146px)] lg:min-h-[480px] lg:flex-row">
 
-        {/* --card-bg matches the other admin panels, keeping the rail distinct
-            from the deck. */}
         <aside className="flex min-h-0 flex-none flex-col border-b border-ink bg-[var(--card-bg)] lg:w-[380px] lg:border-r lg:border-b-0">
           <ScrollArea className="min-h-0 flex-1">
             <div className="px-5 pt-4 pb-[26px]">
@@ -737,9 +710,8 @@ export default function PlaylistBuilderPanel() {
               className="mb-[22px]"
             />
 
-            {/* Raw Controller: the array-mutation half (chips, add/remove) needs
-                RHF's field, but the search dropdown above it (seedQuery/
-                seedResults) is transient UI, not a form value. */}
+            {/* Raw Controller: the array half needs RHF's field, but the search
+                dropdown above it is transient UI, not a form value. */}
             <Controller
               control={recipeControl}
               name="seeds"
@@ -844,8 +816,7 @@ export default function PlaylistBuilderPanel() {
                     </span>
                   )}
                   {/* Raw Controller, not SwitchField: the live length badge sits
-                      between the label and the switch in this row, a slot
-                      SwitchField's fixed label+switch layout has no place for. */}
+                      between the label and the switch. */}
                   <Controller
                     control={recipeControl}
                     name="capOn"
@@ -855,12 +826,9 @@ export default function PlaylistBuilderPanel() {
                   />
                 </div>
               </div>
-              {/* Raw Controller pair, not TextField: DualRange clamps lo
-                  against hi (and vice versa) INSIDE its own onChange before
-                  either prop fires, so the invariant lo<=hi holds by
-                  construction — there is no zod rule to bind and no error
-                  state to wire. Two Controllers because the two thumbs are
-                  two independent RHF field paths. */}
+              {/* Raw Controller pair, not TextField: DualRange clamps lo against
+                  hi inside its own onChange, so lo<=hi holds by construction --
+                  no zod rule to bind. Two Controllers for two field paths. */}
               <Controller control={recipeControl} name="minSec" render={({ field: lo }) => (
                 <Controller control={recipeControl} name="maxSec" render={({ field: hi }) => (
                   <DualRange
@@ -1032,8 +1000,8 @@ export default function PlaylistBuilderPanel() {
                             <button
                               key={g.value}
                               type="button"
-                              // preventDefault on mousedown so the input's onBlur (which
-                              // commits raw text) doesn't fire before this click lands.
+                              // preventDefault on mousedown so the input's onBlur
+                              // doesn't commit raw text before this click lands.
                               onMouseDown={e => e.preventDefault()}
                               onClick={() => {
                                 genresField.onChange(
@@ -1162,8 +1130,6 @@ export default function PlaylistBuilderPanel() {
             {showResult && (
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex-none border-b border-ink px-4 pt-1.5 pb-2.5 sm:px-6">
-                  {/* The three deck actions eat ~185px, leaving ~8 characters of
-                      title at 390px, so the name takes its own line. */}
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <input
                       value={name}
@@ -1408,12 +1374,11 @@ export default function PlaylistBuilderPanel() {
 
       {modal === 'open' && (
         <div
-          // Backdrop keeps no role and no tabIndex: `role="button"` would put a
-          // full-viewport control in the tab order, ahead of the dialog's real
-          // controls. Escape is handled at the document level.
+          // No role/tabIndex on the backdrop: `role="button"` would put a
+          // full-viewport control ahead of the dialog's real controls. Escape is
+          // handled at the document level.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
-          // Only a click on the backdrop itself closes, so the panel needs no
-          // stopPropagation of its own.
+          // Only a click on the backdrop itself closes.
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
         >
           <div
@@ -1497,8 +1462,7 @@ export default function PlaylistBuilderPanel() {
 
       {modal === 'save' && (
         <div
-          // See the OPEN modal above: backdrop stays a plain div; Escape is
-          // owned by the document-level handler.
+          // Backdrop stays a plain div; Escape is owned by the document handler.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
         >

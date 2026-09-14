@@ -1,9 +1,7 @@
 'use client';
 // Radio-card grid for picking a Cloud TTS provider, shared by the Settings voice
-// tab and the per-persona voice slot. Deliberately the same affordance as
-// EngineSelector one level up — picking OpenAI vs ElevenLabs is the same kind of
-// decision as picking Cloud vs Piper. The badge makes "this one has no key"
-// visible before the click instead of after it.
+// tab and the per-persona voice slot. Same affordance as EngineSelector one
+// level up; the badge shows "this one has no key" before the click.
 import type { ReactNode } from 'react';
 import { cn } from '../../../lib/cn';
 import {
@@ -22,8 +20,7 @@ interface CloudProviderSelectorProps {
   // Shown under the grid whatever the selection, above the enable hint.
   hint?: ReactNode;
   // The "how to fix it" note for a provider that can't speak. Off where the fix
-  // is the very next field — the Settings panel would otherwise point down at a
-  // key input that already points back up at itself.
+  // is the very next field.
   enableHint?: boolean;
   className?: string;
   gridClassName?: string;
@@ -39,8 +36,7 @@ export function CloudProviderSelector({
       <div
         role="radiogroup"
         aria-label="Cloud TTS provider"
-        // Two-up by default: the persona voice card puts this in a half-width
-        // column, where four across would crush "OpenAI-compatible". Full-width
+        // Two-up by default (the persona voice card is half-width); full-width
         // callers widen it themselves.
         className={cn('grid grid-cols-2 gap-2.5', gridClassName)}
       >

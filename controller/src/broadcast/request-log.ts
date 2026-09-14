@@ -1,16 +1,7 @@
-// Ring buffer + durable log for listener requests — feeds the admin dashboard
-// so every request and exactly how the AI DJ responded to it is inspectable.
-// Modelled on music/subsonic-log.ts.
-//
-// routes/request.ts holds the live request ledger in an ephemeral 10-minute
-// Map; this module is the *durable* record of outcomes: what was asked, which
-// resolution path handled it, the track picked, the AI ack + full intro script,
-// and timing. The in-memory ring feeds GET /requests; the JSONL file on the
-// shared state volume survives restarts and is tail-loaded back into the ring
-// on boot, so the dashboard still shows recent history after a recreate.
-//
-// JSONL (one object per line) rather than the tab-separated subsonic.log,
-// because a request record carries the multi-line introScript.
+// Ring buffer + durable JSONL log of listener-request outcomes (routes/
+// request.ts owns the ephemeral live ledger). The ring feeds GET /requests; the
+// file is tail-loaded back into it on boot. JSONL rather than subsonic.log's
+// tab-separated form because a record carries the multi-line introScript.
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync, readFileSync } from 'node:fs';
@@ -20,9 +11,7 @@ const MAX_REQUESTS = 150;
 export const recentRequests: any[] = [];
 
 const REQUESTS_LOG = `${STATE_DIR}/logs/requests.log`;
-// Rotate to one .old backup at this cap, same policy as subsonic.log. Tuned
-// tight — the ring + dashboard cover live observability; this file is just a
-// few days of audit history.
+// Rotate to one .old backup at this cap, same policy as subsonic.log.
 const REQUESTS_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 function maybeRotateLog() {
@@ -33,10 +22,8 @@ function maybeRotateLog() {
   } catch {}
 }
 
-// Boot hydration — seed the ring from the tail of the durable log so a restart
-// doesn't blank the dashboard. Best-effort: a missing file, a missing logs/
-// dir, or a malformed trailing line (e.g. a half-written append) is fine —
-// skip lines that don't parse, keep the most recent MAX_REQUESTS, newest first.
+// Boot hydration from the tail of the log. Best-effort: a missing file or a
+// half-written trailing line is skipped, newest MAX_REQUESTS kept.
 function hydrateFromDisk() {
   try {
     const text = readFileSync(REQUESTS_LOG, 'utf8');
@@ -54,9 +41,8 @@ maybeRotateLog();
 hydrateFromDisk();
 let _appendsSinceRotateCheck = 0;
 
-// Append one resolved/failed request outcome. Best-effort — a serialise or disk
-// failure must never break request handling, so callers fire-and-forget and the
-// append is .catch-swallowed here.
+// Append one outcome. Best-effort: callers fire-and-forget and failures are
+// swallowed, so a disk error never breaks request handling.
 export function record(entry: any) {
   recentRequests.unshift(entry);
   if (recentRequests.length > MAX_REQUESTS) recentRequests.length = MAX_REQUESTS;

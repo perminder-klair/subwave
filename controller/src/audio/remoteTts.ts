@@ -1,14 +1,8 @@
-// HTTP client for a user-configured remote TTS engine.
-//
-// When settings.tts.remote.url is set, the `remote` engine POSTs to that
-// endpoint's /speak and receives the rendered audio BYTES back in the HTTP
-// response, then writes them to a local file the controller (and Liquidsoap)
-// can read. Unlike the tts-heavy sidecar — which shares the /var/sub-wave
-// volume and returns a path — `remote` carries the audio in the response
-// body, so the endpoint can live on any host reachable over the network
-// (LAN, Tailscale, …) with no shared filesystem. This is the TTS equivalent
-// of the LLM's custom base URL: a first-class, self-hosted HTTP engine
-// without impersonating pocket-tts or chatterbox.
+// HTTP client for a user-configured remote TTS engine (settings.tts.remote.url).
+// Unlike the tts-heavy sidecar, which shares the /var/sub-wave volume and
+// returns a path, `remote` carries the audio BYTES in the response body, so the
+// endpoint can live on any reachable host with no shared filesystem. The
+// controller writes those bytes to a local file for Liquidsoap.
 //
 // Contract:
 //   GET  {url}/health  → 200 JSON { ok: true }
@@ -35,8 +29,8 @@ function getUrl(): string {
   return settings.get().tts?.remote?.url || '';
 }
 
-// One /health probe. true iff the endpoint reports ok. No engine-name check —
-// the remote endpoint is a generic bridge; it decides what it supports.
+// One /health probe: true iff the endpoint reports ok. No engine-name check —
+// the endpoint is a generic bridge and decides what it supports.
 // Network/timeout/parse failures collapse to unavailable.
 async function probeOnce(): Promise<boolean> {
   const url = getUrl();
@@ -51,10 +45,9 @@ async function probeOnce(): Promise<boolean> {
   }
 }
 
-// Cached availability — read synchronously by the dispatcher in tts.ts. The
-// shared probe runs probeOnce() on an interval (and on demand via refresh()),
-// caches the result, and logs only on a change — re-reading the URL so the
-// "no URL configured" variant stays intact.
+// Cached availability, read synchronously by the dispatcher. The shared probe
+// runs probeOnce() on an interval (and on demand via refresh()) and logs only on
+// a change.
 const probe = cachedHealthProbe<boolean>({
   probe: probeOnce,
   intervalMs: PROBE_INTERVAL_MS,
@@ -69,18 +62,15 @@ const probe = cachedHealthProbe<boolean>({
   },
 });
 
-// Start the periodic /health probe loop (idempotent). Called from server.ts
-// AFTER settings.load(): the remote URL lives in settings (not env), so unlike
-// the tts-heavy probe this can't self-start at import time — it would only ever
-// see the empty default and leave the engine unavailable for the first tick.
-// The interval is unref'd so it doesn't keep the event loop alive on its own.
+// Start the periodic /health probe loop (idempotent). Must be called AFTER
+// settings.load(): the remote URL lives in settings, not env, so starting at
+// import time would only ever see the empty default. The interval is unref'd.
 export function start(): void {
   probe.start();
 }
 
-// Force an immediate probe — called when the URL changes via the admin UI so
-// availability (and the UI badge) reflects the new endpoint without waiting for
-// the next 30s tick.
+// Force an immediate probe, so a URL change in the admin UI reflects without
+// waiting for the next 30s tick.
 export async function refresh(): Promise<void> {
   await probe.refresh();
 }

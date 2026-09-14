@@ -1,11 +1,7 @@
 // Standalone sound-map projection pass (see music/map-projection.ts).
-//
 // Run:  docker exec sub-wave-controller npx tsx src/music/project-map.ts
-//
-// Spawned as a child by the live controller (map-projection.ts startProjection)
-// because UMAP's KNN-graph build is minutes of synchronous CPU — running it
-// in-process would freeze every listener poll. Opens its own DB connection,
-// exactly like the tagger/analyzer children.
+// Spawned as a child by the controller because UMAP's KNN-graph build is minutes
+// of synchronous CPU. Opens its own DB connection, like the tagger's children.
 
 import * as db from './library-db.js';
 import { resolveEmbeddingDim } from './embeddings.js';

@@ -1,10 +1,8 @@
-// Compose drift detection + on-demand re-materialisation. Only `init` ever
-// writes the compose files, and nothing rewrites them afterwards — `self-update`
-// swaps just the binary, `update`/`start` read what's on disk — so an install
-// scaffolded before the analyzer service existed keeps a compose file without it
-// forever (#1043). Detection feeds warnings in `update`/`doctor`; rewriting
-// happens only on explicit `subwave sync`, with backups. The live .env is never
-// touched (secrets live there).
+// Compose drift detection + on-demand re-materialisation. Only `init` writes the
+// compose files and nothing rewrites them afterwards, so an install can keep a
+// compose file missing a later service forever (#1043). Detection feeds warnings
+// in `update`/`doctor`; rewriting happens only on explicit `subwave sync`, with
+// backups. The live .env is never touched (secrets live there).
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -56,9 +54,8 @@ export function expectedFiles(mode: InstallMode): ExpectedFile[] {
   ];
 }
 
-// preferredEnv is authoritative; failing that, the on-disk docker-compose.yml
-// gives it away, since only the bundled-proxy variant carries a `caddy:`
-// service. A wrong guess is recoverable — sync backs up whatever it rewrites.
+// preferredEnv is authoritative; failing that, only the bundled-proxy variant
+// carries a `caddy:` service. A wrong guess is recoverable: sync backs up first.
 export function resolveInstallMode(home: string): InstallMode | null {
   if (isCloneMode(home)) return null;
   const pref = loadConfig().preferredEnv;
@@ -83,8 +80,7 @@ export function hasDrift(entries: DriftEntry[]): boolean {
   return entries.some((e) => e.status !== 'fresh');
 }
 
-// Backs up every file it overwrites except .env.example, which is a pure
-// template with no operator data in it.
+// Backs up every file it overwrites except .env.example, a pure template.
 export function syncFiles(home: string, mode: InstallMode): SyncEntry[] {
   const stamp = backupStamp();
   const out: SyncEntry[] = [];

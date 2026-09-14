@@ -28,6 +28,7 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   maxTrackSeconds: number | null;
+  minTrackLengthSeconds: number | null;
   // Stamped by the submission workflow. Absent on hand-added or pre-provenance
   // entries, so consumers must degrade gracefully.
   submittedBy?: string; // GitHub login of the contributor who submitted it

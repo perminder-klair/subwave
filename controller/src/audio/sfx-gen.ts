@@ -1,7 +1,6 @@
-// ElevenLabs text-to-sound-effects client. The AI SDK exposes only a speech
-// primitive, not a sound-effects one, so this calls the REST endpoint
-// directly. It sits alongside the cloud TTS engine (llm/speech.js) and reuses
-// its ElevenLabs key — backs the sound-effects library (broadcast/sfx.js).
+// ElevenLabs text-to-sound-effects client, backing broadcast/sfx.js. The AI SDK
+// exposes no sound-effects primitive, so this calls the REST endpoint directly
+// with the same key as cloud TTS.
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -9,8 +8,7 @@ import { elevenLabsKey, isConfigured } from './elevenlabs.js';
 
 const ENDPOINT = 'https://api.elevenlabs.io/v1/sound-generation';
 
-// Re-exported for back-compat with call sites that reach isConfigured through
-// this module; the resolver itself lives in audio/elevenlabs.ts now.
+// Re-exported for call sites that reach isConfigured through this module.
 export { isConfigured };
 
 // Generate a sound effect from a text prompt and write it to outPath (mp3).

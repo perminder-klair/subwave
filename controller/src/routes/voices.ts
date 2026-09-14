@@ -1,10 +1,6 @@
-// Admin-gated voice-clone library management — the reference WAVs Chatterbox
-// and PocketTTS clone from (a persona's `tts.voice` is one of these filenames).
-//
-// Mirrors routes/sfx.ts's import flow, minus the generate half: there is no
-// prompt-to-voice generator, only operator-supplied recordings. Dropping files
-// into state/voices/ on the host still works and is still listed here — this
-// just removes the need to.
+// Admin-gated voice-clone library — the reference WAVs Chatterbox and PocketTTS
+// clone from (a persona's `tts.voice` is one of these filenames). Files dropped
+// into state/voices/ by hand are still listed.
 import express from 'express';
 import * as voices from '../audio/voice-library.js';
 import { config } from '../config.js';
@@ -17,9 +13,7 @@ import { audioContentType, hasFfmpeg } from '../audio/audio-import.js';
 
 export const router = express.Router();
 
-// `dir` rides along so the UI can name the host folder in its hint, and
-// `ffmpeg` so it can warn up-front that only .wav will be accepted (a bare-host
-// dev box rather than any Docker image).
+// `ffmpeg: false` (bare-host dev box) means only .wav will be accepted.
 router.get('/voices', requireAdmin, async (req, res) => {
   try {
     res.json({
@@ -34,11 +28,9 @@ router.get('/voices', requireAdmin, async (req, res) => {
   }
 });
 
-// Import an operator-supplied clip (multipart `file`, `name`). Transcoded to
-// the canonical mono 24 kHz WAV. Every rejection is a 400 with the module's
-// message — they're all operator-fixable (bad type, duplicate name, no ffmpeg).
-// validateBody AFTER audioUpload — multer parses the multipart body, the
-// middleware replaces req.body only, req.file rides through untouched.
+// Transcoded to the canonical mono 24 kHz WAV; every rejection is an
+// operator-fixable 400. validateBody must run AFTER audioUpload — multer parses
+// the multipart body and the middleware replaces req.body only.
 router.post('/voices/upload', requireAdmin, audioUpload('file'), validateBody(voiceImportSchema), async (req, res) => {
   const file = req.file;
   const { name } = req.body as { name: string };
@@ -55,9 +47,8 @@ router.post('/voices/upload', requireAdmin, audioUpload('file'), validateBody(vo
   }
 });
 
-// No in-use guard by design: a persona pointing at a deleted file keeps the
-// value visible with a `missing` hint, and the workers fall back to their
-// built-in voice with a logged reason.
+// No in-use guard by design: a persona pointing at a deleted file shows a
+// `missing` hint and the workers fall back to their built-in voice.
 router.delete('/voices/:file', requireAdmin, async (req, res) => {
   try {
     res.json(await voices.removeVoice(req.params.file));
@@ -66,10 +57,8 @@ router.delete('/voices/:file', requireAdmin, async (req, res) => {
   }
 });
 
-// Audition the stored clip — hear what was uploaded without a TTS round-trip.
-// `:file` is resolved through the library's scan (never interpolated into a
-// path), so anything not currently listed is a 404 rather than a filesystem
-// read.
+// `:file` is resolved through the library's scan, never interpolated into a
+// path, so anything unlisted 404s rather than reaching the filesystem.
 router.get('/voices/:file/audio', requireAdmin, async (req, res) => {
   try {
     const entry = await voices.resolve(req.params.file);

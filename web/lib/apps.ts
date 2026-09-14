@@ -1,8 +1,6 @@
-// Community apps directory: anything third-party that talks to a station (a
-// player, a bot, a TUI, an MCP server). Nothing to install — a browse-and-link
-// directory like /stations. Entries come from the community catalog.json, an
-// ISR-revalidated fetch (see communityCatalog.ts) that degrades to an empty
-// list when unreachable.
+// Community apps directory: third-party things that talk to a station. Entries
+// come from the community catalog.json, an ISR-revalidated fetch
+// (communityCatalog.ts) that degrades to an empty list when unreachable.
 import { fetchCommunityCatalog } from './communityCatalog';
 
 /** Mirrors APP_TYPES in the community repo's build-catalog.mjs. `integration`
@@ -31,13 +29,10 @@ export const APP_TYPE_LABELS: Record<AppType, string> = {
   integration: 'Integration',
 };
 
-// Icons and screenshots are submitter-hosted, so the host is a trust boundary.
-// The community repo's catalog builder rejects off-list hosts, but catalog.json
-// is a LIVE remote fetch — we can't assume the response came from that builder.
-// next/image is the real enforcement (it refuses any host outside
-// images.remotePatterns and throws at render); re-checking here means an
-// off-list URL costs one image, not the whole page. Keep in lockstep with
-// web/next.config.js and the community repo.
+// Images are submitter-hosted and catalog.json is a live remote fetch, so the
+// host is a trust boundary. next/image is the real enforcement (it throws at
+// render); re-checking here costs one image instead of the page. Keep in
+// lockstep with web/next.config.js and the community repo.
 const IMAGE_HOSTS = ['raw.githubusercontent.com', 'user-images.githubusercontent.com', 'github.com'];
 
 export interface CommunityApp {
@@ -93,9 +88,8 @@ function safeLink(v: unknown): string | undefined {
   }
 }
 
-// name, url and a known type are the floor; anything else returns null and that
-// one entry is skipped, so a single malformed submission can't empty the
-// directory. Bad image URLs drop the field and keep the app.
+// name, url and a known type are the floor; anything else returns null and only
+// that entry is skipped. Bad image URLs drop the field and keep the app.
 function parseApp(data: Record<string, unknown>): CommunityApp | null {
   const name = String(data.name ?? '').trim();
   const url = safeLink(data.url);
@@ -132,24 +126,22 @@ export async function getAllApps(): Promise<CommunityApp[]> {
     .filter((a): a is CommunityApp => a !== null)
     .sort((a, b) => {
       if (a.featured !== b.featured) return a.featured ? -1 : 1;
-      // Newest first; ISO yyyy-mm-dd compares lexicographically, and an entry
-      // without a date sorts after every dated one.
+      // Newest first; ISO yyyy-mm-dd compares lexicographically, undated last.
       const byDate = (b.submitted ?? '').localeCompare(a.submitted ?? '');
       if (byDate !== 0) return byDate;
       return a.name.localeCompare(b.name);
     });
 }
 
-/** Takes an already-loaded list: /apps streams the directory into several
- *  Suspense boundaries, so re-entering getAllApps() here would mean a second
- *  catalog fetch per render (same reason as stationStats). */
+/** Takes an already-loaded list: /apps streams into several Suspense
+ *  boundaries, so calling getAllApps() here would refetch the catalog. */
 export function appStats(all: CommunityApp[]): { count: number; types: number } {
   return { count: all.length, types: new Set(all.map((a) => a.type)).size };
 }
 
-/** The types actually present, in APP_TYPES order. The filter chips render from
- *  this rather than the full vocabulary, so selecting one can never produce an
- *  empty grid — which is what lets the filter stay CSS-only. */
+/** The types actually present, in APP_TYPES order. The chips render from this,
+ *  not the full vocabulary, so a selection can never produce an empty grid —
+ *  which is what lets the filter stay CSS-only. */
 export function presentTypes(all: CommunityApp[]): AppType[] {
   const seen = new Set(all.map((a) => a.type));
   return APP_TYPES.filter((t) => seen.has(t));

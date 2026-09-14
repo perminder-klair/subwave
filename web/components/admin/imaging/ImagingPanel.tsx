@@ -63,16 +63,15 @@ export default function ImagingPanel() {
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   const [busy, setBusy] = useState(false);
 
-  // Active tab lives in the URL (?tab=…), shared by the in-page SectionTabs and the
-  // sidebar submenu, so switching tabs while already on the page works.
+  // Active tab lives in the URL (?tab=…), shared by SectionTabs and the sidebar.
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
   const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'jingles';
 
-  // jingleRatio null = not yet hydrated from /settings; polling never re-hydrates it,
-  // so operator edits to the ratio input survive the 3s refresh.
+  // jingleRatio null = not yet hydrated from /settings; the 3s poll never
+  // re-hydrates it, so operator edits survive.
   const [jingleRatio, setJingleRatio] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
@@ -135,11 +134,9 @@ export default function ImagingPanel() {
     } finally { setBusy(false); }
   };
 
-  // The create/import modals each own a react-hook-form instance validated
-  // against the matching schema in schemas.generated.ts (#1337's imaging
-  // schemas); these submitters do the actual round trip and hand back
-  // ImagingSubmitResult so the modal that owns the form can route a
-  // server-side refusal onto the right input via applyServerFieldErrors.
+  // Each create/import modal owns a react-hook-form instance validated against
+  // schemas.generated.ts (#1337). These submitters do the round trip and return
+  // ImagingSubmitResult so the modal can route a refusal onto the right input.
   const createJingle = async (values: { text: string }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
@@ -171,11 +168,10 @@ export default function ImagingPanel() {
     finally { setBusy(false); }
   };
 
-  // adminFetch leaves Content-Type unset so the browser sets the multipart boundary.
-  // One request per file, not one batch: a 40-file import would otherwise sit in
-  // server memory at once and one bad file would sink the rest. `label` applies only
-  // to a single-file import (jingleImportSchema — already trimmed/capped by the
-  // time it gets here). An abort counts the interrupted file as skipped, not failed.
+  // adminFetch leaves Content-Type unset so the browser sets the multipart
+  // boundary. One request per file, not one batch, so a bad file can't sink the
+  // rest. `label` applies only to a single-file import. An abort counts the
+  // interrupted file as skipped, not failed.
   const uploadJingle = async (
     files: File[],
     label: string | undefined,
@@ -251,8 +247,8 @@ export default function ImagingPanel() {
     finally { setBusy(false); }
   };
 
-  // Upload a ready-made effect — no ElevenLabs key required (unlike createSfx).
-  // `values` is imagingImportSchema's output — already trimmed/capped.
+  // Upload a ready-made effect; no ElevenLabs key required (unlike createSfx).
+  // `values` is imagingImportSchema's output, already trimmed/capped.
   const uploadSfx = async (file: File, values: { name: string; description: string }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
@@ -271,7 +267,7 @@ export default function ImagingPanel() {
     } finally { setBusy(false); }
   };
 
-  // Generate a bed via the ElevenLabs Music API — needs a key (unlike uploadBed).
+  // Generate a bed via the ElevenLabs Music API; needs a key (unlike uploadBed).
   const createBed = async (values: {
     name: string; description: string; prompt: string; durationSec?: number;
   }): Promise<ImagingSubmitResult> => {

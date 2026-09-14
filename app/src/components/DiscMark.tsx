@@ -1,7 +1,5 @@
-// The SUB/WAVE disc-mark motif — a vinyl record drawn as 20 radial spokes with
-// an accent label, ringed in ink. Spins (6s linear) while the station is on air,
-// matching the web mock's DiscMark. Used in onboarding/stations branding and the
-// top bar. Pure react-native-svg so it themes with the active palette.
+// The SUB/WAVE disc-mark: a vinyl record of 20 radial spokes with an accent
+// label, spinning on a 6s linear loop while the station is on air.
 
 import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';

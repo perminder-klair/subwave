@@ -213,7 +213,7 @@ export default function LibraryTaggingModal(p: Props) {
               <Pass on={effSteps.analyze} onClick={() => toggleStep('analyze')} disabled={analyzeLocked}
                 name="Analyze acoustics" tag="slow"
                 hint={analyzeLocked
-                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
+                  ? 'No analysis engine running — start the analyzer sidecar (docker compose up -d analyzer), point ANALYZE_URL at one, or configure ANALYZE_PYTHON for an in-process backend.'
                   : p.soundsLikeActive
                     ? 'Tempo, key & intro, plus sounds-like fingerprints. The slow step; vocal separation is split out below.'
                     : 'Tempo, key & intro for every track — the slow step. Sounds-like fingerprints are off; enable them on the library page to include them.'} />
@@ -289,7 +289,7 @@ export default function LibraryTaggingModal(p: Props) {
               )}
               <Pass on={!!passes.reAnalyze} onClick={() => togglePass('reAnalyze')} disabled={p.analysisOff} name="Re-analyse acoustics" tag="slow"
                 hint={p.analysisOff
-                  ? 'No analysis engine running — start the analyzer or tts-heavy sidecar (or a local librosa venv).'
+                  ? 'No analysis engine running — start the analyzer sidecar (docker compose up -d analyzer), point ANALYZE_URL at one, or configure ANALYZE_PYTHON for an in-process backend.'
                   : p.soundsLikeActive
                     ? "Redo bpm/key + sounds-like for tracks you've already analysed. Drops their acoustic data and rebuilds it."
                     : "Redo bpm/key for tracks you've already analysed. Drops their acoustic data and rebuilds it. Sounds-like is off."} />

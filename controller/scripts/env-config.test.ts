@@ -1,13 +1,6 @@
-// Pins for the typed env readers (src/util/env.ts).
-//
-// The behaviour that matters is the FALLBACK: config.ts used to read every
-// numeric var through parseInt, which yields NaN for anything non-numeric and
-// then lets the NaN travel (an uncapped headline fetch, a random listen port,
-// `atempo=NaN` reaching ffmpeg). These readers turn that into a warning plus the
-// documented default. They must never throw — a station that refuses to boot
-// over one malformed convenience var is worse than one that boots on defaults.
-//
-// Run: `npm test -- env-config`.
+// The typed env readers (src/util/env.ts). What matters is the FALLBACK: a
+// malformed var warns and yields the documented default rather than letting a
+// NaN travel, and these readers must never throw.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -38,7 +31,7 @@ test('an absent var is the default, silently', () => {
   assert.equal(envIssues().length, before, 'not setting a var is not a mistake');
 });
 
-test('an EMPTY var means absent, not empty — `ANALYZE_URL=` is ordinary', () => {
+test('an EMPTY var means absent, not empty — `ANALYZE_PYTHON=` is ordinary', () => {
   const before = envIssues().length;
   assert.equal(envUrl(withEnv(''), ''), '');
   assert.equal(envInt(withEnv('   '), 10), 10);
@@ -100,10 +93,12 @@ test('config.ts builds on real defaults with a hostile environment', async () =>
   process.env.PORT = 'eight thousand';
   process.env.PIPER_SPEED = 'fast';
   process.env.NAVIDROME_URL = 'navidrome:4533';
+  process.env.ANALYZE_CONCURRENCY = 'many';
   const { config } = await import('../src/config.js');
   assert.equal(config.news.maxItems, 10);
   assert.equal(config.server.port, 7701);
   assert.equal(config.piper.speed, 1);
   assert.equal(config.navidrome.url, 'http://navidrome:4533');
+  assert.equal(config.analyzer.concurrency, 1);
   assert.ok(Number.isFinite(config.tts.cloudSpeed), 'no NaN reaches the TTS layer');
 });

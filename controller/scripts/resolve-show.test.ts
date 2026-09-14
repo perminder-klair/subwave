@@ -82,6 +82,68 @@ await test('carries the strict music filters', () => {
   assert.equal((show as any).vocals, 'instrumental');
 });
 
+await test('a live Default programming takeover suppresses the weekly show without mutating the grid', () => {
+  const before = structuredClone(schedule);
+  const overridden = {
+    ...settings,
+    scheduleOverride: {
+      showId: null,
+      startedAt: at.getTime() - 60_000,
+      expiresAt: at.getTime() + 60_000,
+    },
+  };
+  assert.equal(resolveActiveShow(at, overridden as any), null);
+  assert.deepEqual(schedule, before);
+});
+
+await test('the weekly show resumes before and after a Default programming takeover', () => {
+  const overridden = {
+    ...settings,
+    scheduleOverride: {
+      showId: null,
+      startedAt: at.getTime() + 10 * 60_000,
+      expiresAt: at.getTime() + 20 * 60_000,
+    },
+  };
+  assert.equal(resolveActiveShow(at, overridden as any)?.id, 's1');
+  assert.equal(resolveActiveShow(new Date(at.getTime() + 30 * 60_000), overridden as any)?.id, 's1');
+});
+
+await test('a malformed takeover target voids the takeover rather than reading as Default programming', () => {
+  // The drift the shared predicates exist to close: `showId === null` would
+  // read this as a show pin, `typeof showId === 'string'` as an explicit
+  // Default programming takeover. Neither is right — a target naming nothing
+  // real has always just let the weekly grid resume, and the resolver and
+  // getScheduleOverride must agree about that.
+  for (const bad of [undefined, '', 42]) {
+    const overridden = {
+      ...settings,
+      scheduleOverride: {
+        showId: bad,
+        startedAt: at.getTime() - 60_000,
+        expiresAt: at.getTime() + 60_000,
+      },
+    };
+    assert.equal(resolveActiveShow(at, overridden as any)?.id, 's1', String(bad));
+  }
+});
+
+await test('a live named-show takeover retains its existing precedence', () => {
+  const alternate = {
+    id: 's2', name: 'Dawn Patrol', topic: 'early sounds', personaId: 'p1',
+  };
+  const overridden = {
+    ...settings,
+    shows: [...settings.shows, alternate],
+    scheduleOverride: {
+      showId: 's2',
+      startedAt: at.getTime() - 60_000,
+      expiresAt: at.getTime() + 60_000,
+    },
+  };
+  assert.equal(resolveActiveShow(at, overridden as any)?.id, 's2');
+});
+
 await test('returns null on an unscheduled slot', () => {
   const off = new Date(Date.UTC(2026, 0, 3, 18, 0, 0)); // Sat 18:00 — empty cell
   assert.equal(resolveActiveShow(off, settings as any), null);

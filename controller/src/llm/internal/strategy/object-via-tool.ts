@@ -10,6 +10,36 @@ import { generateText, tool, isStepCount } from 'ai';
 import { usageOf, perfOf, warningsOf } from '../core/pure.js';
 import { reasoningFor, forcedToolChoice } from '../provider/capabilities.js';
 
+// The TRANSPORT rule for this path, stated in the system channel because that
+// is where the model weighs it. It lives HERE, not in any caller's prompt, for
+// the reason every other cross-cutting decision in this codebase lives in one
+// module: the caller cannot know which branch djObject will take
+// (needsToolCallObject resolves that per LEG, at call time), so a caller that
+// writes its own output-channel instruction is guessing — and half the time it
+// guesses against the transport actually chosen.
+//
+// Issue #1536 is that failure with a measurement attached: the tagger's prompt
+// said "Return ONLY a JSON object" while this path sent toolChoice:'required',
+// and gemma-4-12b on llama.cpp spent its whole generation budget arguing with
+// itself over which of the two to obey ("Wait! I just noticed... 'Return ONLY'.
+// ... Tool calls are often used for *actions*. I'll go with direct output.")
+// before being cancelled. The `emit` tool's DESCRIPTION already said calling it
+// is how you answer; a tool description does not carry the weight a system
+// instruction does against a system instruction pulling the other way.
+//
+// Kept to one line, no double quotes: it is prepended to every forced-object
+// call on every leg, including the picker's terminal collapse.
+export const EMIT_ANSWER_INSTRUCTION =
+  'Answer by calling the `emit` tool exactly once with the complete result — the tool call IS your answer. Do not write the result as text, JSON or a code block in your reply.';
+
+// The caller's system prompt with the transport rule appended, or the rule
+// alone when the caller has no system prompt. Last, so it is the nearest thing
+// to the model's turn.
+export function emitInstructions(system?: string): string {
+  const base = typeof system === 'string' ? system.trim() : '';
+  return base ? `${base}\n\n${EMIT_ANSWER_INSTRUCTION}` : EMIT_ANSWER_INSTRUCTION;
+}
+
 export async function objectViaToolCall(
   leg: any,
   { system, prompt, messages, schema, temperature, maxOutputTokens, signal }: any,
@@ -24,7 +54,7 @@ export async function objectViaToolCall(
     // Forced single-tool call — always no-think (the no-think model is identical
     // to leg.model except for OpenRouter, where reasoning is fixed at build time).
     model: leg.noThinkModel ?? leg.model,
-    instructions: system,
+    instructions: emitInstructions(system),
     ...(messages ? { messages } : { prompt }),
     temperature,
     maxOutputTokens,

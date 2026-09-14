@@ -16,7 +16,7 @@ tabs:
   that change the live broadcast are flagged `on-air` and ask for confirmation
   before sending.
 - **MCP** — connect an agent (Claude Code, Claude Desktop, any MCP client) to
-  the station's [17 MCP tools](./mcp-server.md). The controller serves MCP over
+  the station's [20 MCP tools](./mcp-server.md). The controller serves MCP over
   HTTP at `/api/mcp`, so the tab gives a copy-ready `claude mcp add --transport
   http …` command with this station's URL — no clone, no local process. A stdio
   setup is offered as the local-only alternative.
@@ -52,6 +52,42 @@ and `/personas` report which mode you're in via `soulsPublished`, so a client
 can hide the bio column instead of rendering blank cards. `tagline` is the field intended for
 public display and is always present. `GET /dj` publishes the on-air persona's
 soul regardless, as it always has.
+
+## Three auth classes
+
+Every documented endpoint falls into one of three, and the Connect page badges
+each one:
+
+- **public** — no credential. `/health`, `/now-playing`, `/state`, `/schedule`,
+  `/personas`, `/dj`, `/request`.
+- **station** — the station's *listener* password (**Settings → Privacy**), a
+  different secret from the admin one and a different gate: **open on a public
+  station, closed on a private one**. `GET /similar-tracks` is the first of
+  these. It is what lets an operator point a call-in agent at their library
+  without handing it the admin console.
+- **admin** — HTTP Basic with `ADMIN_USER` / `ADMIN_PASS`. `/dj/*`, `/library/*`,
+  `/settings`, `/sfx`, `/jingles`, and everything else operational.
+
+A station-gated read takes the password in any of three carriers, tried in that
+order:
+
+```bash
+curl -H "x-station-auth: $STATION_PASSWORD" '…/api/similar-tracks?id=a1b2c3'
+curl -H "Authorization: Bearer $STATION_PASSWORD" '…/api/similar-tracks?id=a1b2c3'
+curl '…/api/similar-tracks?id=a1b2c3&auth=<password>'
+```
+
+**Prefer the header.** `?auth=` exists because it is the same token the Icecast
+stream mount already takes (`web/lib/stationAuth.ts`), so a client that has
+already built a stream URL needs nothing new — but a query string lands in
+reverse-proxy access logs, browser history and `Referer`. Use it only where a
+header is genuinely not available. An `Authorization: Basic` header is never
+read as a station token: admin credentials are a separate secret and accepting
+them here would quietly widen the gate.
+
+Failed attempts on a station-gated read are rate-limited per IP (20 per 15
+minutes) in their **own** counter — spending them cannot lock a listener out of
+the player's password box, which has a separate one.
 
 ## OpenAPI
 

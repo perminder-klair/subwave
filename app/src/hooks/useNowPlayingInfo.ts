@@ -1,15 +1,9 @@
-// Native port of web/web/hooks/useMediaSession.ts (the metadata half).
+// Pushes track metadata to the OS lock screen / CarPlay via
+// TrackPlayer.updateNowPlayingMetadata; while the DJ is talking the persona
+// avatar and name are swapped in. Remote-control handlers live in service.ts.
 //
-// Pushes current-track metadata to the OS lock screen / CarPlay / Android Auto
-// via TrackPlayer.updateNowPlayingMetadata. While the DJ is talking (a voice
-// turn landed in the last 15s) we swap in the persona avatar + name, exactly
-// like the web. Remote control HANDLERS live in service.ts (headless); this
-// hook only owns the displayed metadata.
-//
-// The two rules it used to own inline — what counts as "talking", and which
-// strings/artwork the strip shows — now live in lib/voice-turn.ts and
-// lib/air-card.ts, because the Live Activity (useLiveActivity) has to reach the
-// same answer on the Lock Screen and the watch, and a second copy would drift.
+// What counts as "talking" and what the strip shows live in lib/voice-turn.ts
+// and lib/air-card.ts, shared with the Live Activity so the two can't drift.
 
 import { useEffect } from 'react';
 import TrackPlayer from 'react-native-track-player';
@@ -36,10 +30,8 @@ export function useNowPlayingInfo({
   const talking = useTalking(boothFeed);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  // Keyed on the RESOLVED strings, not on the feed objects behind them:
-  // useStationFeed hands back a new activeShow object on some polls even when
-  // nothing in it changed, and re-pushing metadata on every poll makes the
-  // lock-screen artwork flicker.
+  // Keyed on the resolved strings, not the feed objects: a new activeShow
+  // object on an unchanged poll would re-push and flicker the artwork.
   const title = card?.title;
   const artist = card?.artist;
   const album = card?.album;
@@ -48,7 +40,7 @@ export function useNowPlayingInfo({
   useEffect(() => {
     if (!api || !tunedIn || !title) return;
     TrackPlayer.updateNowPlayingMetadata({ title, artist, album, artwork }).catch(() => {
-      /* no active track yet — ignored */
+      /* no active track yet */
     });
   }, [api, tunedIn, title, artist, album, artwork]);
 }

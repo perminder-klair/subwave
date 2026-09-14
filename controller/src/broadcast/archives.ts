@@ -1,13 +1,6 @@
-// Hourly archive index.
-//
-// Liquidsoap writes one MP3 per hour to `${STATE_DIR}/archive/%Y-%m-%d/%H-00.mp3`
-// (see liquidsoap/radio.liq's output.file block). This module exposes that
-// tree to the admin UI as a listable + downloadable index — purely read-only
-// over the existing on-disk layout.
-//
-// The pathing scheme is fixed and the operator never edits inside the
-// archive directory by hand, so we don't watch for changes; each /archives
-// GET re-scans. Two-level directory walk is cheap (one entry per hour).
+// Hourly archive index over the MP3s radio.liq writes to
+// `${STATE_DIR}/archive/%Y-%m-%d/%H-00.mp3`. Read-only; each GET re-scans (a
+// two-level walk, one entry per hour).
 
 import { readdir, stat, rm } from 'node:fs/promises';
 import { createReadStream, existsSync } from 'node:fs';
@@ -29,8 +22,7 @@ export interface ArchiveEntry {
   mtime: string;  // ISO
 }
 
-// Scan the archive tree. Newest first. Bounded by `limit` to keep the response
-// small for accounts with months of archives — the UI paginates client-side.
+// Scan the archive tree, newest first. `limit` bounds the response size.
 export async function list({ limit = 500 }: { limit?: number } = {}): Promise<ArchiveEntry[]> {
   if (!existsSync(ARCHIVE_ROOT)) return [];
   let dayDirs: string[] = [];
@@ -88,13 +80,10 @@ export function openStream(abs: string) {
   return createReadStream(abs);
 }
 
-// Retention sweep — delete whole day directories older than `days`. 0 means
-// keep forever (the pre-30-day-default legacy value, preserved on upgrade by
-// normalizeArchiveRetentionDays), and callers gate on that before calling.
-// Day-granular on purpose: comparing the YYYY-MM-DD directory name against a
-// cutoff date can never touch the file Liquidsoap currently holds open (today's
-// dir is always inside any positive retention window). `.ndignore` and anything
-// else at the root is untouched, same as clearAll below.
+// Retention sweep: delete whole day directories older than `days`. 0 means keep
+// forever and callers gate on that before calling. Day-granular on purpose —
+// a YYYY-MM-DD cutoff can never touch the file Liquidsoap holds open, since
+// today's dir is inside any positive window. `.ndignore` is untouched.
 export async function pruneOlderThan(days: number): Promise<{ removed: number; bytes: number }> {
   if (!Number.isFinite(days) || days <= 0) return { removed: 0, bytes: 0 };
   if (!existsSync(ARCHIVE_ROOT)) return { removed: 0, bytes: 0 };
@@ -126,15 +115,9 @@ export async function pruneOlderThan(days: number): Promise<{ removed: number; b
   return { removed, bytes };
 }
 
-// Delete every hourly recording under the archive root. Only YYYY-MM-DD day
-// directories are removed — anything else in the tree (notably the `.ndignore`
-// the broadcast entrypoint drops here to keep these mixdowns out of a
-// co-located Navidrome scan) is left untouched. Returns how many hour files
-// were removed and the bytes freed, for the operator's confirmation toast.
-//
-// Safe to run while on air: if Liquidsoap currently holds this hour's file
-// open, the unlink just detaches the name — it keeps writing to the now-orphan
-// inode and reopens a fresh file at the next HH:00 (output.file reopen_when).
+// Delete every hourly recording. Only YYYY-MM-DD day directories are removed —
+// the `.ndignore` the entrypoint drops here is left alone. Safe on air: an
+// unlink only detaches the name and output.file reopens at the next HH:00.
 export async function clearAll(): Promise<{ removed: number; bytes: number }> {
   if (!existsSync(ARCHIVE_ROOT)) return { removed: 0, bytes: 0 };
   let dayDirs: string[] = [];
@@ -148,7 +131,6 @@ export async function clearAll(): Promise<{ removed: number; bytes: number }> {
   let bytes = 0;
   for (const date of dayDirs) {
     const dir = join(ARCHIVE_ROOT, date);
-    // Tally the hour files before the directory goes, for the report.
     try {
       for (const f of await readdir(dir)) {
         if (!HOUR_RE.test(f)) continue;

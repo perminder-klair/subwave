@@ -63,7 +63,7 @@ test('every field has a no-constraint default, so a caller states only what it c
   // The locks must default to null/empty rather than undefined: `undefined`
   // reads the same at a call site but means "field absent" to anything that
   // enumerates the scope, which is how a dropped lock hid before.
-  for (const k of ['genreLock', 'eraLock', 'moodLock', 'energyLock', 'vocalLock', 'playlistLock', 'playlistTracks', 'excludedIds', 'audioWaypoint'] as const) {
+  for (const k of ['genreLock', 'eraLock', 'moodLock', 'energyLock', 'vocalLock', 'minTrackSec', 'playlistLock', 'playlistTracks', 'excludedIds', 'audioWaypoint'] as const) {
     assert.equal(s[k], null, `${k} must default to null`);
   }
   assert.equal(s.resolveReferences, false);
@@ -95,6 +95,28 @@ test('energyLock drops other bands', () => {
 
 test('vocalLock drops the other side (instrumental = empty vocalRanges)', () => {
   assert.deepEqual(idsFor({ vocalLock: 'instrumental' as any }), ['b']);
+});
+
+test('minTrackSec drops short candidates, and is NOT gated on filtersStrict', () => {
+  // The minimum-track-length floor (#1573) travels in the scope like the five
+  // locks above, but unlike them it is the twin of the max-track-length cap and
+  // applies whether or not the show opted into strict filters. HARD here
+  // (starve:true), same as every other filter in collect(): the pool picker
+  // never-starves on the same floor and is the dead-air scope behind this one.
+  const LENGTHS = [
+    { id: 'skit', title: 'Skit', artist: 'X', duration: 38 },
+    { id: 'song', title: 'Song', artist: 'Y', durationSec: 300 },
+    { id: 'unwalked', title: 'Unwalked', artist: 'Z' },
+  ];
+  const idsOf = (partial: Partial<PickerScope>) =>
+    buildPickerContext(pickerScope(partial)).collect(LENGTHS, 50).map((s: any) => s.id).sort();
+  assert.deepEqual(idsOf({}), ['skit', 'song', 'unwalked'], 'no floor = today');
+  // An unmeasured track survives: dropping unknowns would make the floor mean
+  // "only play what we happen to have walked".
+  assert.deepEqual(idsOf({ minTrackSec: 60 }), ['song', 'unwalked']);
+  // Both field names, since a Subsonic child and a library row spell it
+  // differently and the tools see both.
+  assert.deepEqual(idsOf({ minTrackSec: 400 }), ['unwalked']);
 });
 
 test('playlistLock hard-intersects — no never-starve to off-playlist', () => {

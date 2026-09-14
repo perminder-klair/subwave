@@ -1,24 +1,11 @@
-// Generates web/lib/schemas.generated.ts from controller/src/schemas/*.ts, so
-// the admin forms validate against the exact schema the controller enforces.
-// The web package can't import controller/src at build time (separate package +
-// build context), hence a checked-in mirror kept honest by CI — the same
-// mechanism as gen-theme-tokens.ts.
-//
-//   cd controller && npm run gen:schemas
-//
-// The lint workflow re-runs this and `git diff --exit-code`s the output, so a
-// schema change without a regenerate fails CI.
-//
-// Only pure schema modules are mirrored. *-server.ts siblings hold the rules
-// that need server state and are deliberately excluded.
-//
-// The output is ONE FLAT FILE, built by the WEB package — so every module's top
-// level ends up in the same scope, and every specifier it references has to
-// resolve over there. That is why buildMirror() enforces three things the source
-// modules get for free: unique top-level names across all modules, exactly one
-// zod import form, and no reference to any module BUT zod. All three fail HERE,
-// at generate time, naming the source file — never downstream as a tsc error
-// inside a generated file nobody is allowed to edit.
+// Generates web/lib/schemas.generated.ts from controller/src/schemas/*.ts, so the
+// admin forms validate against the exact schema the controller enforces. The web
+// package can't import controller/src at build time, hence a checked-in mirror
+// kept honest by CI (`npm run gen:schemas`, diffed by the lint workflow).
+// Only pure schema modules are mirrored; *-server.ts siblings are excluded.
+// The output is ONE FLAT FILE built by the web package, so buildMirror() enforces
+// unique top-level names across modules, exactly one zod import form, and no
+// reference to any module but zod — all at generate time, naming the source file.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -34,41 +21,21 @@ export interface SchemaModule {
   source: string;
 }
 
-// The ONE zod import form a mirrored module may use. Quote style and the
-// trailing semicolon are both optional because eslint's zod-only restriction
-// is not quote- or semicolon-sensitive: a module written `import { z } from
-// "zod"` lints clean, so the strip has to recognise it too or its import
-// survives into the mirror and redeclares `z`.
+// The ONE zod import form a mirrored module may use. Quote style and semicolon are
+// optional, because eslint's zod-only rule is not sensitive to either.
 const CANONICAL_ZOD_IMPORT = /^import\s*\{\s*z\s*\}\s*from\s*["']zod["']\s*;?\s*$/;
 
 /**
- * Every top-level name a module introduces — declarations, imported bindings,
- * and the names it exports.
+ * Every top-level name a module introduces — declarations, imported bindings, and
+ * exported names. Parsed with the TypeScript compiler, not a regex: a MISS is the
+ * dangerous direction, since the collision guard can only throw on names it was
+ * told about. Export names count because the flat mirror shares one export
+ * namespace. Names are de-duplicated per module; an invalid module yields a
+ * partial tree rather than a throw.
  *
- * Parsed with the TypeScript compiler, not matched with a regex. A line-wise
- * regex missed whole declaration forms, and a MISS is the dangerous direction:
- * buildMirror's collision guard can only throw on names it was told about, so
- * an unseen name yielded a mirror containing two identical declarations and no
- * error here at all — precisely the "tsc error inside a generated file nobody
- * may edit" this module exists to prevent. The forms it missed were ordinary:
- * `export default function f()`, the second declarator of `const A = 1, B = 2`,
- * destructured `const { a } = …`, and `export { x as y }`. A parser also gets
- * nesting RIGHT rather than guessing it from leading whitespace — an indented
- * top-level statement really does share the mirror's scope, and a `const` inside
- * a function body really doesn't, neither of which indentation can tell you.
  *
- * Export NAMES count alongside bindings because the flat mirror shares one
- * export namespace too: two modules doing `export { a as shared }` collide on
- * `shared` without either declaring that identifier. `default` counts for the
- * same reason — one file can only carry one default export.
  *
- * Names are de-duplicated per module, so `const foo` followed by
- * `export { foo }` is one name declared once rather than a module colliding
- * with itself.
  *
- * A syntactically invalid module yields a partial tree rather than a throw;
- * that degrades to missing a name, and the source modules are typechecked by
- * the controller's own `tsc --noEmit` regardless.
  */
 export function collectDeclarations(source: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -114,8 +81,6 @@ export function collectDeclarations(source: string): string[] {
       if (statement.name && ts.isIdentifier(statement.name)) names.add(statement.name.text);
     } else if (ts.isImportDeclaration(statement)) {
       // An import binding occupies the flat file's scope like any declaration.
-      // In practice the only import that survives to here is one this generator
-      // has already rejected, but the guard shouldn't depend on that.
       const clause = statement.importClause;
       if (clause?.name) names.add(clause.name.text);
       const bound = clause?.namedBindings;
@@ -139,12 +104,10 @@ export function collectDeclarations(source: string): string[] {
 }
 
 /**
- * The module specifier a statement pulls in, or null if it pulls in nothing.
+ * The module specifier a statement pulls in, or null. Re-exports count:
+ * `export { x } from './y.js'` references another module exactly like an import,
+ * but names no `import` keyword, so a line-wise check never saw it.
  *
- * Re-exports count. `export { x } from './y.js'` and `export * from './y.js'`
- * reference another module exactly like an import does, and land in the mirror
- * exactly as broken — but they do not begin with the word `import`, so a
- * line-wise check never saw them at all.
  */
 function moduleSpecifierOf(statement: ts.Statement): string | null {
   if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) {
@@ -161,29 +124,16 @@ function moduleSpecifierOf(statement: ts.Statement): string | null {
 }
 
 /**
- * Rejects everything a mirrored module may not reference, and returns the one
- * zod import it may — as a node, so the strip below cuts exactly that statement.
+ * Rejects everything a mirrored module may not reference, and returns the one zod
+ * import it may, as a node, so the strip below cuts exactly that statement.
+ * A non-zod import copied into the mirror resolves against the WEB package and
+ * fails at web build time, inside a generated file nobody may edit. eslint states
+ * the same rule as the merge gate; this half fires at generate time.
+ * A namespace/default import or extra named bindings are REJECTED, not rewritten:
+ * rewriting could change what the code means or silently drop a binding.
  *
- * Parsed, not pattern-matched, for the reason collectDeclarations is: a MISS is
- * the dangerous direction. A non-zod import used to sail through untouched and
- * be copied verbatim into web/lib/schemas.generated.ts, where it resolves
- * against the WEB package — so `import { mintId } from '../settings/vocab.js'`
- * produced a mirror that fails at web build time, inside a generated file
- * developers are told never to edit. That is the exact failure this module
- * exists to move upstream, and it was only ever enforced for zod.
  *
- * eslint's no-restricted-imports rule (controller/eslint.config.mjs) states the
- * same rule and is the merge gate. This is the second half of the same guard:
- * it fires for whoever runs `npm run gen:schemas` before they run lint, and it
- * names the mirror as the reason rather than citing a lint rule id.
  *
- * DELIBERATE CHOICE on the zod import itself: `import * as z from 'zod'`, a
- * default import, and extra named bindings (`import { z, ZodType }`) are
- * REJECTED rather than rewritten. A namespace import is not the same binding as
- * a named one, and silently swapping it for the mirror's `import { z } from
- * 'zod'` could change what the code means; extra named bindings would simply
- * vanish and break the mirror at tsc time. One form, enforced loudly, keeps the
- * mirror a verbatim copy.
  */
 function findZodImport(mod: SchemaModule, sourceFile: ts.SourceFile): ts.Statement | null {
   const where = `controller/src/schemas/${mod.file}`;
@@ -229,10 +179,8 @@ function findZodImport(mod: SchemaModule, sourceFile: ts.SourceFile): ts.Stateme
   return zodImport;
 }
 
-// Validates the module's references and drops its own zod import. Cut by NODE
-// POSITION rather than by matching lines: the statement the parse validated is
-// exactly the text removed, so an indented or otherwise unusual-but-canonical
-// import cannot survive the strip and redeclare `z` downstream.
+// Validates the module's references and drops its own zod import. Cut by node
+// position, so an indented but canonical import cannot survive and redeclare `z`.
 function stripZodImport(mod: SchemaModule): string {
   const sourceFile = ts.createSourceFile(
     'schema.ts',
@@ -246,8 +194,7 @@ function stripZodImport(mod: SchemaModule): string {
   if (!zodImport) return mod.source.trim();
 
   const src = mod.source;
-  // Widen the cut to the whole line the import sits on, so removing it leaves
-  // no blank line behind — byte-for-byte what dropping the line used to do.
+  // Widen the cut to the whole line, so removing it leaves no blank line behind.
   let from = zodImport.getStart(sourceFile);
   while (from > 0 && (src[from - 1] === ' ' || src[from - 1] === '\t')) from--;
   let to = zodImport.end;
@@ -259,8 +206,7 @@ function stripZodImport(mod: SchemaModule): string {
 }
 
 export function buildMirror(modules: SchemaModule[]): string {
-  // Seeded with the one name the generated preamble itself declares, so a
-  // module declaring `z` collides here rather than in the browser build.
+  // Seeded with the name the generated preamble declares, so a module declaring `z` collides here.
   const seen = new Map<string, string>([['z', "the mirror's own `import { z } from 'zod'`"]]);
 
   const parts = modules.map((mod) => {

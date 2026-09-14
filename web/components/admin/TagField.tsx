@@ -1,20 +1,12 @@
 'use client';
 
-/* The tag editor, shared by the show and persona editors.
+/* The tag editor, shared by the show and persona editors. The skills modal has
+ * its own copy of this markup, styled with the modal's inline style objects.
  *
- * Skills had this markup first (skills/SkillEditModal.tsx), and it is NOT
- * lifted out of there: that copy is styled with the modal's own inline style
- * objects — `chipStyle`, `inputBase`, `sectionLabel` — which belong to the
- * modal, not to a tag. This one is written against the admin `.tag` classes the
- * rest of the panels use. Two renderings, one behaviour: the add/validate/cap
- * rules live here and the skills modal is free to follow later.
- *
- * The RULES are the caller's, passed in rather than imported, because the three
- * tag vocabularies are three separate schema constants by design — a mirrored
- * schema module may import only zod, so SKILL_TAG_RE, SHOW_TAG_RE and
- * PERSONA_TAG_RE are three declarations of one pattern. Hard-coding one of them
- * here would silently make this component enforce the wrong cap for two of its
- * three callers the first time any of them diverges. */
+ * The rules are PASSED IN, not imported: SKILL_TAG_RE, SHOW_TAG_RE and
+ * PERSONA_TAG_RE are three separate declarations of one pattern (a mirrored
+ * schema module may import only zod), so hard-coding one would enforce the
+ * wrong cap for the other callers the moment they diverge. */
 
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
@@ -35,9 +27,8 @@ export interface TagFieldProps {
   suggestions?: string[];
   /** What a tag is being attached to, for the messages ("show", "DJ"). */
   noun: string;
-  /** A malformed, uncommitted draft must participate in the parent editor's
-   *  save gate; otherwise clicking Save blurs this input, reports the error
-   *  locally, then submits the old tag array and silently loses the draft. */
+  /** A malformed, uncommitted draft must reach the parent editor's save gate,
+   *  or Save submits the old array and drops the draft. */
   onDraftBlockedChange?: (blocked: boolean) => void;
   disabled?: boolean;
   className?: string;
@@ -53,9 +44,7 @@ export function TagField({
   onDraftBlockedChange, disabled, className,
 }: TagFieldProps) {
   const [draft, setDraft] = useState('');
-  // Inline rather than a toast: the input that caused it is on screen, and a
-  // toast for a typo the operator is still mid-correction on reads as an error
-  // about the save.
+  // Inline rather than a toast: the offending input is on screen.
   const [err, setErr] = useState<string | null>(null);
 
   const add = (raw: string) => {
@@ -66,8 +55,7 @@ export function TagField({
       onDraftBlockedChange?.(true);
       return;
     }
-    // Re-typing a tag that is already on is a no-op, not an error: it is what
-    // an operator does when they have lost track of which chips are set.
+    // Re-typing an existing tag is a no-op, not an error.
     if (value.includes(tag)) {
       setDraft(''); setErr(null); onDraftBlockedChange?.(false); return;
     }
@@ -115,8 +103,7 @@ export function TagField({
               add(draft);
             }
           }}
-          // Committing on blur is what makes a typed-but-not-Entered tag
-          // survive the operator clicking straight on Save.
+          // Commit on blur so a typed-but-not-Entered tag survives a Save click.
           onBlur={() => add(draft)}
           placeholder={value.length ? 'add tag…' : 'late-night, weekend…'}
           aria-label={`Add ${noun} tag`}

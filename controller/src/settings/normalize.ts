@@ -15,7 +15,7 @@ import {
   Webhook,
   emptyWeek,
 } from './vocab.js';
-import { DEFAULTS, coerceMaxTrackSeconds } from './defaults.js';
+import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 // The webhook rules themselves, so this lenient path and update()'s strict one
 // cannot restate them differently — see normalizeWebhooks below.
 import { WEBHOOK_ID_RE, webhookSchema, type WebhookParsed } from '../schemas/webhook.js';
@@ -29,6 +29,15 @@ import {
   type ShowSchemaContext,
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
+import {
+  DUCK_DEPTH_BOUNDS,
+  HANDOVER_OFFSET_BOUNDS,
+  HANDOVER_OFFSET_STEP_MINUTES,
+  SETTINGS_BACKUP_CADENCES,
+  clampBackupKeep,
+  type BackupCadence,
+  type ScheduledBackupSettings,
+} from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
 import {
@@ -60,6 +69,61 @@ export function normalizeArchiveRetentionDays(archive: any): number {
   if (Number.isInteger(v) && v >= 0) return v;
   if (archive?.enabled === true) return 0;
   return DEFAULTS.archive.retentionDays;
+}
+
+// The scheduled-backup block, repaired rather than refused — load()'s input is
+// a hand-editable file and a backup restore is the other way in.
+//
+// Both repairs fall the SAME way on purpose: toward the shipped default, which
+// for the cadence is `off`. This is the only scheduled job that deletes
+// operator files, so an unreadable cadence must mean "do nothing" rather than
+// "guess daily" — an upgrade, a typo and a settings.json from a newer version
+// all land on the pre-existing behaviour. `keep` is clamped instead of dropped
+// because a cadence the operator DID set must not be disarmed by a bad
+// retention number sitting next to it — through `clampBackupKeep`, the one
+// copy of that clamp, which the retention sweep reads too so the two cannot
+// disagree about what an unreadable retention means (#1585 review).
+export function normalizeBackups(backups: any): ScheduledBackupSettings {
+  const cadence: BackupCadence = SETTINGS_BACKUP_CADENCES.includes(backups?.cadence)
+    ? backups.cadence
+    : DEFAULTS.backups.cadence;
+  return { cadence, keep: clampBackupKeep(backups?.keep) };
+}
+
+// A stored `smooth_add` duck depth, repaired rather than refused — load()'s
+// input is a file an operator (or a backup from another version) may have
+// hand-edited, and the value leaves the controller as a handoff file the mixer
+// reads once at startup. Out of range in either direction is the expensive
+// direction to pass through: >1 is a music BOOST under the DJ, <0 inverts the
+// bus. Bounds come from the shared schema so the save path and this one cannot
+// drift, which is the same rule stream.maxListeners follows.
+export function normalizeDuckDepth(raw: unknown, fallback: number): number {
+  return typeof raw === 'number'
+    && Number.isFinite(raw)
+    && raw >= DUCK_DEPTH_BOUNDS.min
+    && raw <= DUCK_DEPTH_BOUNDS.max
+    ? raw
+    : fallback;
+}
+
+// A stored show-handover offset, repaired rather than refused — same posture as
+// normalizeDuckDepth, and for the same reason: load()'s input is a file an
+// operator (or a backup from another version) may have hand-edited.
+//
+// The STEP is checked here as well as the range, and that is the half worth
+// stating: an offset the talk table's programme row cannot sample produces no
+// error anywhere, just a show whose sign-off silently stops airing. Falling
+// back to the default is the pre-existing behaviour, which is what an
+// unreadable value should coerce to. Bounds and step come from the shared
+// schema so this path and the save path cannot drift.
+export function normalizeHandoverOffsetMinutes(raw: unknown, fallback: number): number {
+  return typeof raw === 'number'
+    && Number.isInteger(raw)
+    && raw >= HANDOVER_OFFSET_BOUNDS.min
+    && raw <= HANDOVER_OFFSET_BOUNDS.max
+    && raw % HANDOVER_OFFSET_STEP_MINUTES === 0
+    ? raw
+    : fallback;
 }
 
 // Persona skill assignment. `null` (raw not an array) is the "all skills"
@@ -188,13 +252,14 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
     // drift from the schema, and the failure mode of that drift is the parse
     // failing and `continue` silently deleting a working show on the next
     // boot. What stays at this call site is only what the schema module cannot
-    // own: maxTrackSeconds clamps through coerceMaxTrackSeconds, whose bounds
-    // defaults.ts derives from the schema's own ceiling. Clamp rather than
-    // reject: an out-of-range cap from a hand-edited file should bound the
-    // show, not delete it.
+    // own: the two track-length fields clamp through coerceMaxTrackSeconds /
+    // coerceMinTrackLengthSeconds, whose bounds defaults.ts derives from the
+    // schema's own ceilings. Clamp rather than reject: an out-of-range cap or
+    // floor from a hand-edited file should bound the show, not delete it.
     const parsed = schema.safeParse({
       ...repairShowForLoad(migrated, personaIds),
       maxTrackSeconds: coerceMaxTrackSeconds(migrated.maxTrackSeconds, true),
+      minTrackLengthSeconds: coerceMinTrackLengthSeconds(migrated.minTrackLengthSeconds, true),
     });
     // What survives a drop: a nameless show, one whose host no longer exists.
     // Both are shows with no owner or no identity, which is what the

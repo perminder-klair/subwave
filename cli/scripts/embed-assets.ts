@@ -1,9 +1,8 @@
 // Generates cli/src/assets.generated.ts from the repo-root compose files +
 // .env.example — run `npm --prefix cli run embed-assets` after editing those.
-// The embedding exists because a Bun-compiled binary can't read the repo at
-// runtime, and `subwave init` has to materialise these into SUBWAVE_HOME. The
-// output is committed so contributors can run the CLI from source without this
-// step; cli-assets-check.yml catches the resulting staleness risk.
+// A Bun-compiled binary can't read the repo at runtime, so `subwave init`
+// materialises these embedded copies. The output is committed; cli-assets-
+// check.yml catches staleness.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -54,11 +53,8 @@ function main(): void {
     parts.push('');
   }
   // Baked in because reading package.json at runtime doesn't survive
-  // `bun build --compile` — `--version` used to print "unknown". The trailing
-  // `x-release-please-version` marker MUST stay on the version line: it's how
-  // release-please bumps the generated file during the release PR. Without it
-  // the committed copy lags cli/package.json and verify-cli-assets fails on the
-  // next PR.
+  // `bun build --compile`. The trailing `x-release-please-version` marker must
+  // stay on the version line: release-please keys off it to bump this file.
   const pkg = JSON.parse(readFileSync(resolve(REPO_ROOT, 'cli', 'package.json'), 'utf8')) as { version: string };
   parts.push('// cli/package.json#version (embedded so the compiled binary can self-identify');
   parts.push('// — used by `subwave --version`).');

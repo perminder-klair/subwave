@@ -28,23 +28,16 @@ export interface StationFeed {
   state: StationState;
   session: SessionPayload;
   /** Epoch ms when the current track became AUDIBLE to this listener, null
-   *  before the first poll. Consumers derive elapsed/progress locally
-   *  (useElapsed) so the per-second tick doesn't re-render the player tree.
-   *  Listener-time, not broadcast-time: the server stamps startedAt at the live
-   *  edge but Icecast bursts `stream.bufferSeconds` on connect, so this carries
-   *  the offset already added and can briefly sit in the future — useElapsed
-   *  clamps at 0 rather than banking the buffer as elapsed (issue #1114). */
+   *  before the first poll. Listener-time, not live-edge: it carries the
+   *  `stream.bufferSeconds` offset already added and can briefly sit in the
+   *  future, so useElapsed clamps at 0 (issue #1114). */
   trackStartedAt: number | null;
-  /** Whether the station is configured to serve `/stream.opus`, or null before
-   *  the first poll. This is the SETTING, not a live mount probe — it needs a
-   *  mixer restart to take effect, so it can read true while the mount is still
-   *  404ing. The player must not upgrade to the Opus mount on codec support
-   *  alone — Opus is off by default, so the mount 404s and playback sits on
-   *  "acquiring" until the error handler pins MP3 back (issue #1300, bug 5). */
+  /** Whether the station is configured to serve `/stream.opus`, null before the
+   *  first poll. The SETTING, not a live mount probe: it needs a mixer restart,
+   *  so it can read true while the mount still 404s (issue #1300). */
   opusEnabled: boolean | null;
-  /** Station IANA timezone (e.g. "Europe/London"), or null before first poll.
-   *  Render on-air timestamps in this zone so they match what the DJ speaks
-   *  (issue #418). */
+  /** Station IANA timezone, or null before the first poll. Render on-air
+   *  timestamps in this zone so they match what the DJ speaks (issue #418). */
   timezone: string | null;
   locale: StationLocale;
 }
@@ -53,23 +46,18 @@ const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 const OFFLINE_CONFIRM_POLLS = 4;
 
-// Returning `prev` from the updater skips the re-render, so a quiet poll tick
-// costs nothing. Server JSON keeps stable key order, so the stringify compare is
-// reliable (and cheap at a few KB every 5s).
+// Returning `prev` skips the re-render, so a quiet poll tick costs nothing.
+// Server JSON keeps stable key order, so the stringify compare is reliable.
 function setIfChanged<T>(setter: Dispatch<SetStateAction<T>>, next: T): void {
   setter(prev => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
 }
 
 // 5s polling of /now-playing + /state + /session, paused while the tab is
-// hidden (with an immediate refetch on return). Single source of truth for
-// "what's on air right now".
+// hidden (with an immediate refetch on return).
 //
-// The listener offset is the advertised stream.bufferSeconds, full stop. Do not
-// go back to a per-tab `buffered.end − currentTime` measurement: `buffered`
-// reports only the DEMUXED window (Chrome keeps the connect burst in an internal
-// cache it never exposes), so it read 2.25s while the listener was genuinely
-// 22.5s behind, flipping every title ~20s early. The burst is also sized in
-// SECONDS per mount server-side now, so every mount lands on bufferSeconds.
+// The listener offset is the advertised stream.bufferSeconds. Never measure it
+// as `buffered.end − currentTime`: that reports only the demuxed window (2.25s
+// against a true 22.5s offset), which flips every title ~20s early.
 export function useStationFeed(): StationFeed {
   const client = useStationClient();
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
@@ -88,22 +76,21 @@ export function useStationFeed(): StationFeed {
   const lastTrackKeyRef = useRef<string | null>(null);
   const offlinePollsRef = useRef(0);
   // Listener buffer depth in ms. A ref, not state, so the polling effect never
-  // re-subscribes when it arrives. 0 until the first payload lands, degrading to
-  // live-edge behaviour rather than guessing an offset.
+  // re-subscribes when it arrives. 0 until the first payload lands, degrading
+  // to live-edge behaviour rather than guessing an offset.
   const leadMsRef = useRef(0);
-  // Holds a track whose metadata has arrived but whose audio hasn't reached this
-  // listener yet, until it's audible.
+  // Holds a track whose metadata has arrived but whose audio hasn't reached
+  // this listener yet, until it's audible.
   const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Same idea for the DJ's spoken lines (#1382): the feed carries them stamped
-  // with the live-edge air time, so a line is withheld until its audio has
-  // reached THIS listener. Raw payload in a ref, filtered copy in state.
+  // Same for the DJ's spoken lines (#1382), stamped with the live-edge air
+  // time. Raw payload in a ref, filtered copy in state.
   const rawSessionRef = useRef<SessionPayload>(EMPTY_SESSION);
   const voiceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Re-derive the visible feed from the last payload and re-arm for the next
-    // line to become audible. Runs on every poll and on its own timer, so a held
-    // line lands on time rather than on the 5s poll grid.
+    // Re-derive the visible feed and re-arm for the next line to become
+    // audible. Runs on every poll and on its own timer, so a held line lands on
+    // time rather than on the 5s poll grid.
     const applySession = () => {
       const raw = rawSessionRef.current;
       const { visible, nextChangeMs } = splitAudibleTurns(raw.messages, leadMsRef.current, Date.now());
@@ -121,18 +108,17 @@ export function useStationFeed(): StationFeed {
           client.session(),
         ]);
         const np = npRes.nowPlaying;
-        // Clamped: a bad value here would either park the clock in the far
-        // future or wind it back past the track start.
+        // Clamped to 0–60s: a bad value parks the clock in the far future or
+        // winds it back past the track start.
         const bufSec = npRes.stream?.bufferSeconds;
         if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
           leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
         }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
         // Prefer the queue's start time over "first seen by this client": a tab
-        // hidden at the transition (or a poll that flipped through null on a torn
-        // now-playing.json read) would stamp Date.now() mid-track and drag the
-        // clock minutes behind. Guarded to the matching track and to plausible
-        // values — a server clock skewed into the future falls back to first-seen.
+        // hidden at the transition would stamp Date.now() mid-track. Guarded to
+        // the matching track and to plausible values; a server clock skewed into
+        // the future falls back to first-seen.
         const cur = (stRes as StationState & { current?: { title?: string; startedAt?: string } }).current;
         let serverStart = NaN;
         if (np?.title && cur && cur.title === np.title && cur.startedAt) {
@@ -153,28 +139,27 @@ export function useStationFeed(): StationFeed {
           };
           const wait = audibleAt - Date.now();
           // Promote immediately when the audio is already out (wait <= 0), when
-          // the stream drops, or on the first payload — a cold load has no
-          // earlier track to keep showing. The clock stays right there because
-          // trackStartedAt carries the offset and useElapsed clamps at 0.
+          // the stream drops, or on the first payload (a cold load has no
+          // earlier track to keep showing).
           if (wait <= 0 || trackKey == null || lastTrackKeyRef.current == null) {
             if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
             commit();
           } else {
-            // Re-armed on every poll while the switch is pending, so the wait is
-            // recomputed against the freshest server stamp rather than drifting.
+            // Re-armed on every poll while the switch is pending, so the wait
+            // is recomputed against the freshest server stamp.
             if (promoteTimerRef.current) clearTimeout(promoteTimerRef.current);
             promoteTimerRef.current = setTimeout(commit, wait);
           }
         } else {
           if (Number.isFinite(serverStart)) {
-            // Same track, better information — converge on the server stamp (and
-            // repair any mid-track reset) without re-render noise inside ±2.5s.
+            // Same track: converge on the server stamp without re-render noise
+            // inside ±2.5s.
             setTrackStartedAt(prev =>
               prev != null && Math.abs(audibleAt - prev) <= 2500 ? prev : audibleAt,
             );
           }
           // Metadata enrichment (genres, bpm, cover) lands on later polls for a
-          // track already on air — keep taking it.
+          // track already on air, so keep taking it.
           setIfChanged(setNowPlaying, np);
         }
         setIfChanged(setContext, npRes.context);
@@ -190,8 +175,8 @@ export function useStationFeed(): StationFeed {
             if (offlinePollsRef.current >= OFFLINE_CONFIRM_POLLS) setStreamOnline(false);
           }
         }
-        // Which mounts are actually live. Only an explicit boolean counts — an
-        // older controller omits the key, and "unknown" must not read as "on".
+        // Only an explicit boolean counts: an older controller omits the key,
+        // and "unknown" must not read as "on".
         if (typeof npRes.stream?.opusEnabled === 'boolean') {
           setIfChanged<boolean | null>(setOpusEnabled, npRes.stream.opusEnabled);
         }

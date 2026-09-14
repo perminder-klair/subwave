@@ -35,7 +35,12 @@ export interface EndpointDoc {
   summary: string;
   // Longer prose for the expanded card.
   description: string;
-  auth: 'none' | 'admin';
+  // 'none'    — open to anyone.
+  // 'admin'   — HTTP Basic, ADMIN_USER / ADMIN_PASS.
+  // 'station' — the STATION password (settings.privacy.password), which is a
+  //   different secret and a different gate: open on a public station, closed
+  //   on a private one. See middleware/station-auth.ts.
+  auth: 'none' | 'admin' | 'station';
   // True when calling it changes the live broadcast (speaks, queues, skips).
   // Drives the playground's confirm step and an "on-air" badge.
   mutatesAir?: boolean;
@@ -60,7 +65,7 @@ export interface McpToolDoc {
   description: string;
   // The controller endpoint(s) it wraps, for the "what does this call" column.
   endpoint: string;
-  auth: 'none' | 'admin';
+  auth: 'none' | 'admin' | 'station';
   mutatesAir?: boolean;
 }
 
@@ -260,6 +265,53 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         auth: 'none',
         responseExample: '#EXTM3U\n#EXTINF:-1,SUB/WAVE\nhttps://radio.example.com/stream.mp3\n',
       },
+      {
+        method: 'GET',
+        path: '/similar-tracks',
+        summary: 'Tracks that sound like this one',
+        description:
+          'CLAP "sounds like" neighbours for a seed track — matched on the actual ' +
+          'sound (timbre, instrumentation, production, energy), not on tags, so it ' +
+          'works for instrumentals and non-English tracks. Pass `id` (a track id, ' +
+          'e.g. now-playing\'s `subsonic_id`) or `q` (free text resolved to a seed). ' +
+          'Gated by the STATION password, not the admin one: open on a public ' +
+          'station, and on a private one send it as an `x-station-auth` header ' +
+          '(preferred), an `Authorization: Bearer` token, or an `?auth=` query ' +
+          'param — the last only where a header is not available, since a query ' +
+          'string lands in proxy access logs. Never-play ' +
+          'tracks are already filtered out. It never errors on a library without ' +
+          'audio analysis — `results` comes back empty with a `reason` ' +
+          '(`no-audio-index`, `seed-not-found`, `seed-not-analysed`, `no-neighbours`).',
+        auth: 'station',
+        queryParams: [
+          { name: 'id', description: 'Seed track id (preferred over q)', example: 'a1b2c3' },
+          { name: 'q', description: 'Free text resolved to a seed track', example: 'jon hopkins immunity' },
+          { name: 'limit', description: 'How many results (1–50, default 12)', example: 12 },
+        ],
+        responseExample: {
+          seed: { id: 'a1b2c3', title: 'Open Eye Signal', artist: 'Jon Hopkins' },
+          results: [
+            {
+              id: 'd4e5f6',
+              title: 'Cirrus',
+              artist: 'Bonobo',
+              album: 'The North Borders',
+              year: 2013,
+              genre: 'Electronic, Downtempo',
+              genres: ['Electronic', 'Downtempo'],
+              duration: 292,
+              moods: ['hypnotic'],
+              energy: 'medium',
+              bpm: 112,
+              musicalKey: 'Am',
+              instrumental: true,
+              similarity: 0.87,
+            },
+          ],
+          reason: 'ok',
+          message: null,
+        },
+      },
     ],
   },
   {
@@ -376,6 +428,41 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         mutatesAir: true,
         bodyExample: { id: 'a1b2c3', title: 'Open Eye Signal', artist: 'Jon Hopkins', album: 'Immunity' },
         responseExample: { ok: true, queuePosition: 2, track: { title: 'Open Eye Signal', artist: 'Jon Hopkins' } },
+      },
+      {
+        method: 'POST',
+        path: '/dj/queue-block',
+        summary: 'Queue a whole album or artist block',
+        description:
+          'Queue a whole album, or a run of tracks by one artist, as ONE operator ' +
+          'action. Say which with a trackId from any admin row (the server resolves ' +
+          "the album/artist off it), a pre-resolved id, or — for an artist — a name. " +
+          'An album is queued in its own disc/track order and cannot be shuffled or ' +
+          'limited; an artist block takes `limit` (default 10) and an optional ' +
+          "order: 'shuffle'. Capped at 30 tracks, with any truncation reported. " +
+          'The never-play blocklist is NOT bypassed: blocked tracks are skipped, ' +
+          'named in `skipped`, and the rest queue. `runsPastShowChange` is a warning ' +
+          'only — nothing is cut.',
+        auth: 'admin',
+        mutatesAir: true,
+        bodyExample: { kind: 'album', trackId: 'a1b2c3' },
+        responseExample: {
+          ok: true, kind: 'album', blockId: '0d9f…', label: 'Immunity — Jon Hopkins',
+          queued: 11, queuePosition: 1, truncated: 0, skipped: [], runsPastShowChange: null,
+        },
+      },
+      {
+        method: 'DELETE',
+        path: '/dj/queue/block/:blockId',
+        summary: 'Cancel the rest of a queued block',
+        description:
+          'Remove every not-yet-aired track from a block queued by /dj/queue-block — ' +
+          'the inverse of the one press that queued it. Partial success is normal, ' +
+          'not an error: a track Liquidsoap has already taken out of its queue plays ' +
+          'out and is reported in `kept` (use /dj/skip for that one).',
+        auth: 'admin',
+        mutatesAir: true,
+        responseExample: { removed: 8, kept: 1, label: 'Immunity — Jon Hopkins' },
       },
       {
         method: 'POST',
@@ -573,7 +660,9 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_request_song', title: 'Request a song', description: 'Submit a free-text request and poll for the outcome.', endpoint: 'POST /request + GET /request/:id', auth: 'none', mutatesAir: true },
   { name: 'subwave_request_status', title: 'Check a request', description: 'Poll a submitted request by id.', endpoint: 'GET /request/:id', auth: 'none' },
   { name: 'subwave_search_library', title: 'Search library', description: 'Search the music library for queue-ready tracks.', endpoint: 'GET /dj/search', auth: 'admin' },
+  { name: 'subwave_similar_tracks', title: 'Tracks that sound like this', description: 'CLAP sound-alike neighbours for a seed track.', endpoint: 'GET /similar-tracks', auth: 'station' },
   { name: 'subwave_queue_track', title: 'Queue an exact track', description: 'Push a specific track to the queue.', endpoint: 'POST /dj/queue-track', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_queue_block', title: 'Queue an album or artist block', description: 'Queue a whole album, or a run of tracks by one artist, in one action.', endpoint: 'POST /dj/queue-block', auth: 'admin', mutatesAir: true },
   { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_announce', title: 'DJ announce', description: 'Make the DJ speak text on air.', endpoint: 'POST /dj/say', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_segment', title: 'DJ segment', description: 'Fire a canned voice segment.', endpoint: 'POST /dj/segment', auth: 'admin', mutatesAir: true },

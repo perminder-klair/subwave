@@ -1,8 +1,8 @@
-// Regression test for the back-to-back artist guard's re-pick (issue #1251).
+// Regression test for the pick-anchor artist guard's re-pick (issue #1251).
 // Run: `tsx scripts/artist-guard.test.ts`.
 //
 // Two defects, one guard:
-//   1. The re-pick excluded ONLY the on-air artist, so whichever artist ranked
+//   1. The re-pick excluded ONLY the rejected anchor artist, so whichever artist ranked
 //      next-highest in the run won it every time the guard fired — no adjacent
 //      repeats, but the same artist every other slot.
 //   2. artistKey was a raw lowercase compare, so "Marvin Gaye & Tammi Terrell"
@@ -121,7 +121,7 @@ assert.equal(
   assert.equal(
     artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), recent),
     'onair',
-    'a pick matching the on-air artist is the back-to-back cause',
+    'a pick matching its anchor uses the legacy onair cause',
   );
   // The #1406 case: legal by the old guard, three slots after the same artist.
   assert.equal(
@@ -142,13 +142,13 @@ assert.equal(
       new Set(),
     ),
     'onair',
-    'a name variant of the on-air act is still back-to-back',
+    'a name variant of the anchor act still uses the strong anchor cause',
   );
-  // Window off (operator set 0) → back-to-back protection is NOT disableable.
+  // Window off (operator set 0) → pick-anchor protection is NOT disableable.
   assert.equal(
     artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), new Set()),
     'onair',
-    'an empty window still guards back-to-back',
+    'an empty window still guards a pick-anchor match',
   );
   assert.equal(
     artistGuardCause(artistRootKey('The Beatles'), artistRootKey('Marvin Gaye'), new Set()),
@@ -187,7 +187,7 @@ const clash = { id: 'c1', title: 'Living in Fame', artist: 'The Clash' };
 const beatles = { id: 'b1', title: 'Ob-La-Di, Ob-La-Da', artist: 'The Beatles' };
 const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
 
-// The on-air artist is excluded — and so is the collaboration they front. This
+// The rejected artist is excluded — and so is the collaboration they front. This
 // is the third slot of the live repro: the guard was avoiding Marvin Gaye and
 // the re-pick handed back Marvin Gaye & Tammi Terrell.
 {
@@ -195,10 +195,10 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
   assert.deepEqual([...alt.keys()], ['c1'], 'both the artist and their collaboration must be excluded');
 }
 
-// …and the reverse: a collaboration on air excludes the lead artist's solo work.
+// …and the reverse: rejecting a collaboration excludes the lead artist's solo work.
 {
   const { alt } = alternativeCandidates(seenOf(marvin, clash), artistRootKey('Marvin Gaye & Tammi Terrell'));
-  assert.deepEqual([...alt.keys()], ['c1'], 'a collaboration on air must exclude the lead artist too');
+  assert.deepEqual([...alt.keys()], ['c1'], 'a rejected collaboration must exclude the lead artist too');
 }
 
 // The #1251 case proper. Guard fires on The Beatles; the run's alternatives are
@@ -222,7 +222,7 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
 }
 
 // Never starve: when EVERY alternative is recently played, hand back the bare
-// on-air exclusion rather than nothing. A repeat five slots later beats a
+// rejected-artist exclusion rather than nothing. A repeat five slots later beats a
 // repeat one slot later, and the run genuinely did surface another artist —
 // escalating to the pool rescue here would be the wrong answer.
 {
@@ -245,7 +245,7 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
 }
 
 // No recency data (a fresh boot, or a queue with nothing played) → byte-for-byte
-// the pre-#1251 behaviour: the on-air artist excluded, nothing else.
+// the pre-#1251 behaviour: the rejected artist excluded, nothing else.
 {
   const { alt, dropped, starved } = alternativeCandidates(seenOf(marvin, sly, beatles), artistRootKey('Marvin Gaye'));
   assert.deepEqual([...alt.keys()].sort(), ['b1', 's1'], 'an empty recency window leaves the old behaviour intact');
@@ -253,7 +253,7 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
   assert.equal(starved, false, 'a window that never applied is a no-op, not starvation');
 }
 
-// Every candidate is the on-air artist → empty, which is what tells the caller
+// Every candidate is the rejected artist → empty, which is what tells the caller
 // to escalate to the pool rescue (#1187). The recency window must not change
 // that verdict.
 {
@@ -269,7 +269,7 @@ assert(ARTIST_VARIETY_WINDOW >= 2, 'the window must span at least the every-othe
 
 // ── blockedArtists (the guard's pool rescue) sees collaborations ────────────
 
-// The rescue asks the pool for a pick that is NOT the on-air artist. A
+// The rescue asks the pool for a pick that is NOT the rejected anchor artist. A
 // collaboration answering that ask is the repeat it was called to prevent.
 const rescuePool = [
   { id: 'p1', title: 'Solo', artist: 'Marvin Gaye' },

@@ -66,6 +66,7 @@ import {
   SEGMENTS,
   maskIp,
   sortConnections,
+  trustedProxyHint,
 } from './dash/types';
 import {
   dashKeys,
@@ -78,10 +79,9 @@ import {
 } from './dash/queries';
 
 // Listeners-table header cells. `sticky top-0` resolves against the ScrollArea
-// viewport, and the opaque card-bg stops rows showing through underneath. The
-// rule is an inset shadow, not `border-b`: under border-collapse (Tailwind
-// preflight) the border belongs to the table, so it stays behind while the cell
-// scrolls away.
+// viewport, and the opaque card-bg stops rows showing through. The rule is an
+// inset shadow, not `border-b`: under border-collapse the border belongs to the
+// table, so it would stay behind while the cell scrolls away.
 const STICKY_TH =
   'sticky top-0 z-[1] bg-[var(--card-bg)] shadow-[inset_0_-1px_0_var(--separator-strong)]';
 
@@ -98,8 +98,8 @@ export default function DashPanel() {
   const [confirmSkip, setConfirmSkip] = useState(false);
 
   // Hardcoded set until the controller has a generated batch. The GET on mount
-  // never calls a model; the ↻ button's POST does.
-  // Longest-connected first by default — the most stable listeners on top.
+  // never calls a model; the refresh button's POST does.
+  // Longest-connected first by default.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
 
@@ -121,7 +121,7 @@ export default function DashPanel() {
     refetchInterval: () => 15_000,
     request: fetchHealthStats,
   });
-  // A review surface, not a live ticker — keep the existing 10s cadence.
+  // A review surface, not a live ticker.
   const requestsQuery = useAdminQuery<RequestEntry[]>({
     key: dashKeys.requests(), adminFetch, enabled: ready, staleTime: 0,
     refetchInterval: () => 10_000,
@@ -135,6 +135,7 @@ export default function DashPanel() {
   const status = statusQuery.data ?? null;
   const err = statusQuery.error ? errorMessage(statusQuery.error) : null;
   const conns = connectionsQuery.data ?? null;
+  const proxyHint = trustedProxyHint(conns?.trustedProxies);
   const connErr = connectionsQuery.error ? errorMessage(connectionsQuery.error) : null;
   const stats = statsQuery.data ?? null;
   const requests = requestsQuery.data ?? null;
@@ -240,6 +241,49 @@ export default function DashPanel() {
     },
   });
 
+  // Cancel the rest of an operator block (#1622 FR 4) — the inverse of the one
+  // press that queued it. Partial success is the NORMAL answer rather than an
+  // error: a track the mixer has already taken plays out and comes back in
+  // `kept`, so the toast reports both instead of calling the cancel a failure.
+  //
+  // No optimistic patch, unlike the per-track cancel above: which members
+  // survive is the SERVER's answer, and guessing it would blank rows that are
+  // still going to air. The invalidate below is the only truth.
+  const cancelQueueBlock = useAdminMutation<
+    { removed?: number; kept?: number; label?: string | null; error?: string }, string
+  >({
+    adminFetch,
+    toastOnError: false,
+    request: async (blockId, fetcher) => {
+      const response = await fetcher(`/dj/queue/block/${encodeURIComponent(blockId)}`, { method: 'DELETE' });
+      const body = await response.json().catch(() => ({})) as { removed?: number; kept?: number; label?: string | null; error?: string };
+      if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
+      return body;
+    },
+    onDone: async (_data, _id, client) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.status() }),
+        client.invalidateQueries({ queryKey: dashKeys.requests() }),
+      ]);
+    },
+  });
+
+  const cancelBlock = async (block: { id: string; label: string }) => {
+    setBusy(`block:${block.id}`);
+    try {
+      const out = await cancelQueueBlock.mutateAsync(block.id);
+      const removed = out.removed ?? 0;
+      notify.ok(
+        `cancelled ${removed} track${removed === 1 ? '' : 's'} from ${out.label || block.label}`
+        + (out.kept ? ` · ${out.kept} already committed and will play out` : ''),
+      );
+    } catch (e) {
+      notify.err(`cancel block: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const cancelQueued = async (t: QueueEntry) => {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
@@ -261,8 +305,8 @@ export default function DashPanel() {
       await cancelQueueItem.mutateAsync(id);
       notify.ok(`removed from queue: ${t.title || 'track'}`);
     } catch (e) {
-      // A 409 usually means the row crossed the live boundary. Never restore
-      // the old full envelope over a newer poll; ask both owners for truth.
+      // A 409 usually means the row crossed the live boundary. Never restore the
+      // old full envelope over a newer poll; ask both owners for truth.
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: dashKeys.status() }),
         queryClient.invalidateQueries({ queryKey: dashKeys.requests() }),
@@ -276,7 +320,7 @@ export default function DashPanel() {
   const np = status?.nowPlaying;
   const ctx = status?.context;
   // On-air timestamps render in the station zone so they match what the DJ
-  // speaks, not the operator's browser timezone (issue #418).
+  // speaks, not the operator's browser timezone (#418).
   const tz = status?.timezone;
   const locale = status?.locale;
   const q: QueueState = status?.queue || {};
@@ -286,19 +330,18 @@ export default function DashPanel() {
   const history = q.history || [];
   // The controller publishes a label only after the incoming item has drained
   // and its transition flags are final. Never reconstruct it from raw queue
-  // flags here: an unsent proposal can still be vetoed or replaced.
+  // flags: an unsent proposal can still be vetoed or replaced.
   const nextTransition = q.nextTransition ?? '—';
   // Under pair-aware drain the first upcoming item is held unsent for most of
-  // each track, so the em dash is the NORMAL reading rather than a fault — say
-  // so, or it reads as a broken panel. The armed tooltip names the pair the
-  // label describes: this is the seam out of the on-air track, not out of the
-  // queue row it sits above.
+  // each track, so the em dash is the NORMAL reading rather than a fault. The
+  // armed tooltip names the pair the label describes: the seam out of the on-air
+  // track, not out of the queue row it sits above.
   const nextTransitionHint = q.nextTransition
     ? 'How the on-air track hands over to the first queued track'
     : 'Not armed yet — the seam is decided when the next track is handed to the mixer';
   // `sessionMessages` arrives in air order and is shown newest first. Each turn
-  // carries its ORIGINAL index: turnKey() folds the index into the React key, and
-  // a display index would shift under every new turn, remounting the whole list.
+  // carries its ORIGINAL index: a display index would shift under every new turn
+  // and remount the whole list.
   const booth = status?.sessionMessages || [];
   const boothNewestFirst = booth.map((turn, i) => ({ turn, i })).reverse();
 
@@ -307,8 +350,8 @@ export default function DashPanel() {
     ? `${ctx.weather.condition}${ctx.weather.temp != null ? ` ${Math.round(ctx.weather.temp)}°` : ''}`
     : '—';
 
-  // A meter with no data yet (stats not loaded, or zero calls since boot) is
-  // passed null so the strip shows "—" rather than a misleading zero.
+  // A meter with no data yet is passed null so the strip shows a dash rather
+  // than a misleading zero.
   const lCurrent =
     listenersObj?.current ?? (typeof listenersValue === 'number' ? listenersValue : 0);
   const lPeak = listenersObj?.peak ?? lCurrent;
@@ -316,8 +359,8 @@ export default function DashPanel() {
     listeners: lCurrent,
     listenersPeak: lPeak,
     latencyMs: stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null,
-    // Redline at the DJ-agent deadline so the gauge tracks the model in use, not
-    // a fixed ceiling. Null until /stats loads → StationHeader's default scale.
+    // Redline at the DJ-agent deadline so the gauge tracks the model in use.
+    // Null until /stats loads.
     latencyDeadlineMs: stats?.llm?.agentTimeoutMs ?? null,
     ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
     online: status?.streamOnline ?? null,
@@ -385,16 +428,39 @@ export default function DashPanel() {
                         <QueueItemContent className="text-[12px] text-ink">
                           {t.title} <span className="text-muted">— {t.artist}</span>
                         </QueueItemContent>
-                        {/* `stemSeam` rides the successor, so keep its definitive
-                            marker on that row even while the header describes
-                            the earlier current → first-upcoming transition. Text
-                            makes the meaning explicit without the old opaque icon. */}
+                        {/* `stemSeam` rides the successor, so keep its marker on
+                            that row even while the header describes the earlier
+                            current -> first-upcoming transition. */}
                         {t.stemSeam ? (
                           <span
                             title="Arrives via a rendered blend mixed from cached stems"
                             className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-vermilion/80 uppercase"
                           >
                             Stem blend
+                          </span>
+                        ) : null}
+                        {/* An operator block (#1622 FR 4): say which record this
+                            row belongs to and where it sits in it, and offer the
+                            inverse of the one press that queued it. Shown on the
+                            FIRST visible member only — a badge on all thirty rows
+                            is noise, and one cancel button is the whole point. */}
+                        {t.block && upcoming.findIndex(u => u.block?.id === t.block!.id) === i ? (
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <span
+                              title={`Queued as one block: ${t.block.label}`}
+                              className="text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-ink/70 uppercase"
+                            >
+                              {t.block.label} · {t.block.index}/{t.block.size}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => cancelBlock({ id: t.block!.id, label: t.block!.label })}
+                              disabled={busy === `block:${t.block.id}`}
+                              title="Cancel the rest of this block"
+                              className="text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-muted uppercase hover:text-vermilion disabled:opacity-50"
+                            >
+                              cancel the rest
+                            </button>
                           </span>
                         ) : null}
                         <QueueHeldBadge sent={t.sent} />
@@ -473,10 +539,8 @@ export default function DashPanel() {
             ) : (
               <div className="relative min-h-[220px] flex-1">
                 {/* The absolute-inset wrapper keeps the log out of the card's
-                    intrinsic height, so the card tracks the right column instead
-                    of growing to fit every turn. The scroller stays anchored at
-                    the TOP: newest first means turns prepend, so scrollTop 0
-                    keeps showing the newest turn on its own. */}
+                    intrinsic height. The scroller stays anchored at the TOP:
+                    newest first means turns prepend. */}
                 <div className="absolute inset-0">
                   <div
                     className="h-full overflow-y-auto"
@@ -520,7 +584,7 @@ export default function DashPanel() {
 
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            {/* Chips fill the textarea, never send, and flip the box to Styled —
+            {/* Chips fill the textarea, never send, and flip the box to Styled:
                 they are directions for the DJ, and raw would air the instruction. */}
             <div className="mb-2.5 flex items-center gap-1.5">
               <div className="min-w-0 flex-1">
@@ -533,8 +597,7 @@ export default function DashPanel() {
                         setSayText(text);
                         setSayMode('styled');
                       }}
-                      // min-h-9 is a thumb-sized target on a phone; sm: drops
-                      // back to the dense desktop pill.
+                      // min-h-9 is a thumb-sized target on a phone.
                       className="h-auto min-h-9 rounded-none border-separator-strong px-3 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink sm:min-h-0 sm:px-2"
                     />
                   ))}
@@ -566,8 +629,7 @@ export default function DashPanel() {
                 />
               </PromptInputBody>
               {/* Two rows (controls, then a full-width send bar): on the ~550px
-                  column a single flex-wrap row broke unpredictably, leaving the
-                  button dangling under empty space. */}
+                  column a single flex-wrap row broke unpredictably. */}
               <PromptInputFooter className="flex-col items-stretch gap-2.5">
                 <PromptInputTools className="flex-wrap items-center gap-x-5 gap-y-2">
                   <div className="flex items-center gap-1.5">
@@ -595,8 +657,7 @@ export default function DashPanel() {
           </Card>
 
           <Card title="DJ segments" sub="fire on demand">
-            {/* 2-up on a phone so each pad keeps a full-width label, and a 4th
-                "banter" pad squares off rather than dangling. */}
+            {/* 2-up on a phone so each pad keeps a full-width label. */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {[...SEGMENTS, ...((status?.activeShow?.guests?.length ?? 0) > 0 ? [BANTER_SEGMENT] : [])].map(s => {
                 const k = `seg:${s.type}`;
@@ -669,6 +730,22 @@ export default function DashPanel() {
           ) : null
         }
       >
+        {/* Why the IP column may be showing one repeated private address
+            (#1613). Advisory: shown only when the icecast render reported a
+            miss, never on a broadcast image too old to say. */}
+        {!connErr && conns && proxyHint ? (
+          <div className="mb-2 border-l-2 border-separator-strong pl-2 text-[11px] text-muted">
+            {proxyHint}{' '}
+            <a
+              className="underline hover:text-ink"
+              href="https://github.com/perminder-klair/subwave/blob/main/docs/reverse-proxy.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              reverse-proxy guide
+            </a>
+          </div>
+        ) : null}
         {connErr ? (
           <div className="text-muted italic">can’t reach Icecast admin: {connErr}</div>
         ) : !conns ? (
@@ -676,8 +753,8 @@ export default function DashPanel() {
         ) : conns.connections.length === 0 ? (
           <div className="text-muted italic">nobody listening right now</div>
         ) : (
-          /* Capped like the other admin lists so a busy station's connection list
-             scrolls inside the card instead of stretching the dash down the page. */
+          /* Capped like the other admin lists so a busy station's connection
+             list scrolls inside the card. */
           <ScrollArea className="max-h-[360px]">
             <table className="w-full text-[12px]">
               <thead>
@@ -689,8 +766,7 @@ export default function DashPanel() {
                     onSort={setSort}
                     className={STICKY_TH + ' pr-3'}
                   />
-                  {/* Mount is dropped on a phone; the other three fit 390px
-                      without a sideways scroll. */}
+                  {/* Mount is dropped on a phone; the other three fit 390px. */}
                   <SortableTh
                     label="Mount"
                     col="mount"
@@ -718,8 +794,7 @@ export default function DashPanel() {
                 {sortConnections(conns.connections, sort).map((c, i) => (
                   <tr
                     key={`${c.ip}:${c.mount}:${i}`}
-                    // The sticky header already draws a solid rule, so the top
-                    // row's dashed border would double it.
+                    // The sticky header already draws a solid rule.
                     className="border-t border-dashed border-separator-strong first:border-t-0"
                   >
                     <td className="py-1.5 pr-3 font-mono whitespace-nowrap" title={c.ip}>

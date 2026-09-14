@@ -1,10 +1,6 @@
-// Shared display helpers for live-session turns served by GET /session.
-// SOURCE OF TRUTH: web/web/lib/sessionFeed.ts — kept in sync (pure functions).
-//
-//   voice  — spoken on-air verbatim (links, station IDs, time, weather)
-//   dj     — the DJ agent's pick / request reasoning (the "thinking")
-//   track  — a track that aired
-//   system — system events
+// Display helpers for GET /session turns. Source of truth is
+// web/web/lib/sessionFeed.ts; keep in sync. Classes: voice (spoken on air),
+// dj (pick/request reasoning), track (aired), system.
 
 import type { SessionTurn } from './types';
 
@@ -37,19 +33,15 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   return text;
 }
 
-// Operator-log summary for long `event` turns (#958). The `pick` event turn is
-// the literal prompt posted to the DJ agent — ~700 chars of link/clock/
-// transition coaching that the model needs verbatim but that drowns a log when
-// rendered raw. Returns a one-liner for long event turns; null means "render
-// the turn as-is". (The listener Booth hides event/system turns entirely — this
-// exists for any surface that shows the full session, mirroring the web.)
+// Operator-log summary for long `event` turns (#958): a `pick` turn is the
+// literal ~700-char prompt posted to the DJ agent. Returns a one-liner, or
+// null to render the turn as-is.
 export function eventTurnSummary(turn: SessionTurn | null | undefined): string | null {
   if (turn?.role !== 'event') return null;
   const text = turn.text || '';
   if (text.length <= 160) return null;
   if (turn.kind === 'pick') {
-    // Head is `Now playing "X" by Y [id: …] (after "A" by B)` — keep it, drop
-    // the raw Subsonic id, and reduce the instruction tail to flags.
+    // Keep the head, drop the raw Subsonic id, reduce the tail to flags.
     const head = (text.split('. Pick the track to play next.')[0] ?? text)
       .replace(/\s*\[id:[^\]]*\]/g, '');
     const parts = [
@@ -63,12 +55,10 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
   return `${firstSentence.trim()} …`;
 }
 
-// The single voice/dj turn to surface as the DJ "thinking" line under the
-// now-playing block. Skips `dj`/pick turns whose meta.trackId is for a track
-// other than what's on air — a pick turn is written at the previous track's
-// start, so its trackId is the NEXT track, not the one playing now (#546).
-// Voice turns carry no trackId, so the aired back-announce link wins, falling
-// back to this track's own pick reason on a silent transition.
+// The one voice/dj turn to show as the DJ "thinking" line. A pick turn is
+// written at the previous track's start, so its meta.trackId is the NEXT
+// track and turns for other tracks are skipped (#546). Voice turns carry no
+// trackId, so an aired back-announce wins over this track's pick reason.
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,

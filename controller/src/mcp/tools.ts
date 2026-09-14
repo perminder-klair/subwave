@@ -2,7 +2,7 @@
  * The SUB/WAVE MCP tool set — the single source of truth for both transports
  * (the controller's HTTP mount in routes/mcp.ts, and the standalone stdio
  * server in mcp-subwave/src/index.ts). `registerSubwaveTools(server, client)`
- * registers all 19 tools on an McpServer; each tool is a thin wrapper over one
+ * registers all 20 tools on an McpServer; each tool is a thin wrapper over one
  * controller endpoint via the shared SubwaveClient.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -311,6 +311,55 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
+  // subwave_similar_tracks — CLAP "sounds like this" neighbours (station gate)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_similar_tracks",
+    {
+      title: "Tracks that sound like this one",
+      description:
+        "Find tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy) is " +
+        "closest to a seed track — blind to tags and metadata, so it works for " +
+        "instrumentals and non-English tracks. Pass a track id (best; take it from " +
+        "subwave_now_playing or subwave_search_library) OR free text to resolve as a " +
+        "title/artist. Needs no admin credentials: it is gated by the STATION password " +
+        "and open on a public station. Never errors on a library without audio " +
+        "fingerprints — it returns an empty list plus a `reason` saying why " +
+        "('no-audio-index' = the station has no CLAP analysis at all, " +
+        "'seed-not-analysed' = this track specifically, 'seed-not-found' = nothing " +
+        "matched). Reading is all it does; pair it with subwave_queue_track (admin) or " +
+        "subwave_request_song to actually put one on air.",
+      inputSchema: {
+        id: z.string().min(1).optional().describe("Track id to seed from — preferred over q."),
+        q: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Free text resolved to a seed track, e.g. 'boards of canada roygbiv'. Used when id is " +
+              "absent, or when the id's track has no audio fingerprint of its own.",
+          ),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 12, cap 50)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    ({ id, q, limit }) =>
+      run(async () => {
+        if (!id && !q) {
+          return { content: [text("Pass either `id` (a track id) or `q` (text to resolve to one).")], isError: true };
+        }
+        const data = await client.similarTracks({ id, q, limit });
+        // The reason is the whole point of an empty result here — surface it as
+        // prose so a model reading only the text block still learns whether to
+        // try a different seed or stop asking this station for sound matches.
+        if (!data.results?.length) {
+          return { content: [text(`No sound-alike tracks: ${data.reason}${data.message ? ` — ${data.message}` : ""}`)] };
+        }
+        return { content: [text(data)] };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
   // subwave_queue_track — queue an exact track (admin)
   // -------------------------------------------------------------------------
   server.registerTool(
@@ -345,6 +394,79 @@ export function registerSubwaveTools(
             text(
               `Queued "${result.track.title}"${result.track.artist ? ` by ${result.track.artist}` : ""} ` +
                 `at position ${result.queuePosition}.`,
+            ),
+          ],
+          structuredContent: { ...result },
+        };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // subwave_queue_block — queue a whole album / artist block (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_queue_block",
+    {
+      title: "Queue an album or artist block",
+      description:
+        "Queue a whole album, or a run of tracks by one artist, in ONE action — the " +
+        "operator gesture behind an album show. ADMIN endpoint. Name the block with a " +
+        "trackId from any subwave_search_library result (the server resolves the " +
+        "album/artist off it), a pre-resolved album/artist id, or an artist name. " +
+        "An album is queued in its own disc/track order and can be neither shuffled " +
+        "nor limited — that ordering is the whole point of a block. Capped at 30 " +
+        "tracks; a longer record is truncated and says so. The never-play blocklist " +
+        "is NOT bypassed: blocked tracks are skipped and named in `skipped`, and the " +
+        "rest queue. `runsPastShowChange` warns when the block outlasts the current " +
+        "show — nothing is cut, it is the operator's call.",
+      inputSchema: {
+        kind: z.enum(["album", "artist"]).describe("What the block is a block of."),
+        trackId: z.string().optional().describe("Any track from the album, or by the artist."),
+        id: z.string().optional().describe("A pre-resolved album or artist id."),
+        artist: z.string().optional().describe("Artist by name. Artist blocks only."),
+        limit: z.number().int().optional().describe("Artist blocks only; default 10, max 30."),
+        order: z.enum(["natural", "shuffle"]).optional().describe("Albums are refused 'shuffle'."),
+      },
+      outputSchema: {
+        ok: z.boolean(),
+        kind: z.enum(["album", "artist"]),
+        blockId: z.string(),
+        label: z.string(),
+        queued: z.number(),
+        queuePosition: z.number().nullable(),
+        truncated: z.number(),
+        skipped: z.array(
+          z.object({
+            title: z.string().nullable(),
+            artist: z.string().nullable(),
+            reason: z.string(),
+            blockedBy: z.unknown().nullable(),
+          }),
+        ),
+        runsPastShowChange: z
+          .object({ at: z.string(), show: z.string().nullable(), bySec: z.number() })
+          .nullable(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    (body) =>
+      run(async () => {
+        const result = await client.queueBlock(body as Record<string, unknown>);
+        // Every caveat is stated in the text, not only in the structured
+        // payload: a model that queues an album and is not told two tracks were
+        // never-played will report a complete record on air.
+        const notes = [
+          result.skipped.length ? `${result.skipped.length} skipped (never-play blocklist)` : null,
+          result.truncated ? `${result.truncated} over the 30-track limit` : null,
+          result.runsPastShowChange
+            ? `runs ~${Math.round(result.runsPastShowChange.bySec / 60)}min past the next show change`
+            : null,
+        ].filter(Boolean);
+        return {
+          content: [
+            text(
+              `Queued ${result.queued} track${result.queued === 1 ? "" : "s"} from "${result.label}"` +
+                (notes.length ? ` — ${notes.join("; ")}.` : "."),
             ),
           ],
           structuredContent: { ...result },

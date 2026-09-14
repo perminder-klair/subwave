@@ -1,7 +1,6 @@
-// Admin-gated Navidrome playlist management — backs the Playlists tab and the
-// add-to-playlist flow in /admin/library. Thin wrappers over the Subsonic
-// playlist API: everything reads live (no memo) so the UI reflects mutations
-// immediately; the picker's own 30-min playlist memo catches up on its own.
+// Admin-gated Navidrome playlist management. Thin wrappers over the Subsonic
+// playlist API; everything reads live (no memo) so the UI reflects mutations at
+// once — the picker's own 30-min playlist memo catches up on its own.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
@@ -13,10 +12,8 @@ import * as genJobs from '../music/playlist-jobs.js';
 import * as recipes from '../music/playlist-recipes.js';
 import type { StoredRecipe } from '../music/playlist-recipes.js';
 import { syncRecipe } from '../music/playlist-sync.js';
-// The request bodies live in the shared schema (mirrored to the web, where the
-// builder runs the same rules for its Generate/Save gates). The middleware
-// replaces req.body with the parsed object, so the handlers below read
-// already-coerced values.
+// Shared schemas, mirrored to the web builder. The middleware replaces req.body
+// with the parsed object, so handlers read already-coerced values.
 import {
   playlistAppendSchema,
   playlistGenerateSchema,
@@ -27,7 +24,6 @@ import {
 
 export const router = express.Router();
 
-// GET /playlists — all playlists visible to the configured Navidrome account.
 router.get('/playlists', requireAdmin, async (_req, res) => {
   try {
     const playlists = await subsonic.getPlaylists();
@@ -51,13 +47,11 @@ router.get('/playlists', requireAdmin, async (_req, res) => {
   }
 });
 
-// GET /playlists/:id — playlist entries, in order (indexes matter: Subsonic
-// removes by position, and the UI sends back the indexes it displayed).
+// Entries stay in order: Subsonic removes by position and the UI sends back the
+// indexes it displayed.
 router.get('/playlists/:id', requireAdmin, async (req, res) => {
   try {
     const entries = await subsonic.getPlaylist(req.params.id);
-    // Merge library tags (same pattern as /dj/search's toAdminRow) so the
-    // builder's energy graph / mood chips work on loaded playlists too.
     await library.load();
     res.json({
       entries: entries.map((s: any) => {
@@ -80,20 +74,16 @@ router.get('/playlists/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /playlists — { name, songIds?, playlistId? } → create in Navidrome, or
-// OVERWRITE an existing playlist's tracks + name when playlistId is present (the
-// builder's "save over an existing playlist").
+// Create, or OVERWRITE an existing playlist's tracks + name when playlistId is
+// present.
 router.post('/playlists', requireAdmin, validateBody(playlistSaveSchema), async (req, res) => {
   const { name, songIds, playlistId, keepInSync } = req.body as {
     name: string; songIds: string[]; playlistId?: string; keepInSync: boolean;
   };
   try {
     const playlist = await subsonic.createPlaylist(name, songIds, { playlistId });
-    // A wholesale overwrite via createPlaylist doesn't touch the name, so patch
-    // it separately in case the operator renamed while saving over.
+    // createPlaylist doesn't touch the name on an overwrite; patch it separately.
     if (playlistId) await subsonic.updatePlaylistMeta(playlistId, { name, public: true });
-    // Recipe upsert/remove for sync (append-only). `keepInSync` needs the recipe
-    // body; toggling it off drops the entry.
     const id = playlist?.id || playlistId;
     if (id) {
       if (keepInSync) recipes.upsert({ playlistId: id, name, recipe: req.body.recipe as StoredRecipe });
@@ -107,7 +97,6 @@ router.post('/playlists', requireAdmin, validateBody(playlistSaveSchema), async 
   }
 });
 
-// POST /playlists/:id/sync — manual "Sync now" for a recipe-backed playlist.
 router.post('/playlists/:id/sync', requireAdmin, async (req, res) => {
   const entry = recipes.get(req.params.id);
   if (!entry) return res.status(404).json({ error: 'this playlist is not sync-enabled' });
@@ -122,8 +111,6 @@ router.post('/playlists/:id/sync', requireAdmin, async (req, res) => {
   }
 });
 
-// A finished generation, shaped for the response: empty results carry the
-// "loosen the filters" hint, non-empty ones are logged.
 function finishGenerate(result: Awaited<ReturnType<typeof generatePlaylist>>) {
   if (!result.tracks.length) {
     return { ...result, message: 'nothing matched — try loosening the filters, removing seeds, or a broader vibe' };
@@ -132,12 +119,9 @@ function finishGenerate(result: Awaited<ReturnType<typeof generatePlaylist>>) {
   return result;
 }
 
-// POST /playlists/generate — { prompt?, seedTrackIds?, seedArtist?, knobs?,
-// sources?, excludeTrackIds? } → an UNSAVED, ordered candidate list. The
-// operator edits it, then saves via POST /playlists. Never mutates Navidrome.
-// Synchronous: the response holds until the generation lands, which can be
-// minutes — anything proxying through Cloudflare should use the jobs flow
-// below instead (CF cuts origin responses off at ~100s).
+// Returns an UNSAVED candidate list; never mutates Navidrome. Synchronous and
+// can take minutes, so anything behind Cloudflare (~100s origin cutoff) must use
+// the jobs flow below.
 router.post('/playlists/generate', requireAdmin, validateBody(playlistGenerateSchema), async (req, res) => {
   const input = req.body as GenerateInput;
   try {
@@ -148,8 +132,6 @@ router.post('/playlists/generate', requireAdmin, validateBody(playlistGenerateSc
   }
 });
 
-// POST /playlists/generate/jobs — same body as /generate, returns { jobId }
-// immediately; the run continues server-side. Poll the job to collect it.
 router.post('/playlists/generate/jobs', requireAdmin, validateBody(playlistGenerateSchema), (req, res) => {
   const input = req.body as GenerateInput;
   const job = genJobs.create();
@@ -164,9 +146,7 @@ router.post('/playlists/generate/jobs', requireAdmin, validateBody(playlistGener
   res.status(202).json({ jobId: job.id });
 });
 
-// GET /playlists/generate/jobs/:id — { status: 'running' } | { status: 'done',
-// result } | { status: 'error', error }. 404 once expired (or after a
-// controller restart — the store is in-memory).
+// 404 once expired, or after a controller restart — the job store is in-memory.
 router.get('/playlists/generate/jobs/:id', requireAdmin, (req, res) => {
   const job = genJobs.get(req.params.id);
   if (!job) return res.status(404).json({ error: 'unknown or expired generation job — start a new one' });
@@ -175,7 +155,6 @@ router.get('/playlists/generate/jobs/:id', requireAdmin, (req, res) => {
   res.json({ status: 'done', result: job.result });
 });
 
-// POST /playlists/:id/tracks — { songIds } → append.
 router.post('/playlists/:id/tracks', requireAdmin, validateBody(playlistAppendSchema), async (req, res) => {
   const { songIds } = req.body as { songIds: string[] };
   try {
@@ -187,7 +166,6 @@ router.post('/playlists/:id/tracks', requireAdmin, validateBody(playlistAppendSc
   }
 });
 
-// PATCH /playlists/:id — { name?, public? } → rename / visibility.
 router.patch('/playlists/:id', requireAdmin, validateBody(playlistPatchSchema), async (req, res) => {
   const { name, public: isPublic } = req.body as { name?: string; public?: boolean };
   try {
@@ -199,7 +177,6 @@ router.patch('/playlists/:id', requireAdmin, validateBody(playlistPatchSchema), 
   }
 });
 
-// DELETE /playlists/:id/tracks — { indexes } → remove by position.
 router.delete('/playlists/:id/tracks', requireAdmin, validateBody(playlistRemoveTracksSchema), async (req, res) => {
   const { indexes } = req.body as { indexes: number[] };
   try {
@@ -211,7 +188,6 @@ router.delete('/playlists/:id/tracks', requireAdmin, validateBody(playlistRemove
   }
 });
 
-// DELETE /playlists/:id — delete the playlist itself.
 router.delete('/playlists/:id', requireAdmin, async (req, res) => {
   try {
     await subsonic.deletePlaylist(req.params.id);

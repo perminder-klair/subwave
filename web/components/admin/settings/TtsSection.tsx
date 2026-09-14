@@ -30,7 +30,8 @@ import { VoicePicker } from '../tts/VoicePicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
-  SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, ELEVENLABS_VS_DEFAULTS,
+  SectionHeader, SaveBar,
+  KeyStatus, KeyTestResult, KEY_HINTS, ELEVENLABS_VS_DEFAULTS,
   FISH_TTS_DEFAULTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
   type TtsFallbackForm,
@@ -476,7 +477,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   // Compat servers don't use the OPENAI/ELEVENLABS env keys — their optional bearer
   // is settings.tts.cloud.compatApiKey, so it rides the settings payload.
   const [compatKeyInput, setCompatKeyInput] = useState('');
-
   useEffect(() => { setCloudKeyInput(''); setCompatKeyInput(''); }, [form.tts.cloud.provider]);
   useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
@@ -830,6 +830,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
             )}
           </p>
         </div>
+
       </Card>
 
       <Card title="Voice engine" sub="active default">

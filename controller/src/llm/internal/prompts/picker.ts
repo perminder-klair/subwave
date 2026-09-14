@@ -4,6 +4,10 @@
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
+// Straight from settings/, not through the barrel: the barrel re-exports it,
+// but naming the module keeps the per-effect rule findable from the prompt.
+import { effectEnabled, enabledEffects } from '../../../settings/transition-effects.js';
+import { TRANSITION_EFFECTS } from '../../../settings/vocab.js';
 import { djObject } from '../strategy/object.js';
 import { instruction } from './instructions.js';
 
@@ -23,7 +27,34 @@ export const PICKER_CRITERIA = instruction('pick-criteria', 'criteria');
 // for each effect — trigger + counter-indication — not how the audio works.
 export function effectsGuidance(): string {
   if (!settings.effectsActive()) return '';
-  return `\n\n${instruction('pick-criteria', 'effects')}`;
+  // Per-effect operator switches (#1565). The catalogue in pick-criteria.md
+  // stays whole and a closing line names what is switched off, rather than the
+  // bullets being filtered out of the markdown: the coaching paragraphs are
+  // written as one piece (the pacing and variety rules read across all six),
+  // and dicing them by name would leave a different, worse prompt on every
+  // combination of switches. With nothing left on, the whole block goes —
+  // callers treat that exactly like DJ mode being off.
+  const off = TRANSITION_EFFECTS.filter(k => !effectEnabled(k));
+  if (off.length === TRANSITION_EFFECTS.length) return '';
+  const unavailable = off.length
+    ? `\nSwitched off on this station right now: ${off.map(k => `"${k}"`).join(', ')} — never choose ${off.length > 1 ? 'those' : 'that'}.`
+    : '';
+  return `\n\n${instruction('pick-criteria', 'effects')}${unavailable}`;
+}
+
+/**
+ * The `transition` enum offered to a pick call, narrowed to the effects an
+ * operator has left on. 'normal' is always available — it is the absence of an
+ * effect, not one of them.
+ *
+ * Only the ONE-SHOT pool path uses this. The agent's PICK_SCHEMA deliberately
+ * keeps the full enum whatever the switches say (see dj-agent/schemas.ts): its
+ * schema is session-anchored, so a shape that changed under a running
+ * conversation would contradict the history already in it. That path is
+ * gated by the guidance above plus the strip in queue.applyMixTransition.
+ */
+export function transitionEnumValues(): [string, ...string[]] {
+  return ['normal', ...enabledEffects()];
 }
 
 type ShowEra = { fromYear?: number | null; toYear?: number | null };
@@ -149,7 +180,10 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
   // soft budget tier, pickerAgent off). Unlike the agent's session-anchored
   // schema pair (PICK_SCHEMA / PICK_SCHEMA_NO_FX), this is a one-shot call with
   // no history to poison — when effects are off the field simply doesn't exist.
-  const fxActive = settings.effectsActive();
+  // Both halves must agree: with every effect switched off there is no
+  // guidance and no `transition` field either, which is the same prompt an
+  // effectsActive:false persona gets.
+  const fxActive = settings.effectsActive() && enabledEffects().length > 0;
   const fxGuidance = effectsGuidance();
   const fxHistory = fxActive && recentTransitions.length
     ? `\n\nYour recent transition choices, oldest first: ${recentTransitions.join(', ')} — the station strips a third repeat, so vary deliberately.`
@@ -164,7 +198,7 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
       ...(fxActive ? {
         // One-line pointer only — the full coaching lives in effectsGuidance()
         // in the system prompt; duplicating it here doubled the token bill.
-        transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable()
+        transition: z.enum(transitionEnumValues()).nullable()
           .describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade.'),
       } : {}),
     }),

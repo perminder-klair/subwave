@@ -1,12 +1,9 @@
-// The back panel — where a real receiver keeps everything that isn't
-// power/dial/volume: output jacks, the timer, the fascia switch. Collapses
-// what used to be four masthead icons (AirPlay, Cast, sleep, theme) into one
-// sheet so the fascia stays clean.
+// The back panel: output jacks, the timer, the fascia switch, collapsed from
+// four masthead icons into one sheet.
 //
-// OUTPUT renders the NATIVE AirPlay/Cast buttons (they must be real native
-// views to present their system pickers), framed as labeled sockets. TIMER,
-// SIGNAL, and FASCIA are drill-in rows — the parent swaps this sheet's content
-// for the sleep/format/themes drawers in place (one <Sheet>, switched content).
+// OUTPUT renders the native AirPlay/Cast buttons, which must be real native
+// views to present their system pickers. TIMER, SIGNAL and FASCIA are drill-in
+// rows: the parent swaps this sheet's content in place.
 
 import { AudioLines, ChevronRight, MoonStar, Palette } from 'lucide-react-native';
 import type { ReactNode } from 'react';
@@ -24,7 +21,7 @@ export interface BackPanelDrawerProps {
   sleepRemainingSec: number | null;
   themeName: string | null;
   /** Label of the current stream format pick, or null to hide the SIGNAL row
-   *  (station only serves the MP3 floor — nothing to choose). */
+   *  when there is nothing to choose. */
   formatLabel: string | null;
   onOpenSleep: () => void;
   onOpenThemes: () => void;
@@ -172,7 +169,7 @@ function Socket({
   );
 }
 
-/** Drill-in row, styled after the SleepDrawer/ThemesDrawer row family. */
+/** Drill-in row. */
 function PanelRow({
   icon,
   title,

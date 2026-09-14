@@ -18,15 +18,25 @@ const validImperativeFixtures = {
   // admin-query-imperative: archive-download
   return adminResponse(adminFetch, \`/archives/file/\${'x'}\`);
 }\n`,
-  'BackupPanel.tsx': `export async function run(adminFetch) {
+  'BackupPanel.tsx': `export async function run(adminFetch, name) {
   // admin-query-imperative: backup-export
-  return adminResponse(adminFetch, '/backup/export');
+  await adminResponse(adminFetch, '/backup/export');
+  // admin-query-imperative: backup-download-file
+  return adminResponse(adminFetch, \`/backup/file/\${name}\`);
 }\n`,
   'DoctorPanel.tsx': `export async function run(adminFetch) {
   // admin-query-imperative: diagnosis-command
   await adminResponse(adminFetch, '/doctor');
   // admin-query-imperative: diagnosis-stream
   return adminResponse(adminFetch, '/doctor/stream', { headers: { Accept: 'text/event-stream' } });
+}\n`,
+  'PersonasPanel.tsx': `export async function run(adminFetch, id) {
+  // admin-query-imperative: persona-bundle-export
+  return adminResponse(adminFetch, \`/personas/\${id}/export\`);
+}\n`,
+  'debug/LlmCalls.tsx': `export async function run(adminFetch, format) {
+  // admin-query-imperative: llm-call-export
+  return adminResponse(adminFetch, \`/debug/llm-calls/export?format=\${format}\`);
 }\n`,
   'connect/ConnectPanel.tsx': `export async function run(adminFetch, catalog) {
   // admin-query-imperative: openapi-download

@@ -1,10 +1,7 @@
-// Persisted multi-station config. Public station metadata stays in AsyncStorage;
-// HTTP Basic Auth credentials live separately in the platform keychain/keystore.
-// Shape:
-//   { activeStation, recents[], }
-// The featured/default station is seeded from app.json `extra.featuredStation`
-// (read via expo-constants), not stored here, so an operator can rebrand the
-// build by editing one config line.
+// Persisted multi-station config: `{ activeStation, recents[] }` in
+// AsyncStorage, with HTTP Basic Auth credentials in the platform keychain
+// instead. The featured station is seeded from app.json
+// `extra.featuredStation`, not stored here.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';

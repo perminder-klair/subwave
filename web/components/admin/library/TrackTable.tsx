@@ -10,7 +10,7 @@ import { cn } from '../../../lib/cn';
  
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { BlockRef, BlockType, LikeIndex, TableVariant, Track } from './types';
+import type { BlockRef, BlockType, LikeIndex, QueueBlockKind, TableVariant, Track } from './types';
 import {
   CHECK_HIT,
   EnergyMeter,
@@ -22,6 +22,7 @@ import {
   unblockLabel,
   useDismissOnOutside,
 } from './bits';
+import { BlockMenu, HeartButton, QueueMenu, likeStateFor } from './row-actions';
 import { ManualTagEditor } from './ManualTagEditor';
 
 interface TrackTableProps {
@@ -32,6 +33,7 @@ interface TrackTableProps {
   retagging: string | null;
   flashId: string | null;
   onQueue: (t: Track) => void;
+  onQueueBlock: (t: Track, kind: QueueBlockKind) => void;
   onRetag: (t: Track) => void;
   blocking: string | null;
   onBlock: (t: Track, type: BlockType) => void;
@@ -53,19 +55,6 @@ interface TrackTableProps {
   liking: string | null;
   onToggleLike: (t: Track, liked: boolean) => void;
   onClearLikes: (t: Track) => void;
-}
-
-// The actions column is a FIXED grid track (.lib-row in globals.css). Uncapped, a
-// heavily-liked track widens the cluster until the actions overlap mood/energy.
-const countLabel = (n: number) => (n > 99 ? '99+' : String(n));
-
-// Inline `likedByOperator`/`likeCount` if the row has them, else the shared index.
-function likeStateFor(t: Track, index: LikeIndex): { liked: boolean; count: number } {
-  if (t.likedByOperator != null || t.likeCount != null) {
-    return { liked: !!t.likedByOperator, count: t.likeCount ?? 0 };
-  }
-  const hit = index[t.id];
-  return { liked: !!hit?.operator, count: hit?.count ?? 0 };
 }
 
 export function TrackTable(p: TrackTableProps) {
@@ -101,8 +90,8 @@ export function TrackTable(p: TrackTableProps) {
   return (
     // Dim, don't blank, stale rows during a refetch so filter changes read as updating.
     <div className={cn(p.loading && 'opacity-60 transition-opacity')}>
-      {/* Below sm: the 5-column grid leaves the title ~60px, so rows lay out as a plain
-          flex line instead. `!` beats `.admin-root .lib-colhead/.lib-row`. */}
+      {/* Below sm: the 5-column grid leaves the title ~60px, so rows lay out as
+          a plain flex line. `!` beats `.admin-root .lib-colhead/.lib-row`. */}
       <div className="lib-colhead !flex sm:!grid">
         <span>
           <label className={CHECK_HIT}>
@@ -136,18 +125,17 @@ export function TrackTable(p: TrackTableProps) {
               />
             </label>
             <Thumb track={t} />
-            {/* flex-1 drives the phone layout; grid items ignore flex-*, so the sm:+
-                grid column sizing is untouched. */}
+            {/* flex-1 drives the phone layout; grid items ignore flex-*. */}
             <div className="min-w-0 flex-1">
-              {/* Badge sits with the TITLE, not the mood/energy cell: .lib-tags is
-                  display:none below 860px and this marker must survive a phone. */}
+              {/* Badge sits with the TITLE: .lib-tags is display:none below
+                  860px and this marker must survive a phone. */}
               <div className="flex min-w-0 items-center gap-2">
                 <div className="lib-title">{t.title || '—'}</div>
                 {t.blockedBy && (
                   <span className="lib-btag shrink-0" title={`blocked via ${blockedByLabel(t.blockedBy)}`}>
                     <Ban size={10} aria-hidden />
-                    {/* Scope word drops below sm: at 390px the badge and title share
-                        ~210px. The full scope stays in the row menu. */}
+                    {/* Scope word drops below sm:. The full scope stays in the
+                        row menu. */}
                     <span aria-hidden>
                       never play
                       {t.blockedBy.kind === 'rule' ? (
@@ -181,8 +169,8 @@ export function TrackTable(p: TrackTableProps) {
               {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
               {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
-            {/* Four 36px buttons cost more than the title is worth on a phone, so below
-                sm: they collapse into the single overflow menu and each inline one hides. */}
+            {/* Four 36px buttons cost more than the title is worth on a phone,
+                so below sm: they collapse into the overflow menu. */}
             <div className="flex items-center justify-end gap-1.5">
               <RowActionsMenu
                 track={t}
@@ -193,6 +181,7 @@ export function TrackTable(p: TrackTableProps) {
                 blocking={p.blocking === t.id}
                 disabled={!!p.queuing || !!p.retagging || !!p.manualBusy || !!p.blocking}
                 onQueue={p.onQueue}
+                onQueueBlock={p.onQueueBlock}
                 onEdit={p.onEdit}
                 onRetag={p.onRetag}
                 onBlock={p.onBlock}
@@ -202,29 +191,21 @@ export function TrackTable(p: TrackTableProps) {
                 onToggleLike={p.onToggleLike}
                 onClearLikes={p.onClearLikes}
               />
-              <Btn
-                sm
+              <HeartButton
                 className="hidden sm:inline-flex"
-                onClick={() => p.onToggleLike(t, like.liked)}
-                disabled={p.liking === t.id}
-                title={like.liked ? 'Remove your heart' : 'Heart this track'}
-                aria-pressed={like.liked}
-                aria-label={like.liked ? `unlike ${t.title || 'track'}` : `like ${t.title || 'track'}`}
-              >
-                {p.liking === t.id ? '…' : (
-                  <span className="inline-flex items-center gap-1">
-                    <Heart
-                      size={12}
-                      className={cn(like.liked && 'fill-vermilion text-vermilion')}
-                    />
-                    {/* Count is every like on the song; the fill is the operator's own. */}
-                    {like.count > 0 && <span className="mono-num text-[10px]">{countLabel(like.count)}</span>}
-                  </span>
-                )}
-              </Btn>
-              <Btn sm className="hidden sm:inline-flex" onClick={() => p.onQueue(t)} disabled={!!p.queuing} title="Queue on air">
-                {p.queuing === t.id ? '…' : <ListPlus size={12} />}
-              </Btn>
+                track={t}
+                like={like}
+                busy={p.liking === t.id}
+                onToggle={p.onToggleLike}
+              />
+              <QueueMenu
+                className="hidden sm:block"
+                track={t}
+                busy={p.queuing === t.id}
+                disabled={!!p.queuing}
+                onQueue={p.onQueue}
+                onQueueBlock={p.onQueueBlock}
+              />
               <Btn
                 sm
                 className="hidden sm:inline-flex"
@@ -235,8 +216,7 @@ export function TrackTable(p: TrackTableProps) {
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
-              {/* Offered on every tab: an untagged search/recent row can be tagged on
-                  the spot (/library/retag takes the row body). */}
+              {/* Offered on every tab: an untagged row can be tagged on the spot. */}
               <Btn
                 sm
                 className="hidden sm:inline-flex"
@@ -249,11 +229,9 @@ export function TrackTable(p: TrackTableProps) {
                   ? <RotateCcw size={11} />
                   : <Sparkles size={11} />}
               </Btn>
-              {/* An entry-blocked row offers the reverse, not another scope to add:
-                  one click lifts the entry that matched, wherever it was made from.
-                  A RULE-blocked row keeps the block menu — the rule may cover
-                  hundreds of rows, so lifting it lives on the Blocked tab, and an
-                  id entry on top is still a legitimate ask. */}
+              {/* An entry-blocked row offers the reverse, not another scope: one
+                  click lifts the entry that matched. A RULE-blocked row keeps the
+                  block menu, since lifting a rule lives on the Blocked tab. */}
               {t.blockedBy && t.blockedBy.kind !== 'rule' ? (
                 <Btn
                   sm
@@ -295,7 +273,7 @@ export function TrackTable(p: TrackTableProps) {
 }
 
 export function RowActionsMenu({
-  track, tagged, editing, queuing, retagging, blocking, disabled, onQueue, onEdit, onRetag, onBlock, onUnblock,
+  track, tagged, editing, queuing, retagging, blocking, disabled, onQueue, onQueueBlock, onEdit, onRetag, onBlock, onUnblock,
   like, liking, onToggleLike, onClearLikes,
 }: {
   track: Track;
@@ -306,6 +284,7 @@ export function RowActionsMenu({
   blocking: boolean;
   disabled: boolean;
   onQueue: (t: Track) => void;
+  onQueueBlock: (t: Track, kind: QueueBlockKind) => void;
   onEdit: (t: Track) => void;
   onRetag: (t: Track) => void;
   onBlock: (t: Track, type: BlockType) => void;
@@ -341,6 +320,16 @@ export function RowActionsMenu({
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueue(track))}>
             <ListPlus size={13} /> Queue on air
           </button>
+          {track.album && (
+            <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueueBlock(track, 'album'))}>
+              <ListPlus size={13} /> Queue the whole album
+            </button>
+          )}
+          {track.artist && (
+            <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueueBlock(track, 'artist'))}>
+              <ListPlus size={13} /> Queue a set by this artist
+            </button>
+          )}
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onEdit(track))}>
             {editing ? <X size={13} /> : <Pencil size={13} />} {editing ? 'Close mood editor' : 'Edit moods'}
           </button>
@@ -362,8 +351,8 @@ export function RowActionsMenu({
           )}
           <span className="my-1 block border-t border-dashed border-separator-strong" />
           {track.blockedBy?.kind === 'rule' && (
-            /* Informational, not actionable: the rule may block hundreds of rows,
-               so lifting it happens on the Blocked tab, never as a row one-click. */
+            /* Informational, not actionable: the rule may block hundreds of
+               rows, so lifting it happens on the Blocked tab. */
             <span className={cn(MENU_ITEM, 'cursor-default items-start text-muted')}>
               <Ban size={13} className="mt-px flex-none" />
               <span>
@@ -391,61 +380,11 @@ export function RowActionsMenu({
                   <Ban size={13} className="mt-px flex-none" />
                   <span>
                     Never play this artist
-                    <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+                    <span className="block text-[10px] text-muted">also blocks tracks they're only featured on — acts joined by & or , stay separate</span>
                   </span>
                 </button>
               )}
             </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// The server resolves album/artist ids from the track id, so the row only needs t.id.
-// No confirm dialog: blocking is one-click reversible from the Blocked tab.
-function BlockMenu({ track, busy, disabled, onBlock, className }: {
-  track: Track;
-  busy: boolean;
-  disabled: boolean;
-  onBlock: (t: Track, type: BlockType) => void;
-  className?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
-  useDismissOnOutside(open, () => setOpen(false), rootRef, triggerRef);
-
-  return (
-    <div ref={rootRef} className={cn('relative', className)}>
-      <Btn
-        ref={triggerRef}
-        sm
-        onClick={() => setOpen(o => !o)}
-        disabled={disabled}
-        title="Never play this on air"
-        aria-expanded={open}
-        aria-haspopup="true"
-      >
-        {busy ? '…' : <Ban size={12} />}
-      </Btn>
-      {open && (
-        <div className="absolute top-full right-0 z-50 mt-1 max-w-[calc(100vw-2rem)] min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
-            Never play this track
-          </button>
-          {track.album && (
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
-              Never play this album
-            </button>
-          )}
-          {track.artist && (
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
-              Never play this artist
-              <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
-            </button>
           )}
         </div>
       )}

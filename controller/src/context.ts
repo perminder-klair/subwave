@@ -6,7 +6,8 @@ import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
-import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenDaypartPhrase } from './time.js';
+import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
+import { nextShowChangeMs } from './broadcast/show-boundary.js';
 
 // The day-period → {vibe, show} table stays in code (these feed spoken-segment
 // prompts and show resolution). Each period's MOOD is operator-editable
@@ -258,6 +259,11 @@ export function getDateContext(date = new Date()) {
 export function getClockContext(date = new Date()) {
   const { hour: h, minute: m, dow } = zonedParts(date);
   const minutesOfDay = h * 60 + m;
+  // One band build per call, not two: this runs on every listener's 5s
+  // /now-playing poll, and `spokenTime` is by definition the band's first form
+  // (time.ts) — asking for it separately re-walked the table and allocated a
+  // second array for a value already in hand.
+  const spokenTimeForms = spokenTimePhrases(h, m);
   return {
     hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
     // What the prompts show the model — the model speaks whatever clock shape
@@ -272,7 +278,18 @@ export function getClockContext(date = new Date()) {
     // Minute-aware variant for the hourly time check — "just gone six" only
     // near :00, "half past six" mid-hour (#1282: a manual trigger at 18:31
     // still announced "just gone six in the evening").
-    spokenTime: spokenTimePhrase(h, m),
+    spokenTime: spokenTimeForms[0],
+    // Every equivalent wording of that same rounded time (#1602). The hourly
+    // prompt picks one per check so consecutive checks don't open with the
+    // identical five words; `spokenTime` stays the canonical single string for
+    // anything that wants one.
+    //
+    // CONTROLLER-INTERNAL: this is the picker's raw material, not a station
+    // fact, and routes/public.ts strips it before /now-playing goes out — a
+    // public read never widens to carry a behaviour internal. Anything else
+    // added here that is prompt plumbing rather than a fact about the moment
+    // belongs on that strip list too.
+    spokenTimeOptions: spokenTimeForms,
     // Daypart only, for the station ident — the one segment that must not
     // name the hour, because it airs minutes after it is written and the
     // hour can change in between ("three in the afternoon" on air at 3:50).
@@ -335,6 +352,48 @@ export function energyForDaypart(date = new Date()) {
   return base;
 }
 
+// The next distinct scheduled show is an optional on-air fact only in the
+// final 15 minutes of the current show. It is derived from the timetable, not
+// an LLM or routing decision, so prompt writers can safely offer a brief nod
+// without exposing any selection or control-plane context.
+export function showHandoverContext(
+  now = new Date(),
+  resolveShow: (at: Date) => any = resolveActiveShow,
+  extraBoundaries?: number[],
+) {
+  const current: any = resolveShow(now);
+  if (!current?.id) return null;
+  // This fact is exposed only inside the final quarter hour, so scan exactly
+  // that window. The shared boundary scanner handles station-zone hour marks;
+  // takeover start/expiry instants are supplied as extra candidates because
+  // they can land at any minute (#930).
+  const nowMs = now.getTime();
+  const override = getSettings()?.scheduleOverride;
+  const extras = extraBoundaries ?? (override
+    ? [Number(override.startedAt), Number(override.expiresAt)]
+    : []);
+  const boundaryMs = nextShowChangeMs({
+    fromMs: nowMs,
+    horizonMs: 15 * 60_000,
+    keyAt: (ms) => resolveShow(new Date(ms))?.id ?? 'default',
+    minuteAt: (ms) => zonedParts(new Date(ms)).minute,
+    extra: extras,
+  });
+  if (boundaryMs == null) return null;
+  const boundary = new Date(boundaryMs);
+  const next: any = resolveShow(boundary);
+  if (!next?.persona?.name) return null;
+  const { hour, minute } = zonedParts(boundary);
+  return {
+    phase: 'final-quarter-hour',
+    nextShow: {
+      name: String(next.name || '').trim(),
+      presenter: String(next.persona.name).trim(),
+      startsAt: minute === 0 ? spokenHourPhrase(hour) : spokenTimePhrases(hour, minute)[0],
+    },
+  };
+}
+
 // Combined snapshot — what's the vibe right now? Pass `at` to resolve the
 // clock-derived parts (time, festival, date, clock, active show, and therefore
 // dominantMood) for a future moment instead — the queue watcher uses this to
@@ -389,5 +448,8 @@ export async function getFullContext(at?: Date) {
   // roll, stamps the OUTGOING persona onto the INCOMING show's session and
   // makes stampRolledFrom see no persona change at all (mic-pass suppressed).
   // Note this is distinct from `date` (getDateContext's calendar strings).
-  return { at: now.toISOString(), time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  return {
+    at: now.toISOString(), time, weather, festival, dominantMood, date, clock,
+    activeShow, showHandover: showHandoverContext(now), listeners,
+  };
 }

@@ -152,7 +152,7 @@ function renderSettingsSnapshot(): string {
     `- LLM: ${providerName()} · ${activeModelLabel()} · pickerAgent ${llm.pickerAgent === false ? 'OFF' : 'ON'} · reasoning ${llm.reasoning ? 'ON' : 'OFF'} · agentDeadline ${Math.round(Number(llm.agentTimeoutMs || 0) / 1000)}s · numCtx ${llm.numCtx ?? 'n/a'} · toolChoice ${llm.toolChoice || 'required'} · maxOutputTokens ${llm.maxOutputTokens || 'default'}`,
     `- Budget: ${budget} · exemptRequests ${llm.exemptRequests === false ? 'OFF' : 'ON'} · pauseWhenEmpty ${llm.pauseWhenEmpty ? 'ON' : 'OFF'}`,
     `- Picking: noRepeatWindow ${llm.noRepeatWindow ?? 'n/a'} · requestWebResolve ${llm.requestWebResolve ? 'ON' : 'OFF'}`,
-    `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
+    `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} (${s?.jingleRotate === 'controller' ? 'controller' : 'mixer'}) · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
     `- Voice: default TTS ${s?.tts?.defaultEngine || 'piper'}`,
     `- Analysis: audio.embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · vocalActivity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
     `- Search: ${s?.search?.provider || 'duckduckgo'}`,

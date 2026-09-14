@@ -1,29 +1,17 @@
-// Shared onboarding schemas — the two PROBE bodies and the handful of rules
-// the save handler had to hand-roll BECAUSE settings.update() does not own
-// them. Executed on BOTH sides: the controller runs them at the route boundary
-// and inside /onboarding/save; the browser (web/components/onboarding) runs the
-// mirrored copy so a rule can hold a button shut instead of only answering a
-// pressed one.
+// Shared onboarding schemas — the two PROBE bodies and the rules the save
+// handler hand-rolls because settings.update() does not own them. Run at the
+// route boundary, inside /onboarding/save, and by web/components/onboarding.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle. Enforced by controller/eslint.config.mjs and gen-schemas.ts.
-//
-// What is deliberately NOT here: the settings pass-through. Most of
-// POST /onboarding/save forwards partial llm / tts / personas / weather
-// patches to settings.update(), and a schema in front of that is the /settings
-// mega-endpoint problem in miniature — worse than nothing, because z.object
-// would strip whatever the wizard learns to send next. Converted is only what
-// the ROUTE owns.
+// Deliberately NOT here: the settings pass-through. Most of /onboarding/save
+// forwards partial patches to settings.update(), and z.object would strip
+// whatever the wizard learns to send next.
 import { z } from 'zod';
 
 /**
- * One normalisation for Navidrome credentials, everywhere they travel: trim,
- * and strip trailing slashes off the url — `${url}/rest/ping` against a stored
- * `…:4533/` double-slashes and some proxies 404 it. The PROBE requires all
- * three fields; save must NOT (skipping Navidrome is a supported way through
- * the wizard, and the shell posts the block with empty strings) — so the
- * strict schema below and this lenient helper share the normalisation rather
- * than each stating their own.
+ * One normalisation for Navidrome credentials: trim, and strip trailing slashes
+ * off the url (`${url}/rest/ping` against a stored `…:4533/` double-slashes and
+ * some proxies 404 it). The PROBE requires all three fields; save must not —
+ * skipping Navidrome is a supported way through the wizard.
  */
 export function normalizeNavidromeCredentials(raw: unknown): {
   url: string;
@@ -47,9 +35,8 @@ export const navidromeProbeSchema = z
     'url, user, and pass are required',
   );
 
-// POST /onboarding/test-llm. The openai-compatible rule used to be a `throw`
-// inside the probe's provider switch, so the only way to discover it was to
-// press Test and wait — in the schema it also holds the wizard's button shut.
+// POST /onboarding/test-llm. The openai-compatible rule lives here rather than
+// in the probe so it also holds the wizard's button shut.
 export const llmProbeSchema = z
   .unknown()
   .transform((raw) => {
@@ -70,14 +57,9 @@ export const llmProbeSchema = z
 export type LlmProbeInput = z.output<typeof llmProbeSchema>;
 
 /**
- * Fish Audio's provider-specific save rule: a message, or null when fine.
- *
- * Deliberately NOT a schema over the tts patch — a schema that has to strip
- * nothing is the wrong tool when the object belongs to settings.update(); this
- * helper inspects one nested block without claiming ownership of the object
- * around it. It is the ONE copy: the route ran `1-100` while the wizard ran
- * `1–100` — same logic, drifted message, which is what the drift looks like
- * *before* it becomes a bug.
+ * Fish Audio's provider-specific save rule: a message, or null when fine. Not a
+ * schema, because the tts patch belongs to settings.update() — this inspects one
+ * nested block without owning the object around it. Keep it the ONE copy.
  */
 export function fishAudioIssue(cloud: unknown): string | null {
   const c = (cloud && typeof cloud === 'object' ? cloud : {}) as Record<string, unknown>;

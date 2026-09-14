@@ -1,6 +1,5 @@
 // Single source of truth for the LLM provider picker, shared by the Settings LLM
-// tab and the onboarding wizard's LLM step. Mirrors the TTS engineMeta.ts.
-// No React, no DOM — safe to unit-import.
+// tab and the onboarding wizard. No React, no DOM -- safe to unit-import.
 
 export type ProviderKind = 'local' | 'self-hosted' | 'cloud';
 
@@ -10,7 +9,7 @@ export interface ProviderMeta {
   label: string;
   // One-line descriptor under the name — what the operator is choosing.
   blurb: string;
-  // local: runs on a box you own, no key (ollama/locca). self-hosted: your own
+  // local: runs on a box you own, no key. self-hosted: your own
   // OpenAI-compatible server, key optional. cloud: hosted vendor, needs a key.
   kind: ProviderKind;
   // Controller env var the key is read from — cloud providers only.
@@ -19,7 +18,7 @@ export interface ProviderMeta {
 
 // Order mirrors the controller's settings.LLM_PROVIDERS. The grid renders
 // data.llm.providers (server-authoritative) and looks each id up here, so a
-// provider the server adds before this map does still renders as a bare card.
+// provider the server adds first still renders as a bare card.
 export const PROVIDERS: ProviderMeta[] = [
   { id: 'ollama',            label: 'Ollama',            blurb: 'Homelab box · no key',          kind: 'local' },
   { id: 'locca',             label: 'locca',             blurb: 'Local llama.cpp · no key',       kind: 'local' },
@@ -37,12 +36,10 @@ export const PROVIDER_META: Record<string, ProviderMeta> = Object.fromEntries(
   PROVIDERS.map(p => [p.id, p]),
 );
 
-// Default render order (local first). Settings passes the server's list instead;
-// onboarding has none yet and maps over this.
+// Default render order (local first). Settings passes the server's list instead.
 export const PROVIDER_IDS: string[] = PROVIDERS.map(p => p.id);
 
-// Derived from PROVIDERS so the two never drift; exported because SettingsPanel
-// indexes it directly.
+// Derived from PROVIDERS so the two never drift.
 export const LLM_ENV_VARS: Record<string, string> = Object.fromEntries(
   PROVIDERS.filter(p => p.envVar).map(p => [p.id, p.envVar as string]),
 );
@@ -71,12 +68,10 @@ export interface ProviderStatus {
 }
 
 // Local providers are always "ready" (no key to miss) and a self-hosted
-// OpenAI-compatible server's bearer is optional, so it reads ready too. The one
-// `warn` case is a cloud provider whose key var isn't set — the #1
-// switch-and-it-fails misconfiguration this grid exists to surface before save.
-//
-// keyAware=false is the onboarding case: first-run has no live controller env, so
-// cloud providers read as a neutral "needs key" rather than a red "no key".
+// OpenAI-compatible server's bearer is optional. The one `warn` case is a cloud
+// provider whose key var isn't set. keyAware=false is the onboarding case:
+// first-run has no live controller env, so cloud providers read as a neutral
+// "needs key" rather than a red "no key".
 export function providerStatus(
   id: string,
   env: Record<string, unknown> | undefined,

@@ -69,19 +69,37 @@ export const ANGLES = {
   ],
 };
 
-// Uniform random, but never the same angle twice running for a kind — on an
+// Uniform random, but never the same entry twice running for a key — on an
 // aggressive station (3 idents/hour) a ~20% consecutive-repeat chance made the
 // segment shape audibly settle. The opener blocklist only guards first words;
 // this guards the whole framing.
-const lastAngleIdx = new Map<string, number>();
+//
+// One picker for both callers rather than two copies of the same four lines:
+// the hourly time wording (#1602) needs exactly this rule, and the rule is the
+// interesting part — a plain random pick repeats often enough to be heard.
+const lastPickIdx = new Map<string, number>();
 
-export function pickAngle(kind: string) {
-  const list = (ANGLES as any)[kind];
+function pickVaried<T>(key: string, list: readonly T[] | null | undefined): T | null {
   if (!list || list.length === 0) return null;
   let idx = Math.floor(Math.random() * list.length);
-  if (list.length > 1 && idx === lastAngleIdx.get(kind)) idx = (idx + 1) % list.length;
-  lastAngleIdx.set(kind, idx);
+  if (list.length > 1 && idx === lastPickIdx.get(key)) idx = (idx + 1) % list.length;
+  lastPickIdx.set(key, idx);
   return list[idx];
+}
+
+export function pickAngle(kind: string): string | null {
+  return pickVaried<string>(`angle:${kind}`, (ANGLES as any)[kind]);
+}
+
+// Which wording of the rounded time the hourly check announces (#1602). The
+// time itself is the code's — `time.ts` builds the band, every form in it says
+// the same rounded time, and the prompt still dictates the ONE string this
+// returns. Picking here rather than listing the band in the prompt is
+// deliberate: a time clause that offers the model options is the latitude
+// #1282 removed, and a model handed a list leans on its first entry anyway,
+// which is the repetition being fixed.
+export function pickTimePhrase(options: readonly string[] | null | undefined) {
+  return pickVaried('time-phrase', options);
 }
 
 export function randomSeed() {

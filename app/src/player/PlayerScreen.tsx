@@ -1,18 +1,11 @@
-// The player composition root — native analog of web PlayerApp. Wires the
-// station feed + RNTP player + signal meter + lock-screen metadata + cover-tint
-// wash, and lays the app out as an FM-dial swipe pager: a persistent TopBar and
-// FreqBand tuner above a horizontal pager whose five "stations" are
-// Shows / Timeline / LIVE / Booth / Request, with LIVE dead-centre as home.
-// Swipe (or tap a band stop) to tune across sections; the needle tracks the
-// scroll. The TransportBar is docked below the pager so the player stays
-// visible on every band stop, bottom-nav style. Themes open in a bottom sheet
-// from the palette icon, off-band.
+// Player composition root: station feed, RNTP player, signal meter,
+// lock-screen metadata and cover tint, laid out as an FM-dial swipe pager
+// (Shows / Timeline / LIVE / Booth / Request, LIVE centre) over a docked
+// TransportBar.
 //
-// Render-path notes: the pager's scroll drives the FreqBand needle through a
-// native-driver Animated.Value (no per-frame React state), and the four
-// non-LIVE pages are memo'd so the 1s elapsed tick and 5s feed poll only
-// re-render the pages whose data actually changed (useStationFeed keeps
-// unchanged payloads reference-stable for exactly this reason).
+// The pager's scroll drives the FreqBand needle on the native driver, and the
+// four non-LIVE pages are memo'd so the 1s tick and 5s poll only re-render
+// pages whose data changed (useStationFeed keeps payloads reference-stable).
 
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -68,11 +61,10 @@ import SleepDrawer from './drawers/SleepDrawer';
 import ThemesDrawer from './drawers/ThemesDrawer';
 import TimelineDrawer from './drawers/TimelineDrawer';
 
-// Stations this app run has already beaconed — remounts/station round-trips
-// must not double count (the controller additionally dedupes by IP).
+// Stations this app run has already beaconed, so remounts and station
+// round-trips don't double count (the controller also dedupes by IP).
 const beaconedBases = new Set<string>();
 
-// FM-dial band: the swipeable pager sections, LIVE in the centre.
 const PAGES: readonly BandStop[] = [
   { id: 'schedule', label: 'Shows', abbr: 'SHWS' },
   { id: 'timeline', label: 'Timeline', abbr: 'TML' },
@@ -83,9 +75,6 @@ const PAGES: readonly BandStop[] = [
 const HOME_INDEX = PAGES.findIndex((p) => p.id === 'now');
 const BOOTH_INDEX = PAGES.findIndex((p) => p.id === 'booth');
 const TIMELINE_INDEX = PAGES.findIndex((p) => p.id === 'timeline');
-
-// Memo'd page bodies — props are reference-stable between polls (see
-// useStationFeed), so off-screen pages skip render on feed ticks entirely.
 
 const SchedulePage = memo(function SchedulePage({
   api,
@@ -183,11 +172,9 @@ export default function PlayerScreen() {
 
   const { isConnected } = useConnectivity();
 
-  // The feed must be called before the player: the player tunes with the
-  // stream format, which useStreamFormat validates against the feed's
-  // streamInfo — but the feed's backgroundPoll winds down on the player's
-  // tunedIn. `bgPoll` mirrors tunedIn into state to break that cycle (one
-  // extra render per tune toggle, nothing per-poll).
+  // The feed must be called before the player (the player tunes with a format
+  // validated against the feed's streamInfo), but the feed's backgroundPoll
+  // depends on the player's tunedIn. `bgPoll` breaks that cycle.
   const [bgPoll, setBgPoll] = useState(false);
   const {
     nowPlaying,
@@ -205,15 +192,14 @@ export default function PlayerScreen() {
     trackStartedAt,
     timezone,
     locale,
-    // While tuned in LOCALLY, keep a slow background poll alive so the lock
-    // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
-    // polls nothing at all. While casting there's no local audio session, so
-    // the OS suspends us in the background anyway — no point polling.
+    // Tuned in locally: a slow background poll keeps the lock screen current.
+    // Idle or casting polls nothing (casting has no local audio session, so
+    // the OS suspends us in the background anyway).
   } = useStationFeed(api, { backgroundPoll: bgPoll });
   const boothFeed = session.messages;
 
-  // Listener-picked stream format (MP3 floor / Opus / FLAC / AAC), per
-  // station, gated on platform decodability + the mounts the station serves.
+  // Per-station format pick, gated on platform decodability and the mounts the
+  // station serves.
   const streamFormat = useStreamFormat(api?.base ?? null, streamInfo);
   const localPlayer = usePlayer(api, 1, isConnected, streamFormat.format);
   useEffect(() => {
@@ -230,9 +216,9 @@ export default function PlayerScreen() {
 
   const trackLike = useTrackLike(api, nowPlaying?.subsonic_id ?? null);
 
-  // Google Cast, merged over the local player: with no session this is
-  // localPlayer untouched; while connected, tune/stop/volume/status re-target
-  // the Cast device and local playback stays torn down (see useCast).
+  // Cast merged over the local player: with no session this is localPlayer
+  // untouched; while connected it re-targets the Cast device and local
+  // playback stays torn down.
   const { player, cast } = useCast(api, localPlayer, {
     stationName,
     djName,
@@ -243,9 +229,8 @@ export default function PlayerScreen() {
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
 
-  // Sleep timer: tune out when it lapses. An explicit tune-out (or a station
-  // switch tearing playback down) also disarms it — a timer armed for one
-  // listen must not ambush the next one.
+  // Sleep timer: tune out when it lapses, and disarm on any tune-out so a
+  // timer armed for one listen can't ambush the next.
   const sleep = useSleepTimer(stop);
   const cancelSleep = sleep.cancel;
   const prevTunedInRef = useRef(tunedIn);
@@ -255,10 +240,8 @@ export default function PlayerScreen() {
     if (was && !tunedIn) cancelSleep();
   }, [tunedIn, cancelSleep]);
 
-  // One-shot audience beacon per station per app run — the native analog of
-  // the web PlayerApp's referrer beacon. An app has no document.referrer or
-  // UTM query, so report the platform as the source; that's how native
-  // listeners become visible in the admin Stats audience rollup at all.
+  // One audience beacon per station per app run. An app has no referrer or UTM
+  // query, so the platform is the source.
   useEffect(() => {
     if (!api || beaconedBases.has(api.base)) return;
     beaconedBases.add(api.base);
@@ -270,16 +253,12 @@ export default function PlayerScreen() {
 
   const coverColors = useCoverColors(coverSrc);
 
-  // Push lock-screen / CarPlay metadata from the feed — keyed on LOCAL
-  // playback: while casting nothing plays through RNTP, so there's no media
-  // session to decorate (the Cast device shows its own metadata).
+  // Lock-screen / CarPlay metadata, keyed on LOCAL playback: while casting
+  // nothing runs through RNTP, so there is no media session to decorate.
   useNowPlayingInfo({ api, tunedIn: localPlayer.tunedIn, nowPlaying, boothFeed, activeShow });
 
-  // The same card again, on the surfaces the OS media controls don't reach:
-  // Lock Screen, Dynamic Island, and — the reason it exists — the Apple Watch
-  // Smart Stack, which iOS mirrors it into without a watchOS target. iOS-only
-  // and self-gating; a no-op everywhere else. Keyed on LOCAL playback for the
-  // same reason as the lock screen above.
+  // The same card on the Live Activity surfaces (Lock Screen, Dynamic Island,
+  // watch Smart Stack). iOS-only and self-gating; keyed on local playback too.
   useLiveActivity({
     api,
     tunedIn: localPlayer.tunedIn,
@@ -292,17 +271,14 @@ export default function PlayerScreen() {
     like: trackLike,
   });
 
-  // Tear down playback if the station drops off air mid-listen. `offline` is
-  // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive
-  // offline polls) so a transient controller blip can't kill live audio
-  // (#463/#466).
+  // Tear down playback if the station drops off air. `offline` is debounced
+  // upstream so a transient blip can't kill live audio (#463/#466).
   useEffect(() => {
     if (offline && tunedIn) stop();
   }, [offline, tunedIn, stop]);
 
-  // --- swipe pager -------------------------------------------------------
-  // Animated.ScrollView forwards its ref to the inner ScrollView (RN ≥0.62),
-  // so scrollTo is available directly.
+  // Animated.ScrollView forwards its ref to the inner ScrollView, so scrollTo
+  // is available directly.
   const pagerRef = useRef<ScrollView>(null);
   const [pagerW, setPagerW] = useState(0);
   const [active, setActive] = useState(HOME_INDEX);
@@ -315,8 +291,8 @@ export default function PlayerScreen() {
     if (w > 0 && w !== pagerW) setPagerW(w);
   };
 
-  // Land on LIVE without animating the first scroll (belt-and-suspenders for
-  // platforms that ignore the ScrollView's initial contentOffset).
+  // Land on LIVE without animating, for platforms that ignore the
+  // ScrollView's initial contentOffset.
   useEffect(() => {
     if (pagerW > 0 && !didInit.current) {
       didInit.current = true;
@@ -325,8 +301,8 @@ export default function PlayerScreen() {
     }
   }, [pagerW, scrollX]);
 
-  // The needle rides scrollX on the native driver; React state only changes
-  // when the snapped-to page does (one update per page change, not per frame).
+  // The needle rides scrollX on the native driver; React state changes once
+  // per page change, not per frame.
   const onPagerScroll = useMemo(
     () =>
       Animated.event([{ nativeEvent: { contentOffset: { x: scrollX } } }], {
@@ -361,10 +337,8 @@ export default function PlayerScreen() {
   const openTimeline = useCallback(() => goToPage(TIMELINE_INDEX), [goToPage]);
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
-  // One bottom sheet, content switched by the active drawer (the Sheet
-  // component's intended pattern): the masthead's single button opens the
-  // "back panel"; its TIMER/FASCIA rows swap content in place — no
-  // modal-dismissal race between stacked sheets.
+  // One bottom sheet whose content is switched by the active drawer, so
+  // stacked sheets can't race each other's dismissal.
   const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | null>(
     null,
   );
@@ -372,15 +346,13 @@ export default function PlayerScreen() {
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
   );
-  // Hide the SIGNAL row when there is nothing to choose (only the MP3 floor is
-  // pickable on this device for this station) — mirrors the web skin picker.
+  // Hide the SIGNAL row when only the MP3 floor is pickable here.
   const streamFormatLabel =
     streamFormat.options.length > 1 ? formatLabel(streamFormat.format) : null;
 
-  // Footprints of the two frosted overlays (masthead/dial header at the top,
-  // transport bar at the bottom). The pager fills the full height behind both,
-  // and each page pads its scroll top/bottom by these so content reads as
-  // flowing under the frosted glass yet still scrolls fully clear.
+  // Footprints of the two frosted overlays. The pager fills the full height
+  // behind both; each page pads its scroll by these so content flows under the
+  // glass yet still scrolls clear.
   const [barInset, setBarInset] = useState(120);
   const onBarLayout = useCallback((e: LayoutChangeEvent) => {
     const h = e.nativeEvent.layout.height;
@@ -393,8 +365,7 @@ export default function PlayerScreen() {
     if (h > 0) setHeaderInset((prev) => (Math.abs(prev - h) > 0.5 ? h : prev));
   }, []);
 
-  // Frosted-glass film shared by both overlays — soft white in light themes, a
-  // faint ink wash in dark — matching the transport bar's glass treatment.
+  // Frosted-glass film shared by both overlays.
   const glassFilm = mode === 'light' ? 'rgba(255,255,255,0.22)' : `${colors.ink}12`;
 
   const tint = coverColors.vibrant;

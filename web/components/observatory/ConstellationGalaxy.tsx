@@ -1,14 +1,10 @@
 /* Library Observatory — the galaxy (WebGL renderer).
-   Every track is a GPU point sprite (three.js) over an additive nebula
-   underlay, faint synapse filaments, and an UnrealBloom pass. The stage is
-   always night because bloom needs a dark ground truth in both site themes, so
-   `.cmap-galaxy` re-declares the theme vars locally and node colours get a
-   legibility lift (see liftNight).
-
-   Semantic zoom, not bigger dots: star screen-size grows sublinearly with zoom
-   (k^0.45), genre constellation names fade OUT as you dive, track labels fade
-   IN where local density allows. Labels live in one CSS-transformed HTML layer
-   so pan/zoom never re-lays-out the DOM; each counter-scales via a single --inv.
+   Track = GPU point sprite (three.js) over an additive nebula, synapse
+   filaments and an UnrealBloom pass. The stage is always night: bloom needs a
+   dark ground truth in both site themes, so `.cmap-galaxy` re-declares the
+   theme vars locally and node colours get a legibility lift (liftNight).
+   Labels live in one CSS-transformed HTML layer so pan/zoom never re-lays-out
+   the DOM; each counter-scales via a single --inv.
 
    Rendering is on-demand: a frame draws only when view/data/selection change
    (plus a ~1.1s GPU-side entrance), and an IntersectionObserver skips draws
@@ -90,9 +86,8 @@ function parseRGB(c: string): [number, number, number] {
   return m && m.length >= 3 ? [Number(m[0]), Number(m[1]), Number(m[2])] : [74, 68, 61];
 }
 
-// The ink→vermilion palette was tuned for paper; its dark end vanishes on the
-// night stage. Lift anything below a luminance floor toward warm paper so hue
-// survives. Applied to legend swatches too, so the key can't lie about the map.
+// Lift palette colours below a luminance floor toward warm paper so hue
+// survives the night stage. Legend swatches use it too, so the key can't lie.
 export function liftNight(c: string): [number, number, number] {
   const [r, g, b] = parseRGB(c);
   const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -796,9 +791,8 @@ export default function ConstellationGalaxy({
     });
 
   // Fly-to. Screen centre is always viewbox (500,500) under meet-fit
-  // letterboxing, so the target is exact regardless of stage aspect. Zoom eases
-  // geometrically (perceptually linear), translation linearly on the same eased
-  // parameter — the focal point drifts a hair mid-flight but lands exactly.
+  // letterboxing, so the target is exact at any stage aspect. Zoom eases
+  // geometrically, translation linearly on the same eased parameter.
   const flyRaf = useRef<number | null>(null);
   useEffect(() => {
     if (!focus) return;

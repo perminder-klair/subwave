@@ -70,6 +70,23 @@ footer, for anything that breaks compatibility.
 PR titles follow the same convention — squash-merging keeps history clean, and
 the commit carries through `develop` → `main`, where release-please reads it.
 
+Commits on `develop` are authored by the repo owner and carry no third-party
+trailers. That holds when a commit is written, but not in GitHub's squash box,
+which prefills the message from every commit on the branch plus the PR body — so
+for ordinary PRs squash-merged into `develop`, read that message before
+confirming. **The default is to delete the inherited tail**: keep the
+conventional PR title as the subject, keep the body you would have written for
+the commit yourself, and drop the concatenated branch commit messages under it.
+Remove anything that rode in that way — attribution trailers
+(`Co-Authored-By:`) and tool or session metadata (`Claude-Session:`,
+generated-by footers, session links).
+
+Two things survive the cut: a `Co-Authored-By:` line you are deliberately
+keeping to credit a genuine human co-author, and a `BREAKING CHANGE:` footer the
+change actually needs. The release PR is merged rather than squashed, for
+reasons of its own — see
+[`.claude/skills/subwave-release-pr/SKILL.md`](.claude/skills/subwave-release-pr/SKILL.md).
+
 ## Releases
 
 You don't cut releases by hand. Maintainers merge `develop` into `main` to ship;

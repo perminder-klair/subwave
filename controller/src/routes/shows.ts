@@ -1,26 +1,17 @@
-// Admin-gated install of a community SHOW template into the station's show list.
-//
-// A shared show (community, fetched via community/registry.ts) carries
-// only portable substance — a brief (topic) + music-steering filters + mode
-// flags. Everything install-specific is re-bound HERE: the host persona defaults
-// to the station's active persona, there are no guests, no theme override, no
-// playlist anchors, and the show is NOT placed in the weekly schedule grid. The
-// operator then edits it in /admin/shows to assign a persona and drop it into a
-// slot. Mirrors the community persona install (routes/personas.ts).
-//
-// Reading/writing shows themselves still travels inside GET/POST /settings — this
-// route only adds the one-tap community install (validateShowsStrict runs inside
-// settings.update(), which mints the s_ id and routes the show into
-// state/schedule.json).
+// Admin show routes: per-show upsert/delete, the weekly grid, timed takeovers,
+// and the one-tap community install. Reading shows still travels inside
+// GET/POST /settings, and settings.update() stays the validation chokepoint.
 
 import express from 'express';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import {
+  isDefaultTakeover,
   resolveScheduleSlots,
   scheduleOverrideRequestSchema,
   scheduleSaveSchema,
+  takeoverShowId,
 } from '../schemas/schedule.js';
 import { showPostSchema } from '../schemas/show.js';
 import { listThemes } from '../themes.js';
@@ -28,14 +19,14 @@ import { readCommunityShow } from '../shows/community.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
 import { rollSessionNow } from '../broadcast/scheduler.js';
+import { resolveTakeoverWindowNow } from '../broadcast/takeover-window.js';
 import { diagnoseShowCandidates } from '../music/show-candidates.js';
 
 export const router = express.Router();
 
-// The show schema is a factory over live state (roster, mood vocabulary, theme
-// registry, the crossfade-derived track-length floor) — the same four inputs
-// update() assembles for validateShowsStrict. Built per request so a persona
-// added seconds ago is a legal host immediately.
+// The show schema is a factory over live state, the same four inputs update()
+// assembles for validateShowsStrict. Built per request so a persona added
+// seconds ago is a legal host immediately.
 async function showPostContext() {
   await settings.load();
   const s = settings.get();
@@ -75,9 +66,8 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     return res.status(409).json({ error: `a show named "${cs.name}" already exists` });
   }
 
-  // Host defaults to the active persona (always present on a booted station); the
-  // operator reassigns it in /admin/shows. No id supplied → validateShowsStrict
-  // mints an s_ id. themeId/playlists empty; not placed in the schedule grid.
+  // Host defaults to the active persona; the operator reassigns it later. With
+  // no id supplied validateShowsStrict mints the s_ id. Not placed in the grid.
   const personaId = s.activePersonaId || s.personas?.[0]?.id;
   if (!personaId) {
     return res.status(409).json({ error: 'no persona in the roster to host the show — add a persona first' });
@@ -98,8 +88,10 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     vocals: cs.vocals,
     filtersStrict: cs.filtersStrict,
     maxTrackSeconds: cs.maxTrackSeconds,
+    minTrackLengthSeconds: cs.minTrackLengthSeconds,
     playlistIds: [],
     playlistStrict: false,
+    playlistExhaust: false,
     excludedPlaylistIds: [],
   };
 
@@ -115,15 +107,10 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
   }
 });
 
-// ---------------------------------------------------------------------------
-// DELETE /shows/:id — remove one show and persist immediately, so a delete
-// takes effect on its own action instead of waiting for a "Save schedule" that
-// also commits every other pending edit. The deleted show is also unscheduled
-// from every weekly grid slot in the SAME update — validateScheduleStrict
-// rejects a slot that references an unknown show, so shows + a cleaned schedule
-// must persist together. Operates on the server's persisted state, so it works
-// regardless of any unsaved edits the admin panel is holding locally.
-// ---------------------------------------------------------------------------
+// Removes one show and unschedules it from the grid in the SAME update:
+// validateScheduleStrict rejects a slot referencing an unknown show, so shows
+// and a cleaned schedule must persist together. Reads the persisted state, not
+// whatever the panel is holding locally.
 router.delete('/shows/:id', requireAdmin, async (req, res) => {
   const id = String(req.params.id);
 
@@ -154,19 +141,11 @@ router.delete('/shows/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /shows — upsert ONE show (add or edit), so the editor's "Save show"
-// persists just that show, independent of any other unsaved/half-finished show
-// the panel is holding. Merges the incoming show into the server's persisted
-// list (replace when the id matches, else append), then settings.update()
-// re-validates the whole array — the other persisted shows are already valid, so
-// only the incoming one can fail. The schedule is untouched (a new show isn't
-// referenced yet; an edited show keeps its id). A client-minted `s_` id survives
-// validateShowsStrict, so grid slots that already point at the show stay valid.
-// ---------------------------------------------------------------------------
+// Upsert ONE show: merge into the persisted list (replace on id match, else
+// append) and let settings.update() re-validate the whole array. The schedule
+// is untouched, and a client-minted s_ id survives validation so grid slots
+// already pointing at the show stay valid.
 router.post('/shows', requireAdmin, validateBodyAsync(showPostContext), async (req, res) => {
-  // validateBodyAsync ran the shared schema, so this is the parsed show — the
-  // same value settings.update() will re-validate as the chokepoint.
   const incoming = req.body.show;
 
   await settings.load();
@@ -196,31 +175,68 @@ router.post('/shows', requireAdmin, validateBodyAsync(showPostContext), async (r
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /schedule/override — pin a show for N minutes (#930): a timed takeover
-// that outranks the weekly grid in resolveActiveShow, then lapses back to
-// normal programming on its own. Re-POSTing while one is live replaces it
-// (switch show or extend the window). The session roll is fire-and-forget —
-// the response returns as soon as the override is persisted; the on-air
-// handoff (LLM + TTS) airs in the background, and the switch fully lands at
-// the next track boundary like any show change.
-// ---------------------------------------------------------------------------
-// The shape (a show id, an integer minute count inside the bounds) comes from
-// the shared schema; the roster lookup below stays here because "no such show"
-// needs server state and answers 404, not 400.
+// What `until: 'schedule-change'` would resolve to if the takeover started now.
+// Advisory only: POST /schedule/override resolves the window again at its own
+// startedAt. Kept off the public GET /schedule because the scan walks a minute
+// at a time over a twelve-hour horizon.
+router.get('/schedule/next-change', requireAdmin, async (_req, res) => {
+  try {
+    await settings.load();
+    res.json(resolveTakeoverWindowNow());
+  } catch (err: any) {
+    queue.log('error', `GET /schedule/next-change failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Pin a show or Default programming for a bounded window; re-POSTing replaces a
+// live one. The session roll is fire-and-forget, so the switch lands on-air at
+// the next track boundary. The roster lookup stays here because "no such show"
+// needs server state and answers 404, not 400. `until: 'schedule-change'`
+// (#1601) is spent here and never persisted: what is stored is an ordinary
+// ScheduleOverride either way.
 router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideRequestSchema), async (req, res) => {
-  const { showId, minutes } = req.body as { showId: string; minutes: number };
+  const { showId, minutes, until } = req.body as {
+    showId: string | null;
+    minutes?: number;
+    until: 'fixed' | 'schedule-change';
+  };
 
   await settings.load();
-  const show = (settings.get().shows || []).find((s: any) => s.id === showId);
-  if (!show) return res.status(404).json({ error: `no such show: ${showId}` });
+  // The same two predicates the resolver reads the stored target with, so the
+  // route cannot answer a target differently from the resolver.
+  const pinnedId = takeoverShowId(req.body);
+  const show = pinnedId ? (settings.get().shows || []).find((s: any) => s.id === pinnedId) : null;
+  if (!isDefaultTakeover(req.body) && !show) {
+    return res.status(404).json({ error: `no such show: ${showId}` });
+  }
 
   const startedAt = Date.now();
-  const override = { showId, startedAt, expiresAt: startedAt + minutes * 60_000 };
+  // Must resolve AFTER settings.load(): a stale roster ends the window at a
+  // boundary the saved schedule no longer has.
+  const resolved = until === 'schedule-change' ? resolveTakeoverWindowNow(startedAt) : null;
+  // `minutes` is optional in the schema only under 'schedule-change', so the
+  // non-null assertions below are exactly what the schema guarantees.
+  const windowMinutes = resolved ? resolved.minutes : minutes!;
+  const expiresAt = resolved ? resolved.expiresAt : startedAt + minutes! * 60_000;
+  const override = { showId, startedAt, expiresAt };
+  // So the booth log records a clamp rather than an unexplained duration.
+  const reason = resolved
+    ? {
+      schedule: ' (until the schedule changes)',
+      maximum: ' (the schedule has no change in reach)',
+      ceiling: ' (the next change is further out than a takeover can run)',
+    }[resolved.source]
+    : '';
   try {
     await settings.update({ scheduleOverride: override });
-    queue.log('scheduler', `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`);
-    void rollSessionNow();
+    queue.log(
+      'scheduler',
+      show
+        ? `[takeover] "${show.name}" pinned for ${windowMinutes} min${reason} via admin UI`
+        : `[takeover] Default programming selected for ${windowMinutes} min${reason} via admin UI`,
+    );
+    void rollSessionNow({ manual: true, reason: 'takeover started' });
     res.json({ override });
   } catch (err: any) {
     queue.log('error', `POST /schedule/override failed: ${err.message}`);
@@ -228,11 +244,8 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
   }
 });
 
-// ---------------------------------------------------------------------------
-// DELETE /schedule/override — cancel a takeover early and resume the weekly
-// schedule. Idempotent: clearing an already-clear override succeeds without
-// airing anything.
-// ---------------------------------------------------------------------------
+// Cancel a takeover early. Idempotent: clearing an already-clear override
+// succeeds without airing anything.
 router.delete('/schedule/override', requireAdmin, async (req, res) => {
   await settings.load();
   const existing = settings.get().scheduleOverride;
@@ -240,7 +253,7 @@ router.delete('/schedule/override', requireAdmin, async (req, res) => {
     await settings.update({ scheduleOverride: null });
     if (existing) {
       queue.log('scheduler', '[takeover] cancelled via admin UI — back to the weekly schedule');
-      void rollSessionNow();
+      void rollSessionNow({ manual: true, reason: 'takeover cancelled' });
     }
     res.json({ override: null });
   } catch (err: any) {
@@ -249,18 +262,10 @@ router.delete('/schedule/override', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// PUT /schedule — save ONLY the weekly grid, so "Save schedule" writes the
-// schedule and nothing else (show definitions persist via POST /shows / the
-// delete route). Any slot pointing at a show that isn't persisted (a locally
-// added show the operator hasn't saved yet, or one just removed) is dropped
-// rather than rejected — validateScheduleStrict would otherwise throw on an
-// unknown show. `dropped` tells the client how many slots were skipped.
-// ---------------------------------------------------------------------------
-// validateBody runs the shared schema with `showIds: null` — SHAPE only. The
-// ids are resolved afterwards against the live roster by resolveScheduleSlots,
-// which drops and counts rather than rejecting, because the editor can hold a
-// locally-added show the operator hasn't saved yet.
+// Saves ONLY the weekly grid. validateBody runs the shared schema with
+// `showIds: null`, SHAPE only; ids are resolved afterwards by
+// resolveScheduleSlots, which DROPS and counts an unknown show rather than
+// rejecting, because the editor can hold a show the operator hasn't saved yet.
 router.put('/schedule', requireAdmin, validateBody(scheduleSaveSchema), async (req, res) => {
   await settings.load();
   const ids = (settings.get().shows || []).map((s: any) => s.id);

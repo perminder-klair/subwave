@@ -1,8 +1,6 @@
-// Per-listener theme picker, styled after the web mock's theme grid: a
-// "Follow station" row, then a 2-column grid of theme cards — each a tri-tone
-// swatch (bg / ink / accent) above a name bar painted in the theme's own colours
-// with an accent dot. Selecting overrides the palette locally; "Follow station"
-// clears the override. Reads the station's registry via ThemeContext.
+// Per-listener theme picker: a "Follow station" row above a grid of theme
+// cards. Selecting overrides the palette locally; "Follow station" clears the
+// override. Reads the station's registry via ThemeContext.
 
 import { Check } from 'lucide-react-native';
 import { Pressable, Text, View } from 'react-native';

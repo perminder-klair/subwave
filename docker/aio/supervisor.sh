@@ -52,6 +52,7 @@ log() { echo "[subwave-aio] $*" >&2; }
 # container outright.
 # ---------------------------------------------------------------------------
 state_warn() { log "WARNING $*"; }
+state_log() { log "$*"; }
 
 # True when `other` can write the dir — see the entrypoint on why the warning
 # keys on this rather than on chmod's exit status.
@@ -309,6 +310,53 @@ warn_if_analyzer_heavy_ignored() {
 }
 
 # ---------------------------------------------------------------------------
+# ANALYZER_REPLICAS=0 removes the compose `analyzer` SERVICE (#1570). The AIO
+# has no services — the analyzer is an in-process venv the controller drives
+# over stdio — so the variable is inert here, exactly like ANALYZER_HEAVY above.
+#
+# It fails worse than ANALYZER_HEAVY did, which is why it gets its own warning
+# rather than a docs line. ANALYZER_HEAVY set on a lean AIO withholds a feature
+# the operator wanted; ANALYZER_REPLICAS=0 set on an AIO withholds NOTHING and
+# silently keeps charging for it — the whole point of setting 0 is usually to
+# stop paying for analysis, and here analysis carries on with its RAM and its
+# CPU while the operator believes it is off. Nothing in the UI contradicts them
+# either: the acoustic engine keeps reading "on", which looks like the switch
+# is broken rather than absent.
+#
+# So the warning names the knob that DOES work here: an empty ANALYZE_PYTHON.
+# config.ts reads `envStr('ANALYZE_PYTHON', '')` and analyzer.ts's
+# localConfigured() requires a non-empty existing path, so blanking the
+# variable this image bakes in resolves no local backend at all.
+#
+# Only 0 warns. Any other value asks for the analyzer to RUN, which is what an
+# AIO does anyway, so it earns the same quiet note ANALYZER_HEAVY gets on a
+# heavy build: still inert, but the outcome already matches the request, and a
+# scary box would send an operator whose setup is fine chasing a non-problem.
+# ---------------------------------------------------------------------------
+warn_if_analyzer_replicas_ignored() {
+	[ -n "${ANALYZER_REPLICAS:-}" ] || return 0
+	if [ "${ANALYZER_REPLICAS}" != "0" ]; then
+		log "note: ANALYZER_REPLICAS is a docker-compose setting and has no effect"
+		log "  on the all-in-one image — but it is not 0, so you are asking for the"
+		log "  analyzer to run, which this image does in-process anyway. Nothing to do."
+		return 0
+	fi
+	log "################################################################"
+	log "WARNING: ANALYZER_REPLICAS=0 is set, and it does NOTHING on this image."
+	log "  It is a docker-compose variable that sets the analyzer SERVICE's"
+	log "  replica count. The all-in-one image has no analyzer service — it runs"
+	log "  the analyzer IN-PROCESS (a librosa venv the controller drives), so"
+	log "  analysis is still running and still using RAM and CPU right now."
+	log "  The admin Library panel will keep reporting the acoustic engine as ON."
+	log "  To actually stop analysis on this image, blank ANALYZE_PYTHON instead:"
+	log "    ANALYZE_PYTHON=          (empty value — no local analysis backend)"
+	log "  To send analysis to another machine, set ANALYZE_URL at it; a"
+	log "  reachable sidecar wins over the in-process venv."
+	log "  https://github.com/perminder-klair/subwave/issues/1570"
+	log "################################################################"
+}
+
+# ---------------------------------------------------------------------------
 # Resolve the ICECAST_*_PASSWORD values. Precedence: env override > persisted
 # secrets file > freshly generated. Written back for operator visibility + the
 # documented rotate path; exported for liquidsoap.
@@ -386,6 +434,132 @@ resolve_max_clients() {
 	esac
 }
 
+# ---------------------------------------------------------------------------
+# Trusted reverse proxies
+# ---------------------------------------------------------------------------
+# Real listener IPs in admin -> Listeners instead of the edge's container
+# address. icecast-KH matches an EXACT IP: a CIDR is accepted and then silently
+# never matches, so a malformed entry is DROPPED and named rather than
+# interpolated — invalid XML here would turn a cosmetic setting into a station
+# that won't boot.
+#
+#   $1 = XML fragment path, $2 = the source label the candidates came from,
+#   $3.. = the candidate addresses (may be empty — a DNS lookup that resolved
+#          nothing is the documented first-cold-boot case).
+#
+# Besides the fragment this writes $STATE_DIR/trusted-proxies.json — the count,
+# the addresses, the source that produced them and anything dropped. Until
+# #1613 the operator's only signal was one stderr line in this container,
+# three layers away from the admin table showing one repeated private address,
+# so the setting that fixes it was undiscoverable from where the symptom shows.
+# The marker is rewritten on EVERY render, so it can never describe a config
+# icecast is not running, and failing to write it is never fatal — same rule as
+# the state bootstrap above.
+#
+# docker/broadcast-entrypoint.sh carries the same function and the same messages;
+# scripts/trusted-proxies.test.ts drives both from one table.
+
+# A dropped entry is operator input on its way into JSON, so it is reduced to a
+# safe token first: address / CIDR / hostname characters only, length capped. A
+# quote or backslash here would produce a marker the controller cannot parse,
+# which is the one failure that would take the hint down along with the config
+# it exists to explain.
+trusted_proxy_token() {
+	printf '%s' "$1" | tr -cd '0-9A-Za-z.:/_-' | cut -c1-48
+}
+
+# True when $1 has the SHAPE of an address icecast can match. A character class
+# is not enough and that is measured: `''|*[!0-9a-fA-F.:]*` — the test both
+# copies carried — accepts every hex-only word, so `cafe`, `beef`, `ace`, `ff`
+# and a bare `a` were written into icecast.xml while `caddy` and `localhost`
+# were dropped. Each one is an <x-forwarded-for> entry that no peer can ever
+# equal, so it changed nothing on air; what makes it worth fixing is the count
+# now in front of the operator, which would report three proxies trusted when
+# one of them cannot match. A hint that lies is worse than the silence it
+# replaced.
+#
+# Shape only, deliberately: whether the address is the RIGHT one is the
+# operator's to know, and this must keep dropping rather than repairing.
+trusted_proxy_valid() {
+	local addr=$1 rest octet n=0
+	# Anything with a colon is IPv6 (dots allowed for the ::ffff:1.2.3.4 form).
+	# Not a full parser — a hex-digit requirement plus the charset is enough to
+	# reject the words this exists to catch, and icecast's own exact match is
+	# the real arbiter.
+	case "$addr" in
+		*:*)
+			case "$addr" in *[!0-9a-fA-F:.]*) return 1 ;; esac
+			case "$addr" in *[0-9a-fA-F]*) return 0 ;; *) return 1 ;; esac
+			;;
+	esac
+	# IPv4: exactly four dot-separated decimal octets, each 0-255.
+	rest=$addr
+	while [ "$n" -lt 4 ]; do
+		case "$rest" in
+			*.*) octet=${rest%%.*}; rest=${rest#*.} ;;
+			*)   octet=$rest; rest='' ;;
+		esac
+		n=$(( n + 1 ))
+		case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+		# Length first: `[ 99999999999999999999 -le 255 ]` is an arithmetic
+		# error, not a false, and would print before the drop.
+		[ "${#octet}" -le 3 ] || return 1
+		[ "$octet" -le 255 ] || return 1
+		[ "$n" -eq 4 ] || [ -n "$rest" ] || return 1
+	done
+	[ -z "$rest" ] || return 1
+	return 0
+}
+
+write_trusted_proxy_marker() {
+	# $1 = count, $2 = source label, $3 = proxies JSON array, $4 = dropped array
+	local dir=${STATE_DIR:-}
+	[ -n "$dir" ] || return 0
+	local marker=$dir/trusted-proxies.json
+	local tmp=$marker.tmp
+	if printf '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}\n' \
+			"$1" "$2" "$3" "$4" "$(date +%s)" > "$tmp" 2>/dev/null \
+		&& mv -f "$tmp" "$marker" 2>/dev/null; then
+		chmod 644 "$marker" 2>/dev/null || true
+	else
+		rm -f "$tmp" 2>/dev/null || true
+		state_warn "could not write $marker — the station is unaffected, but the admin Listeners table cannot explain a missing trusted proxy"
+	fi
+	return 0
+}
+
+render_trusted_proxies() {
+	local xml=$1
+	local source=$2
+	shift 2
+	local ip names="" kept="" dropped="" count=0
+	: > "$xml" 2>/dev/null || true
+	# Candidates arrive already word-split, so an operator who wrote prose
+	# ("not a host") sees each WORD dropped separately rather than the phrase.
+	# Left alone on purpose: the list has always been space-separated — it is
+	# how the DNS path returns several addresses for one name, and how
+	# ICECAST_TRUSTED_PROXY_IPS="1.2.3.4 5.6.7.8" has always been accepted —
+	# and every one of those words is genuinely something that was not used.
+	for ip in "$@"; do
+		if ! trusted_proxy_valid "$ip"; then
+			state_warn "ignoring malformed trusted proxy '$ip' — icecast matches an exact IP, so a CIDR, a hostname or anything else that is not an address never matches"
+			dropped="$dropped,\"$(trusted_proxy_token "$ip")\""
+			continue
+		fi
+		echo "        <x-forwarded-for>$ip</x-forwarded-for>" >> "$xml"
+		names="$names $ip"
+		kept="$kept,\"$ip\""
+		count=$(( count + 1 ))
+	done
+	if [ "$count" -gt 0 ]; then
+		state_log "trusting X-Forwarded-For from$names (from $source)"
+	else
+		state_log "no trusted proxy resolved from $source — listener IPs will show the connecting peer (docs/reverse-proxy.md)"
+	fi
+	write_trusted_proxy_marker "$count" "$source" "[${kept#,}]" "[${dropped#,}]"
+	return 0
+}
+
 render_icecast() {
 	# Concurrent-listener ceiling — see resolve_max_clients above.
 	local MAX_CLIENTS_LINE
@@ -457,24 +631,23 @@ render_icecast() {
 	emit_mount /stream.flac "$FLAC_BITRATE_EST"
 	emit_mount /stream.aac  "$AAC_BITRATE"
 
-	# Trusted reverse proxies — same contract as docker/broadcast-entrypoint.sh.
-	# Caddy is in THIS container, so the peer is always loopback; both forms
-	# are emitted because which one icecast sees depends on how Caddy resolved
-	# its upstream (icecast-KH wants an exact IP). ICECAST_TRUSTED_PROXY_IPS
-	# still overrides, for an AIO behind a further proxy.
+	# Trusted reverse proxies — see render_trusted_proxies above. Caddy is in
+	# THIS container, so the peer is always loopback; both forms are emitted
+	# because which one icecast sees depends on how Caddy resolved its upstream
+	# (icecast-KH wants an exact IP). ICECAST_TRUSTED_PROXY_IPS still overrides,
+	# for an AIO behind a further proxy — and the source label records which of
+	# the two the marker's addresses came from.
 	local TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
-	local TRUSTED_LIST _ip
-	: > "$TRUSTED_XML"
-	TRUSTED_LIST=$(echo "${ICECAST_TRUSTED_PROXY_IPS:-127.0.0.1 ::1}" | tr ',' ' ')
-	for _ip in $TRUSTED_LIST; do
-		case "$_ip" in
-			''|*[!0-9a-fA-F.:]*)
-				log "WARNING ignoring malformed trusted proxy '$_ip'"
-				continue
-				;;
-		esac
-		echo "        <x-forwarded-for>$_ip</x-forwarded-for>" >> "$TRUSTED_XML"
-	done
+	local TRUSTED_LIST TRUSTED_SOURCE=aio-loopback
+	if [ -n "${ICECAST_TRUSTED_PROXY_IPS:-}" ]; then
+		TRUSTED_SOURCE=ICECAST_TRUSTED_PROXY_IPS
+		TRUSTED_LIST=$(echo "$ICECAST_TRUSTED_PROXY_IPS" | tr ',' ' ')
+	else
+		TRUSTED_LIST="127.0.0.1 ::1"
+	fi
+	# Unquoted on purpose — the list is space-separated candidates.
+	# shellcheck disable=SC2086
+	render_trusted_proxies "$TRUSTED_XML" "$TRUSTED_SOURCE" $TRUSTED_LIST
 
 	sed \
 		-e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
@@ -593,6 +766,7 @@ fi
 
 warn_if_state_unmounted
 warn_if_analyzer_heavy_ignored
+warn_if_analyzer_replicas_ignored
 init_state
 init_secrets
 
