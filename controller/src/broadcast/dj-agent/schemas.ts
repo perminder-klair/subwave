@@ -141,6 +141,27 @@ export const LISTENER_TEXT_CLAUSE = instruction('shared', 'listener-text');
 // same look-ahead has already rolled — the mic-pass aired ahead of this pick,
 // so the incoming DJ introduces their own opener rather than the outgoing DJ
 // teeing up a show they've already signed off from.
+type GuestMusicalNudge = {
+  guest: { id: string; name: string };
+  musicalLeanings: string;
+};
+
+// Keep variable editorial preference at the end of the system prompt. Guest
+// nudges are sampled per pick; placing them before the shared picker guidance
+// would unnecessarily shorten the reusable cloud prompt-cache prefix.
+export function pickerMusicLeanings(
+  host: string | null,
+  guest: GuestMusicalNudge | null,
+): string {
+  const hostLine = host
+    ? `\n\nMusical Leanings — ${host}\nTreat this as a soft editorial preference when choosing between eligible tracks that fit the current flow. It may guide an otherwise sound selection, and may be reflected naturally in the private selection reason when it materially matters. It never overrides show rules, rotation, safety, or the musical flow.`
+    : '';
+  const guestLine = guest
+    ? `\n\nGuest Musical Leanings — ${guest.guest.name}: ${guest.musicalLeanings}\nThis is weaker than the host's Musical Leanings. It may guide an otherwise sound selection when it naturally fits the flow; never override show rules, rotation, safety, or the musical flow.`
+    : '';
+  return hostLine + guestLine;
+}
+
 export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
   const persona = session.onAirPersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
@@ -165,6 +186,13 @@ export function pickSystem(showAt: Date | null = null, playlistResolved = true) 
   // instead of soft leans, so both pick paths honour strict the same way. Lives
   // in the system prompt for the same session-window reason as the show brief.
   const musicLean = dj.showMusicLean(activeShow);
+  // Persona Musical Leanings are deliberately separate from the DJ's Soul:
+  // this is a private soft tie-breaker for music choice, not a voice or
+  // discovery instruction. Keep it in the agentic picker too, so changing
+  // picker implementation does not change the station's musical identity.
+  const personaMusicLean = settings.personaMusicLeanings(persona);
+  const guestMusicalNudge = settings.guestEditorialNudge(showAt ?? new Date());
+  const editorialLeanings = pickerMusicLeanings(personaMusicLean, guestMusicalNudge);
   // Playlist anchor: a separate steer from genre/era. Strict → every pick MUST
   // come from the pinned playlist (the tools already enforce this in code, but
   // saying so keeps the agent reaching for showPlaylistTracks instead of
@@ -202,7 +230,7 @@ ${dj.PICKER_CRITERIA}
 
 ${instruction('picker', 'listener-requests', { listenerText: LISTENER_TEXT_CLAUSE })}${dj.REQUESTER_NAME_CLAUSE}
 
-${findingCandidates}${dj.effectsGuidance()}`;
+${findingCandidates}${dj.effectsGuidance()}${editorialLeanings}`;
 }
 
 // Exported for scripts/llm-bench, like requestSchema above.
