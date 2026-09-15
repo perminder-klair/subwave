@@ -31,7 +31,6 @@ import {
   ChevronRight,
   MoreHorizontal,
   ListMusic,
-  Telescope,
   Clock,
   CalendarDays,
   Volume2,
@@ -42,6 +41,7 @@ import {
   Braces,
   Boxes,
   Webhook,
+  Telescope,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';

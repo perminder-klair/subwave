@@ -19,6 +19,7 @@ export interface HealthMetrics {
   /** The live DJ-agent deadline in ms, and the redline anchor. Null until
    *  /stats loads, in which case the gauge uses its default scale. */
   latencyDeadlineMs: number | null;
+  latencyAdaptive?: boolean;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
   /** broadcast online? null before the first poll resolves */
@@ -330,7 +331,7 @@ export default function StationHeader({
             </span>
             <span className="hs-u">ms</span>
             <span className="hs-x">
-              redline <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
+              {metrics.latencyAdaptive ? 'warning' : 'redline'} <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
             </span>
           </div>
         </div>

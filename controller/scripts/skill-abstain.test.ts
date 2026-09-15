@@ -54,8 +54,10 @@ writeSkill('own-material', 'export const requiresData = false;\nexport default a
 const { requiresGrounding, unusableDataReason, standDownReason, declaredBool } =
   await import('../src/skills/abstain-policy.js');
 const { agenticTick, forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { normalizeSegmentToolResult } = await import('../src/llm/segment-tools.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const webSearch = (await import('../src/skills/builtins/web-search/tool.mjs')).default;
+const nowPlayingDig = (await import('../src/skills/builtins/now-playing-dig/tool.mjs')).default;
 
 const dataCap = (over = {}) => ({ kind: 'web-search', toolFn: () => ({}), ...over });
 
@@ -110,6 +112,42 @@ test('an unrecognised declaration falls through to the default, not to false', (
 test('a fetch error and an explicit available:false are both unusable', () => {
   assert.match(String(unusableDataReason({ error: 'Brave HTTP 429' })), /429/);
   assert.equal(typeof unusableDataReason({ available: false }), 'string');
+});
+
+test('a persisted legacy news tool empty response is unavailable', () => {
+  const data = normalizeSegmentToolResult({ kind: 'news' }, { headlines: [] });
+  assert.equal(typeof unusableDataReason(data), 'string');
+  assert.deepEqual(data, { headlines: [], available: false });
+});
+
+test('an older now-playing dig with only unrelated snippets is unavailable', () => {
+  const data = normalizeSegmentToolResult({ kind: 'now-playing-dig' }, {
+    artist: 'Modest Mouse', title: 'Missed the Boat', answer: '',
+    sources: ['BING magazine: the web missed the boat on production credits'],
+  });
+  assert.deepEqual(data, {
+    artist: 'Modest Mouse', title: 'Missed the Boat', answer: '',
+    sources: ['BING magazine: the web missed the boat on production credits'], available: false,
+  });
+});
+
+test('an older artist web-search with only unrelated snippets is unavailable', () => {
+  const data = normalizeSegmentToolResult({ kind: 'web-search' }, {
+    artist: 'Cue', answer: '', sources: ['Queueing etiquette: the latest advice'],
+  });
+  assert.deepEqual(data, {
+    artist: 'Cue', answer: '', sources: ['Queueing etiquette: the latest advice'], available: false,
+  });
+});
+
+test('now-playing dig drops unrelated generic-title results before Direct can see them', async () => {
+  const data = await nowPlayingDig({}, {}, {
+    nowPlaying: () => ({ artist: 'Modest Mouse', title: 'Missed the Boat' }),
+    searchWeb: async () => ({ answer: '', results: [
+      { title: 'BING magazine', content: 'the web missed the boat on production credits' },
+    ] }),
+  });
+  assert.deepEqual(data, { available: false });
 });
 
 test('real data — and no data at all — are not stand-down reasons', () => {

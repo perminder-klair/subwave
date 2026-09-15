@@ -36,11 +36,123 @@ import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
+import { buildPickerTools, PICKER_TOOLS } from '../llm/tools.js';
+import { livePickerScope } from '../broadcast/dj-agent.js';
+import { pickerAgent } from '../broadcast/dj-agent/agents.js';
+import { buildShortlist } from '../music/shortlist.js';
+import { djPick } from '../music/dj-pick.js';
 
 export const router = express.Router();
 
-// Recent listener requests and how the DJ resolved each. Durable across
-// restarts via request-log's on-disk JSONL.
+// ---------------------------------------------------------------------------
+// Discovery bench — read-only execution of the exact picker-tool registry.
+// It deliberately does not call an LLM, enqueue a track, or write any station
+// state: this is the operator's way to inspect the candidate sources a normal
+// next-track run has available.
+// ---------------------------------------------------------------------------
+const REQUEST_ONLY_PICKER_TOOL = 'identifyRequestedTrack';
+const DISCOVERY_BENCH_ENABLED = /^(1|true|yes|on)$/i.test(process.env.SUBWAVE_DISCOVERY_BENCH || '');
+
+function discoveryBenchDisabled(res: express.Response): boolean {
+  if (DISCOVERY_BENCH_ENABLED) return false;
+  res.status(404).json({ error: 'not found' });
+  return true;
+}
+
+async function discoveryBench() {
+  const { scope } = await livePickerScope(queue);
+  const { tools } = buildPickerTools(scope);
+  return { scope, tools };
+}
+
+router.get('/debug/discovery', requireAdmin, async (_req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const { tools } = await discoveryBench();
+    const current = queue.current?.track ?? null;
+    res.json({
+      current: current ? { id: current.id, title: current.title, artist: current.artist, genre: current.genre } : null,
+      tools: PICKER_TOOLS
+        .filter((entry) => entry.name !== REQUEST_ONLY_PICKER_TOOL)
+        .map((entry) => ({
+          name: entry.name,
+          available: !!tools[entry.name],
+          description: (tools[entry.name] as any)?.description ?? null,
+        })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.post('/debug/discovery/tool/:tool', requireAdmin, async (req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const name = String(req.params.tool || '');
+    if (name === REQUEST_ONLY_PICKER_TOOL || !PICKER_TOOLS.some((entry) => entry.name === name)) {
+      return res.status(404).json({ error: 'unknown next-track discovery tool' });
+    }
+    const { tools } = await discoveryBench();
+    const tool: any = tools[name];
+    if (!tool) return res.status(409).json({ error: `${name} is unavailable for the current picker scope` });
+    const args = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const parsed = tool.inputSchema?.safeParse?.(args);
+    if (parsed && !parsed.success) return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'invalid tool input' });
+    const started = performance.now();
+    const result = await tool.execute(parsed?.data ?? args, { toolCallId: `discovery-bench:${name}`, messages: [] });
+    res.json({ name, elapsedMs: Math.round(performance.now() - started), result });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// Deliberately non-airing: it runs each configured route against the same live
+// scope, but never hands either result to the queue or fallback machinery.
+router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
+  if (discoveryBenchDisabled(res)) return;
+  try {
+    const { scope, activeShow, playlistTracks } = await livePickerScope(queue);
+    const current = queue.current?.track ?? null;
+    const agentStarted = performance.now();
+    const agent = await pickerAgent.run({ messages: session.windowMessages(), scope });
+    const shortlistStarted = performance.now();
+    const shortlist = await buildShortlist({
+      scope,
+      currentTrackId: current?.id ?? null,
+      discoveryPasses: settings.get().llm?.shortlistPasses ?? 3,
+      moods: activeShow?.moods,
+      energies: activeShow?.energies,
+    });
+    const shortlistSelection = shortlist.candidates.length
+      ? await djPick({ candidates: shortlist.candidates, playlistResolved: !!playlistTracks?.length })
+      : null;
+    const compact = (track: any) => track?.id
+      ? { id: track.id, title: String(track.title || ''), artist: String(track.artist || '') }
+      : null;
+    res.json({
+      current: compact(current),
+      agentic: {
+        discoveryRounds: settings.get().llm?.discoverySteps ?? 0,
+        elapsedMs: Math.round(performance.now() - agentStarted),
+        selected: compact(agent.extras.seen.get(agent.object?.id)),
+        sources: agent.toolCalls.map((call: any, index: number) => ({ round: call.round ?? index + 1, source: call.name || 'unknown' })),
+      },
+      shortlist: {
+        passes: settings.get().llm?.shortlistPasses ?? 3,
+        elapsedMs: Math.round(performance.now() - shortlistStarted),
+        selected: compact(shortlistSelection && shortlist.candidates.find((track) => track.id === shortlistSelection.id)),
+        sources: shortlist.sourceRuns.map((run, index) => ({ pass: index + 1, source: run.source, returned: run.returned, accepted: run.accepted })),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// GET /requests — recent listener requests and exactly how the AI DJ resolved
+// each (intent breakdown, which path handled it, the picked track, the spoken
+// ack + full intro script, timing). Durable across restarts via request-log's
+// on-disk JSONL. Feeds the dashboard's Requests card.
 router.get('/requests', requireAdmin, (req, res) => {
   try {
     res.json({ requests: requestLog.snapshot(50) });

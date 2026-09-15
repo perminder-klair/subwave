@@ -6,7 +6,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { recentCalls } from '../llm/log.js';
 import * as llmProvider from '../llm/provider.js';
 import * as settings from '../settings.js';
-import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests } from '../stats.js';
+import { ttsCalls, shortlistPicks, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests, summarizeShortlistPicks } from '../stats.js';
 import { queue } from '../broadcast/queue.js';
 import { recentRequests } from '../broadcast/request-log.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
@@ -27,6 +27,8 @@ router.get('/stats', requireAdmin, (req, res) => {
     res.json({
       t: new Date().toISOString(),
       llm,
+      trackSelection: settings.get().llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlist: summarizeShortlistPicks(shortlistPicks),
       tts: summarizeTts(ttsCalls),
       djLog: summarizeDjLog(queue.djLog),
       requests: summarizeRequests(recentRequests),

@@ -9,7 +9,7 @@ thing is, what changes when you move it, and where the control lives.
 > someone reading on GitHub before they have a station to click around in.
 
 - [Local Colour (and the other two dials)](#local-colour-and-the-other-two-dials)
-- [Candidate pool vs the agent picker](#candidate-pool-vs-the-agent-picker)
+- [Track Shortlist vs Agentic Tools](#track-shortlist-vs-agentic-tools)
 - [Playlists vs shows](#playlists-vs-shows)
 - [The stem cache](#the-stem-cache)
 - [Private player vs stream password](#private-player-vs-stream-password)
@@ -62,30 +62,28 @@ Three things it does **not** do:
 
 ---
 
-## Candidate pool vs the agent picker
+## Track Shortlist vs Agentic Tools
 
-**Where:** Admin → Settings → LLM → **Agentic picker** (`Candidate pool` / `Agent`).
+**Where:** Admin → Settings → DJ Behaviour → **Track selection**.
 
 Both end at the same place — one track id, handed to the queue — and both run
-inside a session and get logged. They differ in *who does the searching*.
+inside a session and get logged. They apply the same show constraints, recency
+and artist protections. They differ in *how the choice is reached*.
 
-### Candidate pool (off)
+### Track Shortlist
 
-The controller builds the shortlist itself, then asks the model once.
+The controller builds a varied set of eligible tracks, then asks the model once.
 
-It merges up to sixteen sources into one pool — mood matches from the library,
-sonically similar tracks, embedding neighbours, the current show's genres and
-playlists, starred and frequently-played, recently added, listener favourites,
-a wildcard and a little pure random — de-duplicates, applies the recency and
-artist filters, caps it, and sends the survivors to the model as a list. The
-model makes **one call**: pick one of these.
+It combines suitable library signals, removes duplicates, applies the shared
+policy and sends the survivors to the model as a list. The model makes **one
+structured call**: pick one of these.
 
 - One LLM round-trip per track.
 - Works on a small local model — there is no tool loop to get lost in.
 - Bounded latency, bounded tokens.
 - The model can only choose from what the pool already found.
 
-### Agent (on, the default)
+### Agentic Tools (the default)
 
 The model drives. It gets a toolbox of roughly eighteen discovery tools —
 similar songs, tracks like this one, search by sound, search by lyrics, by
@@ -93,32 +91,27 @@ mood, by energy, by genre, deep cuts, recently added, top songs by artist,
 tracks toward a journey — and searches the library itself over the session's
 chat history, then commits its pick with a `done` call.
 
-- Several round-trips per track, so it costs more tokens and more wall-clock.
-- Needs a model that is genuinely good at **multi-step, forced tool calling**
-  with a context window of at least 16384. Most "the agent stopped without
-  calling done" reports are this requirement not being met.
-- Bounded by **Agent deadline** (default 45s). On timeout or failure it falls
-  back to the candidate pool, so a slot is never lost.
+- Several round-trips per track, so it can use more tokens and more wall-clock.
+- Needs a model that is genuinely comfortable with multi-step tool calling.
+- Bounded by the configured **Agent deadline**. A safe controller fallback
+  keeps the broadcast moving if no choice arrives in time.
 
 ### Which to run
 
-Start on **Agent** if you're on a cloud model or a 12B-class local model. Drop
-to **Candidate pool** if picks are slow, if the log shows repeated
-`djAgentRepick` loops, or if you're on a 9B-class model — the station still
-picks, still writes links, still honours requests.
+Start with **Track Shortlist** when you use modest local hardware, want a
+predictable token budget, or your model does not reliably call tools. Try
+**Agentic Tools** with a robust tool-capable model when you want it to explore
+the library itself. Neither route is a claim of better musical taste or less
+variety.
 
 Two related behaviours worth knowing, whichever you pick:
 
-- **Variety is enforced after the choice, not inside the search.** The
-  discovery tools carry no artist filter on purpose — filtering inside them
-  gutted the similarity pool on niche catalogues. Instead, a pick that repeats
-  an artist from the last few slots triggers a re-pick. So an eight-of-eight
-  same-artist candidate set is expected, and the guard is what stops it
-  reaching air.
+- **Variety is enforced across the selection process.** A choice that repeats
+  a recent artist or album may trigger a re-pick, so both routes observe the
+  same protection before a track reaches air.
 - **The daily token cap degrades in tiers.** Past the soft threshold the
-  station drops to the candidate pool and mutes optional segments; at the cap
-  it stops calling the model at all and coasts on the fallback playlist. Music
-  never stops.
+  station reduces optional work; at the cap it stops calling the model and
+  coasts on the fallback playlist. Music never stops.
 
 ---
 

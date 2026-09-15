@@ -25,7 +25,6 @@ import {
 // module the server bounds-checks against — a hardcoded copy here is a client
 // hint that can disagree with the save it is meant to pre-empt.
 import {
-  PICKER_MIN_TRACK_LENGTH_BOUNDS,
   LLM_HEADER_NAME_RE,
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
@@ -317,6 +316,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
+        trackSelection: form.llm.trackSelection,
+        shortlistPasses: form.llm.shortlistPasses,
+        requestMatching: form.llm.requestMatching,
+        segmentRuntime: form.llm.segmentRuntime,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
         artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
         requestWebResolve: form.llm.requestWebResolve,
@@ -933,7 +936,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.pickerAgent && (
+              {form.llm.trackSelection === 'agentic' && (
                 <div className="field">
                   <Label>Discovery rounds per pick</Label>
                   <Input
@@ -1118,203 +1121,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             an oversized allowance crowds out the system prompt and tool
             list and risks truncation, especially with reasoning off, where
             replies are short anyway. Values between 1 and 499 round up to 500.
-          </div>
-        </div>
-      </Card>
-
-      <Card title="Next-track picker" sub="how the DJ chooses">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-          <div>
-            <div className="text-[13px] font-bold">Agentic picker</div>
-            <div className="field-hint mt-1 max-w-[440px]">
-              When on, the picker is a tool-using agent that explores the library
-              itself; needs a model good at multi-step tool calls. Leave off for
-              small local models, where skill segments (weather, news&hellip;) then
-              run as one call instead of a tool loop.
-            </div>
-          </div>
-          <Seg
-            accent
-            value={form.llm.pickerAgent ? 'agent' : 'pool'}
-            options={[
-              { id: 'pool', label: 'Candidate pool' },
-              { id: 'agent', label: 'Agent' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
-          />
-        </div>
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Agent deadline (seconds)</Label>
-            <Input
-              type="number"
-              min={5}
-              max={300}
-              step={5}
-              value={Math.round(form.llm.agentTimeoutMs / 1000)}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, agentTimeoutMs: Number(e.target.value) * 1000 } }))
-              }
-              placeholder="45"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How long an agent pick or listener request may run before falling
-              back to the stateless picker. Slow reasoning models often need
-              20&ndash;40s per pick; lower it for snappier fallbacks on a fast
-              model. 5&ndash;300s.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Discovery rounds per pick</Label>
-            <Input
-              type="number"
-              min={0}
-              max={5}
-              step={1}
-              value={form.llm.discoverySteps}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, discoverySteps: Number(e.target.value) } }))
-              }
-              placeholder="0"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How many times the DJ may search your library before it has to commit
-              to a track. {' '}<strong>0 = auto</strong>, which picks for you based on
-              your provider: 1 for self-hosted servers (Ollama, llama.cpp, vLLM,
-              LM Studio), 3 for the cloud providers. Raise it if you run a capable
-              model on your own hardware &mdash; auto is cautious there because many
-              local models wander when given more than one round. Lower it to 1 to
-              cut tokens and latency: every round is a separate call, and they all
-              share the agent deadline above. 0&ndash;5.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-            <div>
-              <div className="text-[13px] font-bold">Resolve described requests via web</div>
-              <div className="field-hint mt-1 max-w-[440px]">
-                When on, a listener who <em>describes</em> a track instead of naming
-                it (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on
-                the web, then matched to your library. Needs a web-search provider
-                set under Web search; otherwise it does nothing.
-              </div>
-            </div>
-            <Seg
-              accent
-              value={form.llm.requestWebResolve ? 'on' : 'off'}
-              options={[
-                { id: 'off', label: 'Off' },
-                { id: 'on', label: 'On' },
-              ]}
-              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestWebResolve: v === 'on' } }))}
-            />
-          </div>
-        )}
-
-        <div className="field mt-4">
-          <Label>No-repeat window (tracks)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={1000}
-            step={10}
-            value={form.llm.noRepeatWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: e.target.value } }))
-            }
-            placeholder="250"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The last N <strong>distinct</strong> tracks can never be re-picked: a hard
-            guard on both the agent and candidate-pool pickers, on top of the time-based
-            window. Auto-scales down on a small library so it never blocks everything;
-            on a big library, raise it — it is the station&apos;s long memory.
-            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;1000.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Artist spacing (slots)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={25}
-            step={1}
-            value={form.llm.artistVarietyWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, artistVarietyWindow: e.target.value } }))
-            }
-            placeholder="5"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            How many slots the DJ waits before returning to an artist. The pick is
-            re-taken from the run&apos;s other candidates when it lands inside the
-            window &mdash; and quietly stands if nothing fresher turned up, so this
-            never costs you a track. Raise it on a deep library where one artist
-            keeps circling back; lower it if the DJ is reaching too far from the
-            show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
-            never follow itself whatever this says. 0&ndash;25.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Album cooldown (hours)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={72}
-            step={0.5}
-            value={form.picker.albumHours}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, albumHours: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            How long a <strong>record</strong> rests after one of its tracks airs, on
-            both pickers. Only worth setting <em>above</em> the artist spacing above
-            &mdash; below it, the artist guard already covers the same ground. Like
-            that one it yields rather than starving the pool, and compilations and
-            various-artists albums are exempt, since two tracks off one sampler is
-            ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Minimum track length (seconds)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={PICKER_MIN_TRACK_LENGTH_BOUNDS.max}
-            step={1}
-            value={form.picker.minTrackLengthSeconds}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, minTrackLengthSeconds: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The shortest a track can be to get picked, on both pickers and the
-            offline fallback playlist &mdash; the way to keep 40-second skits,
-            interludes and album intros off air. The mirror of the max track
-            length in Broadcast, but a <em>selection</em> filter: a short track is
-            never chosen, where a long one is simply faded out at the cap. A show
-            can set its own; listener requests are always exempt.
-            {' '}<strong>0 = off</strong> (the default). A non-zero value has to
-            be at least {data?.values?.minTrackSeconds ?? 30}s &mdash; the same
-            crossfade-derived minimum the track-length cap clears.
           </div>
         </div>
       </Card>

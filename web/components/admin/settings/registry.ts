@@ -9,7 +9,7 @@
 // section components; this file never renders anything.
 
 import {
-  Radio, Palette, Cpu, Mic, Library, Search,
+  Radio, Palette, Cpu, Mic, Library, Search, ListMusic,
   Activity, Archive, Save, AlertTriangle, Heart, Music2, BrainCircuit,
   MessageCircle,
 } from 'lucide-react';
@@ -59,16 +59,19 @@ export const SECTIONS = [
     formKeys: [],
   },
   {
+    id: 'selection', group: 'the station', label: 'Music selection',
+    hint: 'agentic · shortlist · requests', icon: ListMusic,
+    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.requestMatching', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
+  },
+  {
     id: 'theme', group: 'the station', label: 'Skin & Themes',
     hint: 'player skin · palette', icon: Palette,
     formKeys: [],
   },
-  // First item in the DJ group: these are the on-air policy controls that
-  // frame the service-specific configuration which follows.
   {
     id: 'behaviour', group: 'the dj', label: 'DJ behaviour',
-    hint: 'talk placement · prompt memory', icon: MessageCircle,
-    formKeys: ['djTalkOnlyBetweenTracks', 'pauseTalkMinSeconds', 'djBehaviour'],
+    hint: 'speech · segments · handovers', icon: MessageCircle,
+    formKeys: ['djTalkOnlyBetweenTracks', 'pauseTalkMinSeconds', 'djBehaviour', 'llm.segmentRuntime'],
   },
   {
     // One-field setup for the hosted DJ Brain: writes both `llm` and
@@ -82,11 +85,7 @@ export const SECTIONS = [
   {
     id: 'llm', group: 'the dj', label: 'LLM provider',
     hint: 'model routing', icon: Cpu,
-    // `picker` rides this section because its two controls (album cooldown,
-    // minimum track length) are edited on this card and saved by the same
-    // PATCH — without it here the section's dirty dot and save bar are blind
-    // to a change the operator just made.
-    formKeys: ['llm', 'picker'],
+    formKeys: ['llm'],
   },
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
@@ -241,10 +240,12 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Reasoning', section: 'llm', card: 'Reasoning', keywords: 'thinking trace chain of thought' },
   { label: 'Backup provider', section: 'llm', card: 'Fallback', keywords: 'fallback secondary offline' },
   { label: 'Backup model', section: 'llm', card: 'Fallback', keywords: 'fallback secondary model id' },
-  { label: 'Agent deadline', section: 'llm', card: 'Next-track picker', keywords: 'timeout seconds give up pool picker' },
-  { label: 'Discovery rounds per pick', section: 'llm', card: 'Next-track picker', keywords: 'steps tool loops' },
-  { label: 'No-repeat window (tracks)', section: 'llm', card: 'Next-track picker', keywords: 'repeat history variety' },
-  { label: 'Artist spacing (slots)', section: 'llm', card: 'Next-track picker', keywords: 'artist variety window' },
+  { label: 'Track selection', section: 'selection', card: 'Music selection', keywords: 'agentic shortlist local model variety' },
+  { label: 'Agent deadline', section: 'selection', card: 'Music selection', keywords: 'timeout seconds' },
+  { label: 'Discovery rounds per pick', section: 'selection', card: 'Music selection', keywords: 'steps tool loops' },
+  { label: 'Shortlist passes', section: 'selection', card: 'Music selection', keywords: 'controller discovery candidates' },
+  { label: 'Request matching', section: 'selection', card: 'Request matching', keywords: 'direct agentic compound listener request' },
+  { label: 'Segments & Skills', section: 'behaviour', card: 'Segments & Skills', keywords: 'direct agentic runtime tools' },
   { label: 'Daily token cap', section: 'llm', card: 'Daily token budget', keywords: 'budget spend limit cost' },
   { label: 'Soft threshold', section: 'llm', card: 'Daily token budget', keywords: 'warning percent budget dash' },
   { label: 'Pause the DJ when nobody is listening', section: 'llm', card: 'Idle behaviour', keywords: 'idle empty room quiet' },
@@ -262,6 +263,10 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Fallback engine', section: 'tts', card: 'Fallback voice', keywords: 'rescue voice slot backup' },
 
   // ── dj behaviour ───────────────────────────────────────────────────────────
+  { label: 'No-repeat window', section: 'selection', card: 'Selection policy', keywords: 'recency repeat tracks' },
+  { label: 'Artist spacing', section: 'selection', card: 'Selection policy', keywords: 'variety repeat artist slots' },
+  { label: 'Album cooldown', section: 'selection', card: 'Selection policy', keywords: 'record repeat hours' },
+  { label: 'Minimum track length', section: 'selection', card: 'Selection policy', keywords: 'short tracks seconds' },
   { label: 'Talk placement', section: 'behaviour', card: 'Talk placement', keywords: 'between tracks boundary interrupt over song duck mid-song' },
   { label: 'Recent lines', section: 'behaviour', card: 'Prompt memory', keywords: 'recap repeat anti-repeat context history limit' },
   { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },

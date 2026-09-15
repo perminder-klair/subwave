@@ -164,8 +164,7 @@ test('the held exit diagnostic names the request as its actual successor', () =>
 
 test('the event prompt names the captured anchor without claiming current adjacency', () => {
   assert.ok(observed);
-  assert.match(observed.eventPrompt ?? '', /Pick-cycle anchor: "Heads We're Dancing"/);
-  assert.match(observed.eventPrompt ?? '', /intended predecessor for this selection/);
+  assert.match(observed.eventPrompt ?? '', /Pick next after "Heads We're Dancing"/);
   assert.doesNotMatch(observed.eventPrompt ?? '', /Now playing "Heads We're Dancing"|immediately preceding|twice in a row/);
 });
 

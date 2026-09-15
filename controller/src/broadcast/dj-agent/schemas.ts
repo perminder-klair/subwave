@@ -141,7 +141,7 @@ export const LISTENER_TEXT_CLAUSE = instruction('shared', 'listener-text');
 // same look-ahead has already rolled — the mic-pass aired ahead of this pick,
 // so the incoming DJ introduces their own opener rather than the outgoing DJ
 // teeing up a show they've already signed off from.
-export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
+export function pickSystem(showAt: Date | null = null, playlistResolved = true, nativeShortlist = false) {
   const persona = session.onAirPersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
@@ -191,9 +191,11 @@ export function pickSystem(showAt: Date | null = null, playlistResolved = true) 
   // that could run, because this prompt is built before failover picks one and
   // over-promising is the more expensive way to be wrong.
   const rounds = dj.promptDiscoverySteps();
-  const findingCandidates = rounds > 1
-    ? instruction('picker', 'finding-candidates-multi', { rounds })
-    : instruction('picker', 'finding-candidates');
+  const findingCandidates = nativeShortlist
+    ? 'The controller has already built a Track Shortlist under the station guards. Choose exactly one supplied id; do not request or invent candidates.'
+    : rounds > 1
+      ? instruction('picker', 'finding-candidates-multi', { rounds })
+      : instruction('picker', 'finding-candidates');
   return `${settings.agentPersonaPreamble(persona)}
 
 ${instruction('picker', 'frame')}${djModeLine}${showLine}${musicLean}${playlistLean}

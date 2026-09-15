@@ -59,7 +59,11 @@ import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
+import { buildShortlist, replayFixtureTrace } from '../music/shortlist.js';
+import { djPick, shortlistPickPrompt, shortlistPickSchema, shortlistSelectionReason, usableSelectionReason } from '../music/dj-pick.js';
+import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
+import { recordShortlistPick } from '../stats.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -85,16 +89,17 @@ export { pickerAgent, requestAgent } from './dj-agent/agents.js';
 // the pick-anchor artist guard (#1124) reuses this same constrained re-pick
 // but for a valid pick it wants to swap off the anchor artist, so the bad-id
 // wording would be false and confuse the model.
-async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
+async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null, telemetryKind = 'djAgentRepick' }: { seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null; telemetryKind?: 'djAgentRepick' | 'djShortlistRepick' }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
-  const schema = modelTolerant(pickSchemaBase().extend({
+  const shortlistRepick = telemetryKind === 'djShortlistRepick';
+  const schema = shortlistRepick ? shortlistPickSchema(ids) : modelTolerant(pickSchemaBase().extend({
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
   }));
   const why = reason
     ?? `You explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`;
   try {
-    return await djObject({
+    const outcome: any = await djObject({
       // Same show snapshot as the failed run (showAt) and the same playlist-
       // resolved gate — a tool-less salvage call must NOT reinstate "call
       // showPlaylistTracks first / every pick MUST come from the playlist" when
@@ -106,13 +111,15 @@ async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = t
       // favourites clause is absent (it rides the pick EVENT turn, not this
       // system prompt) — acceptable because `seen` was discovered under the
       // favourites-aware run this salvages.
-      system: pickSystem(showAt, playlistResolved),
-      prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\n${why}`,
+      system: pickSystem(showAt, playlistResolved, shortlistRepick),
+      prompt: shortlistRepick
+        ? shortlistPickPrompt([...seen.values()]) + `\n\n${why}`
+        : JSON.stringify({ candidates: [...seen.values()] }, null, 2) + `\n\n${why}`,
       schema,
       temperature: 0.5,
-      kind: 'djAgentRepick',
+      kind: telemetryKind,
     });
+    return shortlistRepick ? { ...outcome, reason: outcome.selectionReason } : outcome;
   } catch {
     return null;
   }
@@ -158,11 +165,10 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
   }
 }
 
-// `ctx` / `rankTarget` are carried only for the artist-guard's pool rescue
-// (#1187) — the agent's own run needs neither. They're the same values
-// runTrackEvent hands the ordinary pool fallback, so a rescued pick is built
-// from exactly the pool a failed agent run would have produced.
-async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAnchor = null, showAt = null, rankTarget = null }: { wantLink: boolean; audioWaypoint?: number[] | null; pickAnchor?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null }): Promise<boolean> {
+// Build the exact discovery scope used by a live next-track pick. Diagnostics
+// call this too, so a tool run sees the same recency, show and playlist policy
+// as the DJ rather than a convenient-but-different approximation.
+export async function livePickerScope(queue: any, { audioWaypoint = null, showAt = null }: { audioWaypoint?: number[] | null; showAt?: Date | null } = {}) {
   await library.load();
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total` (TAGGED tracks only) — see the same
@@ -298,14 +304,74 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     excludedIds,
   });
 
-  const run = await pickerAgent.run({
-    messages: session.windowMessages(),
-    scope,
-    showAt,
-  });
-  const { steps, toolCalls, extras } = run;
-  let object = run.object;
+  return { scope, playlistTracks, activeShow };
+}
 
+// `ctx` / `rankTarget` are carried only for the artist-guard's pool rescue
+// (#1187) — the agent's own run needs neither. They're the same values
+// runTrackEvent hands the ordinary pool fallback, so a rescued pick is built
+// from exactly the pool a failed agent run would have produced.
+async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAnchor = null, showAt = null, rankTarget = null }: { wantLink: boolean; audioWaypoint?: number[] | null; pickAnchor?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null }): Promise<boolean> {
+  const pickStarted = performance.now();
+  const { scope, playlistTracks, activeShow } = await livePickerScope(queue, { audioWaypoint, showAt });
+  const useShortlist = settings.get().llm?.trackSelection === 'shortlist';
+  let steps: number;
+  let toolCalls: any[];
+  let extras: { seen: Map<string, any> };
+  let object: any;
+  if (useShortlist) {
+    // This route builds and executes the controller's source plan directly.
+    // It deliberately never instantiates the tool-loop agent or a tool schema.
+    const shortlist = await buildShortlist({
+      scope,
+      currentTrackId: pickAnchor?.id ?? null,
+      discoveryPasses: settings.get().llm?.shortlistPasses ?? 3,
+      moods: activeShow?.moods,
+      energies: activeShow?.energies,
+    });
+    steps = shortlist.sourceRuns.length;
+    toolCalls = shortlist.sourceRuns;
+    extras = { seen: new Map(shortlist.candidates.map((candidate) => [candidate.id, candidate])) };
+    logEvent('shortlist.built', {
+      candidates: shortlist.uniqueCandidates,
+      sourceRuns: shortlist.sourceRuns,
+      elapsedMs: shortlist.elapsedMs,
+    });
+    if (!shortlist.candidates.length) {
+      const failure = classifyPickFailure({
+        pickedId: null,
+        seedId: pickAnchor?.id ?? null,
+        candidates: 0,
+        toolCalls: shortlist.sourceRuns.length,
+      });
+      throw Object.assign(new Error(failure.message), { pickFailure: failure });
+    }
+    const selection = await djPick({
+      candidates: shortlist.candidates,
+      showAt,
+      playlistResolved: !!playlistTracks?.length,
+    });
+    object = { ...selection, reason: selection.selectionReason };
+    logEvent('shortlist.selected', { id: selection.id, candidates: shortlist.uniqueCandidates });
+  } else {
+    const run = await pickerAgent.run({
+      messages: session.windowMessages(),
+      scope,
+      showAt,
+    });
+    steps = run.steps;
+    toolCalls = run.toolCalls;
+    extras = run.extras;
+    // One factual, redacted record supplies faithful replay fixtures for native
+    // shortlisting. It intentionally excludes the prompt and model response.
+    logEvent('picker.replayTrace', replayFixtureTrace({
+      currentTrack: pickAnchor,
+      show: activeShow,
+      scope,
+      toolCalls,
+    }));
+    object = run.object;
+  }
   let song = object?.id ? extras.seen.get(object.id) : null;
 
   // The agent returned an id that isn't in the candidate set it was shown.
@@ -330,7 +396,11 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     }
   }
   if (!song && extras.seen.size) {
-    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, showAt, playlistResolved: !!playlistTracks?.length });
+    const repicked = await repickFromSeen({
+      seen: extras.seen, badId: object?.id ?? null, showAt,
+      playlistResolved: !!playlistTracks?.length,
+      telemetryKind: useShortlist ? 'djShortlistRepick' : 'djAgentRepick',
+    });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
       queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -402,6 +472,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // escalated differently on purpose (see below): an anchor match is worth a
   // pool rescue, while spacing is a preference that yields to the run.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  let shortlistCorrected = false;
   // Read once: the album guard below steps around the same neighbours, and two
   // reads of a live queue across two awaits could disagree.
   const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
@@ -415,6 +486,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       seen: alt, badId: null, showAt,
       playlistResolved: !!playlistTracks?.length,
       reason,
+      telemetryKind: useShortlist ? 'djShortlistRepick' : 'djAgentRepick',
     }),
     poolRescue: (avoidArtist) => pickViaPool(
       queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint,
@@ -427,6 +499,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // rescued slot is a filled slot — runTrackEvent must treat it as done.
   if (guarded.kind === 'rescued') return true;
   if (guarded.kind === 'repicked') {
+    shortlistCorrected = useShortlist;
     object = guarded.object;
     song = guarded.song;
   }
@@ -460,14 +533,37 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
         seen: alt, badId: null, showAt,
         playlistResolved: !!playlistTracks?.length,
         reason,
+        telemetryKind: useShortlist ? 'djShortlistRepick' : 'djAgentRepick',
       }),
       log: (line) => queue.log('picker', line),
       logEvent,
     });
     if (albumGuarded.kind === 'repicked') {
+      shortlistCorrected = useShortlist;
       object = albumGuarded.object;
       song = albumGuarded.song;
     }
+  }
+
+  // The Shortlist model's note must never describe an earlier choice after a
+  // corrective artist/album repick. Replace an unsafe note at the final-track
+  // boundary, before either Booth/session text or queue metadata can see it.
+  if (useShortlist) {
+    // Both safeguards matter: validate against the final (possibly guarded)
+    // track first, then ensure the resulting Booth note remains informative.
+    object.reason = usableSelectionReason(shortlistSelectionReason(song, object.reason), song);
+    const selectionRecord = {
+      id: song.id,
+      track: { title: song.title ?? null, artist: song.artist ?? null },
+      selectionReason: object.reason,
+      sourceHint: shortlistSourceHint(song.shortlistSources),
+      shortlistSources: song.shortlistSources ?? [],
+    };
+    logEvent('shortlist.selected', selectionRecord);
+    queue.log('shortlist', ['Shortlist Pick', selectionRecord.selectionReason, selectionRecord.sourceHint].filter(Boolean).join(' — '), selectionRecord);
+  }
+  if (useShortlist) {
+    recordShortlistPick({ ms: Math.round(performance.now() - pickStarted), primary: !shortlistCorrected });
   }
 
   // The picker has seen private selection context. Only after its final choice
@@ -790,10 +886,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
     const eventText = explicitPickAnchor
-      ? `Pick-cycle anchor: "${pickAnchor?.title}" by ${pickAnchor?.artist}`
-        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
-        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
-        + '. This queued track is the intended predecessor for this selection. Pick the track intended to follow that anchor.'
+      ? `Pick next after "${pickAnchor?.title}" by ${pickAnchor?.artist}`
+        + (anchorPriorTrack ? ` (following "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
+        + '.'
       : `Now playing "${pickAnchor?.title}" by ${pickAnchor?.artist}`
         + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
         + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
@@ -806,12 +901,13 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 
     // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
     // and go straight to the one-call pool picker below to stretch the budget.
-    if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
+    const shortlistSelected = settings.get().llm?.trackSelection === 'shortlist';
+    if (!cheap && (shortlistSelected || (settings.get().llm?.pickerAgent && !breakerOpen()))) {
       try {
         const queued = await pickViaAgent(queue, ctx, {
           wantLink, audioWaypoint, pickAnchor, showAt, rankTarget,
         });
-        breakerSuccess();
+        if (!shortlistSelected) breakerSuccess();
         if (queued) return;
         // The agent produced a valid pick but it was already queued/on-air, so
         // push() dropped it. The agent itself is healthy — don't trip the
@@ -819,6 +915,11 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
         // if even the pool can only find an already-queued track).
         queue.log('picker', 'agent pick already queued — falling back to pool');
       } catch (err) {
+        if (shortlistSelected) {
+          queue.log('error', `Track Shortlist pick failed: ${(err as Error).message} — falling back to pool`);
+          await pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint);
+          return;
+        }
         // A run that made at least one real discovery call but ended with no
         // observed candidates is deliberately breaker-exempt (#1247). The empty
         // set proves this run cannot validate a pick; it does not by itself
@@ -853,7 +954,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, ctx: any, { requester, text }: { requester: string; text: string }) {
-  if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
+  if (settings.get().llm?.requestMatching !== 'agentic' || breakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
   // the caller's stateless matcher cascade handle it without a model call.

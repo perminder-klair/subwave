@@ -315,6 +315,10 @@ const parsedIntIn = (
   return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : def;
 };
 
+// Unlike Agentic discoverySteps, zero has no useful meaning for controller-led
+// shortlist construction: one pass is the smallest real shortlist.
+const clampShortlistPasses = (v: unknown, def: number) => intIn(v, def, 1, 5);
+
 export async function load() {
   const cached = peek();
   if (cached) return cached;
@@ -952,6 +956,23 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      trackSelection:
+        stored.llm?.trackSelection === 'shortlist'
+          ? 'shortlist'
+          // `pickerAgent: false` was the retired Candidate Pool setting.  It
+          // represented a controller-led pool plus one final model choice, so
+          // carry those stations forward to its named replacement rather than
+          // presenting Agentic Tools while silently using the old fallback.
+          : stored.llm?.trackSelection === undefined && stored.llm?.pickerAgent === false
+            ? 'shortlist'
+            : DEFAULTS.llm.trackSelection,
+      shortlistPasses: clampShortlistPasses(stored.llm?.shortlistPasses, DEFAULTS.llm.shortlistPasses),
+      requestMatching:
+        stored.llm?.requestMatching === 'direct' ? 'direct' : DEFAULTS.llm.requestMatching,
+      segmentRuntime:
+        stored.llm?.segmentRuntime === 'direct' || (stored.llm?.segmentRuntime === undefined && stored.llm?.pickerAgent === false)
+          ? 'direct'
+          : DEFAULTS.llm.segmentRuntime,
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
@@ -1923,6 +1944,22 @@ export async function update(patch) {
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+      // Preserve the legacy single-toggle behaviour for API callers and older
+      // admin builds that do not yet send the three independent choices.
+      if (l.pickerAgent === false && l.requestMatching === undefined) next.llm.requestMatching = 'direct';
+      if (l.pickerAgent === false && l.segmentRuntime === undefined) next.llm.segmentRuntime = 'direct';
+    }
+    if (l.trackSelection !== undefined) {
+      next.llm.trackSelection = l.trackSelection === 'shortlist' ? 'shortlist' : 'agentic';
+    }
+    if (l.shortlistPasses !== undefined) {
+      next.llm.shortlistPasses = clampShortlistPasses(Number(l.shortlistPasses), next.llm.shortlistPasses);
+    }
+    if (l.requestMatching !== undefined) {
+      next.llm.requestMatching = l.requestMatching === 'direct' ? 'direct' : 'agentic';
+    }
+    if (l.segmentRuntime !== undefined) {
+      next.llm.segmentRuntime = l.segmentRuntime === 'direct' ? 'direct' : 'agentic';
     }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
