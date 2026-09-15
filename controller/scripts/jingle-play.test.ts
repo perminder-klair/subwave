@@ -5,17 +5,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const STATE = mkdtempSync(join(tmpdir(), 'subwave-jingle-play-'));
 process.env.STATE_DIR = STATE;
 
 const { config } = await import('../src/config.js');
-const { jingleUri } = await import('../src/broadcast/jingles.js');
+const { importAudio, jingleUri } = await import('../src/broadcast/jingles.js');
 const { bedUri } = await import('../src/broadcast/beds.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { setJingleRotateOwner } = await import('../src/broadcast/jingle-rotate.js');
@@ -36,14 +37,17 @@ assert.notEqual(
 
 const filename = 'jingle_a1b2c3d4.wav';
 const other = 'jingle_deadbeef.wav';
+const builtin = 'station_ident_default.wav';
 const jingleDir = join(STATE, 'jingles');
 mkdirSync(jingleDir, { recursive: true });
 writeFileSync(join(jingleDir, filename), 'audio');
 writeFileSync(join(jingleDir, other), 'audio');
+writeFileSync(join(jingleDir, builtin), 'audio');
 writeFileSync(join(STATE, 'jingles.json'), JSON.stringify({
   items: {
     [filename]: { text: 'Event announcement' },
     [other]: { text: 'Sponsor spot' },
+    [builtin]: { text: 'Station ident', builtin: true, source: 'builtin' },
   },
 }));
 
@@ -102,6 +106,215 @@ test('manual jingle rejects when its priority handoff cannot be written', async 
   // A press that never reached the handoff leaves nothing pending behind it.
   assert.deepEqual(await queue.playJingle(filename), { ok: true });
   await markAired(filename);
+});
+
+function pcmWav(sampleRate: number, channels: 1 | 2, durationSec = 1.25): Buffer {
+  const frames = Math.round(sampleRate * durationSec);
+  const data = Buffer.alloc(frames * channels * 2);
+  for (let frame = 0; frame < frames; frame++) {
+    for (let channel = 0; channel < channels; channel++) {
+      const hz = channel === 0 ? 440 : 660;
+      const sample = Math.round(Math.sin(2 * Math.PI * hz * frame / sampleRate) * 8_000);
+      data.writeInt16LE(sample, (frame * channels + channel) * 2);
+    }
+  }
+  const wav = Buffer.alloc(44 + data.length);
+  wav.write('RIFF', 0);
+  wav.writeUInt32LE(36 + data.length, 4);
+  wav.write('WAVEfmt ', 8);
+  wav.writeUInt32LE(16, 16);
+  wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(channels, 22);
+  wav.writeUInt32LE(sampleRate, 24);
+  wav.writeUInt32LE(sampleRate * channels * 2, 28);
+  wav.writeUInt16LE(channels * 2, 32);
+  wav.writeUInt16LE(16, 34);
+  wav.write('data', 36);
+  wav.writeUInt32LE(data.length, 40);
+  data.copy(wav, 44);
+  return wav;
+}
+
+function commandExists(command: string): boolean {
+  const probe = spawnSync(command, ['-version'], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+}
+
+function probeAudio(path: string) {
+  const result = spawnSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'a:0',
+    '-show_entries', 'stream=codec_name,sample_rate,channels:format=duration',
+    '-of', 'json', path,
+  ], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = JSON.parse(result.stdout);
+  return {
+    codec: parsed.streams[0].codec_name as string,
+    sampleRate: Number(parsed.streams[0].sample_rate),
+    channels: Number(parsed.streams[0].channels),
+    duration: Number(parsed.format.duration),
+  };
+}
+
+test('uploaded WAVs are normalized to 44.1 kHz PCM while preserving mono/stereo', async (t) => {
+  if (!commandExists('ffmpeg') || !commandExists('ffprobe')) {
+    t.skip('real ffmpeg and ffprobe are required for codec verification');
+    return;
+  }
+
+  for (const input of [
+    { sampleRate: 192_000, channels: 1 as const, label: 'High-rate mono' },
+    { sampleRate: 192_000, channels: 2 as const, label: 'High-rate stereo' },
+    { sampleRate: 44_100, channels: 1 as const, label: 'Control' },
+  ]) {
+    const created = await importAudio(pcmWav(input.sampleRate, input.channels), {
+      label: input.label,
+      originalName: `${input.label}.wav`,
+    });
+    assert.match(created.filename, /^jingle_[0-9a-f]{8}\.wav$/);
+    assert.equal(created.text, input.label);
+    const audio = probeAudio(join(jingleDir, created.filename));
+    assert.equal(audio.codec, 'pcm_s16le');
+    assert.equal(audio.sampleRate, 44_100);
+    assert.equal(audio.channels, input.channels);
+    assert.ok(Math.abs(audio.duration - 1.25) <= 0.03, `duration changed to ${audio.duration}s`);
+
+    const meta = JSON.parse(readFileSync(join(STATE, 'jingles.json'), 'utf8'));
+    const entry = meta.items[created.filename];
+    assert.equal(entry.text, input.label);
+    assert.equal(entry.builtin, false);
+    assert.equal(entry.source, 'upload');
+    assert.ok(Number.isFinite(Date.parse(entry.createdAt)));
+    const playlist = readFileSync(join(STATE, 'jingles.m3u'), 'utf8');
+    assert.ok(playlist.includes(join(jingleDir, created.filename)));
+    assert.deepEqual(meta.items[builtin], {
+      text: 'Station ident', builtin: true, source: 'builtin',
+    }, 'the built-in ident registration is preserved');
+    assert.ok(playlist.includes(join(jingleDir, builtin)), 'the built-in ident stays in rotation');
+  }
+});
+
+test('undecodable audio leaves the existing library byte-for-byte unchanged', async (t) => {
+  if (!commandExists('ffmpeg')) {
+    t.skip('real ffmpeg is required for decode-failure verification');
+    return;
+  }
+  const beforeFiles = readFileSync(join(STATE, 'jingles.json'), 'utf8');
+  const beforePlaylist = readFileSync(join(STATE, 'jingles.m3u'), 'utf8');
+  const beforeNames = readdirSync(jingleDir).sort();
+  await assert.rejects(
+    importAudio(Buffer.from('not a decodable WAV'), { label: 'Broken', originalName: 'broken.wav' }),
+    /ffmpeg failed/,
+  );
+  assert.equal(readFileSync(join(STATE, 'jingles.json'), 'utf8'), beforeFiles);
+  assert.equal(readFileSync(join(STATE, 'jingles.m3u'), 'utf8'), beforePlaylist);
+  assert.deepEqual(readdirSync(jingleDir).sort(), beforeNames);
+  const registered = new Set(Object.keys(JSON.parse(beforeFiles).items));
+  const disk = new Set(readFileSync(join(STATE, 'jingles.m3u'), 'utf8')
+    .trim().split('\n').filter(Boolean).map(p => p.split('/').pop()));
+  assert.deepEqual(disk, registered);
+});
+
+const CHILD_IMPORT = String.raw`
+  import { readdir, readFile } from 'node:fs/promises';
+  const { importAudio } = await import('./src/broadcast/jingles.js');
+  const result = {};
+  try {
+    result.created = await importAudio(Buffer.from('not audio'), { label: 'Broken', originalName: 'broken.wav' });
+  } catch (err) {
+    result.error = err instanceof Error ? err.message : String(err);
+  }
+  result.files = await readdir(process.env.STATE_DIR + '/jingles').catch(() => []);
+  result.meta = JSON.parse(await readFile(process.env.STATE_DIR + '/jingles.json', 'utf8').catch(() => '{"items":{}}'));
+  result.playlist = await readFile(process.env.STATE_DIR + '/jingles.m3u', 'utf8').catch(() => '');
+  process.stdout.write(JSON.stringify(result));
+`;
+
+function childImport(pathValue: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  const state = mkdtempSync(join(tmpdir(), 'subwave-jingle-import-child-'));
+  const result = spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e', CHILD_IMPORT,
+  ], {
+    cwd: join(here, '..'),
+    encoding: 'utf8',
+    env: { ...process.env, STATE_DIR: state, PATH: pathValue, ...extraEnv },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return { state, body: JSON.parse(result.stdout) };
+}
+
+test('a missing ffmpeg rejects the upload before registration', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'subwave-no-ffmpeg-'));
+  const { state, body } = childImport(bin);
+  try {
+    assert.match(body.error, /ffmpeg.*required.*broadcast-compatible/i);
+    assert.deepEqual(body.files, []);
+    assert.deepEqual(body.meta, { items: {} });
+    assert.equal(body.playlist, '');
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+const CHILD_ROUTE = String.raw`
+  import express from 'express';
+  import { createServer } from 'node:http';
+  import { readdir, readFile } from 'node:fs/promises';
+  const { router } = await import('./src/routes/jingles.js');
+  const app = express();
+  app.use(router);
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const form = new FormData();
+  form.append('label', 'Broken route upload');
+  form.append('file', new Blob([Buffer.from('not audio')], { type: 'audio/wav' }), 'broken.wav');
+  const response = await fetch('http://127.0.0.1:' + port + '/jingles/upload', { method: 'POST', body: form });
+  const body = await response.json();
+  await new Promise(resolve => server.close(resolve));
+  const files = await readdir(process.env.STATE_DIR + '/jingles').catch(() => []);
+  const meta = JSON.parse(await readFile(process.env.STATE_DIR + '/jingles.json', 'utf8').catch(() => '{"items":{}}'));
+  process.stdout.write(JSON.stringify({ status: response.status, body, files, meta }));
+`;
+
+test('POST /jingles/upload returns the actionable ffmpeg refusal as a 400', () => {
+  const state = mkdtempSync(join(tmpdir(), 'subwave-jingle-route-child-'));
+  const bin = mkdtempSync(join(tmpdir(), 'subwave-no-ffmpeg-route-'));
+  const result = spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e', CHILD_ROUTE,
+  ], {
+    cwd: join(here, '..'), encoding: 'utf8',
+    env: { ...process.env, STATE_DIR: state, PATH: bin, ADMIN_USER: '', ADMIN_PASS: '' },
+  });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    const response = JSON.parse(result.stdout);
+    assert.equal(response.status, 400);
+    assert.match(response.body.error, /ffmpeg.*required.*broadcast-compatible/i);
+    assert.deepEqual(response.files, []);
+    assert.deepEqual(response.meta, { items: {} });
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+    rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+test('a failed conversion removes its partial destination and registers nothing', () => {
+  const bin = mkdtempSync(join(tmpdir(), 'subwave-failing-ffmpeg-'));
+  const ffmpeg = join(bin, 'ffmpeg');
+  writeFileSync(ffmpeg, `#!/bin/sh\nif [ "$1" = "-version" ]; then exit 0; fi\nout=""\nfor arg in "$@"; do out="$arg"; done\nprintf partial > "$out"\necho deliberate failure >&2\nexit 9\n`);
+  chmodSync(ffmpeg, 0o755);
+  const { state, body } = childImport(bin);
+  try {
+    assert.match(body.error, /ffmpeg failed \(exit 9\): deliberate failure/);
+    assert.deepEqual(body.files, []);
+    assert.deepEqual(body.meta, { items: {} });
+    assert.equal(body.playlist, '');
+  } finally {
+    rmSync(state, { recursive: true, force: true });
+    rmSync(bin, { recursive: true, force: true });
+  }
 });
 
 const liq = readFileSync(RADIO_LIQ, 'utf8');

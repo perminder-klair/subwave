@@ -329,6 +329,73 @@ shapes:
   You lose your configuration, not your library — then restore from the backup
   zip via **Admin → Settings → Backup → Import**.
 
+### Jingles uploaded before the 44.1 kHz normalization fix
+
+The update normalizes **new** Imaging → Jingles uploads to 44.1 kHz PCM WAV. It
+never rewrites existing files at startup or while listing them. Jingles adopted
+from a persona bundle are also kept verbatim. If an older high-rate jingle is
+registered but does not air, either re-upload it after updating or repair that
+specific WAV as an opt-in operation.
+
+The safest option is to re-upload it. This creates a new jingle ID: audition the
+new entry first, then remove the old entry only after the replacement has aired.
+
+To preserve an existing filename and its `jingles.json` / `jingles.m3u` entry,
+work backup-first. Test this on a disposable station before touching the live
+one, and do not mass-convert healthy assets.
+
+1. Find the active station directory. A single-station clone normally uses
+   `state/`; a multi-station install uses `state/stations/<active-id>/`. The
+   directory you choose must contain the active `jingles.json`, `jingles.m3u`
+   and `jingles/` folder.
+2. Stop automatic/manual use of the affected jingle and wait until it is not on
+   air. Back up the audio and both registration files:
+
+   ```bash
+   STATION_DIR=state                         # or state/stations/<active-id>
+   FILE=jingle_127a4a99.wav
+   BACKUP="$STATION_DIR/jingle-recovery-$(date +%Y%m%d-%H%M%S)"
+   mkdir -p "$BACKUP"
+   cp -p "$STATION_DIR/jingles/$FILE" "$BACKUP/"
+   cp -p "$STATION_DIR/jingles.json" "$STATION_DIR/jingles.m3u" "$BACKUP/"
+   ```
+
+3. Convert to a **separate file in the same directory**. Do not point ffmpeg at
+   the registered destination: ffmpeg opens its output early, so a failed run
+   could truncate the live asset. Plain resampling avoids level-matching an
+   already-levelled file again, and omitting `-ac` preserves mono or stereo.
+
+   ```bash
+   SRC="$STATION_DIR/jingles/$FILE"
+   TMP="$STATION_DIR/jingles/.${FILE%.wav}.44100.tmp.wav"
+   ffmpeg -hide_banner -i "$SRC" -ar 44100 -c:a pcm_s16le -y "$TMP"
+   ffprobe -v error -select_streams a:0 \
+     -show_entries stream=codec_name,sample_rate,channels \
+     -of default=noprint_wrappers=1 "$TMP"
+   ```
+
+   Continue only if ffmpeg succeeded and ffprobe reports `codec_name=pcm_s16le`,
+   `sample_rate=44100`, and the expected channel count. Audition the temporary
+   file if possible.
+
+4. While the jingle is still not airing, atomically replace it on the same
+   filesystem:
+
+   ```bash
+   mv -f "$TMP" "$SRC"
+   ```
+
+   The filename, label, `source`, `createdAt`, JSON entry and playlist line stay
+   unchanged. A mixer reload or broadcast restart may be needed if Liquidsoap
+   cached an earlier failed request; a watched playlist does not guarantee an
+   immediate hot-swap of a decoder request already in flight. Confirm the
+   repaired jingle is actually audible through both normal rotation and the
+   manual play action — registration or queue acceptance alone is not proof.
+
+To roll back, keep the jingle off air and copy its saved audio back over the same
+filename. Restore the saved `jingles.json` and `jingles.m3u` too if either was
+changed during recovery, then restart the broadcast process if needed.
+
 ### Everything else
 
 `state/` is the only thing that matters and it survives `docker compose down`

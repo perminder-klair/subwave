@@ -10,7 +10,7 @@ import { speak } from '../audio/tts.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
-  transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
+  transcodeAudio, hasFfmpeg, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
 import { JINGLE_FILENAME_RE, JINGLE_NAME_MAX, uniqueFilename } from '../personas/bundle-pure.js';
 
@@ -112,8 +112,8 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   return { filename, text: text.trim(), outPath };
 }
 
-// Import an operator-supplied audio file. Transcoded to WAV + loudness-levelled
-// when ffmpeg is available, otherwise stored as-is with its original extension.
+// Import an operator-supplied audio file. New uploads require ffmpeg so every
+// registered jingle is a validated, broadcast-compatible WAV.
 export async function importAudio(
   buffer: Buffer,
   { label = '', originalName = '' }: { label?: string; originalName?: string } = {},
@@ -122,16 +122,26 @@ export async function importAudio(
   if (originalName && !isAcceptedAudio(originalName)) {
     throw new Error(`Unsupported audio type: ${originalName}`);
   }
+  if (!(await hasFfmpeg())) {
+    throw new Error(
+      'ffmpeg is required to convert jingles to broadcast-compatible audio; install or enable ffmpeg, then retry'
+    );
+  }
   await mkdir(DIR, { recursive: true });
 
   const id = crypto.randomBytes(4).toString('hex');
-  let filename: string;
-  if (await hasFfmpeg()) {
-    filename = `jingle_${id}.wav`;
-    await transcodeAudio(buffer, { outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true });
-  } else {
-    filename = `jingle_${id}.${extOf(originalName) || 'mp3'}`;
-    await writeFile(`${DIR}/${filename}`, buffer);
+  const filename = `jingle_${id}.wav`;
+  const outPath = `${DIR}/${filename}`;
+  try {
+    await transcodeAudio(buffer, {
+      outPath,
+      format: 'wav',
+      loudnorm: true,
+      sampleRate: 44100,
+    });
+  } catch (err) {
+    await unlink(outPath).catch(() => {});
+    throw err;
   }
 
   const text = (label || '').trim() || baseName(originalName) || 'Imported jingle';
