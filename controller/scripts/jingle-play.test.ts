@@ -108,7 +108,7 @@ test('manual jingle rejects when its priority handoff cannot be written', async 
   await markAired(filename);
 });
 
-function pcmWav(sampleRate: number, channels: 1 | 2, durationSec = 1.25): Buffer {
+function pcmWav(sampleRate: number, channels: 1 | 2, durationSec = 4): Buffer {
   const frames = Math.round(sampleRate * durationSec);
   const data = Buffer.alloc(frames * channels * 2);
   for (let frame = 0; frame < frames; frame++) {
@@ -177,7 +177,7 @@ test('uploaded WAVs are normalized to 44.1 kHz PCM while preserving mono/stereo'
     assert.equal(audio.codec, 'pcm_s16le');
     assert.equal(audio.sampleRate, 44_100);
     assert.equal(audio.channels, input.channels);
-    assert.ok(Math.abs(audio.duration - 1.25) <= 0.03, `duration changed to ${audio.duration}s`);
+    assert.ok(Math.abs(audio.duration - 4) <= 0.03, `duration changed to ${audio.duration}s`);
 
     const meta = JSON.parse(readFileSync(join(STATE, 'jingles.json'), 'utf8'));
     const entry = meta.items[created.filename];
@@ -254,6 +254,71 @@ test('a missing ffmpeg rejects the upload before registration', () => {
   } finally {
     rmSync(state, { recursive: true, force: true });
     rmSync(bin, { recursive: true, force: true });
+  }
+});
+
+const CHILD_SUCCESS_ROUTE = String.raw`
+  import express from 'express';
+  import { createServer } from 'node:http';
+  import { readFile } from 'node:fs/promises';
+  const { router } = await import('./src/routes/jingles.js');
+  const app = express();
+  app.use(router);
+  const server = createServer(app);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const results = [];
+  for (const spec of JSON.parse(process.env.ROUTE_SPECS)) {
+    const form = new FormData();
+    form.append('label', spec.label);
+    form.append('file', new Blob([await readFile(spec.path)], { type: 'audio/wav' }), spec.name);
+    const response = await fetch('http://127.0.0.1:' + port + '/jingles/upload', {
+      method: 'POST', body: form,
+    });
+    results.push({ status: response.status, body: await response.json() });
+  }
+  await new Promise(resolve => server.close(resolve));
+  process.stdout.write(JSON.stringify(results));
+`;
+
+test('POST /jingles/upload normalizes successful 192 kHz mono and stereo uploads', async (t) => {
+  if (!commandExists('ffmpeg') || !commandExists('ffprobe')) {
+    t.skip('real ffmpeg and ffprobe are required for successful multipart verification');
+    return;
+  }
+  const state = mkdtempSync(join(tmpdir(), 'subwave-jingle-route-success-'));
+  const specs = [
+    { path: join(state, 'route-mono.wav'), name: 'route-mono.wav', label: 'Route mono', channels: 1 },
+    { path: join(state, 'route-stereo.wav'), name: 'route-stereo.wav', label: 'Route stereo', channels: 2 },
+  ] as const;
+  for (const spec of specs) writeFileSync(spec.path, pcmWav(192_000, spec.channels));
+  const result = spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '-e', CHILD_SUCCESS_ROUTE,
+  ], {
+    cwd: join(here, '..'), encoding: 'utf8',
+    env: { ...process.env, STATE_DIR: state, ADMIN_USER: '', ADMIN_PASS: '',
+      ROUTE_SPECS: JSON.stringify(specs) },
+  });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    const responses = JSON.parse(result.stdout.slice(result.stdout.lastIndexOf('\n') + 1));
+    const meta = JSON.parse(readFileSync(join(state, 'jingles.json'), 'utf8'));
+    const playlist = readFileSync(join(state, 'jingles.m3u'), 'utf8');
+    for (let i = 0; i < specs.length; i++) {
+      const { status, body } = responses[i];
+      assert.equal(status, 200);
+      assert.equal(body.text, specs[i].label);
+      assert.match(body.filename, /^jingle_[0-9a-f]{8}\.wav$/);
+      const audio = probeAudio(join(state, 'jingles', body.filename));
+      assert.deepEqual(audio, {
+        codec: 'pcm_s16le', sampleRate: 44_100, channels: specs[i].channels, duration: 4,
+      });
+      assert.equal(meta.items[body.filename].text, specs[i].label);
+      assert.equal(meta.items[body.filename].source, 'upload');
+      assert.ok(playlist.includes(join(state, 'jingles', body.filename)));
+    }
+  } finally {
+    rmSync(state, { recursive: true, force: true });
   }
 });
 
