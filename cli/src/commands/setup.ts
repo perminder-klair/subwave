@@ -21,6 +21,7 @@ import {
   probeSubsonic,
   probeOllama,
   probeOpenAI,
+  probeAzure,
   probeAnthropic,
   probeOpenRouter,
   probeRequesty,
@@ -30,7 +31,7 @@ import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, mu
 
 // Keep in step with the controller's LLM_PROVIDERS (controller/src/settings.ts).
 // `locca` is keyless with a default base URL, so it groups with the local set.
-type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
+type CloudProvider = 'anthropic' | 'openai' | 'azure' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
 type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
@@ -38,6 +39,7 @@ type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
+  azure: 'AZURE_API_KEY',
   google: 'GOOGLE_GENERATIVE_AI_API_KEY',
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
@@ -49,7 +51,7 @@ interface LlmChoice {
   provider: LlmProvider | null; // null = "configure later"
   ollamaUrl?: string;
   ollamaModel?: string;
-  baseUrl?: string; // openai-compatible / locca server URL, /v1 suffix included
+  baseUrl?: string; // openai-compatible / locca server URL (/v1 included), or the Azure resource endpoint
   model?: string; // blank defers the choice to the admin UI
   // Cloud → state/secrets.env (0600); openai-compatible → settings.llm.apiKey.
   apiKey?: string;
@@ -289,6 +291,7 @@ const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later' | 'dj-brain'; l
   { value: 'locca',             label: 'locca — local llama.cpp',          hint: 'no API key — defaults to the host locca server' },
   { value: 'anthropic',         label: 'Anthropic — Claude',               hint: 'needs ANTHROPIC_API_KEY' },
   { value: 'openai',            label: 'OpenAI — GPT',                     hint: 'needs OPENAI_API_KEY' },
+  { value: 'azure',             label: 'Azure OpenAI — your resource',     hint: 'needs AZURE_API_KEY + the endpoint and deployment name, set in the admin UI' },
   { value: 'google',            label: 'Google — Gemini',                  hint: 'needs GOOGLE_GENERATIVE_AI_API_KEY' },
   { value: 'deepseek',          label: 'DeepSeek',                         hint: 'needs DEEPSEEK_API_KEY' },
   { value: 'openrouter',        label: 'OpenRouter — multi-vendor',        hint: 'needs OPENROUTER_API_KEY' },
@@ -303,6 +306,7 @@ const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
   locca: 'qwen3',
   anthropic: 'claude-sonnet-4-5',
   openai: 'gpt-4o-mini',
+  azure: 'gpt-4o-mini',
   google: 'gemini-2.5-flash',
   deepseek: 'deepseek-chat',
   openrouter: 'anthropic/claude-sonnet-4-5',
@@ -392,29 +396,72 @@ async function collectLlm(): Promise<LlmChoice> {
 
   const label = (LLM_PROVIDER_OPTIONS.find((o) => o.value === provider)?.label ?? provider)
     .split(' — ')[0] as string;
+  // Azure is the one cloud provider with no hosted endpoint: the key alone
+  // cannot reach anything, so ask for the resource URL here rather than leaving
+  // a half-configured provider for the operator to debug in the admin UI.
+  let azureBaseUrl = '';
+  if (provider === 'azure') {
+    azureBaseUrl = exitIfCancelled(await p.text({
+      message: 'Azure resource endpoint (portal → your resource → Keys and Endpoint; paste the bare root)',
+      placeholder: 'https://my-resource.openai.azure.com',
+      validate: (v: string) => (!v ? 'required' : (!/^https?:\/\//.test(v) ? 'must start with http(s)://' : undefined)),
+    }), { backOnCancel: false });
+  }
   const apiKey = exitIfCancelled(await p.password({
     message: `${label} API key`,
     mask: '*',
   }), { backOnCancel: false });
   const model = exitIfCancelled(await p.text({
-    message: 'Model id (enter to choose later in the admin UI)',
+    message: provider === 'azure'
+      ? 'Deployment name (what you called it in Azure, not the model name)'
+      : 'Model id (enter to choose later in the admin UI)',
     placeholder: EXAMPLE_MODEL[provider],
   }), { backOnCancel: false });
   if (!apiKey) {
     warn('No key provided — saving the provider choice; add the key later via the admin UI, the browser wizard at /setup, or by hand in state/secrets.env.');
   } else {
-    await maybeProbeCloud(provider, label, apiKey);
+    await maybeProbeCloud(
+      provider,
+      label,
+      apiKey,
+      azureBaseUrl ? { baseUrl: azureBaseUrl, deployment: model || undefined } : undefined,
+    );
   }
-  return { provider, apiKey: apiKey || undefined, model: model || undefined };
+  return {
+    provider,
+    apiKey: apiKey || undefined,
+    model: model || undefined,
+    ...(azureBaseUrl ? { baseUrl: azureBaseUrl } : {}),
+  };
 }
 
 // google / deepseek / gateway have no probe; their key is first exercised on
 // the controller's first DJ call.
-async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: string): Promise<void> {
+//
+// `azure` takes the extra two arguments because its probe cannot be built from
+// the key alone: there is no hosted endpoint to call, and the thing worth
+// checking is whether the DEPLOYMENT the operator just typed actually exists on
+// the resource. Both are already in hand at the one call site, and this is the
+// provider where getting them wrong is easiest — a key that verifies against a
+// resource with nothing deployed under that name is the failure that otherwise
+// surfaces as a silent DJ after the stack is up.
+async function maybeProbeCloud(
+  provider: CloudProvider,
+  label: string,
+  apiKey: string,
+  azure?: { baseUrl: string; deployment?: string },
+): Promise<void> {
   if (provider === 'openai') return reportProbe(label, () => probeOpenAI({ apiKey }));
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
   if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
+  if (provider === 'azure' && azure?.baseUrl) {
+    return reportProbe(label, () => probeAzure({
+      apiKey,
+      baseUrl: azure.baseUrl,
+      deployment: azure.deployment,
+    }));
+  }
 }
 
 // COMPOSE_PROFILES in .env is what brings the sidecar up on later `up -d`
@@ -566,6 +613,11 @@ async function pushOnboardingSave(
       if (llm.baseUrl) llmPatch.baseUrl = llm.baseUrl;
       if (llm.model) llmPatch.model = llm.model;
       if (llm.apiKey) llmPatch.apiKey = llm.apiKey;
+    } else if (llm.provider === 'azure') {
+      // Cloud KEY (rides body.apiKeys → secrets.env) but a per-install
+      // ENDPOINT, which settings.update() routes into providerBaseUrls.azure.
+      if (llm.baseUrl) llmPatch.baseUrl = llm.baseUrl;
+      if (llm.model) llmPatch.model = llm.model;
     } else if (llm.model) {
       // Cloud keys ride body.apiKeys below instead, into state/secrets.env.
       llmPatch.model = llm.model;

@@ -16,6 +16,13 @@ interface ThinkingArgs {
   modelId: string;
   reasoning: boolean;
   forceNoThink: boolean;
+  // The operator's answer to "is the model behind this leg a reasoning model?"
+  // (`llm.reasoningModel`). Deliberately generic rather than azure-shaped: it
+  // is a fact about the MODEL, and any provider whose `model` field is an
+  // operator-chosen alias rather than a model id needs the same answer. Only
+  // the azure descriptor reads it today. Absent = false = pre-existing
+  // behaviour, so an upgraded station is byte-identical.
+  reasoningModelDeclared?: boolean;
 }
 
 // The subset of the SDK's reasoning levels SUB/WAVE emits: 'medium' is the
@@ -66,6 +73,95 @@ const NATIVE_DISCOVERY_STEPS = 3;
 
 const NONE = (): ReasoningLevel | undefined => undefined;
 
+// Does this model id name a family that takes reasoning_effort at all?
+// gpt-4-class models 400 on receiving ANY effort, so both OpenAI providers gate
+// on this before emitting a level. Shared because it is the one part the two
+// agree on — see each descriptor for why the LEVELS then differ.
+const REASONING_FAMILY_RE = /^(o\d|gpt-5)/i;
+
+// ---------------------------------------------------------------------------
+// Azure's request dialect, learned from its own 400s.
+//
+// A deployment name cannot select the dialect: it is an alias the operator
+// chose, so `radio-dj` and `gpt-5.1-chat` are equally uninformative about what
+// the endpoint accepts. The operator can DECLARE it (`llm.reasoningModel`, which
+// seeds the transport so the first request is already correct), and these
+// sniffers are the safety net for when they have not.
+//
+// Each sniffer reads ONE documented rejection and nothing else — a generic 400
+// must keep its normal error path, and no sniffer may infer anything beyond the
+// parameter it names.
+// ---------------------------------------------------------------------------
+
+function azureErrorMessage(payload: unknown): string {
+  if (!payload || typeof payload !== 'object' || !('error' in payload)) return '';
+  const error = payload.error;
+  if (!error || typeof error !== 'object' || !('message' in error)) return '';
+  return typeof error.message === 'string' ? error.message : '';
+}
+
+export function azureRequiresCompletionTokens(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  return /Unsupported parameter:\s*['"]max_tokens['"]/i.test(message)
+    && /Use\s*['"]max_completion_tokens['"]\s*instead/i.test(message);
+}
+
+// TWO wordings, because Azure changed the failure mode mid-generation and both
+// are documented. The original gpt-5 (2025-08-07) rejected a non-default VALUE
+// ("Unsupported value: 'temperature' does not support 0 with this model. Only
+// the default (1) value is supported."); the GPT-5.x generation rejects the
+// PARAMETER's presence regardless of value ("Unsupported parameter:
+// 'temperature' is not supported with this model."). Matching only the first
+// left every newer deployment uncorrected — and the fix for both is the same
+// one: OMIT the key. Never "fix" the value form by pinning temperature to 1;
+// that is exactly the code the parameter form then breaks.
+export function azureRequiresDefaultTemperature(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  if (/Unsupported parameter:\s*['"]temperature['"]/i.test(message)) return true;
+  return /Unsupported value:\s*['"]temperature['"]/i.test(message)
+    && /Only the default\s*\(\s*1\s*\)\s*value is supported/i.test(message);
+}
+
+export function azureRejectsTopP(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  if (/Unsupported parameter:\s*['"]top_p['"]/i.test(message)) return true;
+  return /Unsupported value:\s*['"]top_p['"]/i.test(message)
+    && /Only the default\s*\([^)]*\)\s*value is supported/i.test(message);
+}
+
+// A deployment that takes no reasoning_effort at all. Two documented families
+// reach this and NEITHER is separable by name: `gpt-5-chat` is not a reasoning
+// model and matches every "gpt-5" test, and `o1-mini` supports no effort while
+// matching every "o-series" test. Azure answers both with the unknown-argument
+// shape rather than an unsupported-parameter one.
+export function azureRejectsReasoningEffort(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  return /Unrecognized request argument supplied:\s*reasoning_effort/i.test(message)
+    || /Unsupported parameter:\s*['"]reasoning_effort['"]/i.test(message);
+}
+
+// A deployment that does not take parallel_tool_calls at all. Every o-series
+// model is documented that way, and we send `false` on schema-bearing tool
+// requests — so the clamp that protects structured output must be droppable on
+// the models that refuse the parameter outright.
+export function azureRejectsParallelToolCalls(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  return /Unrecognized request argument supplied:\s*parallel_tool_calls/i.test(message)
+    || /Unsupported parameter:\s*['"]parallel_tool_calls['"]/i.test(message);
+}
+
+// The opposite correction, and the only one that ADDS a parameter: gpt-5.6 and
+// later refuse a tool-bearing Chat Completions request unless reasoning is
+// explicitly switched off, and the error names its own fix. It fires even when
+// no reasoning_effort was sent, because those deployments default to 'medium'
+// — so sending `tools` is enough to trigger it, and an upgrade of an existing
+// deployment can start failing a picker loop that worked the day before.
+export function azureRequiresNoReasoningEffort(payload: unknown): boolean {
+  const message = azureErrorMessage(payload);
+  return /Function tools[\s\S]*reasoning_effort[\s\S]*not supported/i.test(message)
+    && /set\s+reasoning_effort\s+to\s+['"]?none['"]?/i.test(message);
+}
+
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
@@ -84,11 +180,44 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // 'minimal' ('none' is rejected); dotted GPT-5 generations (5.1+) replaced
     // 'minimal' with 'none'. Keep the model-id gate — gpt-4-class models 400 on
     // any reasoning effort. forceNoThink is not factored: forced tools are
-    // permitted while reasoning.
+    // permitted while reasoning. The id gate works HERE because the id is a real
+    // OpenAI model id; on Azure it is a deployment name and tells you nothing —
+    // see the azure descriptor.
     reasoningLevel: ({ modelId, reasoning }) =>
-      /^(o\d|gpt-5)/i.test(modelId)
+      REASONING_FAMILY_RE.test(modelId)
         ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
         : undefined,
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+  },
+  // Azure serves the same model families as `openai` from the operator's own
+  // resource over the same wire dialect (@ai-sdk/azure builds an
+  // OpenAIChatLanguageModel), so the structural traits are openai's.
+  //
+  // The reasoning LEVELS are not, and this is the one place azure must not copy
+  // openai: the id here is a DEPLOYMENT alias, so it is no evidence about the
+  // endpoint's contract. A name test fails in both directions — `gpt-5-chat` is
+  // not a reasoning model yet matches every "gpt-5" test (its sibling
+  // `gpt-5.1-chat` IS one), `o1-mini` takes no reasoning_effort yet matches
+  // every "o-series" test, and a deployment called `dj-brain` in front of gpt-5
+  // matches nothing. So the answer comes from the OPERATOR
+  // (`llm.reasoningModel`), with `azureRejectsReasoningEffort` in the transport
+  // as the net for a wrong one.
+  //
+  // The level is only ever 'medium', and only to opt IN: suppression OMITS the
+  // param and lets the deployment keep its own default, because no floor token
+  // holds across deployments — openai's 'none' on a `gpt-5.1-chat` deployment
+  // answers "Supported values are: 'medium'", a hard 400 that took the DJ off
+  // air mid-segment. Omitting is never rejected, and these families permit
+  // forced tools while reasoning, so a deployment that reasons when asked not
+  // to costs tokens while one that 400s costs the broadcast. The one case that
+  // does need 'none' on the wire (gpt-5.6+ refusing a tool-bearing request)
+  // arrives as its own error naming its own fix, so it is learned in the
+  // transport rather than guessed here.
+  azure: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: ({ reasoning, reasoningModelDeclared }) =>
+      (reasoning && reasoningModelDeclared === true ? 'medium' : undefined),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   // openai-compatible and locca serve the same local GGUF model class as ollama:
@@ -297,5 +426,8 @@ export function reasoningFor(
     modelId: cfg?.model || '',
     reasoning: cfg?.reasoning === true,
     forceNoThink,
+    // Read off the LEG's cfg, like discoverySteps/toolChoice — never from
+    // settings — so this module stays a pure function of its argument.
+    reasoningModelDeclared: cfg?.reasoningModel === true,
   });
 }

@@ -34,6 +34,14 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
     { id: 'text-embedding-3-small', dim: 1536 },
     { id: 'text-embedding-3-large', dim: 3072 },
   ],
+  // Azure runs the same two models, but the id here is a DEPLOYMENT name, so
+  // these are only the names an operator most often gives them: a starting
+  // point for the free-text field, never a default. The controller's
+  // defaultEmbeddingModelFor deliberately refuses to guess one.
+  azure: [
+    { id: 'text-embedding-3-small', dim: 1536 },
+    { id: 'text-embedding-3-large', dim: 3072 },
+  ],
   google: [{ id: 'text-embedding-004', dim: 768 }],
   openrouter: [
     { id: 'openai/text-embedding-3-small', dim: 1536 },
@@ -127,9 +135,10 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Embedding-capable subset, not the full LLM list: deepseek, gateway and
-  // anthropic have no embeddings endpoint (#493, #522).
+  // anthropic have no embeddings endpoint (#493, #522). Azure is in — the same
+  // OpenAI embedding models on the operator's own resource.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'azure', 'google', 'requesty'];
   // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
@@ -164,7 +173,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     || effectiveProvider === 'locca'
     || (effectiveProvider === 'openai-compatible' && !!embedBaseUrl.trim())
     || (effectiveProvider === 'openrouter')
-    || (!!embedKeyVar && embedKeySet);
+    // Azure needs BOTH: the deployments list is per-RESOURCE, so a key alone has
+    // nothing to ask. Mirrors the same gate on the LLM tab.
+    || (effectiveProvider === 'azure'
+      ? (embedKeyPresent && !!embedBaseUrl.trim())
+      : (!!embedKeyVar && embedKeySet));
 
   const embedDiscovery = useModelDiscovery({
     provider: effectiveProvider,
@@ -368,7 +381,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               provider (Settings → LLM), and bill there. Defaults to your DJ&rsquo;s
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
-              pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
+              pick OpenAI here (needs <code>OPENAI_API_KEY</code>). Azure runs the
+              same OpenAI embedding models on your own resource — it needs the
+              resource endpoint and the <em>deployment</em> name, below.
             </div>
             {/* The banner above already states the resolved provider/model/dim, so
                 only the already-embedded-with-a-different-model warning goes here. */}
@@ -406,6 +421,35 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             )}
           </div>
 
+          {effectiveProvider === 'azure' && (
+            <div className="field">
+              <Label>Azure resource endpoint</Label>
+              <Input
+                value={e.providerBaseUrls['azure'] ?? ''}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) =>
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, providerBaseUrls: { ...f.embedding.providerBaseUrls, azure: ev.target.value } } }))
+                }
+                placeholder="https://my-resource.openai.azure.com"
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Your resource endpoint from the Azure portal (<em>your resource →
+                Keys and Endpoint</em>). Blank inherits the one set on
+                Settings&nbsp;→&nbsp;LLM, so an Azure DJ needs nothing here.{' '}
+                <strong>
+                  Your embedding deployment is separate from your chat
+                  deployment
+                </strong>{' '}
+                — deploy <code>text-embedding-3-small</code> on the same resource
+                and enter that deployment&rsquo;s name in Model below. Paste
+                the bare root; only a resource pinned to a dated API version
+                needs the endpoint <em>with</em> its{' '}
+                <code>?api-version=&hellip;</code> query attached, and that
+                legacy path cannot reach the newest models.
+              </div>
+            </div>
+          )}
+
           <div className="field">
             <Label>Model</Label>
             <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
@@ -424,7 +468,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   onChange={(ev: ChangeEvent<HTMLInputElement>) =>
                     setForm(f => ({ ...f, embedding: { ...f.embedding, model: ev.target.value } }))
                   }
-                  placeholder={effectiveModel ? `${effectiveModel} · default` : 'model id'}
+                  placeholder={effectiveModel ? `${effectiveModel} · default` : (effectiveProvider === 'azure' ? 'deployment name, e.g. text-embedding-3-small' : 'model id')}
                   className="max-w-[360px]"
                 />
               )}
@@ -441,7 +485,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 : !embedDiscoveryEnabled
                   ? (effectiveProvider === 'openai-compatible'
                       ? 'Set a base URL above to discover available models.'
-                      : 'Set an API key above to discover and select a model.')
+                      : effectiveProvider === 'azure'
+                        ? 'Set the API key and the resource endpoint above to discover your deployments.'
+                        : 'Set an API key above to discover and select a model.')
                   : embedDiscovery.error
                     ? `Discovery failed: ${embedDiscovery.error}. Type a model ID manually.`
                     : embedDiscovery.loading
@@ -449,7 +495,10 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                       : 'No models discovered. Type a model ID manually.'}
             </div>
             <div className="field-hint">
-              Leave blank for the sensible default per provider. If you change
+              {effectiveProvider === 'azure'
+                ? 'Required for Azure — this is the name you gave the deployment, which nothing can guess, so there is no default to leave it blank for. '
+                : 'Leave blank for the sensible default per provider. '}
+              If you change
               this on a tagged library, the next run will reject the new dim.
               Hit <strong>Re-seed</strong> on the Library tab (or run{' '}
               <code>--reseed</code>) to drop and rebuild the vectors.

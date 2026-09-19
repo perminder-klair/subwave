@@ -6,13 +6,24 @@ import { createGateway } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
+import {
+  capabilitiesFor,
+  appliedRepeatPenalty,
+  appliedNumCtx,
+  azureRequiresCompletionTokens,
+  azureRequiresDefaultTemperature,
+  azureRejectsTopP,
+  azureRejectsReasoningEffort,
+  azureRequiresNoReasoningEffort,
+  azureRejectsParallelToolCalls,
+} from './capabilities.js';
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
@@ -42,6 +53,238 @@ export function debugFetch(url: any, init: any) {
     } catch { /* capture must never break a model call */ }
   }
   return fetch(url, init);
+}
+
+// Azure's request dialect. A reasoning deployment (o-series, gpt-5.x) rejects
+// parameters a gpt-4-class one accepts, and `cfg.model` is a DEPLOYMENT alias,
+// so nothing in the request identifies which contract applies — @ai-sdk/openai
+// infers it only from ids it recognises, and a deployment called `radio-dj` in
+// front of gpt-5 gets the gpt-4 dialect and a hard 400.
+//
+// So the dialect is SEEDED from the operator's declaration
+// (`llm.reasoningModel`), so a correct answer spends no 400 at all, and then
+// LEARNED from Azure's own rejections for the operator who left the box
+// unchecked or answered wrongly — each correction keyed to one documented error
+// naming one parameter (the sniffers in capabilities.ts); an unrecognised 400
+// keeps its normal error path.
+//
+// Two rules that must hold. Learned corrections are applied and then the loop
+// still runs: an earlier cut returned out of that fast path once anything had
+// been learned, so a deployment rejecting all three sampling parameters only
+// ever learned the two the first request carried — picks (max_tokens +
+// temperature) worked and every DJ script after, which also sends top_p, 400'd
+// forever. And the attempt budget is one per learnable correction PLUS the
+// success. A worst-case cold client spends one request per correction, all
+// inside the caller's single deadline (`core/retry.ts`).
+interface AzureDialect {
+  // Rename max_tokens -> max_completion_tokens (every reasoning model).
+  completionTokens: boolean;
+  // Drop rather than pin. Azure has two wordings for temperature — a rejected
+  // VALUE on the original gpt-5 and a rejected PARAMETER from gpt-5.x on — and
+  // omitting satisfies both, while `temperature: 1` satisfies only the first.
+  omitTemperature: boolean;
+  omitTopP: boolean;
+  // This deployment takes no reasoning_effort at all (`gpt-5-chat`, `o1-mini`).
+  omitReasoningEffort: boolean;
+  // The opposite, and the only correction that ADDS a parameter: gpt-5.6+
+  // refuses a tool-bearing Chat Completions request unless reasoning is
+  // explicitly off. Mutually exclusive with omitReasoningEffort.
+  noReasoningEffort: boolean;
+  omitParallelToolCalls: boolean;
+}
+
+// One request per learnable field, plus the one that finally succeeds.
+const AZURE_DIALECT_ATTEMPTS = 7;
+
+function seedAzureDialect(reasoningModel: boolean): AzureDialect {
+  return {
+    // A declared reasoning deployment rejects all three sampling parameters, so
+    // seed those. NOT the reasoning_effort pair: a reasoning deployment is
+    // exactly the one that accepts an effort, and whether it also refuses tools
+    // without 'none' depends on a generation the declaration does not name.
+    completionTokens: reasoningModel,
+    omitTemperature: reasoningModel,
+    omitTopP: reasoningModel,
+    omitReasoningEffort: false,
+    noReasoningEffort: false,
+    omitParallelToolCalls: false,
+  };
+}
+
+// Structured outputs and parallel function calls are documented as mutually
+// exclusive on Azure, and parallel_tool_calls DEFAULTS to true — so omitting it
+// is not the same as disabling it, and a schema-bearing tool call can return
+// something the schema never described. Same rewrite, and the same reason, as
+// openAICompatibleFetch's Gemma-4 clamp below (#940). Deliberately NOT learned:
+// it is a property of the request shape, not of the deployment. A deployment
+// that rejects the parameter itself teaches omitParallelToolCalls.
+function wantsSerialToolCalls(body: Record<string, unknown>): boolean {
+  const format = body.response_format as { type?: unknown } | undefined;
+  return Array.isArray(body.tools)
+    && body.tools.length > 0
+    && !!format
+    && format.type === 'json_schema';
+}
+
+// Would applying the dialect change anything? When it would not, the caller's
+// own request is forwarded untouched, so a gpt-4-class deployment's body leaves
+// the process exactly as the SDK built it — same bytes, same key order, nothing
+// for a debug capture or a wire test to have to explain.
+function azureDialectIsNoop(body: Record<string, unknown>, d: AzureDialect): boolean {
+  if (d.completionTokens && body.max_tokens != null) return false;
+  if (d.omitTemperature && body.temperature != null) return false;
+  if (d.omitTopP && body.top_p != null) return false;
+  if (d.omitReasoningEffort && body.reasoning_effort != null) return false;
+  if (d.noReasoningEffort && Array.isArray(body.tools) && body.tools.length > 0) return false;
+  if (d.omitParallelToolCalls && body.parallel_tool_calls != null) return false;
+  if (!d.omitParallelToolCalls && body.parallel_tool_calls == null && wantsSerialToolCalls(body)) return false;
+  return true;
+}
+
+// Rebuild the outbound body under a dialect. Always derived from the ORIGINAL
+// parsed body, never from a previous correction, so re-applying is idempotent.
+function applyAzureDialect(body: Record<string, unknown>, d: AzureDialect): Record<string, unknown> {
+  const { max_tokens, temperature, top_p, reasoning_effort, ...rest } = body;
+  const out: Record<string, unknown> = { ...rest };
+
+  if (max_tokens != null) {
+    if (d.completionTokens) out.max_completion_tokens = rest.max_completion_tokens ?? max_tokens;
+    else out.max_tokens = max_tokens;
+  }
+  if (temperature != null && !d.omitTemperature) out.temperature = temperature;
+  if (top_p != null && !d.omitTopP) out.top_p = top_p;
+
+  const toolBearing = Array.isArray(body.tools) && body.tools.length > 0;
+  if (d.omitReasoningEffort) {
+    // Nothing: the parameter is unsupported on this deployment.
+  } else if (d.noReasoningEffort && toolBearing) {
+    out.reasoning_effort = 'none';
+  } else if (reasoning_effort != null) {
+    out.reasoning_effort = reasoning_effort;
+  }
+
+  if (d.omitParallelToolCalls) delete out.parallel_tool_calls;
+  else if (out.parallel_tool_calls == null && wantsSerialToolCalls(body)) out.parallel_tool_calls = false;
+
+  return out;
+}
+
+// Fold one rejection into the dialect. Returns false when nothing was learned,
+// which is the caller's signal to hand the response back untouched. Every flag
+// flips at most once, which is what bounds the loop.
+function learnAzureDialect(
+  d: AzureDialect,
+  payload: unknown,
+  body: Record<string, unknown>,
+): boolean {
+  const toolBearing = Array.isArray(body.tools) && body.tools.length > 0;
+  let learned = false;
+  if (!d.completionTokens && body.max_tokens != null && azureRequiresCompletionTokens(payload)) {
+    d.completionTokens = true;
+    learned = true;
+  }
+  if (!d.omitTemperature && body.temperature != null && azureRequiresDefaultTemperature(payload)) {
+    d.omitTemperature = true;
+    learned = true;
+  }
+  if (!d.omitTopP && body.top_p != null && azureRejectsTopP(payload)) {
+    d.omitTopP = true;
+    learned = true;
+  }
+  // The two reasoning_effort corrections are opposites, so each is learnable
+  // only while the other is unset, or a deployment answering both has us
+  // alternate inside the budget instead of surfacing an error we cannot
+  // satisfy. Every branch also checks the parameter was really on the wire, so
+  // a recognised error cannot buy a retry that changes nothing — the only
+  // source is the caller's own body, the injection below being guarded out by
+  // `!d.noReasoningEffort`.
+  if (
+    !d.omitReasoningEffort && !d.noReasoningEffort && body.reasoning_effort != null
+    && azureRejectsReasoningEffort(payload)
+  ) {
+    d.omitReasoningEffort = true;
+    learned = true;
+  }
+  if (
+    !d.noReasoningEffort && !d.omitReasoningEffort && toolBearing
+    && azureRequiresNoReasoningEffort(payload)
+  ) {
+    d.noReasoningEffort = true;
+    learned = true;
+  }
+  if (
+    !d.omitParallelToolCalls
+    && (body.parallel_tool_calls != null || wantsSerialToolCalls(body))
+    && azureRejectsParallelToolCalls(payload)
+  ) {
+    d.omitParallelToolCalls = true;
+    learned = true;
+  }
+  return learned;
+}
+
+// The transport. Its dialect store is keyed by endpoint path + deployment, so
+// one resource serving a chat deployment and a reasoning one keeps them apart,
+// and a learned dialect is not re-learned per request.
+export function azureChatFetch(
+  baseFetch: typeof fetch = fetch,
+  { reasoningModel = false }: { reasoningModel?: boolean } = {},
+): typeof fetch {
+  const dialects = new Map<string, AzureDialect>();
+  return async (url, init) => {
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(typeof init?.body === 'string' ? init.body : 'null');
+    } catch { return baseFetch(url, init); }
+    if (!body || typeof body !== 'object') return baseFetch(url, init);
+
+    // The deployment is in the body on the v1 surface and in the path on the
+    // legacy one, so key on both and neither surface can collide.
+    const key = `${String(url).split('?')[0]}|${typeof body.model === 'string' ? body.model : ''}`;
+    let dialect = dialects.get(key);
+    if (!dialect) {
+      dialect = seedAzureDialect(reasoningModel);
+      dialects.set(key, dialect);
+    }
+    const d = dialect;
+
+    // `init` itself is never mutated, so the caller's headers and signal ride
+    // every attempt unchanged and a debug capture sees each exact body.
+    const requestFor = (): RequestInit => (
+      azureDialectIsNoop(body, d)
+        ? (init as RequestInit)
+        : { ...init, body: JSON.stringify(applyAzureDialect(body, d)) }
+    );
+
+    let request = requestFor();
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < AZURE_DIALECT_ATTEMPTS; attempt++) {
+      response = await baseFetch(url, request);
+      if (response.status !== 400) return response;
+      let payload: unknown;
+      try { payload = await response.clone().json(); } catch { return response; }
+      if (!learnAzureDialect(d, payload, body)) return response;
+      init?.signal?.throwIfAborted();
+      request = requestFor();
+    }
+    return response!;
+  };
+}
+
+// Every model built for one Azure resource shares its transport, so a dialect
+// learned on the picker's leg is already known to the DJ's and survives a
+// settings save. Never persisted: a learned dialect is a fact about a
+// deployment, and a deployment can be replaced under the same name.
+const azureTransports = new Map<string, typeof fetch>();
+
+function azureTransportFor(ep: AzureEndpoint, reasoningModel: boolean): typeof fetch {
+  const key = `${ep.baseURL}|${ep.apiVersion ?? ''}|${reasoningModel ? 'r1' : 'r0'}`;
+  let transport = azureTransports.get(key);
+  if (!transport) {
+    transport = azureChatFetch(debugFetch, { reasoningModel });
+    azureTransports.set(key, transport);
+  }
+  return transport;
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
@@ -148,6 +391,63 @@ export function loccaEmbedBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
 }
 
+// Azure OpenAI runs the same models as `openai` on the operator's OWN resource,
+// so the endpoint is per-install: it rides the existing per-provider base-URL
+// map (`llm.providerBaseUrls.azure`, #1082), which `cfg.baseUrl` is re-derived
+// from on every save. Three endpoint shapes reach here and each takes a
+// different path — get one wrong and the result is a 404, i.e. a silent DJ with
+// nothing in the UI naming the cause:
+//
+//   • the v1 surface (default) — `https://<res>.openai.azure.com/openai/v1`,
+//     no api-version, OpenAI's own request shape. The portal hands over the
+//     bare resource root, so append the path @ai-sdk/azure reads as
+//     already-versioned (it then omits the api-version query entirely).
+//   • the legacy deployment surface — reached by pasting the endpoint WITH its
+//     `?api-version=<date>` query, as Azure's own config blobs quote it. Kept
+//     because resources pinned to a dated api-version 404 on the v1 path, but
+//     NOT the path to steer an operator onto: the dated track is retired, tops
+//     out at 2025-04-01-preview, and cannot express reasoning_effort
+//     'none'/'xhigh' or verbosity at all, so a pinned resource cannot run
+//     gpt-5.x.
+//   • an AI Foundry *project* endpoint
+//     (`https://<res>.services.ai.azure.com/api/projects/<proj>`) — recognised
+//     by @ai-sdk/azure itself, which routes it to `<base>/v1<path>`. Appending
+//     `/openai/v1` to it built exactly that 404, so pass it through untouched.
+//
+// Pure: a function of cfg.baseUrl alone, pinned in llm-azure.test.ts.
+export interface AzureEndpoint {
+  baseURL: string;
+  apiVersion?: string;
+  useDeploymentBasedUrls?: boolean;
+}
+
+export function azureEndpoint(cfg: any): AzureEndpoint {
+  const raw = String(cfg?.baseUrl || '').trim();
+  if (!raw) return { baseURL: '' };
+  const q = raw.indexOf('?');
+  let base = raw;
+  let apiVersion = '';
+  if (q >= 0) {
+    base = raw.slice(0, q);
+    const m = /(?:^|[?&])api-version=([^&]+)/i.exec(raw.slice(q));
+    if (m) apiVersion = decodeURIComponent(m[1]).trim();
+  }
+  base = base.trim().replace(/\/+$/, '');
+  if (!base) return { baseURL: '' };
+  // 'v1' is the modern surface's own version token, so an operator who pasted
+  // it explicitly gets the default path, not the legacy one.
+  if (apiVersion && apiVersion.toLowerCase() !== 'v1') {
+    const root = /\/openai$/i.test(base) ? base : `${base}/openai`;
+    return { baseURL: root, apiVersion, useDeploymentBasedUrls: true };
+  }
+  // Already versioned — either `…/openai/v1` or a custom OpenAI-shaped gateway.
+  if (/\/v1$/i.test(base)) return { baseURL: base };
+  // A Foundry project path the SDK routes itself. Adding a path here is how the
+  // 404 got built, so add nothing.
+  if (/\/api\/projects\/[^/]+$/i.test(base)) return { baseURL: base };
+  return { baseURL: /\/openai$/i.test(base) ? `${base}/v1` : `${base}/openai/v1` };
+}
+
 // Requesty is a fixed-endpoint OpenAI-compatible aggregator, so the base URL is
 // not operator-configurable. Keyed by REQUESTY_API_KEY.
 export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
@@ -212,6 +512,15 @@ export function resolveModelId(cfg: any): string {
   if (cfg.model) return cfg.model;
   if (cfg.provider === 'ollama') return config.ollama.model;
   if (cfg.provider === 'deepseek') return 'deepseek-v4-flash';
+  // Azure's model id is the operator's DEPLOYMENT name, which no default can
+  // guess — say so, or the error reads as "pick a model from a list" when there
+  // is no list to pick from.
+  if (cfg.provider === 'azure') {
+    throw new Error(
+      'llm.provider is "azure" but llm.model is empty — set the DEPLOYMENT name '
+      + '(what you called it in Azure, e.g. gpt-4o-mini) in Settings'
+    );
+  }
   throw new Error(
     `llm.provider is "${cfg.provider}" but llm.model is empty — set a model in Settings`
   );
@@ -231,7 +540,10 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}`;
+  // `reasoningModel` too, and not cosmetically: the azure client is built around
+  // a transport chosen by that flag, so without it an operator who ticks "this
+  // deployment is a reasoning model" keeps being served the un-seeded instance.
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|rm${cfg.reasoningModel === true ? 1 : 0}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -246,6 +558,33 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     case 'openai': {
       const provider = createOpenAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
+      break;
+    }
+    case 'azure': {
+      // Azure OpenAI: same models, the operator's own resource. The endpoint is
+      // required — there is no hosted default to fall back to — so an empty one
+      // is a config error named at the point of use, not a mystery 404 later.
+      const ep = azureEndpoint(cfg);
+      if (!ep.baseURL) {
+        throw new Error(
+          'llm.provider is "azure" but no endpoint is set — paste the resource '
+          + 'endpoint (https://<resource>.openai.azure.com) in Settings → LLM'
+        );
+      }
+      const provider = createAzure({
+        baseURL: ep.baseURL,
+        // Shared per resource, so the dialect the picker's leg learned is
+        // already known to the DJ's — and seeded from the operator's own
+        // answer, so a declared reasoning deployment spends no 400 at all.
+        fetch: azureTransportFor(ep, cfg.reasoningModel === true),
+        ...(ep.apiVersion ? { apiVersion: ep.apiVersion } : {}),
+        ...(ep.useDeploymentBasedUrls ? { useDeploymentBasedUrls: true } : {}),
+        ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
+      });
+      // `.chat()` pins Chat Completions. The bare `provider(id)` targets the
+      // Responses API, which is not enabled on every deployment or region —
+      // Chat Completions is the one surface every Azure deployment serves.
+      model = provider.chat(id);
       break;
     }
     case 'openai-compatible': {

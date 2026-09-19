@@ -6,6 +6,7 @@ import { generateText } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createAzure } from '@ai-sdk/azure';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
@@ -19,7 +20,7 @@ import {
   normalizeNavidromeCredentials,
   type LlmProbeInput,
 } from '../schemas/onboarding.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch, azureEndpoint } from '../llm/provider.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
@@ -71,6 +72,20 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
       case 'openai':
         m = createOpenAI(apiKey ? { apiKey } : {})(model);
         break;
+      case 'azure': {
+        // Azure OpenAI on the operator's own resource: `baseUrl` is the resource
+        // endpoint (the schema requires it) and `model` is the DEPLOYMENT name.
+        // `.chat()` for the same reason as the registry — Chat Completions is
+        // the surface every deployment serves.
+        const ep = azureEndpoint({ baseUrl });
+        m = createAzure({
+          baseURL: ep.baseURL,
+          ...(ep.apiVersion ? { apiVersion: ep.apiVersion } : {}),
+          ...(ep.useDeploymentBasedUrls ? { useDeploymentBasedUrls: true } : {}),
+          ...(apiKey ? { apiKey } : {}),
+        }).chat(model);
+        break;
+      }
       case 'openai-compatible':
         // noThinkFetch so a thinking model returns visible content, not reasoning.
         m = createOpenAI({ baseURL: baseUrl, apiKey: apiKey || 'unused', fetch: noThinkFetch }).chat(model);

@@ -134,6 +134,24 @@ console.log('\n[3b] openrouter builds an embedding model (offline, #522)');
   ok('openrouter builds without the no-embeddings error', built, threw ? `threw: ${threw.slice(0, 48)}` : 'ok');
 }
 
+// ---- 3c. azure's two config refusals get their own codes ------------------
+// Azure is embedding-capable, but two things it cannot invent: the resource
+// endpoint (there is no hosted default) and the DEPLOYMENT name (whatever the
+// operator called it). Both are refused synchronously — no network — and both
+// have to reach the admin's Test button and the tagger preflight as their own
+// code, since 'unknown' would print a raw stack where the fix belongs. The
+// resource URL is exercised at the wire in llm-azure.test.ts.
+console.log('\n[3c] azure names its two config refusals (offline)');
+for (const [label, cfg, expected, fix] of [
+  ['no deployment name', { model: '', baseUrl: 'https://oai-example.openai.azure.com' }, 'no_model', /DEPLOYMENT name/],
+  ['no resource endpoint', { model: 'text-embedding-3-small', baseUrl: '' }, 'bad_url', /Azure resource endpoint/],
+] as [string, { model: string; baseUrl: string }, string, RegExp][]) {
+  S.embedding = { enabled: true, provider: 'azure', apiKey: 'test-key', ollamaUrl: '', ...cfg };
+  const r = await embeddings.ensureReady();
+  ok(`azure ${label} → ${expected}`, r.code === expected, `code=${r.code}`);
+  ok(`azure ${label} message names the fix`, fix.test(r.message), `"${r.message.split('\n')[0].slice(0, 48)}..."`);
+}
+
 // ---- 4. library-db dim handling (#2) --------------------------------------
 console.log('\n[4] library-db honours the stored dim');
 // Seed a 768-d DB the way the tagger would.

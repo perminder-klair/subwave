@@ -179,7 +179,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     || form.llm.provider === 'locca'
     || (form.llm.provider === 'openai-compatible' && !!primaryBaseUrl.trim())
     || (form.llm.provider === 'openrouter')
-    || (!!primaryKeyVar && primaryKeySet);
+    // Azure needs BOTH: the key alone has no resource to ask for deployments.
+    || (form.llm.provider === 'azure' ? (primaryKeySet && !!primaryBaseUrl.trim()) : (!!primaryKeyVar && primaryKeySet));
 
   const primaryDiscovery = useModelDiscovery({
     provider: form.llm.provider,
@@ -202,7 +203,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       || form.llm.fallback.provider === 'locca'
       || (form.llm.fallback.provider === 'openai-compatible' && !!fallbackBaseUrl.trim())
       || (form.llm.fallback.provider === 'openrouter')
-      || (!!fallbackKeyVar && fallbackKeySet)
+      || (form.llm.fallback.provider === 'azure'
+        ? (fallbackKeySet && !!fallbackBaseUrl.trim())
+        : (!!fallbackKeyVar && fallbackKeySet))
     );
 
   const fallbackDiscovery = useModelDiscovery({
@@ -239,6 +242,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     setTesting: (v: boolean) => void,
     setResult: (r: { ok: boolean; message: string; latencyMs: number } | null) => void,
     clearInput?: () => void,
+    // Azure's probe has to call a DEPLOYMENT on the operator's own resource, and
+    // both of those live in this form, unsaved, at the moment the key is tested
+    // — which is exactly when an operator wants to know the key works. Every
+    // other probe ignores these.
+    form?: { baseUrl?: string; model?: string },
   ) => {
     const hasTyped = !!value.trim();
     if (!hasTyped && !data.env?.[envVar]) return;
@@ -248,7 +256,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: envVar, value: value.trim() }),
+        body: JSON.stringify({ key: envVar, value: value.trim(), ...(form || {}) }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
       setResult(j);
@@ -315,6 +323,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         providerBaseUrls: form.llm.providerBaseUrls,
         headers: headerMap(form.llm.headers),
         reasoning: form.llm.reasoning,
+        reasoningModel: form.llm.reasoningModel,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
@@ -341,6 +350,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
           reasoning: form.llm.fallback.reasoning,
+          reasoningModel: form.llm.fallback.reasoningModel,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
@@ -467,6 +477,69 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
             </div>
+          )}
+
+          {form.llm.provider === 'azure' && (
+            <>
+              <div className="field">
+                <Label>Azure resource endpoint</Label>
+                <Input
+                  value={form.llm.providerBaseUrls['azure'] ?? ''}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, azure: e.target.value } } }))
+                  }
+                  placeholder="https://my-resource.openai.azure.com"
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Your resource endpoint from the Azure portal (<em>your resource
+                  → Keys and Endpoint</em>). <strong>Paste the bare root</strong>{' '}
+                  — the API path is added for you, and the <strong>Model</strong>{' '}
+                  field below is your <strong>deployment</strong> name, not the
+                  underlying model name. An Azure AI Foundry <em>project</em>{' '}
+                  endpoint (<code>…/api/projects/…</code>) works as-is too.
+                  <br />
+                  Only if your resource is pinned to a dated API version, paste it
+                  with the query attached
+                  (<code>…azure.com/?api-version=2025-04-01-preview</code>) —
+                  that switches to the legacy per-deployment endpoint. Avoid it
+                  unless you have to: Microsoft has retired the dated track, and
+                  the newest models cannot be reached through it.
+                </div>
+              </div>
+
+              <div className="field">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+                  <div>
+                    <div className="text-[13px] font-bold">Reasoning deployment</div>
+                    <div className="field-hint mt-1 max-w-[440px]">
+                      Turn this on if the deployment above runs an{' '}
+                      <strong>o-series or GPT-5.x</strong> model. Those reject{' '}
+                      <code>temperature</code>, <code>top_p</code> and{' '}
+                      <code>max_tokens</code>, and a deployment <em>name</em>{' '}
+                      cannot say which model is behind it — so this is the one
+                      thing only you know. Leave it off for GPT-4-class
+                      deployments and for <code>gpt-5-chat</code>, which despite
+                      the name is not a reasoning model.
+                      <br />
+                      Off still works: the station learns the same answer from
+                      Azure&rsquo;s own rejections. Turning it on just means the
+                      first request is already right, instead of a few being
+                      spent finding out.
+                    </div>
+                  </div>
+                  <Seg
+                    accent
+                    value={form.llm.reasoningModel ? 'on' : 'off'}
+                    options={[
+                      { id: 'off', label: 'Off' },
+                      { id: 'on', label: 'On' },
+                    ]}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, reasoningModel: v === 'on' } }))}
+                  />
+                </div>
+              </div>
+            </>
           )}
 
           {form.llm.provider === 'openai-compatible' && (
@@ -622,7 +695,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                       className="max-w-[360px]"
                     />
                     <Btn
-                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''), { baseUrl: primaryBaseUrl, model: form.llm.model })}
                       disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
                     >
                       {primaryKeyTesting ? 'Testing…' : 'Test key'}
@@ -661,14 +734,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   disabled={!primaryDiscoveryEnabled && form.llm.provider !== 'ollama'}
                   placeholder={
                     !primaryDiscoveryEnabled
-                      ? (form.llm.provider === 'openai-compatible' ? 'Set a base URL first' : 'Set an API key above to discover and select a model')
+                      ? (form.llm.provider === 'openai-compatible'
+                          ? 'Set a base URL first'
+                          : form.llm.provider === 'azure'
+                            ? 'Set the endpoint and API key above first'
+                            : 'Set an API key above to discover and select a model')
                       : form.llm.provider === 'ollama'
                         ? 'nemotron-3-super:cloud'
                         : form.llm.provider === 'deepseek'
                           ? 'deepseek-v4-flash'
-                          : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
-                            ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
-                            : 'model id'
+                          : form.llm.provider === 'azure'
+                            ? 'deployment name, e.g. gpt-4o-mini'
+                            : form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca'
+                              ? 'Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+                              : 'model id'
                   }
                   className="max-w-[360px]"
                 />
@@ -686,7 +765,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 : !primaryDiscoveryEnabled
                   ? (form.llm.provider === 'openai-compatible'
                       ? 'Set a base URL above to discover available models.'
-                      : 'Set an API key above to discover and select a model.')
+                      : form.llm.provider === 'azure'
+                        ? 'Set the resource endpoint and API key above; this field takes your DEPLOYMENT name.'
+                        : 'Set an API key above to discover and select a model.')
                   : primaryDiscovery.error
                     ? `Discovery failed: ${primaryDiscovery.error}. Type a model ID manually.`
                     : primaryDiscovery.loading
@@ -817,6 +898,44 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     Tokens of context for a <strong>local</strong> backup Ollama
                     model. Set 0 for Ollama&apos;s default. Ignored for
                     <code>:cloud</code> models.
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'azure' && (
+                <div className="field">
+                  <Label>Backup Azure resource endpoint</Label>
+                  <Input
+                    value={form.llm.fallback.providerBaseUrls['azure'] ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, providerBaseUrls: { ...f.llm.fallback.providerBaseUrls, azure: e.target.value } } } }))
+                    }
+                    placeholder="https://my-resource.openai.azure.com"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    The resource endpoint from the Azure portal, pasted as its
+                    bare root. The model field below is the{' '}
+                    <strong>deployment</strong> name.
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+                    <div>
+                      <div className="text-[13px] font-bold">Reasoning deployment</div>
+                      <div className="field-hint mt-1 max-w-[440px]">
+                        On if the backup deployment runs an o-series or GPT-5.x
+                        model. Resolved per leg, so the backup can be a
+                        different generation from the primary.
+                      </div>
+                    </div>
+                    <Seg
+                      accent
+                      value={form.llm.fallback.reasoningModel ? 'on' : 'off'}
+                      options={[
+                        { id: 'off', label: 'Off' },
+                        { id: 'on', label: 'On' },
+                      ]}
+                      onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, reasoningModel: v === 'on' } } }))}
+                    />
                   </div>
                 </div>
               )}
@@ -975,7 +1094,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                           className="max-w-[360px]"
                         />
                         <Btn
-                          onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
+                          onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''), { baseUrl: fallbackBaseUrl, model: form.llm.fallback.model })}
                           disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
                         >
                           {fallbackKeyTesting ? 'Testing…' : 'Test key'}

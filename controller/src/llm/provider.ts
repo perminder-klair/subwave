@@ -11,10 +11,12 @@ export {
   loccaBaseUrl,
   DEFAULT_LOCCA_BASE_URL,
   DEFAULT_REQUESTY_BASE_URL,
+  azureEndpoint,
   OPENROUTER_APP_HEADERS,
   customHeaders,
   noThinkFetch,
 } from './internal/provider/registry.js';
+export type { AzureEndpoint } from './internal/provider/registry.js';
 
 export { primaryLeg, fallbackLeg, probeLegReachable, promptDiscoverySteps } from './internal/provider/legs.js';
 export type { Leg } from './internal/provider/legs.js';

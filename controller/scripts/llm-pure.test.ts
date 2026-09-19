@@ -406,6 +406,45 @@ async function main() {
     }
     assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-5.6-luna', reasoning: true }), 'medium');
   });
+  await test('azure: opts IN only, on the declared reasoning model, never on the deployment name', () => {
+    // A deployment name is an ALIAS, so it is not evidence about what the
+    // endpoint accepts, and azure reads `llm.reasoningModel` instead. Three
+    // documented cases show why a name test cannot stand in for it, and they
+    // fail in BOTH directions: `gpt-5-chat` is not a reasoning model and answers
+    // `Unrecognized request argument supplied: reasoning_effort`, `o1-mini`
+    // takes no effort at all, and a deployment called `dj` in front of gpt-5
+    // matches nothing so the operator's toggle did nothing at all.
+    const NAMES = [
+      'gpt-5.1-chat', 'gpt-5-chat', 'o1-mini', 'o3', 'gpt-5-mini', 'gpt-5.1',
+      'gpt-4o-mini', 'gpt-4.1-mini', 'dj', 'prod-o3', 'subwave-gpt-5-mini',
+    ];
+    // Undeclared: NOTHING is sent, whatever the name says and whichever way the
+    // chain-of-thought toggle is set. No param is never rejected; a wrong one is.
+    for (const model of NAMES) {
+      for (const reasoning of [true, false]) {
+        assert.equal(reasoningFor({ provider: 'azure', model, reasoning }), undefined, `${model} r=${reasoning}`);
+      }
+    }
+    // Declared: opts IN at 'medium', the one level every reasoning model
+    // accepts. Suppression still NEVER sends a level — there is no floor token
+    // the family agrees on across deployments, which is what an earlier cut
+    // learned by sending openai's 'none' to a `gpt-5.1-chat` deployment and
+    // getting "Unsupported value: 'reasoning_effort' does not support 'none'
+    // with this model. Supported values are: 'medium'" — a 400 that took the DJ
+    // off air.
+    for (const model of NAMES) {
+      const cfg = { provider: 'azure', model, reasoningModel: true };
+      assert.equal(reasoningFor({ ...cfg, reasoning: true }), 'medium', model);
+      assert.equal(reasoningFor({ ...cfg, reasoning: false }), undefined, model);
+      // forceNoThink is not factored, exactly as for openai: these families
+      // permit forced tool calls while reasoning, so a picker leg keeps the
+      // opt-in.
+      assert.equal(
+        reasoningFor({ ...cfg, reasoning: true }, { forceNoThink: true }), 'medium', model);
+    }
+    // The structural traits ARE openai's.
+    assert.equal(needsToolCallObject({ provider: 'azure' }), false);
+  });
   await test('requesty: minimal when suppressing — same wire bytes as the old providerOptions.requesty block', () => {
     assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: true }), undefined);
     assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: false }), 'minimal');
@@ -555,7 +594,7 @@ async function main() {
     }
   });
   await test('native-strategy providers get room to seed, refine, cross-check', () => {
-    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
+    for (const provider of ['openai', 'azure', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
       assert.equal(discoveryStepsFor({ provider }), 3, provider);
       assert.equal(gatedMaxStepsFor({ provider }), 4, provider);
     }
@@ -580,7 +619,7 @@ async function main() {
     // A zero/negative budget would force `done` at step 0 with an empty `seen`
     // map — the model could only fabricate an id. Every real descriptor sits
     // inside the band, so the clamp is the backstop, not the mechanism.
-    for (const provider of Object.keys({ ollama: 0, openai: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
+    for (const provider of Object.keys({ ollama: 0, openai: 0, azure: 0, anthropic: 0, google: 0, deepseek: 0, openrouter: 0, requesty: 0, gateway: 0, locca: 0, 'openai-compatible': 0 })) {
       const n = discoveryStepsFor({ provider });
       assert.ok(n >= DISCOVERY_STEPS_MIN && n <= DISCOVERY_STEPS_MAX, `${provider} budget ${n} out of band`);
       assert.equal(Number.isInteger(n), true, `${provider} budget must be a whole step count`);
