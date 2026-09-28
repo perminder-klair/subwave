@@ -542,6 +542,12 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         exemptRequests: v.llm?.exemptRequests !== false,
         maxOutputTokens: typeof v.llm?.maxOutputTokens === 'number' ? v.llm.maxOutputTokens : 0,
         discoverySteps: typeof v.llm?.discoverySteps === 'number' ? v.llm.discoverySteps : 0,
+        geminiSafety: {
+          harassment: !!v.llm?.geminiSafety?.harassment,
+          hateSpeech: !!v.llm?.geminiSafety?.hateSpeech,
+          sexuallyExplicit: !!v.llm?.geminiSafety?.sexuallyExplicit,
+          dangerousContent: !!v.llm?.geminiSafety?.dangerousContent,
+        },
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
           provider: v.llm?.fallback?.provider ?? 'ollama',

@@ -439,6 +439,15 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   if (l.repeatPenalty !== undefined) {
     target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
   }
+  // HARM_CATEGORY thresholds for the native `google` leg. Whole-object
+  // REPLACE (not a merge) so clearing a box in the editor actually clears it;
+  // each box is strictly boolean, anything else reads as allow.
+  if (l.geminiSafety !== undefined) {
+    if (!l.geminiSafety || typeof l.geminiSafety !== 'object' || Array.isArray(l.geminiSafety)) {
+      throw new Error(`${label}.geminiSafety must be an object map of category → boolean`);
+    }
+    target.geminiSafety = normalizeGeminiSafety(l.geminiSafety);
+  }
   // Discovery-round budget. 0 = follow the provider capability table.
   if (l.discoverySteps !== undefined) {
     target.discoverySteps = clampDiscoverySteps(Number(l.discoverySteps), target.discoverySteps as number);
@@ -486,6 +495,24 @@ export function normalizeLlmHeaders(raw: unknown): Record<string, string> {
     out[name] = v;
   }
   return out;
+}
+
+// HARM_CATEGORY thresholds for the native `google` leg. Lenient load posture
+// like the rest of this file: booleans only, anything else reads as allow
+// (unchecked), so a hand-edited settings.json can't wedge boot.
+export function normalizeGeminiSafety(raw: unknown): {
+  harassment: boolean;
+  hateSpeech: boolean;
+  sexuallyExplicit: boolean;
+  dangerousContent: boolean;
+} {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  return {
+    harassment: r.harassment === true,
+    hateSpeech: r.hateSpeech === true,
+    sexuallyExplicit: r.sexuallyExplicit === true,
+    dangerousContent: r.dangerousContent === true,
+  };
 }
 
 // Build the per-provider inline-key map from a stored settings.llm blob and

@@ -429,6 +429,15 @@ export const DEFAULTS = {
     // field). Injected into the request body — the AI SDK has no field for it —
     // and ignored by every other provider, Ollama included.
     repeatPenalty: 1.15,
+    // HARM_CATEGORY thresholds for the native `google` provider leg. Checked =
+    // block that category; unchecked/absent = allow (BLOCK_NONE). Only the
+    // google leg reads them — every other provider ignores the field.
+    geminiSafety: {
+      harassment: false,
+      hateSpeech: false,
+      sexuallyExplicit: false,
+      dangerousContent: false,
+    },
     // On: the session DJ agent drives picks, links and requests as a tool-loop
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.

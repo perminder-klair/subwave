@@ -25,7 +25,7 @@ import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -99,6 +99,7 @@ export async function djObject({
               maxOutputTokens,
               output: Output.object({ schema }),
               reasoning: reasoningFor(l.cfg),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             object = result.output;
@@ -126,6 +127,7 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             try {

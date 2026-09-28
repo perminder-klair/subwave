@@ -327,6 +327,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
         discoverySteps: form.llm.discoverySteps,
+        geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
@@ -1121,6 +1122,52 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         </div>
       </Card>
+
+      {form.llm.provider === 'google' && (
+      <Card title="Gemini Safety Filters" sub="content blocking">
+        <div className="field">
+          <Label>Block categories</Label>
+          <div className="mt-2 flex flex-col gap-2">
+            {[
+              { id: 'harassment', label: 'Harassment' },
+              { id: 'hateSpeech', label: 'Hate Speech' },
+              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
+              { id: 'dangerousContent', label: 'Dangerous Content' },
+            ].map(c => (
+              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+                <input
+                  type="checkbox"
+                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                    setForm(f => ({
+                      ...f,
+                      llm: {
+                        ...f.llm,
+                        geminiSafety: {
+                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
+                          [c.id]: e.target.checked
+                        }
+                      }
+                    }))
+                  }
+                  className="accent-[var(--accent)]"
+                />
+                <span>{c.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="field-hint mt-2">
+            Google-only content blocking, sent on the native <code>google</code> provider
+            leg. Check a category to have Gemini block it; uncheck to allow swearing or
+            sensitive topics. Other providers ignore these flags.
+          </div>
+          <div className="field-hint mt-2">
+            These boxes apply to the primary leg. A <code>google</code> fallback leg
+            carries its own set of flags.
+          </div>
+        </div>
+      </Card>
+      )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">

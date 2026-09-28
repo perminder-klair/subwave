@@ -185,6 +185,13 @@ export interface LlmForm {
   maxOutputTokens: number;
   // 0 = auto (follow the provider capability table); 1-5 overrides it.
   discoverySteps: number;
+  // HARM_CATEGORY thresholds for the native `google` leg. Checked = block.
+  geminiSafety: {
+    harassment: boolean;
+    hateSpeech: boolean;
+    sexuallyExplicit: boolean;
+    dangerousContent: boolean;
+  };
   fallback: LlmFallbackForm;
 }
 
