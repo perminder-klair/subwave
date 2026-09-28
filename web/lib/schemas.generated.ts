@@ -4498,6 +4498,28 @@ const skillCohostsSchema = z.preprocess(
 // persona.ts) because this module may import only zod — the mirror is one
 // flat file. scripts/skill-voice.test.ts pins them equal to the persona
 // originals, the same posture as the three tag-regex declarations.
+//
+// ── MERGE NOTE: this list and PR #1718 (gemini TTS) must land together ─────
+// The gemini-TTS PR adds 'gemini' to persona TTS_ENGINES. The pin above makes
+// this list EQUAL to that one, so exactly one merge order is red:
+//
+//   • Merge #1718 first, then this one. Rebase on it and uncomment 'gemini'
+//     below. `npm test -- skill-voice` goes green with no other change.
+//
+//   • Merge this one first, then #1718. #1718 needs the same edit here; its
+//     branch already carries a note at TTS_ENGINES saying exactly that.
+//
+// Do NOT uncomment it while this branch is unmerged against a develop that has
+// no gemini engine: the pin compares against persona TTS_ENGINES, so it would
+// fail on a branch where neither engine exists. The entry belongs in whichever
+// PR merges second, and the failing test is the signal, not a bug to work
+// around — its message names the fix.
+//
+// Why the two lists must match at all: a skill pins the SAME engine vocabulary
+// a persona does, so a skill must never become the one surface where a valid,
+// working engine is unreachable. That is why the pin is a deepEqual rather
+// than a subset check.
+// ─────────────────────────────────────────────────────────────────────────
 export const SKILL_VOICE_ENGINES = [
   'piper',
   'kokoro',
@@ -4505,7 +4527,7 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
-  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); merge note above
+  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); see above
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
