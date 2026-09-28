@@ -4438,6 +4438,7 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  // 'gemini',  // ← uncomment when landing the gemini-TTS PR (#1718); merge note above
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [

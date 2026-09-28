@@ -38,7 +38,21 @@ const { skillVoiceFor } = await import('../src/skills/_agent.js');
 
 test('skill voice vocabularies match the persona originals', async () => {
   const persona = await import('../src/schemas/persona.js');
-  assert.deepEqual([...SKILL_VOICE_ENGINES], [...persona.TTS_ENGINES]);
+  // The message names the fix, because this pin is the ONLY thing that catches
+  // a new TTS_ENGINES entry arriving without its restated copy here — and a
+  // bare deepEqual diff reads as "these two lists drifted" with no next step.
+  const missing = [...persona.TTS_ENGINES].filter(e => !(SKILL_VOICE_ENGINES as readonly string[]).includes(e));
+  const extra = [...SKILL_VOICE_ENGINES].filter(e => !(persona.TTS_ENGINES as readonly string[]).includes(e));
+  assert.deepEqual(
+    { missing, extra },
+    { missing: [], extra: [] },
+    missing.length
+      ? `SKILL_VOICE_ENGINES is missing ${missing.join(', ')} — add it to `
+        + `schemas/skill.ts (a restated copy of persona TTS_ENGINES, which may `
+        + `not import across here). This is expected when landing the gemini-TTS PR.`
+      : `SKILL_VOICE_ENGINES has ${extra.join(', ')} but persona TTS_ENGINES does `
+        + `not — remove it, or the engines the two surfaces accept have diverged.`,
+  );
   assert.deepEqual([...SKILL_VOICE_PROVIDERS], [...persona.TTS_CLOUD_PROVIDERS]);
 });
 
