@@ -83,6 +83,10 @@ interface SkillFileFields {
   configKeys?: string[];
   tags?: string[];      // freeform organisation tags
   brief?: string;
+  // This skill's own TTS voice override ({engine, voice, cloudProvider}),
+  // or null/absent for the on-air DJ's voice. Written as three flat
+  // frontmatter lines (voiceEngine/voiceId/voiceProvider).
+  voice?: { engine: string; voice: string; cloudProvider: string } | null;
 }
 
 // Render + write a skill's SKILL.md from form fields. Used by the admin routes:
@@ -121,6 +125,13 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   // restrictive `commute` value is worth writing.
   if (fields.window === 'commute') lines.push('window: commute');
   if (fields.requiresKey) lines.push(line('requiresKey', fields.requiresKey));
+  // The skill's own voice override. Absent lines read as "no override", so
+  // clearing the form removes all three.
+  if (fields.voice && fields.voice.engine) {
+    lines.push(line('voiceEngine', fields.voice.engine));
+    if (fields.voice.voice) lines.push(line('voiceId', fields.voice.voice));
+    if (fields.voice.cloudProvider) lines.push(line('voiceProvider', fields.voice.cloudProvider));
+  }
   // Skill-declared knobs (news' feed / feedMaxItems, and anything a custom
   // tool.mjs declares). Insertion order follows the declaration.
   for (const [key, value] of Object.entries(fields.config || {})) {
