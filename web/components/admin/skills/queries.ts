@@ -67,6 +67,7 @@ export interface SkillFileResponse {
   window?: 'any' | 'commute';
   requiresKey?: string;
   hasTool?: boolean;
+  voice?: { engine: string; voice: string; cloudProvider: string } | null;
   tags?: string[];
   brief?: string;
   defaults?: SkillDefaults | null;
