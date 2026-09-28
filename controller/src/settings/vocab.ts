@@ -446,6 +446,24 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
   const prov = target.provider as string | undefined;
   target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
+  // Per-task model overrides ({ [kind]: model }). Whole-map REPLACE (not a
+  // merge) so clearing a task in the editor actually clears it. Keys are task
+  // kinds the callers pass to primaryLeg(); values are trimmed model ids,
+  // each 0-100 chars like `model`; an empty value drops the entry (blank =
+  // "use the primary model").
+  if (l.modelOverrides !== undefined) {
+    if (!l.modelOverrides || typeof l.modelOverrides !== 'object' || Array.isArray(l.modelOverrides)) {
+      throw new Error(`${label}.modelOverrides must be an object map of task → model`);
+    }
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(l.modelOverrides as Record<string, unknown>)) {
+      if (typeof k !== 'string' || !k) continue;
+      const model = String(v ?? '').trim();
+      if (model.length > 100) throw new Error(`${label}.modelOverrides.${k} must be 0-100 chars`);
+      if (model) next[k] = model;
+    }
+    target.modelOverrides = next;
+  }
 }
 
 // Route an inline API key into `llmHost.keys[provider]` (#657) using the leg's

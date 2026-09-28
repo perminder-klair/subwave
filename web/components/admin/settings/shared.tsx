@@ -147,6 +147,7 @@ export interface LlmFallbackForm {
 export interface LlmForm {
   provider: string;
   model: string;
+  modelOverrides?: Record<string, string>;
   ollamaUrl: string;
   numCtx: number;
   repeatPenalty: number;
