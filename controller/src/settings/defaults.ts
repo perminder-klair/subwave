@@ -378,6 +378,9 @@ export const DEFAULTS = {
   llm: {
     provider: 'ollama',
     model: '',
+    // Per-agent-task model overrides ({ [kind]: model }). Empty/absent reads
+    // as "use the primary model"; overrides apply to the primary provider only.
+    modelOverrides: {} as Record<string, string>,
     // Legacy single inline-key slot, superseded by `keys`. Always '' after
     // load(); resolution reads `keys`, never this.
     apiKey: '',
