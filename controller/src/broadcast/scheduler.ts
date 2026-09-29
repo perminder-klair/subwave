@@ -22,6 +22,7 @@ import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
 import { applyTrackFloor } from '../music/track-floor.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
+import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
@@ -81,9 +82,12 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-// Writes an M3U with mood-appropriate tracks for Liquidsoap's fallback source.
+const autoPlaylistRefresh = createAutoPlaylistRefreshRunner(() =>
+  withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner()));
+
+// Writes an M3U immediately; show/operator callers must not join a stale build.
 export async function refreshAutoPlaylist() {
-  return withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner());
+  return autoPlaylistRefresh.refresh();
 }
 
 // Which show the file on disk holds (#1111); rules in auto-playlist-show.ts.
@@ -1145,18 +1149,27 @@ async function overrideJanitor() {
 export function startScheduler() {
   refreshAutoPlaylist().catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
 
-  cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
+  const refreshCron = autoPlaylistRefreshCron(config.show.autoQueueRefreshMinutes);
+  cron.schedule(refreshCron, async () => {
+    try {
+      if (!await autoPlaylistRefresh.refreshScheduled()) {
+        queue.log('scheduler', 'Auto-playlist periodic refresh skipped — a fallback build is already active');
+      }
+    } catch (err) {
+      queue.log('error', `Periodic playlist failed: ${err.message}`);
+    }
+  });
 
   // Every spoken segment the station produces on its own, plus the
   // unconditional :00 session roll: one tick over one slot table (#1500).
   cron.schedule('* * * * *', talkTick);
 
   cron.schedule('*/5 * * * *', overrideJanitor);
-  cron.schedule('0 * * * *', cleanup);
+  cron.schedule('2 * * * *', cleanup, { noOverlap: true });
   cron.schedule('17 4 * * *', nightlyDoctor);
 
   // Hourly so a station only up part of the day still gets its daily snapshot;
-  // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :00
+  // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :02
   // cleanup and the */5 janitor. Off by default.
   cron.schedule('23 * * * *', scheduledBackupTick);
 
@@ -1168,5 +1181,5 @@ export function startScheduler() {
     syncSkillCrons();
   });
 
-  queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
+  queue.log('scheduler', `Scheduler started · auto-playlist: ${refreshCron} · cleanup: 2 * * * * · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }
