@@ -207,7 +207,7 @@ export function budgetMode(
   return 'normal';
 }
 
-// Four classifiers gating two recovery mechanisms:
+// Classifiers gating two recovery mechanisms:
 //   isTransient          → retry the SAME leg (5xx / plain 429 / socket).
 //   isUnreachable        → fail over to the BACKUP leg (host is down). Strict
 //                          subset of isTransient, EXCLUDING 408/425/429/5xx —
@@ -218,6 +218,7 @@ export function budgetMode(
 //                          (#671): a saturated route can clear in a second, so
 //                          same-leg retry gets first crack and only a persistent
 //                          overload reaches failover.
+//   isModelUnavailable   → fail over; permanent even with a transient status.
 
 // AI_RetryError is a wrapper with no statusCode/cause/responseHeaders of its
 // own; the real APICallError lives in err.lastError / err.errors[]. Every
@@ -241,9 +242,9 @@ const TRANSIENT_CODE = new Set([
 export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
-  // Permanent for this leg — let it propagate to withFailover (#438). A plain
-  // rate-limit 429 with no quota/auth signature stays transient below.
-  if (isQuotaOrAuthError(err)) return false;
+  // Permanent for this leg — propagate to withFailover before considering
+  // transient statuses or transport hints. A plain rate-limit stays transient.
+  if (isModelUnavailable(err) || isQuotaOrAuthError(err)) return false;
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (typeof status === 'number' && TRANSIENT_STATUS.has(status)) return true;
   const code = err.code ?? err.cause?.code;
@@ -303,22 +304,23 @@ function upstreamErrorCode(err: ErrorLike): string {
 //
 // Detected by the machine-readable code first and by MESSAGE second, the same
 // way QUOTA_RE is, because providers word this very differently. Deliberately
-// NOT by a bare 404: a 404 from a mistyped base URL is unreachability, and
-// isUnreachable already owns that case.
+// NOT by a bare 404: it may be a wrong URL or an unrelated missing resource.
+// A bare HTTP 404 is not host-unreachable either.
 const MODEL_GONE_CODES = new Set(['model_not_found', 'model_not_available', 'model_terminated']);
-// The `model …` branch allows a few words between the name and the verdict
-// ("model claude-2 is no longer available"). The window must NOT exclude '.',
-// because model names carry dots — llama3.1, qwen2.5, gpt-3.5 — and excluding
-// it stops the match dead inside the name it is trying to read. A short lazy
-// window plus the explicit verdict wordings keep the gate narrow instead.
-const MODEL_GONE_RE = /\bwas retired\b|\bis retired\b|\bhas been (?:retired|removed|decommissioned|deprecated)\b|\b(?:unknown|no such|unsupported) model\b|\bmodel\b[^\n]{0,60}?\b(?:not found|does not exist|(?:is )?not available|no longer available|is unavailable)\b/i;
+// Require a model subject and a permanent verdict, not arbitrary intervening
+// prose about another resource. Dots/colons/slashes are valid model-ID bytes.
+// Plain "unavailable" is ambiguous (e.g. overload), so it is code-only.
+const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:\s+[`'"]?[\w.:/-]{1,60}[`'"]?)?\s+(?:(?:was|is|has been) (?:retired|removed|decommissioned|deprecated)|not found|does not exist|(?:is )?no longer available|(?:is )?not available(?=$|[.,;]))\b/i;
+// Ollama's incident wording omits "model". Bound it to a single model-ID token
+// containing a digit, dot or colon, followed by the dated retirement sentence.
+const MODEL_ID_RETIRED_RE = /^\s*(?=[\w.:/-]*[\d.:])[\w.:/-]{1,60} was retired at \d{4}-\d{2}-\d{2}\b/i;
 
 export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
   const msg = String(err.message || err.cause?.message || '');
-  return MODEL_GONE_RE.test(msg);
+  return MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg);
 }
 
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;

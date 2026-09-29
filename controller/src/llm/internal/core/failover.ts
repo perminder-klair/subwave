@@ -83,8 +83,9 @@ export interface AttemptResult<T> {
 // primary leg is tried first; only when the primary leg can't recover this call
 // — host unreachable OR a quota/usage-limit/auth rejection OR a reachable
 // gateway relaying a saturated upstream (#671) OR a rate limit that survived
-// same-leg retries (#738 — a free-tier request cap) — and only when a fallback
-// is configured, is `attempt` retried once against the backup leg.
+// same-leg retries (#738 — a free-tier request cap) OR a permanently missing
+// model — and only when a fallback is configured, is `attempt` retried once
+// against the backup leg.
 // On a failover the primary's failure is also recorded (via `…:failover→<backup>`)
 // so /debug shows the switch happened.
 //

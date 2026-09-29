@@ -186,6 +186,17 @@ async function main() {
   });
 
   console.log('isModelUnavailable (model gone for good → fail over, never retry):');
+  await test('permanent model 503s propagate once, including SDK wrappers', async () => {
+    const permanent = { statusCode: 503, data: { error: { code: 'model_terminated' } }, message: 'model qwen3.5 has been retired' };
+    for (const error of [permanent, { lastError: permanent }, { errors: [{ statusCode: 503 }, permanent] }]) {
+      let calls = 0;
+      const thrown = await withTransientRetry('retired-model-test', async () => { calls++; throw error; }).catch((err) => err);
+      assert.equal(thrown, error);
+      assert.equal(calls, 1, 'a retired model must not spend controller retries');
+      assert.equal(isTransient(error), false);
+    }
+    assert.equal(isTransient({ ...permanent, message: '503 overloaded, retry later', code: 'ECONNRESET', name: 'TimeoutError' }), false);
+  });
   await test('a hosted model retired mid-flight classifies, and only as this', () => {
     // Verbatim shape seen from Ollama Cloud on 2026-09-25, which silenced every
     // generation for hours while a correctly configured fallback leg sat idle.
@@ -203,14 +214,52 @@ async function main() {
     assert.equal(isModelUnavailable({ message: 'unknown model: mistral-tiny' }), true);
     assert.equal(isModelUnavailable({ message: 'this model has been deprecated' }), true);
   });
+  await test('retirement/removal wording requires model context, not another missing resource', () => {
+    for (const message of [
+      'The requested API endpoint has been removed',
+      'The file has been removed', 'This resource is retired',
+      'The service was retired at 2026-09-25 00:00:00',
+      'model qwen3.5 is temporarily unavailable',
+      'model qwen3.5 is unavailable due to overload',
+      'model qwen3.5 is not available right now',
+      'model request failed: endpoint has been removed',
+      '503 Service Unavailable', 'schema validation failed',
+    ]) assert.equal(isModelUnavailable({ message }), false, message);
+    for (const message of [
+      'model qwen3.5 has been retired', 'model llama3.1:8b has been removed',
+      'The model `claude-2` is retired', 'this model has been decommissioned',
+      'no such model: missing', 'unsupported model: missing',
+    ]) assert.equal(isModelUnavailable({ message }), true, message);
+  });
   await test('the machine-readable code wins over wording', () => {
     assert.equal(isModelUnavailable({ data: { error: { code: 'model_not_found' } }, message: 'Not Found' }), true);
     assert.equal(isModelUnavailable({ responseBody: '{"error":{"code":"model_not_available"}}', message: '' }), true);
   });
+  await test('supported codes classify in parsed/raw/direct forms and SDK wrappers', () => {
+    for (const code of ['model_not_found', 'model_not_available', 'model_terminated']) {
+      for (const body of [
+        { data: { error: { code } } },
+        { responseBody: JSON.stringify({ error: { code } }) },
+        { code },
+      ]) {
+        const inner = { ...body, statusCode: 503, message: 'provider error' };
+        for (const error of [inner, { lastError: inner }, { errors: [{}, inner] }]) {
+          assert.equal(isModelUnavailable(error), true, code);
+          assert.equal(isTransient(error), false, code);
+        }
+      }
+    }
+    assert.equal(isModelUnavailable({ cause: { message: 'model llama3.1:8b has been removed' } }), true);
+    for (const error of [
+      {}, { responseBody: 'not json' }, { responseBody: 'null' },
+      { data: { error: { code: 404 } } }, { code: 'not_found' },
+      { data: { error: { code: 'service_unavailable' } } },
+    ]) assert.equal(isModelUnavailable(error), false);
+  });
   await test('the gate stays narrow: neighbouring failures must NOT classify', () => {
-    // A bare 404 is a mistyped base URL far more often than a dead model, and
-    // isUnreachable already owns that case.
+    // A bare 404 identifies neither a missing model nor an unreachable host.
     assert.equal(isModelUnavailable({ statusCode: 404, message: 'Not Found' }), false);
+    assert.equal(isUnreachable({ statusCode: 404, message: 'Not Found' }), false);
     assert.equal(isModelUnavailable({ statusCode: 429, message: 'rate limit exceeded, slow down' }), false);
     assert.equal(isModelUnavailable({ code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:11434' }), false);
     assert.equal(isModelUnavailable({ statusCode: 401, message: 'invalid api key' }), false);
