@@ -1029,3 +1029,9 @@ export const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 // analyzer's measured LUFS, or tag-with-measured-fallback (the default).
 export const LOUDNESS_SOURCES = SETTINGS_LOUDNESS_SOURCES;
 export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
+
+// Independent provider-generation deadline: always finite, including zero.
+export function clampRequestTimeout(raw: unknown, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(1_800_000, Math.max(5_000, Math.floor(raw)));
+}

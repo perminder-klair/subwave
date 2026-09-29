@@ -232,6 +232,17 @@ export function unwrapSdkError(err: ErrorLike | null | undefined): ErrorLike | n
   return inner ?? err;
 }
 
+// Stable control codes are checked before message/status heuristics, including
+// SDK retry wrappers. Caller cancellation and the agent budget never fail over.
+export function isProviderRequestTimeout(err: ErrorLike | null | undefined): boolean {
+  err = unwrapSdkError(err);
+  return err?.code === 'PROVIDER_REQUEST_TIMEOUT';
+}
+export function isGenerationControlError(err: ErrorLike | null | undefined): boolean {
+  err = unwrapSdkError(err);
+  return isProviderRequestTimeout(err) || err?.code === 'GENERATION_CANCELLED' || err?.name === 'AgentDeadlineError';
+}
+
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -241,6 +252,7 @@ const TRANSIENT_CODE = new Set([
 export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
+  if (isGenerationControlError(err)) return false;
   // Permanent for this leg — let it propagate to withFailover (#438). A plain
   // rate-limit 429 with no quota/auth signature stays transient below.
   if (isQuotaOrAuthError(err)) return false;
@@ -265,6 +277,8 @@ const UNREACHABLE_CODE = new Set([
 export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
+  if (isProviderRequestTimeout(err)) return true;
+  if (isGenerationControlError(err)) return false;
   const code = err.code ?? err.cause?.code;
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;

@@ -452,10 +452,12 @@ export const DEFAULTS = {
     // searchReady().
     requestWebResolve: false,
     // Hard wall-clock ceiling on a single DJ-agent generation, enforced by
-    // withDeadline. The main and recovery runs each get the full budget, so worst
-    // case per pick is ~2x this before the stateless fallback. Reasoning-heavy
-    // cloud models routinely need 20-40s.
+    // withDeadline. Main, recovery and terminal runs share one budget per
+    // provider leg; tool work is included. Reasoning-heavy cloud models
+    // routinely need 20-40s.
     agentTimeoutMs: 45000,
+    // Per provider generation, independent of the whole agent/tool cascade.
+    requestTimeoutMs: 300000,
     // Pause autonomous DJ LLM work and listener requests whenever Icecast reports
     // zero listeners — the stream coasts on the auto playlist.
     pauseWhenEmpty: false,

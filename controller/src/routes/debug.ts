@@ -11,6 +11,7 @@ import {
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
   agentDoneRetryCount,
+  generationHealthSnapshot,
   llmCallExportFormat,
   llmCallExportFilename,
   serializeLlmCalls,
@@ -201,6 +202,7 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
   // No state-dir listing here on purpose: it is browsed lazily, one directory
   // per expand, via GET /debug/state-tree below.
   out.llm = {
+    generation: generationHealthSnapshot(),
     provider: llmProvider.providerName(),
     activeModel: llmProvider.activeModelLabel(),
     ollamaUrl: llmProvider.activeOllamaUrl(),

@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -59,6 +59,26 @@ async function main() {
     const thrown = await withDeadline(20, 'race', () => new Promise<never>(() => {})).catch((x) => x);
     assert.equal(thrown.name, 'AgentDeadlineError');
     assert.equal(isUnreachable(thrown), false);
+  });
+
+  await test('provider timeout and cancellation codes survive SDK wrappers before generic heuristics', () => {
+    for (const code of ['PROVIDER_REQUEST_TIMEOUT', 'GENERATION_CANCELLED']) {
+      const wrapped = { lastError: { code, name: 'AbortError', message: 'fetch failed 503' } };
+      assert.equal(isGenerationControlError(wrapped), true);
+      assert.equal(isProviderRequestTimeout(wrapped), code === 'PROVIDER_REQUEST_TIMEOUT');
+      assert.equal(isTransient(wrapped), false);
+      assert.equal(isUnreachable(wrapped), code === 'PROVIDER_REQUEST_TIMEOUT');
+    }
+  });
+  await test('pre-aborted caller never invokes a retry attempt', async () => {
+    const controller = new AbortController();
+    const reason = new Error('caller budget');
+    controller.abort(reason);
+    let calls = 0;
+    const thrown = await withTransientRetry('test', async () => { calls++; return 'ok'; }, controller.signal).catch((e) => e);
+    assert.equal(thrown.code, 'GENERATION_CANCELLED');
+    assert.equal(thrown.cause, reason);
+    assert.equal(calls, 0);
   });
 
   console.log('isQuotaOrAuthError (quota/usage-limit/auth → fail over, not retry):');
@@ -288,7 +308,10 @@ async function main() {
     setTimeout(() => controller.abort(), 50);       // fire mid-backoff (first delay is ~500ms)
     const thrown = await run;
     const elapsed = Date.now() - started;
-    assert.equal(thrown, err);
+    assert.equal(thrown.code, 'GENERATION_CANCELLED');
+    assert.equal(thrown.cause, controller.signal.reason);
+    assert.equal(isTransient(thrown), false);
+    assert.equal(isUnreachable(thrown), false);
     assert.equal(calls, 1);
     assert.ok(elapsed < 400, `expected the abort to cut the ~500ms sleep short, got ${elapsed}ms`);
   });
