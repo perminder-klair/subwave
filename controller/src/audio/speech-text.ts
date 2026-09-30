@@ -43,6 +43,9 @@ export interface SpeechCorrection {
 // anchors: a rule for "live" must not fire inside "delivery", while a rule
 // whose edge is a symbol ("Ke$ha") has no word boundary there to anchor on.
 const REGEX_SPECIALS_RE = /[.*+?^${}()|[\]\\]/g;
+// Reuse each row's pattern across lines; weak keys release old settings when
+// they are replaced. Check `from` on every use so in-place edits work too.
+const correctionPatterns = new WeakMap<SpeechCorrection, { from: string; pattern: RegExp }>();
 
 function correctionPattern(from: string): RegExp {
   const escaped = from.replace(REGEX_SPECIALS_RE, '\\$&');
@@ -59,7 +62,12 @@ function applyCorrections(text: string, corrections: readonly SpeechCorrection[]
     const to = typeof c?.to === 'string' ? c.to : '';
     // Function replacement so a "$" in the spoken form is literal text, never
     // a capture-group reference.
-    t = t.replace(correctionPattern(from), () => to);
+    let cached = correctionPatterns.get(c);
+    if (cached?.from !== from) {
+      cached = { from, pattern: correctionPattern(from) };
+      correctionPatterns.set(c, cached);
+    }
+    t = t.replace(cached.pattern, () => to);
   }
   return t;
 }
