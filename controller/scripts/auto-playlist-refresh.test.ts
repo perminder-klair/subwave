@@ -4,9 +4,14 @@ import { readFileSync } from 'node:fs';
 
 const scheduler = readFileSync(new URL('../src/broadcast/scheduler.ts', import.meta.url), 'utf8');
 test('startup and hourly refresh explicitly use the automatic idle gate', () => {
-  const startup = scheduler.slice(scheduler.indexOf('export function startScheduler'));
-  assert.match(startup, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
-  assert.match(startup, /Hourly playlist failed/);
+  const start = scheduler.indexOf('export function startScheduler');
+  assert.ok(start >= 0, 'startScheduler must exist');
+  const startup = scheduler.slice(start);
+  assert.match(startup.split('cron.schedule')[0]!, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
+  const hourly = startup.match(/cron\.schedule\(`\*\/\$\{config\.show\.autoQueueRefreshMinutes\} \* \* \* \*`, \(\) => \{([\s\S]*?)\n  \}\);/);
+  assert.ok(hourly, 'the refresh cron callback must exist');
+  assert.match(hourly[1]!, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
+  assert.match(hourly[1]!, /Hourly playlist failed/);
 });
 
 const { createAutoPlaylistRefresh } = await import('../src/broadcast/auto-playlist-refresh.js');
@@ -95,9 +100,19 @@ test('overlapping requests serialize writes and coalesce queued automatic work w
 });
 
 test('production rechecks idle before replacing watched file, and startup awaits adoption', () => {
-  const inner = scheduler.slice(scheduler.indexOf('async function refreshAutoPlaylistInner'));
-  assert.ok(inner.indexOf("if (!canPublish()) return 'deferred'") < inner.indexOf('await writeFileAtomic(config.liquidsoap.autoPlaylist'));
+  const start = scheduler.indexOf('async function refreshAutoPlaylistInner');
+  assert.ok(start >= 0, 'refresh builder must exist');
+  const inner = scheduler.slice(start);
+  const gate = inner.indexOf("if (!canPublish()) return 'deferred'");
+  const write = inner.indexOf('await writeFileAtomic(config.liquidsoap.autoPlaylist');
+  assert.ok(gate >= 0, 'pre-publication gate must exist');
+  assert.ok(write >= 0, 'watched file publication must exist');
+  assert.ok(gate < write, 'idle recheck must precede publication');
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
   assert.match(server, /await startStreamIdleMonitor\(flushPendingAutoPlaylist\)/);
-  assert.ok(server.indexOf('await startStreamIdleMonitor(') < server.indexOf('  startScheduler();'));
+  const adopt = server.indexOf('await startStreamIdleMonitor(');
+  const schedule = server.indexOf('  startScheduler();');
+  assert.ok(adopt >= 0, 'awaited adoption must exist');
+  assert.ok(schedule >= 0, 'scheduler startup must exist');
+  assert.ok(adopt < schedule);
 });
