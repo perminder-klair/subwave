@@ -17,7 +17,7 @@ import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
@@ -310,7 +310,7 @@ app.listen(config.server.port, async () => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  startStreamIdleMonitor();
+  await startStreamIdleMonitor(flushPendingAutoPlaylist);
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));
