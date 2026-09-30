@@ -38,7 +38,7 @@ export function songsByMood(mood: string): TrackRecord[] {
   const rows = requireDb()
     .prepare(
       `SELECT * FROM tracks
-       WHERE (moods IS NOT NULL
+       WHERE (${SQL_HAS_MOODS}
               AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?))
           OR (audio_moods IS NOT NULL
               AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
@@ -50,7 +50,7 @@ export function songsByMood(mood: string): TrackRecord[] {
 export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
   if (!energy) return [];
   const rows = requireDb()
-    .prepare(`SELECT * FROM tracks WHERE energy = ?`)
+    .prepare(`SELECT * FROM tracks WHERE ${SQL_HAS_MOODS} AND energy = ?`)
     .all(energy) as TrackRow[];
   return rows.map(rowToTrack);
 }
@@ -58,7 +58,7 @@ export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
 export function allTaggedIds(): string[] {
   return (
     requireDb()
-      .prepare('SELECT id FROM tracks WHERE moods IS NOT NULL')
+      .prepare(`SELECT id FROM tracks WHERE ${SQL_HAS_MOODS}`)
       .all() as Array<{ id: string }>
   ).map(r => r.id);
 }
@@ -143,7 +143,7 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
                 WHEN year > 0 THEN (year / 10) * 10
                 ELSE 0
               END AS decade
-       FROM tracks WHERE moods IS NULL`,
+       FROM tracks WHERE ${SQL_NO_MOODS}`,
     )
     .all() as Array<{ id: string; g: string; decade: number }>;
   const out = new Map<string, string[]>();
