@@ -47,6 +47,20 @@ export interface PoolEntry {
 }
 
 let holds = new Map<string, Hold>();
+
+// Consecutive failures without an intervening success, per key. This is the
+// circuit-breaker state, and it matters most for `burst`.
+//
+// A per-minute limit really does clear in a minute, but a key whose DAILY
+// quota is gone can also arrive labelled as a rate limit — and a flat
+// one-minute hold then means probing that key every minute for the rest of the
+// day. With a pool that is the difference between one request per call and a
+// handful of wasted probes every minute, which is exactly what makes an
+// exhausted pool feel slow. Escalating turns the churn into a few probes over
+// an hour, then settles at the ceiling.
+//
+// Reset on success, so a key that recovers is trusted again immediately.
+const strikes = new Map<string, number>();
 let poolCache: { entries: PoolEntry[]; at: number } | null = null;
 
 // Parsed on every access in principle; cached briefly so a hot loop (the DJ
@@ -204,10 +218,11 @@ export function isHeld(key: string): boolean {
 export function reportKeyFailure(key: string, bodyText?: unknown): number {
   if (!key) return 0;
   const kind = classifyGeminiFailure(bodyText);
-  const ms = resolveGeminiCooldownMs(bodyText);
-  // 'billing' and 'other' are not key problems; the caller gates on status, so
-  // anything that reaches here with an unrecognised kind falls back to the
-  // conservative 'unknown' label rather than inventing a classification.
+  const n = (strikes.get(key) ?? 0);
+  strikes.set(key, n + 1);
+  // The cooldown module owns the escalation ladder and, critically, applies it
+  // ONLY when Google gave no hint — an explicit RetryInfo is never overridden.
+  const ms = resolveGeminiCooldownMs(bodyText, Math.random, n + 1);
   const reason: Hold['reason'] = kind === 'daily' || kind === 'burst' || kind === 'auth'
     ? kind
     : 'unknown';
@@ -215,9 +230,13 @@ export function reportKeyFailure(key: string, bodyText?: unknown): number {
   return ms;
 }
 
-/** Clear a hold — a key that just succeeded was demonstrably not exhausted. */
+/** Clear a hold — a key that just succeeded was demonstrably not exhausted, so
+ *  its escalation history resets too and the next failure starts from the
+ *  short interval again. */
 export function reportKeySuccess(key: string): void {
-  if (key) holds.delete(key);
+  if (!key) return;
+  holds.delete(key);
+  strikes.delete(key);
 }
 
 /** Everything the admin UI needs, with no secret material in it. The
@@ -231,6 +250,10 @@ export interface PoolStatus {
   held: boolean;
   holdRemainingMs: number;
   reason: Hold['reason'] | null;
+  /** Consecutive failures with no success in between; 0 when the key is
+   *  behaving. Surfaced so the UI can say a key is *persistently* failing
+   *  rather than just briefly held. */
+  strikes: number;
   current: boolean;
 }
 
@@ -249,6 +272,7 @@ export function poolStatus(): PoolStatus[] {
       held: live,
       holdRemainingMs: live ? remaining : 0,
       reason: live ? hold!.reason : null,
+      strikes: strikes.get(key) ?? 0,
       current: key === current,
     };
   });
@@ -265,5 +289,6 @@ export function fingerprint(key: string): string {
 /** Test seam: forget every hold and the memo without touching configuration. */
 export function __resetHoldsForTest(): void {
   holds = new Map();
+  strikes.clear();
   poolCache = null;
 }

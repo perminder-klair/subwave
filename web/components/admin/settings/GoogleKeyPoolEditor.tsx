@@ -27,7 +27,8 @@ export interface GooglePoolKey {
   name: string;
   held: boolean;
   holdRemainingMs: number;
-  reason: 'daily' | 'hint' | 'unknown' | null;
+  reason: 'daily' | 'burst' | 'auth' | 'unknown' | null;
+  strikes: number;
   current: boolean;
 }
 
@@ -39,8 +40,15 @@ export interface GooglePoolState {
 function holdLabel(k: GooglePoolKey): string {
   if (!k.held) return '';
   const mins = Math.max(1, Math.round(k.holdRemainingMs / 60000));
-  const why = k.reason === 'daily' ? 'daily quota' : k.reason === 'hint' ? 'rate limit' : 'no hint from Google';
-  return `held ~${mins}m · ${why}`;
+  const why = k.reason === 'daily' ? 'daily quota'
+    : k.reason === 'burst' ? 'rate limit'
+    : k.reason === 'auth' ? 'key rejected'
+    : 'no hint from Google';
+  // More than one consecutive failure means this key is not clearing on its own,
+  // and the hold has grown to match — worth saying, because it is the signal
+  // that a key should be replaced rather than waited out.
+  const repeat = k.strikes > 1 ? ` · failing ${k.strikes}× in a row` : '';
+  return `held ~${mins}m · ${why}${repeat}`;
 }
 
 export function GoogleKeyPoolEditor({

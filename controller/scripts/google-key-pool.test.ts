@@ -606,6 +606,71 @@ test('billing and content blocks do NOT rotate — they would fail identically',
   }
 });
 
+// ─── escalating holds ───────────────────────────────────────────────────────
+// An exhausted pool is FREE per request (held keys are skipped with no HTTP),
+// so the only real cost is how OFTEN a dead key is re-probed. A flat one-minute
+// hold means a key whose daily quota is mislabelled as a rate limit is probed
+// every minute for the rest of the day.
+
+test('an unhinted burst hold escalates with consecutive failures', () => {
+  const burst = code('rate_limit_exceeded');   // labelled, but no RetryInfo
+  const lapsed = [0, 1, 2, 3, 4, 5, 6].map(n =>
+    resolveGeminiCooldownMs(burst, () => 0.5, n + 1));
+  for (let i = 1; i < lapsed.length; i++) {
+    assert.ok(lapsed[i] >= lapsed[i - 1], `hold must not shrink: ${lapsed[i - 1]} -> ${lapsed[i]}`);
+  }
+  assert.equal(lapsed[0], 60_000, 'first unhinted burst is the short one');
+  assert.ok(lapsed.at(-1)! <= 3 * 60 * 60 * 1000, 'escalation is capped');
+  // A key that keeps failing converges instead of climbing forever.
+  assert.equal(lapsed.at(-1), resolveGeminiCooldownMs(burst, () => 0.5, 99));
+});
+
+test('escalation NEVER overrides an explicit RetryInfo', () => {
+  // Google said twenty seconds. Holding the key a minute "because it keeps
+  // failing" would shrink the pool for no reason — the whole point of the burst
+  // class is that it clears fast, and the hint is the only thing we actually
+  // know about when it will.
+  const hinted = JSON.stringify({ error: {
+    code: 'rate_limit_exceeded',
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '20s' }],
+  } });
+  for (const n of [1, 2, 5, 50]) {
+    assert.equal(resolveGeminiCooldownMs(hinted, () => 0.5, n), 20_000,
+      `strike ${n} must still honour the 20s hint`);
+  }
+});
+
+test('a key that succeeds has its escalation history forgotten', () => {
+  setPool(K1, K2);
+  const burst = code('rate_limit_exceeded');
+  reportKeyFailure(K1, burst);
+  reportKeyFailure(K1, burst);
+  reportKeyFailure(K1, burst);
+  assert.equal(poolStatus()[0].strikes, 3);
+  reportKeySuccess(K1);
+  assert.equal(poolStatus()[0].strikes, 0, 'a recovered key starts fresh');
+  // And its next failure is back to the short interval, not the escalated one.
+  const after = reportKeyFailure(K1, burst);
+  assert.ok(after <= 60_000, `expected the short interval again, got ${after}ms`);
+});
+
+test('a burst key is re-probed rarely, not every minute, once it keeps failing', () => {
+  // The end-to-end claim: with a key that never recovers, the number of probes
+  // over an hour collapses from 60 to single digits.
+  setPool(K1, K2);
+  const burst = code('rate_limit_exceeded');
+  let probes = 0;
+  const oneHourMs = 60 * 60 * 1000;
+  let elapsed = 0;
+  while (elapsed < oneHourMs) {
+    // The hold, then wait it out, then the next probe.
+    const held = reportKeyFailure(K1, burst);
+    elapsed += held;
+    probes += 1;
+  }
+  assert.ok(probes <= 8, `expected single-digit probes in an hour, got ${probes}`);
+});
+
 test('with no pool configured the transport is exactly the SDK transport', async () => {
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;

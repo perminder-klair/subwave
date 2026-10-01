@@ -204,16 +204,26 @@ export function noHintCooldownMs(random: () => number = Math.random): number {
 export function resolveGeminiCooldownMs(
   raw: unknown,
   random: () => number = Math.random,
+  consecutiveFailures = 0,
 ): number {
   const kind = classifyGeminiFailure(raw);
   switch (kind) {
     case 'daily':
       return noHintCooldownMs(random);
-    case 'burst':
-      // Labelled as a rate limit, so a minute is a far better guess than hours:
-      // parking a key for two hours over a limit that clears in thirty seconds
-      // would quietly shrink the pool for no reason.
-      return parseGeminiRetryDelayMs(raw) ?? GEMINI_BURST_NO_HINT_MS;
+    case 'burst': {
+      // An explicit RetryInfo is taken AT ITS WORD, even against the escalation
+      // below. Google said twenty seconds; holding the key a minute because it
+      // keeps failing would shrink the pool for no reason, and the whole point
+      // of this class is that it clears fast.
+      const hint = parseGeminiRetryDelayMs(raw);
+      if (hint != null) return hint;
+      // No hint at all: escalate with consecutive failures, so a key that is
+      // really a daily exhaustion mislabelled as a rate limit stops being
+      // re-probed every minute for the rest of the day.
+      const ladder = [GEMINI_BURST_NO_HINT_MS, 2 * 60_000, 5 * 60_000, 15 * 60_000, 45 * 60_000, 180 * 60_000];
+      const idx = Math.min(Math.max(consecutiveFailures - 1, 0), ladder.length - 1);
+      return ladder[idx];
+    }
     case 'auth':
       return GEMINI_AUTH_PARK_MS;
     default:
