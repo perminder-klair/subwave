@@ -8,6 +8,7 @@ import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.js';
+import { invalidatePool, poolSize, poolStatus } from '../../util/google-key-pool.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
@@ -21,6 +22,19 @@ import { queue } from '../../broadcast/queue.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { generateText } from 'ai';
+import { briefLlmError } from './llm.js';
+import {
+  GOOGLE_KEY_MAX,
+  GOOGLE_KEYS_ENV,
+  GOOGLE_KEY_ENV,
+  GOOGLE_POOL_MAX,
+  poolEntries,
+  poolKeys,
+  sanitizeName,
+  serializePool,
+} from '../../util/google-key-pool.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
@@ -190,6 +204,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
         FISH_API_KEY: !!process.env.FISH_API_KEY,
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
         GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        // Google key POOL state. Fingerprints and hold timers only — no key
+        // material ever crosses this boundary. `count` drives the UI's
+        // single-key vs pooled-key rendering.
+        GOOGLE_KEY_POOL: {
+          count: poolSize(),
+          keys: poolStatus(),
+        },
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
@@ -258,10 +279,169 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       return res.json({ saved: [] });
     }
     await saveSecrets(patch);
+    // saveSecrets writes process.env, but the Google pool memoizes its parsed
+    // key list for a couple of seconds. Drop that memo here so the field's
+    // "takes effect immediately" is true rather than nearly true — this is the
+    // single writer for secrets, so this is the only place it can go stale.
+    if ('GOOGLE_GENERATIVE_AI_API_KEYS' in patch || 'GOOGLE_GENERATIVE_AI_API_KEY' in patch) {
+      invalidatePool();
+    }
     res.json({ saved: Object.keys(patch) });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
+  }
+});
+
+// Google key pool maintenance. Addresses keys by INDEX, never by value: the
+// client is only ever sent fingerprints, so it cannot reconstruct the pool and
+// cannot ask us to delete a key it cannot name. Index is validated against a
+// fresh read of the stored pool, so a stale index from a concurrent add is a
+// 400 rather than the wrong key going away.
+router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) => {
+  const index = (req.body || {}).index;
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  const entries = poolEntries();
+  if (index >= entries.length) return res.status(400).json({ error: `no key at index ${index}` });
+  const next = entries.filter((_, i) => i !== index);
+  try {
+    // An emptied pool clears BOTH vars: leaving the legacy single-key var set
+    // would silently resurrect the key the operator just removed.
+    if (next.length) {
+      await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+    } else {
+      await saveSecrets({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
+      delete process.env[GOOGLE_KEYS_ENV];
+      delete process.env[GOOGLE_KEY_ENV];
+    }
+    invalidatePool();
+    res.json({ ok: true, count: next.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/remove]', err);
+    res.status(500).json({ error: 'Failed to update the key pool' });
+  }
+});
+
+// Add a key. Its OWN endpoint because the generic `/settings/secrets` writer
+// REPLACES the value it is given, and the client cannot construct the new
+// list — it is never sent the key values, by design. Sending only the new key
+// through that route therefore replaced the whole pool on every add, leaving
+// the operator with whichever key they typed last.
+//
+// Two things it has to get right beyond appending:
+//   • a legacy single GOOGLE_GENERATIVE_AI_API_KEY seeds the pool as the FIRST
+//     entry, so adding a key never silently drops the one already working;
+//   • a duplicate is refused rather than added, since parsePool dedupes on
+//     read and the UI would otherwise show a phantom slot.
+router.post('/settings/google-key-pool/add', requireAdmin, async (req, res) => {
+  const { key, name } = (req.body || {});
+  const trimmed = String(key ?? '').trim();
+  if (!trimmed) return res.status(400).json({ error: 'key is required' });
+  if (trimmed.length > GOOGLE_KEY_MAX) {
+    return res.status(400).json({ error: `key must be at most ${GOOGLE_KEY_MAX} characters` });
+  }
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  const entries = poolEntries().map(e => ({ ...e }));
+  if (entries.some(e => e.key === trimmed)) {
+    return res.status(409).json({ error: 'that key is already in the pool' });
+  }
+  if (entries.length >= GOOGLE_POOL_MAX) {
+    return res.status(400).json({ error: `the pool is capped at ${GOOGLE_POOL_MAX} keys` });
+  }
+  // poolEntries() falls back to the legacy single key, so the first add keeps
+  // it as entry 0 rather than orphaning it.
+  entries.push({ key: trimmed, name: sanitizeName(name ?? '') });
+  try {
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+    invalidatePool();
+    res.json({ ok: true, count: entries.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/add]', err);
+    res.status(500).json({ error: 'Failed to add the key' });
+  }
+});
+
+// Reorder the pool. The ORDER is the feature — free keys belong first so the
+// paid key at the end absorbs only what the free tiers can't — so reordering
+// has to exist rather than being fixed at insertion time.
+router.post('/settings/google-key-pool/move', requireAdmin, async (req, res) => {
+  const { from, to } = (req.body || {});
+  if (!Number.isInteger(from) || !Number.isInteger(to)) {
+    return res.status(400).json({ error: 'from and to must be integers' });
+  }
+  const entries = poolEntries();
+  if (from < 0 || from >= entries.length || to < 0 || to >= entries.length) {
+    return res.status(400).json({ error: 'from/to out of range' });
+  }
+  if (from === to) return res.json({ ok: true, count: entries.length });
+  const next = [...entries];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  try {
+    // Serialised from ENTRIES, not keys — a reorder that rewrote the pool from
+    // bare keys would strip every label the operator just typed.
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+    invalidatePool();
+    res.json({ ok: true, count: next.length });
+  } catch (err) {
+    console.error('[settings/google-key-pool/move]', err);
+    res.status(500).json({ error: 'Failed to reorder the key pool' });
+  }
+});
+
+// Label one key. The name lives inline in the same variable as the key
+// (`key:name`) rather than in a parallel array indexed by position, which is
+// the shape that silently reattaches labels to the wrong credentials the first
+// time a key is removed or moved.
+router.post('/settings/google-key-pool/rename', requireAdmin, async (req, res) => {
+  const { index, name } = (req.body || {});
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  const entries = poolEntries().map(e => ({ ...e }));
+  if (index >= entries.length) return res.status(400).json({ error: `no key at index ${index}` });
+  entries[index].name = sanitizeName(name ?? '');
+  try {
+    await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+    invalidatePool();
+    res.json({ ok: true, name: entries[index].name });
+  } catch (err) {
+    console.error('[settings/google-key-pool/rename]', err);
+    res.status(500).json({ error: 'Failed to rename the key' });
+  }
+});
+
+// Test ONE pooled key against the real API. Goes through the same provider
+// path the station uses, but pins the key so a held key can be checked without
+// disturbing the rotation state.
+router.post('/settings/google-key-pool/test', requireAdmin, async (req, res) => {
+  const index = (req.body || {}).index;
+  if (!Number.isInteger(index) || index < 0) {
+    return res.status(400).json({ error: 'index must be a non-negative integer' });
+  }
+  const keys = poolKeys();
+  const key = keys[index];
+  if (!key) return res.status(400).json({ error: `no key at index ${index}` });
+  try {
+    const llm = settings.get().llm || {};
+    const model = llm.provider === 'google' && llm.model ? llm.model : 'gemini-2.5-flash';
+    const m = createGoogleGenerativeAI({ apiKey: key })(model);
+    await generateText({
+      model: m,
+      prompt: 'Reply with the single word OK.',
+      maxOutputTokens: 32,
+      abortSignal: AbortSignal.timeout(15000),
+    });
+    res.json({ ok: true, message: 'Key responded' });
+  } catch (err) {
+    res.json({ ok: false, message: briefLlmError(err) });
   }
 });
 

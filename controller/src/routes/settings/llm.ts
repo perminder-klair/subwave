@@ -22,7 +22,9 @@ import { probeFishKey } from '../../llm/speech.js';
 export const router = express.Router();
 
 // Distill a raw provider/SDK error into a one-line actionable message.
-function briefLlmError(err: unknown): string {
+// Exported so the per-key pool tester (core.ts) formats its failures the same
+// way — a second copy would drift the moment either message changed.
+export function briefLlmError(err: unknown): string {
   const e = err as { message?: string; toString(): string } | null | undefined;
   const msg: string = (e?.message || e?.toString() || '').toLowerCase();
   if (msg.includes('401') || msg.includes('unauthorized') || msg.includes('invalid') && msg.includes('key') || msg.includes('incorrect api key')) {

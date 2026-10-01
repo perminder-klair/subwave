@@ -24,6 +24,10 @@ export const SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
+  // Comma-separated Gemini key POOL, shared by the LLM leg and the TTS engine.
+  // GOOGLE_GENERATIVE_AI_API_KEY stays valid on its own and is treated as a
+  // one-key pool, so a station that only ever set one key is unaffected.
+  'GOOGLE_GENERATIVE_AI_API_KEYS',
   'OPENROUTER_API_KEY',
   'REQUESTY_API_KEY',
   'DEEPSEEK_API_KEY',

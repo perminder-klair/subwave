@@ -16,6 +16,7 @@ import { Card, Btn, Pill, Seg } from '../ui';
 import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -677,6 +678,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="field-hint">
                       This key is shared across LLM and Cloud TTS.
                     </div>
+                  )}
+                  {keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY' && (
+                    <GoogleKeyPoolEditor
+                      pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
+                      adminFetch={adminFetch}
+                      onChanged={refresh}
+                    />
                   )}
                 </div>
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
