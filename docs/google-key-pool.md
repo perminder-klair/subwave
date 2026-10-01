@@ -1,9 +1,17 @@
 # Gemini key pool (free keys first, paid key last)
 
-Google's Gemini API has a free tier with a daily quota per API key. A station
-that leans on it — DJ scripts, banter, segment research — can burn a single
-key's daily allowance in an afternoon and then sit there getting `429`s for the
-rest of the day while the DJ goes quiet.
+Google's Gemini API has a free tier with a daily quota. A station that leans on
+it — DJ scripts, banter, segment research — can burn that allowance in an
+afternoon and then sit there getting `429`s for the rest of the day while the DJ
+goes quiet.
+
+**The quota belongs to the Google Cloud PROJECT, not to one key.** Every key you
+create under the same project draws on the same daily allowance, so two keys in
+one project do not give you twice the quota. A pool only helps when the keys
+belong to **different projects** — which is also why the keys are usually spread
+across several Google accounts. Google can lower a project's quota, change how it
+is enforced, or restrict it without notice, and free-tier limits have changed
+before.
 
 The key pool solves that: give the station **several keys, cheapest first**, and
 it fails forward through them instead of stopping.
@@ -43,9 +51,12 @@ is irrelevant.
 
 ## Setting it up
 
-**Admin → LLM → Google (Gemini) API key.** Below the existing single-key field
-is the **Gemini key pool**. Paste a key, hit **Add key**, repeat. The pool is
-used in the order you add it, and **↑ ↓** move a key up or down.
+**Admin → LLM → Google (Gemini) API key.** That field takes a single key and
+saves it as a one-key pool. To manage several, choose **Manage several keys**
+beside the label; the same credential is then shown in full, with your existing
+key as the first entry. Paste a key, hit **Add key**, repeat. The pool is used in
+the order you add it, and **↑ ↓** move a key up or down. **Use a single key**
+returns to the one-field view without changing what is stored.
 
 Each entry shows:
 
@@ -54,7 +65,8 @@ Each entry shows:
 | `in use` | This is the key currently being used |
 | `standby` | Ready, waiting its turn |
 | `held ~42m · daily quota` | Exhausted for the day; skipped until the timer lapses |
-| `held ~5s · rate limit` | Briefly throttled; back in seconds |
+| `held ~1m · rate limit` | Briefly throttled; the timer is rounded to whole minutes |
+| `held ~60m · key rejected` | Google rejected the credential (`401`); park it and report it |
 
 Keys are identified by a short fingerprint (`••••bhzQ`) so you can tell them
 apart, and you can give each one a **name** — "Free 1", "Free 2", "Paid" — so
@@ -80,8 +92,11 @@ key is moved or removed. A Google key can't contain a colon, so the first colon
 is the split point and a name may contain colons of its own. Commas are stripped
 from names when they save, since they separate entries.
 
-The single `GOOGLE_GENERATIVE_AI_API_KEY` still works and is read as a one-key
-pool, so a station that never touches this feature behaves identically to before.
+The single `GOOGLE_GENERATIVE_AI_API_KEY` is **untouched by this feature**. It is
+not read as a one-key pool: a station that has never set the plural variable
+keeps exactly the single-key behaviour it had before — no holds, no rotation, no
+replay, and the same single-key field in the admin UI. Setting the plural
+variable is what turns the pool on, and it is the only thing that does.
 
 ## How the hold is decided
 
@@ -94,18 +109,45 @@ wastes a key or wastes time:
   too; honouring it means sleeping a few seconds, waking, and immediately
   hitting another `429`.
 - **A per-minute rate limit** — Google says how long in seconds. That number is
-  taken at its word and the key comes back that quickly.
+  taken at its word and the key comes back that quickly. The admin list rounds
+  this up to whole minutes, so `held ~1m` can be a few seconds.
 - **No usable hint** — parked for 1–3 hours, randomised, so a pool of keys
   sharing one quota policy doesn't all wake on the same second.
 
-Only a `429` parks a key. A `403` on a valid key is a permissions or model
-problem that a different key won't fix, so the station reports it rather than
-quietly hiding a misconfiguration behind a working key.
+**Two statuses park a key**, and the second is worth stating separately:
+
+- **`429`** — quota or rate limit. This is the whole point of the pool.
+- **`401`** — Google rejected the credential: invalid, revoked, or from a
+  project that has been disabled. Another key cannot fix it, but *staying* on it
+  would cost every call until somebody noticed, so it is set aside and the pool
+  continues.
+
+Everything else is deliberately **not** rotated: a `403` (permissions), a `402`
+(billing) or a `503` (transient load) is a project-level or momentary condition
+that a sibling key usually shares, so rotating would burn through the whole pool
+and then fail identically while hiding the real cause. `403` is reported to the
+operator rather than hidden behind a working key.
+
+Repeated failures on one key **escalate** the hold, so a key that is not
+actually clearing is probed a handful of times an hour rather than every minute.
+Any **success clears** that key's hold and its failure count — a key that just
+answered is demonstrably not exhausted, so the next failure starts from the
+short interval again.
 
 Holds live in memory. A controller restart re-probes keys that are still
 exhausted and re-parks them from the same response within one call, so nothing
 is lost and no key gets hammered — the station simply rediscovers the state it
 already had.
+
+**One request tries each key at most once.** The bound is the pool size, held in
+the request itself rather than read from the hold timers: a short retry hint can
+expire while the request that follows it is still in flight, and a bound derived
+from the timers would let the key that just failed come back as eligible and be
+retried — with two keys and a 10-second hint that repeats indefinitely. When
+every key has been tried, the station replays the last real quota failure (with
+its `Retry-After`, so the retry and failover layers still classify it correctly)
+without spending another request, and the caller's existing backup leg takes
+over.
 
 ## What the pool covers today
 
