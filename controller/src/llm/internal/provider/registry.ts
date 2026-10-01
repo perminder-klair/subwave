@@ -86,10 +86,21 @@ export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
   const headers = new Headers(init?.headers || {});
   headers.set('x-goog-api-key', key);
   const res = await debugFetch(url, { ...init, headers });
-  // Only a quota 429 rotates. A 403 on a well-formed key is a permissions or
-  // model problem that rotating cannot fix, and papering over it would hide a
-  // real config error behind a working key.
-  if (res.status !== 429) return res;
+  // Two statuses mean "this KEY is the problem", and a pool exists precisely to
+  // try another one:
+  //   429 — quota or rate limit (the whole point of the feature)
+  //   401 — the credential itself is missing/invalid/expired. Nothing about the
+  //         next key makes this worse, and staying on a rejected credential
+  //         would cost every call until an operator noticed.
+  // Everything else is deliberately NOT rotated:
+  //   403 permission_denied and 402 payment_required are project/billing
+  //     problems that a sibling key usually shares, and the documented guidance
+  //     for 402 is "don't retry" — rotating would burn the pool and then fail
+  //     identically, while hiding the real cause behind eight confusing hops.
+  //   503 is transient load: the same key will be fine in a moment.
+  //   The generation-blocked codes (safety, recitation, language, …) are the
+  //     CONTENT being refused, so another key refuses the same input.
+  if (res.status !== 429 && res.status !== 401) return res;
 
   const body = await res.text().catch(() => '');
   const heldMs = reportKeyFailure(key, body);

@@ -21,9 +21,8 @@
 // invisible: an upgraded station with one key behaves exactly as before.
 
 import {
-  hasDailyQuotaViolation,
-  noHintCooldownMs,
-  parseGeminiRetryDelayMs,
+  classifyGeminiFailure,
+  resolveGeminiCooldownMs,
 } from '../llm/internal/provider/gemini-cooldown.js';
 
 export const GOOGLE_KEYS_ENV = 'GOOGLE_GENERATIVE_AI_API_KEYS';
@@ -37,7 +36,8 @@ export const GOOGLE_POOL_MAX = 50;
 
 interface Hold {
   until: number;
-  reason: 'daily' | 'hint' | 'unknown';
+  /** Mirrors GeminiFailure, minus 'billing'/'other' which never park. */
+  reason: 'daily' | 'burst' | 'auth' | 'unknown';
 }
 
 export interface PoolEntry {
@@ -198,15 +198,20 @@ export function isHeld(key: string): boolean {
   return holdRemainingMs(key) > 0;
 }
 
-/** Park a key. `bodyText` is the raw 429 body, which carries both the retry
- *  hint and the daily-vs-per-minute distinction. Returns the hold length so a
- *  caller can log it. */
+/** Park a key. `bodyText` is the raw error body — it carries the machine-readable
+ *  `error.code`, the retry hint and the daily-vs-per-minute distinction.
+ *  Returns the hold length so a caller can log it. */
 export function reportKeyFailure(key: string, bodyText?: unknown): number {
   if (!key) return 0;
-  const daily = hasDailyQuotaViolation(bodyText);
-  const hint = parseGeminiRetryDelayMs(bodyText);
-  const ms = daily ? noHintCooldownMs() : (hint ?? noHintCooldownMs());
-  holds.set(key, { until: Date.now() + ms, reason: daily ? 'daily' : hint != null ? 'hint' : 'unknown' });
+  const kind = classifyGeminiFailure(bodyText);
+  const ms = resolveGeminiCooldownMs(bodyText);
+  // 'billing' and 'other' are not key problems; the caller gates on status, so
+  // anything that reaches here with an unrecognised kind falls back to the
+  // conservative 'unknown' label rather than inventing a classification.
+  const reason: Hold['reason'] = kind === 'daily' || kind === 'burst' || kind === 'auth'
+    ? kind
+    : 'unknown';
+  holds.set(key, { until: Date.now() + ms, reason });
   return ms;
 }
 
