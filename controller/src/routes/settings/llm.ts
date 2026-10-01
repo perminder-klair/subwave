@@ -17,7 +17,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
 import { probeFishKey } from '../../llm/speech.js';
-import { currentKey } from '../../util/google-key-pool.js';
+import { currentKeyOrHead, GOOGLE_KEYS_ENV, GOOGLE_KEY_ENV } from '../../util/google-key-pool.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -80,7 +80,10 @@ async function probeKey(
         return { ok: true, message: `✓ OpenAI key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
-    case 'GOOGLE_GENERATIVE_AI_API_KEY': {
+    // The pool variable probes through the same branch: both are the same
+    // credential, and the admin field now saves Google to the pool.
+    case GOOGLE_KEYS_ENV:
+    case GOOGLE_KEY_ENV: {
       try {
         const model = activeModel('google') || 'gemini-1.5-flash';
         const m = createGoogleGenerativeAI({ apiKey: value })(model);
@@ -213,7 +216,13 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   let targetValue = typeof value === 'string' ? value.trim() : '';
   if (!targetValue) {
     // No value supplied: fall back to the key already in the environment.
-    const envValue = (process.env[key] || '').trim();
+    // The Google pool resolves through `currentKey()` rather than process.env,
+    // because the pool variable may hold several comma-separated entries (and
+    // `GOOGLE_GENERATIVE_AI_API_KEY` may be absent entirely on a pool station).
+    // Probing the raw string would hand a comma-joined list to the provider.
+    const envValue = key === GOOGLE_KEYS_ENV
+      ? currentKeyOrHead()
+      : (process.env[key] || '').trim();
     if (!envValue) {
       return res.status(400).json({ ok: false, message: 'value is required when key is not set in environment', latencyMs: 0 });
     }
@@ -432,7 +441,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         // pool-only station (which never set GOOGLE_GENERATIVE_AI_API_KEY) could
         // not list models at all, and a migrated one discovered against a
         // different credential than the one actually serving chat.
-        const apiKey = currentKey() || resolveKey('GOOGLE_GENERATIVE_AI_API_KEY');
+        const apiKey = currentKeyOrHead() || resolveKey('GOOGLE_GENERATIVE_AI_API_KEY');
         if (!apiKey) throw new Error('No Google API key configured (set one, or add a key pool)');
         const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`, {
           signal: ctrl.signal,
