@@ -18,10 +18,13 @@ import type { AdminAuth } from '@/lib/adminAuth';
 import { adminResponse } from '@/lib/admin-query';
 import { Btn } from '../ui';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { notify } from '@/lib/notify';
 
 export interface GooglePoolKey {
+  /** Stable opaque identity. Every mutation addresses this, never `index`. */
+  id: string;
+  /** Display position only — sending it back is how a stale click deletes the
+   *  wrong credential. */
   index: number;
   fingerprint: string;
   name: string;
@@ -34,6 +37,9 @@ export interface GooglePoolKey {
 
 export interface GooglePoolState {
   count: number;
+  /** Bumped by every server-side mutation. A row rendered against an older
+   *  revision may no longer describe the pool, so its controls stay disabled. */
+  revision: number;
   keys: GooglePoolKey[];
 }
 
@@ -62,23 +68,38 @@ export function GoogleKeyPoolEditor({
 }) {
   const [adding, setAdding] = useState('');
   const [addingName, setAddingName] = useState('');
-  // Per-row draft for the rename box. An uncontrolled input keeps whatever the
-  // operator typed even when the save failed or the server sanitised the value,
-  // so it would show a label that is not the one on file. Keying drafts by
-  // FINGERPRINT (not index) is what makes them follow a key through a reorder,
-  // and remounts the box when the server sends a different stored value.
+  // Per-row draft for the rename box, keyed by the key's OPAQUE ID. Keying by
+  // index is what made a draft follow a position rather than a credential, so a
+  // reorder moved the typed name onto a different key. The draft is what is
+  // being typed; `k.name` is what is on file, and dropping the draft is what
+  // makes a failed or sanitised save snap back to the truth.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  // The full pool is only ever known to the server, so a removal has to be sent
-  // as a replacement of the whole list — which needs the values we deliberately
-  // never receive. Removal therefore goes through a server-side endpoint that
-  // edits the stored list in place, addressed by fingerprint.
-  const [testingIndex, setTestingIndex] = useState<number | null>(null);
+  const [testingId, setTestingId] = useState<string | null>(null);
 
   const keys = pool?.keys ?? [];
 
-  const post = useCallback(async (path: string, body: unknown) => {
+  // Rows always render straight from `pool`, so they cannot drift from the
+  // server on their own. The one window where they CAN is between our POST
+  // returning and the refetch landing — a mutation there would be addressed
+  // against a list that no longer exists. `busy` is held across both by
+  // postAndRefresh, which closes that window.
+  //
+  // `desynced` is the case that leaves it open: if the refetch FAILS, the write
+  // landed but the screen does not show it, and every control would then be
+  // acting on a list the operator can no longer see. Rather than let that stand,
+  // the rows stay locked until a refresh succeeds.
+  const [desynced, setDesynced] = useState(false);
+  const locked = busy || desynced;
+
+  // A mutation and the refetch that reconciles it are ONE operation. Releasing
+  // `busy` when the POST returned left the pre-write rows interactive against
+  // the post-write order. If the refetch itself fails, `desynced` holds the rows
+  // locked rather than letting the operator act on a list the screen no longer
+  // matches.
+  const postAndRefresh = useCallback(async (path: string, body: unknown) => {
     setBusy(true);
+    let ok = false;
     try {
       const r = await adminResponse(adminFetch, path, {
         method: 'POST',
@@ -86,33 +107,26 @@ export function GoogleKeyPoolEditor({
         body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({})) as { error?: string; ok?: boolean; message?: string };
-      if (!r.ok || j.ok === false) {
+      ok = r.ok && j.ok !== false;
+      if (!ok) {
         notify.err(j.message || j.error || `Request failed (${r.status})`);
-        return false;
+        // A 409 means the pool moved under us; the refetch is what resolves it,
+        // and until it does the rows on screen are not the pool.
+        if (r.status === 409) setDesynced(true);
       }
-      return true;
     } catch (e) {
       notify.err(e instanceof Error ? e.message : 'Request failed');
-      return false;
-    } finally {
-      setBusy(false);
     }
-  }, [adminFetch]);
-
-  // Every pool call addresses a key by INDEX, so the controls must stay disabled
-  // until the refetch that reorders them has landed. Clearing `busy` the moment
-  // the POST returned left the OLD rows actionable against the NEW server order,
-  // where a Remove or Rename one row too far down deletes a different
-  // credential than the one the operator clicked.
-  const postAndRefresh = useCallback(async (path: string, body: unknown) => {
-    const ok = await post(path, body);
     try {
       await onChanged?.();
+      setDesynced(false);
+    } catch {
+      setDesynced(true);
     } finally {
       setBusy(false);
     }
     return ok;
-  }, [post, onChanged]);
+  }, [adminFetch, onChanged]);
 
   const addKey = useCallback(async () => {
     const key = adding.trim();
@@ -127,46 +141,49 @@ export function GoogleKeyPoolEditor({
     }
   }, [adding, addingName, postAndRefresh]);
 
-  const removeKey = useCallback(async (index: number) => {
-    const ok = await postAndRefresh('/settings/google-key-pool/remove', { index });
+  const removeKey = useCallback(async (id: string) => {
+    const ok = await postAndRefresh('/settings/google-key-pool/remove', { id });
     if (ok) notify.ok('Key removed from the pool');
   }, [postAndRefresh]);
 
-  const moveKey = useCallback(async (from: number, to: number) => {
-    if (from === to) return;
-    await postAndRefresh('/settings/google-key-pool/move', { from, to });
+  const moveKey = useCallback(async (k: GooglePoolKey, to: number) => {
+    if (to === k.index) return;
+    await postAndRefresh('/settings/google-key-pool/move', { id: k.id, to });
   }, [postAndRefresh]);
 
-  const renameKey = useCallback(async (index: number, fingerprint: string, name: string) => {
+  const renameKey = useCallback(async (k: GooglePoolKey, name: string) => {
     // Drop the draft FIRST so the input falls back to the server's value: on a
     // failure that means it snaps back to what is actually stored, and on a
     // sanitised name it shows what was kept rather than the raw text.
-    setDrafts(d => { const { [fingerprint]: _drop, ...rest } = d; return rest; });
-    const ok = await postAndRefresh('/settings/google-key-pool/rename', { index, name });
+    setDrafts(d => { const { [k.id]: _drop, ...rest } = d; return rest; });
+    const ok = await postAndRefresh('/settings/google-key-pool/rename', { id: k.id, name });
     if (ok) notify.ok('Key renamed');
   }, [postAndRefresh]);
 
-  const testKey = useCallback(async (index: number) => {
-    setTestingIndex(index);
+  const testKey = useCallback(async (k: GooglePoolKey) => {
+    setTestingId(k.id);
     try {
-      const ok = await postAndRefresh('/settings/google-key-pool/test', { index });
-      if (ok) notify.ok(`Key ${index + 1} responded`);
+      const ok = await postAndRefresh('/settings/google-key-pool/test', { id: k.id });
+      if (ok) notify.ok(`Key ${k.fingerprint} responded`);
     } finally {
-      setTestingIndex(null);
+      setTestingId(null);
     }
   }, [postAndRefresh]);
 
   return (
-    <div className="mt-3 border-t border-[var(--hairline)] pt-3">
-      <Label>Gemini key pool</Label>
-      <p className="mt-1 text-[12px] text-muted">
+    /* This replaces the single field rather than sitting beneath it, so it
+       carries no separator of its own — the field label above already says
+       which credential is being edited, and a rule here would read as a second
+       section boundary inside the same one. */
+    <div>
+      <p className="text-[12px] text-muted">
         Runs several Gemini keys as one, so a daily free-tier quota running out
-        doesn&rsquo;t take the DJ offline.
+        doesn&rsquo;t take the DJ offline. The first key is used until it fails.
       </p>
 
       {keys.length === 0 ? (
         <p className="mt-1 text-[12px] text-muted">
-          No pool configured. The single key above is used on its own.
+          No keys yet. Add one below, or switch back to a single key.
         </p>
       ) : (
         <>
@@ -181,23 +198,34 @@ export function GoogleKeyPoolEditor({
           </div>
           <ul className="mt-1 flex flex-col gap-2">
             {keys.map(k => (
-              <li key={`${k.index}-${k.fingerprint}`} className="flex flex-wrap items-center gap-2 text-[12px]">
+              <li key={k.id} className="flex flex-wrap items-center gap-2 text-[12px]">
+                {/* Fully controlled: no `defaultValue`, which React warns about
+                    alongside `value` and which cannot be corrected once the
+                    server has answered with a different name than the operator
+                    typed. The draft is the text being typed; `k.name` is what is
+                    on file, and dropping the draft snaps back to it. */}
                 <input
-                  key={`${k.fingerprint}-${k.name}`}
-                  defaultValue={k.name}
-                  value={drafts[k.fingerprint] ?? k.name}
+                  value={drafts[k.id] ?? k.name}
                   placeholder="e.g. Free 1"
-                  aria-label={`Name for key ${k.index + 1}`}
+                  aria-label={`Name for key ${k.fingerprint}`}
                   maxLength={60}
-                  // Keyed by fingerprint AND stored name, so a refetch carrying
-                  // a different value remounts the box. The draft holds whatever
-                  // is being typed without firing a request per keystroke.
-                  onChange={e => setDrafts(d => ({ ...d, [k.fingerprint]: e.target.value }))}
+                  disabled={locked}
+                  onChange={e => setDrafts(d => ({ ...d, [k.id]: e.target.value }))}
+                  onKeyDown={e => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    const next = (drafts[k.id] ?? k.name).trim();
+                    if (next !== k.name) void renameKey(k, next);
+                  }}
                   onBlur={e => {
                     const next = e.target.value.trim();
-                    if (next !== k.name) void renameKey(k.index, k.fingerprint, next);
+                    // Guarded, like every other entry point: a blur fires on
+                    // focus loss, which is exactly what clicking another row
+                    // causes — so an unguarded rename could fire while a
+                    // different mutation was still settling.
+                    if (!locked && next !== k.name) void renameKey(k, next);
                   }}
-                  className="min-w-[140px] border border-input bg-field px-2 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+                  className="min-w-[140px] border border-input bg-field px-2 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                 />
                 <code className="min-w-[80px] text-muted">{k.fingerprint}</code>
                 <span className="min-w-[150px] text-muted">
@@ -206,33 +234,33 @@ export function GoogleKeyPoolEditor({
                 </span>
                 <span className="ml-auto flex gap-1">
                   <Btn
-                    onClick={() => moveKey(k.index, k.index - 1)}
-                    disabled={busy || k.index === 0}
+                    onClick={() => moveKey(k, k.index - 1)}
+                    disabled={locked || k.index === 0}
                     title="Move up"
-                    aria-label={`Move key ${k.index + 1} up`}
+                    aria-label={`Move key ${k.fingerprint} up`}
                     className="px-2 py-1 text-[10px]"
                   >
                     ↑
                   </Btn>
                   <Btn
-                    onClick={() => moveKey(k.index, k.index + 1)}
-                    disabled={busy || k.index === keys.length - 1}
+                    onClick={() => moveKey(k, k.index + 1)}
+                    disabled={locked || k.index === keys.length - 1}
                     title="Move down"
-                    aria-label={`Move key ${k.index + 1} down`}
+                    aria-label={`Move key ${k.fingerprint} down`}
                     className="px-2 py-1 text-[10px]"
                   >
                     ↓
                   </Btn>
                   <Btn
-                    onClick={() => testKey(k.index)}
-                    disabled={busy || testingIndex === k.index}
+                    onClick={() => testKey(k)}
+                    disabled={locked || testingId === k.id}
                     className="px-2 py-1 text-[10px]"
                   >
-                    {testingIndex === k.index ? 'Testing…' : 'Test'}
+                    {testingId === k.id ? 'Testing…' : 'Test'}
                   </Btn>
                   <Btn
-                    onClick={() => removeKey(k.index)}
-                    disabled={busy}
+                    onClick={() => removeKey(k.id)}
+                    disabled={locked}
                     title={keys.length === 1 ? 'Remove the last key and clear the pool' : undefined}
                     className="px-2 py-1 text-[10px]"
                   >
@@ -256,6 +284,7 @@ export function GoogleKeyPoolEditor({
           autoComplete="off"
           value={adding}
           placeholder="Paste another Gemini key…"
+          disabled={locked}
           onChange={e => setAdding(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void addKey(); } }}
           className="max-w-[360px]"
@@ -265,11 +294,12 @@ export function GoogleKeyPoolEditor({
           placeholder="Name (optional)"
           aria-label="Name for the new key"
           maxLength={60}
+          disabled={locked}
           onChange={e => setAddingName(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); void addKey(); } }}
           className="max-w-[200px]"
         />
-        <Btn onClick={addKey} disabled={busy || !adding.trim()}>Add key</Btn>
+        <Btn onClick={addKey} disabled={locked || !adding.trim()}>Add key</Btn>
       </div>
       <p className="mt-1 text-[12px] text-muted">
         Adding a key keeps the ones already here, and appends it to the end —
