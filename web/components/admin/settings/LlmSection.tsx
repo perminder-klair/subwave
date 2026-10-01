@@ -17,6 +17,7 @@ import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
+import { useGoogleKeyField } from '@/lib/adminView';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -258,16 +259,29 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   // reads the singular variable solely as a one-key fallback. Leaving that field
   // editable would let an operator save a replacement key that is accepted,
   // reported as saved, and then never read by anything.
-  const googlePoolActive =
-    ((data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0) > 0;
+  const googlePoolCount =
+    (data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0;
+  // Two depths on ONE credential: a single field, or the full pool. The hook is
+  // called here rather than inside the render IIFE below because that is a plain
+  // callback, not a component.
+  const [googleDepth, setGoogleDepth] = useGoogleKeyField(googlePoolCount);
+  const showPool = googleDepth === 'pool';
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
+    // The single field and the pool editor are two depths on ONE credential, so
+    // the shallow view writes the same store the deep one does. Google is saved
+    // as a one-key pool rather than to the legacy singular variable — otherwise
+    // the two surfaces would write different keys, and the field would be
+    // ignored the moment a pool existed.
+    const target = envVar === 'GOOGLE_GENERATIVE_AI_API_KEY'
+      ? 'GOOGLE_GENERATIVE_AI_API_KEYS'
+      : envVar;
     try {
       const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [envVar]: value.trim() }),
+        body: JSON.stringify({ [target]: value.trim() }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { error?: string };
@@ -658,43 +672,62 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
+            const isGoogle = keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY';
+            const showGooglePool = isGoogle && showPool;
             return (
               <>
                 <div className="field">
-                  <Label>
-                    {llmProviderLabel(form.llm.provider)} API key
-                    {keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY' && googlePoolActive && (
-                      <span className="ml-2 font-normal tracking-normal text-muted normal-case">
-                        — a key pool is configured below, so this field is not used
-                      </span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label>
+                      {isGoogle && showGooglePool
+                        ? 'Google (Gemini) API keys'
+                        : `${llmProviderLabel(form.llm.provider)} API key`}
+                    </Label>
+                    {isGoogle && (
+                      <button
+                        type="button"
+                        onClick={() => setGoogleDepth(showGooglePool ? 'single' : 'pool')}
+                        className="inline-flex cursor-pointer items-center text-[11px] text-muted underline-offset-2 transition-colors hover:text-ink focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+                      >
+                        {showGooglePool ? 'Use a single key' : 'Manage several keys'}
+                      </button>
                     )}
-                  </Label>
-                  <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
-                    <Input
-                      type="password"
-                      autoComplete="off"
-                      value={primaryKeyInput}
-                      disabled={googlePoolActive && keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY'}
-                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                      className="max-w-[360px]"
-                    />
-                    <Btn
-                      onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
-                    >
-                      {primaryKeyTesting ? 'Testing…' : 'Test key'}
-                    </Btn>
                   </div>
-                  <div className="field-hint">
-                    Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
-                  </div>
+
+                  {/* Depth 1 — one credential, one field. */}
+                  {!showGooglePool && (
+                    <>
+                      <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                        <Input
+                          type="password"
+                          autoComplete="off"
+                          value={primaryKeyInput}
+                          placeholder={googlePoolCount > 0 || data.env?.[keyVar] ? '\u2022\u2022\u2022\u2022\u2022\u2022 (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
+                          className="max-w-[360px]"
+                        />
+                        <Btn
+                          onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
+                          disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                        >
+                          {primaryKeyTesting ? 'Testing\u2026' : 'Test key'}
+                        </Btn>
+                      </div>
+                      <div className="field-hint">
+                        Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                      </div>
+                    </>
+                  )}
+
                   {keyVar === 'OPENAI_API_KEY' && (
                     <div className="field-hint">
                       This key is shared across LLM and Cloud TTS.
                     </div>
                   )}
-                  {keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY' && (
+                  {/* Depth 2 — the same credential, fully. Rendered INSTEAD of
+                      the single field, never alongside it: two inputs writing
+                      one secret is the confusion this split removes. */}
+                  {showGooglePool && (
                     <GoogleKeyPoolEditor
                       pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
                       adminFetch={adminFetch}
