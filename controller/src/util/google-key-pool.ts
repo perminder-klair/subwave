@@ -20,6 +20,7 @@
 // Absent configuration, EVERY function here is a no-op and the module is
 // invisible: an upgraded station with one key behaves exactly as before.
 
+import { createHash } from 'node:crypto';
 import {
   classifyGeminiFailure,
   resolveGeminiCooldownMs,
@@ -127,12 +128,42 @@ export function serializePool(entries: PoolEntry[]): string {
     .join(',');
 }
 
-/** The configured pool, or the single legacy key as a one-entry pool. */
+/**
+ * The explicitly configured pool — the PLURAL variable only.
+ *
+ * The legacy singular `GOOGLE_GENERATIVE_AI_API_KEY` is deliberately NOT read
+ * as a one-key pool. Treating it as one silently switched every existing
+ * single-key station onto pool behaviour it never opted into: an unhinted 429
+ * parked its only credential for 1-3 hours and every later call replayed a
+ * fabricated error with no network I/O, so a station that was previously
+ * recoverable by one retry went quiet instead. That breaks the upgrade
+ * guarantee ("an upgraded station behaves exactly as before"), so a legacy
+ * station now keeps the plain single-key transport and the single-key editing
+ * flow, and the pool is inert until an operator explicitly configures it.
+ *
+ * KEPT FOR REFERENCE — do not restore without re-solving the failure above.
+ * The fallback this replaces made `poolSize()` count a legacy single key, which
+ * (a) activated holds, escalation and replay on stations that never asked for
+ * them, and (b) made the admin UI treat a single-key station as "a pool is
+ * configured", disabling the very field the operator needed to edit it. Both
+ * were silent — the station just stopped making sound. A correct re-enable
+ * would need the legacy key selectable as a pool entry WITHOUT changing its
+ * failure handling, which is why `add`'s legacy-seeding comment describes the
+ * behaviour rather than promising it:
+ *
+ *   const single = (process.env[GOOGLE_KEY_ENV] || '').trim();
+ *   if (single && single.length <= GOOGLE_KEY_MAX) return [{ key: single, name: '' }];
+ */
 function configuredEntries(): PoolEntry[] {
-  const pooled = parsePool(process.env[GOOGLE_KEYS_ENV]);
-  if (pooled.length) return pooled;
-  const single = (process.env[GOOGLE_KEY_ENV] || '').trim();
-  return single && single.length <= GOOGLE_KEY_MAX ? [{ key: single, name: '' }] : [];
+  return parsePool(process.env[GOOGLE_KEYS_ENV]);
+}
+
+/** True only when the operator explicitly configured the plural pool. Every
+ *  consumer that must stay inert on a legacy station tests THIS, not
+ *  `poolSize()` — the two are the same thing now, but they answer different
+ *  questions and conflating them is what caused the regression above. */
+export function poolConfigured(): boolean {
+  return poolEntries().length > 0;
 }
 
 /** Every entry, named or not, in configured order. */
@@ -162,27 +193,47 @@ export function poolSize(): number {
 }
 
 /**
- * The key to send right now: the first in configured order that is not held.
- * Returns '' only when nothing is configured — a real station with an exhausted
- * pool returns the LAST key anyway, so the caller still makes one attempt per
- * call rather than failing before it starts. The caller is what decides an
- * exhausted pool is fatal.
+ * The key to send right now: the first in configured order that is neither
+ * held nor already tried on this call.
+ *
+ * `exclude` is REQUEST-LOCAL state and is the whole reason traversal terminates.
+ * Holds alone are not a bound: a short RetryInfo (or any hint shorter than the
+ * request that follows it) expires while the call is still in flight, so
+ * `currentKey()` hands back the key that just failed and the transport retries
+ * it — forever. With two keys, a 10ms hint and 20ms of latency that produced
+ * A,B,A,B,A,B… indefinitely. At most one attempt per key per call is a property
+ * of the CALL, so it is tracked per call.
+ *
+ * Returns '' only when nothing is configured. Note the exhausted-pool case
+ * deliberately does NOT fall back to the head: a caller asking for a key must
+ * not be handed one it has already been told is dead. Callers that want a real
+ * attempt anyway (a one-shot preview, the Test button) ask for it explicitly.
  */
-export function currentKey(): string {
+export function currentKey(exclude?: ReadonlySet<string>): string {
   const now = Date.now();
   const keys = poolKeys();
   for (const key of keys) {
+    if (exclude?.has(key)) continue;
     const hold = holds.get(key);
     if (!hold || hold.until <= now) {
       if (hold) holds.delete(key);
       return key;
     }
   }
-  // Every key is held. Return the first anyway: the caller gets a real 429
-  // with a real RetryInfo, which is strictly more information than guessing a
-  // wait here, and it keeps one-shot callers (a preview, a Test key button)
-  // working instead of failing on a transient state.
-  return keys[0] || '';
+  return '';
+}
+
+/**
+ * The key for a ONE-SHOT call: the live key, or — when every key is held — the
+ * head anyway, so a preview or a Test-key button still gets a real answer from
+ * a real request instead of failing on a transient state.
+ *
+ * Deliberately NOT what the rotation path uses. There, handing back a held key
+ * is what produced a guaranteed extra 429 per call against a credential the
+ * operator already knows is dead.
+ */
+export function currentKeyOrHead(exclude?: ReadonlySet<string>): string {
+  return currentKey(exclude) || currentKey() || poolKeys()[0] || '';
 }
 
 /** True when every configured key is currently parked. The failover layer asks
@@ -237,13 +288,44 @@ export function reportKeyFailure(key: string, bodyText?: unknown): number {
  * (`withTransientRetry` / `withFailover`) classifies what comes back — so the
  * body has to carry the provider's own words, not a synthetic stand-in.
  */
-let lastFailure: { status: number; statusText: string; body: string } | null = null;
+let lastFailure: { status: number; statusText: string; body: string; headers: Record<string, string> } | null = null;
 
-export function recordLastFailure(status: number, statusText: string, body: string): void {
-  lastFailure = { status, statusText, body };
+// Only the headers a retry/failover classifier can actually read. Capturing all
+// of them would carry provider tracing ids and connection metadata into a
+// replayed response the SDK then treats as authoritative.
+const REPLAYED_HEADERS = ['retry-after', 'x-ratelimit-reset', 'x-ratelimit-limit', 'x-ratelimit-remaining'] as const;
+
+/**
+ * The last quota failure, kept so a call whose whole pool is exhausted can
+ * answer with a REAL 429 instead of inventing one. Headers are kept alongside
+ * the body for the same reason: `Retry-After` drives how the retry layer times
+ * its next attempt, so a replay without it was classified differently from the
+ * original response it stands in for — and could keep the station from ever
+ * selecting its backup leg.
+ */
+export function recordLastFailure(
+  status: number,
+  statusText: string,
+  body: string,
+  headers?: Headers | Record<string, string> | null,
+): void {
+  const kept: Record<string, string> = {};
+  const src: { forEach?: unknown; entries?: unknown } | null | undefined =
+    headers as unknown as { forEach?: unknown };
+  if (headers && typeof (src as any).forEach === 'function') {
+    (headers as Headers).forEach((v, k) => {
+      if ((REPLAYED_HEADERS as readonly string[]).includes(k.toLowerCase())) kept[k.toLowerCase()] = v;
+    });
+  } else if (headers && typeof (headers as any) === 'object') {
+    for (const k of REPLAYED_HEADERS) {
+      const v = (headers as Record<string, string>)[k] ?? (headers as Record<string, string>)[k.toUpperCase()];
+      if (typeof v === 'string') kept[k] = v;
+    }
+  }
+  lastFailure = { status, statusText, body, headers: kept };
 }
 
-export function getLastFailure(): { status: number; statusText: string; body: string } | null {
+export function getLastFailure(): { status: number; statusText: string; body: string; headers: Record<string, string> } | null {
   return lastFailure;
 }
 
@@ -260,6 +342,9 @@ export function reportKeySuccess(key: string): void {
  *  fingerprint is a short suffix so an operator can tell key 3 from key 7
  *  without the value ever crossing the wire. */
 export interface PoolStatus {
+  /** Stable opaque identity — what every mutation addresses. */
+  id: string;
+  /** Position, for DISPLAY order only. Never send it back to a mutation. */
   index: number;
   fingerprint: string;
   /** Operator's label, or '' when unnamed. */
@@ -283,6 +368,7 @@ export function poolStatus(): PoolStatus[] {
     const live = remaining > 0;
     if (hold && !live) holds.delete(key);
     return {
+      id: entryId(key),
       index,
       fingerprint: fingerprint(key),
       name,
@@ -301,6 +387,72 @@ export function poolStatus(): PoolStatus[] {
 export function fingerprint(key: string): string {
   if (!key) return '';
   return `••••${key.slice(-4)}`;
+}
+
+/**
+ * A stable, opaque identifier for one credential.
+ *
+ * Mutations used to address keys by INDEX, with the index range checked against
+ * a fresh read. That check passes even when it should not: if another client
+ * reorders [Free 1, Paid] between the render and the click, "remove index 0" is
+ * still in range and deletes Paid instead — a wrong credential destroyed by a
+ * request that was valid when it was written. This id is derived from the key
+ * itself, so it survives a reorder, a rename and a re-render, and a stale
+ * reference resolves to the key the operator actually meant (or to nothing).
+ *
+ * A hash rather than the key or its fingerprint: `fingerprint` is a 4-character
+ * display suffix, which two keys can share, and it is deliberately shown in the
+ * UI. 12 hex chars of SHA-256 identifies a 39-char key without being invertible
+ * or guessable from what the admin UI already displays.
+ */
+export function entryId(key: string): string {
+  if (!key) return '';
+  return createHash('sha256').update(key).digest('hex').slice(0, 12);
+}
+
+/**
+ * Monotonic revision of the pool, bumped by every mutation.
+ *
+ * Separate from the id because they answer different questions. The id says
+ * "which credential"; the revision says "is the pool I am editing still the pool
+ * I was shown". A client sends the revision it rendered from, and a mismatch is
+ * a 409 instead of a silently overwriting write — the same lost-update the
+ * mutex below prevents between concurrent requests, caught for the case where
+ * the other writer's change is already visible.
+ */
+let revision = 0;
+
+export function poolRevision(): number {
+  return revision;
+}
+
+/** Called by the single mutation chokepoint after a successful write. */
+export function bumpPoolRevision(): void {
+  revision += 1;
+}
+
+/**
+ * Serialises every pool mutation.
+ *
+ * Each handler is a read-modify-write: read the current pool, mutate, persist.
+ * Two of them running concurrently both read the same starting list, so the
+ * second write silently discards the first — four concurrent adds all returned
+ * HTTP 200 with `count: 2` while only the last credential survived. The
+ * operator was told four keys were added and got one.
+ *
+ * The chain is a plain promise tail rather than a lock library: it is a single
+ * async resource, and callers are admin-only and rare. The generic
+ * `/settings/secrets` writer joins the SAME chain, because it can write the pool
+ * variable too and would otherwise interleave with these handlers.
+ */
+let tail: Promise<unknown> = Promise.resolve();
+
+export function withPoolLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = tail.then(fn, fn);
+  // Keep the chain alive even when this link rejects, or one failed mutation
+  // would reject every later one and wedge the pool permanently.
+  tail = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 /** Test seam: forget every hold and the memo without touching configuration. */

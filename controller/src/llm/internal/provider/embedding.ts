@@ -18,7 +18,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS, googleKeyFetch } from './registry.js';
+import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS, googleKeyFetch, googleApiKeyForSdk } from './registry.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -216,7 +216,10 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       // only the legacy single key — so a pool-only station (one that never set
       // GOOGLE_GENERATIVE_AI_API_KEY at all) failed embeddings outright, and a
       // migrated one silently used one key for chat and another for embeddings.
-      const provider = createGoogleGenerativeAI({ fetch: googleKeyFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      // googleApiKeyForSdk supplies the construction key the SDK requires, or a
+      // pool-only station throws LoadAPIKeyError before the transport is ever
+      // reached.
+      const provider = createGoogleGenerativeAI({ fetch: googleKeyFetch, apiKey: googleApiKeyForSdk(cfg) });
       return provider.textEmbeddingModel(id);
     }
     case 'openrouter': {
