@@ -112,6 +112,21 @@ export function PersonaIdentityCard({
           </div>
 
           <div>
+            <TextField
+              control={control}
+              name={`personas.${index}.alsoSpeaks`}
+              label="Also speaks"
+              placeholder="e.g. Japanese"
+              maxLength={LANGUAGE_MAX}
+            />
+            <div className="field-hint">
+              For a bilingual DJ: languages mixed <em>into</em> the one above, comma-separated,
+              each written in its own script. Needs a voice that can read them all.
+              <span className="ml-2 text-muted">{persona.alsoSpeaks.trim().length} / {LANGUAGE_MAX}</span>
+            </div>
+          </div>
+
+          <div>
             <Label>Tags</Label>
             <TagField
               className="mt-1.5"
