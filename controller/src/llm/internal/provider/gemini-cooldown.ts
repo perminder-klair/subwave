@@ -13,13 +13,20 @@
 //
 // Pure and network-free — `scripts/gemini-cooldown.test.ts` is the seam.
 
-/** "22s" | "500ms" | "2m" | "1.5h" | "1d" → ms. null when unparseable. */
+/** "22s" | "500ms" | "2m" | "1.5h" | "1d" → ms. null when unparseable.
+ *
+ *  ZERO is rejected as unusable, and that matters more than it looks. A `0s`
+ *  RetryInfo would produce a hold that is already expired by the time it is
+ *  stored, so `currentKey()` reaps it immediately, hands back the SAME key, and
+ *  the transport recurses on a response that will keep arriving identically.
+ *  Treating zero as "no hint" sends the request to the no-hint hold instead,
+ *  which actually moves it forward. */
 export function parseDurationMs(raw: unknown): number | null {
   if (raw == null) return null;
   const m = String(raw).trim().match(/^([\d.]+)\s*(ms|s|m|h|d)$/i);
   if (!m) return null;
   const value = Number(m[1]);
-  if (!Number.isFinite(value) || value < 0) return null;
+  if (!Number.isFinite(value) || value <= 0) return null;
   const unit = m[2].toLowerCase();
   const factor = unit === 'ms' ? 1
     : unit === 's' ? 1000
@@ -27,7 +34,7 @@ export function parseDurationMs(raw: unknown): number | null {
     : unit === 'h' ? 3_600_000
     : 86_400_000;
   const ms = Math.round(value * factor);
-  return Number.isSafeInteger(ms) ? ms : null;
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : null;
 }
 
 const RETRY_INFO_TYPE = 'type.googleapis.com/google.rpc.RetryInfo';

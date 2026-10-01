@@ -254,6 +254,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     adminFetch,
   });
 
+  // A configured pool is the ONLY source of Google credentials — the controller
+  // reads the singular variable solely as a one-key fallback. Leaving that field
+  // editable would let an operator save a replacement key that is accepted,
+  // reported as saved, and then never read by anything.
+  const googlePoolActive =
+    ((data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0) > 0;
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -654,12 +661,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             return (
               <>
                 <div className="field">
-                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
+                  <Label>
+                    {llmProviderLabel(form.llm.provider)} API key
+                    {keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY' && googlePoolActive && (
+                      <span className="ml-2 font-normal tracking-normal text-muted normal-case">
+                        — a key pool is configured below, so this field is not used
+                      </span>
+                    )}
+                  </Label>
                   <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <Input
                       type="password"
                       autoComplete="off"
                       value={primaryKeyInput}
+                      disabled={googlePoolActive && keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY'}
                       placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
                       className="max-w-[360px]"

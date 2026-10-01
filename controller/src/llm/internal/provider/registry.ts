@@ -15,6 +15,8 @@ import {
   allKeysHeld,
   currentKey,
   fingerprint,
+  getLastFailure,
+  recordLastFailure,
   reportKeyFailure,
 } from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
@@ -83,6 +85,22 @@ export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
   const key = currentKey();
   if (!key) return debugFetch(url, init);
 
+  // Every key is already held: answer from the last real failure WITHOUT a
+  // round-trip. Checking after the fact meant each generation still spent a
+  // request on an exhausted credential, got the same 429 back, and only then
+  // discovered the pool was spent — a guaranteed extra 429 per call that also
+  // kept hammering credentials the operator already knows are dead. Replaying
+  // the recorded body keeps `withTransientRetry`/`withFailover` able to
+  // classify it and escalate to the backup leg.
+  if (allKeysHeld()) {
+    const prior = getLastFailure();
+    console.log('[google] every pooled key is on hold — answering from the last quota failure without a request');
+    return new Response(prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key is on hold"}}', {
+      status: prior?.status ?? 429,
+      statusText: prior?.statusText ?? 'Too Many Requests',
+    });
+  }
+
   const headers = new Headers(init?.headers || {});
   headers.set('x-goog-api-key', key);
   const res = await debugFetch(url, { ...init, headers });
@@ -103,6 +121,7 @@ export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
   if (res.status !== 429 && res.status !== 401) return res;
 
   const body = await res.text().catch(() => '');
+  recordLastFailure(res.status, res.statusText, body);
   const heldMs = reportKeyFailure(key, body);
   const next = currentKey();
   // Ask whether the POOL is spent, not whether the next key differs. Comparing

@@ -441,7 +441,10 @@ router.post('/settings/google-key-pool/test', requireAdmin, async (req, res) => 
     });
     res.json({ ok: true, message: 'Key responded' });
   } catch (err) {
-    res.json({ ok: false, message: briefLlmError(err) });
+    // 502, not 200: the editor's post() treats any 2xx as success and never
+    // reads this body, so a plain 200 here reported "Key N responded" for a key
+    // that had just been rejected. The message still rides along for the UI.
+    res.status(502).json({ ok: false, message: briefLlmError(err) });
   }
 });
 

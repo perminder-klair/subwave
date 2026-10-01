@@ -26,6 +26,7 @@ import {
   allKeysHeld,
   currentKey,
   fingerprint,
+  getLastFailure,
   holdRemainingMs,
   invalidatePool,
   parsePool,
@@ -669,6 +670,104 @@ test('a burst key is re-probed rarely, not every minute, once it keeps failing',
     probes += 1;
   }
   assert.ok(probes <= 8, `expected single-digit probes in an hour, got ${probes}`);
+});
+
+// ─── review fixes ───────────────────────────────────────────────────────────
+
+test('a ZERO RetryInfo is treated as no hint, never as a zero-length hold', () => {
+  // `0s` produced a hold that was already expired on store, so currentKey()
+  // reaped it, handed back the SAME key, and the transport recursed forever on
+  // a response that would keep arriving identically.
+  assert.equal(parseDurationMs('0s'), null);
+  assert.equal(parseDurationMs('0ms'), null);
+  const zero = JSON.stringify({ error: {
+    code: 'rate_limit_exceeded',
+    details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '0s' }],
+  } });
+  assert.ok(resolveGeminiCooldownMs(zero) > 0, 'a zero hint must still park for a real interval');
+});
+
+test('an exhausted pool short-circuits WITHOUT a request, and replays the real body', async () => {
+  // Checking after the fact meant every generation spent a request on a
+  // credential already known dead, got the same 429 back, and only then
+  // noticed — a guaranteed extra round-trip per call that also kept hammering
+  // exhausted keys.
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const seen: string[] = [];
+  let call = 0;
+  globalThis.fetch = (async (_u: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    call += 1;
+    return new Response(code('quota_exceeded', {
+      details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '30s' }],
+    }), { status: 429, statusText: 'Too Many Requests' });
+  }) as typeof fetch;
+  try {
+    const first = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(first.status, 429);
+    const learned = call;
+    // Pool is now spent. These must cost nothing at all.
+    for (let i = 0; i < 5; i++) {
+      const res = await googleKeyFetch('https://example.test/v1/x', {});
+      assert.equal(res.status, 429, 'still a real 429 for failover to classify');
+    }
+    assert.equal(call, learned, 'no further network I/O once the pool is spent');
+    assert.deepEqual(seen, [K1, K2], 'only one attempt per key, ever');
+    // And the replayed body is the provider's own, so the reason survives.
+    const body = await (await googleKeyFetch('https://example.test/v1/x', {})).json();
+    assert.equal(body.error.code, 'quota_exceeded');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('a successful call clears the recorded failure it would otherwise replay', async () => {
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let call = 0;
+  globalThis.fetch = (async () => {
+    call += 1;
+    return call === 1 ? new Response(code('quota_exceeded'), { status: 429 }) : new Response('{}', { status: 200 });
+  }) as typeof fetch;
+  try {
+    assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+    // K1's hold is still set from the first call, so the replay path is not
+    // reachable — but the failure record must not outlive a working key either.
+    assert.equal(getLastFailure()?.status ?? 429, 429);
+    reportKeySuccess(K1);
+    assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('the per-key probe reports failure as a non-2xx status', async () => {
+  // A plain 200 carrying {ok:false} is read as SUCCESS by the editor's post(),
+  // which never inspects the body — so an invalid or exhausted key was reported
+  // as "Key N responded". This is the mistake that actually happened once.
+  const fs = await import('node:fs');
+  const src = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const start = src.indexOf("router.post('/settings/google-key-pool/test'");
+  assert.ok(start > 0, 'the test endpoint is missing');
+  const body = src.slice(start, src.indexOf('\n});', start));
+  assert.match(body, /res\.status\(502\)\.json\(\{ ok: false/);
+  assert.doesNotMatch(body, /res\.json\(\{ ok: false/);
+});
+
+test('every Google consumer is routed through the pooled transport', async () => {
+  // Embeddings and model discovery were still reading only the legacy single
+  // key, so a pool-only station failed them outright while a migrated one
+  // silently used a different credential than the one serving chat.
+  const fs = await import('node:fs');
+  const embed = fs.readFileSync(new URL('../src/llm/internal/provider/embedding.ts', import.meta.url), 'utf8');
+  assert.match(embed, /createGoogleGenerativeAI\(\{ fetch: googleKeyFetch/,
+    'Google embeddings must use the pooled transport');
+  const routes = fs.readFileSync(new URL('../src/routes/settings/llm.ts', import.meta.url), 'utf8');
+  assert.match(routes, /currentKey\(\) \|\| resolveKey\('GOOGLE_GENERATIVE_AI_API_KEY'\)/,
+    'model discovery must prefer the pool\'s live key');
 });
 
 test('with no pool configured the transport is exactly the SDK transport', async () => {

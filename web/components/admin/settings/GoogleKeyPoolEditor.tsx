@@ -62,6 +62,12 @@ export function GoogleKeyPoolEditor({
 }) {
   const [adding, setAdding] = useState('');
   const [addingName, setAddingName] = useState('');
+  // Per-row draft for the rename box. An uncontrolled input keeps whatever the
+  // operator typed even when the save failed or the server sanitised the value,
+  // so it would show a label that is not the one on file. Keying drafts by
+  // FINGERPRINT (not index) is what makes them follow a key through a reorder,
+  // and remounts the box when the server sends a different stored value.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   // The full pool is only ever known to the server, so a removal has to be sent
   // as a replacement of the whole list — which needs the values we deliberately
@@ -79,9 +85,9 @@ export function GoogleKeyPoolEditor({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({})) as { error?: string };
-        notify.err(j.error || `Request failed (${r.status})`);
+      const j = await r.json().catch(() => ({})) as { error?: string; ok?: boolean; message?: string };
+      if (!r.ok || j.ok === false) {
+        notify.err(j.message || j.error || `Request failed (${r.status})`);
         return false;
       }
       return true;
@@ -93,51 +99,62 @@ export function GoogleKeyPoolEditor({
     }
   }, [adminFetch]);
 
+  // Every pool call addresses a key by INDEX, so the controls must stay disabled
+  // until the refetch that reorders them has landed. Clearing `busy` the moment
+  // the POST returned left the OLD rows actionable against the NEW server order,
+  // where a Remove or Rename one row too far down deletes a different
+  // credential than the one the operator clicked.
+  const postAndRefresh = useCallback(async (path: string, body: unknown) => {
+    const ok = await post(path, body);
+    try {
+      await onChanged?.();
+    } finally {
+      setBusy(false);
+    }
+    return ok;
+  }, [post, onChanged]);
+
   const addKey = useCallback(async () => {
     const key = adding.trim();
     if (!key) return;
     // Its own endpoint, NOT /settings/secrets: that writer REPLACES the value,
     // and the client cannot build the new list because it is never sent the key
     // values. Posting the new key there replaced the whole pool every time.
-    const ok = await post('/settings/google-key-pool/add', { key, name: addingName });
+    const ok = await postAndRefresh('/settings/google-key-pool/add', { key, name: addingName });
     if (ok) {
       setAdding('');
       setAddingName('');
-      onChanged?.();
     }
-  }, [adding, addingName, post, onChanged]);
+  }, [adding, addingName, postAndRefresh]);
 
   const removeKey = useCallback(async (index: number) => {
-    const ok = await post('/settings/google-key-pool/remove', { index });
-    if (ok) {
-      notify.ok('Key removed from the pool');
-      onChanged?.();
-    }
-  }, [post, onChanged]);
+    const ok = await postAndRefresh('/settings/google-key-pool/remove', { index });
+    if (ok) notify.ok('Key removed from the pool');
+  }, [postAndRefresh]);
 
   const moveKey = useCallback(async (from: number, to: number) => {
     if (from === to) return;
-    const ok = await post('/settings/google-key-pool/move', { from, to });
-    if (ok) onChanged?.();
-  }, [post, onChanged]);
+    await postAndRefresh('/settings/google-key-pool/move', { from, to });
+  }, [postAndRefresh]);
 
-  const renameKey = useCallback(async (index: number, name: string) => {
-    const ok = await post('/settings/google-key-pool/rename', { index, name });
-    // Refresh either way: on failure the stored label is unchanged and the box
-    // must snap back rather than keep showing something that was never saved.
+  const renameKey = useCallback(async (index: number, fingerprint: string, name: string) => {
+    // Drop the draft FIRST so the input falls back to the server's value: on a
+    // failure that means it snaps back to what is actually stored, and on a
+    // sanitised name it shows what was kept rather than the raw text.
+    setDrafts(d => { const { [fingerprint]: _drop, ...rest } = d; return rest; });
+    const ok = await postAndRefresh('/settings/google-key-pool/rename', { index, name });
     if (ok) notify.ok('Key renamed');
-    onChanged?.();
-  }, [post, onChanged]);
+  }, [postAndRefresh]);
 
   const testKey = useCallback(async (index: number) => {
     setTestingIndex(index);
     try {
-      const ok = await post('/settings/google-key-pool/test', { index });
+      const ok = await postAndRefresh('/settings/google-key-pool/test', { index });
       if (ok) notify.ok(`Key ${index + 1} responded`);
     } finally {
       setTestingIndex(null);
     }
-  }, [post]);
+  }, [postAndRefresh]);
 
   return (
     <div className="mt-3 border-t border-[var(--hairline)] pt-3">
@@ -166,16 +183,19 @@ export function GoogleKeyPoolEditor({
             {keys.map(k => (
               <li key={`${k.index}-${k.fingerprint}`} className="flex flex-wrap items-center gap-2 text-[12px]">
                 <input
+                  key={`${k.fingerprint}-${k.name}`}
                   defaultValue={k.name}
+                  value={drafts[k.fingerprint] ?? k.name}
                   placeholder="e.g. Free 1"
                   aria-label={`Name for key ${k.index + 1}`}
                   maxLength={60}
-                  // defaultValue + blur, not controlled: a per-keystroke save
-                  // would fight the operator mid-word, and the label is not
-                  // worth a request per character.
+                  // Keyed by fingerprint AND stored name, so a refetch carrying
+                  // a different value remounts the box. The draft holds whatever
+                  // is being typed without firing a request per keystroke.
+                  onChange={e => setDrafts(d => ({ ...d, [k.fingerprint]: e.target.value }))}
                   onBlur={e => {
                     const next = e.target.value.trim();
-                    if (next !== k.name) void renameKey(k.index, next);
+                    if (next !== k.name) void renameKey(k.index, k.fingerprint, next);
                   }}
                   className="min-w-[140px] border border-input bg-field px-2 py-1 text-[12px] text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
                 />
@@ -212,7 +232,8 @@ export function GoogleKeyPoolEditor({
                   </Btn>
                   <Btn
                     onClick={() => removeKey(k.index)}
-                    disabled={busy || keys.length === 1}
+                    disabled={busy}
+                    title={keys.length === 1 ? 'Remove the last key and clear the pool' : undefined}
                     className="px-2 py-1 text-[10px]"
                   >
                     Remove
@@ -258,16 +279,16 @@ export function GoogleKeyPoolEditor({
         Keys are tried in the order you add them — use ↑ ↓ to change that order.
         When one hits a quota limit it is set aside for as long as Google asks
         and the next one is used; if every key is spent, the station falls back
-        to its configured backup model. Shared by the Gemini DJ and Gemini TTS.
+        to its configured backup model.
       </p>
       {/*
         The multi-key guidance and the terms note appear only once this is
-        actually a POOL rather than a second way to spell one key — nobody
-        should meet a compliance warning for something they haven't done, and
-        the warning is only actionable at the moment they add a second key.
-        `adding.trim()` covers the instant they are about to.
+        actually MULTIPLE keys, or the operator is typing a key that would make
+        it so. Both halves matter: the pool list counts the key that is ALREADY
+        on file, so entering the very first key into an empty pool is not yet a
+        second key and must not raise a compliance warning.
       */}
-      {(keys.length > 1 || adding.trim().length > 0) && (
+      {(keys.length > 1 || (keys.length > 0 && adding.trim().length > 0)) && (
         <>
           <p className="mt-2 text-[12px] text-muted">
             <strong className="text-ink">Put your free-tier keys first and your

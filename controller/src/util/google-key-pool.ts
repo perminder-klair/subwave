@@ -230,6 +230,23 @@ export function reportKeyFailure(key: string, bodyText?: unknown): number {
   return ms;
 }
 
+/**
+ * The last quota failure seen, kept so a call made while the whole pool is held
+ * can answer with a REAL 429 instead of inventing one. The transport
+ * short-circuits before any network I/O in that state, and the caller
+ * (`withTransientRetry` / `withFailover`) classifies what comes back — so the
+ * body has to carry the provider's own words, not a synthetic stand-in.
+ */
+let lastFailure: { status: number; statusText: string; body: string } | null = null;
+
+export function recordLastFailure(status: number, statusText: string, body: string): void {
+  lastFailure = { status, statusText, body };
+}
+
+export function getLastFailure(): { status: number; statusText: string; body: string } | null {
+  return lastFailure;
+}
+
 /** Clear a hold — a key that just succeeded was demonstrably not exhausted, so
  *  its escalation history resets too and the next failure starts from the
  *  short interval again. */
@@ -290,5 +307,6 @@ export function fingerprint(key: string): string {
 export function __resetHoldsForTest(): void {
   holds = new Map();
   strikes.clear();
+  lastFailure = null;
   poolCache = null;
 }

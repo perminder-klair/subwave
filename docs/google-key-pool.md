@@ -107,11 +107,16 @@ exhausted and re-parks them from the same response within one call, so nothing
 is lost and no key gets hammered — the station simply rediscovers the state it
 already had.
 
-## Shared with Gemini TTS
+## What the pool covers today
 
-The pool is the single source of keys for both the **Gemini DJ** (the LLM leg)
-and **Gemini TTS**. Keys set up in one place are used by both, so you don't
-maintain two lists and they can't drift apart.
+**The Gemini LLM leg** — the `google` provider, including its embeddings and the
+model list used by discovery.
+
+It does **not** yet cover Gemini TTS. The native Gemini TTS engine (#1718) is a
+separate PR, and it will read this same pool when it lands; until then a
+Gemini-TTS station keeps using its own single key. The pool module is already
+shaped for it — nothing about adding that engine's consumer requires a change
+here.
 
 ## Headless / multi-station
 
