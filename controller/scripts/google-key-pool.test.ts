@@ -551,8 +551,9 @@ test('an invalid credential parks for a day; billing is never parked', () => {
 });
 
 test('a gateway that drops error.code still classifies via details[]', () => {
-  // 9router and other intermediaries reshape the body; the details fallback is
-  // what keeps this working when `code` is gone.
+  // A proxy or gateway in front of the API can reshape the error body, and an
+  // older API surface may never have sent `code` at all; the details fallback is
+  // what keeps this working when the code is gone.
   const reshaped = JSON.stringify({ error: { details: [
     { '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
       violations: [{ quotaId: 'generate_content_free_tier_requests_per_project_per_day' }] },
