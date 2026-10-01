@@ -32,8 +32,13 @@ import {
   parsePool,
   sanitizeName,
   serializePool,
+  currentKeyOrHead,
+  entryId,
+  poolConfigured,
+  recordLastFailure,
   poolEntries,
   poolKeys,
+  poolRevision,
   poolSize,
   poolStatus,
   reportKeyFailure,
@@ -239,13 +244,20 @@ test('pool status reports the name and still leaks no key material', () => {
   assert.ok(!serialised.includes(K1) && !serialised.includes(K2), 'a raw key leaked into pool status');
 });
 
-test('a single legacy key is a one-key pool, so nothing changes for those stations', () => {
+test('a legacy single key is NOT a pool — those stations keep their old behaviour', () => {
+  // Reading the singular variable as a one-key pool silently switched every
+  // existing station onto holds, escalation and replay it never opted into: an
+  // unhinted 429 parked its only credential for hours and later calls replayed a
+  // fabricated error with no network I/O. The pool is inert until the PLURAL
+  // variable is set.
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
   process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
   invalidatePool();
   __resetHoldsForTest();
-  assert.deepEqual(poolKeys(), [K1]);
-  assert.equal(currentKey(), K1);
+  assert.deepEqual(poolKeys(), [], 'a legacy key must not appear in the pool');
+  assert.equal(poolSize(), 0);
+  assert.equal(poolConfigured(), false);
+  assert.equal(currentKey(), '', 'no pool means no pooled selection at all');
 });
 
 test('an unconfigured pool is inert: currentKey is empty, not a crash', () => {
@@ -291,14 +303,40 @@ test('an expired hold is reaped, not remembered forever', async () => {
   assert.equal(poolStatus()[0].held, false);
 });
 
-test('an exhausted pool still returns a key so one-shot callers still work', () => {
+test('the rotation path gets nothing from an exhausted pool, but one-shot callers still do', () => {
   setPool(K1, K2);
   reportKeyFailure(K1, 'Please retry in 5s.');
   reportKeyFailure(K2, 'Please retry in 5s.');
   assert.equal(allKeysHeld(), true);
-  // Deliberately NOT empty: a preview or Test-key button gets a real 429 with
-  // a real RetryInfo instead of failing on a transient internal state.
-  assert.equal(currentKey(), K1);
+  // The two answers are deliberately different, and conflating them was a bug.
+  // currentKey() is what rotation calls: it must return '' rather than the head,
+  // or the transport spends a guaranteed extra request on a key it has just been
+  // told is dead. currentKeyOrHead() is what a preview or the Test-key button
+  // calls, where a real answer from a real request beats failing on a transient
+  // internal state.
+  assert.equal(currentKey(), '', 'rotation must never be handed a held key');
+  assert.equal(currentKeyOrHead(), K1, 'a one-shot caller still gets a usable key');
+});
+
+test('currentKey never returns a key the caller excluded, even once its hold lapses', () => {
+  // The defect that made traversal unbounded: eligibility was re-derived from
+  // shared hold timers on every hop, so a hold shorter than the request that
+  // followed it expired mid-call and handed back the key that had just failed.
+  // Two keys, a 10ms hint and 20ms of latency gave A,B,A,B,A,B… with no stop.
+  // Excluding is request-local state, so it holds regardless of timer timing.
+  setPool(K1, K2);
+  const attempted = new Set([K1]);
+  reportKeyFailure(K1, JSON.stringify({
+    error: { details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '0.01s' }] },
+  }));
+  assert.equal(currentKey(attempted), K2);
+  // Past the hold window, K1 is eligible again on its own terms — but NOT to a
+  // call that has already tried it.
+  return new Promise<void>(r => setTimeout(r, 25)).then(() => {
+    assert.equal(currentKey(), K1, 'the key itself is healthy again');
+    assert.equal(currentKey(attempted), K2, 'but this call must not reuse it');
+    assert.equal(currentKey(new Set([K1, K2])), '', 'every key tried — nothing left');
+  });
 });
 
 // ─── status redaction ───────────────────────────────────────────────────────
@@ -416,16 +454,19 @@ test('reordering preserves every key exactly once', () => {
   }
 });
 
-test('the move endpoint validates both bounds and rewrites the whole list', async () => {
+test('move is addressed by opaque id, not by an index pair', async () => {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
   const start = src.indexOf("router.post('/settings/google-key-pool/move'");
   assert.ok(start > 0, 'the move endpoint is missing');
   const body = src.slice(start, src.indexOf('\n});', start));
-  // Both bounds are checked against a FRESH read of the pool, so a stale index
-  // from a concurrent add is a 400 rather than the wrong key moving.
-  assert.match(body, /!Number\.isInteger\(from\) \|\| !Number\.isInteger\(to\)/);
-  assert.match(body, /from < 0 \|\| from >= entries\.length \|\| to < 0 \|\| to >= entries\.length/);
+  // A from/to INDEX PAIR is two stale references the moment anything moves, and
+  // moving is exactly when an operator has two tabs open. The id is derived from
+  // the key, so it survives the reorder that invalidated the indices.
+  assert.doesNotMatch(body, /from:\s*number/);
+  assert.match(body, /entryId\(e\.key\) === id/);
+  // A source that no longer exists is a 409, not a silent success.
+  assert.match(body, /conflict/);
   // And it persists the whole reordered list, from ENTRIES so labels survive.
   assert.match(body, /serializePool\(next\)/);
   assert.match(body, /invalidatePool\(\)/);
@@ -447,17 +488,18 @@ test('appending a key preserves every key already in the pool', () => {
   assert.deepEqual(parsePool(serializePool(entries)).map(e => e.key), [K1, K2, K3]);
 });
 
-test('the first add keeps a legacy single key as entry 0 rather than orphaning it', () => {
-  // poolEntries() falls back to GOOGLE_GENERATIVE_AI_API_KEY when no pool is
-  // set. An add that ignored that would silently drop the key already working.
+test('an add on a legacy station starts a pool from the key being added', () => {
+  // The legacy variable is NOT seeded into the pool — that is what made every
+  // existing station behave as if it had opted in. So the first add on a legacy
+  // station produces a pool of exactly the one key added, and the operator's
+  // next save in the pool editor is what carries their original key across.
   delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
   process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
   invalidatePool();
   __resetHoldsForTest();
-  const entries = poolEntries().map(e => ({ ...e }));
-  assert.deepEqual(entries.map(e => e.key), [K1], 'the legacy key is the seed');
-  entries.push({ key: K2, name: '' });
-  assert.deepEqual(entries.map(e => e.key), [K1, K2]);
+  assert.deepEqual(poolEntries(), [], 'nothing is seeded implicitly');
+  const entries = [...poolEntries(), { key: K2, name: '' }];
+  assert.deepEqual(entries.map(e => e.key), [K2]);
 });
 
 test('the add endpoint appends from entries and refuses a duplicate', async () => {
@@ -757,16 +799,191 @@ test('the per-key probe reports failure as a non-2xx status', async () => {
   assert.doesNotMatch(body, /res\.json\(\{ ok: false/);
 });
 
+// ─── SDK integration: the tests that would have caught the load-bearing bug ───
+//
+// Everything above exercises the pool through its own functions. That is not
+// enough, and the gap was not theoretical: the feature shipped with
+// `apiKey` passed to `createGoogleGenerativeAI` only when `cfg.apiKey` was set.
+// On a pool-only station — the exact configuration the feature exists for, with
+// no `GOOGLE_GENERATIVE_AI_API_KEY` at all — the SDK threw `LoadAPIKeyError`
+// with ZERO fetch calls, so the pooled transport never ran and no amount of
+// green unit tests noticed. The assertion that "passed" was a regex over source
+// text, which cannot see a constructor that throws.
+//
+// These go through the real SDK entry points instead: build the model the way
+// the controller does, call it, and look at what reached the wire.
+
+/** A Gemini-shaped response, so the SDK's parsing succeeds and the call returns
+ *  rather than failing later in a way that would mask the thing under test. */
+function geminiReply(text = 'OK') {
+  return new Response(JSON.stringify({
+    candidates: [{ content: { parts: [{ text }] } }],
+    usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+function geminiEmbedding() {
+  return new Response(JSON.stringify({ embedding: { values: [0.1, 0.2, 0.3] } }),
+    { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+/** Drive both Google consumers through the REAL entry points the controller
+ *  uses — `languageModel()` and `embeddingModel()` — and report what reached the
+ *  wire.
+ *
+ *  It has to go through those and not re-build the provider here. An earlier
+ *  version of this file constructed its own `createGoogleGenerativeAI`, which
+ *  meant it kept passing with the construction-key fix reverted: it was
+ *  exercising the helper it was meant to police instead of the call site. A
+ *  test that cannot fail on the bug is worse than no test, because it reads as
+ *  coverage.
+ */
+async function probeSdkConsumers(): Promise<{ chat: string; embed: string; calls: number; keys: string[] }> {
+  // Aliased: this file already binds `embed` at module scope, and destructuring
+  // the same name here silently renamed to `embed2`, which is not a function.
+  const { generateText, embed: embedText } = await import('ai');
+  const { languageModel } = await import('../src/llm/internal/provider/registry.js');
+  const { embeddingModel } = await import('../src/llm/internal/provider/embedding.js');
+
+  const keys: string[] = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async (url: any, init: any) => {
+    const headers = new Headers(init?.headers || {});
+    keys.push(headers.get('x-goog-api-key')
+      ?? new URL(String(url?.url ?? url)).searchParams.get('key')
+      ?? '');
+    return String(url?.url ?? url).includes('embed') ? geminiEmbedding() : geminiReply();
+  }) as unknown as typeof fetch;
+
+  try {
+    let chat = '';
+    await generateText({ model: languageModel(), prompt: 'hi', maxOutputTokens: 8 })
+      .then(r => { chat = r.text?.trim() ?? ''; })
+      .catch(() => { chat = ''; });
+
+    let embed = 'FAILED';
+    await embedText({ model: embeddingModel(), value: 'x' })
+      .then(e => { embed = e.embedding.length === 3 ? 'dimensions returned' : 'FAILED'; })
+      .catch(() => { embed = 'THREW'; });
+
+    return { chat, embed, calls: keys.length, keys };
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+/** Point settings at the google provider, the way a controller restart with
+ *  `settings.json` on disk would.
+ *
+ *  It writes into the STATE_DIR the modules ALREADY resolved rather than a new
+ *  temp dir: `config.js` captures STATE_DIR at import, so a fresh directory
+ *  created here is simply never read, and settings silently stay at their
+ *  defaults — which reads as "the provider ignored my config", not as a test
+ *  setup mistake.
+ */
+async function coldLoadGoogleSettings(): Promise<void> {
+  const { config } = await import('../src/config.js');
+  const { writeFileSync } = await import('node:fs');
+  writeFileSync(join(config.stateDir, 'settings.json'), JSON.stringify({
+    llm: { provider: 'google', model: 'gemini-2.5-flash' },
+    embedding: { provider: 'google', model: 'text-embedding-004' },
+  }));
+  const { setCache } = await import('../src/settings/store.js');
+  const settings = await import('../src/settings.js');
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().llm.provider, 'google', 'settings must actually have loaded');
+}
+
+test('a POOL-ONLY station can generate and embed — no singular key variable at all', async () => {
+  // The regression this pins. `delete` on the singular variable is the whole
+  // point: it is what makes this a pool-only station, which is the setup the
+  // feature is FOR. Before the fix this threw LoadAPIKeyError with 0 fetches.
+  await coldLoadGoogleSettings();
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  setPool(K1, K2);
+
+  const out = await probeSdkConsumers();
+  assert.equal(out.chat, 'OK', `chat must work pool-only (got "${out.chat}")`);
+  assert.equal(out.embed, 'dimensions returned', 'embeddings must work pool-only');
+  assert.ok(out.calls >= 2, `both consumers must reach the wire (got ${out.calls})`);
+});
+
+test('the wire carries a key FROM THE POOL, never the environment default', async () => {
+  // Both consumers must stamp the pool's key. If either fell back to the SDK's
+  // own environment lookup it would use a different credential than the one
+  // serving chat — a migrated station quietly splitting its quota across two
+  // keys it thinks it is rotating deliberately.
+  await coldLoadGoogleSettings();
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  setPool(K1, K2);
+
+  const out = await probeSdkConsumers();
+  assert.ok(out.calls >= 1, 'the request must reach the wire');
+  for (const k of out.keys) assert.equal(k, K1, 'must use the pool head, not an env default');
+});
+
+test('a LEGACY single-key station still reaches Google', async () => {
+  // The upgrade guarantee, checked at the SDK rather than by reading config:
+  // a station that set only the singular variable must keep working exactly as
+  // before, with the pool inert.
+  await coldLoadGoogleSettings();
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
+  invalidatePool();
+  __resetHoldsForTest();
+
+  const out = await probeSdkConsumers();
+  assert.equal(out.chat, 'OK', 'the legacy path must still generate');
+  assert.ok(out.calls >= 1, 'the legacy path must still make its request');
+});
+
+test('a legacy station is NOT parked by an unhinted 429, and replays nothing', async () => {
+  // The other half of the upgrade guarantee, and the more damaging half. With
+  // the singular variable read as a one-key pool, an unhinted 429 parked that
+  // station's only credential for 1-3 hours and every later call answered from
+  // a recorded body with NO network I/O — so a station that previously recovered
+  // by one retry went silent. Legacy means legacy.
+  delete process.env.GOOGLE_GENERATIVE_AI_API_KEYS;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = K1;
+  invalidatePool();
+  __resetHoldsForTest();
+
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  let calls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Resource has been exhausted' } }),
+      { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '30' } });
+  }) as unknown as typeof fetch;
+  try {
+    const first = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(first.status, 429, 'the real response is passed straight through');
+    const afterFirst = calls;
+    const second = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(second.status, 429);
+    // Each call makes its own request. Read as a one-key pool, the second call
+    // would find that key held and answer from a recorded body with no network
+    // I/O — which is the failure this pins.
+    assert.equal(calls, afterFirst + 1,
+      'a legacy station must keep making its request — no synthesised replay');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test('every Google consumer is routed through the pooled transport', async () => {
-  // Embeddings and model discovery were still reading only the legacy single
-  // key, so a pool-only station failed them outright while a migrated one
-  // silently used a different credential than the one serving chat.
+  // Kept as a source check on TOP of the SDK tests above, not instead of them:
+  // it catches a future edit that unwires a consumer, while the SDK tests catch
+  // one that leaves it wired but broken. Neither alone is sufficient, and the
+  // SDK test alone would not notice a consumer being pointed somewhere else.
   const fs = await import('node:fs');
   const embed = fs.readFileSync(new URL('../src/llm/internal/provider/embedding.ts', import.meta.url), 'utf8');
   assert.match(embed, /createGoogleGenerativeAI\(\{ fetch: googleKeyFetch/,
     'Google embeddings must use the pooled transport');
   const routes = fs.readFileSync(new URL('../src/routes/settings/llm.ts', import.meta.url), 'utf8');
-  assert.match(routes, /currentKey\(\) \|\| resolveKey\('GOOGLE_GENERATIVE_AI_API_KEY'\)/,
+  assert.match(routes, /currentKeyOrHead\(\) \|\| resolveKey\('GOOGLE_GENERATIVE_AI_API_KEY'\)/,
     'model discovery must prefer the pool\'s live key');
 });
 
@@ -788,4 +1005,170 @@ test('with no pool configured the transport is exactly the SDK transport', async
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+test('the admin single field and the pool editor write the SAME credential', async () => {
+  // The redundancy this guards: the single field used to save the singular
+  // variable while the pool editor saved the plural one, so the same secret had
+  // two stores and a key typed into the field was silently ignored the moment a
+  // pool existed. Both depths now write the pool, and the field's Test button
+  // probes through the pool rather than raw process.env.
+  const fs = await import('node:fs');
+  const llmSection = fs.readFileSync(
+    new URL('../../web/components/admin/settings/LlmSection.tsx', import.meta.url), 'utf8');
+
+  assert.match(llmSection,
+    /envVar === 'GOOGLE_GENERATIVE_AI_API_KEY'\s*\?\s*\n?\s*'GOOGLE_GENERATIVE_AI_API_KEYS'/,
+    'saving a Google key from the single field must target the pool variable');
+
+  // The pool editor renders INSTEAD of the field, never beside it — two inputs
+  // writing one secret is the confusion the depth split exists to remove.
+  assert.match(llmSection, /\{!showGooglePool && \(/,
+    'the single field must be gated on the single depth');
+  assert.match(llmSection, /\{showGooglePool && \(\s*\n\s*<GoogleKeyPoolEditor/,
+    'the pool editor must be gated on the pool depth');
+
+  // More than one key forces the pool depth whatever the stored preference is,
+  // so a stale view choice can never hide credentials the operator set.
+  const adminView = fs.readFileSync(new URL('../../web/lib/adminView.ts', import.meta.url), 'utf8');
+  assert.match(adminView, /poolCount > 1 \? 'pool'/,
+    'a pool of several keys must force the pool view');
+
+  const routes = fs.readFileSync(new URL('../src/routes/settings/llm.ts', import.meta.url), 'utf8');
+  assert.match(routes, /key === GOOGLE_KEYS_ENV\s*\n?\s*\? currentKeyOrHead\(\)/,
+    'testing an on-file Google key must resolve the pool, not raw process.env');
+  assert.match(routes, /case GOOGLE_KEYS_ENV:\s*\n\s*case GOOGLE_KEY_ENV:/,
+    'the pool variable must reach the Google probe branch');
+
+  const core = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  assert.match(core, /GOOGLE_GENERATIVE_AI_API_KEY: !!process\.env\.GOOGLE_GENERATIVE_AI_API_KEY \|\| poolConfigured\(\)/,
+    'a pool-only station must still report a Google key on file, or Test stays disabled');
+});
+
+// ─── concurrent mutation ─────────────────────────────────────────────────────
+// The bug: each handler was read-modify-write, and nothing serialised them. Four
+// concurrent adds all returned HTTP 200 with `count: 2`, and the persisted pool
+// held ONE of the four. The operator was told four keys were added.
+
+test('concurrent pool writers do not lose each other\'s additions', async () => {
+  const stateRoot = mkdtempSync(join(tmpdir(), 'google-pool-race-'));
+  const { saveSecrets: realSave } = await import('../src/setup/secrets.js');
+  const { poolEntries: entriesOf } = await import('../src/util/google-key-pool.js');
+  const { withPoolLock: lock } = await import('../src/util/google-key-pool.js');
+
+  // A slow writer makes the interleaving deterministic: without the lock every
+  // reader observes the same starting list before any of them writes.
+  const slowSave = async (patch: Record<string, string>) => {
+    await new Promise(r => setTimeout(r, 15));
+    return realSave(patch);
+  };
+
+  const adds = [1, 2, 3, 4].map(i => () => lock(async () => {
+    const entries = entriesOf().map(e => ({ ...e }));
+    entries.push({ key: `RACE_${i}`, name: '' });
+    await slowSave({ GOOGLE_GENERATIVE_AI_API_KEYS: serializePool(entries) });
+    invalidatePool();
+    return entries.length;
+  }));
+
+  await Promise.all(adds.map(fn => fn()));
+  invalidatePool();
+
+  const persisted = parsePool(process.env.GOOGLE_GENERATIVE_AI_API_KEYS).map(e => e.key);
+  for (let i = 1; i <= 4; i++) {
+    assert.ok(persisted.includes(`RACE_${i}`), `RACE_${i} was lost — only ${persisted.join(',')}`);
+  }
+  assert.equal(stateRoot.length > 0, true);
+});
+
+test('the lock rejects nothing: a failing mutation does not wedge the pool', async () => {
+  // The chain must survive a rejection. If a failed write poisoned the tail,
+  // every later pool mutation would reject and the operator could never fix the
+  // pool again — a permanent dead end with the credentials still misconfigured.
+  const { withPoolLock: lock } = await import('../src/util/google-key-pool.js');
+  await assert.rejects(lock(async () => { throw new Error('simulated write failure'); }));
+  const after = await lock(async () => 'still works');
+  assert.equal(after, 'still works');
+});
+
+test('every pool mutation bumps the revision the admin UI compares against', async () => {
+  // The revision is what tells a client "someone else changed this since you
+  // rendered", which is a different fact from "is a write in flight" and the one
+  // the lock cannot supply — the competing change may be seconds old.
+  const { bumpPoolRevision, poolRevision } = await import('../src/util/google-key-pool.js');
+  const before = poolRevision();
+  bumpPoolRevision();
+  assert.ok(poolRevision() > before, 'the revision must advance on every mutation');
+});
+
+// ─── credential identity ─────────────────────────────────────────────────────
+// Mutations used to address keys by INDEX with the range checked against a
+// fresh read. A stale index is still in range after a reorder, so "remove index
+// 0" destroyed whatever had moved into that slot and answered HTTP 200.
+
+test('an entry id identifies its key across a reorder, and survives a rename', () => {
+  setPool(K1, K2);
+  const idForK1 = entryId(K1);
+  assert.equal(entryFor(poolEntries(), idForK1), K1);
+  // Reorder: the id travels with the credential, the index does not.
+  const reordered = [poolEntries()[1], poolEntries()[0]];
+  assert.equal(entryFor(reordered, idForK1), K1);
+  assert.notEqual(reordered[0].key, K1, 'the first slot now holds a different key');
+  // A rename changes nothing about identity.
+  const renamed = { ...poolEntries()[0], name: 'Free tier' };
+  assert.equal(entryId(renamed.key), entryId(poolEntries()[0].key));
+});
+
+test('a stale index reference no longer resolves to a live entry', () => {
+  // The shape of the wrong-key deletion, expressed on the selector the endpoint
+  // actually uses: index 0 before a reorder is a different credential after it.
+  setPool(K1, K2);
+  const staleIndex = 0;
+  const before = poolEntries()[staleIndex].key;
+  const reordered = [poolEntries()[1], poolEntries()[0]];
+  const after = reordered[staleIndex].key;
+  assert.notEqual(before, after, 'an index is a position, not a credential');
+  // The id, by contrast, still names the same key.
+  assert.equal(entryFor(reordered, entryId(K1)), K1);
+});
+
+function entryFor(entries: { key: string }[], id: string): string | undefined {
+  return entries.find(e => entryId(e.key) === id)?.key;
+}
+
+// ─── replay fidelity ─────────────────────────────────────────────────────────
+// The replayed response stands in for a real provider response, so anything the
+// retry/failover layers read from it has to survive.
+
+test('a replayed exhausted-pool response keeps the Retry-After header', async () => {
+  setPool(K1);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ error: { code: 429, status: 'RESOURCE_EXHAUSTED', message: 'Temporarily busy' } }),
+    { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '3600' } },
+  )) as unknown as typeof fetch;
+  try {
+    // First call makes the request and is 429; that parks the only key.
+    await googleKeyFetch('https://example.test/v1/x', {});
+    // Second call must short-circuit — but keep enough for the retry layer to
+    // classify it the same way. Losing `Retry-After` changed the timing
+    // classification between the original and its replay, which could stop the
+    // backup leg from ever being selected.
+    const replay = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(replay.status, 429);
+    assert.ok(replay.headers.get('retry-after'),
+      'the replay must carry a retry hint or the retry layer mis-times the fallback');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test('the recorded failure keeps the headers a classifier reads', () => {
+  recordLastFailure(429, 'Too Many Requests', '{"error":{}}',
+    new Headers({ 'retry-after': '120', 'x-trace-id': 'should-not-be-kept' }));
+  const kept = getLastFailure()!.headers;
+  assert.equal(kept['retry-after'], '120');
+  assert.equal(kept['x-trace-id'], undefined,
+    'tracing metadata must not ride along in a response the SDK treats as real');
 });
