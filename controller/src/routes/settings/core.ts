@@ -418,6 +418,41 @@ router.post('/settings/google-key-pool/rename', requireAdmin, async (req, res) =
   }
 });
 
+// A model this key can actually SERVE. Availability is per-key AND per-project,
+// and the listing is not trustworthy on its own: Google still advertises
+// `gemini-2.5-flash` as generateContent-capable on keys where calling it 404s
+// with "no longer available". Picking from the list therefore reports a
+// perfectly good key as broken — worse than no test, because the operator's
+// conclusion would be false. So we build a short ordered preference from what the
+// key advertises, newest first, and actually CALL them until one answers.
+const GOOGLE_FLASH_FALLBACK = 'gemini-3.5-flash-lite';
+
+async function probeCandidates(key: string, configured?: string | null): Promise<string[]> {
+  const wanted = configured?.trim();
+  const out: string[] = [];
+  if (wanted) out.push(wanted);
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (r.ok) {
+      const data = (await r.json()) as { models?: { name?: string; supportedGenerationMethods?: string[] }[] };
+      const ids = (data.models || [])
+        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => String(m.name || '').replace(/^models\//, ''))
+        .filter(Boolean);
+      // Newest first — the listing comes back oldest-first, and the retired
+      // models are the old ones.
+      const flash = ids
+        .filter(id => /flash/.test(id) && !/preview|tts|native-audio|image/.test(id))
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+      out.push(...flash);
+    }
+  } catch { /* fall through to the fallback */ }
+  out.push(GOOGLE_FLASH_FALLBACK);
+  return [...new Set(out)].slice(0, 4);
+}
+
 // Test ONE pooled key against the real API. Goes through the same provider
 // path the station uses, but pins the key so a held key can be checked without
 // disturbing the rotation state.
@@ -431,19 +466,32 @@ router.post('/settings/google-key-pool/test', requireAdmin, async (req, res) => 
   if (!key) return res.status(400).json({ error: `no key at index ${index}` });
   try {
     const llm = settings.get().llm || {};
-    const model = llm.provider === 'google' && llm.model ? llm.model : 'gemini-2.5-flash';
-    const m = createGoogleGenerativeAI({ apiKey: key })(model);
-    await generateText({
-      model: m,
-      prompt: 'Reply with the single word OK.',
-      maxOutputTokens: 32,
-      abortSignal: AbortSignal.timeout(15000),
-    });
-    res.json({ ok: true, message: 'Key responded' });
-  } catch (err) {
+    const candidates = await probeCandidates(key, llm.provider === 'google' ? llm.model : undefined);
+    let lastErr: unknown = new Error(`No servable model (tried: ${candidates.join(', ')})`);
+    for (const model of candidates) {
+      try {
+        const m = createGoogleGenerativeAI({ apiKey: key })(model);
+        await generateText({
+          model: m,
+          prompt: 'Reply with the single word OK.',
+          maxOutputTokens: 32,
+          abortSignal: AbortSignal.timeout(15_000),
+        });
+        res.json({ ok: true, message: `Key responded (${model})` });
+        return;
+      } catch (err) {
+        lastErr = err;
+        // 401/403/429 say something about the KEY, so trying another model
+        // cannot help — stop and report that instead.
+        const msg = String((err as any)?.message || '');
+        if (/\b(401|403|429)\b|API_KEY_INVALID|PERMISSION_DENIED|RESOURCE_EXHAUSTED/.test(msg)) break;
+      }
+    }
     // 502, not 200: the editor's post() treats any 2xx as success and never
     // reads this body, so a plain 200 here reported "Key N responded" for a key
     // that had just been rejected. The message still rides along for the UI.
+    res.status(502).json({ ok: false, message: briefLlmError(lastErr) });
+  } catch (err) {
     res.status(502).json({ ok: false, message: briefLlmError(err) });
   }
 });
