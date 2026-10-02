@@ -36,12 +36,20 @@ export function mergePlaylistTracks(lists: any[][]): any[] {
 // Same 30-min horizon the pool picker uses for its other Subsonic sources.
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, { val: any[]; at: number }>();
+let cacheGeneration = 0;
+
+// A playlist ID may survive an upgrade while every member's song ID changes.
+export function clearPlaylistCache(): void {
+  cacheGeneration++;
+  cache.clear();
+}
 
 async function memoFetch(key: string, fn: () => Promise<any[]>): Promise<any[]> {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.val;
+  const generation = cacheGeneration;
   const val = await fn();
-  cache.set(key, { val, at: Date.now() });
+  if (generation === cacheGeneration) cache.set(key, { val, at: Date.now() });
   return val;
 }
 

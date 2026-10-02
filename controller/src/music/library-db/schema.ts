@@ -395,6 +395,49 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 26');
   }
 
+  if (userVersion < 27) {
+    // Lock before rechecking: another opener may have completed the backfill
+    // while this connection waited. Never publish a partially built pool.
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 27) return;
+      const started = performance.now();
+      console.log('[library-db] building mood membership and energy indexes');
+      const labels = (source: string) =>
+        `SELECT value FROM json_each(CASE WHEN json_valid(${source}) THEN ${source} ELSE '[]' END) WHERE type = 'text'`;
+      const membership = (id: string, editorial: string, audio: string) =>
+        `INSERT OR IGNORE INTO track_moods(track_id, mood)
+         SELECT ${id}, value FROM (${labels(editorial)} UNION ${labels(audio)});`;
+      runDdl(d, `
+        CREATE INDEX idx_tracks_energy ON tracks(energy);
+        CREATE TABLE track_moods (
+          track_id TEXT NOT NULL,
+          mood TEXT NOT NULL,
+          PRIMARY KEY(track_id, mood)
+        );
+        CREATE INDEX idx_track_moods_mood ON track_moods(mood, track_id);
+        CREATE TRIGGER tracks_moods_insert AFTER INSERT ON tracks BEGIN
+          ${membership('NEW.id', 'NEW.moods', 'NEW.audio_moods')}
+        END;
+        CREATE TRIGGER tracks_moods_update AFTER UPDATE OF id, moods, audio_moods ON tracks
+        WHEN OLD.id IS NOT NEW.id OR OLD.moods IS NOT NEW.moods OR OLD.audio_moods IS NOT NEW.audio_moods
+        BEGIN
+          DELETE FROM track_moods WHERE track_id = OLD.id OR track_id = NEW.id;
+          ${membership('NEW.id', 'NEW.moods', 'NEW.audio_moods')}
+        END;
+        CREATE TRIGGER tracks_moods_delete AFTER DELETE ON tracks BEGIN
+          DELETE FROM track_moods WHERE track_id = OLD.id;
+        END;
+        INSERT OR IGNORE INTO track_moods(track_id, mood)
+          SELECT t.id, j.value FROM tracks t,
+            json_each(json_array(t.moods, t.audio_moods)) sources,
+            json_each(CASE WHEN json_valid(sources.value) THEN sources.value ELSE '[]' END) j
+          WHERE j.type = 'text';
+      `);
+      d.pragma('user_version = 27');
+      console.log(`[library-db] mood/energy indexes built in ${Math.round(performance.now() - started)}ms`);
+    }).immediate();
+  }
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.

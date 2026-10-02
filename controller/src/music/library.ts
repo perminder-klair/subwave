@@ -246,7 +246,7 @@ export function songsByMood(mood: string | null | undefined): any[] {
   if (!mood || !loaded) return [];
   // rejectBlocked here (not on the final return) so the MOOD_MIN_EXACT
   // widening threshold counts airable tracks, not blocked ones.
-  const flatten = (rows: db.TrackRecord[]) =>
+  const flatten = (rows: db.MoodPoolRecord[]) =>
     blocklist.rejectBlocked(rows.map(r => ({
       id: r.id,
       title: r.title,
@@ -293,7 +293,7 @@ export function sectionCount(t: { structure?: any[] | null } | null | undefined)
   return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
 }
 
-function slimTrack(r: db.TrackRecord) {
+function slimTrack(r: db.EnergyPoolRecord) {
   return {
     id: r.id,
     title: r.title,

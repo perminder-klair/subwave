@@ -153,7 +153,14 @@ async function call(endpoint, params = {}, options: CallOptions = {}) {
     }
     const data = await res.json() as any;
     const sub = data['subsonic-response'];
-    if (sub.status !== 'ok') throw new Error(`Subsonic error: ${sub.error?.message || 'unknown'}`);
+    if (sub.status !== 'ok') {
+      const err = new Error(`Subsonic error: ${sub.error?.message || 'unknown'}`) as Error & {
+        subsonicCode?: number;
+      };
+      const code = Number(sub.error?.code);
+      if (Number.isFinite(code)) err.subsonicCode = code;
+      throw err;
+    }
     const songs = extractSongs(sub);
     subLog.record({
       t: new Date().toISOString(), endpoint, params, ms: Date.now() - started,
@@ -509,12 +516,16 @@ export async function scrobble(
   });
 }
 
-export async function getAlbumList(offset = 0, size = 500) {
+export async function getAlbumList(offset = 0, size = 500, { requireComplete = false } = {}) {
   const r = await call(
     'getAlbumList2',
     { type: 'alphabeticalByName', size, offset },
     RETRY_FAST_TRANSPORT,
   );
+  if (requireComplete && (!r.albumList2 ||
+      (r.albumList2.album != null && !Array.isArray(r.albumList2.album)))) {
+    throw new Error('Incomplete Navidrome walk: malformed album listing');
+  }
   return r.albumList2?.album || [];
 }
 
@@ -688,15 +699,18 @@ export async function getStructuredLyrics(
 // whether an album is a reissue anthology needs the album record AND its full
 // track list together, which exists only in this loop. era-suspect.ts still
 // owns the judgement; this only feeds it.
-export async function* iterateAllSongs() {
+export async function* iterateAllSongs({ requireComplete = false } = {}) {
   let offset = 0;
   const BATCH = 500;
   while (true) {
-    const albums = await getAlbumList(offset, BATCH);
+    const albums = await getAlbumList(offset, BATCH, { requireComplete });
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
         const r = await call('getAlbum', { id: album.id }, RETRY_FAST_TRANSPORT);
+        if (requireComplete && (!r.album || r.album.id !== album.id || !Array.isArray(r.album.song))) {
+          throw new Error('Malformed album response');
+        }
         const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
         const ord = r.album?.originalReleaseDate?.year;
         const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
@@ -725,6 +739,9 @@ export async function* iterateAllSongs() {
         }
       } catch (err) {
         console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
+        // Counts and discovery may use a best-effort listing. A pruning walk
+        // must abort instead: an omitted album is not evidence of deletion.
+        if (requireComplete) throw new Error(`Incomplete Navidrome walk: album ${album.id} could not be read`, { cause: err });
       }
     }
     if (albums.length < BATCH) break;

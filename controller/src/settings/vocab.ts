@@ -39,6 +39,8 @@ import {
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
+  GEMINI_TTS_MODELS as GEMINI_TTS_MODEL_VALUES,
+  GEMINI_TTS_VOICES as GEMINI_TTS_VOICE_VALUES,
   TTS_SPEED_DEFAULT as TTS_SPEED_DEFAULT_VALUE,
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
   TTS_SPEED_MIN as TTS_SPEED_MIN_VALUE,
@@ -53,12 +55,15 @@ import {
   LLM_HEADER_VALUE_MAX,
   LLM_HEADER_VALUE_RE,
   LLM_HEADERS_MAX,
+  normalizeGeminiSafety,
   SETTINGS_AAC_BITRATES,
   SETTINGS_LOUDNESS_SOURCES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
 } from '../schemas/settings.js';
+
+export { normalizeGeminiSafety } from '../schemas/settings.js';
 
 // Placeholders are substituted by renderDjPrompt(). {name} is mandatory:
 // update() refuses any custom template that drops it.
@@ -439,6 +444,15 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   if (l.repeatPenalty !== undefined) {
     target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
   }
+  // HARM_CATEGORY thresholds for the native `google` leg. Whole-object
+  // REPLACE (not a merge) so clearing a box in the editor actually clears it;
+  // each box is strictly boolean, anything else reads as allow.
+  if (l.geminiSafety !== undefined) {
+    if (!l.geminiSafety || typeof l.geminiSafety !== 'object' || Array.isArray(l.geminiSafety)) {
+      throw new Error(`${label}.geminiSafety must be an object map of category → boolean`);
+    }
+    target.geminiSafety = normalizeGeminiSafety(l.geminiSafety);
+  }
   // Discovery-round budget. 0 = follow the provider capability table.
   if (l.discoverySteps !== undefined) {
     target.discoverySteps = clampDiscoverySteps(Number(l.discoverySteps), target.discoverySteps as number);
@@ -760,6 +774,10 @@ export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
 // Empty is valid (use the built-in default voice). Used by chatterbox and
 // pocket-tts (#213).
 export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
+// Gemini's model + voice vocabularies, re-exported under the plain names the
+// rest of the controller imports, mirroring TTS_CLOUD_PROVIDERS above.
+export const GEMINI_TTS_MODELS: readonly string[] = GEMINI_TTS_MODEL_VALUES;
+export const GEMINI_TTS_VOICES: readonly string[] = GEMINI_TTS_VOICE_VALUES;
 // The entity-id pattern shows, personas and skill assignments share. Defined
 // once as SHOW_ID_RE in the shared show schema: a mirrored module may import
 // only 'zod', so it is homed in the first feature that needed it.
