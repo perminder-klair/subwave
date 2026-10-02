@@ -618,7 +618,7 @@ export async function runBanter() {
       recentOpeners: queue.getRecentOpeners(),
     });
     if (!lines) throw new Error('banter generation returned no usable exchange');
-    const ok = await queue.announceExchange(lines, 'banter');
+    const ok = await queue.announceExchange(lines, 'banter', { castNames: [host, ...guests].map(p => p.name) });
     if (!ok) throw new Error('banter exchange failed to render');
     return lines.map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });

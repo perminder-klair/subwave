@@ -461,6 +461,13 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         kokoro: { voice: v.tts?.kokoro?.voice ?? 'bf_isabella' },
         chatterbox: { referenceVoice: v.tts?.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: v.tts?.pocketTts?.voice ?? 'alba' },
+        // Absent block = the engine's own defaults, matching the controller's
+        // coercion: an empty model means "walk the fallback chain".
+        gemini: {
+          model: v.tts?.gemini?.model ?? '',
+          voice: v.tts?.gemini?.voice ?? 'Puck',
+          pronunciation: v.tts?.gemini?.pronunciation ?? '',
+        },
         cloud: {
           enabled: v.tts?.cloud?.enabled ?? false,
           provider: v.tts?.cloud?.provider ?? 'openai',

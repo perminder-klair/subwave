@@ -2,6 +2,7 @@
 // them literally. Keep the primary text untouched and sanitize only its rescue.
 export function fallbackTextFor(requested: string, cloudCueFamily: string | null, text: string): string {
   const expressiveRequest = requested === 'chatterbox'
+    || requested === 'gemini'
     || cloudCueFamily === 'fish-s21'
     || cloudCueFamily === 'elevenlabs-v3';
   if (!expressiveRequest || !text) return text;

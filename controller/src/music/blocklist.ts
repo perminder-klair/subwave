@@ -125,20 +125,25 @@ const PLAYLIST_MEMBERS_TTL_MS = 30 * 60 * 1000;
 let playlistMembers = new Map<string, Set<string>>();
 let playlistMembersAt = 0;
 let playlistRefreshInflight: Promise<void> | null = null;
+let playlistMembersGeneration = 0;
 
 function playlistRuleIds(): string[] {
   return [...new Set(rules.filter((r) => r.field === 'playlist').flatMap((r) => r.values))];
 }
 
 export async function refreshPlaylistMembers(): Promise<void> {
+  const generation = ++playlistMembersGeneration;
   const ids = playlistRuleIds();
   if (!ids.length) {
     playlistMembers = new Map();
     playlistMembersAt = Date.now();
     return;
   }
-  playlistMembers = await resolvePlaylistMemberSets(ids);
-  playlistMembersAt = Date.now();
+  const members = await resolvePlaylistMemberSets(ids);
+  if (generation === playlistMembersGeneration) {
+    playlistMembers = members;
+    playlistMembersAt = Date.now();
+  }
 }
 
 function maybeRefreshPlaylistMembers() {

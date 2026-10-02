@@ -39,6 +39,8 @@ import {
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
+  GEMINI_TTS_MODELS as GEMINI_TTS_MODEL_VALUES,
+  GEMINI_TTS_VOICES as GEMINI_TTS_VOICE_VALUES,
   TTS_SPEED_DEFAULT as TTS_SPEED_DEFAULT_VALUE,
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
   TTS_SPEED_MIN as TTS_SPEED_MIN_VALUE,
@@ -760,6 +762,10 @@ export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
 // Empty is valid (use the built-in default voice). Used by chatterbox and
 // pocket-tts (#213).
 export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
+// Gemini's model + voice vocabularies, re-exported under the plain names the
+// rest of the controller imports, mirroring TTS_CLOUD_PROVIDERS above.
+export const GEMINI_TTS_MODELS: readonly string[] = GEMINI_TTS_MODEL_VALUES;
+export const GEMINI_TTS_VOICES: readonly string[] = GEMINI_TTS_VOICE_VALUES;
 // The entity-id pattern shows, personas and skill assignments share. Defined
 // once as SHOW_ID_RE in the shared show schema: a mirrored module may import
 // only 'zod', so it is homed in the first feature that needed it.

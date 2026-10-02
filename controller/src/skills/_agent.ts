@@ -405,7 +405,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     else lastUnavailable.set(cap.kind, Date.now());
     return {
       seg: null,
-      exchange: result.aired ? { kind: cap.kind, lines: result.lines || [] } : null,
+      exchange: result.aired ? { kind: cap.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null,
       reason: result.reason || undefined,
       skippedBeforeLlm: undefined,
     };
@@ -476,7 +476,7 @@ export async function agenticTick(ctx) {
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
 
     let seg: { kind: string; text: string; sfx: string | null } | null = null;
-    let exchange: { kind: string; lines: Array<{ persona: any; text: string }> } | null = null;
+    let exchange: { kind: string; lines: Array<{ persona: any; text: string }>; castNames: string[] } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (!settings.get().llm?.pickerAgent) {
@@ -507,7 +507,7 @@ export async function agenticTick(ctx) {
             situation: buildCohostedSituation(ctx, selected),
             segmentState, forced: false,
           });
-          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [] } : null;
+          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [], castNames: [host, ...guests].map(p => p.name) } : null;
           if (result.aired) lastUnavailable.delete(selected.kind);
           else lastUnavailable.set(selected.kind, Date.now());
           seg = null;
@@ -517,7 +517,7 @@ export async function agenticTick(ctx) {
     }
 
     if (exchange) {
-      const aired = await queue.announceExchange(exchange.lines, exchange.kind);
+      const aired = await queue.announceExchange(exchange.lines, exchange.kind, { castNames: exchange.castNames });
       if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
       lastFired.set(exchange.kind, Date.now());
       segmentState.lastAnySegment = Date.now();
@@ -720,7 +720,7 @@ export async function runCapability(
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
       return { aired: false, queued: false, deferred: false, text: null, reason };
     }
-    const aired = await queue.announceExchange(result.lines, cap.kind);
+    const aired = await queue.announceExchange(result.lines, cap.kind, { castNames: [host, ...guests].map(p => p.name) });
     if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
     lastFired.set(cap.kind, Date.now());
     segmentState.lastAnySegment = Date.now();

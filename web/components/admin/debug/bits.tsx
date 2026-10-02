@@ -38,6 +38,13 @@ export function KvTable({ obj }: { obj: Record<string, unknown> | null | undefin
   );
 }
 
+// true for anything JSON.stringify would inline (no nested object/array), so
+// a flat array of these reads better comma-joined than as a bracketed,
+// quoted JSON dump.
+function isFlat(v: unknown): boolean {
+  return v === null || (typeof v !== 'object' && typeof v !== 'function');
+}
+
 function KvRow({ k, val }: { k: string; val: unknown }) {
   return (
     <>
@@ -45,6 +52,12 @@ function KvRow({ k, val }: { k: string; val: unknown }) {
       <dd>
         {val === null || val === undefined ? (
           <span className="text-muted italic">null</span>
+        ) : Array.isArray(val) && val.every(isFlat) ? (
+          val.length ? (
+            <span className="break-words">{val.join(', ')}</span>
+          ) : (
+            <span className="text-muted italic">none</span>
+          )
         ) : typeof val === 'object' ? (
           <pre className="m-0 font-[inherit] text-[11px] break-words whitespace-pre-wrap">
             {JSON.stringify(val, null, 2)}

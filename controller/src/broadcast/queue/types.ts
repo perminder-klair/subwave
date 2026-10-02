@@ -101,6 +101,9 @@ export interface QueueItem {
   block?: { id: string; label: string; index: number; size: number };
   intent?: string | null;
   introScript?: string | null;
+  // Persist the one-label pass so retries/recovery cannot eat a second label
+  // that belongs to the spoken text. Absent on legacy queue snapshots.
+  introLabelChecked?: boolean;
   introKind?: string;
   // Who WROTE introScript. Carried on the item because the line is rendered in
   // drainToLiquidsoap and aired in airIntro, both later than generation and
