@@ -45,6 +45,24 @@ yours. Set this up only if you're satisfied it does. Everything here is a plain
 list of keys the operator supplies; the station does not acquire, generate,
 share or rotate keys on its own.
 
+To be explicit about the scope of that warning, because it is easy to read it as
+a rule rather than as a prompt to check:
+
+- **If you enter several free-tier keys, whether that is permitted is on you.**
+  The software has no way to enforce it and takes no position either way. It
+  will happily rotate them.
+- **If you enter several paid keys across projects or quotas, compliance is
+  still on you** — this is not a licence that only the free-tier arrangement
+  needs. SUB/WAVE cannot tell a paid-key pool that is permitted apart from one
+  that is not, because the answer lives in terms it does not read and cannot
+  enforce.
+
+So the note is not software policing a policy, and it is not a verdict on your
+particular setup. It exists for one reason: to make you aware that there is
+something worth checking before you wire this into a station you care about. The
+checking is the part only you can do. If you have already done it, this section
+has nothing further to add.
+
 If your use doesn't fit comfortably inside a single key's free tier, the paid
 key on its own — no pool — is the straightforward option, and this whole page
 is irrelevant.
@@ -181,3 +199,9 @@ one). A station with a single key never sees it: nobody should meet a compliance
 warning for something they haven't done, and it is only actionable at the point
 of adding a second key. This page and `README.md` carry it unconditionally,
 because a doc can be read deliberately rather than stumbled into.
+
+The note says the same thing wherever it appears: it is a prompt to check, and
+the check is yours. That matters in both directions — it is not a warning the
+software raises against you, and it is not an assurance that your arrangement is
+fine. Multiple paid keys are no more exempt from your own review than multiple
+free ones.

@@ -328,9 +328,8 @@ export function GoogleKeyPoolEditor({
             ↑ ↓ if you got the order wrong.
           </p>
           <p className="mt-2 border-l-2 border-[var(--accent)] pl-2 text-[12px] text-muted">
-            <strong className="text-ink">Check Google&rsquo;s terms before
-            using more than one key.</strong> Rotating several free-tier keys to
-            work around a single key&rsquo;s quota may conflict with the{' '}
+            <strong className="text-ink">Whether this is permitted is your call,
+            not ours.</strong> Several free-tier keys may conflict with the{' '}
             <a
               href="https://developers.google.com/terms"
               target="_blank"
@@ -339,9 +338,12 @@ export function GoogleKeyPoolEditor({
             >
               Google APIs Terms of Service
             </a>{' '}
-            or the Gemini free-tier terms, which can change without notice. Read
-            them and decide for yourself whether your use is permitted &mdash;
-            Subwave can&rsquo;t make that call for you.
+            or the Gemini free-tier terms, which can change without notice
+            &mdash; and several <em>paid</em> keys across projects are just as
+            much your responsibility to check. This is a prompt to look, not a
+            rule the station applies: it has no way to enforce those terms and
+            takes no position on your setup. If you have already read them, you
+            can ignore this.
           </p>
         </>
       )}
