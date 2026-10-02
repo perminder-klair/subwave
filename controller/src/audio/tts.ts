@@ -302,7 +302,7 @@ export async function synthesizeSample(
   const activeCorrections = corrections !== undefined
     ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections, language);
   // `speed` is already the final preview multiplier. A persona preview can
   // compose two saved 0.05-grid controls into a non-grid rate (0.90 x 1.15 =
   // 1.035), so only bounds-clamp here; snapping again would diverge from air.
@@ -345,7 +345,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure falls back so the
@@ -364,7 +364,7 @@ export async function speak(
   // that the free-text generators' own stripThinking never sees. No-op on clean
   // text. Operator speech corrections are read live, so a saved rule applies to
   // the next spoken line with no restart.
-  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language);
   const speakText = GLOBAL_VOICE_KINDS.has(kind)
     ? normalizedText
     : scrubCjkForSpeech(normalizedText, language);

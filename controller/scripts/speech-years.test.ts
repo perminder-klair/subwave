@@ -151,6 +151,42 @@ test('currency and units keep their existing expansions and numeric readings', (
   assert.equal(normalizeForSpeech('1967 mph'), '1967 miles per hour');
 });
 
+for (const unit of ['ms', 'g', 'm', 'W', 'mg', 'cm', 'ml', 'kW', 'kHz', 'rpm', 'bpm', 'dB', 'µs', 'milliseconds', 'grams', 'litres']) {
+  test(`explicit ${unit} quantities never receive year readings`, () => {
+    for (const year of ['1800', '1967', '2001', '2099']) {
+      assert.equal(normalizeForSpeech(`${year} ${unit}`), `${year} ${unit}`);
+    }
+    assert.equal(normalizeForSpeech(`1967-1972 ${unit}`), `1967-1972 ${unit}`);
+  });
+}
+
+for (const symbol of ['₹', '₩', '₽', '₦', '₺', '€', '£', '¥']) {
+  test(`${symbol} currency quantities never receive year readings`, () => {
+    assert.equal(normalizeForSpeech(`${symbol}1967`), `${symbol}1967`);
+    assert.equal(normalizeForSpeech(`${symbol} 1967`), `${symbol} 1967`);
+    assert.equal(normalizeForSpeech(`1967 ${symbol}`), `1967 ${symbol}`);
+    assert.equal(normalizeForSpeech(`${symbol}1967-1972`), `${symbol}1967-1972`);
+  });
+}
+
+for (const language of ['', 'English', 'English (UK)', 'en', 'en-GB', ' en_US ']) {
+  test(`English language ${JSON.stringify(language)} permits date words`, () => {
+    assert.equal(normalizeForSpeech('1967 and the 1960s', undefined, language),
+      'nineteen sixty-seven and the nineteen sixties');
+  });
+}
+
+for (const language of ['French', 'fr', 'Spanish', 'es', 'Turkish', 'German', 'Japanese', 'unknown']) {
+  test(`${language} dates stay numeric and operator corrections still apply`, () => {
+    const text = "1967, 1960s, '60s and 1967-1972";
+    assert.equal(normalizeForSpeech(text, undefined, language), text);
+    assert.equal(normalizeForSpeech('Sorti en **1967**.', [
+      { from: '1967', to: 'mille neuf cent soixante-sept' },
+    ], language), 'Sorti en mille neuf cent soixante-sept.');
+    assert.equal(normalizeForDisplay('Sorti en 1967.'), 'Sorti en 1967.');
+  });
+}
+
 test('punctuation cleanup does not turn multi-part dates into year ranges', () => {
   assert.equal(normalizeForSpeech('1967–01–01'), '1967 to 01 to 01');
 });

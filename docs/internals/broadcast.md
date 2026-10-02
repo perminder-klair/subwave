@@ -48,11 +48,17 @@ TTS engine routing, personas, guests, programmes and the policy switches
 - **Speech-only year readings (#1669)**: engines can read a digit year as a
   quantity (Kokoro: "1967" → "one thousand nine hundred sixty-seven"), so
   `normalizeForSpeech` spells years, decades and simple year ranges as words for
-  every engine, after operator `tts.corrections` (an operator's pronunciation
-  wins) and before the unit/symbol rules. `normalizeForDisplay` keeps digits in
+  every engine when the speech language is English or unset. Non-English
+  languages keep digit dates for their engine's native reading. Synthesis,
+  previews and intro budgeting pass the speaker's language to the same rule.
+  It runs after operator `tts.corrections` and before the unit/symbol rules;
+  a correction to spoken words preempts expansion, while a replacement that
+  still contains digits or symbols goes through the remaining rules.
+  `normalizeForDisplay` keeps digits in
   the booth log, session and player feed. Scope is standalone years from
   **1800–2099**. Numbers stay numeric when context marks them as quantities or
-  identifiers: currency, decimals, comma formatting, clocks, slash dates, digit
+  identifiers: Unicode currency signs, explicit units such as `ms`, `g` and
+  `W`, decimals, comma formatting, clocks, slash dates, digit
   groups (phone numbers), identifier prefixes (`catalogue number`, `room`,
   `#`), and a plural count noun within two words (`2000 copies`, `1984 vinyl
   records`). A possessive year stays a year (`1967's biggest hit`); `1960s`

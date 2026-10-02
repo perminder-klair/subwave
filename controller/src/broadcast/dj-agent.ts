@@ -496,7 +496,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
+  const say = dropEchoedLink(trimLinkToIntro(rawLink, song, linkPersona), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
   // The no-FX schema tells the model to leave transition null, but a model can

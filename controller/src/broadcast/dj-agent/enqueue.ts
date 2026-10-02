@@ -79,20 +79,21 @@ export function dropEchoedLink(link: string | null, queue: any): string | null {
 // Returns the DISPLAY form (#1186): it becomes introScript, which is
 // booth-logged, remembered in the session and shown in the player's feed. The
 // pronunciation layer is applied separately by speak() at render time.
-export function trimLinkToIntro(text: string | null | undefined, song: any): string | null {
+export function trimLinkToIntro(text: string | null | undefined, song: any, persona: Persona | null = null): string | null {
   const raw = (text || '').trim();
   if (!raw) return null;
   const clean = stripThinking(raw);
   const display = normalizeForDisplay(clean);
   // Non-DJ personas skip the budget but not the cleanup.
-  if (!settings.getEffectivePersona()?.djMode) return display || null;
+  const speaker = persona ?? settings.getEffectivePersona();
+  if (!speaker?.djMode) return display || null;
   // A DURATION budget, so it is counted on the words the engine will read.
   // spokenWordScale folds the display/spoken difference into the pace scale, so
   // the ceiling stays a spoken-word ceiling while the trim lands on the display
   // text's sentence boundaries. firstVocalMsFor arms the drop when a measured
   // vocal entry leaves no runway.
-  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections);
-  const pace = speechPaceScale('link') * spokenWordScale(display, spoken);
+  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections, String(speaker.language || ''));
+  const pace = speechPaceScale('link', speaker) * spokenWordScale(display, spoken);
   return dj.enforceIntroBudget(display, introMsOf(song), pace, dj.firstVocalMsFor(song)) || null;
 }
 
@@ -120,7 +121,7 @@ export async function enqueuePick(
   // the session turn may carry the marginally longer reading.
   const introLink = hostSpeech && !session.isHostSpeechCurrent(hostSpeech)
     ? null
-    : dropEchoedLink(trimLinkToIntro(link, song), queue);
+    : dropEchoedLink(trimLinkToIntro(link, song, introPersona), queue);
   const track: any = trackFields(song);
   // Transition effects (DJ mode only); getAnnotatedUri stamps the liq_* flags
   // and radio.liq ramps them. sweep muffles the crossfade INTO this pick;

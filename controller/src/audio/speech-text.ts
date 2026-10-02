@@ -79,6 +79,9 @@ const SMALL_NUMBERS = [
 ];
 const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
 const DECADES = ['', 'tens', 'twenties', 'thirties', 'forties', 'fifties', 'sixties', 'seventies', 'eighties', 'nineties'];
+// Persona languages are free text; blank is the station's English default.
+// Explicit non-English (including unknown labels) leaves dates to the engine.
+const ENGLISH_LANGUAGE_RE = /^(?:english\b|en(?:$|[-_]))/i;
 // 1800–2099 covers historical recordings/composers and near-future dates.
 // Unicode boundaries also protect catalogue identifiers and longer digit runs.
 const YEAR_RE = /(?<![\p{L}\p{N}_])((?:18|19|20)\d{2})(?:('?s)|\s*(?:-|to)\s*(\d{4}|\d{2}))?(?![\p{L}\p{N}_])/giu;
@@ -89,7 +92,8 @@ const DECADE_CONTEXT_RE = /\b(?:the|early|mid|late|during)\s*$/i;
 const IDENTIFIER_PREFIX_RE = /(?:\b(?:catalogue|catalog|cat\.|no\.|number|serial|model|room|flight|route|track\s+number|extension|ext\.?)|#)\s*$/i;
 // Deliberately small: obvious counts, magnitudes and units, not a noun parser.
 const PLURAL_COUNT_NOUNS = 'people|copies|records|tracks|songs|albums|items|units|dollars|cents|euros|pounds|seconds|minutes|hours|days|years|meters|metres|kilometers|kilometres|miles|feet|watts';
-const QUANTITY_SUFFIX_RE = new RegExp(`^(?:\\s*[%°]|\\s+(?:${PLURAL_COUNT_NOUNS}|dollar|cent|euro|pound|yen|thousand|million|billion|trillion|second|minute|hour|day|year|meter|metre|kilometer|kilometre|mile|kg|km|mph|hz|watt)\\b)`, 'i');
+const MEASUREMENT_UNITS = 'milliseconds?|microseconds?|nanoseconds?|grams?|milligrams?|kilograms?|litres?|liters?|ns|us|µs|μs|ms|s|mg|g|kg|mm|cm|m|km|ml|l|mph|hz|khz|mhz|ghz|w|kw|mw|bpm|rpm|db';
+const QUANTITY_SUFFIX_RE = new RegExp(`^(?:\\s*[%°\\p{Sc}]|\\s+(?:${PLURAL_COUNT_NOUNS}|dollar|cent|euro|pound|yen|thousand|million|billion|trillion|second|minute|hour|day|year|meter|metre|kilometer|kilometre|mile|watt|${MEASUREMENT_UNITS})\\b)`, 'iu');
 // Only plural counts may follow an intervening word: "1984 vinyl records"
 // is a quantity, while "the 1972 studio album" remains a date.
 const PLURAL_QUANTITY_SUFFIX_RE = new RegExp(`^\\s+(?:[\\p{L}]+\\s+)?(?:${PLURAL_COUNT_NOUNS})\\b`, 'iu');
@@ -119,7 +123,7 @@ function decadeWords(year: number): string {
 function isNumericContext(before: string, after: string): boolean {
   // Currency is still owned by the dollar rule below. Commas/decimal points
   // touching digits, clock colons and slash/hyphen date fragments stay numeric.
-  return /(?:[$€£¥]\s*|[\d.,:/-])$/.test(before)
+  return /(?:\p{Sc}\s*|[\d.,:/-])$/u.test(before)
     || /\d{2,}\s+$/.test(before)
     || /^\s+\d/.test(after)
     || IDENTIFIER_PREFIX_RE.test(before)
@@ -354,6 +358,7 @@ export function normalizeForDisplay(text: string): string {
 export function normalizeForSpeech(
   text: string,
   corrections?: readonly SpeechCorrection[],
+  language = '',
 ): string {
   if (!text) return text;
   let t = stripMarkup(text);
@@ -371,9 +376,10 @@ export function normalizeForSpeech(
   // the year/decade and symbol rules so a correction can pre-empt an expansion.
   if (corrections?.length) t = applyCorrections(t, corrections);
 
-  // --- years and decades (speech only, every engine, operator rules first) ---
+  // --- English years and decades (every engine, operator rules first) ---
   // Before currency/unit expansion: their original symbols identify quantities.
-  t = normalizeYears(t);
+  const lang = language.trim();
+  if (!lang || ENGLISH_LANGUAGE_RE.test(lang)) t = normalizeYears(t);
 
   // --- units and symbols (all keyed on an adjacent digit — conservative) ---
   t = t.replace(/(\d)\s*°\s*F\b/g, '$1 degrees Fahrenheit');
