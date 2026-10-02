@@ -16,6 +16,12 @@ export const CLOUD_PROVIDERS: CloudProviderMeta[] = [
   { id: 'elevenlabs', label: 'ElevenLabs', blurb: 'Most natural · your library' },
   { id: 'fish-audio', label: 'Fish Audio', blurb: 'Expressive · performance cues' },
   { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'Your own server · no key' },
+  // Gemini is a CLOUD PROVIDER here, not a peer engine card: it is a managed
+  // Google service reached with the same key as the LLM section, so an operator
+  // picking a voice should find it in the list they already know. The engine
+  // still resolves as its own id (engineMeta.GEMINI_CLOUD_PROVIDER) — this is a
+  // presentation choice, not a second source of truth.
+  { id: 'gemini', label: 'Gemini', blurb: 'Google TTS direct · same key as the LLM' },
 ];
 
 export const CLOUD_PROVIDER_META: Record<string, CloudProviderMeta> = Object.fromEntries(
@@ -90,6 +96,10 @@ export interface CloudProviderAvailability {
   // caller can't see it (the persona slot reads the station's saved value), and
   // that gap is why the state has an explicit 'unknown'.
   compatBaseUrlSet?: boolean;
+  // SettingsResponse.tts.available.gemini — the ENGINE flag, not a
+  // cloudByProvider entry: Gemini is its own engine id, so the controller
+  // reports its key readiness under `available.gemini`.
+  gemini?: boolean;
 }
 
 export interface CloudProviderStatusOpts {
@@ -108,6 +118,20 @@ export function cloudProviderStatus(
   opts: CloudProviderStatusOpts = {},
 ): CloudProviderStatus {
   const a = availability || {};
+  if (id === 'gemini') {
+    // Reads the engine flag, NOT cloudByProvider — Gemini is not a cloud
+    // provider on the server, so it has no entry there and borrowing one would
+    // report "unknown" on a station that is perfectly keyed.
+    if (a.gemini === undefined) return { label: '', tone: 'ok', state: 'unknown' };
+    if (a.gemini) return { label: 'key set', tone: 'ok', state: 'ready' };
+    return {
+      label: 'no key', tone: 'warn', state: 'off',
+      hint: {
+        reason: 'No Google API key is configured for Gemini TTS',
+        action: opts.keyAction || 'add GOOGLE_GENERATIVE_AI_API_KEY in Settings → Voice',
+      },
+    };
+  }
   if (id === 'openai-compatible') {
     // No key-based entry: this provider is trusted once it has somewhere to
     // send the request.

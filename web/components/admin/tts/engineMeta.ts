@@ -14,9 +14,33 @@ export const ENGINES: EngineMeta[] = [
   { id: 'kokoro',     label: 'Kokoro',     blurb: 'More natural · multilingual' },
   { id: 'chatterbox', label: 'Chatterbox', blurb: 'Clone a voice from a clip' },
   { id: 'pocket-tts', label: 'PocketTTS',  blurb: 'Multilingual · CPU-only' },
-  { id: 'cloud',      label: 'Cloud',      blurb: 'OpenAI · ElevenLabs · Fish' },
+  { id: 'cloud',      label: 'Cloud',      blurb: 'OpenAI · ElevenLabs · Fish · Gemini' },
   { id: 'remote',     label: 'Remote',     blurb: 'Self-hosted HTTP endpoint' },
 ];
+
+// Gemini reaches Google directly with the same API key as the LLM section, so an
+// operator choosing a voice should find it beside OpenAI / ElevenLabs / Fish
+// rather than as a card of its own — two Google-backed choices in two different
+// menus is a question nobody can answer from the screen. The dispatcher still
+// resolves it as its own engine id, so the two selectors are tied together by
+// the pair of helpers below: which engine card lights up, and which provider is
+// chosen. They are always written together and never read apart, which is what
+// keeps this a presentation choice rather than a second source of truth.
+export const GEMINI_CLOUD_PROVIDER = 'gemini';
+
+/** The engine card a given engine id belongs under. */
+export function engineCategory(engine: string): string {
+  return engine === GEMINI_CLOUD_PROVIDER ? 'cloud' : engine;
+}
+
+/**
+ * The engine id a cloud-provider selection means. Gemini keeps its own id so the
+ * dispatcher and every stored persona/skill value are untouched; everything else
+ * is the shared `cloud` engine.
+ */
+export function engineForCloudProvider(provider: string): string {
+  return provider === GEMINI_CLOUD_PROVIDER ? GEMINI_CLOUD_PROVIDER : 'cloud';
+}
 
 // The persona-only "follow the station" card, offered first. Kept out of
 // ENGINES because that list also serves the fallback slot and the default-engine

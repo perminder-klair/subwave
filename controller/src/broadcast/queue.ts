@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, voiceGainDb } from '../audio/tts.js';
+import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -2295,11 +2295,36 @@ class Queue {
     // label picks any name on the call sheet, including the one it is replying to.
     const knownNames = [...castNames, ...lines.map(l => l.persona?.name).filter(Boolean) as string[]];
     try {
-      for (const l of lines) {
-        const text = normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames));
-        if (!text) continue;
-        const wavPath = await this._speak(text, { kind, persona: l.persona });
-        rendered.push({ ...l, text, wavPath });
+      // One conversational render when every line is gemini-voiced — the whole
+      // exchange in a single request, so turn-taking is generated as dialogue
+      // rather than stitched from N independent clips. Anything else (a
+      // mixed-engine roster, or more voices than Google's 2-speaker cap) throws
+      // and falls through to the per-line loop below, which is the long-standing
+      // behaviour and must keep working unchanged.
+      //
+      // The batched path strips the speaker label for the same reason the
+      // per-line loop does (#1715): Gemini reads its transcript verbatim, so a
+      // prefixed "Roxy:" is spoken aloud as a name rather than stripped as a
+      // label. The name is carried by `speech_metadata.speaker` instead, which
+      // is what the batching exists to do.
+      const stripped = lines.map(l => normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames)));
+      const single = await speakExchange(
+        lines.map((l, i) => ({ ...l, text: stripped[i] })),
+        { kind },
+      ).catch(() => null);
+      if (single) {
+        const text = lines
+          .map((l, i) => `${l.persona?.name || 'DJ'}: ${stripped[i]}`)
+          .filter(t => !t.endsWith(': '))
+          .join('\n');
+        rendered.push({ persona: lines[0].persona, text, wavPath: single });
+      } else {
+        for (const [i, l] of lines.entries()) {
+          const text = stripped[i];
+          if (!text) continue;
+          const wavPath = await this._speak(text, { kind, persona: l.persona });
+          rendered.push({ ...l, text, wavPath });
+        }
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);

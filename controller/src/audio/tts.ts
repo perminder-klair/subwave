@@ -385,6 +385,60 @@ export async function synthesizeSample(
   return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
+// One conversational render for a whole multi-voice exchange, when every line
+// resolves to the gemini engine (max 2 distinct voices — gemini.speakMulti
+// throws past that). Anything else throws and the caller renders per-line, so
+// mixed-engine exchanges keep working exactly as before.
+export async function speakExchange(
+  lines: { persona: any; text: string }[],
+  { kind = 'banter', outPath }: { kind?: string; outPath?: string } = {},
+): Promise<string> {
+  const resolved = lines.map((l) => {
+    const personaTts = resolvePersonaVoiceSlot(l.persona?.tts || null, settings.get().tts);
+    return { line: l, engine: resolveEngine(kind, personaTts).engine, personaTts };
+  });
+  if (resolved.length === 0 || !resolved.every((r) => r.engine === 'gemini')) {
+    throw new Error('speakExchange only supports an all-gemini exchange');
+  }
+  // Same floor as the single-speaker path, so the operator's Voice-panel pick
+  // governs an exchange too: a persona on gemini keeps its OWN voice, and
+  // anything else takes the station voice instead of the engine's hardcoded
+  // default. The model is station-level — every turn in one request shares it,
+  // so it is resolved once here rather than per line.
+  const { model } = stationGeminiPick({}, resolved[0].personaTts);
+  const geminiLines = resolved.map(({ line: l, personaTts }) => ({
+    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
+    voice: stationGeminiPick({}, personaTts).voice,
+    style: typeof (l.persona as any)?.voiceStyle === 'string' ? (l.persona as any).voiceStyle : undefined,
+    // Each speaker's own character, so a host and a guest don't come out of one
+    // render sounding like the same person. Composed per turn inside the engine.
+    soul: typeof (l.persona as any)?.soul === 'string' ? (l.persona as any).soul : undefined,
+  }));
+
+  const started = Date.now();
+  try {
+    const result = await gemini.speakMulti(geminiLines, { outPath, model });
+    if (typeof result === 'string') await applyEdgeFades(result);
+    const combinedText = lines.map((l) => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n').slice(0, 240);
+    recordTts({
+      kind, requested: 'gemini', chars: combinedText.length,
+      text: combinedText, persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+    });
+    return result;
+  } catch (err) {
+    recordTts({
+      kind, requested: 'gemini', chars: 0,
+      text: 'Multi-speaker exchange failed', persona: 'Multi-Speaker',
+      engine: 'gemini', fellBack: false,
+      ok: false, ms: Date.now() - started, error: (err as any).message,
+      t: new Date().toISOString(),
+    });
+    throw err;
+  }
+}
+
 // Public entry point. Tries the configured engine; on failure falls back so the
 // DJ never goes silent. Every call is timed into the TTS ring buffer (stats.js).
 export async function speak(
