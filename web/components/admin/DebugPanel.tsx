@@ -121,15 +121,7 @@ export default function DebugPanel() {
       {data && (
         <>
           <div className="stack-mobile grid grid-cols-3 gap-4">
-            <Card
-              title="Now playing"
-              headClass="flex-nowrap"
-              sub={
-                <span className="text-[9px] tracking-[0.08em] normal-case">
-                  now-playing.json
-                </span>
-              }
-            >
+            <Card title="Now playing">
               <ScrollArea className="max-h-80">
                 <KvTable obj={data.nowPlaying} />
               </ScrollArea>

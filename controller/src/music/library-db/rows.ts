@@ -2,7 +2,7 @@
 // column as JSON is parsed here, defensively — a row written by an older schema
 // version must degrade to null rather than throw a query.
 
-import type { TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
   return {
@@ -196,3 +196,29 @@ export function normaliseYear(y: unknown): number | null {
   return null;
 }
 
+
+export function rowToMoodPool(row: MoodPoolRow): MoodPoolRecord {
+  return {
+    id: row.id, title: row.title, artist: row.artist, album: row.album,
+    albumId: row.album_id ?? null, artistId: row.artist_id ?? null, year: row.year,
+    genres: row.genres ? safeParseArray(row.genres) : [], genre: row.genre,
+    moods: row.moods ? safeParseArray(row.moods) : [], energy: row.energy ?? null,
+    durationSec: row.duration_sec,
+  };
+}
+
+export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
+  return {
+    ...rowToMoodPool(row),
+    originalYear: row.original_year ?? null,
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
+    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
+      ? true : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+    audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
+    bpm: row.bpm ?? null, musicalKey: row.musical_key ?? null,
+    introMs: row.intro_ms ?? null, loudnessLufs: row.loudness_lufs ?? null,
+    structure: row.structure_json ? safeParseSections(row.structure_json) : null,
+    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
+  };
+}

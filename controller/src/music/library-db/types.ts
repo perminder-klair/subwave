@@ -228,3 +228,17 @@ export interface LibraryStats {
   updatedAt: string | null;
 }
 
+
+// Discovery pools deliberately exclude analysis that their consumers never read.
+export type MoodPoolRecord = Pick<TrackRecord,
+  'id' | 'title' | 'artist' | 'album' | 'albumId' | 'artistId' | 'year' |
+  'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'>;
+export type EnergyPoolRecord = MoodPoolRecord & Pick<TrackRecord,
+  'originalYear' | 'isCompilation' | 'yearUntrusted' | 'audioMoods' | 'bpm' |
+  'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'pace'>;
+export type MoodPoolRow = Pick<TrackRow,
+  'id' | 'title' | 'artist' | 'album' | 'album_id' | 'artist_id' | 'year' |
+  'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec'>;
+export type EnergyPoolRow = MoodPoolRow & Pick<TrackRow,
+  'original_year' | 'is_compilation' | 'era_untrusted' | 'audio_moods' | 'bpm' |
+  'musical_key' | 'intro_ms' | 'loudness_lufs' | 'structure_json' | 'vocal_ranges_json' | 'pace_json'>;
