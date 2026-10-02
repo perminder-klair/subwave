@@ -61,7 +61,7 @@ export interface NeverPlayAgainDeps {
   /** queue.purgeBlocked() — drops now-blocked upcoming items, returns how many. */
   purgeBlockedIncludingSent: () => Promise<{ removed: number; kept: number }>;
   /** scheduler.refreshAutoPlaylist() — rewrites auto.m3u. */
-  refreshAutoPlaylist: () => Promise<void>;
+  refreshAutoPlaylist: () => Promise<unknown>;
   /** never-play-ignore.isEnabled() — is NEVER_PLAY_LIBRARY_PATH configured. */
   ignoreEnabled: () => boolean;
   /** never-play-ignore.resolveWithinRoot(rel) — throws on an invalid/escaping path. */
