@@ -18,7 +18,7 @@
 // Run: npm test -- handoff-memory-wiring
 
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { after, test, type TestContext } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,6 +59,18 @@ function context(show: { id: string; name: string }, atMs: number) {
     listeners: 1,
     activeShow: { ...show, topic: '', moods: ['calm'] },
   } as any;
+}
+
+// Register before setup so a failed update or arming assertion cannot leak the
+// fake clock or prompt settings into the next test.
+function restorePromptSettingsAfter(t: TestContext) {
+  const realNow = Date.now;
+  const { timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock } = settings.get();
+  const prior = structuredClone({ timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock });
+  t.after(async () => {
+    Date.now = realNow;
+    await settings.update(prior as never);
+  });
 }
 
 // Records what each generator was handed. Neither returns anything the test
@@ -308,14 +320,13 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
   await settings.update({ shows: priorShows, schedule: priorSchedule } as never);
 });
 
-test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async () => {
-  const realNow = Date.now;
+test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async (t) => {
+  restorePromptSettingsAfter(t);
   const generatedAt = Date.parse('2026-09-18T13:57:00.000Z'); // 14:57 Europe/London
   const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');  // 15:00 Europe/London
   const contextAt = Date.parse('2026-09-18T14:03:00.000Z');   // picker look-ahead
   Date.now = () => generatedAt;
 
-  const prior = settings.get();
   const week: Record<number, string[]> = {};
   for (let day = 0; day < 7; day++) {
     week[day] = Array(24).fill('s_outgoing');
@@ -358,12 +369,6 @@ test('a final-track handoff grounds both rendered prompts at the stored boundary
     await djAgent.runPersonaHandoff(queue, incoming, deps);
   } finally {
     (queue as any).announceExchange = realExchange;
-    Date.now = realNow;
-    await settings.update({
-      timezone: prior.timezone, locale: prior.locale, personas: prior.personas,
-      activePersonaId: prior.activePersonaId, shows: prior.shows, schedule: prior.schedule,
-      djSpeakClock: prior.djSpeakClock,
-    } as never);
   }
 
   for (const half of [seen.signoff, seen.greeting]) {
@@ -379,7 +384,8 @@ test('a final-track handoff grounds both rendered prompts at the stored boundary
   assert.deepEqual(incoming, original, 'prompt clock normalization does not mutate the picker context');
 });
 
-test('boundary prompt clocks stay on the stored side of calendar and daypart transitions', async () => {
+test('boundary prompt clocks stay on the stored side of calendar and daypart transitions', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({
     timezone: 'Europe/London', locale: 'en-GB',
     personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true,
@@ -428,7 +434,8 @@ test('boundary prompt clocks stay on the stored side of calendar and daypart tra
   }
 });
 
-test('a boundary handoff omits all temporal prompt facts when its stored boundary is untrustworthy', async () => {
+test('a boundary handoff omits all temporal prompt facts when its stored boundary is untrustworthy', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true } as never);
   const at = Date.parse('2026-09-18T14:03:00.000Z');
   const incoming = {
@@ -465,9 +472,11 @@ test('a boundary handoff omits all temporal prompt facts when its stored boundar
   }
 });
 
-test('the station clock switch still withholds boundary numerals after normalization', async () => {
+test('the station clock switch still withholds boundary numerals after normalization', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({
-    timezone: 'Europe/London', personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: false,
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: false,
   } as never);
   const contextAt = Date.parse('2026-09-18T14:03:00.000Z');
   const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');
@@ -489,7 +498,6 @@ test('the station clock switch still withholds boundary numerals after normaliza
     await djAgent.runPersonaHandoff(queue, incoming, deps);
   } finally {
     (queue as any).announceExchange = realExchange;
-    await settings.update({ activePersonaId: WREN.id, djSpeakClock: true } as never);
   }
 
   for (const half of [seen.signoff, seen.greeting]) {
