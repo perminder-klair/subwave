@@ -9,12 +9,16 @@
 // nothing in the logs (tts.cloud.compatParams #1317, llm.repeatPenalty).
 //
 // Covers: persistence round trip, load-path sanitising (non-strings dropped,
-// blanks dropped), patch replace semantics, and primaryLeg() resolution.
+// blanks dropped), patch replace semantics, primaryLeg() resolution, and the
+// ONE-KIND-PER-TASK rule — the override map is keyed by the `kind` a caller
+// passes, so a task that reaches two call sites under two different kinds gets
+// two override entries, and the editor (which names tasks, not kinds) can only
+// ever write one of them. That is a silently dead control, not a missing feature.
 //
 // No credentials, no external host.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -78,4 +82,30 @@ test('primaryLeg resolves the override by kind, default otherwise', async () => 
   assert.equal(primaryLeg('djAgentPick').cfg.model, 'big-pro');
   assert.equal(primaryLeg('matchRequest').cfg.model, 'small-flash');
   assert.equal(primaryLeg().cfg.model, 'small-flash');
+});
+
+// The bug this pins: both segment paths used to pass `generateSegment`, so an
+// operator's Script Generation override — which the editor writes under
+// `djAgentSegment`, the AGENT path's kind — never reached the pool path. With
+// `settings.llm.pickerAgent` off that is the only segment path there is, so the
+// control saved fine and did nothing. primaryLeg() was never wrong; the callers
+// disagreed about what the task is called.
+test('the Script Generation override reaches BOTH segment paths', async () => {
+  await coldLoad({ modelOverrides: { djAgentSegment: 'big-pro' } });
+  assert.equal(primaryLeg('djAgentSegment').cfg.model, 'big-pro');
+
+  // Read the kinds off the source rather than restating them: a test that
+  // hardcodes 'djAgentSegment' on both sides still passes if the pool call site
+  // drifts back to a pool-only kind, which is the whole regression.
+  const src = readFileSync(path.join(process.cwd(), 'src/skills/_agent.ts'), 'utf8');
+  const segmentKinds = [...src.matchAll(/kind: '([A-Za-z]+)'/g)].map(m => m[1]);
+  assert.ok(segmentKinds.length >= 4, `expected the agent and pool segment call sites, saw ${segmentKinds}`);
+  assert.equal(
+    new Set(segmentKinds).size,
+    1,
+    `every segment call site must use ONE kind, saw ${JSON.stringify(segmentKinds)}`,
+  );
+  for (const kind of segmentKinds) {
+    assert.equal(primaryLeg(kind).cfg.model, 'big-pro', `${kind} must resolve the Script Generation override`);
+  }
 });

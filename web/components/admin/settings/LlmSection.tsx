@@ -1550,7 +1550,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
           {[
             { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker conversation between personas' },
-            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts' },
+            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts — agent and pool modes alike' },
             { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track' },
             { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of track requests' },
             { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching request text against the library' },
