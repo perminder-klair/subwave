@@ -256,8 +256,11 @@ export {
   getEffectivePersona,
   getOnAirRoster,
   getScheduleOverride,
+  guestEditorialNudge,
+  guestEditorialNudgeFromGuests,
   languageDirective,
   onAirRosterClause,
+  personaMusicLeanings,
   pickOnAirSpeaker,
   renderDjPrompt,
   resolveActiveShow,
@@ -976,6 +979,12 @@ export async function load() {
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // A new explicit opt-in. Older settings files and malformed values remain
+      // off, so guests never become an invisible source of editorial influence.
+      guestMusicalLeanings:
+        typeof stored.llm?.guestMusicalLeanings === 'boolean'
+          ? stored.llm.guestMusicalLeanings
+          : DEFAULTS.llm.guestMusicalLeanings,
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
@@ -1987,6 +1996,9 @@ export async function update(patch) {
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+    }
+    if (l.guestMusicalLeanings !== undefined) {
+      next.llm.guestMusicalLeanings = !!l.guestMusicalLeanings;
     }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
