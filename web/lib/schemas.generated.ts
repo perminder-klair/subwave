@@ -1090,6 +1090,7 @@ export interface PersonaParsed {
   warmth: number;
   soul: string;
   language: string;
+  alsoSpeaks: string;
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
@@ -1150,6 +1151,16 @@ export const personaSchema = z
         .string({ error: 'language must be a string' })
         .trim()
         .max(PERSONA_LANGUAGE_MAX, `language must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
+    // Languages a multilingual DJ mixes INTO `language`, comma-separated.
+    // '' = one language. Read only by settings/persona.ts personaLanguages.
+    alsoSpeaks: z.preprocess(
+      personaNullToUndefined,
+      z
+        .string({ error: 'alsoSpeaks must be a string' })
+        .trim()
+        .max(PERSONA_LANGUAGE_MAX, `alsoSpeaks must be 0-${PERSONA_LANGUAGE_MAX} chars`)
         .default(''),
     ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
@@ -1249,6 +1260,7 @@ export const personaSchema = z
       warmth: p.warmth,
       soul: p.soul,
       language: p.language,
+      alsoSpeaks: p.alsoSpeaks,
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
@@ -1285,6 +1297,10 @@ export function repairPersonaForLoad(
     language:
       typeof raw.language === 'string'
         ? raw.language.trim().slice(0, PERSONA_LANGUAGE_MAX)
+        : undefined,
+    alsoSpeaks:
+      typeof raw.alsoSpeaks === 'string'
+        ? raw.alsoSpeaks.trim().slice(0, PERSONA_LANGUAGE_MAX)
         : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency

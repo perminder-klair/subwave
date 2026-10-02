@@ -450,6 +450,11 @@ export async function speak(
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.language || '').trim();
+  // What a multilingual persona mixes into that language. Non-empty, the
+  // scrub stands down and the cloud hint stops forcing one language on the line.
+  const alsoSpeaks = GLOBAL_VOICE_KINDS.has(kind)
+    ? []
+    : settings.personaLanguages(personaFor(persona)).mix;
   // Scrub leaked reasoning at the single point every booth-bound string
   // converges (#949): a structured say/intro field can carry a <think> token
   // that the free-text generators' own stripThinking never sees. No-op on clean
@@ -458,7 +463,7 @@ export async function speak(
   const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language);
   const speakText = GLOBAL_VOICE_KINDS.has(kind)
     ? normalizedText
-    : scrubCjkForSpeech(normalizedText, language);
+    : scrubCjkForSpeech(normalizedText, language, alsoSpeaks);
   // `persona` overrides the effective persona so the handoff mic-pass can voice
   // the outgoing DJ after the hour has flipped.
   const personaTts = djPersonaTts(kind, persona);
@@ -475,7 +480,14 @@ export async function speak(
   const cloudCueFamily = requested === 'cloud' && speakingPersona
     ? cloud.requestedCloudExpressionCueFamilyForPersona(speakingPersona)
     : '';
-  const rescueText = fallbackTextFor(requested, cloudCueFamily, speakText);
+  // A rescue voice is not the one the mix was written for: judge the script
+  // by the primary language alone, as a one-language persona always is, so a
+  // local English voice is never handed kana when the cloud voice is down.
+  const rescueText = fallbackTextFor(
+    requested,
+    cloudCueFamily,
+    alsoSpeaks.length ? scrubCjkForSpeech(speakText, language) : speakText,
+  );
   const primaryText = primaryFellBack ? rescueText : speakText;
   // Persona soul rides to the cloud engine so delivery matches the writing
   // (#579), like `language` does for pronunciation (#558). DJ-voiced kinds only.
@@ -494,7 +506,7 @@ export async function speak(
     persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
   };
   try {
-    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul }, primaryPersonaTts);
+    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, alsoSpeaks, soul }, primaryPersonaTts);
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
@@ -526,7 +538,7 @@ export async function speak(
         // the credentials the chain probe just rejected. What rides is the
         // slot's own override (null for hardcoded rungs, the operator's
         // engine+voice for their configured one), so probe and call agree.
-        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul }, slot.personaTts);
+        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, alsoSpeaks, soul }, slot.personaTts);
         if (typeof result === 'string') await applyEdgeFades(result);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,

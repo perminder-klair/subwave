@@ -72,5 +72,5 @@ Rules:
 - Each speaker stays in THEIR OWN character. The host carries the room and the guest co-hosts speak as themselves.
 - ${grounding}
 - Plain spoken words only. Do not write speaker labels such as "Name:" inside text; speaker identity travels separately and each line will use that persona's own TTS voice.
-- Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}${settings.castHouseRulesBlock()}`;
+- Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective({ language: lang })}${settings.castHouseRulesBlock()}`;
 }

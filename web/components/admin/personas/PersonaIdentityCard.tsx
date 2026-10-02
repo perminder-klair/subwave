@@ -110,6 +110,21 @@ export function PersonaIdentityCard({
             </div>
           </div>
 
+          <div>
+            <TextField
+              control={control}
+              name={`personas.${index}.alsoSpeaks`}
+              label="Also speaks"
+              placeholder="e.g. Japanese"
+              maxLength={LANGUAGE_MAX}
+            />
+            <div className="field-hint">
+              For a bilingual DJ: languages mixed <em>into</em> the one above, comma-separated,
+              each written in its own script. Needs a voice that can read them all.
+              <span className="ml-2 text-muted">{persona.alsoSpeaks.trim().length} / {LANGUAGE_MAX}</span>
+            </div>
+          </div>
+
           {/* Filing, not personality: tags never reach a prompt, the public
               roster or anything on air. They group this list and stop there,
               which is why they sit below the fold of Identity rather than

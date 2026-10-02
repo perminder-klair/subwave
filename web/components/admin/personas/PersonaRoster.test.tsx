@@ -18,6 +18,7 @@ const persona: Persona = {
   warmth: 5,
   soul: 'Calm and observant.',
   language: '',
+  alsoSpeaks: '',
   avatar: '',
   tts: {
     engine: 'piper',

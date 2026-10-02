@@ -186,6 +186,12 @@ test('language REFUSES a non-string where name COERCES one', () => {
   assert.equal(personaSchema.parse({ ...base(), language: '  Turkish  ' }).language, 'Turkish');
 });
 
+test('alsoSpeaks follows language\'s rules: optional, trimmed, non-string refused', () => {
+  assert.equal(personaSchema.parse(base()).alsoSpeaks, '');
+  assert.equal(personaSchema.safeParse({ ...base(), alsoSpeaks: 42 }).success, false);
+  assert.equal(repairPersonaForLoad({ alsoSpeaks: 42 }).alsoSpeaks, undefined);
+});
+
 test('frequency must name a real frequency; scriptLength defaults but is checked', () => {
   assert.equal(personaSchema.safeParse({ ...base(), frequency: 'loud' }).success, false);
   assert.equal(personaSchema.safeParse({ ...base(), frequency: undefined }).success, false);
@@ -574,6 +580,7 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     warmth: 7,
     soul: 'dry and specific',
     language: 'Turkish',
+    alsoSpeaks: 'English, Kurdish',
     avatar: 'p_rich.webp',
     tts: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 1.5, speed: 1.1 },
     skills: ['news', 'weather'],

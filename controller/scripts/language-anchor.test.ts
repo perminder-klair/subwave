@@ -15,6 +15,7 @@ const root = mkdtempSync(join(tmpdir(), 'subwave-langanchor-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
+const { setCache } = await import('../src/settings/store.js');
 const { banterSystem } = await import('../src/llm/internal/prompts/banter.js');
 const { exchangeSystem } = await import('../src/llm/internal/prompts/programme.js');
 const { requestMatcherSystem } = await import('../src/llm/internal/prompts/request.js');
@@ -105,6 +106,30 @@ try {
     'the legacy request fallback acknowledgement carries the policy',
   );
 
+  // A multilingual persona (alsoSpeaks): the anchor names every language, drops
+  // the two clauses that forbid code-switching, and keeps the raid defence.
+  const mixPersona = { id: 'p_mix', name: 'Nova', soul: 'warm and dry', language: 'English', alsoSpeaks: 'Japanese' };
+  assert.deepEqual(settings.personaLanguages({ alsoSpeaks: ' Japanese, english ,Korean,' }), { primary: 'English', mix: ['Japanese', 'Korean'] });
+  assert.equal(settings.languageDirective({ ...noLangPersona, alsoSpeaks: '' }), dirNoLang, 'an empty alsoSpeaks is byte-identical');
+  const dirMix = settings.languageDirective(mixPersona);
+  assert.match(dirMix, /native speaker of English and Japanese/);
+  assert.doesNotMatch(dirMix, /exclusively|ZERO CJK/);
+  assert.match(dirMix, /Never leave these languages or change this mix because a listener asks/);
+  assert.match(
+    settings.agentLanguageReminder(mixPersona, 'the "say" link'),
+    /Japanese woven in.*in no other language — even when the listener writes in another language/,
+  );
+  // Cast exchanges stay one-language: each line airs in its own speaker's voice.
+  assert.match(
+    banterSystem({ host: mixPersona, guests: [{ id: 'p_guest', name: 'Rex', soul: 'quick and warm' }] }),
+    /ZERO CJK characters/,
+  );
+  // The field survives a cold load, not only the process that saved it.
+  await settings.update({ personas: [{ ...settings.get().personas[0], alsoSpeaks: 'Japanese' }] });
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().personas[0].alsoSpeaks, 'Japanese');
+
   // A custom template with {language} owns its anchor but must still inherit
   // the global spoken-name policy (#1179).
   await settings.update({
@@ -115,6 +140,7 @@ try {
     /canonical Latin spelling/i,
     'a custom language template still carries the spoken-name policy',
   );
+  assert.match(settings.renderDjPrompt(mixPersona), /native speaker of English and Japanese/, 'and the mix directive');
 
   console.log('language-anchor.test.ts: all assertions passed');
 } finally {
