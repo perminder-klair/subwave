@@ -1078,6 +1078,21 @@ class Queue {
     return dropped;
   }
 
+  // Stronger Never Play Again purge: use the existing mixer-aware cancel path
+  // so sent-but-not-started duplicates are pulled back from dj_queue too.
+  async purgeBlockedIncludingSent(isBlocked: typeof blocklist.isBlocked = blocklist.isBlocked): Promise<{ removed: number; kept: number }> {
+    const blocked = this.upcoming.filter(i => isBlocked(i.track));
+    let removed = 0;
+    let kept = 0;
+    for (const item of blocked) {
+      const result = await this.removeUpcomingItem(item);
+      if (result.ok) removed++;
+      else if (result.reason === 'already-playing') kept++;
+    }
+    if (kept) this.log('blocked', `${kept} blocked queued cop${kept === 1 ? 'y could' : 'ies could'} not be recalled from Liquidsoap`);
+    return { removed, kept };
+  }
+
   // Resolve {bpm, key} for a queued track: from the track object if it carries
   // analysis, else a library lookup (queued items hold only id/title/artist).
   mixAnalysisFor(track: Track | null): mix.Analysis {

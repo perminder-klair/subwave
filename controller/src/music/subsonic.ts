@@ -260,10 +260,40 @@ async function pingWithOnce({
   }
 }
 
-// Station-archive guard: the station's own hourly mixdowns
-// (`archive/YYYY-MM-DD/HH-00.mp3`) index as untagged songs when the Navidrome
-// folder overlaps that directory (#273). Every song-returning function below
-// filters through this; `call()` logging stays raw for /debug.
+// Subsonic/OpenSubsonic startScan — asks Navidrome to re-index its library
+// now, rather than waiting for its own scheduled scan. Used by
+// broadcast/never-play-again.ts right after music/never-play-ignore.ts writes
+// a fresh `.ndignore` exclusion, so the change doesn't sit unapplied until
+// Navidrome's own cadence gets to it.
+//
+// Best-effort by design and NEVER throws: a Navidrome version without this
+// endpoint (404), or a scan already in progress, both degrade to "the
+// exclusion lands on Navidrome's own next scan instead," not a caller-visible
+// failure — same posture as ping()/pingWith() above, which never throw
+// either. Deliberately not polled to completion (no getScanStatus loop
+// anywhere in this codebase) — a full scan is library-size-dependent and can
+// run seconds to minutes, which does not fit inside an interactive admin
+// action the way music/blocklist.ts's in-memory index rebuild does.
+export async function startScan(): Promise<{ ok: boolean; scanning?: boolean }> {
+  try {
+    const r = await call('startScan', {});
+    return { ok: true, scanning: r.scanStatus?.scanning === true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Station-archive guard
+// ---------------------------------------------------------------------------
+// SUB/WAVE's own hourly mixdowns are written by radio.liq to
+// `/var/sub-wave/archive/YYYY-MM-DD/HH-00.mp3`. If the operator's Navidrome music
+// folder overlaps that directory, Navidrome scans those MP3s and indexes them as
+// untagged songs whose filename ("02-00.mp3") becomes the title — they then leak
+// into the picker (DJ reads "02:00" as the time), the tagger, and the library UI
+// (issue #273). Every selection/enumeration path funnels through the song-returning
+// functions below, so filtering here keeps station recordings out of all of them.
+// `call()` logging is untouched, so /debug still shows the raw Subsonic responses.
 export function isStationArchive(song: any): boolean {
   if (!song) return false;
   const path = String(song.path ?? '');
