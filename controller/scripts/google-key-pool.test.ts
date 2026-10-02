@@ -542,6 +542,44 @@ test('an exhausted pool costs exactly ONE attempt per key, never a second pass',
   }
 });
 
+test('a hold SHORTER than the request still costs one attempt per key', async () => {
+  // The review round's finding #2, which the test above cannot see: that one
+  // uses a 20s hint, so every failed key is still parked when the next one is
+  // selected and the shared holds bound the loop on their own. Make the hold
+  // 10ms and the request 20ms and the hold is EXPIRED before the next
+  // selection — so the request-local attempted set is the only thing left that
+  // can end the recursion. Handing the recursion a fresh set here does not
+  // produce a failing assertion, it produces an unbounded loop that hangs the
+  // runner, which is why this case needs its own test rather than a wider
+  // assertion on the one above.
+  setPool(K1, K2);
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const seen: string[] = [];
+  // The stub REFUSES a third attempt rather than letting the recursion run.
+  // An unbounded loop does not fail a test, it hangs the runner until the whole
+  // suite is killed — which reads as "the pool broke" and proves nothing about
+  // which assertion was supposed to catch it. Throwing here converts the exact
+  // regression into a reported failure at the call site.
+  const POOL_SIZE = 2;
+  globalThis.fetch = (async (_u: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    if (seen.length > POOL_SIZE) {
+      throw new Error(`rotation was not bounded: ${seen.length} attempts for a ${POOL_SIZE}-key pool`);
+    }
+    await new Promise(r => setTimeout(r, 20));   // slower than the hold below
+    return new Response(JSON.stringify({ error: { message: 'Please retry in 0.01s.' } }), { status: 429 });
+  }) as typeof fetch;
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 429);
+    assert.equal(seen.length, 2, `one attempt per key, got ${seen.length} for a 2-key pool`);
+    assert.deepEqual(seen, [K1, K2], 'an expired hold must not hand the failed key back');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 // ─── documented Interactions API error codes ───────────────────────────────
 // Google publishes a machine-readable `error.code`. Where it exists it beats
 // inferring intent from a quotaId substring, and it opens two cases the
