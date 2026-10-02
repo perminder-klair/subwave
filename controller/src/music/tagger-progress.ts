@@ -68,6 +68,16 @@ export function reportRotation(r: Omit<TaggerRotation, 'at'>): void {
   console.log(ROTATION_PREFIX + JSON.stringify({ ...r, at: new Date().toISOString() }));
 }
 
+// A nonempty authoritative walk has finished adoption AND pruning. Consumers
+// may now rebuild without waiting for enrichment/tagging/analysis to finish.
+// Separate from [rotation], which can arrive before pruning and is only a
+// notification that the journal is durable.
+export const CATALOGUE_PREFIX = '[catalogue] ';
+
+export function reportCatalogueReady(walked: number): void {
+  console.log(CATALOGUE_PREFIX + JSON.stringify({ walked }));
+}
+
 // Bind an event logger to a module's console tag ('tag' / 'analyze'). Each call
 // emits BOTH the terse `[tag] …` line (docker logs stay greppable) AND the event
 // sentinel, so call sites stay one line. Both go to stdout back-to-back so the

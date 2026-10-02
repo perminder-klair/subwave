@@ -24,8 +24,8 @@
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable, isGenerationControlError } from '../core/pure.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -60,11 +60,7 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
-  // Optional caller-supplied abort signal. No live caller wraps djObject in
-  // withDeadline today, so this is inert unless one starts to — kept in the
-  // shape as a precaution so a future deadline-wrapped call can cut the
-  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
-  // djAgent's threading, PR #751 review).
+  // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,
 }: any): Promise<any> {
   return withFailover(
@@ -99,6 +95,7 @@ export async function djObject({
               maxOutputTokens,
               output: Output.object({ schema }),
               reasoning: reasoningFor(l.cfg),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             object = result.output;
@@ -126,6 +123,7 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
+              ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             try {
@@ -158,6 +156,10 @@ export async function djObject({
             extra: { system, user: prompt, response: JSON.stringify(object) },
           };
         } catch (err) {
+          if (isGenerationControlError(err)) {
+            (err as any).__via = lastVia;
+            throw err;
+          }
           lastErr = err;
           // Changing the output format cannot recover a retired/missing model.
           // Keep the common failure attribution before handing it to failover.
@@ -170,5 +172,6 @@ export async function djObject({
       throw lastErr;
     },
     leg,
+    signal,
   );
 }

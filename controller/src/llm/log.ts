@@ -40,3 +40,6 @@ export {
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
 } from './internal/telemetry/raw-debug.js';
+
+// Live process-local generation ages, separate from completed-call accounting.
+export { generationHealthSnapshot } from './internal/core/generation.js';

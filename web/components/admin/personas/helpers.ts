@@ -228,5 +228,10 @@ export function engineLabel(p: Persona, data: SettingsResponse | null = null): s
   if (t?.engine === 'pocket-tts') return `pocket-tts / ${voice || 'alba'}${suffix}`;
   if (t?.engine === 'cloud') return `cloud / ${t.cloudProvider} / ${voice || '—'}${suffix}`;
   if (t?.engine === 'remote') return `remote / ${voice || '—'}${suffix}`;
+  // Gemini had no branch here, so a persona on it fell through to the piper
+  // fallback and the hero banner reported "piper / Despina" — naming a local
+  // engine that never rendered it. A wrong engine name on screen sends the
+  // operator looking for a piper voice they never set.
+  if (t?.engine === 'gemini') return `gemini / ${voice || 'station default'}${suffix}`;
   return `piper / ${voice || 'built-in'}${suffix}`;
 }

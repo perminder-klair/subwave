@@ -14,7 +14,7 @@ import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect, JingleRotateOwner } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner, GeminiSafety } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
@@ -99,6 +99,7 @@ export interface TtsForm {
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
+  gemini: { model: string; voice: string; pronunciation: string };
   cloud: CloudTtsCfg;
   remote: { url: string };
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
@@ -161,6 +162,7 @@ export interface LlmFallbackForm {
   headers: LlmHeaderRow[];
   reasoning: boolean;
   discoverySteps: number;
+  geminiSafety: GeminiSafety;
 }
 
 export interface LlmForm {
@@ -185,6 +187,8 @@ export interface LlmForm {
   maxOutputTokens: number;
   // 0 = auto (follow the provider capability table); 1-5 overrides it.
   discoverySteps: number;
+  // HARM_CATEGORY thresholds for the native `google` leg. Checked = block.
+  geminiSafety: GeminiSafety;
   fallback: LlmFallbackForm;
 }
 
@@ -480,6 +484,7 @@ export interface SettingsData {
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
+      gemini?: { model?: string; voice?: string; pronunciation?: string };
       // The saved shape also carries the redacted key sentinels ('set' when a
       // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };

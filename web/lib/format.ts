@@ -58,6 +58,49 @@ export function fmtClockMinute(
   }
 }
 
+// Full local station date + time for the admin header clock, e.g.
+// "Thursday 24 September 2026   04:37:45". The weekday/month words are
+// always English regardless of station locale (the rest of this admin is
+// English text around a live English-language date), but the clock follows
+// the station's own 12h/24h convention via fmtClock — same station
+// zone/locale as elsewhere, so the header never disagrees with what the DJ is
+// actually saying on air (issue #418).
+export function fmtStationDateTime(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  try {
+    const date = new Date(t);
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      ...(tz ? { timeZone: tz } : {}),
+    }).formatToParts(date);
+    const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
+    // 'en-GB' already gives "Thursday"/"September" — leading capital, rest
+    // lowercase — so no extra casing pass is needed.
+    const datePart = `${get('weekday')} ${get('day')} ${get('month')} ${get('year')}`;
+    // Three non-breaking spaces, not three plain ones — HTML collapses
+    // consecutive plain spaces to one, so a literal "   " here would render
+    // identically to " ".   doesn't collapse, which is what triples the
+    // visual gap between the year and the clock without touching the single
+    // spaces inside the date itself.
+    return `${datePart}   ${
+      // fmtClock, not fmtClockMinute: toLocaleTimeString with no explicit
+      // hour/minute/second option defaults to showing all three, which is
+      // what puts the ticking seconds digit ("04:37:45") on this display.
+      // fmtClock's signature takes string | number, not Date — .getTime()
+      // instead of handing it `date` directly.
+      fmtClock(date.getTime(), tz, locale)
+    }`;
+  } catch {
+    return '';
+  }
+}
+
 const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 // Day-of-week (0=Sun) and hour (0-23) for `date` on the wall clock in `tz`.

@@ -16,6 +16,7 @@ const settings = await import('../src/settings.js');
 const { primaryLeg, fallbackLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
+const { GenerationCancelledError } = await import('../src/llm/internal/core/generation.js');
 const previousCache = store.peek();
 const schema = z.object({ name: z.string() });
 const answer = { name: 'backup' };
@@ -99,6 +100,29 @@ for (const entry of paths) {
       assert.equal(failure?.ok, false);
       assert.equal(failure?.error, primaryError.message);
       assert.equal(failure?.via, outcome === 'disabled' ? entry.via : `${entry.via}:failover→openai:strategy-backup`);
+    });
+  }
+}
+
+for (const entry of paths) {
+  for (const control of ['cancelled', 'deadline'] as const) {
+    test(`${entry.name} does not fail over a ${control} error containing retirement wording`, async (t) => {
+      const legs = configure(t, entry.provider);
+      const retirement = new Error('model strategy-primary has been retired');
+      const error = control === 'cancelled' ? new GenerationCancelledError(retirement)
+        : Object.assign(retirement, { name: 'AgentDeadlineError' });
+      if (control === 'cancelled') error.message += `: ${retirement.message}`;
+      const counts = { primary: 0, backup: 0 };
+      mockGeneration(t, legs.primary, async () => { counts.primary++; throw error; });
+      mockGeneration(t, legs.backup!, async () => { counts.backup++; return nativeAgentAnswer(); });
+      const run = entry.agent
+        ? djAgent({ system: 'Choose a name', messages: [{ role: 'user', content: 'Choose' }], tools, schema })
+        : djObject({ prompt: 'Choose a name', schema });
+      await assert.rejects(run, (err) => err === error);
+      assert.deepEqual(counts, { primary: 1, backup: 0 });
+      assert.equal(recentCalls.length, 1);
+      assert.equal(recentCalls[0].ok, false);
+      assert.equal(recentCalls[0].via, entry.via);
     });
   }
 }
