@@ -188,7 +188,7 @@ export function normalizeTtsSpeedMap(raw: unknown): Record<string, number> {
 // find->replace pairs applied to every booth-bound line before any engine sees
 // it. `from` is a literal phrase (regex-escaped at apply time); `to` '' drops
 // the phrase.
-export const TTS_CORRECTIONS_LIMIT = 100;
+export const TTS_CORRECTIONS_LIMIT = 500;
 const TTS_CORRECTION_FROM_MAX = 80;
 const TTS_CORRECTION_TO_MAX = 160;
 

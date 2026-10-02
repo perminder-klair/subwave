@@ -87,14 +87,14 @@ export function trimLinkToIntro(text: string | null | undefined, song: any, pers
   const clean = stripSpeakerLabel(stripThinking(raw), speaker?.name ? [speaker.name] : []);
   const display = normalizeForDisplay(clean);
   // Non-DJ personas skip the budget but not the cleanup.
-  if (!settings.getEffectivePersona()?.djMode) return display || null;
+  if (!speaker?.djMode) return display || null;
   // A DURATION budget, so it is counted on the words the engine will read.
   // spokenWordScale folds the display/spoken difference into the pace scale, so
   // the ceiling stays a spoken-word ceiling while the trim lands on the display
   // text's sentence boundaries. firstVocalMsFor arms the drop when a measured
   // vocal entry leaves no runway.
-  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections);
-  const pace = speechPaceScale('link') * spokenWordScale(display, spoken);
+  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections, String(speaker.language || ''));
+  const pace = speechPaceScale('link', speaker) * spokenWordScale(display, spoken);
   return dj.enforceIntroBudget(display, introMsOf(song), pace, dj.firstVocalMsFor(song)) || null;
 }
 

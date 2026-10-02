@@ -62,6 +62,17 @@ test('normalize: capped at the entry limit, the first rows survive', () => {
 
 // --- validateTtsCorrectionsStrict (strict update() path) -------------------
 
+test('strict: accepts all 500 corrections, including rows beyond the old cap', () => {
+  assert.equal(TTS_CORRECTIONS_LIMIT, 500);
+  const rows = Array.from({ length: 500 }, (_, i) => ({ from: `w${i}`, to: `x${i}` }));
+  assert.deepEqual(validateTtsCorrectionsStrict(rows), rows);
+  assert.deepEqual(normalizeTtsCorrections(rows), rows);
+  assert.throws(
+    () => validateTtsCorrectionsStrict([...rows, { from: 'overflow', to: 'no' }]),
+    /tts\.corrections must be at most 500 entries/,
+  );
+});
+
 test('strict: throws on non-array', () => {
   assert.throws(() => validateTtsCorrectionsStrict('nope'), /must be an array/);
 });

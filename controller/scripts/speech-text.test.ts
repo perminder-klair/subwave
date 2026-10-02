@@ -200,7 +200,7 @@ async function main() {
     assert.equal(normalizeForSpeech('That was Song Title [Live].'), 'That was Song Title Live.');
     assert.equal(normalizeForSpeech('Here is Album Cut [Deluxe].'), 'Here is Album Cut Deluxe.');
     assert.equal(normalizeForSpeech('Next, Song Title [Remastered 2011].'),
-      'Next, Song Title Remastered 2011.');
+      'Next, Song Title Remastered twenty eleven.');
     assert.equal(normalizeForSpeech('[Live fade out] Keep talking.'), 'Keep talking.',
       'a title-like prefix must not override the production-direction blocklist');
   });
@@ -218,7 +218,7 @@ async function main() {
   });
   await test('normalizes punctuation known to upset cloud TTS without changing display', () => {
     const source = 'From 1991–1993 — \u201cquiet\u201d… and ready.';
-    assert.equal(normalizeForSpeech(source), 'From 1991 to 1993 — quiet... and ready.');
+    assert.equal(normalizeForSpeech(source), 'From nineteen ninety-one to nineteen ninety-three — quiet... and ready.');
     assert.equal(normalizeForDisplay(source), 'From 1991–1993 — “quiet”… and ready.');
     assert.equal(normalizeForSpeech('A\u00a0soft\u00adhyphen\u200b stays tidy.'), 'A softhyphen stays tidy.');
   });

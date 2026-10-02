@@ -339,7 +339,7 @@ export async function synthesizeSample(
   const activeCorrections = corrections !== undefined
     ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections, language);
   // `speed` is already the final preview multiplier. A persona preview can
   // compose two saved 0.05-grid controls into a non-grid rate (0.90 x 1.15 =
   // 1.035), so only bounds-clamp here; snapping again would diverge from air.
@@ -382,7 +382,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
 // One conversational render for a whole multi-voice exchange, when every line
@@ -407,7 +407,7 @@ export async function speakExchange(
   // so it is resolved once here rather than per line.
   const { model } = stationGeminiPick({}, resolved[0].personaTts);
   const geminiLines = resolved.map(({ line: l, personaTts }) => ({
-    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections),
+    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections, String(l.persona?.language || '')),
     voice: stationGeminiPick({}, personaTts).voice,
     style: typeof (l.persona as any)?.voiceStyle === 'string' ? (l.persona as any).voiceStyle : undefined,
     // Each speaker's own character, so a host and a guest don't come out of one
@@ -455,7 +455,7 @@ export async function speak(
   // that the free-text generators' own stripThinking never sees. No-op on clean
   // text. Operator speech corrections are read live, so a saved rule applies to
   // the next spoken line with no restart.
-  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language);
   const speakText = GLOBAL_VOICE_KINDS.has(kind)
     ? normalizedText
     : scrubCjkForSpeech(normalizedText, language);
