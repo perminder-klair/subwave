@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, voiceGainDb } from '../audio/tts.js';
+import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -36,7 +36,7 @@ import {
   discardPauseTalkCommit,
   PAUSE_TALK_DIR,
 } from '../audio/wav-silence.js';
-import { normalizeForDisplay } from '../audio/speech-text.js';
+import { normalizeForDisplay, stripSpeakerLabel } from '../audio/speech-text.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
@@ -433,8 +433,14 @@ class Queue {
   _writeHandoff = writeHandoff;
   _speak = speak;
   _airVoice = airVoice;
+  _considerIdRotationRecovery = async (track: Track) => {
+    // Dynamic import keeps queue <-> tagger ownership acyclic at module init.
+    const { considerIdRotationRecovery } = await import('./tagger.js');
+    await considerIdRotationRecovery(track);
+  };
 
   startIntroRender(item: QueueItem) {
+    this.cleanUnrenderedIntro(item);
     const expected = introSpeechIdentity(item);
     const kind = expected.kind || 'dj-speak';
     const render = this._introRenders.start(item, () => this._speak(expected.script!, {
@@ -449,6 +455,18 @@ class Queue {
       }
     });
     return render;
+  }
+
+  // Recovered/legacy scripts may predate the guard. Clean before the render
+  // identity is captured, and keep the displayed/stored line equal to TTS input.
+  // An existing WAV already owns its words and must never be relabelled.
+  cleanUnrenderedIntro(item: QueueItem) {
+    if (item.introLabelChecked) return;
+    if (item.introWav && existsSync(item.introWav)) return;
+    if (!item.introScript) return;
+    const speaker = item.introPersona ?? settings.getEffectivePersona();
+    item.introScript = normalizeForDisplay(stripSpeakerLabel(item.introScript, speaker?.name ? [speaker.name] : []));
+    item.introLabelChecked = true;
   }
 
   // Drop only uncommitted ordinary host speech. The music item remains in the
@@ -887,13 +905,14 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
     block?: QueueItem['block'] | null;
     intent?: string | null;
     introScript?: string | null;
+    introLabelChecked?: boolean;
     introKind?: string;
     introPersona?: Persona | null;
     introHostSpeech?: HostSpeechStamp | null;
@@ -942,8 +961,12 @@ class Queue {
       introPersona = null;
       introHostSpeech = null;
     }
+    if (introScript && !introLabelChecked) {
+      const speaker = introPersona ?? settings.getEffectivePersona();
+      introScript = normalizeForDisplay(stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []));
+    }
     const item = {
-      track, requestedBy, operator, intent, introScript, introKind, introPersona, introHostSpeech,
+      track, requestedBy, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve
       // the key alongside the persona: persona alone cannot distinguish two
       // adjacent shows hosted by the same DJ.
@@ -2095,7 +2118,19 @@ class Queue {
     { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null }:
       { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null } = {},
   ): Promise<AnnounceOutcome> {
-    const safeText = normalizeForDisplay(text || '');
+    // Single-voice paths leak the label too — a styled POST /dj/say came back as
+    // "Iris : Bonsoir…" with one persona and one voice (#1707).
+    //
+    // Resolve the speaker the same way the voice will be: tts.personaFor()
+    // falls back to settings.getEffectivePersona() when no persona is passed,
+    // so stripping only on an explicit one left every caller that omits it
+    // leaking the label — /dj/say among them. Reading a different source of
+    // truth than _speak is what made the fix miss the very path that reported
+    // the bug.
+    const speaker = persona ?? settings.getEffectivePersona();
+    const safeText = normalizeForDisplay(
+      speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || ''),
+    );
     if (!safeText) return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
       return { accepted: false, deferred: false, completed: Promise.resolve(false) };
@@ -2250,18 +2285,46 @@ class Queue {
   // makes the two-voice persona handoff play cleanly). Each line is booth-
   // logged speaker-prefixed and appended to the session tagged with its
   // speaker, so windowMessages names a guest's words as theirs.
-  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter') {
+  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter', { castNames = [] }: { castNames?: readonly string[] } = {}) {
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} exchange — the show handoff has already claimed this boundary`);
       return false;
     }
     const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
+    // The whole cast, not just the line's own speaker: a model that prefixes a
+    // label picks any name on the call sheet, including the one it is replying to.
+    const knownNames = [...castNames, ...lines.map(l => l.persona?.name).filter(Boolean) as string[]];
     try {
-      for (const l of lines) {
-        const text = normalizeForDisplay(l.text || '');
-        if (!text) continue;
-        const wavPath = await this._speak(text, { kind, persona: l.persona });
-        rendered.push({ ...l, text, wavPath });
+      // One conversational render when every line is gemini-voiced — the whole
+      // exchange in a single request, so turn-taking is generated as dialogue
+      // rather than stitched from N independent clips. Anything else (a
+      // mixed-engine roster, or more voices than Google's 2-speaker cap) throws
+      // and falls through to the per-line loop below, which is the long-standing
+      // behaviour and must keep working unchanged.
+      //
+      // The batched path strips the speaker label for the same reason the
+      // per-line loop does (#1715): Gemini reads its transcript verbatim, so a
+      // prefixed "Roxy:" is spoken aloud as a name rather than stripped as a
+      // label. The name is carried by `speech_metadata.speaker` instead, which
+      // is what the batching exists to do.
+      const stripped = lines.map(l => normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames)));
+      const single = await speakExchange(
+        lines.map((l, i) => ({ ...l, text: stripped[i] })),
+        { kind },
+      ).catch(() => null);
+      if (single) {
+        const text = lines
+          .map((l, i) => `${l.persona?.name || 'DJ'}: ${stripped[i]}`)
+          .filter(t => !t.endsWith(': '))
+          .join('\n');
+        rendered.push({ persona: lines[0].persona, text, wavPath: single });
+      } else {
+        for (const [i, l] of lines.entries()) {
+          const text = stripped[i];
+          if (!text) continue;
+          const wavPath = await this._speak(text, { kind, persona: l.persona });
+          rendered.push({ ...l, text, wavPath });
+        }
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);
@@ -2324,7 +2387,13 @@ class Queue {
   // webhook) happens at AIR time, so the DJ's memory reflects what reached the
   // stream, not what was merely scheduled.
   async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null } = {}) {
-    const safeText = normalizeForDisplay(text || '');
+    // Scheduled segments reach _speak through here too, so they need the same
+    // guard as announce(): a label the model prefixed would otherwise be read
+    // aloud. Same speaker resolution, for the same reason.
+    const scheduledSpeaker = persona ?? settings.getEffectivePersona();
+    const safeText = normalizeForDisplay(
+      scheduledSpeaker?.name ? stripSpeakerLabel(text || '', [scheduledSpeaker.name]) : (text || ''),
+    );
     if (!safeText) return;
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
@@ -2839,6 +2908,7 @@ class Queue {
     if (!item.introWav || !existsSync(item.introWav)) {
       if (!item.introScript) return;
       try {
+        this.cleanUnrenderedIntro(item);
         item.introWav = await this._speak(item.introScript, {
           kind: item.introKind || 'dj-speak',
           // Same persona the script was written under — speak() would
@@ -3540,6 +3610,14 @@ class Queue {
     const who = item.requestedBy ? ` (requested by ${item.requestedBy})` : '';
     this.log('error',
       `Liquidsoap never resolved "${item.track?.title || 'unknown'} — ${item.track?.artist || 'unknown'}"${who}: it left dj_queue without airing. The music source returned an error instead of audio, or the file is missing/unreadable — check the broadcast log for a "protocol.subhttp" line and the music server's own log. Dropped from the queue.`);
+
+    // Navidrome 0.64 rotated most track IDs. A generic resolution failure is
+    // not enough evidence to mutate the library, so the recovery probes the
+    // stored ID and its deterministic canonical image before it starts the
+    // existing authoritative reconcile walk.
+    void this._considerIdRotationRecovery(item.track)
+      .catch((err: unknown) => this.log('error',
+        `Navidrome ID-rotation check failed: ${err instanceof Error ? err.message : String(err)}`));
 
     // A whole origin being down fails every re-pick the same way, and each one
     // costs an LLM call to queue a track that cannot air. Past the budget the

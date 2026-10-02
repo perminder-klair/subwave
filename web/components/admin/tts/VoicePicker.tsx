@@ -44,6 +44,9 @@ export interface VoicePickerPreviewParams {
   engine: string;
   cloudProvider?: string;
   cloudModel?: string;
+  // Gemini's own model id, so "Play sample" auditions the UNSAVED choice rather
+  // than the saved station model. Mirrors cloudModel above.
+  geminiModel?: string;
   speed?: number;
   lang?: string;
   // Persona's free-text on-air language — the server renders the sample

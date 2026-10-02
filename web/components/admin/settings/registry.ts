@@ -126,7 +126,12 @@ export const SECTIONS = [
   {
     id: 'danger', group: 'operations', label: 'Danger zone',
     hint: 'mixer · broadcast', icon: AlertTriangle,
-    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
+    // fadeAtShowEnd belongs here too — SettingsPanel's `ownedKeys` for this
+    // section's save bar already includes it (Save danger zone), but this
+    // list is what drives the dirty-check that decides whether the save bar
+    // shows at all. Without it, toggling "Fade out at a show change" alone
+    // never registers as a change and the save prompt never appears.
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'stream', 'loudness'],
   },
 ] as const satisfies readonly SectionSpec[];
 

@@ -3,6 +3,7 @@
 //   withTransientRetry — retries the SAME call on transient upstream blips.
 //   withDeadline       — a hard wall-clock ceiling (Promise.race + AbortSignal).
 
+import { throwIfCancelled } from './generation.js';
 import { isTransient, errReason, unwrapSdkError } from './pure.js';
 
 // Retry-After (seconds, or an HTTP-date) — RFC 9110 §10.2.3. Providers rate-
@@ -68,9 +69,11 @@ export async function withTransientRetry<T>(
   const delays = [500, 1500]; // ms — two retries, ~2s total budget
   let lastErr: any;
   for (let attempt = 0; attempt <= delays.length; attempt++) {
+    throwIfCancelled(signal);
     try {
       return await fn();
     } catch (err) {
+      throwIfCancelled(signal);
       lastErr = err;
       if (!isTransient(err) || attempt === delays.length || signal?.aborted) throw err;
       const jitter = Math.floor(Math.random() * 200);
@@ -82,7 +85,7 @@ export async function withTransientRetry<T>(
       const wait = hinted != null ? hinted + jitter : delays[attempt] + jitter;
       console.log(`[${kind}] transient upstream error — ${errReason(err)} — retrying in ${wait}ms (attempt ${attempt + 1}/${delays.length})`);
       await sleep(wait, signal);
-      if (signal?.aborted) throw lastErr;
+      throwIfCancelled(signal);
     }
   }
   throw lastErr;
@@ -136,10 +139,10 @@ export function withDeadline<T>(
   let timer: any;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      controller.abort();
       const err: any = new Error(`${label} exceeded ${ms}ms deadline`);
       err.name = 'AgentDeadlineError';
       reject(err);
+      controller.abort(err);
     }, ms);
   });
   // Promise.race attaches a reaction to every contender, so a late rejection

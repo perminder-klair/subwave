@@ -12,7 +12,7 @@ import { recordPick } from '../../llm/log.js';
 import * as requestLog from '../request-log.js';
 import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
-import { normalizeForDisplay, normalizeForSpeech, spokenWordScale } from '../../audio/speech-text.js';
+import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
 import { introMsOf } from './runs.js';
 
 export interface GeneratedHostLink {
@@ -79,20 +79,22 @@ export function dropEchoedLink(link: string | null, queue: any): string | null {
 // Returns the DISPLAY form (#1186): it becomes introScript, which is
 // booth-logged, remembered in the session and shown in the player's feed. The
 // pronunciation layer is applied separately by speak() at render time.
-export function trimLinkToIntro(text: string | null | undefined, song: any): string | null {
+export function trimLinkToIntro(text: string | null | undefined, song: any, persona: Persona | null = null): string | null {
   const raw = (text || '').trim();
   if (!raw) return null;
-  const clean = stripThinking(raw);
+  const speaker = persona ?? settings.getEffectivePersona();
+  // Budget the words that will air, using the author captured at generation.
+  const clean = stripSpeakerLabel(stripThinking(raw), speaker?.name ? [speaker.name] : []);
   const display = normalizeForDisplay(clean);
   // Non-DJ personas skip the budget but not the cleanup.
-  if (!settings.getEffectivePersona()?.djMode) return display || null;
+  if (!speaker?.djMode) return display || null;
   // A DURATION budget, so it is counted on the words the engine will read.
   // spokenWordScale folds the display/spoken difference into the pace scale, so
   // the ceiling stays a spoken-word ceiling while the trim lands on the display
   // text's sentence boundaries. firstVocalMsFor arms the drop when a measured
   // vocal entry leaves no runway.
-  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections);
-  const pace = speechPaceScale('link') * spokenWordScale(display, spoken);
+  const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections, String(speaker.language || ''));
+  const pace = speechPaceScale('link', speaker) * spokenWordScale(display, spoken);
   return dj.enforceIntroBudget(display, introMsOf(song), pace, dj.firstVocalMsFor(song)) || null;
 }
 
@@ -115,12 +117,12 @@ export async function enqueuePick(
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
-  // that already trimmed — this pass recomputes spokenWordScale on the kept
-  // text and can trim slightly further, so air always honours the budget while
-  // the session turn may carry the marginally longer reading.
+  // that already budgeted — the agent passes the original output after its
+  // preview so we strip only one label. This pass recomputes spokenWordScale,
+  // and the queued text always honours the budget.
   const introLink = hostSpeech && !session.isHostSpeechCurrent(hostSpeech)
     ? null
-    : dropEchoedLink(trimLinkToIntro(link, song), queue);
+    : dropEchoedLink(trimLinkToIntro(link, song, introPersona), queue);
   const track: any = trackFields(song);
   // Transition effects (DJ mode only); getAnnotatedUri stamps the liq_* flags
   // and radio.liq ramps them. sweep muffles the crossfade INTO this pick;
@@ -137,6 +139,9 @@ export async function enqueuePick(
     requestedBy: null,
     intent: reason || 'ai pick',
     introScript: introLink,
+    // Already stripped before budgeting; push/render/recovery must not strip
+    // a second leading name that was kept as part of the spoken line.
+    introLabelChecked: true,
     introKind: 'link',
     // Pin the author captured at generation. Never relabel an old script with
     // whoever happens to be live when the queue write finally runs.
@@ -157,5 +162,3 @@ export async function enqueuePick(
   recordPick({ song, reason, source });
   return pos;
 }
-
-

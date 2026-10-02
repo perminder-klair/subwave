@@ -8,7 +8,7 @@ import { generateText } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, truncationError, usageOf, perfOf, warningsOf, failureDiagnostics } from '../core/pure.js';
-import { reasoningFor, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { reasoningFor, repeatPenaltyApplies, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
@@ -28,11 +28,7 @@ export async function djText({
   seed = null,
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_TEXT),
   kind = 'sdk.djText',
-  // Optional caller-supplied abort signal. No live caller wraps djText in
-  // withDeadline today, so this is inert unless one starts to — kept in the
-  // shape as a precaution so a future deadline-wrapped call can cut the
-  // Retry-After sleep short and prevent a ghost retry after the abort (mirrors
-  // djAgent's threading, PR #751 review).
+  // Caller budgets/cancellation take precedence over the provider deadline.
   signal = undefined,
 }: any): Promise<string> {
   return withFailover(
@@ -48,6 +44,7 @@ export async function djText({
         ...(seed != null ? { seed } : {}),
         maxOutputTokens,
         reasoning: reasoningFor(leg.cfg),
+        ...googleSafetyOptions(leg.cfg),
         ...(signal ? { abortSignal: signal } : {}),
       }), signal);
       // A free-text DJ script that hit the output-token cap is never a usable
@@ -77,5 +74,7 @@ export async function djText({
         extra: { system, user: prompt, response: out },
       };
     },
+    undefined,
+    signal,
   );
 }

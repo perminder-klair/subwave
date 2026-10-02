@@ -3,7 +3,7 @@
 // restart by design; the raw per-call lists stay on /debug.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import { recentCalls } from '../llm/log.js';
+import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
 import * as llmProvider from '../llm/provider.js';
 import * as settings from '../settings.js';
 import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests } from '../stats.js';
@@ -23,6 +23,7 @@ router.get('/stats', requireAdmin, (req, res) => {
     llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
     // Durable per-UTC-day tally, unlike the rings above. enabled:false with no cap.
     llm.budget = budgetStatus();
+    llm.generation = generationHealthSnapshot();
 
     res.json({
       t: new Date().toISOString(),

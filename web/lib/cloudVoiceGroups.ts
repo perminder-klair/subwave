@@ -40,6 +40,75 @@ export function isKnownCloudVoice(provider: string, discovered: DiscoveredVoice[
   return !!v && knownCloudVoiceIds(provider, discovered).has(v);
 }
 
+// Curated prebuilt Gemini voice ids with Google's own descriptors. Lives here,
+// beside the cloud lists, because the Gemini fold makes this the SAME field: one
+// voice picker whose contents follow whichever provider card is selected above
+// it. It used to live in the persona editor next to its JSX, which is where a
+// second copy would have been written the moment the station panel wanted the
+// same labels.
+const GEMINI_PREBUILT_VOICES: { id: string; label: string }[] = [
+  { id: 'Zephyr', label: 'Zephyr — Bright' },
+  { id: 'Puck', label: 'Puck — Upbeat' },
+  { id: 'Charon', label: 'Charon — Informative' },
+  { id: 'Kore', label: 'Kore — Firm' },
+  { id: 'Fenrir', label: 'Fenrir — Excitable' },
+  { id: 'Leda', label: 'Leda — Youthful' },
+  { id: 'Orus', label: 'Orus — Firm' },
+  { id: 'Aoede', label: 'Aoede — Breezy' },
+  { id: 'Callirrhoe', label: 'Callirrhoe — Easy-going' },
+  { id: 'Autonoe', label: 'Autonoe — Bright' },
+  { id: 'Enceladus', label: 'Enceladus — Breathy' },
+  { id: 'Iapetus', label: 'Iapetus — Clear' },
+  { id: 'Umbriel', label: 'Umbriel — Easy-going' },
+  { id: 'Algieba', label: 'Algieba — Smooth' },
+  { id: 'Despina', label: 'Despina — Smooth' },
+  { id: 'Erinome', label: 'Erinome — Clear' },
+  { id: 'Algenib', label: 'Algenib — Gravelly' },
+  { id: 'Rasalgethi', label: 'Rasalgethi — Informative' },
+  { id: 'Laomedeia', label: 'Laomedeia — Upbeat' },
+  { id: 'Achernar', label: 'Achernar — Soft' },
+  { id: 'Alnilam', label: 'Alnilam — Firm' },
+  { id: 'Schedar', label: 'Schedar — Even' },
+  { id: 'Gacrux', label: 'Gacrux — Mature' },
+  { id: 'Pulcherrima', label: 'Pulcherrima — Forward' },
+  { id: 'Achird', label: 'Achird — Friendly' },
+  { id: 'Zubenelgenubi', label: 'Zubenelgenubi — Casual' },
+  { id: 'Vindemiatrix', label: 'Vindemiatrix — Gentle' },
+  { id: 'Sadachbia', label: 'Sadachbia — Lively' },
+  { id: 'Sadaltager', label: 'Sadaltager — Knowledgeable' },
+  { id: 'Sulafat', label: 'Sulafat — Warm' },
+];
+
+/** The Gemini half of the shared voice field: the 30 prebuilt voices, plus the
+ *  same "Custom voice id…" row every cloud provider ends with — so a designed
+ *  (`voice_…`) or replicated (`voicekey_…`) id has a home in the picker exactly
+ *  where an operator already looks for one. Never discoverable: Google's Voice
+ *  Library endpoint is not the prebuilt catalogue (it omits Puck, Zephyr and
+ *  Kore entirely), so the curated list here is the complete one. */
+export function buildGeminiVoiceGroups(): VoicePickerGroup[] {
+  return [{ label: 'Google prebuilt', voices: GEMINI_PREBUILT_VOICES }, { voices: [CUSTOM_ROW] }];
+}
+
+/** What the picker shows when the Gemini card is chosen and the slot has no
+ *  usable voice yet. Mirrors the cloud branch, which falls back to the first
+ *  curated id — landing an operator on an empty "Custom voice id…" box because
+ *  they picked a provider card reads as a broken field, not as a choice. */
+export function defaultGeminiVoice(): string {
+  // noUncheckedIndexedAccess: the list is a literal above, so this cannot be
+  // undefined at runtime — but the type says it could be, and the fallback
+  // keeps that from becoming a `voice: undefined` write.
+  return GEMINI_PREBUILT_VOICES[0]?.id ?? 'Puck';
+}
+
+/** True when the saved voice is one of the 30 prebuilt ids. Case-insensitive
+ *  because the engine accepts any case (verified — `Charon`/`charon`/`CHARON`
+ *  all render) and a persona stored in lowercase is still that voice, not a
+ *  custom one. */
+export function isKnownGeminiVoice(voice: string): boolean {
+  const v = voice.trim().toLowerCase();
+  return !!v && GEMINI_PREBUILT_VOICES.some(o => o.id.toLowerCase() === v);
+}
+
 /** Always ends with the "Custom voice id…" action row so an operator can enter
  *  an id the server never advertised. */
 export function buildCloudVoiceGroups(provider: string, discovered: DiscoveredVoice[]): VoicePickerGroup[] {

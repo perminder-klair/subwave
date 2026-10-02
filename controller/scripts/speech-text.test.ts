@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  normalizeForDisplay, normalizeForSpeech, sanitizePerformanceCues, spokenWordScale,
+  normalizeForDisplay, normalizeForSpeech, sanitizePerformanceCues, spokenWordScale, stripSpeakerLabel,
 } from '../src/audio/speech-text.js';
 
 let failures = 0;
@@ -24,6 +24,66 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
+  console.log('speaker labels (#1707 — the label is read aloud if it survives):');
+  const cast = ['Iris', 'Lucifer', 'Solène'];
+  await test('a leading persona label is stripped, colon tight or spaced', () => {
+    assert.equal(stripSpeakerLabel('Iris: Je sens une lumière lointaine.', cast), 'Je sens une lumière lointaine.');
+    assert.equal(stripSpeakerLabel('Lucifer : blablabla', cast), 'blablabla');
+  });
+  await test('any cast name counts, not just the line\'s own speaker', () => {
+    // A model that prefixes a label picks any name on the call sheet, including
+    // the one it is answering.
+    assert.equal(stripSpeakerLabel('Solène: Oui, presque trop légère.', cast), 'Oui, presque trop légère.');
+  });
+  await test('accents and case do not matter', () => {
+    assert.equal(stripSpeakerLabel('Solene: bonsoir', cast), 'bonsoir');
+    assert.equal(stripSpeakerLabel('IRIS : bonsoir', cast), 'bonsoir');
+  });
+  await test('an opening quote before the label does not hide it', () => {
+    assert.equal(stripSpeakerLabel('"Iris: bonsoir', cast), 'bonsoir');
+  });
+  await test('paired quotes around the name do not hide a known label', () => {
+    for (const label of ['"Iris"', "'Iris'", '«Iris»', '“Iris”']) {
+      assert.equal(stripSpeakerLabel(`${label}: bonsoir`, cast), 'bonsoir');
+    }
+    assert.equal(stripSpeakerLabel('«Solene» : bonsoir', cast), 'bonsoir');
+    assert.equal(stripSpeakerLabel('«Bob»: bonsoir', cast), '«Bob»: bonsoir');
+    assert.equal(stripSpeakerLabel('«Iris»: ', cast), '«Iris»: ');
+  });
+  await test('long and decomposed known names have no arbitrary prefix limit', () => {
+    for (const name of ['The Midnight Frequency Presenter', 'A'.repeat(40), 'é'.repeat(40).normalize('NFD')]) {
+      assert.equal(stripSpeakerLabel(`${name}: bonsoir`, [name]), 'bonsoir');
+    }
+    assert.equal(stripSpeakerLabel('A'.repeat(40) + ': bonsoir', cast), 'A'.repeat(40) + ': bonsoir');
+  });
+  await test('deliberately unsupported markup and tight colon remain unchanged', () => {
+    assert.equal(stripSpeakerLabel('Iris:bonsoir', cast), 'Iris:bonsoir');
+    assert.equal(stripSpeakerLabel('**Iris:** bonsoir', cast), '**Iris:** bonsoir');
+  });
+  await test('REAL SPEECH IS NEVER TOUCHED — this is the whole point', () => {
+    // A blanket "drop any leading Word:" would eat the first word of these.
+    assert.equal(stripSpeakerLabel('Attention : voici le morceau', cast), 'Attention : voici le morceau');
+    assert.equal(stripSpeakerLabel('Bref : on continue', cast), 'Bref : on continue');
+    assert.equal(stripSpeakerLabel('Prochain titre : Neon Void', cast), 'Prochain titre : Neon Void');
+  });
+  await test('a name that is not in the cast stays put', () => {
+    assert.equal(stripSpeakerLabel('Vespera: bonsoir', cast), 'Vespera: bonsoir');
+    assert.equal(stripSpeakerLabel('Iris: bonsoir', []), 'Iris: bonsoir');
+  });
+  await test('a name deeper in the line is speech, not routing', () => {
+    assert.equal(stripSpeakerLabel('et puis Iris: ce moment-là', cast), 'et puis Iris: ce moment-là');
+  });
+  await test('only one label is stripped', () => {
+    assert.equal(stripSpeakerLabel('Iris: Lucifer : bonsoir', cast), 'Lucifer : bonsoir');
+  });
+  await test('a label with nothing after it is left alone rather than emptying the line', () => {
+    assert.equal(stripSpeakerLabel('Iris: ', cast), 'Iris: ');
+  });
+  await test('empty and label-free input pass through', () => {
+    assert.equal(stripSpeakerLabel('', cast), '');
+    assert.equal(stripSpeakerLabel('bonsoir à tous', cast), 'bonsoir à tous');
+  });
+
   console.log('temperature units:');
   await test('°F expands, with and without a space', () => {
     assert.equal(normalizeForSpeech('Clear night, 76°F — the sky refuses to dim.'),
@@ -140,7 +200,7 @@ async function main() {
     assert.equal(normalizeForSpeech('That was Song Title [Live].'), 'That was Song Title Live.');
     assert.equal(normalizeForSpeech('Here is Album Cut [Deluxe].'), 'Here is Album Cut Deluxe.');
     assert.equal(normalizeForSpeech('Next, Song Title [Remastered 2011].'),
-      'Next, Song Title Remastered 2011.');
+      'Next, Song Title Remastered twenty eleven.');
     assert.equal(normalizeForSpeech('[Live fade out] Keep talking.'), 'Keep talking.',
       'a title-like prefix must not override the production-direction blocklist');
   });
@@ -158,7 +218,7 @@ async function main() {
   });
   await test('normalizes punctuation known to upset cloud TTS without changing display', () => {
     const source = 'From 1991–1993 — \u201cquiet\u201d… and ready.';
-    assert.equal(normalizeForSpeech(source), 'From 1991 to 1993 — quiet... and ready.');
+    assert.equal(normalizeForSpeech(source), 'From nineteen ninety-one to nineteen ninety-three — quiet... and ready.');
     assert.equal(normalizeForDisplay(source), 'From 1991–1993 — “quiet”… and ready.');
     assert.equal(normalizeForSpeech('A\u00a0soft\u00adhyphen\u200b stays tidy.'), 'A softhyphen stays tidy.');
   });

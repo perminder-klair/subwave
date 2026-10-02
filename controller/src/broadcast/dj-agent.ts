@@ -483,7 +483,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   if (wantLink && pickAnchor) {
     try {
       const generated = await generatePickLink({
-        previous: pickAnchor, current: song, context: linkAirContext(ctx, linkAirAt),
+        previous: pickAnchor, current: song, context: speechClockContext(ctx, linkAirAt),
         clockIsAirTime: !!linkAirAt,
         recap: queue.getDjRecap(), recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
@@ -496,7 +496,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
+  const say = dropEchoedLink(trimLinkToIntro(rawLink, song, linkPersona), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
   // The no-FX schema tells the model to leave transition null, but a model can
@@ -527,7 +527,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // the captured pick anchor), instead of immediately over the current track (#189).
   // Stamp `pickAnchor` as the link's intended back-announce target so the queue
   // can drop the link if a request jumps ahead of this pick before it airs.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech });
+  // Re-budget the original output: a second strip of `say` could eat a nested
+  // leading name that the first pass deliberately kept as spoken text.
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link ? rawLink : null, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -543,9 +545,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   return true;
 }
 
-// The link's context with the clock stepped forward to `airAt`, the moment the
-// link actually AIRS. ctx resolved at showAt is right for show IDENTITY but its
-// clock runs PICK_SHOW_LOOKAHEAD_SEC fast, and every pick-attached link spoke
+// A speech context with the clock moved to `at` while every editorial field is
+// preserved. For links, `at` is the moment the link actually AIRS. A context
+// resolved at showAt is right for show IDENTITY but its clock runs PICK_SHOW_LOOKAHEAD_SEC fast, and every pick-attached link spoke
 // that padded time — "Local time eight fifty" logged at 08:48 (#1282). So the
 // same identity/clock split runPickCycle's handoff makes: show/mood/festival
 // stay on showAt, only the clock-derived fields move to air time. `isDark` rides
@@ -557,11 +559,20 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
 // caller passes clockIsAirTime false, withholding the "Local time" line from the
 // prompt entirely rather than showing a time the model must be trusted not to
 // use.
-function linkAirContext(ctx: any, airAt: Date | null) {
-  if (!airAt || !ctx) return ctx;
-  const clock: any = getClockContext(airAt);
+function speechClockContext(ctx: any, at: Date | null) {
+  if (!at || !ctx) return ctx;
+  const clock: any = getClockContext(at);
   if (typeof ctx.clock?.isDark === 'boolean') clock.isDark = ctx.clock.isDark;
-  return { ...ctx, at: airAt.toISOString(), date: getDateContext(airAt), clock, time: getTimeContext(airAt) };
+  return { ...ctx, at: at.toISOString(), date: getDateContext(at), clock, time: getTimeContext(at) };
+}
+
+function boundarySpeechContext(ctx: any, boundaryAt: unknown) {
+  if (typeof boundaryAt === 'number' && Number.isFinite(boundaryAt)) {
+    const at = new Date(boundaryAt);
+    if (!Number.isNaN(at.getTime())) return speechClockContext(ctx, at);
+  }
+  if (!ctx) return ctx;
+  return { ...ctx, at: undefined, date: undefined, clock: undefined, time: undefined };
 }
 
 // Returns 'queued' when a pick was actually enqueued, 'empty' when the pool
@@ -603,7 +614,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
         // left for it to hold may the link speak the clock at all (issue #864:
         // generation-time clocks aired a track late; #1314: forecast clocks
         // aired a filler track early).
-        previous: pickAnchor, current: result.song, context: linkAirContext(ctx, airAt),
+        previous: pickAnchor, current: result.song, context: speechClockContext(ctx, airAt),
         clockIsAirTime: !!airAt && clockAllowed,
         // Name the speaker explicitly. Left unset, scripts.generateLink falls
         // back to getEffectivePersona() on the wall clock, which disagrees with
@@ -656,7 +667,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // (broadcast/clock-policy.ts) generateLink wrote this line under a flat ban
   // and it cannot contain a time, so a drift drop would cost the operator the
   // whole link to protect a clock that isn't in it. Gated on the STAMP rather
-  // than on `airAt` itself, so linkAirContext still steps the daypart tags to
+  // than on `airAt` itself, so speechClockContext still steps the daypart tags to
   // air time — "after dark" stays accurate even when the numerals are withheld.
   const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, pickAnchor, fx, {
     linkClockAt: linkClockStampFor(airAt, clockAllowed),
@@ -1157,6 +1168,13 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   }
   const showIn = (isBoundaryHandoff ? pending.incomingShowName : null) || cur?.show?.name || null;
   const showOut = pending.showName || null;
+  // The armed record keeps a future contextAt for incoming show identity, but
+  // speech facts belong to the scheduled boundary. Unknown legacy/malformed
+  // boundaries fail silent for every temporal field rather than leaking the
+  // look-ahead clock into either half of the handoff.
+  const promptContext = isBoundaryHandoff
+    ? boundarySpeechContext(ctx, pending.boundaryAt)
+    : ctx;
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
     // A boundary handoff is generated while the outgoing session is deliberately
@@ -1176,7 +1194,7 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
       try {
         signoffText = await generateSignoff({
           personaOut, personaIn, showOut, showIn,
-          context: ctx, recap: outgoingRecap, recentOpeners: outgoingOpeners,
+          context: promptContext, recap: outgoingRecap, recentOpeners: outgoingOpeners,
         });
       } catch (err: any) {
         queue.log('error', `Handoff sign-off failed: ${err.message}`);
@@ -1199,7 +1217,7 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
         episodeAngle: (isBoundaryHandoff
           ? session.getBoundaryProgramme()
           : session.getProgramme())?.plan?.angle || null,
-        context: ctx, recap: incomingRecap, recentOpeners,
+        context: promptContext, recap: incomingRecap, recentOpeners,
       });
     } catch (err: any) {
       queue.log('error', `Handoff greeting failed: ${err.message}`);

@@ -31,6 +31,8 @@ import { isValidTimezone, setStationTimezone } from './time.js';
 // forwards straight from vocab.js, so the public surface is unchanged.
 import {
   CHATTERBOX_VOICE_RE,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_VOICES,
   DEFAULT_DJ_PROMPT_TEMPLATE,
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
@@ -55,6 +57,7 @@ import {
   canonicalKokoroLang,
   clamp01,
   clampAgentTimeout,
+  clampRequestTimeout,
   clampBudgetSoftPct,
   clampDailyTokenCap,
   clampMaxOutputTokens,
@@ -69,6 +72,7 @@ import {
   isDefaultTakeover,
   mintId,
   normalizeLlmHeaders,
+  normalizeGeminiSafety,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -91,6 +95,10 @@ import {
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
+// A bound on the engine's composed prompt, not a validated vocabulary — it lives
+// beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
+// admin field, pinned by scripts/gemini-tts-settings.test.ts).
+import { GEMINI_PRONUNCIATION_MAX } from './audio/gemini.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
 import {
   DJ_RECAP_CHARS_BOUNDS,
@@ -805,6 +813,21 @@ export async function load() {
             ? stored.tts.pocketTts.voice
             : DEFAULTS.tts.pocketTts.voice,
       },
+      gemini: {
+        model:
+          typeof stored.tts?.gemini?.model === 'string'
+          && (GEMINI_TTS_MODELS as readonly string[]).includes(stored.tts.gemini.model.trim())
+            ? stored.tts.gemini.model.trim()
+            : DEFAULTS.tts.gemini.model,
+        voice:
+          typeof stored.tts?.gemini?.voice === 'string' && stored.tts.gemini.voice.trim()
+            ? stored.tts.gemini.voice.trim()
+            : DEFAULTS.tts.gemini.voice,
+        pronunciation:
+          typeof stored.tts?.gemini?.pronunciation === 'string'
+            ? stored.tts.gemini.pronunciation.trim().slice(0, GEMINI_PRONUNCIATION_MAX)
+            : DEFAULTS.tts.gemini.pronunciation,
+      },
       cloud: {
         // Explicit boolean wins; otherwise an install that already had a saved
         // cloud key keeps cloud on so the upgrade doesn't silently disable it.
@@ -948,6 +971,7 @@ export async function load() {
       // value survived in memory for that process, vanished on restart, and
       // llama.cpp fell back to its own 1.0 default with nothing in the logs.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
+      geminiSafety: normalizeGeminiSafety(stored.llm?.geminiSafety),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
@@ -966,6 +990,8 @@ export async function load() {
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
           : DEFAULTS.llm.requestWebResolve,
+      // Per-generation ceiling [5s, 30min], distinct from the agent cascade.
+      requestTimeoutMs: clampRequestTimeout(stored.llm?.requestTimeoutMs, DEFAULTS.llm.requestTimeoutMs),
       // Clamped to [5s, 300s]; settings.json files from before the field
       // existed pick up the default.
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
@@ -1015,6 +1041,7 @@ export async function load() {
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
+          geminiSafety: normalizeGeminiSafety(fb.geminiSafety),
           discoverySteps: clampDiscoverySteps(fb.discoverySteps, DEFAULTS.llm.fallback.discoverySteps),
         };
       })(),
@@ -1742,6 +1769,43 @@ export async function update(patch) {
         next.tts.pocketTts.voice = v;
       }
     }
+    if (t.gemini !== undefined) {
+      const gm = t.gemini || {};
+      if (gm.model !== undefined) {
+        // '' is meaningful and allowed: it means "use the engine's fallback
+        // chain", which is how a station that never chose a model should read.
+        const v = String(gm.model).trim();
+        if (v && !(GEMINI_TTS_MODELS as readonly string[]).includes(v)) {
+          throw new Error(`tts.gemini.model must be one of: ${GEMINI_TTS_MODELS.join(', ')}`);
+        }
+        next.tts.gemini.model = v;
+      }
+      if (gm.voice !== undefined) {
+        const v = String(gm.voice).trim();
+        // A voice must be one Google accepts. Left to speak time it becomes a
+        // 400 from deep inside the request and the operator reads a stack trace
+        // instead of a form error. A DESIGNED or REPLICATED id (`voice_…`,
+        // `voicekey_…`) is deliberately NOT in this list: it is an opaque
+        // per-project handle this code cannot validate, and refusing it would
+        // break custom voices outright.
+        if (v && !/^(voice|voicekey)_/i.test(v) && !(GEMINI_TTS_VOICES as readonly string[]).includes(v)) {
+          throw new Error(`tts.gemini.voice must be one of: ${GEMINI_TTS_VOICES.join(', ')} (or a voice_… / voicekey_… id)`);
+        }
+        if (!v) throw new Error('tts.gemini.voice must not be blank');
+        next.tts.gemini.voice = v;
+      }
+      if (gm.pronunciation !== undefined) {
+        // Free text, deliberately NOT validated against a list — it is a natural
+        // language instruction ("Sook rhymes with look"), so any grammar is
+        // legitimate. Capped because it rides EVERY render inside the engine's
+        // style budget alongside the persona's voiceStyle and soul excerpt.
+        const v = String(gm.pronunciation).trim();
+        if (v.length > GEMINI_PRONUNCIATION_MAX) {
+          throw new Error(`tts.gemini.pronunciation must be at most ${GEMINI_PRONUNCIATION_MAX} characters`);
+        }
+        next.tts.gemini.pronunciation = v;
+      }
+    }
     if (t.cloud !== undefined) {
       const c = t.cloud || {};
       const savedCloudProvider = next.tts.cloud.provider;
@@ -1934,6 +1998,11 @@ export async function update(patch) {
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
+    }
+    if (l.requestTimeoutMs !== undefined) {
+      const raw: unknown = l.requestTimeoutMs;
+      const numeric = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
+      next.llm.requestTimeoutMs = clampRequestTimeout(numeric, next.llm.requestTimeoutMs);
     }
     if (l.agentTimeoutMs !== undefined) {
       next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);

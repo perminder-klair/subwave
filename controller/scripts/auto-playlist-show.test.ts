@@ -235,3 +235,32 @@ test('only the operator-driven takeovers are exempt from the handover rule', () 
   assert.doesNotMatch(scheduler, /rollSessionNow\(\{[^}]*manual: true[^}]*reason: 'takeover expired'[^}]*\}\)/,
     'the expiry is automatic — it must not claim the operator exemption');
 });
+
+test('overlapping deferred claims never restore an unbuilt show', () => {
+  const tracker = createShowBuildTracker();
+  tracker.built(null);
+  const first = tracker.claim(FAULTLINE);
+  const other = withField({ id: 'other' });
+  const second = tracker.claim(other);
+  first();
+  second();
+  assert.equal(tracker.needsRebuild(FAULTLINE), true);
+  assert.equal(tracker.needsRebuild(other), true);
+  assert.equal(tracker.needsRebuild(null), false);
+});
+
+test('a stale failed claim cannot undo a successful publication', () => {
+  const tracker = createShowBuildTracker();
+  tracker.built(null);
+  const rollback = tracker.claim(FAULTLINE);
+  const other = withField({ id: 'other' });
+  tracker.built(other);
+  rollback();
+  assert.equal(tracker.needsRebuild(other), false);
+});
+
+test('deferred show refresh rolls back rather than reporting success', () => {
+  const hook = scheduler.slice(scheduler.indexOf('export async function refreshAutoPlaylistOnShowChange'), scheduler.indexOf('async function refreshAutoPlaylistInner'));
+  assert.match(hook, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
+  assert.match(hook, /result === 'deferred'[\s\S]*?rollback\(\);[\s\S]*?return false/);
+});

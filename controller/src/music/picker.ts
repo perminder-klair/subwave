@@ -80,17 +80,22 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 // Shorter TTL for an EMPTY result, so a transient blank clears quickly.
 const EMPTY_CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map();
+let cacheGeneration = 0;
 async function memo(key, ttl, fn) {
   const hit = cache.get(key);
   if (hit && Date.now() < hit.until) return hit.val;
+  const generation = cacheGeneration;
   const val = await fn();
   const isEmpty = Array.isArray(val) ? val.length === 0 : val == null;
-  cache.set(key, { val, until: Date.now() + (isEmpty ? Math.min(EMPTY_CACHE_TTL_MS, ttl) : ttl) });
+  if (generation === cacheGeneration) {
+    cache.set(key, { val, until: Date.now() + (isEmpty ? Math.min(EMPTY_CACHE_TTL_MS, ttl) : ttl) });
+  }
   return val;
 }
 
 // Must be called when the Navidrome creds change: entries hold old server ids.
 export function clearPoolCache() {
+  cacheGeneration++;
   cache.clear();
   offered.clear();
 }

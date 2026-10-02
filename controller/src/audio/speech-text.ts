@@ -9,8 +9,9 @@
 // engines may use bracketed performance cues, but they are structural input:
 // closing, excess or trailing cues must never reach TTS.
 //
-// Digit-to-word expansion is NOT done here: every engine already reads plain
-// numbers naturally. The scope is symbols and markup only.
+// Plain quantities still belong to the engines. Years/decades are the narrow
+// exception: engines can read "1967" as a quantity instead of a date (#1669).
+// Spell those consistently for every engine, after operator corrections.
 //
 // TWO passes, and the split is load-bearing (issue #1186):
 //
@@ -19,7 +20,7 @@
 //     feed. Stripping `**bold**` makes a line more readable, never differently
 //     spelled.
 //   normalizeForSpeech()  — the above PLUS the pronunciation layer: operator
-//     corrections, unit/symbol expansion, the SUB/WAVE → "Subwave" rule.
+//     corrections, year/decade and unit/symbol expansion, SUB/WAVE → "Subwave".
 //     These are spelled for an ENGINE's benefit, not a reader's — "Ye" reads
 //     as "Yay" only so the voice says it right, and a listener seeing "Yay"
 //     in the written line is a bug, not a feature. Speech-only spellings must
@@ -43,6 +44,9 @@ export interface SpeechCorrection {
 // anchors: a rule for "live" must not fire inside "delivery", while a rule
 // whose edge is a symbol ("Ke$ha") has no word boundary there to anchor on.
 const REGEX_SPECIALS_RE = /[.*+?^${}()|[\]\\]/g;
+// Reuse each row's pattern across lines; weak keys release old settings when
+// they are replaced. Check `from` on every use so in-place edits work too.
+const correctionPatterns = new WeakMap<SpeechCorrection, { from: string; pattern: RegExp }>();
 
 function correctionPattern(from: string): RegExp {
   const escaped = from.replace(REGEX_SPECIALS_RE, '\\$&');
@@ -59,7 +63,12 @@ function applyCorrections(text: string, corrections: readonly SpeechCorrection[]
     const to = typeof c?.to === 'string' ? c.to : '';
     // Function replacement so a "$" in the spoken form is literal text, never
     // a capture-group reference.
-    t = t.replace(correctionPattern(from), () => to);
+    let cached = correctionPatterns.get(c);
+    if (cached?.from !== from) {
+      cached = { from, pattern: correctionPattern(from) };
+      correctionPatterns.set(c, cached);
+    }
+    t = t.replace(cached.pattern, () => to);
   }
   return t;
 }
@@ -70,6 +79,111 @@ function applyCorrections(text: string, corrections: readonly SpeechCorrection[]
 const DOLLAR_MAGNITUDE = '(?:\\s+(?:thousand|million|billion|trillion)\\b)?';
 // The $ amount itself: digits with their own formatting ("1,200", "12.50").
 const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
+
+const SMALL_NUMBERS = [
+  'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+  'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen',
+  'seventeen', 'eighteen', 'nineteen',
+];
+const TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+const DECADES = ['', 'tens', 'twenties', 'thirties', 'forties', 'fifties', 'sixties', 'seventies', 'eighties', 'nineties'];
+// Persona languages are free text; blank is the station's English default.
+// Explicit non-English (including unknown labels) leaves dates to the engine.
+const ENGLISH_LANGUAGE_RE = /^(?:english\b|en(?:$|[-_]))/i;
+// 1800–2099 covers historical recordings/composers and near-future dates.
+// Unicode boundaries also protect catalogue identifiers and longer digit runs.
+const YEAR_RE = /(?<![\p{L}\p{N}_])((?:18|19|20)\d{2})(?:('?s)|\s*(?:-|to)\s*(\d{4}|\d{2}))?(?![\p{L}\p{N}_])/giu;
+const SHORT_DECADE_RE = /(?<![\p{L}\p{N}_])('?)([1-9]0)'?s(?![\p{L}\p{N}_])/giu;
+const SHORT_DURATION_RE = /^\s+(?:timeout|timer|delay|wait|interval|duration|countdown|limit)\b/i;
+// Also covers phrases ending in "in the", "of the" and "from the".
+const DECADE_CONTEXT_RE = /\b(?:the|early|mid|late|during)\s*$/i;
+const IDENTIFIER_PREFIX_RE = /(?:\b(?:catalogue|catalog|cat\.|no\.|number|serial|model|room|flight|route|track\s+number|extension|ext\.?)|#)\s*$/i;
+// Deliberately small: obvious counts, magnitudes and units, not a noun parser.
+const PLURAL_COUNT_NOUNS = 'people|copies|records|tracks|songs|albums|items|units|dollars|cents|euros|pounds|seconds|minutes|hours|days|years|meters|metres|kilometers|kilometres|miles|feet|watts';
+const MEASUREMENT_UNITS = 'milliseconds?|microseconds?|nanoseconds?|grams?|milligrams?|kilograms?|litres?|liters?|ns|us|µs|μs|ms|s|mg|g|kg|mm|cm|m|km|ml|l|mph|hz|khz|mhz|ghz|w|kw|mw|bpm|rpm|db';
+const QUANTITY_SUFFIX_RE = new RegExp(`^(?:\\s*[%°\\p{Sc}]|\\s+(?:${PLURAL_COUNT_NOUNS}|dollar|cent|euro|pound|yen|thousand|million|billion|trillion|second|minute|hour|day|year|meter|metre|kilometer|kilometre|mile|watt|${MEASUREMENT_UNITS})\\b)`, 'iu');
+// Only plural counts may follow an intervening word: "1984 vinyl records"
+// is a quantity, while "the 1972 studio album" remains a date.
+const PLURAL_QUANTITY_SUFFIX_RE = new RegExp(`^\\s+(?:[\\p{L}]+\\s+)?(?:${PLURAL_COUNT_NOUNS})\\b`, 'iu');
+
+function twoDigitWords(n: number): string {
+  if (n < 20) return SMALL_NUMBERS[n];
+  const tens = TENS[Math.floor(n / 10)];
+  return n % 10 ? `${tens}-${SMALL_NUMBERS[n % 10]}` : tens;
+}
+
+function yearWords(year: number): string {
+  const last = year % 100;
+  if (year >= 2000 && year < 2010) {
+    return last ? `two thousand ${SMALL_NUMBERS[last]}` : 'two thousand';
+  }
+  const century = twoDigitWords(Math.floor(year / 100));
+  if (!last) return `${century} hundred`;
+  return `${century} ${last < 10 ? `oh-${SMALL_NUMBERS[last]}` : twoDigitWords(last)}`;
+}
+
+function decadeWords(year: number): string {
+  if (year === 2000) return 'two thousands';
+  const century = twoDigitWords(Math.floor(year / 100));
+  return `${century} ${year % 100 ? DECADES[(year % 100) / 10] : 'hundreds'}`;
+}
+
+function isNumericContext(before: string, after: string): boolean {
+  // Currency is still owned by the dollar rule below. Commas/decimal points
+  // touching digits, clock colons and slash/hyphen date fragments stay numeric.
+  return /(?:\p{Sc}\s*|[\d.,:/-])$/u.test(before)
+    || /\d{2,}\s+$/.test(before)
+    || /^\s+\d/.test(after)
+    || IDENTIFIER_PREFIX_RE.test(before)
+    || /\d\s+to\s*$/i.test(before)
+    || /^[.,:]\d/.test(after)
+    || /^\s*(?:[-/]|to\b)\s*\d/i.test(after);
+}
+
+function normalizeYears(text: string): string {
+  const t = text.replace(YEAR_RE, (
+    match, first: string, decade: string | undefined, end: string | undefined, offset: number,
+  ) => {
+    const before = text.slice(0, offset);
+    const after = text.slice(offset + match.length);
+    if (isNumericContext(before, after)
+      || (!decade && (QUANTITY_SUFFIX_RE.test(after) || PLURAL_QUANTITY_SUFFIX_RE.test(after)))) return match;
+    const year = Number(first);
+    if (decade) {
+      if (decade.startsWith("'")) {
+        return year % 10 === 0 && DECADE_CONTEXT_RE.test(before)
+          ? decadeWords(year) : `${yearWords(year)}'s`;
+      }
+      return year % 10 === 0 ? decadeWords(year) : match;
+    }
+    if (end) {
+      const century = Math.floor(year / 100) * 100;
+      const shortEnd = Number(end);
+      const resolvedEnd = end.length === 2
+        ? century + shortEnd + (shortEnd < year % 100 ? 100 : 0) : shortEnd;
+      // Leave non-forward/out-of-range endpoints and multi-part dates alone.
+      if (resolvedEnd <= year || resolvedEnd < 1800 || resolvedEnd > 2099) return match;
+      const endWords = end.length === 2 && resolvedEnd < century + 100 && shortEnd >= 10
+        ? twoDigitWords(shortEnd) : yearWords(resolvedEnd);
+      return `${yearWords(year)} to ${endWords}`;
+    }
+    return yearWords(year);
+  });
+  return t.replace(SHORT_DECADE_RE, (match, quote: string, digits: string, offset: number) => {
+    const before = t.slice(0, offset);
+    const after = t.slice(offset + match.length);
+    if (isNumericContext(before, after)) return match;
+    // A bare "60s" may mean seconds. Require a date phrase or music context;
+    // the leading apostrophe in "'60s" already makes the decade explicit.
+    if (!quote) {
+      if (SHORT_DURATION_RE.test(after)) return match;
+      const dateContext = DECADE_CONTEXT_RE.test(before);
+      const musicContext = /^(?:\s+(?:music|groove|sound|era|style|classics|hits|rock|pop|soul|jazz)\b|-inspired\b)/i.test(after);
+      if (!dateContext && !musicContext) return match;
+    }
+    return DECADES[Number(digits) / 10];
+  });
+}
 
 // Fish/Chatterbox performance cues are deliberately loose in vocabulary — the
 // provider owns what it can express — but strict in position and purpose. A
@@ -244,6 +358,60 @@ function normalizeTtsPunctuation(text: string): string {
 // The READER's form of a line: markup and entities cleaned up, spelling left
 // exactly as written. This is what gets logged, persisted to the session, and
 // pushed to the player — see the two-pass note at the top of the file.
+// A model that was told three times not to write speaker labels still writes
+// them — "Iris: …", "Lucifer : …" — and the label is then READ ALOUD, so the
+// listener hears a persona announce its own name before every line (#1707).
+// The prompt instructions stay as the first line of defence; this is the check
+// that makes the failure impossible rather than merely discouraged.
+//
+// ⚠️ It strips ONLY a name the caller already knows to be in the cast. A blanket
+// "drop any leading Word:" would eat real speech — "Attention : voici le
+// morceau" would lose its first word — and the cast is exactly what the caller
+// has, because it is what routes each line to its voice.
+// Supported grammar, deliberately narrow (PR #1715 review):
+//   "Iris: hello"  "Iris : hello"  "«Iris»: hello"  — stripped when Iris is cast
+//   "Iris:hello"                                    — NOT stripped: the space
+//     after the colon is required, because "ratio:3" style text is not a label.
+//   "**Iris:** hello"                               — reaches here as
+//     "Iris: hello" only AFTER display normalization; stripping runs first, so
+//     a bold label survives this pass. Prompt instructions remain the first
+//     line of defence for that shape.
+const SPEAKER_LABEL_RE = /^\s*([^:\r\n]+?)\s*:\s+/;
+const SPEAKER_QUOTES: Readonly<Record<string, string>> = { '"': '"', "'": "'", '«': '»', '“': '”' };
+
+function unquoteSpeaker(name: string): string {
+  const trimmed = name.trim();
+  const closing = SPEAKER_QUOTES[trimmed[0]!];
+  if (!closing) return trimmed;
+  // Accept an opening quote around the whole line as well as a quoted name.
+  const rest = trimmed.slice(1).trim();
+  return rest.endsWith(closing) ? rest.slice(0, -1).trim() : rest;
+}
+
+// Accent- and case-insensitive so "Solene:" still matches the persona Solène.
+function foldName(name: string): string {
+  return name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+export function stripSpeakerLabel(text: string, castNames: Iterable<string>): string {
+  if (!text) return text;
+  const known = new Set<string>();
+  for (const n of castNames) {
+    const folded = foldName(String(n || ''));
+    if (folded) known.add(folded);
+  }
+  if (!known.size) return text;
+
+  const m = SPEAKER_LABEL_RE.exec(text);
+  if (!m) return text;
+  if (!known.has(foldName(m[1]!)) && !known.has(foldName(unquoteSpeaker(m[1]!)))) return text;
+
+  // One strip only: a second label deeper in the line is part of what was said
+  // ("and then Iris: that was the moment"), not a routing artefact.
+  const rest = text.slice(m[0].length);
+  return rest.trim() ? rest : text;
+}
+
 export function normalizeForDisplay(text: string): string {
   if (!text) return text;
   return collapseSpace(stripMarkup(text));
@@ -252,6 +420,7 @@ export function normalizeForDisplay(text: string): string {
 export function normalizeForSpeech(
   text: string,
   corrections?: readonly SpeechCorrection[],
+  language = '',
 ): string {
   if (!text) return text;
   let t = stripMarkup(text);
@@ -266,8 +435,13 @@ export function normalizeForSpeech(
   // --- operator corrections (settings.tts.corrections) ---
   // After markdown/entity cleanup so a rule matches the readable text the
   // operator sees ("**Hozier**" still matches a "Hozier" rule), and BEFORE
-  // the symbol rules so a correction can pre-empt a built-in expansion.
+  // the year/decade and symbol rules so a correction can pre-empt an expansion.
   if (corrections?.length) t = applyCorrections(t, corrections);
+
+  // --- English years and decades (every engine, operator rules first) ---
+  // Before currency/unit expansion: their original symbols identify quantities.
+  const lang = language.trim();
+  if (!lang || ENGLISH_LANGUAGE_RE.test(lang)) t = normalizeYears(t);
 
   // --- units and symbols (all keyed on an adjacent digit — conservative) ---
   t = t.replace(/(\d)\s*°\s*F\b/g, '$1 degrees Fahrenheit');

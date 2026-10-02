@@ -75,20 +75,25 @@ export function autoPlaylistShowLabel(show: AutoPlaylistShow | null | undefined)
  */
 export function createShowBuildTracker() {
   let builtFor: string | null = null;
+  const claims = new Map<symbol, string>();
   return {
     /** True when the file on disk was not built for this show. */
     needsRebuild(show: AutoPlaylistShow | null | undefined): boolean {
-      return autoPlaylistShowKey(show) !== builtFor;
+      const key = autoPlaylistShowKey(show);
+      return key !== builtFor && ![...claims.values()].includes(key);
     },
     /** Record a build that landed. */
     built(show: AutoPlaylistShow | null | undefined): void {
       builtFor = autoPlaylistShowKey(show);
+      claims.clear();
     },
     /** Claim a rebuild before awaiting it; call the returned rollback if it fails. */
     claim(show: AutoPlaylistShow | null | undefined): () => void {
-      const previous = builtFor;
-      builtFor = autoPlaylistShowKey(show);
-      return () => { builtFor = previous; };
+      const token = Symbol();
+      claims.set(token, autoPlaylistShowKey(show));
+      // Claims are not publications. Overlapping failed/deferred refreshes
+      // must never restore another claim as if it were the file on disk.
+      return () => { claims.delete(token); };
     },
   };
 }

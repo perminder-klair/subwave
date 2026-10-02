@@ -239,6 +239,30 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
   return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
 }
 
+// Per-call safety thresholds for the native `google` provider, as ai-sdk
+// providerOptions. Model-construction arguments are ignored by the SDK;
+// `safetySettings` is resolved from the per-call providerOptions when the
+// request body is built. Checked = block that category; unchecked/absent =
+// allow (BLOCK_NONE). Every other provider gets {} (no-op spread), so call
+// sites never name one.
+export function googleSafetyOptions(cfg: any): Record<string, unknown> {
+  if (!cfg || cfg.provider !== 'google') return {};
+  const g = (cfg as any).geminiSafety || {};
+  const setting = (v: unknown) => (v ? 'BLOCK_MEDIUM_AND_ABOVE' : 'BLOCK_NONE');
+  return {
+    providerOptions: {
+      google: {
+        safetySettings: [
+          { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: setting(g.hateSpeech) },
+          { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: setting(g.dangerousContent) },
+          { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: setting(g.sexuallyExplicit) },
+          { category: 'HARM_CATEGORY_HARASSMENT', threshold: setting(g.harassment) },
+        ],
+      },
+    },
+  };
+}
+
 // Gates the sampling log so /debug doesn't claim a repeat_penalty was applied
 // when the provider dropped it. Currently false everywhere; kept as the
 // chokepoint for when the Ollama per-call channel is restored.
