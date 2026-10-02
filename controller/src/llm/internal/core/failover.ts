@@ -5,13 +5,45 @@
 // once against the optional fallback leg when the primary leg can't recover this
 // call — either its host is unreachable (connection refused / DNS / timeout —
 // see isUnreachable), it refused with a quota/usage-limit/auth error (see
-// isQuotaOrAuthError; issue #438), or a reachable gateway relayed a saturated
-// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671).
+// isQuotaOrAuthError; issue #438), a reachable gateway relayed a saturated
+// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671),
+// or the leg's model itself is gone — retired, removed, or never present (see
+// isModelUnavailable). That last one is permanent: no retry and no wait brings
+// the model back, so the call must move to the fallback leg immediately.
 // record* lives here so a call is logged exactly once, with the leg that ran.
 
+import { createHash } from 'node:crypto';
+import * as settings from '../../../settings.js';
+import { ollamaBaseUrl, loccaBaseUrl } from '../provider/registry.js';
+import { guardGenerationModel, throwIfCancelled } from './generation.js';
+import type { Leg } from '../provider/legs.js';
 import { primaryLeg, fallbackLeg } from '../provider/legs.js';
 import { record } from '../telemetry/log.js';
-import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited } from './pure.js';
+import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, isGenerationControlError, isProviderRequestTimeout } from './pure.js';
+
+// Wrap per dispatch, never mutate cached registry models or capture old settings.
+function guardedLeg(leg: Leg, kind: string, role: 'primary' | 'fallback'): Leg {
+  const provider = leg.cfg.provider;
+  let endpoint = provider === 'ollama' ? ollamaBaseUrl(leg.cfg)
+    : provider === 'locca' ? loccaBaseUrl(leg.cfg)
+      : provider === 'openai-compatible' ? leg.cfg.baseUrl : provider;
+  try {
+    const url = new URL(endpoint);
+    url.username = '';
+    url.password = '';
+    url.search = '';
+    url.hash = '';
+    endpoint = url.toString().replace(/\/+$/, '');
+  } catch { /* Hosted default: the provider name identifies the target. */ }
+  const metadata = {
+    kind, leg: role, provider, modelLabel: leg.label,
+    targetId: createHash('sha256').update(`${provider}|${endpoint}`).digest('hex').slice(0, 24),
+    timeoutMs: settings.get().llm.requestTimeoutMs,
+  };
+  const model = guardGenerationModel(leg.model, metadata);
+  const noThinkModel = leg.noThinkModel === leg.model ? model : guardGenerationModel(leg.noThinkModel, metadata);
+  return { ...leg, model, noThinkModel };
+}
 
 // Centralised success/failure record writers. Every LLM call goes through one
 // of each. The required-shape args (kind/started/via/sampling/usage for
@@ -80,8 +112,9 @@ export interface AttemptResult<T> {
 // primary leg is tried first; only when the primary leg can't recover this call
 // — host unreachable OR a quota/usage-limit/auth rejection OR a reachable
 // gateway relaying a saturated upstream (#671) OR a rate limit that survived
-// same-leg retries (#738 — a free-tier request cap) — and only when a fallback
-// is configured, is `attempt` retried once against the backup leg.
+// same-leg retries (#738 — a free-tier request cap) OR a permanently missing
+// model — and only when a fallback is configured, is `attempt` retried once
+// against the backup leg.
 // On a failover the primary's failure is also recorded (via `…:failover→<backup>`)
 // so /debug shows the switch happened.
 //
@@ -96,13 +129,15 @@ export async function withFailover<T>(
   failExtra: (err: any) => any,
   attempt: (leg: any) => Promise<AttemptResult<T>>,
   pin?: 'primary' | 'fallback',
+  signal?: AbortSignal,
 ): Promise<T> {
+  throwIfCancelled(signal);
   if (pin) {
     const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg();
     if (!leg) throw new Error(`withFailover: pinned leg "${pin}" is not configured`);
     const started = Date.now();
     try {
-      const r = await attempt(leg);
+      const r = await attempt(guardedLeg(leg, kind, pin));
       recordSuccess({ kind, started, via: `${r.via}:pinned`, model: leg.label, sampling: r.sampling, usage: r.usage, perf: r.perf, warnings: r.warnings, extra: r.extra });
       return r.value;
     } catch (err: any) {
@@ -114,7 +149,7 @@ export async function withFailover<T>(
   const primary = primaryLeg();
   const primaryStarted = Date.now();
   try {
-    const r = await attempt(primary);
+    const r = await attempt(guardedLeg(primary, kind, 'primary'));
     recordSuccess({ kind, started: primaryStarted, via: r.via, model: primary.label, sampling: r.sampling, usage: r.usage, perf: r.perf, warnings: r.warnings, extra: r.extra });
     return r.value;
   } catch (err: any) {
@@ -122,19 +157,32 @@ export async function withFailover<T>(
     const quotaOrAuth = isQuotaOrAuthError(err);
     const upstreamOverloaded = isUpstreamOverloaded(err);
     const rateLimited = isRateLimited(err);
-    const backup = (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited) ? fallbackLeg() : null;
+    const modelGone = isModelUnavailable(err);
+    const backup = ((!isGenerationControlError(err) || isProviderRequestTimeout(err))
+      && !signal?.aborted
+      && (isUnreachable(err) || quotaOrAuth || upstreamOverloaded || rateLimited || modelGone))
+      ? fallbackLeg()
+      : null;
     if (!backup) {
       logFailurePreview(kind, err);
       recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
+      throwIfCancelled(signal);
       throw err;
     }
-    const reason = quotaOrAuth ? 'refused (quota/auth)' : upstreamOverloaded ? 'upstream overloaded' : rateLimited ? 'rate limited' : 'unreachable';
+    const reason = isProviderRequestTimeout(err)
+      ? 'generation timed out'
+      : modelGone ? 'model unavailable'
+      : quotaOrAuth ? 'refused (quota/auth)'
+      : upstreamOverloaded ? 'upstream overloaded'
+      : rateLimited ? 'rate limited'
+      : 'unreachable';
     const detail = err?.statusCode || err?.cause?.statusCode || err?.code || err?.cause?.code || err?.name || 'unknown';
     console.log(`[${kind}] primary LLM (${primary.label}) ${reason} (${detail}) — failing over to ${backup.label}`);
     recordFailure({ kind, started: primaryStarted, via: `${primaryVia}:failover→${backup.label}`, model: primary.label, error: err?.message, extra: failExtra(err) });
+    throwIfCancelled(signal);
     const backupStarted = Date.now();
     try {
-      const r = await attempt(backup);
+      const r = await attempt(guardedLeg(backup, kind, 'fallback'));
       recordSuccess({ kind, started: backupStarted, via: r.via, model: backup.label, sampling: r.sampling, usage: r.usage, perf: r.perf, warnings: r.warnings, extra: r.extra });
       return r.value;
     } catch (err2: any) {

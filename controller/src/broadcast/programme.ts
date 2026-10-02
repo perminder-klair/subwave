@@ -261,7 +261,7 @@ export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new D
     if (roster.guests.length && roster.host) {
       try {
         const lines = await dj.generateProgrammeExchange({ beat: 'intro', host: roster.host, guests: roster.guests, ...common });
-        if (lines && await queue.announceExchange(lines, 'programme-intro')) {
+        if (lines && await queue.announceExchange(lines, 'programme-intro', { castNames: [roster.host, ...roster.guests].map(p => p.name) })) {
           return lines.map((l: { persona: { name: string }; text: string }) => `${l.persona.name}: ${l.text}`).join('\n');
         }
       } catch (err) {
@@ -397,7 +397,7 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
     if (roster.guests.length && roster.host) {
       try {
         const lines = await dj.generateProgrammeExchange({ beat: 'outro', host: roster.host, guests: roster.guests, ...common });
-        if (lines && await queue.announceExchange(lines, 'programme-outro')) {
+        if (lines && await queue.announceExchange(lines, 'programme-outro', { castNames: [roster.host, ...roster.guests].map(p => p.name) })) {
           return lines.map((l: { persona: { name: string }; text: string }) => `${l.persona.name}: ${l.text}`).join('\n');
         }
       } catch (err) {

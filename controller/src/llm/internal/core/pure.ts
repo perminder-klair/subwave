@@ -207,7 +207,7 @@ export function budgetMode(
   return 'normal';
 }
 
-// Four classifiers gating two recovery mechanisms:
+// Classifiers gating two recovery mechanisms:
 //   isTransient          → retry the SAME leg (5xx / plain 429 / socket).
 //   isUnreachable        → fail over to the BACKUP leg (host is down). Strict
 //                          subset of isTransient, EXCLUDING 408/425/429/5xx —
@@ -218,6 +218,7 @@ export function budgetMode(
 //                          (#671): a saturated route can clear in a second, so
 //                          same-leg retry gets first crack and only a persistent
 //                          overload reaches failover.
+//   isModelUnavailable   → fail over; permanent even with a transient status.
 
 // AI_RetryError is a wrapper with no statusCode/cause/responseHeaders of its
 // own; the real APICallError lives in err.lastError / err.errors[]. Every
@@ -232,6 +233,17 @@ export function unwrapSdkError(err: ErrorLike | null | undefined): ErrorLike | n
   return inner ?? err;
 }
 
+// Stable control codes are checked before message/status heuristics, including
+// SDK retry wrappers. Caller cancellation and the agent budget never fail over.
+export function isProviderRequestTimeout(err: ErrorLike | null | undefined): boolean {
+  err = unwrapSdkError(err);
+  return err?.code === 'PROVIDER_REQUEST_TIMEOUT';
+}
+export function isGenerationControlError(err: ErrorLike | null | undefined): boolean {
+  err = unwrapSdkError(err);
+  return isProviderRequestTimeout(err) || err?.code === 'GENERATION_CANCELLED' || err?.name === 'AgentDeadlineError';
+}
+
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -241,9 +253,10 @@ const TRANSIENT_CODE = new Set([
 export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
-  // Permanent for this leg — let it propagate to withFailover (#438). A plain
-  // rate-limit 429 with no quota/auth signature stays transient below.
-  if (isQuotaOrAuthError(err)) return false;
+  if (isGenerationControlError(err)) return false;
+  // Permanent for this leg — propagate to withFailover before considering
+  // transient statuses or transport hints. A plain rate-limit stays transient.
+  if (isModelUnavailable(err) || isQuotaOrAuthError(err)) return false;
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (typeof status === 'number' && TRANSIENT_STATUS.has(status)) return true;
   const code = err.code ?? err.cause?.code;
@@ -265,6 +278,8 @@ const UNREACHABLE_CODE = new Set([
 export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
+  if (isProviderRequestTimeout(err)) return true;
+  if (isGenerationControlError(err)) return false;
   const code = err.code ?? err.cause?.code;
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
@@ -295,6 +310,33 @@ function upstreamErrorCode(err: ErrorLike): string {
   const code = (parsed as { error?: { code?: unknown } } | null)?.error?.code;
   return typeof code === 'string' ? code : (typeof err.code === 'string' ? err.code : '');
 }
+// Model retired, removed, or never present on this leg: the host is up and the
+// credentials are good, but THIS model will never answer again — no retry and no
+// wait recovers it, so failover must treat it like host-down. A hosted provider
+// retiring a model otherwise silences every generation until an operator
+// notices, with the fallback leg sitting idle and correctly configured.
+//
+// Detected by the machine-readable code first and by MESSAGE second, the same
+// way QUOTA_RE is, because providers word this very differently. Deliberately
+// NOT by a bare 404: it may be a wrong URL or an unrelated missing resource.
+// A bare HTTP 404 is not host-unreachable either.
+const MODEL_GONE_CODES = new Set(['model_not_found', 'model_not_available', 'model_terminated']);
+// Require a model subject and a permanent verdict, not arbitrary intervening
+// prose about another resource. Dots/colons/slashes are valid model-ID bytes.
+// Plain "unavailable" is ambiguous (e.g. overload), so it is code-only.
+const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:\s+[`'"]?[\w.:/-]{1,60}[`'"]?)?\s+(?:(?:was|is|has been) (?:retired|removed|decommissioned|deprecated)|not found|does not exist|(?:is )?no longer available|(?:is )?not available(?=$|[.,;]))\b/i;
+// Ollama's incident wording omits "model". Bound it to a single model-ID token
+// containing a digit, dot or colon, followed by the dated retirement sentence.
+const MODEL_ID_RETIRED_RE = /^\s*(?=[\w.:/-]*[\d.:])[\w.:/-]{1,60} was retired at \d{4}-\d{2}-\d{2}\b/i;
+
+export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
+  if (!err) return false;
+  err = unwrapSdkError(err);
+  if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
+  const msg = String(err.message || err.cause?.message || '');
+  return MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg);
+}
+
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {

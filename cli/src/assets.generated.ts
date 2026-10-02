@@ -1236,6 +1236,11 @@ SITE_URL=
 # same directory your Navidrome instance is configured to scan.
 # HOST_MUSIC_PATH=
 # TTS_SPEED=0.85
+# Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
+# default 60 (and values >=60) runs hourly at :07, not every N elapsed minutes.
+# Non-divisors retain uneven hour-rollover gaps; 1 still runs every minute.
+# Startup, show-change and manual/settings refreshes remain immediate.
+# Busy periodic slots are skipped without a catch-up run.
 # AUTO_QUEUE_REFRESH_MINUTES=60
 # Convenience only — seeds the News skill's feed on first boot. After that the
 # file wins: edit it in /admin/skills or state/skills/news/SKILL.md (changing

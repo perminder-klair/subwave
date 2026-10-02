@@ -314,6 +314,23 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
 
+// Native Google safety flags are independent per LLM leg. Only a literal true
+// enables blocking; absent or malformed flags preserve the permissive default.
+const geminiSafetyFlagSchema = z.unknown().transform((raw) => raw === true).default(false);
+export const geminiSafetySchema = z.object({
+  harassment: geminiSafetyFlagSchema,
+  hateSpeech: geminiSafetyFlagSchema,
+  sexuallyExplicit: geminiSafetyFlagSchema,
+  dangerousContent: geminiSafetyFlagSchema,
+});
+export type GeminiSafety = z.output<typeof geminiSafetySchema>;
+
+export function normalizeGeminiSafety(raw: unknown): GeminiSafety {
+  return geminiSafetySchema.parse(
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {},
+  );
+}
+
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 

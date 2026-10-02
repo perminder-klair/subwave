@@ -10,6 +10,7 @@
 // listeners-status.test.ts.
 
 import assert from 'node:assert/strict';
+import { createStreamIdleMonitor } from '../src/broadcast/stream-idle.js';
 import { nextIdleState, type IdleState } from '../src/broadcast/stream-idle-pure.js';
 import { gatedCount } from '../src/broadcast/listeners.js';
 
@@ -232,6 +233,76 @@ async function main() {
     const actions = replayLive(polls);
     // The blip is absorbed; tick 50 clears the clock and tick 51 restarts it.
     assert.equal(actions.indexOf('pause'), 51 + PAUSE_TICK);
+  });
+
+  await test('startup adopts mixer pause before resolving', async () => {
+    let resolve!: (idle: boolean) => void;
+    const status = new Promise<boolean>(r => { resolve = r; });
+    const monitor = createStreamIdleMonitor({ idleStatus: () => status, setStreamIdle: () => {} });
+    const init = monitor.initialize();
+    assert.equal(monitor.isIdle(), false);
+    resolve(true);
+    await init;
+    assert.equal(monitor.isIdle(), true);
+  });
+
+  await test('unavailable status fails open and late status cannot overwrite it', async () => {
+    let resolve!: (idle: boolean) => void;
+    const status = new Promise<boolean>(r => { resolve = r; });
+    const monitor = createStreamIdleMonitor({ idleStatus: () => status, setStreamIdle: () => {} });
+    await monitor.initialize(1);
+    assert.equal(monitor.isIdle(), false);
+    resolve(true);
+    await Promise.resolve();
+    assert.equal(monitor.isIdle(), false);
+  });
+
+  for (const [name, enabled, count] of [
+    ['connect', true, 1], ['toggle-off', false, 0], ['unknown fail-open', true, null],
+  ] as const) {
+    await test(`${name} resumes before background refresh completes; failure stays live`, async () => {
+      let release!: () => void;
+      const pending = new Promise<void>(r => { release = r; });
+      let flushed = false;
+      const monitor = createStreamIdleMonitor({
+        idleStatus: async () => true,
+        idleOff: async () => {},
+        refresh: async () => {},
+        streamSettings: () => ({ idleWhenEmpty: enabled, idleAfterMinutes: 1 }),
+        gatedListenerCount: () => count,
+        setStreamIdle: () => {}, warmHeavy: async () => {}, log: () => {},
+        onResume: async () => { assert.equal(monitor.isIdle(), false); flushed = true; await pending; throw new Error('refresh failed'); },
+      });
+      await monitor.initialize();
+      await monitor.tick();
+      assert.equal(monitor.isIdle(), false);
+      assert.equal(flushed, true);
+      release();
+      await new Promise(r => setImmediate(r));
+      await monitor.tick();
+      assert.equal(monitor.isIdle(), false);
+    });
+  }
+
+  await test('failed idleOff holds the pause without flushing, then retries', async () => {
+    let fail = true;
+    let flushed = 0;
+    const monitor = createStreamIdleMonitor({
+      idleStatus: async () => true,
+      idleOff: async () => { if (fail) throw new Error('telnet down'); },
+      refresh: async () => {}, gatedListenerCount: () => 1,
+      streamSettings: () => ({ idleWhenEmpty: true, idleAfterMinutes: 1 }),
+      setStreamIdle: () => {}, warmHeavy: async () => {}, log: () => {},
+      onResume: async () => { flushed++; },
+    });
+    await monitor.initialize();
+    await monitor.tick();
+    assert.equal(monitor.isIdle(), true);
+    assert.equal(flushed, 0);
+    fail = false;
+    await monitor.tick();
+    assert.equal(monitor.isIdle(), false);
+    assert.equal(flushed, 1);
   });
 
   process.exit(failures ? 1 : 0);

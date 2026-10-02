@@ -28,6 +28,7 @@ import {
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   TRANSITION_EFFECTS,
+  normalizeGeminiSafety,
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
@@ -461,6 +462,13 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         kokoro: { voice: v.tts?.kokoro?.voice ?? 'bf_isabella' },
         chatterbox: { referenceVoice: v.tts?.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: v.tts?.pocketTts?.voice ?? 'alba' },
+        // Absent block = the engine's own defaults, matching the controller's
+        // coercion: an empty model means "walk the fallback chain".
+        gemini: {
+          model: v.tts?.gemini?.model ?? '',
+          voice: v.tts?.gemini?.voice ?? 'Puck',
+          pronunciation: v.tts?.gemini?.pronunciation ?? '',
+        },
         cloud: {
           enabled: v.tts?.cloud?.enabled ?? false,
           provider: v.tts?.cloud?.provider ?? 'openai',
@@ -542,6 +550,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         exemptRequests: v.llm?.exemptRequests !== false,
         maxOutputTokens: typeof v.llm?.maxOutputTokens === 'number' ? v.llm.maxOutputTokens : 0,
         discoverySteps: typeof v.llm?.discoverySteps === 'number' ? v.llm.discoverySteps : 0,
+        geminiSafety: normalizeGeminiSafety(v.llm?.geminiSafety),
         fallback: {
           enabled: !!v.llm?.fallback?.enabled,
           provider: v.llm?.fallback?.provider ?? 'ollama',
@@ -550,6 +559,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
           repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
           discoverySteps: typeof v.llm?.fallback?.discoverySteps === 'number' ? v.llm.fallback.discoverySteps : 0,
+          geminiSafety: normalizeGeminiSafety(v.llm?.fallback?.geminiSafety),
           providerBaseUrls: (() => {
             const fbAny = v.llm?.fallback as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
             const stored = fbAny?.providerBaseUrls;

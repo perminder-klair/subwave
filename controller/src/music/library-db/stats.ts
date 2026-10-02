@@ -91,7 +91,7 @@ function computeStats(): LibraryStats {
   for (const r of d
     .prepare(
       `SELECT value AS mood, COUNT(*) AS n FROM tracks, json_each(tracks.moods)
-       WHERE tracks.moods IS NOT NULL GROUP BY value`,
+       WHERE ${SQL_HAS_MOODS} GROUP BY value`,
     )
     .all() as Array<{ mood: string; n: number }>) {
     byMood[r.mood] = r.n;
@@ -99,7 +99,8 @@ function computeStats(): LibraryStats {
   const byEnergy: Record<string, number> = {};
   for (const r of d
     .prepare(
-      `SELECT energy, COUNT(*) AS n FROM tracks WHERE energy IS NOT NULL GROUP BY energy`,
+      `SELECT energy, COUNT(*) AS n FROM tracks
+       WHERE ${SQL_HAS_MOODS} AND energy IS NOT NULL GROUP BY energy`,
     )
     .all() as Array<{ energy: string; n: number }>) {
     byEnergy[r.energy] = r.n;
@@ -110,7 +111,7 @@ function computeStats(): LibraryStats {
   for (const r of d
     .prepare(
       `SELECT value AS genre, COUNT(*) AS n FROM tracks, json_each(tracks.genres)
-       WHERE tracks.genres IS NOT NULL GROUP BY value`,
+       WHERE ${SQL_HAS_MOODS} AND tracks.genres IS NOT NULL GROUP BY value`,
     )
     .all() as Array<{ genre: string; n: number }>) {
     byGenre[r.genre] = r.n;
@@ -118,7 +119,8 @@ function computeStats(): LibraryStats {
   const bySource: Record<string, number> = {};
   for (const r of d
     .prepare(
-      `SELECT source, COUNT(*) AS n FROM tracks WHERE source IS NOT NULL GROUP BY source`,
+      `SELECT source, COUNT(*) AS n FROM tracks
+       WHERE ${SQL_HAS_MOODS} AND source IS NOT NULL GROUP BY source`,
     )
     .all() as Array<{ source: string; n: number }>) {
     bySource[r.source] = r.n;
@@ -130,12 +132,11 @@ function computeStats(): LibraryStats {
     d.prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as { n: number }
   ).n;
   const updatedAt =
-    ((d.prepare('SELECT MAX(tagged_at) AS t FROM tracks').get() as { t: string | null }).t) ||
+    ((d.prepare(`SELECT MAX(tagged_at) AS t FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as { t: string | null }).t) ||
     null;
   return {
     total, mirrorTotal, distinctArtists, byMood, byEnergy, byGenre, bySource,
     withEmbedding, withAudioEmbedding, updatedAt,
   };
 }
-
 

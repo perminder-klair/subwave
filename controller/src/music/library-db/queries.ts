@@ -1,8 +1,8 @@
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
-import type { EnergyValue, TrackRecord, TrackRow } from './types.js';
-import { rowToTrack, safeParseArray } from './rows.js';
+import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
+import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
 // rowToTrack: GET /library/blocklist runs this over the whole library per request.
@@ -33,32 +33,32 @@ export function ruleMatchRows(): Array<{
   }));
 }
 
-export function songsByMood(mood: string): TrackRecord[] {
-  // Editorial moods OR zero-shot audio moods; a track matching both appears once.
-  const rows = requireDb()
-    .prepare(
-      `SELECT * FROM tracks
-       WHERE (moods IS NOT NULL
-              AND EXISTS (SELECT 1 FROM json_each(tracks.moods) WHERE value = ?))
-          OR (audio_moods IS NOT NULL
-              AND EXISTS (SELECT 1 FROM json_each(tracks.audio_moods) WHERE value = ?))`,
-    )
-    .all(mood, mood) as TrackRow[];
-  return rows.map(rowToTrack);
+const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+
+export function songsByMood(mood: string): MoodPoolRecord[] {
+  // Start at the covering membership index, never scan tracks/json_each.
+  // Sorting by rowid preserves the former full-scan bucket order.
+  const rows = requireDb().prepare(`SELECT ${MOOD_POOL_COLUMNS}
+    FROM track_moods m JOIN tracks t ON t.id = m.track_id
+    WHERE m.mood = ? ORDER BY t.rowid`).all(mood) as MoodPoolRow[];
+  return rows.map(rowToMoodPool);
 }
 
-export function songsByEnergy(energy: EnergyValue): TrackRecord[] {
+export function songsByEnergy(energy: EnergyValue): EnergyPoolRecord[] {
   if (!energy) return [];
-  const rows = requireDb()
-    .prepare(`SELECT * FROM tracks WHERE energy = ?`)
-    .all(energy) as TrackRow[];
-  return rows.map(rowToTrack);
+  const rows = requireDb().prepare(`SELECT ${MOOD_POOL_COLUMNS},
+    t.original_year, t.is_compilation, t.era_untrusted, t.audio_moods,
+    t.bpm, t.musical_key, t.intro_ms, t.loudness_lufs,
+    t.structure_json, t.vocal_ranges_json, t.pace_json
+    FROM tracks t WHERE t.energy = ? AND ${SQL_HAS_MOODS} ORDER BY t.rowid`).all(energy) as EnergyPoolRow[];
+  return rows.map(rowToEnergyPool);
 }
 
 export function allTaggedIds(): string[] {
   return (
     requireDb()
-      .prepare('SELECT id FROM tracks WHERE moods IS NOT NULL')
+      .prepare(`SELECT id FROM tracks WHERE ${SQL_HAS_MOODS}`)
       .all() as Array<{ id: string }>
   ).map(r => r.id);
 }
@@ -143,7 +143,7 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
                 WHEN year > 0 THEN (year / 10) * 10
                 ELSE 0
               END AS decade
-       FROM tracks WHERE moods IS NULL`,
+       FROM tracks WHERE ${SQL_NO_MOODS}`,
     )
     .all() as Array<{ id: string; g: string; decade: number }>;
   const out = new Map<string, string[]>();

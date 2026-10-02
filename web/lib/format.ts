@@ -58,6 +58,26 @@ export function fmtClockMinute(
   }
 }
 
+// Compact station date + time for the admin header, e.g. "2 Oct · 14:37:45".
+// The clock follows the station's timezone and 12h/24h convention.
+export function fmtStationDateTime(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  try {
+    const date = new Date(t);
+    const datePart = new Intl.DateTimeFormat('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      ...(tz ? { timeZone: tz } : {}),
+    }).format(date);
+    return `${datePart} · ${fmtClock(date.getTime(), tz, locale)}`;
+  } catch {
+    return '';
+  }
+}
+
 const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 // Day-of-week (0=Sun) and hour (0-23) for `date` on the wall clock in `tz`.

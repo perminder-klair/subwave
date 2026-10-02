@@ -116,7 +116,7 @@ const MOODS_LIMIT = SETTINGS_MOODS_LIMIT;
 // settings-patch-registry keys that deliberately has no zod schema.
 const CORRECTION_FROM_MAX = 80;
 const CORRECTION_TO_MAX = 160;
-const CORRECTIONS_LIMIT = 100;
+const CORRECTIONS_LIMIT = 500;
 const correctionsSchema = z
   .array(
     z.object({
@@ -586,7 +586,7 @@ export default function MoodsPanel() {
                 words the voice tends to get wrong (<em>GHz</em> →<em> gigahertz</em>, <em>Hozier</em>{' '}
                 → <em>Ho-zeer</em>). Case doesn’t matter, and it matches whole words and phrases;
                 leave the spoken form empty to drop a word entirely. New rules kick in from the next
-                line — no restart needed.
+                line — no restart needed. Up to {CORRECTIONS_LIMIT} rules.
               </div>
               <ScrollArea className="max-h-[360px]">
                 <div className="flex flex-col gap-3 pr-2">
