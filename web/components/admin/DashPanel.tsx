@@ -631,14 +631,14 @@ export default function DashPanel() {
               {/* Two rows (controls, then a full-width send bar): on the ~550px
                   column a single flex-wrap row broke unpredictably. */}
               <PromptInputFooter className="flex-col items-stretch gap-2.5">
-                <PromptInputTools className="flex-wrap items-center gap-x-5 gap-y-2">
-                  <div className="flex items-center gap-1.5">
+                <PromptInputTools className="grid w-full grid-cols-2 items-end gap-3 [&_[role=group]]:w-full [&_[role=group]]:flex-nowrap [&_button]:flex-1 [&_button]:px-2 [&_button]:tracking-normal">
+                  <div className="grid min-w-0 gap-1.5">
                     <span className="caption">mode</span>
-                    <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
+                    <Seg aria-label="Voice mode" value={sayMode} options={SAY_MODES} onChange={setSayMode} />
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="grid min-w-0 gap-1.5">
                     <span className="caption">duck</span>
-                    <Seg value={sayKind} options={SAY_KINDS} onChange={setSayKind} />
+                    <Seg aria-label="Voice ducking" value={sayKind} options={SAY_KINDS} onChange={setSayKind} />
                   </div>
                 </PromptInputTools>
                 <PromptInputSubmit

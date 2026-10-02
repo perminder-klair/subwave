@@ -237,7 +237,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       {live && (pinned || defaultTakeover) ? (
         <div className="grid gap-2.5">
           <div className="grid gap-1 border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-2.5 py-2">
-            <div className="flex items-baseline gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <ColorChip
                 color={pinned ? colorOf(pinned.id) : null}
                 className="size-[11px] self-center"
@@ -245,13 +245,12 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               <span className="min-w-0 truncate text-[13px] font-bold text-ink">
                 {pinned?.name ?? 'Default programming'}
               </span>
-              <span className="mono-num ml-auto flex-none text-[10px] whitespace-nowrap text-muted">
-                ends {fmtClock(live.expiresAt, tz, locale)}
-              </span>
             </div>
-            <div className="text-[10px] text-muted">
-              {defaultTakeover ? 'autonomous music · default DJ' : 'on air over the schedule'}
-              {' · '}{minutesLeft} min left
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[10px] text-muted">
+              <span>{defaultTakeover ? 'autonomous music · default DJ' : 'on air over the schedule'}</span>
+              <span className="mono-num whitespace-nowrap">
+                ends {fmtClock(live.expiresAt, tz, locale)} · {minutesLeft} min left
+              </span>
             </div>
           </div>
           <Btn sm className="w-full" disabled={busy} onClick={cancel}>
@@ -266,7 +265,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
           </Link>
         </div>
       ) : (
-        <div className="grid gap-2.5">
+        <div className="@container grid gap-4">
           <Controller
             control={form.control}
             name="showId"
@@ -279,12 +278,14 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               return (
                 <SlotMenu
                   ariaLabel="Choose takeover programming"
-                  // justify-self, not self-start: the grid otherwise stretches
-                  // the slot to full width, where it reads as a text field.
-                  className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
-                  label={isDefaultTakeover(chosen)
-                    ? 'Default programming'
-                    : (chosenId && showById(chosenId)?.name) || 'Choose programming…'}
+                  className="min-h-9 w-full min-w-0 justify-between text-[12px]"
+                  label={(
+                    <span className="min-w-0 flex-1 truncate text-left">
+                      {isDefaultTakeover(chosen)
+                        ? 'Default programming'
+                        : (chosenId && showById(chosenId)?.name) || 'Choose programming…'}
+                    </span>
+                  )}
                   chipColor={isDefaultTakeover(chosen)
                     ? null
                     : chosenId ? colorOf(chosenId) : undefined}
@@ -297,33 +298,37 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               );
             }}
           />
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* One control over two form fields: the three presets set a fixed
-                window, the fourth switches to the boundary the controller
-                resolves. Picking it CLEARS `minutes` rather than leaving the old
-                value under the hidden input. */}
-            <Controller
-              control={form.control}
-              name="until"
-              render={({ field }) => (
-                <Seg
-                  value={field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
-                  options={[
-                    ...PRESETS.map(p => ({ id: String(p.minutes), label: p.label })),
-                    { id: SCHEDULE_SEG, label: 'til change', title: 'End when the weekly schedule would have moved on' },
-                  ]}
-                  onChange={id => {
-                    if (id === SCHEDULE_SEG) {
-                      field.onChange('schedule-change');
-                      form.setValue('minutes', undefined, { shouldValidate: true });
-                      return;
-                    }
-                    field.onChange('fixed');
-                    form.setValue('minutes', Number(id), { shouldValidate: true });
-                  }}
-                />
-              )}
-            />
+          <div className="grid items-end gap-3 @min-[420px]:grid-cols-[minmax(0,1fr)_8rem]">
+            <div className="grid min-w-0 gap-2">
+              <span className="text-sm font-medium">Duration</span>
+              {/* One control over two form fields: the three presets set a fixed
+                  window, the fourth switches to the boundary the controller
+                  resolves. Picking it CLEARS `minutes` rather than leaving the old
+                  value under the hidden input. */}
+              <Controller
+                control={form.control}
+                name="until"
+                render={({ field }) => (
+                  <Seg
+                    aria-label="Takeover duration"
+                    value={field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
+                    options={[
+                      ...PRESETS.map(p => ({ id: String(p.minutes), label: p.label })),
+                      { id: SCHEDULE_SEG, label: 'til change', title: 'End when the weekly schedule would have moved on' },
+                    ]}
+                    onChange={id => {
+                      if (id === SCHEDULE_SEG) {
+                        field.onChange('schedule-change');
+                        form.setValue('minutes', undefined, { shouldValidate: true });
+                        return;
+                      }
+                      field.onChange('fixed');
+                      form.setValue('minutes', Number(id), { shouldValidate: true });
+                    }}
+                  />
+                )}
+              />
+            </div>
             {/* Hidden rather than disabled under the schedule option: a minute
                 box beside a server-resolved window reads as the thing being
                 submitted, and it is not. */}
@@ -333,7 +338,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
                 name="minutes"
                 label="Takeover minutes"
                 numeric
-                className="max-w-32"
+                className="min-w-0"
                 min={OVERRIDE_MIN_MINUTES}
                 max={OVERRIDE_MAX_MINUTES}
               />

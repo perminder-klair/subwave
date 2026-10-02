@@ -814,7 +814,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
 // useStationFeed's existing 5s poll, unrelated to this timer.
 //
 // Layout: the clock is an in-flow flex item between the breadcrumb and the
-// right-hand cluster, not an overlay. `flex-1 min-w-0` lets it take only the
+// right-hand cluster, aligned right beside the status dot. `flex-1 min-w-0` lets it take only the
 // space those two leave over, so it can never paint on top of either of them
 // (an absolute overlay centred on the whole bar did, at tablet width with the
 // sidebar open). Whether it shows is decided by the width of THAT slot, not
@@ -826,7 +826,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
 // placeholder rather than the browser's local time, which would be a
 // different — wrong — clock for any operator outside the station's zone.
 const CLOCK_PLACEHOLDER = '--:--:--';
-const CLOCK_TEXT_CLASS = 'text-[13px] font-bold whitespace-nowrap tabular-nums sm:text-base';
+const CLOCK_TEXT_CLASS = 'text-[11px] font-normal whitespace-nowrap tabular-nums';
 
 type ClockFit = 'full' | 'short' | 'none';
 
@@ -870,7 +870,7 @@ function StationClock({ tz, locale }: { tz: string | null; locale: Parameters<ty
   const shown = fit === 'full' ? full : fit === 'short' ? short : null;
 
   return (
-    <span ref={slotRef} className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden">
+    <span ref={slotRef} className="relative flex min-w-0 flex-1 items-center justify-end overflow-hidden">
       {/* Invisible, out-of-flow copies, measured to decide which tier fits. */}
       <span ref={fullRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
         {full}
