@@ -308,6 +308,13 @@ export const DEFAULTS = {
     // Built-in voice id used when the engine resolves to pocket-tts with no
     // persona-level voice.
     pocketTts: { voice: 'alba' },
+    // Station-level Gemini choice, used when a persona leaves its own voice (or
+    // follows the station default). `model: ''` means "walk the engine's own
+    // fallback chain", which is what an install that never picked one wants —
+    // pinning a model at install time would freeze the chain at whatever was
+    // newest today. `pronunciation` is free text and empty by default: it is for
+    // ONE station's place names, and nothing ships enabled for anyone else.
+    gemini: { model: '', voice: 'Puck', pronunciation: '' },
     // Used when an engine resolves to 'cloud'. A persona chooses provider+voice;
     // `model` stays shared. `enabled: false` makes the engine report unavailable
     // regardless of key, so the pickers grey it out.

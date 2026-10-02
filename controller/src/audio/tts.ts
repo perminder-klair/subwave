@@ -9,6 +9,7 @@ import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import { heavyColdEngines, heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
+import * as gemini from './gemini.js';
 import { normalizeForSpeech } from './speech-text.js';
 import { scrubCjkForSpeech } from './spoken-script-policy.js';
 import {
@@ -23,7 +24,7 @@ import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
 import { energyForDaypart } from '../context.js';
 
-export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'];
+export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'];
 
 // Kinds NOT voiced by the on-air persona: they use the global defaultEngine.
 // Every other kind takes engine+voice from the effective persona's `tts`.
@@ -62,6 +63,7 @@ function engineUsable(engine: string, cloudProvider?: string | null): boolean {
   if (engine === 'pocket-tts') return pocketTts.isAvailable();
   if (engine === 'kokoro') return kokoro.isAvailable();
   if (engine === 'remote') return remoteTts.isAvailable();
+  if (engine === 'gemini') return gemini.isAvailable();
   return true;
 }
 
@@ -202,6 +204,31 @@ export function speechPaceScale(kind: string, persona?: any, liveOverride?: numb
   return settings.clampEffectiveTtsSpeed(engineSpeed * live);
 }
 
+// The operator's Gemini choice — model + voice — and the precedence that puts a
+// persona's own pick on top of it. Extracted because three call sites need it
+// (the single-speaker branch below, the admin preview, the multi-speaker
+// exchange) and a copy per site is how they end up disagreeing.
+//
+// Voice: a persona that names a voice wins, and one that doesn't inherits the
+// station default rather than the engine's own — otherwise the panel's "default
+// voice" would do nothing for exactly the personas that leave it alone, which is
+// most of them. This is what an `inherit` slot relies on: resolvePersonaVoiceSlot
+// hands it `engine: 'gemini', voice: ''`, and the floor fills that blank.
+//
+// Model: `opts.geminiModel` is the admin preview's UNSAVED choice and outranks
+// the saved station value, so "Play sample" doesn't audition last week's model
+// instead of the one in the dropdown.
+export function stationGeminiPick(opts: any, personaTts: any): { voice?: string; model?: string } {
+  const station = (settings.get().tts as any)?.gemini || {};
+  const voice = (personaTts?.engine === 'gemini' && personaTts.voice)
+    ? personaTts.voice
+    : (typeof station.voice === 'string' && station.voice.trim() ? station.voice.trim() : undefined);
+  const model = typeof opts?.geminiModel === 'string' && opts.geminiModel.trim()
+    ? opts.geminiModel.trim()
+    : (typeof station.model === 'string' && station.model.trim() ? station.model.trim() : undefined);
+  return { voice, model };
+}
+
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
   if (engine === 'kokoro') {
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
@@ -247,6 +274,13 @@ async function speakWith(engine: string, text: string, opts: any, personaTts: an
       : undefined;
     return remoteTts.speak(text, { ...opts, voice });
   }
+  if (engine === 'gemini') {
+    // Direct Google TTS, no sidecar. Style threads identically to the other
+    // engines — the persona's `voiceStyle` is the delivery directive.
+    const { voice, model } = stationGeminiPick(opts, personaTts);
+    const style = typeof opts.voiceStyle === 'string' ? opts.voiceStyle : undefined;
+    return gemini.speak(text, { ...opts, voice, style, model });
+  }
   // piper `voice` is an .onnx filename; empty → the baked-in default voice.
   const voice = (personaTts && personaTts.engine === 'piper' && personaTts.voice)
     ? personaTts.voice
@@ -263,12 +297,15 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     // Unsaved model id so preview validates the exact provider/model choice.
     cloudModel?: string;
+    // Same for Gemini — rides stationGeminiPick, which lets it outrank the
+    // saved model so the dropdown's UNSAVED choice is what you hear.
+    geminiModel?: string;
     speed?: number;
     lang?: string;
     // Persona's free-text on-air language ("Turkish", "Türkçe"): picks the
@@ -345,7 +382,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
 // Public entry point. Tries the configured engine; on failure falls back so the
@@ -478,6 +515,7 @@ export function availableEngines() {
     pocketTtsCloning: pocketTts.cloningAvailable(),
     cloud: cloud.isConfigured(),
     remote: remoteTts.isAvailable(),
+    gemini: gemini.isAvailable(),
     // Per-provider: a persona's cloud voice needs ITS provider configured,
     // which can differ from the global Cloud-engine provider.
     cloudByProvider: {
