@@ -22,7 +22,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
@@ -285,6 +285,7 @@ export async function djAgent({
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
             addUsage(usageOf(nr));
           } catch (e) {
+            if (isModelUnavailable(e)) throw e;
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
           }
         }
@@ -395,6 +396,7 @@ export async function djAgent({
               // A real model call the record should count.
               steps += 1;
             } catch (e) {
+              if (isModelUnavailable(e)) throw e;
               // Text salvage below still gets a shot, then the caller's pool
               // fallback, so log and carry on rather than throwing past both.
               const why = (e as Error)?.message || String(e);
@@ -458,7 +460,7 @@ export async function djAgent({
         };
       } catch (err) {
         // Attribute to the path actually attempted; withFailover writes the
-        // record and decides whether a host-unreachable error tries the backup.
+        // record and decides whether this failure tries the backup.
         (err as { __via?: string }).__via = lastVia;
         throw err;
       }
