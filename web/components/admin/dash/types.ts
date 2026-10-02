@@ -105,6 +105,32 @@ export interface ConnectionsState {
   /** What the icecast render trusted (#1613). Rides the connections response
    *  so the hint cannot disagree with the rows it is explaining. */
   trustedProxies: TrustedProxyState;
+  /** Whether the Country column's GeoIP link can run. Absent on an older
+   *  controller, in which case no hint is shown. */
+  geoip?: GeoipState;
+}
+
+export interface GeoipState {
+  source: 'env' | 'setting' | 'none';
+  path: string;
+  ok: boolean;
+  error?: string;
+}
+
+// Why some Country cells are blank, said only when some are. Rows get a
+// country from that IP's player beacon or from the GeoIP database; players
+// that never load the page (VLC, Sonos, hardware) depend on the database.
+export function geoipHint(
+  s: GeoipState | undefined,
+  rows: { country?: string }[] | undefined,
+): string | null {
+  if (!s || s.ok) return null;
+  if (!rows?.some(r => !r.country)) return null;
+  if (s.source === 'none') {
+    return 'No country for some listeners: no GeoIP database is set, so only listeners who opened the web player get one. Set Settings → Danger zone → Listener country → GeoIP database.';
+  }
+  const where = s.source === 'env' ? 'GEOIP_DB_PATH' : 'the GeoIP database setting';
+  return `No country for some listeners: can’t open ${s.path} (${s.error || 'unreadable'}), set in ${where}. Use the path as the controller container sees it (e.g. /var/sub-wave/…) and make sure the file is readable; it is retried every minute.`;
 }
 
 // The Listeners table shows the connecting peer whenever no proxy is trusted,
@@ -169,7 +195,45 @@ export function maskIp(ip: string): string {
   return ip;
 }
 
-export type SortKey = 'ip' | 'mount' | 'connectedSeconds' | 'client';
+// Regional-indicator flag for an ISO alpha-2 code ("GR" → 🇬🇷). Platforms
+// without flag glyphs (Windows) show the two letters, which the cell prints
+// anyway, so nothing is lost.
+export function countryFlag(code: string | undefined): string {
+  if (!code || !/^[A-Z]{2}$/.test(code)) return '';
+  return String.fromCodePoint(...[...code].map(ch => 0x1f1e6 + ch.charCodeAt(0) - 65));
+}
+
+let regionNames: Intl.DisplayNames | null | undefined;
+
+// "GR" → "Greece" in the operator's browser language; the bare code when the
+// runtime has no DisplayNames or does not know the code.
+export function countryName(code: string | undefined): string {
+  if (!code) return '';
+  if (regionNames === undefined) {
+    try {
+      regionNames = new Intl.DisplayNames(undefined, { type: 'region' });
+    } catch {
+      regionNames = null;
+    }
+  }
+  try {
+    return regionNames?.of(code) || code;
+  } catch {
+    return code;
+  }
+}
+
+// Tooltip for the Country cell: the name, and which link named it, so an
+// operator can tell a beacon's edge header from a database guess.
+export function countryTitle(c: { country?: string; countrySource?: string }): string {
+  if (!c.country) {
+    return 'Unknown: no player beacon from this IP and no GeoIP database match (Settings → Danger zone → Listener country)';
+  }
+  const via = c.countrySource === 'beacon' ? 'from the player beacon' : 'from the GeoIP database';
+  return `${countryName(c.country)} (${via})`;
+}
+
+export type SortKey = 'ip' | 'country' | 'mount' | 'connectedSeconds' | 'client';
 export interface SortState {
   key: SortKey;
   dir: 'asc' | 'desc';
@@ -185,6 +249,11 @@ export function sortConnections(
     let cmp: number;
     if (key === 'connectedSeconds') cmp = a.connectedSeconds - b.connectedSeconds;
     else if (key === 'client') cmp = clientLabel(a.userAgent).localeCompare(clientLabel(b.userAgent));
+    // Unknown countries sort after every known one, in either direction.
+    else if (key === 'country') {
+      if (!a.country !== !b.country) return a.country ? -1 : 1;
+      cmp = countryName(a.country).localeCompare(countryName(b.country));
+    }
     else cmp = String(a[key]).localeCompare(String(b[key]));
     return cmp * sign;
   });
