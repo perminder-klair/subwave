@@ -18,7 +18,7 @@
 // Run: npm test -- handoff-memory-wiring
 
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
+import { after, test, type TestContext } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,6 +33,8 @@ const djAgent = await import('../src/broadcast/dj-agent.js');
 const programme = await import('../src/broadcast/programme.js');
 const { currentTalkAir } = await import('../src/broadcast/talk-air.js');
 const { config } = await import('../src/config.js');
+const contextHelpers = await import('../src/context.js');
+const promptScripts = await import('../src/llm/internal/prompts/scripts.js');
 
 after(() => {
   rmSync(root, { recursive: true, force: true });
@@ -59,6 +61,18 @@ function context(show: { id: string; name: string }, atMs: number) {
   } as any;
 }
 
+// Register before setup so a failed update or arming assertion cannot leak the
+// fake clock or prompt settings into the next test.
+function restorePromptSettingsAfter(t: TestContext) {
+  const realNow = Date.now;
+  const { timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock } = settings.get();
+  const prior = structuredClone({ timezone, locale, personas, activePersonaId, shows, schedule, djSpeakClock });
+  t.after(async () => {
+    Date.now = realNow;
+    await settings.update(prior as never);
+  });
+}
+
 // Records what each generator was handed. Neither returns anything the test
 // asserts on — the arguments ARE the assertion.
 function generators() {
@@ -70,22 +84,28 @@ function generators() {
     showOut: string | null;
     showIn: string | null;
     episodeAngle?: string | null;
+    context: any;
+    prompt: string;
   }> = {};
   return {
     seen,
     deps: {
-      generateSignoff: async ({ recap, recentOpeners, personaOut, personaIn, showOut, showIn }: any) => {
+      generateSignoff: async (args: any) => {
+        const { recap, recentOpeners, personaOut, personaIn, showOut, showIn } = args;
         seen.signoff = {
           recap: recap ?? null, recentOpeners: recentOpeners ?? [],
           personaOut: personaOut.name, personaIn: personaIn.name, showOut, showIn,
+          context: args.context, prompt: promptScripts.signoffPrompt(args),
         };
         return 'That was the hour. Gigi has the next one.';
       },
-      generateHandoffGreeting: async ({ recap, recentOpeners, personaOut, personaIn, showIn, episodeAngle }: any) => {
+      generateHandoffGreeting: async (args: any) => {
+        const { recap, recentOpeners, personaOut, personaIn, showIn, episodeAngle } = args;
         seen.greeting = {
           recap: recap ?? null, recentOpeners: recentOpeners ?? [],
           personaOut: personaOut.name, personaIn: personaIn.name, showIn,
-          episodeAngle: episodeAngle ?? null,
+          episodeAngle: episodeAngle ?? null, context: args.context,
+          prompt: promptScripts.handoffGreetingPrompt(args),
         };
         return 'Cultural Currents starts now.';
       },
@@ -190,12 +210,13 @@ test('an enabled same-host show change renders one acknowledgement, not a self-h
   let signoffs = 0;
   let acknowledgement: any = null;
   const announced: string[] = [];
+  const sameHostContext = context({ id: 's_go', name: 'Get up and Go!' }, Date.now());
   const realAnnounce = (queue as any).announce;
   (queue as any).announce = async (text: string) => { announced.push(text); };
   try {
     await djAgent.runPersonaHandoff(
       queue,
-      context({ id: 's_go', name: 'Get up and Go!' }, Date.now()),
+      sameHostContext,
       {
         generateSignoff: async () => { signoffs++; return 'This must not be used.'; },
         generateHandoffGreeting: async (args: any) => {
@@ -211,6 +232,8 @@ test('an enabled same-host show change renders one acknowledgement, not a self-h
   assert.equal(signoffs, 0, 'the host does not sign off to themself');
   assert.equal(acknowledgement.sameHost, true);
   assert.equal(acknowledgement.showIn, 'Get up and Go!');
+  assert.equal(acknowledgement.context, sameHostContext,
+    'ordinary same-host acknowledgements keep their original context');
   assert.deepEqual(announced, ['A fresh start for Get up and Go!']);
 });
 
@@ -297,6 +320,194 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
   await settings.update({ shows: priorShows, schedule: priorSchedule } as never);
 });
 
+test('a final-track handoff grounds both rendered prompts at the stored boundary clock', async (t) => {
+  restorePromptSettingsAfter(t);
+  const generatedAt = Date.parse('2026-09-18T13:57:00.000Z'); // 14:57 Europe/London
+  const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');  // 15:00 Europe/London
+  const contextAt = Date.parse('2026-09-18T14:03:00.000Z');   // picker look-ahead
+  Date.now = () => generatedAt;
+
+  const week: Record<number, string[]> = {};
+  for (let day = 0; day < 7; day++) {
+    week[day] = Array(24).fill('s_outgoing');
+    week[day][15] = 's_incoming';
+  }
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id,
+    shows: [
+      { id: 's_outgoing', name: 'The Soft Start Procedure', topic: 'soft', personaId: WREN.id },
+      { id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id, programme: true },
+    ],
+    schedule: week, djSpeakClock: true,
+  } as never);
+
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, contextAt),
+    time: contextHelpers.getTimeContext(new Date(contextAt)),
+    date: contextHelpers.getDateContext(new Date(contextAt)),
+    clock: contextHelpers.getClockContext(new Date(contextAt)),
+    dominantMood: 'curious',
+    activeShow: {
+      id: 's_incoming', name: 'Cultural Currents', topic: 'culture',
+      moods: ['curious'], episodeAngle: 'The city after the last train',
+    },
+  } as any;
+  const original = structuredClone(incoming);
+
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, generatedAt));
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+  assert.equal(session.boundaryHandoffStatus()?.boundaryAt, boundaryAt);
+  session.attachBoundaryProgramme({
+    status: 'ok', plan: { angle: 'The city after the last train' }, beats: {}, introAiredAt: null,
+  });
+
+  const { seen, deps } = generators();
+  const realExchange = (queue as any).announceExchange;
+  (queue as any).announceExchange = async () => true;
+  try {
+    await djAgent.runPersonaHandoff(queue, incoming, deps);
+  } finally {
+    (queue as any).announceExchange = realExchange;
+  }
+
+  for (const half of [seen.signoff, seen.greeting]) {
+    assert.match(half.prompt, /Day: Friday, 18 September \(autumn\)/);
+    assert.match(half.prompt, /Local time: 15:00/);
+    assert.match(half.prompt, /Period: afternoon/);
+    assert.doesNotMatch(half.prompt, /Local time: 15:03/);
+  }
+  assert.equal(seen.greeting.showIn, 'Cultural Currents');
+  assert.equal(seen.greeting.episodeAngle, 'The city after the last train');
+  assert.equal(seen.greeting.context.dominantMood, 'curious');
+  assert.equal(seen.greeting.context.activeShow.episodeAngle, 'The city after the last train');
+  assert.deepEqual(incoming, original, 'prompt clock normalization does not mutate the picker context');
+});
+
+test('boundary prompt clocks stay on the stored side of calendar and daypart transitions', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true,
+  } as never);
+  const cases = [
+    {
+      boundaryAt: Date.parse('2026-09-18T22:59:00.000Z'), // Friday 23:59 BST
+      contextAt: Date.parse('2026-09-18T23:02:00.000Z'),  // Saturday 00:02 BST
+      expected: [/^Day: Friday, 18 September \(autumn\)$/m, /^Local time: 23:59/m, /^Period: late-evening$/m],
+      rejected: [/^Day: Saturday, 19 September/m, /^Local time: 00:02/m],
+    },
+    {
+      boundaryAt: Date.parse('2026-09-18T12:59:00.000Z'), // 13:59 BST, midday
+      contextAt: Date.parse('2026-09-18T13:02:00.000Z'),  // 14:02 BST, afternoon
+      expected: [/^Local time: 13:59/m, /^Period: midday$/m],
+      rejected: [/^Local time: 14:02/m, /^Period: afternoon$/m],
+    },
+  ];
+
+  for (const sample of cases) {
+    const incoming = {
+      ...context({ id: 's_incoming', name: 'Cultural Currents' }, sample.contextAt),
+      time: contextHelpers.getTimeContext(new Date(sample.contextAt)),
+      date: contextHelpers.getDateContext(new Date(sample.contextAt)),
+      clock: contextHelpers.getClockContext(new Date(sample.contextAt)),
+    } as any;
+    session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, sample.contextAt - 60_000));
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    (session.getSession() as any).boundaryHandoff.boundaryAt = sample.boundaryAt;
+
+    const { seen, deps } = generators();
+    const realExchange = (queue as any).announceExchange;
+    (queue as any).announceExchange = async () => true;
+    try {
+      await djAgent.runPersonaHandoff(queue, incoming, deps);
+    } finally {
+      (queue as any).announceExchange = realExchange;
+      await settings.update({ activePersonaId: WREN.id } as never);
+    }
+
+    for (const half of [seen.signoff, seen.greeting]) {
+      for (const expected of sample.expected) assert.match(half.prompt, expected);
+      for (const rejected of sample.rejected) assert.doesNotMatch(half.prompt, rejected);
+    }
+  }
+});
+
+test('a boundary handoff omits all temporal prompt facts when its stored boundary is untrustworthy', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: true } as never);
+  const at = Date.parse('2026-09-18T14:03:00.000Z');
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, at),
+    time: contextHelpers.getTimeContext(new Date(at)),
+    date: contextHelpers.getDateContext(new Date(at)),
+    clock: contextHelpers.getClockContext(new Date(at)),
+  } as any;
+
+  for (const invalid of [null, '2026-09-18T14:00:00Z', Number.NaN, Number.POSITIVE_INFINITY, 9e15, undefined]) {
+    session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, at - 60_000));
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    const handoff = (session.getSession() as any).boundaryHandoff;
+    if (invalid === undefined) delete handoff.boundaryAt;
+    else handoff.boundaryAt = invalid;
+
+    const { seen, deps } = generators();
+    const realExchange = (queue as any).announceExchange;
+    (queue as any).announceExchange = async () => true;
+    try {
+      await djAgent.runPersonaHandoff(queue, incoming, deps);
+    } finally {
+      (queue as any).announceExchange = realExchange;
+      await settings.update({ activePersonaId: WREN.id } as never);
+    }
+
+    for (const half of [seen.signoff, seen.greeting]) {
+      assert.doesNotMatch(half.prompt, /^Day:/m, String(invalid));
+      assert.doesNotMatch(half.prompt, /^Local time:/m, String(invalid));
+      assert.doesNotMatch(half.prompt, /^Period:/m, String(invalid));
+      assert.equal(half.context.activeShow.name, 'Cultural Currents');
+    }
+  }
+});
+
+test('the station clock switch still withholds boundary numerals after normalization', async (t) => {
+  restorePromptSettingsAfter(t);
+  await settings.update({
+    timezone: 'Europe/London', locale: 'en-GB',
+    personas: [WREN, GIGI], activePersonaId: WREN.id, djSpeakClock: false,
+  } as never);
+  const contextAt = Date.parse('2026-09-18T14:03:00.000Z');
+  const boundaryAt = Date.parse('2026-09-18T14:00:00.000Z');
+  const incoming = {
+    ...context({ id: 's_incoming', name: 'Cultural Currents' }, contextAt),
+    time: contextHelpers.getTimeContext(new Date(contextAt)),
+    date: contextHelpers.getDateContext(new Date(contextAt)),
+    clock: { ...contextHelpers.getClockContext(new Date(contextAt)), isDark: true },
+  } as any;
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, contextAt - 60_000));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  assert.equal(session.armBoundaryHandoff(incoming), true);
+  (session.getSession() as any).boundaryHandoff.boundaryAt = boundaryAt;
+
+  const { seen, deps } = generators();
+  const realExchange = (queue as any).announceExchange;
+  (queue as any).announceExchange = async () => true;
+  try {
+    await djAgent.runPersonaHandoff(queue, incoming, deps);
+  } finally {
+    (queue as any).announceExchange = realExchange;
+  }
+
+  for (const half of [seen.signoff, seen.greeting]) {
+    assert.doesNotMatch(half.prompt, /^Local time:/m);
+    assert.match(half.prompt, /^Vibe: after dark/m);
+    assert.match(half.prompt, /^Day: Friday, 18 September \(autumn\)$/m);
+    assert.match(half.prompt, /^Period: afternoon$/m);
+  }
+});
+
 test('a queued final-track handoff survives a controller restart for re-rendering', async () => {
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
@@ -304,6 +515,8 @@ test('a queued final-track handoff survives a controller restart for re-renderin
   await settings.update({ activePersonaId: GIGI.id } as never);
   const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
   assert.equal(session.armBoundaryHandoff(incoming), true);
+  const storedBoundaryAt = t0;
+  (session.getSession() as any).boundaryHandoff.boundaryAt = storedBoundaryAt;
   session.markHandoffQueued();
 
   // The session writer is deliberately debounced in production. Once its
@@ -315,6 +528,21 @@ test('a queued final-track handoff survives a controller restart for re-renderin
   assert.equal(session.boundaryHandoffStatus()?.state, 'queued');
   assert.equal(session.boundaryHandoffStatus()?.recovered, true);
   assert.ok(session.pendingHandoff(), 'the lost in-memory WAV pair is regenerated on the next queue cycle');
+
+  const { seen, deps } = generators();
+  const realExchange = (queue as any).announceExchange;
+  (queue as any).announceExchange = async () => true;
+  try {
+    await djAgent.runPersonaHandoff(queue, incoming, deps);
+  } finally {
+    (queue as any).announceExchange = realExchange;
+  }
+  assert.equal(seen.signoff.context.at, new Date(storedBoundaryAt).toISOString());
+  assert.equal(seen.greeting.context.at, new Date(storedBoundaryAt).toISOString());
+  assert.equal(session.boundaryHandoffStatus()?.boundaryAt, storedBoundaryAt,
+    'regeneration leaves the persisted scheduled boundary unchanged');
+  assert.equal(session.boundaryHandoffContextAt()?.toISOString(), incoming.at,
+    'regeneration leaves the future identity timestamp unchanged');
 });
 
 test('a refused final-track handoff remains armed for retry', async () => {

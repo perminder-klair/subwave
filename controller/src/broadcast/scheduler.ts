@@ -24,6 +24,7 @@ import { applyTrackFloor } from '../music/track-floor.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
 import { isIdle } from './stream-idle.js';
+import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
@@ -89,6 +90,9 @@ const playlistRefresh = createAutoPlaylistRefresh({
   build: canPublish => withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner(canPublish)),
   onDeferred: () => queue.log('scheduler', 'Auto-playlist refresh deferred — programme idle-paused (coalescing until resume)'),
 });
+const autoPlaylistRefresh = createAutoPlaylistRefreshRunner(async () => {
+  await refreshAutoPlaylist({ automatic: true });
+}, playlistRefresh.isBusy);
 
 export async function refreshAutoPlaylist({ automatic = false } = {}) {
   return playlistRefresh.request({ automatic });
@@ -636,7 +640,7 @@ export async function runBanter() {
       recentOpeners: queue.getRecentOpeners(),
     });
     if (!lines) throw new Error('banter generation returned no usable exchange');
-    const ok = await queue.announceExchange(lines, 'banter');
+    const ok = await queue.announceExchange(lines, 'banter', { castNames: [host, ...guests].map(p => p.name) });
     if (!ok) throw new Error('banter exchange failed to render');
     return lines.map(l => `${l.persona.name}: ${l.text}`).join('\n');
   });
@@ -1163,8 +1167,15 @@ async function overrideJanitor() {
 export function startScheduler() {
   refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
 
-  cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, () => {
-    refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Hourly playlist failed: ${err.message}`));
+  const refreshCron = autoPlaylistRefreshCron(config.show.autoQueueRefreshMinutes);
+  cron.schedule(refreshCron, async () => {
+    try {
+      if (!await autoPlaylistRefresh.refreshScheduled()) {
+        queue.log('scheduler', 'Auto-playlist periodic refresh skipped — a fallback build is already active');
+      }
+    } catch (err) {
+      queue.log('error', `Periodic playlist failed: ${err.message}`);
+    }
   });
 
   // Every spoken segment the station produces on its own, plus the
@@ -1172,11 +1183,11 @@ export function startScheduler() {
   cron.schedule('* * * * *', talkTick);
 
   cron.schedule('*/5 * * * *', overrideJanitor);
-  cron.schedule('0 * * * *', cleanup);
+  cron.schedule('2 * * * *', cleanup, { noOverlap: true });
   cron.schedule('17 4 * * *', nightlyDoctor);
 
   // Hourly so a station only up part of the day still gets its daily snapshot;
-  // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :00
+  // the elapsed-time cadence lives in backup/pure.ts. :23 keeps it off the :02
   // cleanup and the */5 janitor. Off by default.
   cron.schedule('23 * * * *', scheduledBackupTick);
 
@@ -1188,5 +1199,5 @@ export function startScheduler() {
     syncSkillCrons();
   });
 
-  queue.log('scheduler', `Scheduler started · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
+  queue.log('scheduler', `Scheduler started · auto-playlist: ${refreshCron} · cleanup: 2 * * * * · skills: ${skillCatalog().map((s: any) => s.name).join(', ')}`);
 }

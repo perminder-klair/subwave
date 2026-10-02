@@ -194,7 +194,7 @@ export default function LibraryTaggingModal(p: Props) {
             <div className="grid gap-2.5">
               <Pass on={steps.reconcile} onClick={() => toggleStep('reconcile')}
                 name="Reconcile with Navidrome" tag="quick"
-                hint="Find newly-added tracks and drop ones deleted from Navidrome. Fast — no AI, no model calls." />
+                hint="Find newly-added tracks, adopt IDs changed by a Navidrome upgrade, and drop deleted tracks. Fast — no AI, no model calls." />
               <Pass on={steps.enrich} onClick={() => toggleStep('enrich')}
                 name="Enrich metadata" tag="network"
                 hint="Fetch Last.fm tags + lyrics per track to sharpen the mood read. External API calls — slower on big batches." />

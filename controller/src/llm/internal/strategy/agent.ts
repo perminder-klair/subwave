@@ -24,7 +24,7 @@ import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -133,6 +133,7 @@ function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefi
     stopWhen: [isStepCount(2), hasToolCall('done')],
     temperature,
     maxOutputTokens,
+    ...googleSafetyOptions(leg.cfg),
     // Recovery forces done-only every step, so it has the same
     // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
     reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
@@ -251,6 +252,7 @@ export async function djAgent({
               stopWhen: [isStepCount(Math.max(maxSteps, gatedMaxSteps))],
               temperature,
               maxOutputTokens,
+              ...googleSafetyOptions(leg.cfg),
               timeout: { toolMs: TOOL_TIMEOUT_MS },
               // Thinking off — the pick is structured extraction; djText's
               // free text still reasons.
@@ -315,6 +317,7 @@ export async function djAgent({
           stopWhen: [isStepCount(effectiveMaxSteps), hasToolCall('done')],
           temperature,
           maxOutputTokens,
+          ...googleSafetyOptions(leg.cfg),
           timeout: { toolMs: TOOL_TIMEOUT_MS },
           // Suppress thinking on providers that reject forced tools mid-reasoning.
           reasoning: reasoningFor(leg.cfg, { forceNoThink: useDoneTool }),

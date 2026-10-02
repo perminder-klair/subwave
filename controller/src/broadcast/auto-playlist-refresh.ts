@@ -10,6 +10,7 @@ export function createAutoPlaylistRefresh({ isIdle, build, onDeferred = () => {}
   let pending = false;
   let tail: Promise<unknown> = Promise.resolve();
   let queuedAutomatic: Promise<RefreshResult> | null = null;
+  let activeRequests = 0;
 
   function defer(): RefreshResult {
     if (!pending) onDeferred();
@@ -20,6 +21,7 @@ export function createAutoPlaylistRefresh({ isIdle, build, onDeferred = () => {}
   function request({ automatic }: { automatic: boolean }): Promise<RefreshResult> {
     if (automatic && isIdle()) return Promise.resolve(defer());
     if (automatic && queuedAutomatic) return queuedAutomatic;
+    activeRequests++;
     const run = tail.then(async (): Promise<RefreshResult> => {
       if (automatic) queuedAutomatic = null;
       if (automatic && isIdle()) return defer();
@@ -33,7 +35,7 @@ export function createAutoPlaylistRefresh({ isIdle, build, onDeferred = () => {}
         if (automatic || wasPending) pending = true;
         throw err;
       }
-    });
+    }).finally(() => { activeRequests--; });
     tail = run.catch(() => {});
     if (automatic) queuedAutomatic = run;
     return run;
@@ -43,5 +45,5 @@ export function createAutoPlaylistRefresh({ isIdle, build, onDeferred = () => {}
     if (pending && !isIdle()) await request({ automatic: true });
   }
 
-  return { request, flushPending };
+  return { request, flushPending, isBusy: () => activeRequests > 0 };
 }

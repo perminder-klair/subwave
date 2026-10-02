@@ -5,7 +5,11 @@ import type { StationLocale } from '../../../lib/types';
 
 export interface DebugIcecast {
   listeners?: number;
-  peakListeners?: number;
+  /** Sum of independent per-mount high-water marks, not a simultaneous peak.
+   * Matches the backend's raw Icecast field name. */
+  listener_peak?: number;
+  /** listenurl of every mount Icecast currently has a connected encoder on. */
+  activeMounts?: string[];
   error?: string;
 }
 

@@ -3,15 +3,16 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const scheduler = readFileSync(new URL('../src/broadcast/scheduler.ts', import.meta.url), 'utf8');
-test('startup and hourly refresh explicitly use the automatic idle gate', () => {
+test('startup and periodic refresh explicitly use the automatic idle gate', () => {
   const start = scheduler.indexOf('export function startScheduler');
   assert.ok(start >= 0, 'startScheduler must exist');
   const startup = scheduler.slice(start);
   assert.match(startup.split('cron.schedule')[0]!, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
-  const hourly = startup.match(/cron\.schedule\(`\*\/\$\{config\.show\.autoQueueRefreshMinutes\} \* \* \* \*`, \(\) => \{([\s\S]*?)\n  \}\);/);
-  assert.ok(hourly, 'the refresh cron callback must exist');
-  assert.match(hourly[1]!, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
-  assert.match(hourly[1]!, /Hourly playlist failed/);
+  const periodic = startup.match(/cron\.schedule\(refreshCron, async \(\) => \{([\s\S]*?)\n  \}\);/);
+  assert.ok(periodic, 'the refresh cron callback must exist');
+  assert.match(periodic[1]!, /autoPlaylistRefresh\.refreshScheduled\(\)/);
+  assert.match(scheduler, /createAutoPlaylistRefreshRunner\(async \(\) => \{\s*await refreshAutoPlaylist\(\{ automatic: true \}\);\s*\}, playlistRefresh\.isBusy\)/);
+  assert.match(periodic[1]!, /Periodic playlist failed/);
 });
 
 const { createAutoPlaylistRefresh } = await import('../src/broadcast/auto-playlist-refresh.js');

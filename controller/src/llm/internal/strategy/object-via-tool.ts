@@ -8,7 +8,7 @@
 
 import { generateText, tool, isStepCount } from 'ai';
 import { usageOf, perfOf, warningsOf } from '../core/pure.js';
-import { reasoningFor, forcedToolChoice } from '../provider/capabilities.js';
+import { reasoningFor, forcedToolChoice, googleSafetyOptions } from '../provider/capabilities.js';
 
 // The TRANSPORT rule for this path, stated in the system channel because that
 // is where the model weighs it. It lives HERE, not in any caller's prompt, for
@@ -66,6 +66,7 @@ export async function objectViaToolCall(
     toolChoice: forcedToolChoice(leg.cfg),
     stopWhen: isStepCount(1),
     reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
+    ...googleSafetyOptions(leg.cfg),
     ...(signal ? { abortSignal: signal } : {}),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');

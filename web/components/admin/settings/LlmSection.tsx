@@ -4,6 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
+import { fieldAria } from '../../../lib/form';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
@@ -30,6 +31,7 @@ import {
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
   LLM_HEADERS_MAX,
+  type GeminiSafety,
 } from '@/lib/schemas.generated';
 
 // Provider descriptors, the cloud-key env-var map and the badge logic live in
@@ -41,6 +43,44 @@ import {
 // without an explicit override.
 const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
 const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
+
+const GEMINI_SAFETY_LABELS: { id: keyof GeminiSafety; label: string }[] = [
+  { id: 'harassment', label: 'Harassment' },
+  { id: 'hateSpeech', label: 'Hate speech' },
+  { id: 'sexuallyExplicit', label: 'Sexually explicit' },
+  { id: 'dangerousContent', label: 'Dangerous content' },
+];
+
+function GeminiSafetyEditor({ value, onChange, idPrefix }: {
+  value: GeminiSafety;
+  onChange: (category: keyof GeminiSafety, checked: boolean) => void;
+  idPrefix: string;
+}) {
+  const aria = fieldAria(idPrefix, undefined, { hasDescription: true });
+  return (
+    <div className="field">
+      <div {...aria.labelledByProps} className="text-[13px] font-bold">Block categories</div>
+      <div role="group" {...aria.groupProps} className="mt-2 flex flex-col gap-2">
+        {GEMINI_SAFETY_LABELS.map(({ id, label }) => (
+          <label key={id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+            <input
+              type="checkbox"
+              checked={value[id]}
+              onChange={e => onChange(id, e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <div {...aria.descriptionProps} className="field-hint mt-2">
+        Checked categories block content with medium or high probability of harm.
+        Unchecked categories allow it. Primary and fallback settings are independent
+        and apply only when that model uses Google.
+      </div>
+    </div>
+  );
+}
 
 // Custom request headers for an openai-compatible gateway (#1618). A row list
 // rather than a map: the operator types a name one character at a time, and a
@@ -327,6 +367,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
         discoverySteps: form.llm.discoverySteps,
+        geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
@@ -338,6 +379,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
           discoverySteps: form.llm.fallback.discoverySteps,
+          geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
           reasoning: form.llm.fallback.reasoning,
@@ -1121,6 +1163,34 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           </div>
         </div>
       </Card>
+
+      {form.llm.provider === 'google' && (
+        <Card title="Gemini safety filters" sub="primary model">
+          <GeminiSafetyEditor
+            value={form.llm.geminiSafety}
+            idPrefix="primary-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f, llm: { ...f.llm, geminiSafety: { ...f.llm.geminiSafety, [category]: checked } },
+            }))}
+          />
+        </Card>
+      )}
+
+      {form.llm.fallback.enabled && form.llm.fallback.provider === 'google' && (
+        <Card title="Fallback Gemini safety filters" sub="backup model">
+          <GeminiSafetyEditor
+            value={form.llm.fallback.geminiSafety}
+            idPrefix="fallback-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f,
+              llm: { ...f.llm, fallback: {
+                ...f.llm.fallback,
+                geminiSafety: { ...f.llm.fallback.geminiSafety, [category]: checked },
+              } },
+            }))}
+          />
+        </Card>
+      )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">

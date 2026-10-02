@@ -244,6 +244,60 @@ function normalizeTtsPunctuation(text: string): string {
 // The READER's form of a line: markup and entities cleaned up, spelling left
 // exactly as written. This is what gets logged, persisted to the session, and
 // pushed to the player — see the two-pass note at the top of the file.
+// A model that was told three times not to write speaker labels still writes
+// them — "Iris: …", "Lucifer : …" — and the label is then READ ALOUD, so the
+// listener hears a persona announce its own name before every line (#1707).
+// The prompt instructions stay as the first line of defence; this is the check
+// that makes the failure impossible rather than merely discouraged.
+//
+// ⚠️ It strips ONLY a name the caller already knows to be in the cast. A blanket
+// "drop any leading Word:" would eat real speech — "Attention : voici le
+// morceau" would lose its first word — and the cast is exactly what the caller
+// has, because it is what routes each line to its voice.
+// Supported grammar, deliberately narrow (PR #1715 review):
+//   "Iris: hello"  "Iris : hello"  "«Iris»: hello"  — stripped when Iris is cast
+//   "Iris:hello"                                    — NOT stripped: the space
+//     after the colon is required, because "ratio:3" style text is not a label.
+//   "**Iris:** hello"                               — reaches here as
+//     "Iris: hello" only AFTER display normalization; stripping runs first, so
+//     a bold label survives this pass. Prompt instructions remain the first
+//     line of defence for that shape.
+const SPEAKER_LABEL_RE = /^\s*([^:\r\n]+?)\s*:\s+/;
+const SPEAKER_QUOTES: Readonly<Record<string, string>> = { '"': '"', "'": "'", '«': '»', '“': '”' };
+
+function unquoteSpeaker(name: string): string {
+  const trimmed = name.trim();
+  const closing = SPEAKER_QUOTES[trimmed[0]!];
+  if (!closing) return trimmed;
+  // Accept an opening quote around the whole line as well as a quoted name.
+  const rest = trimmed.slice(1).trim();
+  return rest.endsWith(closing) ? rest.slice(0, -1).trim() : rest;
+}
+
+// Accent- and case-insensitive so "Solene:" still matches the persona Solène.
+function foldName(name: string): string {
+  return name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+export function stripSpeakerLabel(text: string, castNames: Iterable<string>): string {
+  if (!text) return text;
+  const known = new Set<string>();
+  for (const n of castNames) {
+    const folded = foldName(String(n || ''));
+    if (folded) known.add(folded);
+  }
+  if (!known.size) return text;
+
+  const m = SPEAKER_LABEL_RE.exec(text);
+  if (!m) return text;
+  if (!known.has(foldName(m[1]!)) && !known.has(foldName(unquoteSpeaker(m[1]!)))) return text;
+
+  // One strip only: a second label deeper in the line is part of what was said
+  // ("and then Iris: that was the moment"), not a routing artefact.
+  const rest = text.slice(m[0].length);
+  return rest.trim() ? rest : text;
+}
+
 export function normalizeForDisplay(text: string): string {
   if (!text) return text;
   return collapseSpace(stripMarkup(text));
