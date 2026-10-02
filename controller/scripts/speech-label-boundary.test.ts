@@ -9,8 +9,8 @@
 // Run: npm test -- speech-label-boundary
 
 import assert from 'node:assert/strict';
-import { after, beforeEach, test } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { after, beforeEach, test, type TestContext } from 'node:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +23,8 @@ const { queue } = await import('../src/broadcast/queue.js');
 const { config } = await import('../src/config.js');
 const { enqueuePick, trimLinkToIntro } = await import('../src/broadcast/dj-agent/enqueue.js');
 const { awaitIntroRender } = await import('../src/broadcast/queue/intro-render.js');
+const { writeSilentWav } = await import('../src/audio/wav-silence.js');
+const { withTalkAir } = await import('../src/broadcast/talk-air.js');
 
 const realSpeak = (queue as any)._speak;
 const realAirVoice = (queue as any)._airVoice;
@@ -54,7 +56,7 @@ function ctx() {
 let spoken: string[] = [];
 let speakers: string[] = [];
 const wav = join(root, 'test.wav');
-writeFileSync(wav, Buffer.alloc(44));
+await writeSilentWav(wav, 100);
 
 beforeEach(async () => {
   spoken = [];
@@ -63,6 +65,7 @@ beforeEach(async () => {
   queue.upcoming = [];
   queue.current = null;
   queue.history = [];
+  queue._pendingVoice = null;
   (queue as any)._speak = async (text: string, opts: any) => {
     spoken.push(text);
     speakers.push(opts.persona?.id ?? 'implicit');
@@ -217,6 +220,93 @@ test('exchange delivery uses the generation cast even when a member has no speak
   ], 'banter', { castNames });
   assert.deepEqual(spoken, ['Bonsoir.', 'Oui.', 'Bob: still ordinary speech.']);
   assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
+});
+
+async function geminiExchange(t: TestContext) {
+  const originalKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'isolated-label-test';
+  t.after(() => {
+    if (originalKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = originalKey;
+  });
+  await settings.update({ tts: { gainDb: { gemini: 2 } } });
+  const host = { ...IRIS, tts: { engine: 'gemini', voice: 'Puck', cloudProvider: 'openai', gainDb: 3, speed: 1 } };
+  const guest = { ...LUCIFER, tts: { ...host.tts, voice: 'Charon', gainDb: -4 } };
+  return [
+    { persona: host as never, text: 'Solene: Iris: a title with a colon.' },
+    { persona: guest as never, text: 'Iris: Attention : voici la suite.' },
+    { persona: host as never, text: 'Bob: still ordinary speech.' },
+  ];
+}
+
+const cleanedExchange = ['Iris: a title with a colon.', 'Attention : voici la suite.', 'Bob: still ordinary speech.'];
+const displayedExchange = cleanedExchange.map((text, i) => `${i === 1 ? LUCIFER.name : IRIS.name}: ${text}`).join('\n');
+
+for (const placement of ['immediate', 'next-track'] as const) {
+  test(`Gemini batch receives once-cleaned cast labels and stores the same text (${placement})`, async (t) => {
+    const lines = await geminiExchange(t);
+    const requests: string[][] = [];
+    t.mock.method(globalThis, 'fetch', async (url, init) => {
+      assert.match(String(url), /\/interactions$/);
+      const request = JSON.parse(String(init?.body));
+      requests.push(request.input[0].content.map((item: { text: string }) => item.text));
+      assert.deepEqual(request.input[0].content.map((item: { annotations: { speaker: string }[] }) => item.annotations[0].speaker), ['Puck', 'Charon', 'Puck']);
+      return Response.json({ output_audio: { data: readFileSync(wav).toString('base64') } });
+    });
+    const aired: { text: string; gain: number }[] = [];
+    (queue as any)._airVoice = async (_channel: string, _path: string, text: string, gain: number) => {
+      aired.push({ text, gain });
+      return { voiceId: 'batch-test', clipMs: 100, aired: Promise.resolve(null) };
+    };
+    const kind = placement === 'next-track' ? 'handoff' : 'banter';
+    assert.equal(await withTalkAir(placement, () => queue.announceExchange(lines, kind, { castNames: [SOLENE.name] })), true);
+    assert.deepEqual(requests, [cleanedExchange]);
+    assert.deepEqual(spoken, [], 'a successful batch does not use the per-line renderer');
+    if (placement === 'next-track') {
+      const pending = queue._pendingVoice;
+      assert.ok(pending);
+      assert.equal(pending.clips.length, 1);
+      assert.equal(pending.clips[0].text, displayedExchange);
+      assert.equal(pending.clips[0].persona?.id, IRIS.id);
+      assert.equal(pending.clips[0].settlesHandoff, true, 'the aggregate carries the final-line settlement flag');
+      assert.deepEqual(aired, []);
+      queue._pendingVoice = null;
+    } else {
+      await Promise.resolve();
+      // Preserve the author's aggregate receipt. This is NOT per-speaker gain
+      // or attribution: the single WAV takes its first persona's trim/metadata.
+      assert.deepEqual(aired, [{ text: displayedExchange, gain: 5 }]);
+      const turns = session.getSession()?.messages.filter(turn => turn.role === 'segment');
+      assert.equal(turns?.length, 1);
+      assert.equal(turns?.[0].text, displayedExchange.replaceAll('\n', ' '), 'post-air display normalization keeps the cleaned words');
+      assert.equal(turns?.[0].meta.personaId, IRIS.id);
+    }
+  });
+}
+
+test('a rejected Gemini batch falls back without stripping the cleaned lines again', async (t) => {
+  const lines = await geminiExchange(t);
+  const requests: string[][] = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    assert.match(String(url), /\/interactions$/);
+    const request = JSON.parse(String(init?.body));
+    requests.push(request.input[0].content.map((item: { text: string }) => item.text));
+    return new Response('batch rejected', { status: 400 });
+  });
+  const aired: { text: string; gain: number }[] = [];
+  (queue as any)._airVoice = async (_channel: string, _path: string, text: string, gain: number) => {
+    aired.push({ text, gain });
+    return { voiceId: `line-${aired.length}`, clipMs: 100, aired: Promise.resolve(null) };
+  };
+  assert.equal(await queue.announceExchange(lines, 'handoff', { castNames: [SOLENE.name] }), true);
+  await Promise.resolve();
+  assert.deepEqual(requests, [cleanedExchange]);
+  assert.deepEqual(spoken, cleanedExchange);
+  assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
+  assert.deepEqual(aired, cleanedExchange.map((text, i) => ({ text, gain: i === 1 ? -2 : 5 })));
+  const turns = session.getSession()?.messages.filter(turn => turn.role === 'segment');
+  assert.deepEqual(turns?.map(turn => turn.text), cleanedExchange);
+  assert.deepEqual(turns?.map(turn => turn.meta.personaId), [IRIS.id, LUCIFER.id, IRIS.id]);
 });
 
 test('the banter runner carries its complete captured cast through generation into delivery', async () => {

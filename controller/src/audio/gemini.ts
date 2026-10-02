@@ -387,7 +387,7 @@ export async function speakMulti(
   // exactly what a station default voice produces for every persona that leaves
   // its own voice blank, so it has to render rather than throw.
   const oneVoice = seen.size === 1;
-  const speakers = [...seen.entries()].map(([alias, voice]) => ({ speaker: voice, voice }));
+  const speakers = [...seen.entries()].map(([, voice]) => ({ speaker: voice, voice }));
   const speakerOf = (alias: string) => speakers.find((s) => s.speaker.toLowerCase() === alias)?.speaker;
   // A speaker name that Google would reject (`speaker` and `voice` are both the
   // name) has to go before it is put in EITHER slot, so an unusable value
