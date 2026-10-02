@@ -26,7 +26,7 @@ import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
-import { ENGINE_META, GEMINI_CLOUD_PROVIDER } from '../tts/engineMeta';
+import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
 import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
@@ -575,7 +575,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       setCloudKeyTesting(false);
     }
   };
-  const engines = data.tts?.engines || ['piper'];
+  // The engine grid is fed by the CONTROLLER's tts.engines, which is ENGINES and
+  // therefore includes gemini. Gemini is a PROVIDER card here, so it is filtered
+  // out at the point of use rather than removed from the shared list — that list
+  // also backs the fallback slot and the per-engine gainDb/speed maps, which all
+  // need the real engine id.
+  const engines = (data.tts?.engines || ['piper']).filter(e => e !== GEMINI_CLOUD_PROVIDER);
   const available = data.tts?.available || {};
   const providerCloudReady = isCompat
     ? !!(form.tts.cloud.baseUrl.trim() && form.tts.cloud.model.trim())
@@ -624,6 +629,15 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
+        gemini: {
+          // '' is sent verbatim for the model: it is the "walk the fallback
+          // chain" choice, not a blank field for the server to fill in.
+          model: form.tts.gemini?.model ?? '',
+          voice: form.tts.gemini?.voice ?? 'Puck',
+          // '' is a real choice here too — no pronunciation notes is the
+          // default for every station, so it must survive the round trip.
+          pronunciation: form.tts.gemini?.pronunciation ?? '',
+        },
         cloud: {
           enabled: true,
           provider: form.tts.cloud.provider,
@@ -867,7 +881,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
               {ttsDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
             <EngineSelector
-              value={form.tts.defaultEngine}
+              // Highlight through the CATEGORY, not the raw id: Gemini keeps its
+              // own engine id but has no card of its own, so passing the id
+              // straight through would light nothing and read as a missing
+              // engine. Same pair (engineCategory/engineForCloudProvider) the
+              // persona slot uses.
+              value={engineCategory(form.tts.defaultEngine)}
               engineIds={engines}
               available={selectorAvailable}
               // This IS Settings → Voice, so the default "go to Settings →
