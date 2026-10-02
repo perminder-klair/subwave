@@ -83,7 +83,7 @@ export interface StationSettings {
   search?: { provider?: string };
   audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
   transitions?: { pairDrain?: boolean; stemBlends?: boolean };
-  stream?: { opusEnabled?: boolean; flacEnabled?: boolean; aacEnabled?: boolean };
+  stream?: { opusEnabled?: boolean; flacEnabled?: boolean; aacEnabled?: boolean; hlsEnabled?: boolean };
   archive?: { enabled?: boolean };
   crossfadeDuration?: number;
   jingleRatio?: number;

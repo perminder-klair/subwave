@@ -13,17 +13,25 @@ import {
   type StreamMountDoc,
 } from '../connect/catalog.js';
 import { toOpenApi } from '../connect/openapi.js';
+import { hlsActive } from '../broadcast/hls-policy.js';
 
 export const router = express.Router();
 
 const VERSION = process.env.SUBWAVE_VERSION || 'latest';
 
-// The MP3 floor is always on; optional mounts follow their settings flag.
+// The MP3 floor is always on; optional mounts follow their settings flag. HLS
+// reads the policy rather than its raw flag, because the stream password holds
+// it back (broadcast/hls-policy.ts).
 function mountsWithState(): (StreamMountDoc & { enabled: boolean })[] {
-  const stream = settings.get().stream || {};
+  const s = settings.get();
+  const stream = s.stream || {};
   return STREAM_MOUNTS.map(m => ({
     ...m,
-    enabled: m.alwaysOn ? true : stream[m.settingFlag as keyof typeof stream] === true,
+    enabled: m.alwaysOn
+      ? true
+      : m.settingFlag === 'hlsEnabled'
+        ? hlsActive(s)
+        : stream[m.settingFlag as keyof typeof stream] === true,
   }));
 }
 

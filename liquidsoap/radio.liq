@@ -16,6 +16,13 @@ settings.server.telnet.port := 1234
 # entrypoint (docker/broadcast-entrypoint.sh / the AIO supervisor).
 state_dir = environment.get(default="/var/sub-wave", "SUBWAVE_STATE_DIR")
 
+# The install-level state root, exported as SUBWAVE_STATE_ROOT beside the station
+# dir above. Only the HLS output writes here: the edge serves ONE fixed hls/
+# directory and knows nothing about the per-station layout, and only one station
+# is ever on air, so the live station's segments always land where the edge
+# looks. On a single-station install the two paths are the same.
+state_root = environment.get(default="/var/sub-wave", "SUBWAVE_STATE_ROOT")
+
 # Scratch dirs for the atomic marker writes below (#1240). Without a temp_dir on
 # the state fs, file.write(atomic=true) stages under $TMPDIR (container overlay)
 # while the state dir is a bind mount, so the rename is cross-device and the
@@ -102,6 +109,10 @@ opus_bitrate = ref(96)
 flac_enabled = ref(false)
 aac_enabled = ref(false)
 aac_bitrate = ref(192)
+# HLS (/hls/live.m3u8) — an adaptive playlist over four AAC rungs, served by the
+# edge as static files. Off by default like the other optional mounts; see the
+# output in make_stream_outputs() for the ladder and the lifecycle.
+hls_enabled = ref(false)
 stream_bitrate = ref(192)
 ogg_icy_metadata = ref(true)
 station_name = ref("SUB/WAVE")
@@ -194,6 +205,13 @@ if file.exists("#{state_dir}/liquidsoap_aac_bitrate.txt") then
   if v > 0 then aac_bitrate := v end
 end
 
+# Opt IN to HLS. Only an explicit "true" enables it, exactly like the optional
+# icecast mounts, so an install that never saved the setting is byte-identical.
+if file.exists("#{state_dir}/liquidsoap_hls_enabled.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_hls_enabled.txt"))
+  hls_enabled := (raw == "true")
+end
+
 # Opt IN to the Ogg-FLAC mount — a lossless capture of the PROCESSED bus at the
 # source 44.1 kHz. ~800-900 kbps, hence off by default; external players only.
 if file.exists("#{state_dir}/liquidsoap_flac_enabled.txt") then
@@ -213,7 +231,40 @@ if file.exists("#{state_dir}/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} hls_enabled=#{hls_enabled()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+
+# Empties the served HLS directory: every playlist and every segment. The edge
+# serves that directory as it finds it and checks nothing, so whatever the
+# output leaves behind stays public — a frozen playlist that players sit
+# re-polling, and the last segments' audio, which matters most for a station
+# that just turned the stream password on. Called when HLS is off at boot and
+# whenever the output is taken down (stream_off), so HLS answers 404 exactly
+# when the icecast mounts go away.
+#
+# Never raises: it also runs from a thread.run callback (stream_down), where an
+# uncaught exception would kill that thread for good.
+def hls_clear() =
+  dir = "#{state_root}/hls"
+  try
+    if file.exists(dir) then
+      list.iter(
+        fun (f) ->
+          if r/\.(m3u8|ts)$/.test(f) then
+            try
+              file.remove(f)
+            catch err do
+              log(label="subwave", "could not remove HLS file #{f} (#{err})")
+            end
+          end,
+        file.ls(absolute=true, dir)
+      )
+    end
+  catch err do
+    log(label="subwave", "could not clear #{dir} (#{err})")
+  end
+end
+
+if not hls_enabled() then hls_clear() end
 
 # subhttp:<full-url> — whole-file download via curl (http.get.stream returns
 # spurious 522s on the Cloudflare-fronted Navidrome origin).
@@ -1784,6 +1835,78 @@ def make_stream_outputs() =
     else
       fun () -> ()
     end
+  # HLS — an adaptive-bitrate playlist beside the icecast mounts, not instead of
+  # them. Segments and playlists are written into the install-level hls/ dir
+  # (see state_root) and the edge serves that directory as plain static files,
+  # so there is no socket to keep alive: a listener who drops off simply fetches
+  # the next segment when they come back.
+  #
+  # Built INSIDE make_stream_outputs like every icecast mount, so it follows the
+  # same on-air lifecycle: /stream-off stops writing and clears the directory
+  # (hls_clear) rather than publishing the emergency loop, and the idle gate
+  # keeps writing (silence), which is what lets a polling HLS listener be
+  # counted and wake the programme.
+  hls_shutdown =
+    if hls_enabled() then
+      hls_dir = "#{state_root}/hls"
+      ignore(file.mkdir(parents=true, hls_dir))
+      # Segments are written HERE and moved into hls_dir complete. Same volume,
+      # so the move is atomic — and a listener never fetches a file that is
+      # still being written. Without it the half-written segments land in the
+      # directory the edge serves, under names ending in "tmp".
+      hls_tmp_dir = "#{state_dir}/tmp/hls"
+      ignore(file.mkdir(parents=true, hls_tmp_dir))
+      # Segment filenames that are unique FOREVER, not just within one run. The
+      # default <stream>_<position>.ts restarts from scratch whenever hls.config
+      # is lost, so yesterday's URL would come back pointing at different audio,
+      # and anything caching between the station and the listener (a proxy, a
+      # CDN, the client) would answer a new segment with old sound.
+      def hls_segment_name(m) =
+        "#{m.stream_name}_#{int_of_float(time())}_#{m.position}.#{m.extname}"
+      end
+      # Four AAC rungs. Liquidsoap writes one media playlist per rung plus a
+      # master playlist that lists them, which is what makes the client switch:
+      # the player measures its own download rate per segment and steps down a
+      # rung when it can't keep ahead, back up when it can. No server decision
+      # and no operator knob — the ladder IS the feature, so the rungs are fixed.
+      # 4s x 5 segments puts a listener ~20s behind the live edge, deliberately
+      # close to the default stream.bufferSeconds (22s) so both transports hear
+      # the same moment. Rung names and the master's name are read by the
+      # controller (broadcast/hls-listeners.ts) and the edge's log filter; keep
+      # them in sync.
+      hls_out = output.file.hls(
+        id="stream_hls",
+        fallible=true,
+        playlist="live.m3u8",
+        segment_duration=4.,
+        segments=5,
+        # Keep a couple of expired segments on disk past the playlist window so a
+        # client that is a beat behind still resolves the URL it already holds.
+        segments_overhead=2,
+        segment_name=hls_segment_name,
+        # Keeps the segment numbering across a mixer restart, so a client
+        # mid-playlist doesn't see the sequence jump backwards and stall.
+        persist_at="#{state_dir}/hls.config",
+        temp_dir=hls_tmp_dir,
+        hls_dir,
+        [
+          ("aac_320", %ffmpeg(format="mpegts", %audio(codec="aac", b="320k", channels=2, samplerate=44100))),
+          ("aac_256", %ffmpeg(format="mpegts", %audio(codec="aac", b="256k", channels=2, samplerate=44100))),
+          ("aac_192", %ffmpeg(format="mpegts", %audio(codec="aac", b="192k", channels=2, samplerate=44100))),
+          ("aac_128", %ffmpeg(format="mpegts", %audio(codec="aac", b="128k", channels=2, samplerate=44100))),
+        ],
+        radio
+      )
+      log("HLS on: #{hls_dir}/live.m3u8 · AAC 320/256/192/128k · 4s x 5 segments")
+      # Stopping the writer alone would leave the last playlists and segments
+      # served; take them down with it.
+      fun () -> begin
+        hls_out.shutdown()
+        hls_clear()
+      end
+    else
+      fun () -> ()
+    end
   # Hourly archive. A second MP3 encoder running 24/7 is the biggest CPU cost in
   # the broadcast container, so the whole output is guarded. Built in here so it
   # follows the on-air lifecycle — off air stops the recording, rather than
@@ -1815,6 +1938,7 @@ def make_stream_outputs() =
     opus_shutdown()
     flac_shutdown()
     aac_shutdown()
+    hls_shutdown()
     archive_shutdown()
   end
 end
@@ -1834,6 +1958,12 @@ def stream_down() =
     fn = stream_shutdown()
     fn()
     stream_on := false
+    # The HLS writer finishes the segment it had in flight AFTER its shutdown
+    # returns, so the clear inside hls_shutdown misses it (measured: one
+    # orphaned .ts per rung, a few seconds later). Clear once more when that has
+    # landed — unless the station is back on air by then, whose fresh files
+    # must stay.
+    thread.run(delay=6., fun () -> if not stream_on() then hls_clear() end)
     # Drop now-playing.json so the UI stops advertising the last track: the
     # controller reads a missing file as "nothing playing". on_meta rewrites it
     # on the next track once back on air.

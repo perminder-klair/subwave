@@ -36,6 +36,8 @@ resolve_state_dir() {
 		fi
 	fi
 	export SUBWAVE_STATE_DIR="$STATE_DIR"
+	# radio.liq writes HLS under the root, not the station dir (its state_root).
+	export SUBWAVE_STATE_ROOT="$STATE_ROOT"
 }
 
 log() { echo "[subwave-aio] $*" >&2; }
@@ -95,6 +97,10 @@ bootstrap_state_dirs() {
 	local sub
 	state_prepare_dir "$root"
 	state_prepare_dir "$dir"
+	# HLS segments and the edge's playlist access log live at the INSTALL level,
+	# not per station — see docker/broadcast-entrypoint.sh.
+	state_prepare_dir "$root/hls"
+	state_prepare_dir "$root/edge"
 	# stems + transitions are the analyzer's, and the only two dirs worth
 	# relocating to a bigger disk — a bind mount there lands root-owned 755,
 	# which the analyzer cannot write without this chmod.

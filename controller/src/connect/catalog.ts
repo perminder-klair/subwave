@@ -75,7 +75,7 @@ export interface StreamMountDoc {
   codec: string;
   description: string;
   // Which settings.stream flag gates it. `null` for the always-served floor.
-  settingFlag: 'opusEnabled' | 'flacEnabled' | 'aacEnabled' | null;
+  settingFlag: 'opusEnabled' | 'flacEnabled' | 'aacEnabled' | 'hlsEnabled' | null;
   alwaysOn: boolean;
 }
 
@@ -719,6 +719,19 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
       'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Danger zone. For ' +
       'external players that prefer AAC.',
     settingFlag: 'aacEnabled',
+    alwaysOn: false,
+  },
+  {
+    mount: '/hls/live.m3u8',
+    format: 'HLS',
+    codec: 'aac',
+    description:
+      'Adaptive HLS: a master playlist over four AAC rungs (320/256/192/128 kbps) ' +
+      'that the player steps between on its own as the connection changes, and ' +
+      'resumes by fetching the next segment rather than reconnecting. Enable in ' +
+      'Settings → Danger zone. Plays natively in Safari/iOS and in VLC; other ' +
+      'browsers need hls.js. Not served while the stream password is on.',
+    settingFlag: 'hlsEnabled',
     alwaysOn: false,
   },
 ];

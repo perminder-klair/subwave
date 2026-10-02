@@ -86,6 +86,11 @@ export const DEFAULTS = {
     flacEnabled: false,
     aacEnabled: false,
     aacBitrate: 192,
+    // HLS (/hls/live.m3u8): an adaptive playlist over four fixed AAC rungs
+    // (320/256/192/128 kbps), written to <state>/hls and served by the edge as
+    // static files, BESIDE the icecast mounts. Off by default like the other
+    // optional mounts: four more continuous encoders are a real CPU cost.
+    hlsEnabled: false,
     bitrate: 192,
     // Icecast <burst-size> expressed in SECONDS, not bytes: a fixed byte count
     // stretches at low bitrates (512 KB is ~22s at 192k but ~66s at 64k), so the

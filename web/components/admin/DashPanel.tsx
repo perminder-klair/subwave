@@ -365,6 +365,9 @@ export default function DashPanel() {
     ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
     online: status?.streamOnline ?? null,
     bitrateKbps: status?.streamBitrate ?? null,
+    // The HLS share of `listeners`, only while HLS is served — a station that
+    // never turned it on reports a measured 0 here and must not grow a label.
+    hlsListeners: status?.stream?.hlsEnabled === true ? (listenersObj?.hls ?? null) : undefined,
   };
 
   const djName =

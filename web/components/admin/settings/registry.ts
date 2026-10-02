@@ -162,6 +162,7 @@ export const RESTART_PATHS: readonly string[] = [
   'stream.oggIcyMetadata',
   'stream.aacEnabled',
   'stream.aacBitrate',
+  'stream.hlsEnabled',
   'stream.bitrate',
   'stream.bufferSeconds',
   'stream.maxListeners',
@@ -183,7 +184,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   danger: [
     'crossfade', 'duck-depth', 'stem-transitions', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
-    'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
+    'aac-stream', 'hls-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
     'listener-country',
   ],
 };
@@ -349,6 +350,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Push ICY track titles on the Ogg mounts', section: 'danger', card: 'Ogg metadata', keywords: 'icy metadata ogg titles' },
   { label: 'Serve the AAC mount', section: 'danger', card: 'AAC stream', keywords: 'aac adts mount restart' },
   { label: 'Bitrate', section: 'danger', card: 'AAC stream', keywords: 'aac kbps restart' },
+  { label: 'Serve HLS', section: 'danger', card: 'HLS stream', keywords: 'hls m3u8 adaptive bitrate ladder segments mobile safari ios restart' },
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
   { label: 'Listener buffer', section: 'danger', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
   { label: 'Max listeners', section: 'danger', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },

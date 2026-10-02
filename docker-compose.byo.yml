@@ -13,7 +13,14 @@
 #   /stream*                 → host:${ICECAST_PORT}      (keep path; disable buffering)
 #   /listen.pls /listen.m3u  → host:${CONTROLLER_PORT}   (keep path)
 #   /api/*                   → host:${CONTROLLER_PORT}   (strip the /api prefix)
+#   /hls/*                   → static files from <state>/hls  (only if HLS is on)
 #   everything               → host:${WEB_PORT}
+# HLS is optional (stream.hlsEnabled, off by default). Serve <state>/hls as
+# static files with the playlist types docker/Caddyfile sets. To have HLS
+# listeners COUNTED (they hold no socket, so Icecast cannot see them), also
+# write the `*.m3u8` requests as Caddy-format JSON access log lines to
+# <state>/edge/hls-access.log — without it they are simply not counted, and
+# Doctor says so.
 # Split hostnames need a web rebuild with NEXT_PUBLIC_API_URL /
 # NEXT_PUBLIC_STREAM_URL (baked at build time).
 #

@@ -28,12 +28,38 @@ Every split-service proxy must apply these rules in this order:
 | `/api/listener-auth` | none | none | Return 404 or otherwise deny it before the general API rule. Icecast calls this password callback over the private Compose network; it must not be public. |
 | `/stream*` | Icecast on `:7702` | unchanged | Disable response buffering, caching, and compression. Match the prefix so optional Opus, FLAC, and AAC mounts work without another proxy edit. |
 | `/listen.pls`, `/listen.m3u` | Controller on `:7701` | unchanged | These tune-in files are controller routes, not Icecast routes. |
+| `/hls/*` | files in `<state>/hls` | n/a | Only if HLS is on. Static files, not a proxied service — see [Optional: HLS](#optional-hls). |
 | `/api/*` | Controller on `:7701` | strip `/api` | `/api/health` must reach the controller as `/health`. Keep streaming responses such as diagnosis events unbuffered. |
 | everything else | Web on `:7700` | unchanged | Player, admin, onboarding, manual, and static assets. |
 
 The examples use the default ports and a proxy on the same host. Replace
 `127.0.0.1` with an address or Docker service name reachable from your proxy
 when it runs elsewhere.
+
+### Optional: HLS
+
+HLS (`/hls/live.m3u8`, Settings → Danger zone, off by default) is not a
+service to proxy: the mixer writes segments and playlists into `<state>/hls`,
+and the bundled edge serves that directory as static files. Behind your own
+proxy, serve it the same way:
+
+- **Map `/hls/` to `<state>/hls/`** read-only, with `Content-Type:
+  application/vnd.apple.mpegurl` for `*.m3u8` and `video/mp2t` for `*.ts`
+  (Apple clients decide from that type whether a URL is a live stream), and
+  `Cache-Control: no-cache` — the playlists are rewritten every 4 seconds.
+  Don't compress the segments.
+- **Optionally, count HLS listeners.** They hold no connection, so Icecast
+  cannot see them; the controller counts them from a log of the playlist
+  requests. Write every `*.m3u8` request — never the segments — as one JSON
+  object per line to `<state>/edge/hls-access.log`, with at least
+  `{"ts": <epoch seconds>, "status": <code>, "request": {"uri": "...",
+  "client_ip": "...", "headers": {"User-Agent": "..."}}}`. In nginx that is a
+  `log_format … escape=json` over `$msec`, `$status`, `$request_uri`,
+  `$remote_addr` and `$http_user_agent`. Without the log, HLS still plays; its
+  listeners just aren't counted, and Doctor says so.
+
+HLS is not served while the stream password is on: it is plain files, which
+Icecast's password check never sees.
 
 ### Optional: a listener-country header
 
@@ -326,7 +352,9 @@ Validate a locally managed configuration before running the tunnel:
 cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 ```
 
-Create a Cache Rule that bypasses cache for paths beginning with `/stream`.
+Create a Cache Rule that bypasses cache for paths beginning with `/stream`
+(and for `*.m3u8` under `/hls` if you turned HLS on — segment names are unique,
+so those can be cached).
 Cloudflare Access should not guard the stream mount unless every listening
 client can complete its login flow; use SUB/WAVE's own stream password when
 ordinary players and hardware radios need access.

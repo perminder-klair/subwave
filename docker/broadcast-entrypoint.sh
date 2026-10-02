@@ -64,6 +64,13 @@ bootstrap_state_dirs() {
     local sub
     state_prepare_dir "$root"
     state_prepare_dir "$dir"
+    # HLS segments (written here by Liquidsoap) and the edge's playlist access
+    # log (written by Caddy, read by the controller) live at the INSTALL level,
+    # not per station: the edge serves one fixed directory, and only one station
+    # is ever on air. On the compose stack Caddy bind-mounts both, and a bind
+    # source Docker creates for it lands root-owned 755.
+    state_prepare_dir "$root/hls"
+    state_prepare_dir "$root/edge"
     # stems + transitions are the analyzer's (uid 10001); a fresh bind mount
     # lands root-owned 755, which it cannot write without the same 777.
     for sub in voice voices archive jingles logs sessions sfx stems transitions; do
@@ -251,6 +258,8 @@ if [ -f "$ACTIVE_FILE" ]; then
     fi
 fi
 export SUBWAVE_STATE_DIR="$STATE_DIR"
+# radio.liq writes HLS under the root, not the station dir (see its state_root).
+export SUBWAVE_STATE_ROOT="$STATE_ROOT"
 
 SECRETS=$STATE_ROOT/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template

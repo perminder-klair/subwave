@@ -38,6 +38,10 @@ every listener connect, so:
   against the current settings.
 - **If the controller is down, new listeners can't connect** (fail closed);
   already-connected listeners keep playing.
+- **HLS is switched off while the password is on.** HLS (`/hls/live.m3u8`) is
+  plain files served by the edge, which Icecast's password check never sees, so
+  a locked station doesn't publish it at all — the HLS setting stays saved and
+  comes back when the password is turned off (after a mixer restart).
 
 > **Running your own reverse proxy?** `POST /listener-auth` answers 200 or 401
 > depending on whether the submitted password is right, which makes it a

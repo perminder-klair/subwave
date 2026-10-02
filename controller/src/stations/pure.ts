@@ -44,9 +44,13 @@ export function duplicateAction(entry: string): 'copy' | 'backup' | 'skip' {
 }
 
 // Conversion moves the legacy root's contents into stations/main/. Only
-// install-level entries stay at the root (spec §2).
+// install-level entries stay at the root (spec §2). `hls` and `edge` are the
+// HLS output and the edge's playlist log: the edge serves and writes one fixed
+// root-level path whichever station is on air, and the compose stack
+// bind-mounts both into the edge container, so moving them would detach it.
 const INSTALL_LEVEL = new Set([
   'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found',
+  'hls', 'edge',
 ]);
 
 export function conversionAction(entry: string): 'move' | 'keep' {

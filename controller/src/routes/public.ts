@@ -13,6 +13,7 @@ import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
+import { hlsActive } from '../broadcast/hls-policy.js';
 import { isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
@@ -264,6 +265,9 @@ router.get('/now-playing', async (req, res) => {
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,
+        // HLS at /hls/live.m3u8 — the policy, not the raw switch, since the
+        // stream password holds it back (broadcast/hls-policy.ts).
+        hlsEnabled: hlsActive(stationSettings),
       },
       // Aggregate only; the model/cost breakdown stays on admin-gated /stats.
       llmTokens: lifetimeTokenCount(),

@@ -1,12 +1,20 @@
-// Icecast listener-count monitor: polls both broadcast mounts on an interval
-// and caches the count so the DJ gates don't each hit Icecast.
+// The station's listener count, and the gates that read it.
 //
-// The count never keys on IP (a proxy collapses everyone onto one address, a NAT
-// hides several listeners behind one). Every non-Safari socket is a listener;
-// Safari/AppleCoreMedia opens two sockets per client and they are paired by
-// user-agent + connect time off the admin feed (/admin/listclients). The public
-// status-json.xsl supplies online/bitrate and the fallback sum when admin is
-// unavailable.
+// TWO LEGS, one number. This file owns the ICECAST leg: it polls the broadcast
+// mounts on an interval and caches the count so the DJ gates don't each hit
+// Icecast. The HLS leg — listeners who hold no socket at all — is counted from
+// the edge's playlist access log by broadcast/hls-listeners.ts and added here,
+// in combineCounts() and combineGatedCounts(): the same two legs, two opposite
+// failure directions, and the only two places they meet. An HLS-only audience
+// used to read as an empty room, which silently disabled Last.fm.
+//
+// The Icecast count never keys on IP (a proxy collapses everyone onto one
+// address, a NAT hides several listeners behind one). Every non-Safari socket is
+// a listener; Safari/AppleCoreMedia opens two sockets per client and they are
+// paired by user-agent + connect time off the admin feed (/admin/listclients).
+// The public status-json.xsl supplies online/bitrate and the fallback sum when
+// admin is unavailable. The HLS leg has no socket to count and keys differently
+// — see hls-listeners.ts, which is where that trade-off is argued.
 //
 // Fail-open: an unreachable Icecast reads null and djCallsAllowed() treats the
 // station as occupied, so a stats outage never silences the DJ.
@@ -17,16 +25,19 @@ import { join } from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { hlsListenerCount, refreshHlsListeners, startHlsListenerMonitor } from './hls-listeners.js';
+import { hlsActive } from './hls-policy.js';
 
-let lastCount: number | null = null;        // null = unknown (not yet polled, or this poll failed)
-let lastGoodCount: number | null = null;    // last count actually read from Icecast; null until the first success
+let icecastCount: number | null = null;        // null = unknown (not yet polled, or this poll failed)
+let lastGoodIcecast: number | null = null;    // last count actually read from Icecast; null until the first success
 let peakSeen = 0;                            // running max of the deduped count this process run
 let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
 
-// Cached stream status from the same poll as lastCount. Served to /now-playing
-// (polled by every listener every 5s) so N listeners cost one status fetch per
-// 15s rather than one per request.
-export interface StreamStatus {
+// What one Icecast poll observed, cached so N listeners polling /now-playing
+// every 5s cost one status fetch per 15s rather than one per request. Cached
+// as-is: the HLS leg is added on the way out in getStreamStatus(), never folded
+// in here, or statusAfterFailure would zero a count it never measured.
+export interface IcecastStatus {
   online: boolean;
   listeners: { current: number; peak: number };
   /** Bitrate (kbps) of the primary (mp3) broadcast mount, null when offline. */
@@ -36,7 +47,17 @@ export interface StreamStatus {
   /** Channel count of the primary mount, null when offline/unknown. */
   channels: number | null;
 }
-let lastStatus: StreamStatus = {
+
+// What callers get. `listeners.current` is BOTH legs — that is what "how many
+// people are listening" means, and every gate reads it. The split rides
+// alongside it for the admin, never instead of it: `icecast` is sockets, `hls`
+// is playlist polls, null only when that leg cannot be read at all (no access
+// log — an edge that isn't writing one, which Doctor calls out).
+export interface StreamStatus extends Omit<IcecastStatus, 'listeners'> {
+  listeners: { current: number; peak: number; icecast: number; hls: number | null };
+}
+
+let lastStatus: IcecastStatus = {
   online: false,
   listeners: { current: 0, peak: 0 },
   bitrate: null,
@@ -60,11 +81,11 @@ const STATUS_TIMEOUT_MS = 3000;
 // the last known status, since a failed fetch is not a freshly-observed 0.
 // Sustained (≥ limit): report offline, zero the count, drop bitrate, keep peak.
 export function statusAfterFailure(
-  prev: StreamStatus,
+  prev: IcecastStatus,
   consecutiveFailures: number,
   limit: number,
   peak: number,
-): StreamStatus {
+): IcecastStatus {
   if (consecutiveFailures >= limit) {
     return { online: false, listeners: { current: 0, peak }, bitrate: null, sampleRate: null, channels: null };
   }
@@ -83,6 +104,43 @@ export function gatedCount(
   if (raw !== null) return raw;
   if (consecutiveFailures >= limit) return null;
   return lastGood;
+}
+
+// The HLS leg as the combiners see it. `undefined` means THERE IS NO SECOND
+// LEG — HLS is off (or held back by the stream password) — and then every
+// figure below is exactly the Icecast leg, null included. That is what keeps a
+// station that never turned HLS on byte-identical: folding a switched-off
+// transport in as a measured 0 would turn one failed Icecast poll into a
+// fabricated "0 listeners" on the sparkline instead of a gap.
+function hlsLeg(): number | null | undefined {
+  return hlsActive(settings.get()) ? hlsListenerCount() : undefined;
+}
+
+// The two legs into one count, for the fail-CLOSED presence check and for every
+// surface that displays a number. `null` from a leg means UNKNOWN: it
+// contributes nothing and the other leg stands alone, since an HLS-only
+// audience is an audience and so is an mp3-only one. Two unknowns stay unknown
+// rather than becoming 0 — nothing was measured, and a fabricated 0 would reach
+// the sparkline and /now-playing as a fact. A leg reading 0 IS a measurement
+// and counts as one. An absent HLS leg (`undefined`, see hlsLeg) leaves the
+// Icecast figure exactly as it was.
+export function combineCounts(icecast: number | null, hls: number | null | undefined): number | null {
+  if (hls === undefined) return icecast;
+  if (icecast === null && hls === null) return null;
+  return (icecast ?? 0) + (hls ?? 0);
+}
+
+// The FAIL-OPEN counterpart, for the gates that treat unknown as "carry on".
+// Here a single unreadable leg makes the whole figure unknown, because the
+// listeners it would have counted are exactly the ones nobody can see — folding
+// it to 0 would report an empty room the station never measured and silence the
+// DJ on a stats outage. The two must NOT be unified: combineCounts serves the
+// fail-CLOSED presence check, where an unreadable leg costs at most a skipped
+// scrobble, and this one serves the opposite direction.
+export function combineGatedCounts(icecast: number | null, hls: number | null | undefined): number | null {
+  if (hls === undefined) return icecast;
+  if (icecast === null || hls === null) return null;
+  return icecast + hls;
 }
 
 // JSONL of {t, count}, one row per minute (not per 15s poll) — ~1440 rows/day.
@@ -154,58 +212,85 @@ async function pollCount(persistHistory: boolean) {
       }
     }
 
-    lastCount = current;
-    lastGoodCount = current;
-    peakSeen = Math.max(peakSeen, current);
+    icecastCount = current;
+    lastGoodIcecast = current;
+    notePeak(combineCounts(current, hlsLeg()));
     lastStatus = { online, listeners: { current, peak: peakSeen }, bitrate, sampleRate, channels };
     consecutiveStatusFailures = 0;
   } catch {
-    lastCount = null;
+    icecastCount = null;
     // A transient fetch failure means "unknown", not offline (#461).
     consecutiveStatusFailures += 1;
     lastStatus = statusAfterFailure(lastStatus, consecutiveStatusFailures, STALE_STATUS_LIMIT, peakSeen);
   }
-  // One row per wall-clock minute. Null samples are skipped so a stats outage
-  // leaves a gap rather than a misleading "0 listeners" stripe.
-  if (persistHistory && lastCount !== null) {
+  // One row per wall-clock minute, BOTH legs — the sparkline is the audience,
+  // not the Icecast mount. Null samples are skipped so a stats outage leaves a
+  // gap rather than a misleading "0 listeners" stripe.
+  const combined = combineCounts(icecastCount, hlsLeg());
+  if (persistHistory && combined !== null) {
     const now = new Date();
     const minute = Math.floor(now.getTime() / 60000);
     if (minute !== lastPersistedMinute) {
       lastPersistedMinute = minute;
-      const line = JSON.stringify({ t: now.toISOString(), count: lastCount }) + '\n';
+      const line = JSON.stringify({ t: now.toISOString(), count: combined }) + '\n';
       appendFile(HISTORY_FILE, line).catch(() => {});  // best-effort
     }
   }
-  return lastCount;
+  return combined;
 }
 
-// RAW poll result: one failed fetch reads null. For reporting surfaces only;
-// decision-making code reads gatedListenerCount().
+// Running max of the combined count. Updated wherever a combined count is
+// formed, since the HLS leg moves between Icecast polls.
+function notePeak(current: number | null): number {
+  if (current !== null && current > peakSeen) peakSeen = current;
+  return peakSeen;
+}
+
+// RAW reading, both legs: one failed Icecast fetch reads null on that leg. For
+// reporting surfaces only; decision-making code reads gatedListenerCount().
 export function getListenerCount() {
-  return lastCount;
+  return combineCounts(icecastCount, hlsLeg());
 }
 
 // The count the fail-open gates act on: the last real Icecast reading, held
-// through transient poll failures, unknown only at STALE_STATUS_LIMIT.
-// djCallsAllowed() and the idle monitor must read this, never raw lastCount —
-// both fail OPEN on null, so one blip would release the idle pause (#1256).
+// through transient poll failures and unknown only at STALE_STATUS_LIMIT, plus
+// the HLS leg. djCallsAllowed(), the idle monitor and the analysis quiet gate
+// must read this, never raw icecastCount — all fail OPEN on null, so one blip
+// would release the idle pause (#1256). The hold applies to the Icecast leg
+// only: HLS has no fetch to time out, and a transport that isn't served is no
+// leg at all (hlsLeg), so an HLS null really does mean "cannot tell".
 export function gatedListenerCount(): number | null {
-  return gatedCount(lastCount, lastGoodCount, consecutiveStatusFailures, STALE_STATUS_LIMIT);
+  return combineGatedCounts(
+    gatedCount(icecastCount, lastGoodIcecast, consecutiveStatusFailures, STALE_STATUS_LIMIT),
+    hlsLeg(),
+  );
 }
 
 // Fail-CLOSED presence check, the single definition of "someone is tuned in"
 // for outbound side effects (scrobbles, gated track.play webhooks). Reads the
 // RAW count on purpose: failing closed costs at most a skipped scrobble and
 // needs no hysteresis. Don't unify it with the fail-open gates below.
+//
+// Both legs, which is the whole point: an HLS-only audience is an audience, and
+// reading it as an empty room is what stopped every Last.fm submission.
 export function presentListeners(): number | null {
-  return typeof lastCount === 'number' && Number.isFinite(lastCount) && lastCount > 0
-    ? lastCount
-    : null;
+  const count = getListenerCount();
+  return typeof count === 'number' && Number.isFinite(count) && count > 0 ? count : null;
 }
 
-// Offline + 0/0 until the first successful poll.
+// Offline + 0/0 until the first successful poll. The HLS leg is added here
+// rather than in the cache so a listener who arrives or leaves between two
+// 15s Icecast polls still shows up on the next /now-playing.
 export function getStreamStatus(): StreamStatus {
-  return lastStatus;
+  const icecast = lastStatus.listeners.current;
+  const leg = hlsLeg();
+  const current = combineCounts(icecast, leg) ?? icecast;
+  return {
+    ...lastStatus,
+    // `hls` in the split: 0 with no HLS leg at all (nobody can be on a
+    // transport that isn't served), null when it is served but can't be read.
+    listeners: { current, peak: notePeak(current), icecast, hls: leg === undefined ? 0 : leg },
+  };
 }
 
 // Force an immediate poll. Used by the request route so a listener who just
@@ -221,7 +306,10 @@ export async function refresh() {
 // GATED count: the quiet gate fails open the OPPOSITE way, so a blip would
 // start a heavy DSP pass while somebody is listening (#1256).
 export async function probeListenerCount(): Promise<number | null> {
-  await pollCount(false);
+  // Both legs, explicitly: the child has no HLS read loop either, and a leg
+  // nobody refreshed reads as unknown — which here would mean starting a heavy
+  // DSP pass while an HLS audience is listening.
+  await Promise.all([pollCount(false), refreshHlsListeners()]);
   return gatedListenerCount();
 }
 
@@ -254,10 +342,14 @@ const FIRST_POLL_WAIT_MS = STATUS_TIMEOUT_MS + 500;
 // dispatch a pick — "never polled" fails open and used to buy the DJ one free
 // agent pick per restart (#1256).
 export function startListenerMonitor(): Promise<void> {
+  // The HLS leg starts here rather than from server.ts, so there is one boot
+  // call site for "the station now knows who is listening". Its first read is a
+  // local file, so it is not part of the race below.
+  const hlsFirst = startHlsListenerMonitor();
   const first = fetchCount().then(() => {}, () => {});
   setInterval(fetchCount, 15000);
   return Promise.race([
-    first,
+    Promise.all([first, hlsFirst]).then(() => {}),
     new Promise<void>(resolve => setTimeout(resolve, FIRST_POLL_WAIT_MS).unref()),
   ]);
 }

@@ -12,6 +12,9 @@ import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { streamStatusFresh } from '../broadcast/liquidsoap-control.js';
+import { hlsStatus } from '../broadcast/hls-listeners.js';
+import { hlsBlockedReason } from '../broadcast/hls-policy.js';
+import * as settings from '../settings.js';
 import {
   primaryLeg,
   fallbackLeg,
@@ -279,7 +282,8 @@ export async function checkBroadcast(): Promise<Finding[]> {
       label: 'Icecast stream',
       status: st.online ? 'ok' : 'fail',
       detail: st.online
-        ? `online · ${st.listeners?.current ?? 0} listening · ${st.bitrate ?? '?'}kbps`
+        // The Icecast leg, not the combined figure: this line is about the mount.
+        ? `online · ${st.listeners?.icecast ?? st.listeners?.current ?? 0} listening · ${st.bitrate ?? '?'}kbps`
         : 'offline — nothing on /stream.mp3',
       hint: st.online
         ? undefined
@@ -288,6 +292,56 @@ export async function checkBroadcast(): Promise<Finding[]> {
     });
   } catch (err) {
     out.push({ label: 'Icecast stream', status: 'skip', detail: err?.message || 'status unavailable' });
+  }
+
+  // HLS — only once it is switched on. Worth its own lines because both of its
+  // failure modes are SILENT: a mixer that isn't writing the playlists serves
+  // nothing without erroring anywhere, and an edge that isn't writing the
+  // playlist access log (a hand-rolled proxy, or an image built before HLS)
+  // makes every HLS listener invisible — which reads as an empty room to the
+  // DJ gates and stops Last.fm scrobbling for them.
+  try {
+    const s = settings.get();
+    const blocked = hlsBlockedReason(s);
+    if (blocked) {
+      out.push({
+        label: 'HLS',
+        status: 'warn',
+        detail: 'switched on, but not served',
+        hint: `HLS is held back because ${blocked}. Turn the stream password off to serve HLS, or switch HLS off.`,
+      });
+    } else if (s?.stream?.hlsEnabled === true) {
+      const hls = await hlsStatus();
+      out.push({
+        label: 'HLS',
+        status: hls.live ? 'ok' : 'warn',
+        detail: hls.live
+          ? `live · /hls/live.m3u8 · playlist ${hls.ageSec ?? '?'}s old`
+          : hls.ageSec === null
+            ? 'switched on, but no playlist written yet'
+            : `playlist stale (${hls.ageSec}s old)`,
+        hint: hls.live
+          ? undefined
+          : 'The mixer writes HLS only after a restart once the setting changes. If a restart does not bring it up, check the broadcast logs for "HLS on".',
+        fix: hls.live ? undefined : { id: 'restart-mixer', label: 'Restart mixer' },
+      });
+      if (hls.live) {
+        out.push(hls.listeners === null
+          ? {
+              label: 'HLS listeners',
+              status: 'warn',
+              detail: 'not counted — no playlist access log',
+              hint: 'The edge writes <state>/edge/hls-access.log for *.m3u8 requests and the controller counts HLS listeners from it. Without it an HLS audience reads as an empty room. Redeploy the current image (and on the compose stack its docker-compose.yml, which mounts that directory into the edge); behind your own proxy, log the playlist requests there.',
+            }
+          : {
+              label: 'HLS listeners',
+              status: 'ok',
+              detail: `${hls.listeners} listening · counted from playlist polls`,
+            });
+      }
+    }
+  } catch (err) {
+    out.push({ label: 'HLS', status: 'skip', detail: err?.message || 'status unavailable' });
   }
 
   // Liquidsoap telnet — proves the mixer process is alive and reachable. Reads

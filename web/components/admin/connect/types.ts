@@ -43,7 +43,7 @@ export interface StreamMountDoc {
   format: string;
   codec: string;
   description: string;
-  settingFlag: 'opusEnabled' | 'flacEnabled' | 'aacEnabled' | null;
+  settingFlag: 'opusEnabled' | 'flacEnabled' | 'aacEnabled' | 'hlsEnabled' | null;
   alwaysOn: boolean;
   enabled: boolean;
 }

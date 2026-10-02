@@ -392,6 +392,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         flacEnabled: v.stream?.flacEnabled ?? false,
         aacEnabled: v.stream?.aacEnabled ?? false,
         aacBitrate: String(v.stream?.aacBitrate ?? 192),
+        hlsEnabled: v.stream?.hlsEnabled ?? false,
         bitrate: String(v.stream?.bitrate ?? 192),
         bufferSeconds: String(v.stream?.bufferSeconds ?? 22),
         oggIcyMetadata: v.stream?.oggIcyMetadata ?? true,
@@ -801,6 +802,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         oggIcyMetadata: form.stream.oggIcyMetadata,
         aacEnabled: form.stream.aacEnabled,
         aacBitrate: n.int('stream.aacBitrate', form.stream.aacBitrate),
+        hlsEnabled: form.stream.hlsEnabled,
         bitrate: n.int('stream.bitrate', form.stream.bitrate),
         bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
         maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
@@ -1959,6 +1961,58 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       AAC-LC is transparent around 256 kbps (current:{' '}
                       {data?.values?.stream?.aacBitrate ?? '—'} kbps).
                     </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="HLS stream" sub="/hls/live.m3u8 (adaptive AAC)">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Serve HLS</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.hlsEnabled ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, hlsEnabled: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="stream.hlsEnabled" errors={fieldErrors} />
+                  {form.stream.hlsEnabled && data?.values?.privacy?.listenerAuth === true && (
+                    <div className="field-hint text-vermilion">
+                      Not served while the stream password is on (Settings → Station → Privacy):
+                      HLS is plain files the password cannot protect, so the station keeps it
+                      off rather than publishing a locked stream.
+                    </div>
+                  )}
+                  {form.stream.hlsEnabled && data?.values?.privacy?.listenerAuth !== true && (
+                    <div className="field-hint">
+                      Point a player at{' '}
+                      <code>
+                        {typeof window !== 'undefined' ? window.location.origin : ''}
+                        /hls/live.m3u8
+                      </code>
+                    </div>
+                  )}
+                  <div className="field-hint">
+                    Off by default. An adaptive stream beside the icecast mounts: a master
+                    playlist over four AAC rungs (320, 256, 192 and 128 kbps) that the player
+                    steps between on its own as the connection changes, and resumes by fetching
+                    the next segment instead of reconnecting — which is what survives a patchy
+                    mobile connection. About 20s behind the live edge, like the icecast buffer.
+                    Plays natively in Safari/iOS and VLC; the web player stays on MP3/Opus. Four
+                    extra encoders, so it costs CPU. HLS listeners hold no connection, so they are
+                    counted from the edge&apos;s playlist log and added to the listener count.
                   </div>
                 </div>
               </Card>

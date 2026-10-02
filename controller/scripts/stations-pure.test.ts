@@ -64,8 +64,10 @@ for (const f of [
 ]) assert.equal(duplicateAction(f), 'skip', f);
 
 // --- conversion classification (spec §6) --------------------------------------
-for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
+for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found', 'hls', 'edge'])
   assert.equal(conversionAction(f), 'keep', f);
+// A station duplicate must not copy the live HLS output or the edge's log.
+for (const f of ['hls', 'edge', 'hls.config']) assert.equal(duplicateAction(f), 'skip', f);
 for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json'])
   assert.equal(conversionAction(f), 'move', f);
 

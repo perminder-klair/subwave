@@ -101,6 +101,10 @@ export interface ListenerCount {
   current?: number;
   peak?: number;
   total?: number;
+  /** The Icecast leg of `current` (sockets). */
+  icecast?: number;
+  /** The HLS leg of `current` (playlist polls); null when it cannot be counted. */
+  hls?: number | null;
   [key: string]: unknown;
 }
 
@@ -115,6 +119,8 @@ export interface StreamInfo {
   opusEnabled?: boolean;
   flacEnabled?: boolean;
   aacEnabled?: boolean;
+  /** HLS at /hls/live.m3u8 is being served (the switch AND no stream password). */
+  hlsEnabled?: boolean;
   /** Seconds of audio Icecast bursts on connect — i.e. how far behind the live
    *  edge this listener is for the whole connection. Every timestamp on the
    *  payload is live-edge; subtract this to render listener-time (issue #1114). */

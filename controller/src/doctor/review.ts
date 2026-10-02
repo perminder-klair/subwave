@@ -9,6 +9,7 @@ import * as settings from '../settings.js';
 import { primaryLeg, probeLegReachable, providerName, activeModelLabel } from '../llm/provider.js';
 import { djObject } from '../llm/sdk.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
+import { hlsActive } from '../broadcast/hls-policy.js';
 import * as analyzer from '../music/analyzer.js';
 import { DJ_DOC_KNOWLEDGE } from '../doctor-knowledge.js';
 import type { DoctorReport, DoctorReview, FixId, StationSettings } from './types.js';
@@ -129,6 +130,7 @@ function renderSettingsSnapshot(): string {
   if (st.opusEnabled) mounts.push('opus');
   if (st.flacEnabled) mounts.push('flac');
   if (st.aacEnabled) mounts.push('aac');
+  if (hlsActive(s)) mounts.push('hls');
 
   let budget = 'unlimited';
   try {

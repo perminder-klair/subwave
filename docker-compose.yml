@@ -46,6 +46,13 @@ services:
     volumes:
       - caddy-data:/data
       - caddy-config:/config
+      # HLS (optional, stream.hlsEnabled). The mixer's segments and playlists,
+      # served read-only at /hls/*, and the edge's playlist access log the
+      # controller counts HLS listeners from. Both are subdirectories of the same
+      # state dir every other service mounts; the broadcast entrypoint creates
+      # them writable before this container starts (depends_on above).
+      - ${STATE_DIR:-./state}/hls:/srv/hls:ro
+      - ${STATE_DIR:-./state}/edge:/var/log/subwave-edge
 
   # -------------------------------------------------------------------------
   # BROADCAST — icecast2 + liquidsoap in one container

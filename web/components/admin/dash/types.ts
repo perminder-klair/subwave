@@ -8,6 +8,7 @@ import type {
   ListenerCount,
   QueueEntry,
   StationLocale,
+  StreamInfo,
 } from '../../../lib/types';
 import { AudioLines, Clock3, MessagesSquare, RadioTower, type LucideIcon } from 'lucide-react';
 
@@ -62,6 +63,7 @@ export interface DashStatus {
   listeners?: ListenerCount | number | null;
   streamOnline?: boolean;
   streamBitrate?: number | null;
+  stream?: StreamInfo;
   activeShow?: ActiveShow | null;
   queue?: QueueState;
   sessionMessages?: SessionTurn[];

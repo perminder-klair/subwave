@@ -7,6 +7,7 @@ import { recentCalls } from '../llm/log.js';
 import { searchReady, searchWeb } from '../skills/web-search.js';
 import * as system from '../system.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
+import { hlsActive } from '../broadcast/hls-policy.js';
 import * as analyzer from '../music/analyzer.js';
 import * as db from '../music/library-db.js';
 import * as stemCache from '../music/stem-cache.js';
@@ -344,8 +345,11 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     if (st.opusEnabled) extra.push('opus');
     if (st.flacEnabled) extra.push('flac');
     if (st.aacEnabled) extra.push('aac');
+    // Four encoders, one per rung — counted as such, not as one mount.
+    const hls = hlsActive(s);
+    if (hls) extra.push('hls ×4');
     if (s?.archive?.enabled) extra.push('hourly archive');
-    const encoderCount = 1 + extra.length; // /stream.mp3 always
+    const encoderCount = 1 + extra.length + (hls ? 3 : 0); // /stream.mp3 always
     const sys = await system.summary();
     const cores = sys.host?.cpus || 0;
     const load1 = Array.isArray(sys.host?.loadavg) ? sys.host.loadavg[0] : 0;

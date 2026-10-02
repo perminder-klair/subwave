@@ -31,14 +31,18 @@ export function MountsTable({ mounts }: { mounts?: DebugMounts }) {
             </span>
             <span className="text-right text-[11px] text-muted">
               {m.live
-                ? `${m.bitrate ? `${m.bitrate} kbps` : m.codec === 'FLAC' ? 'lossless' : '—'} · ${
-                    m.listeners ?? 0
-                  } ${m.listeners === 1 ? 'listener' : 'listeners'}${
+                ? `${m.note ?? (m.bitrate ? `${m.bitrate} kbps` : m.codec === 'FLAC' ? 'lossless' : '—')} · ${
+                    // HLS listeners are counted off the edge's playlist log; null
+                    // there means "not counted", which is not the same as 0.
+                    m.listeners == null && m.note ? 'not counted' : `${m.listeners ?? 0} ${m.listeners === 1 ? 'listener' : 'listeners'}`
+                  }${
                     m.sampleRate ? ` · ${(m.sampleRate / 1000).toFixed(1)}k` : ''
                   }`
                 : m.configured
                   ? 'enabled · no source (restart mixer?)'
-                  : 'disabled'}
+                  : m.blockedReason
+                    ? `held back — ${m.blockedReason}`
+                    : 'disabled'}
             </span>
           </div>
         ))}

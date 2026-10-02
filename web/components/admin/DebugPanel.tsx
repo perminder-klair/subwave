@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { fmtClock } from '../../lib/format';
+import { cn } from '../../lib/cn';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useAdminQuery } from '../../lib/admin-query';
 import { errorMessage } from '../../lib/notify';
@@ -63,6 +64,8 @@ export default function DebugPanel() {
     return () => document.removeEventListener('visibilitychange', onVisible);
   }, [enabled, refetchDebug]);
 
+  const hlsShown = !!data?.hls && (data.hls.enabled || !!data.hls.blockedReason);
+
   return (
     <div className="grid gap-4">
       <section className="card">
@@ -76,13 +79,35 @@ export default function DebugPanel() {
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
         </div>
-        <div className="strip-mobile grid grid-cols-5">
+        {/* The HLS cell joins the strip only once HLS is switched on, so a
+            station that never uses it keeps exactly the five cells it had. */}
+        <div className={cn('strip-mobile grid', hlsShown ? 'grid-cols-6' : 'grid-cols-5')}>
           <HealthCell
             label="Icecast"
             status={data?.icecast && !data.icecast.error ? 'ok' : err ? 'down' : 'idle'}
             v={fmtListeners(data?.icecast)}
             sub={fmtListenerPeak(data?.icecast)}
           />
+          {hlsShown && data?.hls && (
+            <HealthCell
+              label="HLS"
+              status={
+                data.hls.blockedReason ? 'off'
+                  : data.hls.live ? 'ok'
+                    : err ? 'down' : 'idle'
+              }
+              v={
+                data.hls.blockedReason ? 'held back'
+                  : data.hls.listeners == null ? 'not counted'
+                    : `${data.hls.listeners} ${data.hls.listeners === 1 ? 'listener' : 'listeners'}`
+              }
+              sub={
+                data.hls.blockedReason ? 'stream password on'
+                  : data.hls.live ? `playlist ${data.hls.playlistAgeSec ?? '?'}s old`
+                    : 'no source (restart mixer?)'
+              }
+            />
+          )}
           <HealthCell
             label="Liquidsoap"
             status={data?.liquidsoapLog ? 'ok' : err ? 'down' : 'idle'}

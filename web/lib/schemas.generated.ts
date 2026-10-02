@@ -2873,6 +2873,7 @@ export const streamPatchSchema = settingsBlockOf({
   flacEnabled: settingsBoolLike(),
   oggIcyMetadata: settingsBoolLike(),
   aacEnabled: settingsBoolLike(),
+  hlsEnabled: settingsBoolLike(),
   idleWhenEmpty: settingsBoolLike(),
   opusBitrate: settingsIntOneOf(
     SETTINGS_OPUS_BITRATES,

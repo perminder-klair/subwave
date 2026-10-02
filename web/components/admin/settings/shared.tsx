@@ -280,6 +280,7 @@ export interface StreamForm {
   flacEnabled: boolean;
   aacEnabled: boolean;
   aacBitrate: string;
+  hlsEnabled: boolean;
   bitrate: string;
   bufferSeconds: string;
   oggIcyMetadata: boolean;
@@ -440,6 +441,7 @@ export interface SettingsData {
       flacEnabled?: boolean;
       aacEnabled?: boolean;
       aacBitrate?: number;
+      hlsEnabled?: boolean;
       bitrate?: number;
       bufferSeconds?: number;
       oggIcyMetadata?: boolean;

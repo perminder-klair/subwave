@@ -5,8 +5,9 @@
 import { writeFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import { DEFAULTS } from './defaults.js';
-// Pure policy module — no settings import of its own, so this stays acyclic.
+// Pure policy modules — no settings import of their own, so this stays acyclic.
 import { mixerJingleRatioFile } from '../broadcast/jingle-rotate.js';
+import { hlsActive } from '../broadcast/hls-policy.js';
 
 export const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 export const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
@@ -21,6 +22,8 @@ const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
 const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`;
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
+// Only the literal 'true' enables HLS in radio.liq (opt-in, like the mounts above).
+export const LIQ_HLS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_hls_enabled.txt`;
 export const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 // Entrypoint, not radio.liq: sizes Icecast's <burst-size> at broadcast boot.
 export const LIQ_STREAM_BUFFER_SECONDS_PATH = `${STATE_DIR}/liquidsoap_stream_buffer_seconds.txt`;
@@ -51,6 +54,9 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_OGG_ICY_METADATA_PATH, s.stream.oggIcyMetadata ? 'true' : 'false');
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
+  // hlsActive, not the raw switch: a station behind the stream password must
+  // not publish HLS (broadcast/hls-policy.ts).
+  await writeFile(LIQ_HLS_ENABLED_PATH, hlsActive(s) ? 'true' : 'false');
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
   await writeFile(LIQ_ICECAST_MAX_CLIENTS_PATH, String(s.stream.maxListeners));

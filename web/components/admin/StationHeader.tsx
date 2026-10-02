@@ -14,6 +14,9 @@ export interface HealthMetrics {
   listeners: number;
   /** session peak listeners (authoritative, from the server) */
   listenersPeak: number;
+  /** Of `listeners`, how many are on HLS. undefined while HLS isn't served (the
+   *  readout is hidden); null when HLS is served but can't be counted. */
+  hlsListeners?: number | null;
   /** DJ think→speak p95 latency in ms, or null when unknown (stats not loaded) */
   latencyMs: number | null;
   /** The live DJ-agent deadline in ms, and the redline anchor. Null until
@@ -297,6 +300,11 @@ export default function StationHeader({
             <div className="hs-lbl">
               <span className="idx">01</span>Listeners
             </div>
+            {metrics.hlsListeners !== undefined && (
+              <div className="hs-sub hidden sm:block" title="Of these, listening over HLS">
+                hls {metrics.hlsListeners ?? '—'}
+              </div>
+            )}
           </div>
           <svg ref={listenersSvg} className="hs-gauge" />
           {/* Readouts wrap on a phone so the trailing peak/redline figure drops

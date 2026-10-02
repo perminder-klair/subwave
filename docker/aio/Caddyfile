@@ -22,6 +22,36 @@
 		}
 	}
 
+	# HLS (/hls/live.m3u8) — optional, off by default (stream.hlsEnabled).
+	# Liquidsoap writes segments and playlists into the install-level hls/
+	# directory; this serves it as static files. While HLS is off the directory
+	# is empty (the mixer clears it at boot and whenever the stream goes off
+	# air), so this answers 404.
+	handle /hls/* {
+		header {
+			Access-Control-Allow-Origin *
+			# Playlists are rewritten every segment and must never be cached.
+			# Segment names are unique forever, so this costs them nothing.
+			Cache-Control "no-cache"
+		}
+		# Caddy guesses the type from the extension, and `.ts` collides with
+		# TypeScript (text/vnd.trolltech.linguist); `.m3u8` resolves to the
+		# legacy M3U file-list type on some base images, which AVFoundation reads
+		# as "not a live stream". State both, as Apple specifies them.
+		@hls_segment path *.ts
+		header @hls_segment Content-Type video/mp2t
+		@hls_playlist path *.m3u8
+		header @hls_playlist Content-Type application/vnd.apple.mpegurl
+		# An HLS listener holds no socket, so Icecast cannot see them — the only
+		# trace they leave is re-fetching a media playlist about once per segment
+		# while they play. Just those requests go to their own access log, which
+		# the controller counts (broadcast/hls-listeners.ts). Segments are NOT
+		# logged: 4x the volume and nothing the playlist poll doesn't say.
+		log_name @hls_playlist hls_access
+		root * {$SUBWAVE_STATE_ROOT:/var/sub-wave}
+		file_server
+	}
+
 	# Icecast's URL-auth callback — NOT reachable from the internet (password
 	# oracle otherwise; icecast calls the controller on loopback directly).
 	# Kept in lockstep with docker/Caddyfile.
@@ -47,11 +77,29 @@
 	}
 
 	# Don't gzip the already-compressed live audio mounts.
-	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
+	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac /hls/*
 	encode @compressible gzip zstd
 
 	log {
 		output stdout
 		format console
+	}
+
+	# HLS playlist polls, and only those (`no_hostname` keeps every other request
+	# on the default logger above). JSON because the controller parses it:
+	# `ts`, `status`, `request.client_ip`, `request.uri`,
+	# `request.headers.User-Agent`. Rolling is bounded and UNCOMPRESSED on
+	# purpose — the reader walks back into the most recent rolled file when the
+	# live one doesn't reach far enough, and a .gz would make that a decompressor.
+	log hls_access {
+		output file {$SUBWAVE_STATE_ROOT:/var/sub-wave}/edge/hls-access.log {
+			mode 644
+			roll_size 4mb
+			roll_keep 2
+			roll_keep_for 24h
+			roll_uncompressed
+		}
+		format json
+		no_hostname
 	}
 }

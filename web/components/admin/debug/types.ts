@@ -182,6 +182,10 @@ export interface DebugMount {
   channels: number | null;
   contentType: string | null;
   url: string;
+  /** A fixed description in place of a measured bitrate (the HLS ladder). */
+  note?: string;
+  /** Switched on but held back, and why (HLS under the stream password). */
+  blockedReason?: string | null;
 }
 
 export interface DebugMounts {
@@ -217,6 +221,16 @@ export interface DebugData {
   session?: DebugSession;
   config?: Record<string, unknown>;
   mounts?: DebugMounts;
+  /** The HLS transport (optional, stream.hlsEnabled). `enabled` is the policy —
+   *  false while the stream password holds it back, with `blockedReason` set. */
+  hls?: {
+    enabled: boolean;
+    blockedReason: string | null;
+    live: boolean;
+    listeners: number | null;
+    playlistAgeSec: number | null;
+    playlist: string;
+  };
   error?: string;
 }
 

@@ -32,12 +32,17 @@ import { talkAirStatus } from '../broadcast/talk-air.js';
 import { jingleRotateStatus } from '../broadcast/jingle-rotate.js';
 import { LIQ_JINGLE_RATIO_PATH } from '../settings/liquidsoap.js';
 import { handoverStatus } from '../broadcast/handover-policy.js';
+import { hlsStatus } from '../broadcast/hls-listeners.js';
+import { hlsBlockedReason } from '../broadcast/hls-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
 import { icecastDebugSnapshot, type IcecastSource, type IcecastStats } from './debug-icecast.js';
+
+// radio.liq's fixed HLS ladder, stated in the debug mounts table.
+const HLS_RUNGS_KBPS = [320, 256, 192, 128] as const;
 
 export const router = express.Router();
 
@@ -170,9 +175,44 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
       mountEntry('/stream.flac', 'FLAC', st.flacEnabled === true, null),
       mountEntry('/stream.aac', 'AAC-LC', st.aacEnabled === true, st.aacBitrate ?? 192),
     ];
+
+    // HLS has no Icecast source to read, so both halves come from elsewhere:
+    // liveness from the variant playlists on disk, listeners from the edge's
+    // playlist access log (broadcast/hls-listeners.ts). Appended after the
+    // icecast rows — it is an extra transport, not a replacement. The ladder is
+    // fixed in radio.liq, so it is stated as a note rather than faked into the
+    // bitrate/samplerate fields.
+    const hls = await hlsStatus();
+    const hlsBlocked = hlsBlockedReason(settingsSnapshot);
+    const hlsMount = {
+      path: '/hls/live.m3u8',
+      codec: 'HLS',
+      configured: hls.enabled,
+      live: hls.live,
+      bitrate: null,
+      listeners: hls.enabled ? hls.listeners : null,
+      sampleRate: null,
+      channels: null,
+      contentType: hls.live ? 'application/vnd.apple.mpegurl' : null,
+      url: `${origin}/hls/live.m3u8`,
+      note: `AAC ${HLS_RUNGS_KBPS.join('/')} kbps · adaptive`,
+      // Set only when the operator switched HLS on and something holds it back.
+      blockedReason: hlsBlocked,
+    };
+    out.hls = {
+      enabled: hls.enabled,
+      blockedReason: hlsBlocked,
+      live: hls.live,
+      listeners: hls.listeners,
+      playlistAgeSec: hls.ageSec,
+      playlist: hlsMount.url,
+    };
+
     out.mounts = {
-      list,
+      list: [...list, hlsMount],
       tuneIn: {
+        // The icecast mounts only: /listen.pls and /listen.m3u carry no HLS
+        // entry, since the hardware those files are for plays Icecast.
         entryCount: list.filter(m => m.configured).length,
         pls: `${origin}/listen.pls`,
         m3u: `${origin}/listen.m3u`,

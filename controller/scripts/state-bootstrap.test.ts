@@ -183,6 +183,25 @@ for (const s of SUPERVISORS) {
     }
   });
 
+  // 4b. HLS output and the edge's playlist log are INSTALL-level: on a
+  //    multi-station install they must land under the root, not the active
+  //    station, or the edge (which serves one fixed path) finds nothing. They
+  //    are also the compose edge's bind-mount sources, which Docker would
+  //    otherwise create root-owned 755 — unwritable by the mixer.
+  check('hls and edge are created under the root, world-writable', () => {
+    const { root } = scratch();
+    const dir = join(root, 'stations', 'late-night');
+    mkdirSync(dir, { recursive: true });
+    const r = bootstrap(s.path, s.lib, root, dir);
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    for (const d of ['hls', 'edge']) {
+      assert.ok(existsSync(join(root, d)), `${d} not created under the root`);
+      assert.ok(!existsSync(join(dir, d)), `${d} created under the station dir`);
+      const mode = statSync(join(root, d)).mode & 0o777;
+      assert.equal(mode & 0o002, 0o002, `${d} not writable by other uids (mode ${mode.toString(8)})`);
+    }
+  });
+
   // 5. A RELOCATED stem cache (STEMS_DIR in .env → the container path
   //    SUBWAVE_STEMS_DIR) is outside the state dir, so the subdir loop above
   //    never touches it. Without its own entry the bind mount keeps the

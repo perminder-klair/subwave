@@ -145,6 +145,7 @@ import {
   LIQ_ARCHIVE_BITRATE_PATH,
   LIQ_ARCHIVE_ENABLED_PATH,
   LIQ_CROSSFADE_PATH,
+  LIQ_HLS_ENABLED_PATH,
   LIQ_JINGLE_RATIO_PATH,
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
@@ -488,6 +489,10 @@ export async function load() {
         typeof stored.stream?.aacEnabled === 'boolean'
           ? stored.stream.aacEnabled
           : DEFAULTS.stream.aacEnabled,
+      hlsEnabled:
+        typeof stored.stream?.hlsEnabled === 'boolean'
+          ? stored.stream.hlsEnabled
+          : DEFAULTS.stream.hlsEnabled,
       aacBitrate:
         typeof stored.stream?.aacBitrate === 'number' &&
         AAC_BITRATE_SET.has(stored.stream.aacBitrate)
@@ -1414,6 +1419,7 @@ export async function update(patch) {
       'oggIcyMetadata',
       'aacEnabled',
       'aacBitrate',
+      'hlsEnabled',
       'bitrate',
     ] as const) {
       if (st[k] !== undefined && st[k] !== (cur.stream as Record<string, unknown>)[k]) {
@@ -2562,7 +2568,11 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
     !existsSync(LIQ_STREAM_BITRATE_PATH) ||
     !existsSync(LIQ_STREAM_BUFFER_SECONDS_PATH) ||
-    !existsSync(ICECAST_LISTENER_AUTH_PATH)
+    !existsSync(ICECAST_LISTENER_AUTH_PATH) ||
+    // Newer than the rest: a state dir from before HLS (or a settings.json
+    // restored by hand onto one) has every older handoff but not this, and the
+    // mixer would then leave HLS off while the controller reports it on.
+    !existsSync(LIQ_HLS_ENABLED_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }
