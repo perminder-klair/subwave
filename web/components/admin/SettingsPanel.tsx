@@ -519,6 +519,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       llm: {
         provider: v.llm?.provider ?? 'ollama',
         model: v.llm?.model ?? '',
+        modelOverrides: (v.llm as { modelOverrides?: Record<string, string> })?.modelOverrides ?? {},
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,

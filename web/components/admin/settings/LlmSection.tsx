@@ -349,6 +349,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       llm: {
         provider: activeProvider,
         model: form.llm.model,
+        modelOverrides: Object.fromEntries(
+          Object.entries(form.llm.modelOverrides || {})
+            .map(([k, v]) => [k, (v || '').trim()] as const)
+            .filter(([, v]) => v),
+        ),
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
@@ -1483,6 +1488,53 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       </Card>
       </Advanced>
+
+      <Card title="Task Model Overrides" sub="route specific agent tasks to a different model">
+        <div className="grid gap-[18px]">
+          <div className="field-hint">
+            The tasks below default to using the primary model. To route a heavy task to a larger
+            model while keeping the station running on a smaller, faster model, select an override
+            below. Overrides apply to the <strong>primary provider</strong> only — leave blank for the primary model.
+          </div>
+          {[
+            { id: 'generateBanter', label: 'Presenter Banter', desc: 'Multi-speaker conversation between personas' },
+            { id: 'djAgentSegment', label: 'Script Generation', desc: 'Single-speaker scripts for news, weather, deep-cuts — agent and pool modes alike' },
+            { id: 'djAgentPick', label: 'Track Selection', desc: 'The AI DJ picking the next track' },
+            { id: 'djAgentRequest', label: 'Listener Requests', desc: 'Negotiation and fulfillment of track requests' },
+            { id: 'matchRequest', label: 'Request Matcher', desc: 'Matching request text against the library' },
+            { id: 'identifyRequest', label: 'Search Identifier', desc: 'Web search to identify a vague request' },
+          ].map(task => (
+            <div className="field" key={task.id}>
+              <Label>{task.label}</Label>
+              <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                {primaryDiscovery.models.length > 0 ? (
+                  <ModelCombobox
+                    models={primaryDiscovery.models}
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: v } } }))}
+                    placeholder="Use primary model"
+                  />
+                ) : (
+                  <Input
+                    value={form.llm.modelOverrides?.[task.id] || ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: e.target.value } } }))
+                    }
+                    placeholder="Use primary model (or type model ID)"
+                    className="max-w-[360px]"
+                  />
+                )}
+                {!!form.llm.modelOverrides?.[task.id] && (
+                  <Btn sm onClick={() => setForm(f => ({ ...f, llm: { ...f.llm, modelOverrides: { ...(f.llm.modelOverrides || {}), [task.id]: '' } } }))}>
+                    Clear
+                  </Btn>
+                )}
+              </div>
+              <div className="field-hint">{task.desc}</div>
+            </div>
+          ))}
+        </div>
+      </Card>
 
       <SaveBar
         note={`Active model: ${data.llm?.active}. Applies to the next LLM call, no restart needed.`}

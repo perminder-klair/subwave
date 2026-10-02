@@ -428,7 +428,12 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     prompt: buildSituation(ctx, { contextFields: effectiveContextFields(cap), recentCuriosity }) + dataBlock(data),
     schema: simpleSegmentSchema(),
     temperature: 0.9,
-    kind: 'generateSegment',
+    // `djAgentSegment`, NOT a pool-only kind: this is the same TASK as the
+    // agent director above, and the kind is what settings.llm.modelOverrides
+    // is keyed by (primaryLeg(kind)). A second id for one task means an
+    // operator's Script Generation override silently does nothing here —
+    // with the picker agent off, which is the whole pool path.
+    kind: 'djAgentSegment',
   });
   const text = out?.air ? String(out?.text || '').trim() : '';
   if (!text) return { seg: null, exchange: null, reason: out?.reason || 'nothing to add' };
@@ -765,7 +770,9 @@ export async function runCapability(
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
       schema: forcedSchema({ mayAbstain }),
       temperature: 0.9,
-      kind: 'generateSegment',
+      // Same key as the agent path below — one task, one override entry. See
+      // the pool director above for why a second id here is a dead control.
+      kind: 'djAgentSegment',
     });
   } else {
     // Agent mode: the agent calls the tool itself, so the check runs on what
