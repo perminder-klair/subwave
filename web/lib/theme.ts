@@ -31,6 +31,25 @@ const FONT_STACKS: Record<DisplayFontId | MonoFontId, string> = {
 
 const FONT_TOKEN_KEYS = new Set(['--display-font', '--mono-font']);
 
+// A theme stores an uploaded background as url("/theme-assets/<file>"): a path
+// on the CONTROLLER, which the web origin only reaches through its API base
+// (Caddy mounts the controller at /api). Resolved here, at paint time, so the
+// stored token stays independent of how the controller is exposed.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '/api';
+const THEME_ASSET_URL_RE = /^url\((['"]?)\/theme-assets\//;
+
+/** A token value as it must be written into CSS. Only `--bg-image` changes. */
+export function resolveTokenValue(key: string, value: string): string {
+  if (FONT_TOKEN_KEYS.has(key)) return resolveFont(value);
+  if (key === '--bg-image') return value.trim().replace(THEME_ASSET_URL_RE, `url($1${API_BASE}/theme-assets/`);
+  return value;
+}
+
+/** The fetchable URL of an uploaded theme asset, for previews in the editor. */
+export function themeAssetUrl(name: string): string {
+  return `${API_BASE}/theme-assets/${encodeURIComponent(name)}`;
+}
+
 /** Curated font id → family stack; anything else passes through unchanged. */
 export function resolveFont(id: string): string {
   return FONT_STACKS[id as DisplayFontId | MonoFontId] ?? id;
@@ -57,8 +76,7 @@ export function applyTheme(theme: Theme): void {
   for (const key of THEME_TOKEN_KEYS) html.style.removeProperty(key);
   for (const [k, v] of Object.entries(theme.tokens)) {
     if (!TOKEN_KEY_SET.has(k)) continue;
-    const value = FONT_TOKEN_KEYS.has(k) ? resolveFont(v) : v;
-    html.style.setProperty(k, value);
+    html.style.setProperty(k, resolveTokenValue(k, v));
   }
   html.setAttribute('data-theme', theme.mode);
   syncDarkClass(theme.mode);
@@ -173,11 +191,13 @@ export const THEME_INIT_SCRIPT = `
     if (usePalette) {
       var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
       var fonts = ${JSON.stringify(FONT_STACKS)};
+      var apiBase = ${JSON.stringify(API_BASE)};
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
         var v = t.tokens[k];
         if (typeof v === 'string') {
           if ((k === '--display-font' || k === '--mono-font') && fonts[v]) v = fonts[v];
+          if (k === '--bg-image') v = v.trim().replace(/^url\\((['"]?)\\/theme-assets\\//, 'url($1' + apiBase + '/theme-assets/');
           html.style.setProperty(k, v);
         }
       }

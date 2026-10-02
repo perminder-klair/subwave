@@ -2,6 +2,17 @@
    `.playing` lands, so a tuned-out deck sits still and html.lite's global
    keyframe kill stops the whole thing for free. */
 
+/* Root: layers the operator's --bg-image (theme-tokens.ts) under the flat
+   bg-bg fill the TSX root already sets via Tailwind — that utility touches
+   only background-color, so it can't clobber this. "none" by default, so an
+   untouched theme still paints the plain deck backdrop. */
+.stage {
+  background-image: var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
 @keyframes platter-spin { to { transform: rotate(360deg); } }
 @keyframes platter-sheen { to { transform: rotate(360deg); } }
 @keyframes platter-rim { to { transform: rotate(360deg); } }
