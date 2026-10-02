@@ -1007,32 +1007,36 @@ test('with no pool configured the transport is exactly the SDK transport', async
   }
 });
 
-test('the admin single field and the pool editor write the SAME credential', async () => {
-  // The redundancy this guards: the single field used to save the singular
-  // variable while the pool editor saved the plural one, so the same secret had
-  // two stores and a key typed into the field was silently ignored the moment a
-  // pool existed. Both depths now write the pool, and the field's Test button
-  // probes through the pool rather than raw process.env.
+test('the single-key field is greyed out while a pool exists, and says so', async () => {
+  // The product decision: an operator must be able to SEE that their single key
+  // is parked rather than assume it was replaced. Hidden is not the same as
+  // answered, so the field stays visible, inert, and carries the reason plus the
+  // way back.
   const fs = await import('node:fs');
   const llmSection = fs.readFileSync(
     new URL('../../web/components/admin/settings/LlmSection.tsx', import.meta.url), 'utf8');
 
-  assert.match(llmSection,
-    /envVar === 'GOOGLE_GENERATIVE_AI_API_KEY'\s*\?\s*\n?\s*'GOOGLE_GENERATIVE_AI_API_KEYS'/,
-    'saving a Google key from the single field must target the pool variable');
+  // The field writes the LEGACY singular variable. If it wrote the pool, then
+  // "remove every key" would empty the pool, the field would re-enable, typing
+  // one key would re-activate the pool, and the field would disable itself
+  // again — a single key could never be configured at all.
+  assert.doesNotMatch(llmSection, /'GOOGLE_GENERATIVE_AI_API_KEYS'/,
+    'the single field must not write the pool variable');
 
-  // The pool editor renders INSTEAD of the field, never beside it — two inputs
-  // writing one secret is the confusion the depth split exists to remove.
-  assert.match(llmSection, /\{!showGooglePool && \(/,
-    'the single field must be gated on the single depth');
-  assert.match(llmSection, /\{showGooglePool && \(\s*\n\s*<GoogleKeyPoolEditor/,
-    'the pool editor must be gated on the pool depth');
+  assert.match(llmSection, /const poolActive = isGoogle && googlePoolCount > 0/,
+    'pool presence must drive the disabled state');
+  assert.match(llmSection, /disabled=\{poolActive\}/,
+    'the single-key input must be disabled while a pool exists');
+  assert.match(llmSection, /disabled=\{poolActive \|\| primaryKeyTesting/,
+    'the Test key button must be disabled while a pool exists');
+  assert.match(llmSection, /Not used while a key pool is set up below/,
+    'the hint must state the single key is unused');
+  assert.match(llmSection, /Remove the pool to go back to a\s*\n?\s*single key\./,
+    'the hint must state how to get back to a single key');
 
-  // More than one key forces the pool depth whatever the stored preference is,
-  // so a stale view choice can never hide credentials the operator set.
-  const adminView = fs.readFileSync(new URL('../../web/lib/adminView.ts', import.meta.url), 'utf8');
-  assert.match(adminView, /poolCount > 1 \? 'pool'/,
-    'a pool of several keys must force the pool view');
+  // Both are on screen together: the pool editor is a sibling, not a swap.
+  assert.match(llmSection, /\{isGoogle && \(\s*\n\s*<GoogleKeyPoolEditor/,
+    'the pool editor must render below the field, not replace it');
 
   const routes = fs.readFileSync(new URL('../src/routes/settings/llm.ts', import.meta.url), 'utf8');
   assert.match(routes, /key === GOOGLE_KEYS_ENV\s*\n?\s*\? currentKeyOrHead\(\)/,
