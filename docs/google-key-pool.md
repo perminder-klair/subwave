@@ -46,19 +46,22 @@ list of keys the operator supplies; the station does not acquire, generate,
 share or rotate keys on its own.
 
 To be explicit about the scope of that warning, because it is easy to read it as
-a rule rather than as a prompt to check:
+a verdict rather than as a prompt to check:
 
-- **If you enter several free-tier keys, whether that is permitted is on you.**
-  The software has no way to enforce it and takes no position either way. It
-  will happily rotate them.
-- **If you enter several paid keys across projects or quotas, compliance is
-  still on you** — this is not a licence that only the free-tier arrangement
-  needs. SUB/WAVE cannot tell a paid-key pool that is permitted apart from one
-  that is not, because the answer lives in terms it does not read and cannot
-  enforce.
+- **If you enter several free-tier keys, you may want to read those terms
+  first.** Rotating free-tier keys around one key's quota is the arrangement
+  most likely to warrant a look, and it is the case the admin note points at.
+- **The station cannot tell which kind of key you gave it.** It is handed
+  strings, not billing tiers, so it does not know whether your pool is
+  free-tier, paid, or a mix. The note in the admin UI therefore raises the
+  possibility rather than checking your actual setup.
+- **Whichever mix you have used, whether it complies is yours to decide and
+  verify.** Several paid keys across projects are no more exempt from your own
+  review than several free ones; SUB/WAVE has no way to enforce those terms and
+  takes no position either way.
 
-So the note is not software policing a policy, and it is not a verdict on your
-particular setup. It exists for one reason: to make you aware that there is
+So the note is not software policing a policy, and it is not an assurance that
+your particular setup is fine. It exists for one reason: to make you aware that there is
 something worth checking before you wire this into a station you care about. The
 checking is the part only you can do. If you have already done it, this section
 has nothing further to add.
@@ -200,8 +203,8 @@ warning for something they haven't done, and it is only actionable at the point
 of adding a second key. This page and `README.md` carry it unconditionally,
 because a doc can be read deliberately rather than stumbled into.
 
-The note says the same thing wherever it appears: it is a prompt to check, and
-the check is yours. That matters in both directions — it is not a warning the
-software raises against you, and it is not an assurance that your arrangement is
-fine. Multiple paid keys are no more exempt from your own review than multiple
-free ones.
+The note says the same thing wherever it appears: it points at something worth
+checking, and the check is yours. That matters in both directions — it is not a
+warning the software raises against you, and it is not an assurance that your
+arrangement is fine. It names the free-tier case because that is the pattern
+worth flagging, and it cannot tell you which kind of key you supplied.

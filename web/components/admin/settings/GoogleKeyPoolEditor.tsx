@@ -327,9 +327,26 @@ export function GoogleKeyPoolEditor({
             what they can&rsquo;t once their daily quotas run out. Reorder with
             ↑ ↓ if you got the order wrong.
           </p>
+          {/*
+            Terms note. Shown only while the pool is actually in use — two or
+            more keys, or a second one being typed — because a station with a
+            single key has done nothing that needs checking, and a compliance
+            warning nobody has earned is just noise that trains people to ignore
+            the one time it matters.
+
+            It states BOTH things, deliberately. The free-tier case is the one
+            worth naming (rotating free keys around one key's quota is the
+            pattern most likely to warrant a look), and the limitation is stated
+            just as plainly: the station is handed strings and cannot know which
+            are free-tier and which are paid. So the note points at something to
+            check without claiming to know what the operator supplied, and
+            without implying a paid-key pool is exempt — both readings would be
+            false. The call is the operator's.
+          */}
           <p className="mt-2 border-l-2 border-[var(--accent)] pl-2 text-[12px] text-muted">
-            <strong className="text-ink">Whether this is permitted is your call,
-            not ours.</strong> Several free-tier keys may conflict with the{' '}
+            <strong className="text-ink">You&rsquo;re using this to supply
+            several API keys &mdash; free tier or paid.</strong> If some of them
+            are free-tier keys, you may want to read the{' '}
             <a
               href="https://developers.google.com/terms"
               target="_blank"
@@ -338,12 +355,17 @@ export function GoogleKeyPoolEditor({
             >
               Google APIs Terms of Service
             </a>{' '}
-            or the Gemini free-tier terms, which can change without notice
-            &mdash; and several <em>paid</em> keys across projects are just as
-            much your responsibility to check. This is a prompt to look, not a
-            rule the station applies: it has no way to enforce those terms and
-            takes no position on your setup. If you have already read them, you
-            can ignore this.
+            first: rotating several free-tier keys to work around one
+            key&rsquo;s quota is the arrangement most likely to be worth a look,
+            and those terms can change without notice.
+            <br />
+            <br />
+            The station can&rsquo;t tell which kind of key you&rsquo;ve given
+            it &mdash; it sees strings, not billing tiers &mdash; so it is
+            flagging the possibility rather than judging your setup, and it
+            cannot tell you that your arrangement is fine either. Whichever mix
+            you&rsquo;ve used, whether it complies is your call to make and
+            verify.
           </p>
         </>
       )}
