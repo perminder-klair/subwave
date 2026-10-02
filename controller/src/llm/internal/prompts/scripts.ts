@@ -100,7 +100,7 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
   if (hasFollowingShow) {
     moment.push("Current show is approaching its scheduled close.");
     const startsAt = clockIsAirTime ? String(handover.nextShow.startsAt || "").trim() : "";
-    moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + (startsAt ? ", starting " + startsAt : "") + ".");
+    moment.push("Following show: " + String(handover.nextShow.presenter).trim() + " presents \"" + String(handover.nextShow.name).trim() + "\"" + (startsAt ? ", starting " + startsAt : "") + ".");
   }
   const playStats = current ? library.trackPlayStatsFor(current) : null;
   const playCount = playStats?.count ?? null;
@@ -124,7 +124,7 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
     sections.push("Track on air:\n- " + String(current?.title || "Unknown") + " by " + String(current?.artist || "unknown") + ".");
   }
   if (hasFollowingShow) {
-    sections.push("Mention the approaching change and following show naturally when it fits; do not make it a required signpost, state remaining minutes, describe it as a fraction of the show, or repeat it mechanically.");
+    sections.push("If you mention the approaching change, describe it as the incoming presenter's show — never as your own or \"our\" show. Do not make it a required signpost, state remaining minutes, describe it as a fraction of the show, or repeat it mechanically.");
   }
   return sections.join("\n\n");
 }
@@ -217,7 +217,7 @@ export function stationIdPrompt({ context = null, persona = null }: any = {}) {
   const nextShow = handover?.phase === 'final-quarter-hour'
     && handover?.nextShow?.name && handover?.nextShow?.presenter;
   const handoverNudge = nextShow
-    ? ` The next scheduled show is "${String(handover.nextShow.name).trim()}" with ${String(handover.nextShow.presenter).trim()}. If natural, give it one brief nod; do not make it a required signpost or explain the schedule.`
+    ? ` ${String(handover.nextShow.presenter).trim()} presents the next scheduled show, "${String(handover.nextShow.name).trim()}". If natural, give it one brief nod; never describe it as your own show, make it a required signpost, or explain the schedule.`
     : '';
   ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.${clockNudge}${handoverNudge}`);
   return ctxLines.join('\n');
@@ -585,7 +585,7 @@ export async function generateHourlyTime({ recap = null, context = null, recentO
   const timeClause = nextHourlyTimeClause(context?.clock);
   ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. ${timeClause}`);
   if (showWelcome && context?.activeShow?.name) {
-    ctxLines.push(`This is the first spoken segment of the newly started show "${context.activeShow.name}". After the required time check, add one short, natural welcome to that show. The complete line may be two short sentences. Do not introduce yourself by name, mention an outgoing presenter, or imply the show began before this hour.`);
+    ctxLines.push(`The schedule is now in "${context.activeShow.name}". After the required time check, you may add one short, natural welcome to it. The complete line may be two short sentences. Do not introduce yourself by name, mention an outgoing presenter, or claim the show began at a particular time.`);
   }
   return djText({
     system: djSystem(persona || undefined),

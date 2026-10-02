@@ -34,7 +34,13 @@
 
 import assert from 'node:assert/strict';
 import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
-import { PICK_SHOW_LOOKAHEAD_SEC, linkAirDate, pickLeadSec } from '../src/broadcast/queue/pure.js';
+import {
+  handoffAnchorReachesBoundary,
+  PICK_SHOW_LOOKAHEAD_SEC,
+  linkAirDate,
+  pickLeadSec,
+  pickShowDate,
+} from '../src/broadcast/queue/pure.js';
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
@@ -190,6 +196,21 @@ function main() {
     const boundary = Date.parse('2026-07-25T22:00:00.000Z');
     const showAt = now + ((pickLeadSec(90) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
     assert.ok(showAt > boundary, 'a changeover track should still resolve the incoming show');
+  });
+
+  test('#1672 — picker forecast cannot drift more than its attribution window past a boundary', () => {
+    const now = Date.parse('2026-09-14T13:48:00.000Z');
+    const boundary = Date.parse('2026-09-14T14:00:00.000Z');
+    const showAt = pickShowDate(now, 17 * 60, boundary);
+    assert.equal(showAt?.getTime(), boundary + PICK_SHOW_LOOKAHEAD_SEC * 1000);
+  });
+
+  test('#1672 — a handoff anchor must itself reach the boundary', () => {
+    const now = Date.parse('2026-09-14T16:55:00.000Z');
+    const boundary = Date.parse('2026-09-14T17:00:00.000Z');
+    assert.equal(handoffAnchorReachesBoundary(now, 2 * 60, boundary), false,
+      'a final track ending at 16:57 cannot own a 17:00 handoff');
+    assert.equal(handoffAnchorReachesBoundary(now, 5 * 60, boundary), true);
   });
 
   test('at a track start remaining ≈ duration → byte-for-byte the old lead', () => {

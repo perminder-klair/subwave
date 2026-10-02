@@ -534,6 +534,10 @@ export async function rollSessionNow(
   // it — the others no-op). No ctx → the roll above didn't happen either;
   // leave the handoff pending for the next call site.
   if (!ctx) return { ctx: null, introAired: false, showStarted: false };
+  // The normal :00 path preserves the next natural seam. This independent
+  // deadline makes that preference finite when the outgoing track runs long:
+  // after two minutes the queue generates and ducks the mic-pass over music.
+  queue.armHandoffGenerationFallback();
   // Plan the episode BEFORE the mic-pass so a persona handoff into a
   // programme show can weave the episode angle into the greeting (the
   // greeting doubles as the show's intro on a persona-change boundary).
@@ -548,6 +552,7 @@ export async function rollSessionNow(
     } catch (err) {
       queue.log('error', `Persona handoff failed: ${err.message}`);
     }
+    queue.armHandoffGenerationFallback();
   }
   // Programme shows: open the episode. The intro owns the top of the show's
   // first hour, so once it airs the generic time check stands down (#310).

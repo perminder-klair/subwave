@@ -59,7 +59,98 @@ after(() => {
   if (queue._handoffBoundaryTimer) {
     clearTimeout(queue._handoffBoundaryTimer);
   }
+  if (queue._handoffGenerationTimer) {
+    clearTimeout(queue._handoffGenerationTimer);
+  }
   rmSync(root, { recursive: true, force: true });
+});
+
+test('an unrendered final-track handoff falls back to immediate delivery after its deadline', async () => {
+  await settings.update({
+    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
+  } as never);
+  const now = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
+
+  const week: Record<number, string[]> = {};
+  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  await settings.update({
+    activePersonaId: GIGI.id,
+    shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id }],
+    schedule: week,
+  } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
+  assert.equal(session.armBoundaryHandoff(incoming, { id: 'long-final-track' }), true);
+
+  let generated = 0;
+  await queue.runHandoffGenerationFallback({
+    getContext: async at => {
+      assert.equal(at?.getTime(), new Date(incoming.at).getTime(),
+        'the fallback keeps the incoming show context while the final track is still playing');
+      return incoming;
+    },
+    runHandoff: async ctx => {
+      generated += 1;
+      assert.equal(ctx, incoming);
+      session.markHandoffAired();
+    },
+  });
+  assert.equal(generated, 1, 'the fallback invokes the regular handoff runner without waiting for a seam');
+  assert.equal(session.pendingHandoff(), null, 'the consumed handoff cannot be generated again at a later seam');
+});
+
+test('an ordinary scheduled roll uses its durable rolledFrom record for the fallback', async () => {
+  await settings.update({
+    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
+  } as never);
+  const now = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
+  await session.maybeRoll(incoming);
+
+  const pending = session.pendingHandoff();
+  assert.ok(pending && !('incomingPersonaId' in pending),
+    'a normal scheduled roll creates rolledFrom rather than a pre-armed final-track record');
+  let generated = 0;
+  await queue.runHandoffGenerationFallback({
+    getContext: async at => {
+      assert.equal(at, undefined, 'ordinary rolls use live incoming-show context, not a boundary forecast');
+      return incoming;
+    },
+    runHandoff: async ctx => {
+      generated += 1;
+      assert.equal(ctx, incoming);
+      session.markHandoffAired();
+    },
+  });
+  assert.equal(generated, 1);
+  assert.equal(session.pendingHandoff(), null);
+});
+
+test('a failed fallback attempt does not spin at an already-expired deadline', async () => {
+  await settings.update({
+    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
+  } as never);
+  const now = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
+  await settings.update({ activePersonaId: GIGI.id } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
+  await session.maybeRoll(incoming);
+
+  let attempts = 0;
+  await queue.runHandoffGenerationFallback({
+    getContext: async () => incoming,
+    runHandoff: async () => {
+      attempts += 1;
+      throw new Error('LLM unavailable');
+    },
+  });
+  assert.equal(attempts, 1);
+  assert.equal(queue._handoffGenerationTimer, null,
+    'the failed attempt is not immediately re-armed from a deadline already in the past');
+  assert.ok(session.pendingHandoff(), 'a later normal track/session trigger may still retry the durable handoff');
+  session.markHandoffAired();
 });
 
 test('a queued handoff falls back when no post-boundary seam arrives in time', async () => {

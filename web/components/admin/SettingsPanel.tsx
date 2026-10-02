@@ -432,6 +432,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       pauseTalkMinSeconds: String(v.pauseTalkMinSeconds ?? 20),
       djBehaviour: {
         showWelcome: v.djBehaviour?.showWelcome === true,
+        previewNextShow: v.djBehaviour?.previewNextShow !== false,
         sameHostAcknowledgement: v.djBehaviour?.sameHostAcknowledgement === true,
         extendedSleeveNotes: v.djBehaviour?.extendedSleeveNotes === true,
         releaseYearMentions: v.djBehaviour?.releaseYearMentions ?? 'regular',

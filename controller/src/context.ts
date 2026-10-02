@@ -450,6 +450,13 @@ export async function getFullContext(at?: Date) {
   // Note this is distinct from `date` (getDateContext's calendar strings).
   return {
     at: now.toISOString(), time, weather, festival, dominantMood, date, clock,
-    activeShow, showHandover: showHandoverContext(now), listeners,
+    activeShow,
+    // This is preview copy, not the handoff lifecycle. Keep it out of every
+    // script prompt when the operator wants the presenter change itself to be
+    // the only acknowledgement of what follows.
+    showHandover: getSettings()?.djBehaviour?.previewNextShow !== false
+      ? showHandoverContext(now)
+      : null,
+    listeners,
   };
 }
