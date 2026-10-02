@@ -26,6 +26,7 @@ import { cors } from './middleware/cors.js';
 import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
+import { router as authRoutes } from './routes/auth.js';
 import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
@@ -128,6 +129,7 @@ app.use(startup.middleware);
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);
+app.use(authRoutes);
 app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);

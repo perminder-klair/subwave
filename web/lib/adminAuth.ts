@@ -104,7 +104,10 @@ export function useAdminAuth(): AdminAuth {
     const token = encode(`${user}:${pass}`);
     let r: Response;
     try {
-      r = await fetch(`${API_URL}/settings`, { headers: { Authorization: `Basic ${token}` } });
+      r = await fetch(`${API_URL}/admin-auth`, {
+        cache: 'no-store',
+        headers: { Authorization: `Basic ${token}` },
+      });
     } catch {
       return { ok: false, error: 'could not reach the controller' };
     }
