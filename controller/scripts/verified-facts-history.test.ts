@@ -14,7 +14,7 @@ process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-verified-facts-histo
 const library = await import('../src/music/library.js');
 const { linkPrompt } = await import('../src/llm/internal/prompts/scripts.js');
 
-test('Verified Facts labels the real lifetime play count truthfully when a prior play was today', async () => {
+test('Verified Facts never exposes raw lifetime play counts', async () => {
   const track = { id: 'same-day-replay', title: 'Second Spin', artist: 'The Fixtures' };
 
   await library.load();
@@ -45,7 +45,7 @@ test('Verified Facts labels the real lifetime play count truthfully when a prior
   assert.equal(library.trackPlayStatsFor(track)?.count, 2, 'the production projection is lifetime plays');
 
   const prompt = linkPrompt({ current: track, context: {} });
-  assert.match(prompt, /Lifetime station plays: 2\./,
-    'a lifetime count must not be described as plays before today');
+  assert.doesNotMatch(prompt, /Lifetime station plays: 2\./);
   assert.doesNotMatch(prompt, /Station plays before today:/);
+  assert.doesNotMatch(prompt, /Played here only (once|twice) before/);
 });

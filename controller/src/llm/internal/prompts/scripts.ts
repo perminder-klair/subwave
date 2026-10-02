@@ -102,15 +102,19 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
     const startsAt = clockIsAirTime ? String(handover.nextShow.startsAt || "").trim() : "";
     moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + (startsAt ? ", starting " + startsAt : "") + ".");
   }
-  const playStats = current ? library.trackPlayStatsFor(current) : null;
-  const playCount = playStats?.count ?? null;
+  // `context.date.iso` is already rendered in the station's configured
+  // timezone. Anchor the year-based first-play window to that date, not the
+  // controller host's clock; noon avoids any UTC date-boundary shift.
+  const stationDate = /^\d{4}-\d{2}-\d{2}$/.test(String(context?.date?.iso ?? ''))
+    ? Date.parse(`${context.date.iso}T12:00:00.000Z`)
+    : Date.now();
   const stationHistoryNote = current
-    ? stationHistoryNoteFor(current, playStats, library.lastAiredInfo())
+    ? stationHistoryNoteFor(current, library.lastAiredInfo(), stationDate)
     : null;
   const releaseYearMentions = settings.get().djBehaviour.releaseYearMentions;
   const sleeves = includeSleeves
     ? selectSleeveNotes(
-      contextSleeveNotesFor(current, context, playCount, stationHistoryNote),
+      contextSleeveNotesFor(current, context, stationHistoryNote),
       Math.random,
       releaseYearMentionEligible(current, context, releaseYearMentions),
     )
