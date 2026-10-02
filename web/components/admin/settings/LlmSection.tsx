@@ -4,6 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
+import { fieldAria } from '../../../lib/form';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
@@ -30,6 +31,7 @@ import {
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
   LLM_HEADERS_MAX,
+  type GeminiSafety,
 } from '@/lib/schemas.generated';
 
 // Provider descriptors, the cloud-key env-var map and the badge logic live in
@@ -41,6 +43,44 @@ import {
 // without an explicit override.
 const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
 const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
+
+const GEMINI_SAFETY_LABELS: { id: keyof GeminiSafety; label: string }[] = [
+  { id: 'harassment', label: 'Harassment' },
+  { id: 'hateSpeech', label: 'Hate speech' },
+  { id: 'sexuallyExplicit', label: 'Sexually explicit' },
+  { id: 'dangerousContent', label: 'Dangerous content' },
+];
+
+function GeminiSafetyEditor({ value, onChange, idPrefix }: {
+  value: GeminiSafety;
+  onChange: (category: keyof GeminiSafety, checked: boolean) => void;
+  idPrefix: string;
+}) {
+  const aria = fieldAria(idPrefix, undefined, { hasDescription: true });
+  return (
+    <div className="field">
+      <div {...aria.labelledByProps} className="text-[13px] font-bold">Block categories</div>
+      <div role="group" {...aria.groupProps} className="mt-2 flex flex-col gap-2">
+        {GEMINI_SAFETY_LABELS.map(({ id, label }) => (
+          <label key={id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
+            <input
+              type="checkbox"
+              checked={value[id]}
+              onChange={e => onChange(id, e.target.checked)}
+              className="accent-[var(--accent)]"
+            />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <div {...aria.descriptionProps} className="field-hint mt-2">
+        Checked categories block content with medium or high probability of harm.
+        Unchecked categories allow it. Primary and fallback settings are independent
+        and apply only when that model uses Google.
+      </div>
+    </div>
+  );
+}
 
 // Custom request headers for an openai-compatible gateway (#1618). A row list
 // rather than a map: the operator types a name one character at a time, and a
@@ -339,6 +379,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
           discoverySteps: form.llm.fallback.discoverySteps,
+          geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
           reasoning: form.llm.fallback.reasoning,
@@ -1124,49 +1165,31 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       </Card>
 
       {form.llm.provider === 'google' && (
-      <Card title="Gemini Safety Filters" sub="content blocking">
-        <div className="field">
-          <Label>Block categories</Label>
-          <div className="mt-2 flex flex-col gap-2">
-            {[
-              { id: 'harassment', label: 'Harassment' },
-              { id: 'hateSpeech', label: 'Hate Speech' },
-              { id: 'sexuallyExplicit', label: 'Sexually Explicit' },
-              { id: 'dangerousContent', label: 'Dangerous Content' },
-            ].map(c => (
-              <label key={c.id} className="flex cursor-pointer items-center gap-2 text-[13px] leading-[1.5] text-ink">
-                <input
-                  type="checkbox"
-                  checked={!!form.llm.geminiSafety?.[c.id as keyof typeof form.llm.geminiSafety]}
-                  onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                    setForm(f => ({
-                      ...f,
-                      llm: {
-                        ...f.llm,
-                        geminiSafety: {
-                          ...(f.llm.geminiSafety || { harassment: false, hateSpeech: false, sexuallyExplicit: false, dangerousContent: false }),
-                          [c.id]: e.target.checked
-                        }
-                      }
-                    }))
-                  }
-                  className="accent-[var(--accent)]"
-                />
-                <span>{c.label}</span>
-              </label>
-            ))}
-          </div>
-          <div className="field-hint mt-2">
-            Google-only content blocking, sent on the native <code>google</code> provider
-            leg. Check a category to have Gemini block it; uncheck to allow swearing or
-            sensitive topics. Other providers ignore these flags.
-          </div>
-          <div className="field-hint mt-2">
-            These boxes apply to the primary leg. A <code>google</code> fallback leg
-            carries its own set of flags.
-          </div>
-        </div>
-      </Card>
+        <Card title="Gemini safety filters" sub="primary model">
+          <GeminiSafetyEditor
+            value={form.llm.geminiSafety}
+            idPrefix="primary-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f, llm: { ...f.llm, geminiSafety: { ...f.llm.geminiSafety, [category]: checked } },
+            }))}
+          />
+        </Card>
+      )}
+
+      {form.llm.fallback.enabled && form.llm.fallback.provider === 'google' && (
+        <Card title="Fallback Gemini safety filters" sub="backup model">
+          <GeminiSafetyEditor
+            value={form.llm.fallback.geminiSafety}
+            idPrefix="fallback-gemini-safety"
+            onChange={(category, checked) => setForm(f => ({
+              ...f,
+              llm: { ...f.llm, fallback: {
+                ...f.llm.fallback,
+                geminiSafety: { ...f.llm.fallback.geminiSafety, [category]: checked },
+              } },
+            }))}
+          />
+        </Card>
       )}
 
       <Card title="Next-track picker" sub="how the DJ chooses">

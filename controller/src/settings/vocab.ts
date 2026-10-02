@@ -53,12 +53,15 @@ import {
   LLM_HEADER_VALUE_MAX,
   LLM_HEADER_VALUE_RE,
   LLM_HEADERS_MAX,
+  normalizeGeminiSafety,
   SETTINGS_AAC_BITRATES,
   SETTINGS_LOUDNESS_SOURCES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
 } from '../schemas/settings.js';
+
+export { normalizeGeminiSafety } from '../schemas/settings.js';
 
 // Placeholders are substituted by renderDjPrompt(). {name} is mandatory:
 // update() refuses any custom template that drops it.
@@ -495,24 +498,6 @@ export function normalizeLlmHeaders(raw: unknown): Record<string, string> {
     out[name] = v;
   }
   return out;
-}
-
-// HARM_CATEGORY thresholds for the native `google` leg. Lenient load posture
-// like the rest of this file: booleans only, anything else reads as allow
-// (unchecked), so a hand-edited settings.json can't wedge boot.
-export function normalizeGeminiSafety(raw: unknown): {
-  harassment: boolean;
-  hateSpeech: boolean;
-  sexuallyExplicit: boolean;
-  dangerousContent: boolean;
-} {
-  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  return {
-    harassment: r.harassment === true,
-    hateSpeech: r.hateSpeech === true,
-    sexuallyExplicit: r.sexuallyExplicit === true,
-    dangerousContent: r.dangerousContent === true,
-  };
 }
 
 // Build the per-provider inline-key map from a stored settings.llm blob and

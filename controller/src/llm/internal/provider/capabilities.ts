@@ -240,8 +240,7 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
 }
 
 // Per-call safety thresholds for the native `google` provider, as ai-sdk
-// providerOptions. This is the ONLY channel that can express them: the
-// model-construction options carry a single `threshold` string, while
+// providerOptions. Model-construction arguments are ignored by the SDK;
 // `safetySettings` is resolved from the per-call providerOptions when the
 // request body is built. Checked = block that category; unchecked/absent =
 // allow (BLOCK_NONE). Every other provider gets {} (no-op spread), so call

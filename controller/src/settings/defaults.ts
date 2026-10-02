@@ -18,6 +18,7 @@ import {
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  normalizeGeminiSafety,
   type JingleRotateOwner,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
@@ -432,12 +433,7 @@ export const DEFAULTS = {
     // HARM_CATEGORY thresholds for the native `google` provider leg. Checked =
     // block that category; unchecked/absent = allow (BLOCK_NONE). Only the
     // google leg reads them — every other provider ignores the field.
-    geminiSafety: {
-      harassment: false,
-      hateSpeech: false,
-      sexuallyExplicit: false,
-      dangerousContent: false,
-    },
+    geminiSafety: normalizeGeminiSafety(undefined),
     // On: the session DJ agent drives picks, links and requests as a tool-loop
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.
@@ -514,6 +510,8 @@ export const DEFAULTS = {
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,
+      // Independent of the primary: only this leg's Google calls read it.
+      geminiSafety: normalizeGeminiSafety(undefined),
       // Per-leg like toolChoice/numCtx: the backup may be a different provider
       // running a different model, so it resolves its own budget.
       discoverySteps: 0,
