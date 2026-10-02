@@ -49,6 +49,7 @@ export function createStreamIdleMonitor(overrides: Partial<{
     ...overrides,
   };
   let state: IdleState = { idle: false, zeroSince: null };
+  let startupReleasePending = false;
 
   // Read by GET /state so the player can tell "nobody's here" from "broken".
   function isIdle() {
@@ -64,12 +65,17 @@ export function createStreamIdleMonitor(overrides: Partial<{
     // timed-out poll out of ~120 per pause released it (#1256).
     if (state.idle && enabled) await deps.refresh();
     const count = deps.gatedListenerCount();
-    const { state: next, action } = nextIdleState(state, {
+    const input = {
       enabled,
       count,
       now: Date.now(),
       idleAfterMs: idleAfterMin * 60_000,
-    });
+    };
+    const { state: next, action: plannedAction } = nextIdleState(state, input);
+    // An unknown startup gate must fail open in the mixer too. Release it
+    // before starting a fresh empty-room grace window, and retry on failure
+    // without waiting for the original status read to finish.
+    const action = startupReleasePending ? 'resume' : plannedAction;
     try {
       if (action === 'pause') {
         await deps.idleOn();
@@ -96,8 +102,14 @@ export function createStreamIdleMonitor(overrides: Partial<{
     } catch {
       return; // telnet unreachable — keep the current state, retry next tick
     }
-    state = next;
-    deps.setStreamIdle(next.idle);
+    // A forced release overrides the whole transition, not just its command.
+    // Start the empty-room clock only after idle_off succeeds, even if retries
+    // (or the command itself) lasted longer than the previous grace window.
+    state = startupReleasePending
+      ? nextIdleState({ idle: false, zeroSince: null }, { ...input, now: Date.now() }).state
+      : next;
+    startupReleasePending = false;
+    deps.setStreamIdle(state.idle);
     if (action === 'resume') {
       // Playback is already live. Catalogue failures must not roll the idle
       // state back, delay the frozen track, or prevent later monitor ticks.
@@ -118,9 +130,14 @@ export function createStreamIdleMonitor(overrides: Partial<{
         }),
       ]);
       state = { idle, zeroSince: null };
+      startupReleasePending = false;
       deps.setStreamIdle(idle);
     } catch {
-      /* Liquidsoap not up yet — start live; ticks reconcile from here */
+      // The surviving mixer may still be paused. Boot stays bounded and
+      // logically live; ticks retry idle_off until the physical gate agrees.
+      state = { idle: false, zeroSince: null };
+      startupReleasePending = true;
+      deps.setStreamIdle(false);
     } finally {
       clearTimeout(timer);
     }
