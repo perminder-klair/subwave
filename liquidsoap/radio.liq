@@ -201,8 +201,8 @@ if file.exists("#{state_dir}/liquidsoap_flac_enabled.txt") then
   flac_enabled := (raw == "true")
 end
 
-# ICY (out-of-band) per-track titles on BOTH Ogg mounts. ON by default — only an
-# explicit "false" disables. See make_stream_outputs() for the client trade-off.
+# Legacy ICY (out-of-band) per-track titles for the Opus mount. ON by default —
+# only an explicit "false" disables. FLAC always uses native chained Ogg tags.
 if file.exists("#{state_dir}/liquidsoap_ogg_icy_metadata.txt") then
   raw = string.trim(file.contents("#{state_dir}/liquidsoap_ogg_icy_metadata.txt"))
   ogg_icy_metadata := (raw != "false")
@@ -213,7 +213,7 @@ if file.exists("#{state_dir}/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} opus_icy_metadata=#{ogg_icy_metadata()} flac_metadata=native station_name=#{station_name()}")
 
 # subhttp:<full-url> — whole-file download via curl (http.get.stream returns
 # spurious 522s on the Cloudflare-fronted Navidrome origin).
@@ -1699,11 +1699,8 @@ def make_stream_outputs() =
         opus_enc,
         id="stream_opus",
         fallible=true,
-        # ICY metadata toggle (default ON). output.icecast's null default
-        # guesses ICY off for Ogg and relies on in-band chained-Ogg re-emission,
-        # but many clients (Ferrosonic, Cast, Symfonium) read the Ogg comment
-        # once at connect and freeze on the first title (#1052), while
-        # foobar2000 wants the opposite. Hence a toggle.
+        # Legacy Opus compatibility toggle. False selects the encoder's native
+        # chained-Ogg metadata path; true keeps the existing external ICY mode.
         send_icy_metadata=ogg_icy_metadata(),
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
@@ -1735,8 +1732,9 @@ def make_stream_outputs() =
         ),
         id="stream_flac",
         fallible=true,
-        # ICY toggle — see the /stream.opus note above (#1052 vs foobar2000).
-        send_icy_metadata=ogg_icy_metadata(),
+        # Ogg-FLAC metadata must stay in the encoder: Icecast does not apply
+        # external ICY updates to this codec, while false emits native chained tags.
+        send_icy_metadata=false,
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
