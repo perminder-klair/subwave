@@ -297,7 +297,7 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, voiceStyle, fishSettings: requestedFishSettings, signal }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
@@ -306,6 +306,12 @@ export async function synthesizeSample(
     // Same for Gemini — rides stationGeminiPick, which lets it outrank the
     // saved model so the dropdown's UNSAVED choice is what you hear.
     geminiModel?: string;
+    // The persona's delivery directive for this audition. The two engines with
+    // a free-text channel (gemini's speech_metadata.style, cloud→openai's
+    // `instructions`) compose it; the rest ignore it exactly as they ignore
+    // `soul`, so the preview route forwards it unconditionally and the gate
+    // stays in one place (deliveryHint / geminiStyle).
+    voiceStyle?: string;
     speed?: number;
     lang?: string;
     // Persona's free-text on-air language ("Turkish", "Türkçe"): picks the
@@ -382,7 +388,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', voiceStyle, lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
 // One conversational render for a whole multi-voice exchange, when every line

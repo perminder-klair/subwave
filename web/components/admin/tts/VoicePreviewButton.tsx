@@ -26,6 +26,9 @@ interface VoicePreviewButtonProps {
   // Gemini's own model id — the UNSAVED dropdown choice, so the sample
   // auditions what is on screen rather than the saved station model.
   geminiModel?: string;
+  // The persona's UNSAVED delivery directive, so the sample auditions the
+  // current textarea. Omitted by the station Voice panel, which has no persona.
+  voiceStyle?: string;
   // Final saved-control rate to audition (server bounds-clamps to 0.5–2.0×);
   // current programme pacing is deliberately excluded from stable previews.
   speed?: number;
@@ -59,7 +62,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, geminiModel, voiceStyle, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +99,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings },
+        { engine, voice, cloudProvider, cloudModel, geminiModel, voiceStyle, speed, lang, language, text, corrections, voiceSettings, fishSettings },
         ac.signal,
       );
       if (ac.signal.aborted) return;
