@@ -7,7 +7,7 @@
 
 import * as library from '../../music/library.js';
 import * as settings from '../../settings.js';
-import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
+import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
 import type { QueueItem, Track } from './types.js';
 import type { HostSpeechStamp } from '../session.js';
 
@@ -219,6 +219,31 @@ export function pickLeadSec(remainingSec: number | null, heldSec: number | null 
   if (heldSec == null) return rem;
   if (!Number.isFinite(heldSec) || heldSec <= 0) return null;
   return rem + heldSec;
+}
+
+// The seconds a HELD (not yet drained) pick anchor will actually air, for
+// pickLeadSec's `heldSec`. The drain only stamps the #447 length cap and the
+// silence-trim tail when the item goes out, which is AFTER the pick that follows
+// it is chosen — so its raw tagged duration overstates the lead by everything
+// the cap will cut. A 2h35 continuous mix held behind the on-air track under a
+// 600s cap walked `showAt` from 18:00 to 20:39, resolved the 20:00 show, and
+// aired its handoff two hours early while /now-playing still showed the
+// outgoing show. Composes the same cues the drain will: the cap (null for
+// listener requests, which are exempt), the trim tail and any cue already
+// stamped, earliest wins; then the head trim. Unknown length → null.
+export function heldAnchorPlayableSec(input: {
+  durationSec: number | null | undefined;
+  maxTrackSec: number | null | undefined;
+  cueOutSecs?: (number | null | undefined)[];
+  cueInSec?: number | null;
+}): number | null {
+  const early = [input.maxTrackSec, ...(input.cueOutSecs ?? [])]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  return playableDurationSec(
+    input.durationSec,
+    early.length ? Math.min(...early) : null,
+    input.cueInSec ?? null,
+  );
 }
 
 // Has this events-log play already been recorded by recordPlay? The old dedup
