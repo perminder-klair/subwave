@@ -30,6 +30,11 @@ export interface Persona {
   localColour: number;
   warmth: number;
   soul: string;
+  /** Free-text delivery directive — how this persona is TOLD to speak, as
+   *  opposed to `soul`, which is who they are. Read only by Gemini
+   *  (speech_metadata.style) and cloud→openai (`instructions`); empty = no
+   *  directive composed. */
+  voiceStyle: string;
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;
