@@ -144,8 +144,17 @@ export default function AdminSettings() {
             location the DJ reads from.
           </li>
           <li>
-            <strong>LLM provider</strong> — which model writes the DJ's words and picks
-            tracks, plus the toggles that tune the station to that model. See{' '}
+            <strong>Music Selection</strong> — choose how tracks are selected (Agentic
+            Tools or Track Shortlist), and independently whether listener requests use
+            direct matching or agent assistance. It sits just below Music Source.
+          </li>
+          <li>
+            <strong>DJ Behaviour</strong> — configure segments and skills, then the
+            station&rsquo;s show and talk behaviour.
+          </li>
+          <li>
+            <strong>LLM provider</strong> — where the model runs and which model writes
+            the DJ's words. See{' '}
             <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
           </li>
           <li>

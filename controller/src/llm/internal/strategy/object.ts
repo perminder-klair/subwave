@@ -60,12 +60,17 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
+  // Callers may attach controller-resolved diagnostics to the recent-call
+  // record. Objects inside this value are deliberately retained by reference:
+  // selection code learns the verified queued track only after djObject
+  // returns, before withFailover records the successful call.
+  telemetry = {},
   // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,
 }: any): Promise<any> {
   return withFailover(
     kind,
-    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    (err) => ({ user: prompt, ...failureDiagnostics(err), ...telemetry }),
     async (l) => {
       let lastErr;
       // Track the strategy actually attempted so a failure record attributes to
@@ -153,7 +158,7 @@ export async function djObject({
             // the ring buffer holds only 120 entries so size isn't a concern.
             // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
             // /admin/debug; the durable events.jsonl still caps via cap().)
-            extra: { system, user: prompt, response: JSON.stringify(object) },
+            extra: { system, user: prompt, response: JSON.stringify(object), ...telemetry },
           };
         } catch (err) {
           if (isGenerationControlError(err)) {

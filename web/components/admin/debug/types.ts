@@ -101,6 +101,48 @@ interface LlmCall {
   systemPreview?: string;
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
+  shortlistResolution?: {
+    preliminary?: { id?: string; title?: string | null; artist?: string | null };
+    leaningsReview?: {
+      outcome?: 'not-run' | 'kept' | 'replaced' | 'invalid' | 'failed';
+      replacementId?: string | null;
+      track?: { id?: string; title?: string | null; artist?: string | null } | null;
+      leaningsBasis?: string | null;
+      leaningsSource?: 'host' | 'guest' | null;
+      baselineId?: string | null;
+      reviewedSelectedId?: string | null;
+      candidateIds?: string[];
+      leaningsOptions?: string[];
+      proposedReplacementId?: string | null;
+      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'not-flow-tie' | 'weak-musical-reason' | null;
+    };
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    final?: { id?: string; title?: string | null; artist?: string | null };
+    reason?: string | null;
+    queued?: boolean;
+    usedMusicalLeanings?: boolean;
+    rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'not-flow-tie' | 'weak-musical-reason' | 'queue-collision' | 'pool-rescue' | null;
+  };
+  agentPickResolution?: {
+    preliminary?: { id?: string; title?: string | null; artist?: string | null };
+    leaningsReview?: {
+      outcome?: 'not-run' | 'kept' | 'replaced' | 'invalid' | 'failed';
+      replacementId?: string | null;
+      track?: { id?: string; title?: string | null; artist?: string | null } | null;
+      leaningsBasis?: string | null;
+      baselineId?: string | null;
+      reviewedSelectedId?: string | null;
+      candidateIds?: string[];
+      leaningsOptions?: string[];
+      proposedReplacementId?: string | null;
+      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'not-flow-tie' | 'weak-musical-reason' | null;
+    };
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    final?: { id?: string; title?: string | null; artist?: string | null };
+    reason?: string | null;
+    queued?: boolean;
+    usedMusicalLeanings?: boolean;
+  };
   response?: string;
   /** What the model said INSTEAD of the expected structured output on a failed call.
    * From the controller's failureDiagnostics(); absent on success (see `response`). */
@@ -219,5 +261,3 @@ export interface DebugData {
   mounts?: DebugMounts;
   error?: string;
 }
-
-

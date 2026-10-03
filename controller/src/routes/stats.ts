@@ -6,10 +6,11 @@ import { requireAdmin } from '../middleware/auth.js';
 import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
 import * as llmProvider from '../llm/provider.js';
 import * as settings from '../settings.js';
-import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests } from '../stats.js';
+import { ttsCalls, shortlistPicks, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests, summarizeShortlistPicks } from '../stats.js';
 import { queue } from '../broadcast/queue.js';
 import { recentRequests } from '../broadcast/request-log.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
+import { agenticPickerContextWindow, contextWindowByKind, shortlistContextWindow } from '../llm/context-window.js';
 
 export const router = express.Router();
 
@@ -23,11 +24,18 @@ router.get('/stats', requireAdmin, (req, res) => {
     llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
     // Durable per-UTC-day tally, unlike the rings above. enabled:false with no cap.
     llm.budget = budgetStatus();
+    llm.contextWindows = {
+      shortlist: shortlistContextWindow(recentCalls),
+      agenticPicker: agenticPickerContextWindow(recentCalls),
+      byKind: contextWindowByKind(recentCalls),
+    };
     llm.generation = generationHealthSnapshot();
 
     res.json({
       t: new Date().toISOString(),
       llm,
+      trackSelection: settings.get().llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlist: summarizeShortlistPicks(shortlistPicks),
       tts: summarizeTts(ttsCalls),
       djLog: summarizeDjLog(queue.djLog),
       requests: summarizeRequests(recentRequests),

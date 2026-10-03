@@ -357,6 +357,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
+        trackSelection: form.llm.trackSelection,
+        shortlistPasses: form.llm.shortlistPasses,
+        requestMatching: form.llm.requestMatching,
+        segmentRuntime: form.llm.segmentRuntime,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
         artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
         requestWebResolve: form.llm.requestWebResolve,
@@ -975,7 +979,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.pickerAgent && (
+              {form.llm.trackSelection === 'agentic' && (
                 <div className="field">
                   <Label>Discovery rounds per pick</Label>
                   <Input

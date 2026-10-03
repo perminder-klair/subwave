@@ -355,13 +355,17 @@ export default function DashPanel() {
   const lCurrent =
     listenersObj?.current ?? (typeof listenersValue === 'number' ? listenersValue : 0);
   const lPeak = listenersObj?.peak ?? lCurrent;
+  const shortlistSelected = stats?.trackSelection === 'shortlist';
   const healthMetrics: HealthMetrics = {
     listeners: lCurrent,
     listenersPeak: lPeak,
-    latencyMs: stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null,
+    latencyMs: shortlistSelected
+      ? (stats?.shortlist?.count ? (stats.shortlist.latency?.p95 ?? null) : null)
+      : (stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null),
     // Redline at the DJ-agent deadline so the gauge tracks the model in use.
     // Null until /stats loads.
-    latencyDeadlineMs: stats?.llm?.agentTimeoutMs ?? null,
+    latencyDeadlineMs: shortlistSelected ? (stats?.shortlist?.warningMs ?? 30_000) : (stats?.llm?.agentTimeoutMs ?? null),
+    latencyAdaptive: shortlistSelected,
     ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
     online: status?.streamOnline ?? null,
     bitrateKbps: status?.streamBitrate ?? null,

@@ -120,7 +120,7 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
   // call), so it stood down every tick after a full wasted agent run.
   const settings = await import('../src/settings.js');
   await settings.load();
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: false, segmentRuntime: 'direct' } });
   try {
     let toolCalls = 0;
     const capability = {
@@ -140,13 +140,13 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
     assert.match(String(objectArgs.prompt), /Bakersfield/, 'the fetched source data is inlined into the prompt');
     assert.ok(objectArgs.signal, 'the unbounded djObject call carries a deadline signal');
   } finally {
-    await settings.update({ llm: { pickerAgent: true } });
+    await settings.update({ llm: { pickerAgent: true, segmentRuntime: 'agentic' } });
   }
 });
 
 test('pool mode stands a grounded discussion down BEFORE any model call', async () => {
   const settings = await import('../src/settings.js');
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: false, segmentRuntime: 'direct' } });
   try {
     for (const returned of [{ available: false }, { error: 'search offline' }]) {
       const capability = {
@@ -164,7 +164,7 @@ test('pool mode stands a grounded discussion down BEFORE any model call', async 
       assert.ok(result.reason);
     }
   } finally {
-    await settings.update({ llm: { pickerAgent: true } });
+    await settings.update({ llm: { pickerAgent: true, segmentRuntime: 'agentic' } });
   }
 });
 

@@ -4,7 +4,7 @@
 // boundary.
 //
 // TWO RUN SHAPES, chosen exactly the way every other segment path chooses one
-// (`settings.llm.pickerAgent`, the same branch as runSimpleDirector and
+// (`settings.llm.segmentRuntime`, the same branch as runSimpleDirector and
 // runCapability in _agent.ts):
 //
 //   agent mode — the skill's own tool loop, the model calls the tool itself and
@@ -88,7 +88,7 @@ export async function runCohostedCapability({
 
   let out: CohostedObject;
 
-  if (!settings.get().llm?.pickerAgent) {
+  if (settings.get().llm?.segmentRuntime === 'direct') {
     // Pool mode: fetch in code, decide in code, one structured call. A skill
     // that writes from the moment survives a failed fetch (it writes from its
     // brief, as it always could); a GROUNDED one doesn't get that degradation
