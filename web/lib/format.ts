@@ -58,8 +58,10 @@ export function fmtClockMinute(
   }
 }
 
-// Compact station date + time for the admin header, e.g. "2 Oct · 14:37:45".
-// The clock follows the station's timezone and 12h/24h convention.
+// Compact station date + time for the admin header, e.g. "Fri 2 Oct · 14:37:45".
+// The weekday stays even in this compact form: the show schedule is weekly, so
+// the day is what tells an operator which programming is due. The clock follows
+// the station's timezone and 12h/24h convention.
 export function fmtStationDateTime(
   t: string | number | Date,
   tz?: string | null,
@@ -68,6 +70,7 @@ export function fmtStationDateTime(
   try {
     const date = new Date(t);
     const datePart = new Intl.DateTimeFormat('en-GB', {
+      weekday: 'short',
       day: 'numeric',
       month: 'short',
       ...(tz ? { timeZone: tz } : {}),
