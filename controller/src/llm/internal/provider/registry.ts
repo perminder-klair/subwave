@@ -11,6 +11,16 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import {
+  currentKey,
+  fingerprint,
+  getLastFailure,
+  GOOGLE_KEY_ENV,
+  poolConfigured,
+  recordLastFailure,
+  reportKeyFailure,
+  reportKeySuccess,
+} from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
 
@@ -42,6 +52,128 @@ export function debugFetch(url: any, init: any) {
     } catch { /* capture must never break a model call */ }
   }
   return fetch(url, init);
+}
+
+/**
+ * The Google transport, and where key rotation happens.
+ *
+ * Two jobs, in this order:
+ *
+ *  1. Stamp `x-goog-api-key` with whichever pooled key is currently live, so
+ *     ONE cached client serves the whole pool. The alternative — rebuilding the
+ *     provider per key — invalidates the client cache on every rotation and
+ *     drops the per-provider headers captured at construction.
+ *
+ *  2. Rotate ON a quota 429: park the exhausted key for as long as Google
+ *     asked, then re-issue the same request with the next key.
+ *
+ * Rotating here rather than in withTransientRetry is deliberate. In the retry
+ * layer a 429 would either sleep on the key that just refused (burning the
+ * agent deadline on a key whose quota is gone until tomorrow) or escalate
+ * straight to the backup leg, skipping the nine other keys entirely. Doing it
+ * at the transport means the SDK's own retry budget never observes the 429,
+ * `withTransientRetry` and `withFailover` are untouched, and rotation composes
+ * with the existing dead-air fallbacks for free.
+ *
+ * Safe to re-send: every request through here is a model generation (LLM
+ * prompt or TTS render), both idempotent, so a repeat costs tokens and nothing
+ * else. Bounded by the pool — each recursion parks a key, so the depth is the
+ * pool size and `currentKey()` returning the same key ends it.
+ *
+ * With no pool configured this is exactly the SDK's own transport, so an
+ * unconfigured station is byte-identical to before.
+ */
+/**
+ * The `apiKey` to hand `createGoogleGenerativeAI` at CONSTRUCTION time.
+ *
+ * This exists because the SDK resolves a missing `apiKey` from the environment
+ * variable `GOOGLE_GENERATIVE_AI_API_KEY` and throws `LoadAPIKeyError` if that
+ * is also unset — it never looks at the pool. Passing `apiKey` only when
+ * `cfg.apiKey` was set therefore broke the exact configuration the feature is
+ * for: a pool-only station (no singular variable at all) failed every chat
+ * generation and every embedding with ZERO fetch calls, so the pooled
+ * transport never ran. googleKeyFetch re-stamps the real per-request key on
+ * every call, so the value given here is only what the constructor requires —
+ * but it must be a real configured credential, not a placeholder, because a
+ * placeholder would be sent as the key whenever the pool has nothing live.
+ */
+export function googleApiKeyForSdk(cfg: any): string | undefined {
+  // Order matters, and the last element is deliberately the LEGACY variable:
+  // a station that has never configured a pool still needs a construction key,
+  // and `undefined` here lets the SDK read that variable itself exactly as it
+  // always did. A pool-only station has the plural set and the singular unset,
+  // which is the case the SDK cannot help with — hence the pool lookup first.
+  return cfg.apiKey || currentKey() || process.env[GOOGLE_KEY_ENV] || undefined;
+}
+
+export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
+  // Explicit pool configuration is what arms rotation. A legacy single-key
+  // station is NOT a one-key pool: it keeps the plain transport, so an
+  // unhinted 429 parks nothing and every call retries as it always did.
+  if (!poolConfigured()) return debugFetch(url, init);
+  return rotateGoogle(url, init, new Set());
+}
+
+/**
+ * One call's rotation, bounded by the POOL SIZE and by nothing else.
+ *
+ * `attempted` is request-local and is what actually terminates this. The
+ * previous version re-derived eligibility from shared holds on every recursion,
+ * and a hold shorter than the request that follows it expired mid-call, so the
+ * key that had just failed came back as eligible and was retried — two keys and
+ * a 10ms hint gave A,B,A,B,A,B… with no stop. Holds are shared state whose
+ * lifetime has nothing to do with this call, so they cannot bound this call.
+ * The bound is also capped at the pool size, so a pool mutated mid-call (an
+ * operator adding a key) cannot extend the recursion past a sane depth either.
+ */
+async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promise<Response> {
+  const key = currentKey(attempted);
+  if (!key) {
+    // Every key has been tried on THIS call. Answer from the last real failure
+    // instead of spending another request on a credential we have just been
+    // told is dead — while carrying enough of that failure for
+    // withTransientRetry / withFailover to classify it and escalate to the
+    // backup leg.
+    const prior = getLastFailure();
+    console.log('[google] every pooled key is exhausted for this call — replaying the last quota failure without a request');
+    const headers = new Headers(prior?.headers || {});
+    if (!headers.has('retry-after')) headers.set('retry-after', '60');
+    return new Response(
+      prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key is exhausted"}}',
+      { status: prior?.status ?? 429, statusText: prior?.statusText ?? 'Too Many Requests', headers },
+    );
+  }
+  attempted.add(key);
+
+  const headers = new Headers(init?.headers || {});
+  headers.set('x-goog-api-key', key);
+  const res = await debugFetch(url, { ...init, headers });
+
+  // A SUCCESS ends this call. It also clears the key's hold and strike count:
+  // a key that just answered is demonstrably not exhausted, so the next
+  // failure has to start from the short interval again. Without this the
+  // escalation ladder ratchets on failures separated by any number of
+  // successes, and a key that recovered stayed pinned at the ceiling.
+  if (res.status !== 429 && res.status !== 401) {
+    reportKeySuccess(key);
+    return res;
+  }
+
+  const body = await res.text().catch(() => '');
+  // Record the HEADERS too, not just the body. The replayed response is what
+  // the retry/failover layers classify, and `Retry-After` is one of the things
+  // they read: dropping it changed a 429's timing classification between the
+  // first attempt and the replay, which could prevent the backup leg from ever
+  // being selected.
+  recordLastFailure(res.status, res.statusText, body, res.headers);
+  const heldMs = reportKeyFailure(key, body);
+  const next = currentKey(attempted);
+  if (!next) {
+    console.log(`[google] every pooled key failed on this call — returning the ${res.status} upstream`);
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  console.log(`[google] key ${fingerprint(key)} held for ${Math.round(heldMs / 1000)}s — retrying with ${fingerprint(next)}`);
+  return rotateGoogle(url, init, attempted);
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
@@ -258,7 +390,12 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'google': {
-      const provider = createGoogleGenerativeAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      // googleKeyFetch, not debugFetch: the key is re-stamped per request from
+      // the pool, which is what lets a 429 rotate credentials without
+      // rebuilding this cached client. The construction apiKey is only what the
+      // SDK demands before it will build a client at all — see googleApiKeyForSdk
+      // for why omitting it broke pool-only stations entirely.
+      const provider = createGoogleGenerativeAI({ fetch: googleKeyFetch, apiKey: googleApiKeyForSdk(cfg) });
       model = provider(id);
       break;
     }

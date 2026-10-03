@@ -30,6 +30,56 @@ function writeRosterView(surface: RosterSurface, view: RosterView): void {
   } catch { /* private-mode browsers throw on setItem */ }
 }
 
+/* ── Google key field depth ────────────────────────────────────────────────
+   One credential, two depths of editing. The single password field is that
+   credential viewed shallowly; the pool editor is the same credential viewed
+   fully. This preference chooses only WHICH VIEW is offered — never what is
+   stored — so it is a browser-local view preference like the roster ones above,
+   not station state.
+
+   It is not authoritative either: the pool view is forced on whenever more than
+   one key actually exists (see useGoogleKeyField), so a stale preference can
+   never hide credentials from an operator who believes they are all set. */
+const GOOGLE_KEY_DEPTH_KEY = `${KEY_PREFIX}google-key-depth`;
+
+export function readGoogleKeyDepth(): 'single' | 'pool' {
+  if (typeof window === 'undefined') return 'single';
+  try {
+    return window.localStorage.getItem(GOOGLE_KEY_DEPTH_KEY) === 'pool' ? 'pool' : 'single';
+  } catch {
+    return 'single';
+  }
+}
+
+export function writeGoogleKeyDepth(depth: 'single' | 'pool'): void {
+  try {
+    window.localStorage.setItem(GOOGLE_KEY_DEPTH_KEY, depth);
+  } catch { /* private-mode browsers throw on setItem */ }
+}
+
+/**
+ * Which depth to actually show. The preference picks the DEFAULT; a pool
+ * holding more than one key always wins, because a single field at that point
+ * would hide the other credentials — the exact confusion this split removes.
+ */
+export function useGoogleKeyField(poolCount: number): ['single' | 'pool', (v: 'single' | 'pool') => void] {
+  const [depth, setDepthState] = useState<'single' | 'pool'>('single');
+
+  useEffect(() => {
+    setDepthState(readGoogleKeyDepth());
+  }, []);
+
+  // Applied during render as well as on mount, so the pool view never flashes
+  // the single field on the first paint when several keys are configured.
+  const effective: 'single' | 'pool' = poolCount > 1 ? 'pool' : depth;
+  const setDepth = useCallback((v: 'single' | 'pool') => {
+    setDepthState(v);
+    writeGoogleKeyDepth(v);
+  }, []);
+
+  return [effective, setDepth];
+}
+
 /* `[view, setView]` for one roster surface. The stored preference is read in a
    mount effect, not in the initial state, so server and first client render
    agree. */

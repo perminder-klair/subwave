@@ -16,6 +16,7 @@ import { Card, Btn, Pill, Seg } from '../ui';
 import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -253,8 +254,21 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     adminFetch,
   });
 
+  // A configured pool is the ONLY source of Google credentials — the controller
+  // reads the singular variable solely as a one-key fallback. Leaving that field
+  // editable would let an operator save a replacement key that is accepted,
+  // reported as saved, and then never read by anything.
+  const googlePoolCount =
+    (data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined)?.count ?? 0;
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
+    // Google saves to the LEGACY singular variable, and the pool is a separate
+    // thing that takes precedence while it exists. That is what makes "one key"
+    // and "a pool" two states rather than one: if this field wrote the pool,
+    // removing every key and then typing one here would re-activate the pool and
+    // disable the very field being typed into, so a single key could never be
+    // configured at all.
     try {
       const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
@@ -650,35 +664,63 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
+            const isGoogle = keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY';
+            // A configured pool IS the Google credential, so the single-key
+            // field is shown but inert while one exists. Visible-and-disabled
+            // rather than hidden: an operator who cannot see the field cannot
+            // tell whether their key was replaced or is merely parked, and the
+            // obvious question ("where did my single key go?") deserves an
+            // answer on screen instead of in a doc.
+            const poolActive = isGoogle && googlePoolCount > 0;
             return (
               <>
                 <div className="field">
-                  <Label>{llmProviderLabel(form.llm.provider)} API key</Label>
+                  <Label>{`${llmProviderLabel(form.llm.provider)} API key`}</Label>
+
                   <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                     <Input
                       type="password"
                       autoComplete="off"
                       value={primaryKeyInput}
-                      placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                      disabled={poolActive}
+                      placeholder={poolActive || data.env?.[keyVar] ? '……… (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
-                      className="max-w-[360px]"
+                      className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
                     />
                     <Btn
                       onClick={() => testKey(keyVar, primaryKeyInput, setPrimaryKeyTesting, setPrimaryKeyTest, () => setPrimaryKeyInput(''))}
-                      disabled={primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
+                      disabled={poolActive || primaryKeyTesting || (!primaryKeyInput.trim() && !data.env?.[keyVar])}
                     >
                       {primaryKeyTesting ? 'Testing…' : 'Test key'}
                     </Btn>
                   </div>
                   <div className="field-hint">
                     Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                    {poolActive && (
+                      <>
+                        {' '}
+                        <strong className="text-ink">Not used while a key pool is set up below</strong> — the pool is what the
+                        station calls Google with, and this key is ignored. Remove the pool to go back to a single key.
+                      </>
+                    )}
                   </div>
-                  {keyVar === 'OPENAI_API_KEY' && (
-                    <div className="field-hint">
-                      This key is shared across LLM and Cloud TTS.
-                    </div>
-                  )}
                 </div>
+
+                {keyVar === 'OPENAI_API_KEY' && (
+                  <div className="field-hint">
+                    This key is shared across LLM and Cloud TTS.
+                  </div>
+                )}
+                {/* The pool editor sits BELOW the single-key field rather than
+                    replacing it, so the operator can see both and is told
+                    plainly which one is live. */}
+                {isGoogle && (
+                  <GoogleKeyPoolEditor
+                    pool={data.env?.GOOGLE_KEY_POOL as GooglePoolState | undefined}
+                    adminFetch={adminFetch}
+                    onChanged={refresh}
+                  />
+                )}
                 {primaryKeyTest && <KeyTestResult result={primaryKeyTest} />}
               </>
             );
