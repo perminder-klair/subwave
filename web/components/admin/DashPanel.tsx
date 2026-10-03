@@ -720,13 +720,9 @@ export default function DashPanel() {
           connErr ? (
             <Pill>unavailable</Pill>
           ) : conns && conns.connections.length > 0 ? (
-            <button
-              type="button"
-              className="inline-flex min-h-9 items-center text-[9px] font-bold tracking-[0.2em] text-muted uppercase hover:text-ink sm:min-h-0"
-              onClick={() => setRevealIps(v => !v)}
-            >
-              {revealIps ? 'hide IPs' : 'show IPs'}
-            </button>
+            <Btn sm onClick={() => setRevealIps(v => !v)}>
+              {revealIps ? 'Hide IPs' : 'Show IPs'}
+            </Btn>
           ) : null
         }
       >
