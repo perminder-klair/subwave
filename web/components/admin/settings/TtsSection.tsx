@@ -27,7 +27,7 @@ import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields'
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
 import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
-import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
+import { GEMINI_TTS_MODELS, TTS_CLOUD_PROVIDERS as CLOUD_PROVIDER_IDS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
 import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
@@ -640,7 +640,14 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         },
         cloud: {
           enabled: true,
-          provider: form.tts.cloud.provider,
+          // Never send `gemini` here. selectCloudProvider routes it to
+          // defaultEngine instead, but a form hydrated from an older build could
+          // still carry it, and one stray value 400s the whole save — including
+          // the unrelated LLM and pool settings the operator was there to change.
+          // openai is the enum's first member, so the fallback is always valid.
+          provider: (CLOUD_PROVIDER_IDS as readonly string[]).includes(form.tts.cloud.provider)
+            ? form.tts.cloud.provider
+            : 'openai',
           model: form.tts.cloud.model,
           voice: form.tts.cloud.voice,
           baseUrl: form.tts.cloud.baseUrl,
@@ -681,6 +688,15 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
+    // Gemini is SELECTED as a provider card but is an ENGINE, not a
+    // `tts.cloud.provider` value: the controller's TTS_CLOUD_PROVIDERS enum is
+    // the four real cloud providers and refuses `gemini`, so persisting it here
+    // made every save 400 with "tts.cloud.provider must be one of: …". Its
+    // identity is carried by `tts.defaultEngine` (GEMINI_CLOUD_PROVIDER is the
+    // engine id too), and its settings live under `tts.gemini`.
+    if (provider === GEMINI_CLOUD_PROVIDER) {
+      return { ...f, tts: { ...f.tts, defaultEngine: GEMINI_CLOUD_PROVIDER } };
+    }
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
     // Switching provider invalidates the old provider-specific ids; re-entering
     // the already-selected engine preserves manual/custom values.
