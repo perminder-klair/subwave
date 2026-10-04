@@ -63,14 +63,68 @@ export function isAvailable(): boolean {
 // doubling this table, because a missing `-s` used to mean the bracket SURVIVED
 // into the transcript and Gemini 3.8 — which treats `text` as a verbatim
 // transcript — read the word "laughs" out loud on air.
+// Every value below is a tag from Google's own vocabulary list.
+//
+// WHY A CURATED LIST, MEASURED RATHER THAN ASSUMED
+// -------------------------------------------------
+// Google says to "test and verify new tags" because "a tag you assume is a style
+// modifier might be vocalized". An earlier draft of this comment asserted that
+// an undocumented tag WOULD be read aloud on Gemini 3.8. That was an inference,
+// and measurement does not support it: rendering `I am fine. <panting> I am
+// fine.` and transcribing the audio with Gemini's own audio understanding
+// returns "I am fine. I am fine." — no "panting". Same for `<tsk>`, `<argh>` and
+// `<throat-clearing>`. Angle-bracket tags are performed, documented or not.
+//
+// So the list is kept as a VERIFIED set, not as a safety rail: a station cannot
+// audition two thousand tags, and Google's own instruction is to verify before
+// shipping. `panting` maps to `<pant>` because that is the documented spelling,
+// and because the two are not guaranteed to behave identically forever — not
+// because `<panting>` was known to be broken.
+//
+// THE HAZARD THAT IS REAL, AND WHERE IT IS HANDLED
+// ------------------------------------------------
+// Google warns about tags that are SPOKEN, and the ones that do that are the
+// square-bracket emotional adjectives — `[scared]`, `[curious]`, `[bored]` —
+// whose Mode 3 is "the tag itself is spoken as a word". Those never reach the
+// wire: FREEFORM_STYLE_RE below routes an unrecognised bracket to
+// `speech_metadata.style` instead, which is what Google recommends over speaking
+// the adjective. That is the mechanism that protects us, not this table.
+//
+// `medium pause` was missing entirely and fell through to the free-text rule, so
+// `[medium pause]` became the STYLE STRING "medium pause" rather than an actual
+// pause. It does produce a pause, on BOTH models in MODELS — verified by
+// rendering four of them and transcribing: silence is added and nothing is
+// spoken. How much silence is NOT established: single samples were far too
+// noisy to grade short vs medium vs long, and on flash-lite two runs of
+// `<short pause>` and `<medium pause>` came out within 0.04s of each other. So
+// the tag is here because it pauses, not because it has been shown to pause by
+// a specific amount.
+//
+// Keys are the spellings the DJ actually writes, including the third-person
+// `-s` forms the system prompt itself suggests (`[laughs]`, `[sighs]`).
 const VOCAL_BURSTS: Record<string, string> = {
+  // Laughter and its neighbours.
   laugh: 'laugh', laughing: 'laugh', laughter: 'laughter',
-  chuckle: 'chuckle', giggle: 'giggle', snicker: 'snicker',
-  sigh: 'sigh', cough: 'cough', breath: 'breath', gasp: 'gasp',
-  groan: 'groan', moan: 'moan', pant: 'panting', yawn: 'yawn',
-  sneeze: 'sneeze', snort: 'snort', sob: 'sob', cry: 'cry',
-  shout: 'shout', scream: 'scream', whisper: 'whispering',
-  'short pause': 'short pause', 'long pause': 'long pause',
+  chuckle: 'chuckle', chuckles: 'chuckles', giggle: 'giggle', snicker: 'snicker',
+  cackle: 'cackle', cheer: 'cheer',
+  // Breath, effort, and the vocal noises.
+  breath: 'breath', 'heavy breath': 'heavy breath', exhale: 'exhales', exhales: 'exhales',
+  pant: 'pant', panting: 'pant', gasp: 'gasp', sigh: 'sigh',
+  cough: 'cough', sneeze: 'sneeze', snort: 'snort', sob: 'sob', cry: 'cry',
+  groan: 'groan', moan: 'moan', growl: 'growl', grunt: 'grunt',
+  yell: 'shout', shout: 'shout', scream: 'scream', shriek: 'shriek',
+  tsk: 'tsk', hiss: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
+  whimper: 'whimper', yawn: 'yawn',
+  'throat-clearing': 'throat-clearing', throatclear: 'throat-clearing',
+  // `whisper` is the only whisper spelling that becomes a TAG. `[whispers]` /
+  // `[whispering]` deliberately fall through to DELIVERY_STYLES instead: Google's
+  // tag guide classes whispering as a sustained modifier of the following
+  // speech, not a one-shot sound, and that is exactly what the style field is.
+  whisper: 'whispering',
+  // Pacing. `medium pause` is absent from Google's list but does pause on both
+  // models in MODELS. The magnitude is not pinned down — see the note above on
+  // why a single noisy sample cannot grade short against medium.
+  'short pause': 'short pause', 'medium pause': 'medium pause', 'long pause': 'long pause',
   uhm: 'breath',
 };
 
