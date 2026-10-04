@@ -67,14 +67,30 @@ if (!files.length) {
 
 console.log(`web: ${files.length} test file(s)${filter ? ` matching ${JSON.stringify(filter)}` : ''}`);
 const tsx = join(webRoot, 'node_modules', '.bin', 'tsx');
-const res = spawnSync(tsx, ['--test', ...files], {
-  cwd: webRoot,
-  stdio: 'inherit',
-  // --test-concurrency=1, matching the controller: these files share ground
-  // (process.env, module-level caches), so parallel files interleave state.
-  env: { ...process.env, TSX_TSCONFIG_PATH: join(webRoot, 'tsconfig.json') },
-});
+const res = spawnSync(
+  tsx,
+  // `--test-concurrency=1` is PASSED, not merely described. It was previously a
+  // COMMENT above a call that never passed it, and a comment asserting a
+  // guarantee the code does not make is worse than no comment.
+  //
+  // The original comment justified it with `process.env` and module-level
+  // caches. That justification is WRONG for this package and was checked rather
+  // than assumed: node's runner gives each test FILE its own process (verified —
+  // two files, two PIDs), so neither `process.env` nor module state is shared
+  // between them. No current web test needs this flag; the controller's do,
+  // because those share a temp state dir and a library DB on disk.
+  //
+  // It is passed anyway, for two honest reasons: the filesystem is still shared
+  // (every file runs with cwd at the web root, so a future test writing a fixture
+  // or temp path can collide), and serial execution keeps output deterministic
+  // and matches the posture `CLAUDE.md` documents for both packages. If a web
+  // test ever needs real parallelism, this is the line to revisit — with the
+  // measurement above in hand rather than a guess.
+  ['--test', '--test-concurrency=1', ...files],
+  {
+    cwd: webRoot,
+    stdio: 'inherit',
+    env: { ...process.env, TSX_TSCONFIG_PATH: join(webRoot, 'tsconfig.json') },
+  },
+);
 process.exit(res.status ?? 1);
-
-// Keep `sep` referenced so a future edit does not silently drop the import.
-void sep;

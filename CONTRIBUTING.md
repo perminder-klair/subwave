@@ -27,8 +27,13 @@ cd controller && npm install && npm run dev
 cd web && npm install && npm run dev     # web UI on :7700
 ```
 
-There is no test runner, linter, or formatter configured. Match the style of
-the surrounding code.
+`controller/`, `web/` and `mcp-subwave/` each expose `npm run lint` (`eslint . &&
+`tsc --noEmit`; `mcp-subwave` is `tsc` only), and CI runs all three on every PR.
+`controller/` and `web/` also have `npm test`, which auto-discovers the `*.test.ts`
+and `*.test.tsx` files already in the tree — `npm test -- <substring>` filters.
+**Neither test suite runs in CI**, so run it yourself before pushing: a green
+lint says nothing about it. There is no formatter; match the style of the
+surrounding code.
 
 ## Reporting bugs
 
