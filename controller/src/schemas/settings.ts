@@ -1565,7 +1565,11 @@ export function normalizeGeminiLibraryLanguage(raw: unknown): string {
   const parts = v.split('-');
   for (let i = 0; i < parts.length; i += 1) {
     const p = parts[i] ?? '';
-    if (!p) continue;
+    // Empty segments are KEPT, not skipped. Skipping them turned the malformed
+    // `en-AU-` into the valid `en-AU`, so a typo was silently repaired into a
+    // setting the operator never typed — the exact silent-repair behaviour the
+    // patch-path rules forbid. Preserved, the trailing hyphen fails BCP47 below
+    // and the save is refused, which is the answer the operator needs.
     if (i > 0 && /^[a-z]{4}$/i.test(p)) {
       out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
     } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {

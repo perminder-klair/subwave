@@ -43,11 +43,40 @@ export interface LibraryVoice {
   description?: string;
 }
 
+export interface LibraryFacets {
+  languages: string[];
+  accents: string[];
+  genders: string[];
+  pitches: string[];
+  contexts: string[];
+  /** False when the controller has not walked the catalogue yet, so the UI can
+   *  fall back to whatever the current page offers rather than empty menus. */
+  ready: boolean;
+}
+
+const EMPTY_FACETS: LibraryFacets = {
+  languages: [], accents: [], genders: [], pitches: [], contexts: [], ready: false,
+};
+
+/** Union the catalogue vocabulary with any value the operator has already
+ *  chosen. A selection must never disappear from the menu that holds it —
+ *  otherwise picking a value the catalogue has not confirmed yet silently
+ *  resets the control. */
+function withSelection(options: string[], selected: string): string[] {
+  if (selected === ANY || options.includes(selected)) return options;
+  return [...options, selected].sort();
+}
+
 const ANY = '__any__';
 // Google's own page_size ceiling is 1000; 200 keeps a browse responsive while
 // still covering one language in a single request (en-AU is 44).
 const PAGE_SIZE = 200;
 
+/** Fallback ONLY — see `catalogue` below. Deriving the menus from the visible
+ *  page was the bug: the unfiltered first page offered three accents and
+ *  "Sydney English" was not selectable at all, and the menus repopulated once
+ *  an unrelated filter changed the page. Retained solely for the degraded case
+ *  where the controller reports `ready: false`. */
 function facetsOf(voices: LibraryVoice[]) {
   const uniq = (pick: (v: LibraryVoice) => string | undefined) =>
     [...new Set(voices.map(pick).filter((s): s is string => !!s))].sort();
@@ -103,6 +132,7 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
   }, [adminFetch, speed, sampleLanguage]);
   const [open, setOpen] = useState(false);
   const [voices, setVoices] = useState<LibraryVoice[]>([]);
+  const [serverFacets, setServerFacets] = useState<LibraryFacets>(EMPTY_FACETS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -135,11 +165,25 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       const res = await adminResponse(adminFetch, `/settings/tts/voices?${q}`);
       const body = await res.json() as {
         ok: boolean; voices?: LibraryVoice[]; nextPageToken?: string; error?: string;
+        facets?: LibraryFacets;
       };
       if (mine !== seq.current) return; // a newer filter set won
       if (!body.ok) { setError(body.error || 'Voice library unavailable'); return; }
       const rows = Array.isArray(body.voices) ? body.voices : [];
       setVoices(prev => (opts.append ? [...prev, ...rows] : rows));
+      // Accumulate, never replace: a facet vocabulary that shrank when a filter
+      // changed would reintroduce the original bug through the back door.
+      if (body.facets?.ready) {
+        setServerFacets(prev => (prev.ready ? {
+          ...prev,
+          languages: [...new Set([...prev.languages, ...body.facets!.languages])].sort(),
+          accents: [...new Set([...prev.accents, ...body.facets!.accents])].sort(),
+          genders: [...new Set([...prev.genders, ...body.facets!.genders])].sort(),
+          pitches: [...new Set([...prev.pitches, ...body.facets!.pitches])].sort(),
+          contexts: [...new Set([...prev.contexts, ...body.facets!.contexts])].sort(),
+          ready: true,
+        } : body.facets!));
+      }
       setPageToken(body.nextPageToken);
     } catch (e: unknown) {
       if (mine !== seq.current) return;
@@ -156,7 +200,15 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
     if (open && !started.current) { started.current = true; void load(); }
   }, [open, load]);
 
-  const facets = useMemo(() => facetsOf(voices), [voices]);
+  // The catalogue is authoritative; the visible page is only a fallback for a
+  // controller that has not walked it yet.
+  const pageFacets = useMemo(() => (serverFacets.ready ? null : facetsOf(voices)), [voices, serverFacets.ready]);
+  const catalogue = useMemo(() => ({
+    languages: withSelection(serverFacets.ready ? serverFacets.languages : (pageFacets?.languages ?? []), language),
+    accents: withSelection(serverFacets.ready ? serverFacets.accents : (pageFacets?.accents ?? []), accent),
+    genders: serverFacets.ready ? serverFacets.genders : (pageFacets?.genders ?? []),
+    pitches: serverFacets.ready ? serverFacets.pitches : (pageFacets?.pitches ?? []),
+  }), [serverFacets, pageFacets, language, accent]);
 
   // A saved library voice must stay visible even when a filter set excludes it,
   // or the operator cannot tell what the persona is actually using.
@@ -219,10 +271,10 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        {filter('Language', language, setLanguage, facets.languages, 'Every language')}
-        {filter('Gender', gender, setGender, facets.genders, 'Any')}
-        {filter('Pitch', pitch, setPitch, facets.pitches, 'Any')}
-        {filter('Accent', accent, setAccent, facets.accents, 'Any')}
+        {filter('Language', language, setLanguage, catalogue.languages, 'Every language')}
+        {filter('Gender', gender, setGender, catalogue.genders, 'Any')}
+        {filter('Pitch', pitch, setPitch, catalogue.pitches, 'Any')}
+        {filter('Accent', accent, setAccent, catalogue.accents, 'Any')}
       </div>
 
       <button

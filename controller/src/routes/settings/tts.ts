@@ -8,7 +8,7 @@ import * as settings from '../../settings.js';
 import * as tts from '../../audio/tts.js';
 import * as speech from '../../llm/speech.js';
 import { requireAdmin } from '../../middleware/auth.js';
-import { listLibraryVoices } from '../../audio/gemini-library.js';
+import { ensureFacets, listLibraryVoices } from '../../audio/gemini-library.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -111,6 +111,12 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
       pageSize: Number(req.query.pageSize) || undefined,
       pageToken: q('pageToken') || undefined,
     });
+    // The filter MENU is a vocabulary, so it comes from the whole catalogue and
+    // not from the page being paged through. Served from the boot prewarm's
+    // walk; `ensureFacets` fills it if boot ran without a key or before this
+    // feature existed. `ready: false` tells the UI to fall back to deriving
+    // options from the rows it does have rather than showing empty menus.
+    const facets = await ensureFacets();
     return res.json({
       ok: page.ok,
       // The library's richer rows, so the picker can show accent/gender/pitch
@@ -125,6 +131,14 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
         persona: v.persona,
         description: v.description,
       })),
+      facets: {
+        languages: facets.languages,
+        accents: facets.accents,
+        genders: facets.genders,
+        pitches: facets.pitches,
+        contexts: facets.contexts,
+        ready: facets.ready,
+      },
       nextPageToken: page.nextPageToken,
       applied: page.applied,
       error: page.ok ? undefined : page.message,

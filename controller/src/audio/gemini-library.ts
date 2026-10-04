@@ -196,6 +196,78 @@ function note(voices: LibraryVoice[]): void {
   }
 }
 
+// ── Facet vocabulary ─────────────────────────────────────────────────────────
+// WHY NOT derived from the page the operator is looking at
+// ---------------------------------------------------------
+// A filter menu is a vocabulary, not a summary of the current results. Deriving
+// it from the returned page made the menu depend on the filter: on first open
+// the unfiltered page yielded THREE accents, and "Sydney English" was simply not
+// an option — so an Australian station could not select it. Narrowing by gender
+// first changed the page, the menu repopulated, and 10 more accents appeared
+// including the one being looked for. Measured, not hypothesised: 3 accents
+// unfiltered vs 13 after gender=male.
+//
+// The whole-catalogue walk that fills the membership index above already sees
+// every row, so the vocabulary is collected there at no extra cost. This is the
+// same reasoning as GEMINI_TTS_VOICES: derived from what Google serves, never
+// restated, because the vocabulary moves.
+
+export interface CatalogueFacets {
+  languages: string[];
+  accents: string[];
+  genders: string[];
+  pitches: string[];
+  contexts: string[];
+}
+
+const EMPTY_FACETS: CatalogueFacets = {
+  languages: [], accents: [], genders: [], pitches: [], contexts: [],
+};
+
+let facetCache: CatalogueFacets | null = null;
+
+function noteFacets(voices: LibraryVoice[]): void {
+  const lang = new Set<string>(), acc = new Set<string>(), gen = new Set<string>();
+  const pit = new Set<string>(), ctx = new Set<string>();
+  for (const v of voices) {
+    if (v.language) lang.add(v.language);
+    if (v.accent) acc.add(v.accent);
+    if (v.gender) gen.add(v.gender);
+    if (v.pitch) pit.add(v.pitch);
+    if (v.context) ctx.add(v.context);
+  }
+  const sorted = (s: Set<string>) => [...s].sort();
+  // Union with what is already cached: pages are walked incrementally and a
+  // later page must not erase a value the first one contributed.
+  const prev = facetCache;
+  facetCache = {
+    languages: sorted(new Set([...(prev?.languages ?? []), ...lang])),
+    accents: sorted(new Set([...(prev?.accents ?? []), ...acc])),
+    genders: sorted(new Set([...(prev?.genders ?? []), ...gen])),
+    pitches: sorted(new Set([...(prev?.pitches ?? []), ...pit])),
+    contexts: sorted(new Set([...(prev?.contexts ?? []), ...ctx])),
+  };
+}
+
+/** The catalogue-wide vocabulary, or empty when nothing has been walked yet.
+ *  `ready` is false in that case so a caller can tell "no accents exist" (never
+ *  true) apart from "we have not looked yet". */
+export function catalogueFacets(): CatalogueFacets & { ready: boolean } {
+  if (!facetCache) return { ...EMPTY_FACETS, ready: false };
+  const total = facetCache.accents.length + facetCache.languages.length
+    + facetCache.genders.length + facetCache.pitches.length + facetCache.contexts.length;
+  return { ...facetCache, ready: total > 0 };
+}
+
+/** Make sure the vocabulary exists, walking the catalogue if boot has not (or
+ *  ran without a key). Bounded and TTL-cached by prewarm, so this is a no-op on
+ *  the second call. Never throws. */
+export async function ensureFacets(): Promise<CatalogueFacets & { ready: boolean }> {
+  if (catalogueFacets().ready) return catalogueFacets();
+  await prewarm();
+  return catalogueFacets();
+}
+
 /** Whether this process has seen this voice from Google. Both the id and the
  *  display name count — the engine accepts either, and the picker shows the
  *  name. */
@@ -205,10 +277,10 @@ export function isLibraryVoice(name: unknown): boolean {
   return known.has(raw.toLowerCase());
 }
 
-/** Load the full catalogue into the membership index. Cheap (a few pages of
- *  ids) and safe to call repeatedly — it no-ops inside the TTL. Never throws:
- *  a failure leaves the index as it was, which degrades to the pre-existing
- *  graceful fallback rather than to an error. */
+/** Load the full catalogue into the membership index and the facet vocabulary.
+ *  Cheap (a few pages of ids) and safe to call repeatedly — it no-ops inside the
+ *  TTL. Never throws: a failure leaves the index as it was, which degrades to
+ *  the pre-existing graceful fallback rather than to an error. */
 export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
   if (!apiKey()) return 0;
   if (!opts.force && warmedAt && Date.now() - warmedAt < TTL_MS) return known.size;
@@ -221,6 +293,13 @@ export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
     do {
       const page = await listLibraryVoices({ pageSize: MAX_PAGE_SIZE, pageToken: token, signal: AbortSignal.timeout(WARM_TIMEOUT_MS) });
       if (!page.ok) return known.size;
+      // Facets are collected HERE and nowhere else. A browse is usually
+      // FILTERED, and accumulating facets from a filtered page would rebuild
+      // the very bug this replaces: the menu would once again describe the
+      // current result instead of the catalogue. Membership, by contrast, is
+      // safe to note from any page — a voice Google served is a voice that
+      // exists, whoever asked for it.
+      noteFacets(page.voices);
       token = page.nextPageToken;
       pages += 1;
       if (pages >= 5) break;
@@ -270,9 +349,13 @@ export function looksLikeLibraryId(name: unknown): boolean {
   return v.length > 0 && v.length <= MAX_ID_LEN && /^[a-z0-9]+(-[a-z0-9]+)+$/.test(v);
 }
 
-/** Test seam — the index is process-global, so a test that asserts on it needs
- *  to be able to reset it. */
+/** Test seam — the index and the vocabulary are process-global, so a test that
+ *  asserts on either needs to reset BOTH. Clearing only `known` left the facet
+ *  cache populated from the previous test, which made the suite
+ *  order-dependent: it passed when the "no facets yet" case ran first and
+ *  failed the moment that changed. */
 export function _resetLibraryIndex(): void {
   known = new Set();
   warmedAt = 0;
+  facetCache = null;
 }

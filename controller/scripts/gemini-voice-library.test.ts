@@ -221,7 +221,11 @@ async function withStubbedCatalogue<T>(
       text: async () => JSON.stringify(body),
     } as unknown as Response;
   }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'AIzaTestKeyNotReal000000000000000000000';
+  // Deliberately NOT key-shaped. `apiKey()` only checks that the variable is
+  // non-empty, so any string works — and a realistic-looking `AIza…` literal in
+  // source makes every secret scanner in the pipeline fire and forces a human
+  // to adjudicate whether it is real.
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-voice-list-tests';
   try {
     return await fn(seen);
   } finally {
@@ -319,4 +323,126 @@ test('a missing key reports instead of calling out', async () => {
     globalThis.fetch = realFetch;
     if (realKey !== undefined) process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
   }
+});
+
+// ── The facet vocabulary ────────────────────────────────────────────────────
+// A filter MENU is a vocabulary, not a summary of the current results. Deriving
+// it from the visible page made the menus depend on the filter: unfiltered the
+// first page offered THREE accents and "Sydney English" was not selectable at
+// all, and narrowing by gender repopulated the menu with 13 — ten of which were
+// previously unreachable. So an Australian station could not pick an Australian
+// voice without first narrowing by something unrelated.
+//
+// Measured on the live catalogue, which is why this is a test and not a note:
+//   unfiltered page (50 rows)  ->  3 accents, no "Sydney English"
+//   gender=male     (200 rows) -> 13 accents, "Sydney English" present
+
+test('facets are empty and not-ready until the catalogue has been walked', async () => {
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+  const f = lib.catalogueFacets();
+  assert.equal(f.ready, false, 'a cold process must not claim to know the vocabulary');
+  assert.deepEqual(f.accents, []);
+});
+
+test('a FILTERED browse must not populate the facet vocabulary', async () => {
+  // The regression this guards is subtle: facets look like they belong in
+  // listLibraryVoices() next to the membership `note()`, because both consume
+  // "voices Google served". Membership is safe from any page — a voice that
+  // exists is a voice that exists. Facets are NOT: accumulating them from a
+  // filtered page rebuilds the original bug through the back door, and the menu
+  // would once again describe the current results instead of the catalogue.
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  // `display_name`, not `name` — that is the field the catalogue actually
+  // carries. A fixture using `name` silently falls back to the id, so the
+  // display name never gets indexed and the assertion below fails for a
+  // reason that has nothing to do with the behaviour under test.
+  const maleOnly = [{ id: 'en-us-varo', display_name: 'Varo', language_code: 'en-US', accent: 'Northwest', gender: 'male', pitch: 'low' }];
+  await withStubbedCatalogue({ voices: maleOnly }, () => lib.listLibraryVoices({ gender: 'male' }));
+
+  // Membership: a served voice is known, whoever asked.
+  assert.equal(lib.isLibraryVoice('Varo'), true);
+  // Facets: still unknown, because that browse was filtered.
+  assert.equal(lib.catalogueFacets().ready, false,
+    'a filtered page must not be mistaken for the catalogue vocabulary');
+});
+
+test('the catalogue walk accumulates facets across pages', async () => {
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  // Two pages, disjoint vocabularies. If the second replaced the first rather
+  // than unioning, "Sydney English" would vanish depending on pagination.
+  const p1 = { voices: [{ id: 'a', display_name: 'A', language_code: 'en-US', accent: 'General American', gender: 'male', pitch: 'high' }], next_page_token: 'p2' };
+  const p2 = { voices: [{ id: 'b', display_name: 'B', language_code: 'en-AU', accent: 'Sydney English', gender: 'female', pitch: 'low' }] };
+
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  let call_ = 0;
+  globalThis.fetch = (async () => {
+    const body = call_++ === 0 ? p1 : p2;
+    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
+  try {
+    await lib.prewarm({ force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+
+  const f = lib.catalogueFacets();
+  assert.equal(f.ready, true);
+  assert.deepEqual(f.accents, ['General American', 'Sydney English'],
+    'both pages must contribute — a replace would drop one');
+  assert.deepEqual(f.languages, ['en-AU', 'en-US']);
+  assert.deepEqual(f.genders, ['female', 'male']);
+  assert.deepEqual(f.pitches, ['high', 'low']);
+});
+
+test('ensureFacets returns the catalogue vocabulary without a second walk', async () => {
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  let requests = 0;
+  globalThis.fetch = (async () => {
+    requests++;
+    return {
+      ok: true, status: 200,
+      json: async () => ({ voices: [{ id: 'a', display_name: 'A', accent: 'Sydney English', language_code: 'en-AU', gender: 'male', pitch: 'low' }] }),
+      text: async () => '{}',
+    } as unknown as Response;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
+  try {
+    const first = await lib.ensureFacets();
+    assert.equal(first.ready, true);
+    assert.deepEqual(first.accents, ['Sydney English']);
+    const after = requests;
+    await lib.ensureFacets();
+    assert.equal(requests, after, 'a warm cache must not re-walk the catalogue');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+});
+
+test('the route serves the catalogue vocabulary, not the page it returned', async () => {
+  // The bug was in the SHAPE of the response as much as in the component: the
+  // endpoint handed the client a page and expected it to infer a vocabulary.
+  const fs = await import('node:fs');
+  const route = fs.readFileSync(new URL('../src/routes/settings/tts.ts', import.meta.url), 'utf8');
+  const at = route.indexOf("provider === 'gemini'");
+  assert.ok(at > 0, 'the gemini branch must exist on the voices route');
+  const block = route.slice(at, route.indexOf('res.json(', at));
+  assert.match(block, /await ensureFacets\(\)/,
+    'the route must supply the catalogue vocabulary');
+  const json = route.slice(route.indexOf('res.json(', at), route.indexOf('});', route.indexOf('res.json(', at)));
+  assert.match(json, /facets:\s*\{/, 'and send it to the client');
+  assert.match(json, /ready: facets\.ready/, 'including whether it is trustworthy yet');
 });
