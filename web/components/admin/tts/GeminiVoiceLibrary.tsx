@@ -28,35 +28,15 @@ import { Label } from '../../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../../ui/select';
-import { adminResponse } from '../../../lib/admin-query';
+import {
+  flattenLibraryPages,
+  normalizeLibraryInput,
+  useGeminiLibraryQuery,
+  type LibraryInput,
+  type LibraryVoice,
+} from './geminiLibraryQueries';
 import { fetchPreviewSample } from './previewApi';
 import { cn } from '../../../lib/cn';
-
-export interface LibraryVoice {
-  id: string;
-  label: string;
-  language?: string;
-  accent?: string;
-  gender?: string;
-  pitch?: string;
-  persona?: string;
-  description?: string;
-}
-
-export interface LibraryFacets {
-  languages: string[];
-  accents: string[];
-  genders: string[];
-  pitches: string[];
-  contexts: string[];
-  /** False when the controller has not walked the catalogue yet, so the UI can
-   *  fall back to whatever the current page offers rather than empty menus. */
-  ready: boolean;
-}
-
-const EMPTY_FACETS: LibraryFacets = {
-  languages: [], accents: [], genders: [], pitches: [], contexts: [], ready: false,
-};
 
 /** Union the catalogue vocabulary with any value the operator has already
  *  chosen. A selection must never disappear from the menu that holds it —
@@ -72,19 +52,23 @@ const ANY = '__any__';
 // still covering one language in a single request (en-AU is 44).
 const PAGE_SIZE = 200;
 
-/** Fallback ONLY — see `catalogue` below. Deriving the menus from the visible
- *  page was the bug: the unfiltered first page offered three accents and
- *  "Sydney English" was not selectable at all, and the menus repopulated once
- *  an unrelated filter changed the page. Retained solely for the degraded case
- *  where the controller reports `ready: false`. */
+/** Derive a vocabulary from the voices actually on screen.
+ *
+ *  This is the COLD path only, and it is deliberately worse than the catalogue:
+ *  it describes the current result rather than the whole library, so an accent
+ *  the current page happens not to contain is simply absent from the menu. The
+ *  alternative — empty dropdowns until the controller finishes its boot walk —
+ *  reads as a broken control, and this component has to work on a controller
+ *  that reports `ready: false`. Values are still Google's own, never a
+ *  restated list. */
 function facetsOf(voices: LibraryVoice[]) {
-  const uniq = (pick: (v: LibraryVoice) => string | undefined) =>
-    [...new Set(voices.map(pick).filter((s): s is string => !!s))].sort();
+  const pick = (f: (v: LibraryVoice) => string | undefined) =>
+    [...new Set(voices.map(f).filter((x): x is string => !!x && x !== ''))].sort();
   return {
-    languages: uniq(v => v.language),
-    accents: uniq(v => v.accent),
-    genders: uniq(v => v.gender),
-    pitches: uniq(v => v.pitch),
+    languages: pick(v => v.language),
+    accents: pick(v => v.accent),
+    genders: pick(v => v.gender),
+    pitches: pick(v => v.pitch),
   };
 }
 
@@ -108,107 +92,113 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
   const [auditioning, setAuditioning] = useState<string | null>(null);
   const [auditionError, setAuditionError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // The object URL is tracked SEPARATELY from the element: revoking
+  // `audioRef.current.src` reads a property that a detached or already-ended
+  // element may not have, and a browser that has already released the blob
+  // would silently leak the URL we just made.
+  const audioUrl = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const auditionSeq = useRef(0);
+
+  /** Stop playback and release the blob. Idempotent — every exit path calls it. */
+  const releaseCurrent = useCallback(() => {
+    const el = audioRef.current;
+    if (el) { el.pause(); el.onended = null; el.src = ''; audioRef.current = null; }
+    if (audioUrl.current) { URL.revokeObjectURL(audioUrl.current); audioUrl.current = null; }
+  }, []);
+  const stopCurrent = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    releaseCurrent();
+  }, [releaseCurrent]);
+
+  // Unmounting mid-render used to leave an Audio playing and its blob URL live,
+  // because nothing on the way out released them. The Personas page renders one
+  // of these per persona, so closing an editor mid-sample is a normal path.
+  useEffect(() => () => { auditionSeq.current += 1; stopCurrent(); }, [stopCurrent]);
 
   const audition = useCallback(async (voiceId: string) => {
+    // A second Play while the first is still rendering, or still playing, used
+    // to overlap: the old element kept its src and kept going while the new one
+    // started, so two voices talked over each other. Stop the outgoing element
+    // and invalidate the request in flight so only the newest sample can play.
+    auditionSeq.current += 1;
+    const mine = auditionSeq.current;
+    stopCurrent();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setAuditioning(voiceId);
     setAuditionError(null);
     try {
       const res = await fetchPreviewSample(adminFetch, {
         engine: 'gemini', voice: voiceId, speed, language: sampleLanguage,
-      });
+      }, ac.signal);
+      // A superseded audition must not resurrect itself when it lands.
+      if (mine !== auditionSeq.current) return;
       if (!res.ok) { setAuditionError(res.message); return; }
       const url = URL.createObjectURL(res.blob);
-      // Revoke the PREVIOUS object URL before replacing the element, or a long
-      // browse leaks one blob per row played.
-      if (audioRef.current) { URL.revokeObjectURL(audioRef.current.src); }
       const el = new Audio(url);
+      el.onended = () => { if (audioRef.current === el) releaseCurrent(); };
       audioRef.current = el;
-      await el.play().catch(() => { setAuditionError('Playback was blocked — press play again'); });
+      audioUrl.current = url;
+      await el.play().catch(() => {
+        if (mine === auditionSeq.current) setAuditionError('Playback was blocked — press play again');
+      });
     } catch (e: unknown) {
+      if ((e as { name?: string })?.name === 'AbortError' || mine !== auditionSeq.current) return;
       setAuditionError((e as { message?: string })?.message || 'Preview failed');
     } finally {
-      setAuditioning(null);
+      if (abortRef.current === ac) abortRef.current = null;
+      if (mine === auditionSeq.current) setAuditioning(null);
     }
   }, [adminFetch, speed, sampleLanguage]);
   const [open, setOpen] = useState(false);
-  const [voices, setVoices] = useState<LibraryVoice[]>([]);
-  const [serverFacets, setServerFacets] = useState<LibraryFacets>(EMPTY_FACETS);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [language, setLanguage] = useState<string>(ANY);
   const [gender, setGender] = useState<string>(ANY);
   const [pitch, setPitch] = useState<string>(ANY);
   const [accent, setAccent] = useState<string>(ANY);
-  const [pageToken, setPageToken] = useState<string | undefined>();
-  // Guards a late response from a superseded filter set — the same reason the
-  // preview sampler carries a sequence ref.
-  const seq = useRef(0);
+  // The controls are DRAFT until Apply. Typing must not re-query per keystroke,
+  // and — the reason they are separate at all — a cursor from one applied set
+  // must never be combined with another. Both fall out of the query owning the
+  // cursor: it is one cache entry per applied filter set, so a stale one is not
+  // merely hidden, it is unreachable.
+  const [appliedInput, setAppliedInput] = useState<LibraryInput>({ language: ANY });
 
-  // `language` starts as ANY, which the route reads as "ignore the station's
-  // saved libraryLanguage default" so the operator's first browse is every
-  // language and the facets below can show what exists. The saved default is
-  // applied by the station panel's own "apply default" affordance instead of
-  // being silently imposed here.
-  const load = useCallback(async (opts: { append?: boolean; token?: string } = {}) => {
-    const mine = ++seq.current;
-    setLoading(true);
-    setError(null);
-    const q = new URLSearchParams({ provider: 'gemini', pageSize: String(PAGE_SIZE) });
-    if (language !== ANY) q.set('language', language);
-    if (gender !== ANY) q.set('gender', gender);
-    if (pitch !== ANY) q.set('pitch', pitch);
-    if (accent !== ANY) q.set('accent', accent);
-    if (search.trim()) q.set('search', search.trim());
-    if (opts.token) q.set('pageToken', opts.token);
-    try {
-      const res = await adminResponse(adminFetch, `/settings/tts/voices?${q}`);
-      const body = await res.json() as {
-        ok: boolean; voices?: LibraryVoice[]; nextPageToken?: string; error?: string;
-        facets?: LibraryFacets;
-      };
-      if (mine !== seq.current) return; // a newer filter set won
-      if (!body.ok) { setError(body.error || 'Voice library unavailable'); return; }
-      const rows = Array.isArray(body.voices) ? body.voices : [];
-      setVoices(prev => (opts.append ? [...prev, ...rows] : rows));
-      // Accumulate, never replace: a facet vocabulary that shrank when a filter
-      // changed would reintroduce the original bug through the back door.
-      if (body.facets?.ready) {
-        setServerFacets(prev => (prev.ready ? {
-          ...prev,
-          languages: [...new Set([...prev.languages, ...body.facets!.languages])].sort(),
-          accents: [...new Set([...prev.accents, ...body.facets!.accents])].sort(),
-          genders: [...new Set([...prev.genders, ...body.facets!.genders])].sort(),
-          pitches: [...new Set([...prev.pitches, ...body.facets!.pitches])].sort(),
-          contexts: [...new Set([...prev.contexts, ...body.facets!.contexts])].sort(),
-          ready: true,
-        } : body.facets!));
-      }
-      setPageToken(body.nextPageToken);
-    } catch (e: unknown) {
-      if (mine !== seq.current) return;
-      setError((e as { message?: string })?.message || 'Voice library unreachable');
-    } finally {
-      if (mine === seq.current) setLoading(false);
-    }
-  }, [adminFetch, language, gender, pitch, accent, search]);
+  const library = useGeminiLibraryQuery(adminFetch, appliedInput, open);
+  const { voices, facets } = useMemo(() => flattenLibraryPages(library.data?.pages), [library.data?.pages]);
+  const loading = library.isPending || library.isFetchingNextPage;
+  const firstPage = library.data?.pages?.[0];
+  const error = library.isError
+    ? 'Voice library unreachable'
+    : (firstPage && !firstPage.ok ? (firstPage.error || 'Voice library unavailable') : null);
 
-  // First expand only. Afterwards the operator drives it with the controls, so
-  // re-running this on every filter change would double-request.
-  const started = useRef(false);
-  useEffect(() => {
-    if (open && !started.current) { started.current = true; void load(); }
-  }, [open, load]);
+  const apply = useCallback(() => {
+    setAppliedInput(normalizeLibraryInput({
+      language,
+      gender: gender === ANY ? undefined : gender,
+      pitch: pitch === ANY ? undefined : pitch,
+      accent: accent === ANY ? undefined : accent,
+      search: search.trim() || undefined,
+      pageSize: PAGE_SIZE,
+    }));
+  }, [language, gender, pitch, accent, search]);
 
-  // The catalogue is authoritative; the visible page is only a fallback for a
-  // controller that has not walked it yet.
-  const pageFacets = useMemo(() => (serverFacets.ready ? null : facetsOf(voices)), [voices, serverFacets.ready]);
-  const catalogue = useMemo(() => ({
-    languages: withSelection(serverFacets.ready ? serverFacets.languages : (pageFacets?.languages ?? []), language),
-    accents: withSelection(serverFacets.ready ? serverFacets.accents : (pageFacets?.accents ?? []), accent),
-    genders: serverFacets.ready ? serverFacets.genders : (pageFacets?.genders ?? []),
-    pitches: serverFacets.ready ? serverFacets.pitches : (pageFacets?.pitches ?? []),
-  }), [serverFacets, pageFacets, language, accent]);
+  // The catalogue vocabulary is authoritative and identical for every persona
+  // card, so it is preferred whenever the controller has one. `flattenLibraryPages`
+  // only hands one back when it is `ready` — a walk that has not finished must
+  // not claim to be the whole catalogue — so the on-screen page stands in.
+  const catalogue = useMemo(() => {
+    const base = facets ?? facetsOf(voices);
+    return {
+      languages: withSelection(base.languages, language),
+      accents: withSelection(base.accents, accent),
+      // Gender and pitch are low-cardinality, so a current page almost always
+      // contains every value that exists; they need no selection union.
+      genders: base.genders,
+      pitches: base.pitches,
+    };
+  }, [facets, voices, language, accent]);
 
   // A saved library voice must stay visible even when a filter set excludes it,
   // or the operator cannot tell what the persona is actually using.
@@ -281,7 +271,7 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
         type="button"
         disabled={loading}
         className="mt-3 w-full cursor-pointer border border-ink bg-transparent py-[6px] text-[9px] font-bold tracking-[0.2em] text-ink uppercase hover:bg-[var(--ink-soft)] disabled:opacity-40"
-        onClick={() => void load()}
+        onClick={apply}
       >
         {loading ? 'Searching…' : 'Apply filters'}
       </button>
@@ -333,12 +323,12 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
         })}
       </ul>
 
-      {pageToken && (
+      {library.hasNextPage && (
         <button
           type="button"
           disabled={loading}
           className="mt-2 w-full cursor-pointer border border-ink bg-transparent py-[6px] text-[9px] font-bold tracking-[0.2em] text-ink uppercase hover:bg-[var(--ink-soft)] disabled:opacity-40"
-          onClick={() => void load({ append: true, token: pageToken })}
+          onClick={() => void library.fetchNextPage()}
         >
           {loading ? 'Loading…' : 'Load more'}
         </button>

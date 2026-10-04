@@ -85,6 +85,13 @@ const defaultOwnershipRegistry = [
     ],
   },
   {
+    file: 'tts/geminiLibraryQueries.ts', function: 'fetchLibraryPage',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/settings/tts/voices?${}', signal: 'signal' }],
+    consumers: [
+      { file: 'tts/geminiLibraryQueries.ts', owner: 'useInfiniteQuery', property: 'queryFn', count: 1 },
+    ],
+  },
+  {
     file: 'themes-queries.ts', function: 'fetchAdminThemes',
     reads: [{ callee: 'adminJson', method: 'GET', path: '/themes', signal: 'signal' }],
     consumers: [
