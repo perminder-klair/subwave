@@ -297,7 +297,7 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, voiceStyle, fishSettings: requestedFishSettings, signal }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
@@ -306,6 +306,12 @@ export async function synthesizeSample(
     // Same for Gemini — rides stationGeminiPick, which lets it outrank the
     // saved model so the dropdown's UNSAVED choice is what you hear.
     geminiModel?: string;
+    // The persona's delivery directive for this audition. The two engines with
+    // a free-text channel (gemini's speech_metadata.style, cloud→openai's
+    // `instructions`) compose it; the rest ignore it exactly as they ignore
+    // `soul`, so the preview route forwards it unconditionally and the gate
+    // stays in one place (deliveryHint / geminiStyle).
+    voiceStyle?: string;
     speed?: number;
     lang?: string;
     // Persona's free-text on-air language ("Turkish", "Türkçe"): picks the
@@ -382,7 +388,7 @@ export async function synthesizeSample(
         : settings.get().tts?.cloud?.latency || 'normal',
     };
   }
-  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
+  return speakWith(engine, sample, { speedScale: scale, language: language || '', soul: '', voiceStyle, lang, cloudModel: previewCloudModel, geminiModel, cloudVoiceSettings, fishSettings, signal }, personaTts);
 }
 
 // One conversational render for a whole multi-voice exchange, when every line
@@ -483,6 +489,16 @@ export async function speak(
   const soul = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.soul || '').trim();
+  // The operator's per-persona delivery directive, for the two engines with a
+  // free-text channel: gemini's speech_metadata.style and cloud→openai's
+  // `instructions`. Read for EVERY kind rather than gated on GLOBAL_VOICE_KINDS
+  // like `soul` is: unlike the soul, this is a deliberate per-persona instruction
+  // about how to speak, and a station ident announcing itself in a persona's
+  // register is a legitimate thing to want. Engines without the channel ignore
+  // it, exactly as they ignore `soul`.
+  const voiceStyle = typeof personaFor(persona)?.voiceStyle === 'string'
+    ? personaFor(persona)!.voiceStyle!.trim()
+    : '';
   const scale = speechPaceScale(kind, persona, speedScale);
   const started = Date.now();
   const chars = (speakText || '').length;
@@ -494,7 +510,7 @@ export async function speak(
     persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
   };
   try {
-    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul }, primaryPersonaTts);
+    const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul, voiceStyle }, primaryPersonaTts);
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
@@ -526,7 +542,7 @@ export async function speak(
         // the credentials the chain probe just rejected. What rides is the
         // slot's own override (null for hardcoded rungs, the operator's
         // engine+voice for their configured one), so probe and call agree.
-        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul }, slot.personaTts);
+        const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul, voiceStyle }, slot.personaTts);
         if (typeof result === 'string') await applyEdgeFades(result);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,

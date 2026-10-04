@@ -8,6 +8,7 @@ import * as settings from '../../settings.js';
 import * as tts from '../../audio/tts.js';
 import * as speech from '../../llm/speech.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { PERSONA_VOICE_STYLE_MAX } from '../../schemas/persona.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -41,6 +42,14 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       // The UNSAVED Gemini model, so "Play sample" auditions the dropdown choice
       // rather than the saved station model.
       geminiModel: typeof body.geminiModel === 'string' ? body.geminiModel : undefined,
+      // The persona's UNSAVED delivery directive, so the sample auditions what
+      // is in the textarea rather than the last-saved value — the same reason
+      // geminiModel rides. Preview CLAMPS rather than refuses, the posture
+      // `text` and `speed` already take: an over-long directive is no reason to
+      // fail an audition, and gemini's own style budget truncates it anyway.
+      voiceStyle: typeof body.voiceStyle === 'string'
+        ? body.voiceStyle.replace(/\s+/g, ' ').trim().slice(0, PERSONA_VOICE_STYLE_MAX) || undefined
+        : undefined,
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,

@@ -705,6 +705,16 @@ export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
+// The delivery directive — free text an operator writes to change HOW a persona
+// sounds ("tired Australian dad, warm, unhurried"), as distinct from `soul`,
+// which is who the persona IS and feeds the LLM's writing.
+//
+// Capped well under the Gemini style budget (VOICE_STYLE_MAX = 300, shared with
+// the soul excerpt and the station pronunciation note) because a directive long
+// enough to crowd the other two out is worse than a short one: a truncated soul
+// still reads as character, while a dropped pronunciation note is a place name
+// said wrong in EVERY segment. 120 leaves room for both.
+export const PERSONA_VOICE_STYLE_MAX = 120;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
@@ -1089,6 +1099,7 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  voiceStyle: string;
   language: string;
   avatar: string;
   tts: TtsVoiceSlot;
@@ -1150,6 +1161,20 @@ export const personaSchema = z
         .string({ error: 'language must be a string' })
         .trim()
         .max(PERSONA_LANGUAGE_MAX, `language must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
+    // Optional delivery directive. Absent/empty → '' (no directive composed),
+    // which is why it preprocesses null to undefined rather than coercing like
+    // name/soul. Only read by the engines that accept free text — `gemini`
+    // (speech_metadata.style) and `cloud`→openai (instructions) — so it is
+    // stored unconditionally rather than per-engine: the engine is a per-turn
+    // setting and the directive must survive changing it.
+    voiceStyle: z.preprocess(
+      personaNullToUndefined,
+      z
+        .string({ error: 'voiceStyle must be a string' })
+        .trim()
+        .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
@@ -1248,6 +1273,7 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      voiceStyle: p.voiceStyle,
       language: p.language,
       avatar: p.avatar,
       tts: p.tts,
@@ -1282,6 +1308,10 @@ export function repairPersonaForLoad(
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
+    voiceStyle:
+      typeof raw.voiceStyle === 'string'
+        ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+        : undefined,
     language:
       typeof raw.language === 'string'
         ? raw.language.trim().slice(0, PERSONA_LANGUAGE_MAX)

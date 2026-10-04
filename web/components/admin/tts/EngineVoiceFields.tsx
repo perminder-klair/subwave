@@ -92,6 +92,11 @@ interface EngineVoiceFieldsProps {
   // Omitted where the slot has no rate of its own (the fallback slot).
   previewSpeed?: number;
   previewLanguage?: string;
+  // The persona's UNSAVED "how this persona speaks" directive, forwarded to the
+  // sample button. The panel's own hint promises the sample auditions it, so
+  // without this the promise is a lie the operator only discovers by saving.
+  // Absent on the station Voice panel, which has no persona to speak for.
+  previewVoiceStyle?: string;
   // Body of the red notice when `engine` can't speak; wording is caller-supplied.
   unavailableNote: (engine: string) => ReactNode;
   // Cloud-specific "this won't play" notice (missing key, disabled engine).
@@ -113,7 +118,7 @@ interface EngineVoiceFieldsProps {
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
-  previewSpeed, previewLanguage,
+  previewSpeed, previewLanguage, previewVoiceStyle,
   unavailableNote, cloudIssue, engineHint, previewHint,
   allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
@@ -579,6 +584,7 @@ export function EngineVoiceFields({
           cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
+          voiceStyle={previewVoiceStyle}
           adminFetch={adminFetch}
         />
         {previewHint && <div className="field-hint mt-1.5">{previewHint}</div>}

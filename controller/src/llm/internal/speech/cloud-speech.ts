@@ -203,8 +203,13 @@ function isoCodeFor(name: string): string | null {
 // layered on as a pronunciation directive (#558). ElevenLabs honours only an ISO
 // `language` code, so the soul can't ride there, and openai-compatible servers
 // vary too much to hint at all. No soul and no language → {}.
-function deliveryHint(
-  { language, soul }: { language?: string; soul?: string },
+// Exported for scripts/persona-voice-style.test.ts. The per-provider contract
+// here is the whole reason a persona's delivery directive reaches one engine and
+// not another, and it is unreachable from the outside: `instructions` is built
+// into a closed body by the AI SDK, so there is no wire capture cheap enough to
+// assert against on every run.
+export function deliveryHint(
+  { language, soul, voiceStyle }: { language?: string; soul?: string; voiceStyle?: string },
   provider: string,
   model: string,
 ): { instructions?: string; language?: string } {
@@ -212,11 +217,17 @@ function deliveryHint(
   // Brief, not the full soul: this rides every spoken line and only steers tone
   // and pacing, so a long soul's backstory just enlarges each request.
   const character = soulBrief(soul);
+  // The operator's directive is stated as itself, NOT wrapped in the
+  // "Convey this character" phrasing used for the soul: it is already an
+  // instruction about delivery, and re-framing it as character description
+  // would blur the two — the soul is who they are, this is how to say it.
+  const directive = String(voiceStyle || '').trim().replace(/\s+/g, ' ');
   if (provider === 'openai') {
     // tts-1 / tts-1-hd ignore or reject `instructions`, and a 400 drops the line
     // to an English local fallback — worse than no hint.
     if (!/gpt-4o.*tts/i.test(String(model || ''))) return {};
     const parts: string[] = [];
+    if (directive) parts.push(directive);
     if (character) parts.push(`Convey this character in your tone and delivery: ${character}.`);
     if (lang) parts.push(`Speak entirely in ${lang}, using natural, native ${lang} pronunciation and accent. Do not read the text with an English accent.`);
     return parts.length ? { instructions: parts.join(' ') } : {};
@@ -323,7 +334,7 @@ export function isConfigured(providerOverride: string | null = null) {
 // provider + voice while still sharing the global model + apiKey from Settings.
 export async function speak(
   text: string,
-  { outPath, cloudOverride = null, speedScale, language, soul, signal }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string; signal?: AbortSignal } = {},
+  { outPath, cloudOverride = null, speedScale, language, soul, voiceStyle, signal }: { outPath?: string; cloudOverride?: any; speedScale?: number; language?: string; soul?: string; voiceStyle?: string; signal?: AbortSignal } = {},
 ) {
   if (!text || !text.trim()) throw new Error('Empty TTS text');
   const base = cloudCfg();
@@ -418,7 +429,7 @@ export async function speak(
     ...(rate.body != null ? { speed: rate.body } : {}),
     // Persona character (soul) + language → provider-native delivery hint
     // (issues #579 / #558).
-    ...deliveryHint({ language, soul }, c.provider, c.model),
+    ...deliveryHint({ language, soul, voiceStyle }, c.provider, c.model),
     // ElevenLabs gates 44.1 kHz PCM/WAV behind paid tiers — a free/lower-tier
     // key 403s ("Forbidden") on pcm_44100. mp3 is allowed on every tier and
     // OpenAI honours it too, so it's the safe cross-provider request.

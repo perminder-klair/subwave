@@ -14,6 +14,10 @@ export interface PreviewParams {
   // Gemini's own model id, so an unsaved dropdown choice is what gets
   // auditioned rather than the saved station model.
   geminiModel?: string;
+  // The persona's UNSAVED delivery directive ("how this persona speaks"), so
+  // the sample auditions the current textarea rather than the last-saved value.
+  // Only gemini and cloud→openai have a channel for it; the others ignore it.
+  voiceStyle?: string;
   // Final rate multiplier to audition (server clamps to 0.5–2.0×).
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
