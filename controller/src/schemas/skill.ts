@@ -279,6 +279,12 @@ const skillCohostsSchema = z.preprocess(
 // the pin in scripts/skill-voice.test.ts is what makes the omission fail loudly
 // rather than quietly leaving one surface behind.
 // ─────────────────────────────────────────────────────────────────────────
+// `gemini` joins because `TTS_ENGINES` already contains it: a skill pins the
+// same engine vocabulary a persona does, so leaving it off here would make the
+// skill surface the one place a working engine cannot be selected. The comment
+// above says to add an engine HERE in the same change, and the deepEqual in
+// scripts/skill-voice.test.ts is what makes the omission fail loudly — it did,
+// on the rebase that brought this branch level with develop.
 export const SKILL_VOICE_ENGINES = [
   'piper',
   'kokoro',
@@ -286,6 +292,7 @@ export const SKILL_VOICE_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  'gemini',
 ] as const;
 
 export const SKILL_VOICE_PROVIDERS = [
