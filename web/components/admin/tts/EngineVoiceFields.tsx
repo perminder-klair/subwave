@@ -477,7 +477,14 @@ export function EngineVoiceFields({
               <div className="field">
                 <Label>Cloud provider</Label>
                 <CloudProviderSelector
-                  value={value.cloudProvider}
+                  // Gemini is an ENGINE that presents as a provider card, and
+                  // picking it writes `engine`, never `cloudProvider` — so
+                  // reading the displayed value off cloudProvider alone left the
+                  // Gemini card unhighlighted while it was plainly the active
+                  // selection (the click landed, the state just had nowhere to
+                  // show). Deriving the value from whichever field actually
+                  // carries the choice is what makes the card light up.
+                  value={geminiSelected ? GEMINI_CLOUD_PROVIDER : value.cloudProvider}
                   providerIds={cloudProviders}
                   availability={{
                     cloudByProvider: resolveKeyPresence(

@@ -414,7 +414,9 @@ test('the station Voice panel offers model, voice and pronunciation', async () =
     new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
   // Model list sourced from the generated mirror, so the dropdown and the
   // server's validation cannot drift into offering something save rejects.
-  assert.match(panel, /import \{ GEMINI_TTS_MODELS \} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
+  // Aliased as CLOUD_PROVIDER_IDS alongside it — the same import statement, so
+  // the regex allows a named-alias form rather than pinning one spelling.
+  assert.match(panel, /import \{[^}]*GEMINI_TTS_MODELS[^}]*\} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
   assert.match(panel, /GEMINI_TTS_MODELS\.map\(/);
   // '' is the "walk the fallback chain" choice and must survive the round trip.
   assert.match(panel, /<SelectItem value="">Automatic \(fallback chain\)<\/SelectItem>/);
