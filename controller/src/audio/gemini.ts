@@ -116,11 +116,20 @@ const VOCAL_BURSTS: Record<string, string> = {
   tsk: 'tsk', hiss: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
   whimper: 'whimper', yawn: 'yawn',
   'throat-clearing': 'throat-clearing', throatclear: 'throat-clearing',
-  // `whisper` is the only whisper spelling that becomes a TAG. `[whispers]` /
-  // `[whispering]` deliberately fall through to DELIVERY_STYLES instead: Google's
-  // tag guide classes whispering as a sustained modifier of the following
-  // speech, not a one-shot sound, and that is exactly what the style field is.
-  whisper: 'whispering',
+  // WHISPERING IS ASPECT-SENSITIVE, AND THE THREE SPELLINGS SPLIT
+  // ----------------------------------------------------------
+  // `whisper` and `whispers` are a one-shot vocalised noise and become a TAG;
+  // `whispering` is the MANNER of the following speech and becomes a STYLE.
+  // Google's tag list carries both spellings, so both are legitimate output —
+  // what differs is which channel they belong in, and `speech_metadata.style`
+  // is where a sustained modifier is supposed to live.
+  //
+  // `whispers` is spelled out rather than left to the trailing-`s` fallback
+  // below. It would currently resolve to the same tag either way, but this is a
+  // deliberate grammatical distinction, and a distinction that exists only as
+  // an artefact of plural-stripping is one refactor away from silently
+  // disappearing: delete the fallback and `[whispers]` becomes a style.
+  whisper: 'whispering', whispers: 'whispering',
   // Pacing. `medium pause` is absent from Google's list but does pause on both
   // models in MODELS. The magnitude is not pinned down — see the note above on
   // why a single noisy sample cannot grade short against medium.
@@ -130,9 +139,14 @@ const VOCAL_BURSTS: Record<string, string> = {
 
 // Delivery modifiers become part of `speech_metadata.style`, never inline tags:
 // they sustain across the whole turn, which is what the style field is for.
+//
+// Only REACHABLE spellings appear here. `whisper` is absent because
+// vocalBurstFor() is consulted first and resolves it to a tag — an entry here
+// would be unreachable, and an unreachable entry in a lookup table reads as
+// live. The sustained spelling is `whispering`; see the note on VOCAL_BURSTS.
 const DELIVERY_STYLES: Record<string, string> = {
   sarcasm: 'sarcastic', sarcastic: 'sarcastic',
-  shouting: 'loud', whispering: 'whispered', whisper: 'whispered',
+  shouting: 'loud', whispering: 'whispered',
   robotic: 'flat and mechanical', 'extremely fast': 'speaking rapidly',
   excited: 'excited, upbeat',
 };

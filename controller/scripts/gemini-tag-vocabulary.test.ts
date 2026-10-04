@@ -111,6 +111,42 @@ test('a one-shot breath cue is a sound, and a sustained one is a style', () => {
   assert.deepEqual(sustained.styles, ['whispered']);
 });
 
+test('the whisper split is grammatical, not an artefact of plural-stripping', () => {
+  // The three spellings split on ASPECT — `whispers` is a vocalised noise,
+  // `whispering` is the manner of the speech that follows. Google's tag list
+  // carries both, so both are legitimate; only the channel differs.
+  //
+  // This case exists because that split was once an emergent property of the
+  // generic trailing-`s` fallback rather than a stated one: `[whispers]`
+  // resolved by stripping the `s` and hitting `whisper`, which happened to be
+  // right. Delete the fallback, or add an unrelated `whispers` entry to
+  // DELIVERY_STYLES, and the sound silently becomes a style — the same
+  // sound-versus-style confusion this suite already caught for `[tsk]`.
+  //
+  // The bare `whisper` is asserted too: it is the third spelling, and it is a
+  // TAG. It is also the one DELIVERY_STYLES used to list, where it was
+  // unreachable — vocalBurstFor is consulted first. An entry that cannot be
+  // reached reads as live behaviour, which is how the comment above it came to
+  // describe the opposite of what the code does.
+  for (const spelling of ['whisper', 'whispers']) {
+    const asTag = splitCues(`Hi. [${spelling}] There.`);
+    assert.match(asTag.text, /<whispers?ing>/,
+      `[${spelling}] is a one-shot noise and must stay a tag`);
+    assert.deepEqual(asTag.styles, [], `[${spelling}] must not also add a style`);
+  }
+
+  const asStyle = splitCues('Hi. [whispering] There.');
+  assert.equal(asStyle.text, 'Hi. There.', 'the gerund is consumed, not spoken');
+  assert.deepEqual(asStyle.styles, ['whispered']);
+
+  // And the plural forms of the OTHER burst tags must keep working, since that
+  // fallback is still load-bearing for `[laughs]`, `[sighs]` and friends.
+  for (const [spelling, tag] of [['laughs', 'laugh'], ['sighs', 'sigh'], ['chuckles', 'chuckles']]) {
+    assert.match(splitCues(`Hi. [${spelling}] There.`).text, new RegExp(`<${tag}>`),
+      `[${spelling}] relies on the trailing-s fallback`);
+  }
+});
+
 test('Google Mode 3 — the vocalized adjectives — never become tags', () => {
   // Mode 3 is the trap: "the tag itself is spoken as a word, while also
   // influencing the tone". Google's own guidance is to prefer the style prompt.
