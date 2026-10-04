@@ -27,11 +27,12 @@ import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields'
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
 import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
-import { GEMINI_TTS_MODELS, TTS_CLOUD_PROVIDERS as CLOUD_PROVIDER_IDS } from '../../../lib/schemas.generated';
+import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
 import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
 import { VoicePicker } from '../tts/VoicePicker';
+import { decideCloudSave } from './cloudSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
@@ -616,9 +617,21 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       }
     }
 
+    // ONE decision, taken once. It used to be re-derived in three places — the
+    // payload's provider, the inline-key comparison, and the blank model/voice
+    // — which agreed on a healthy form and diverged on a stale one. See
+    // cloudSavePayload.ts: a stale provider id both erased the stored inline key
+    // and sent a blank `tts.cloud.model`, which the controller rejects for every
+    // provider, 400-ing the whole save.
     const savedCloudProvider = String(data.values?.tts?.cloud?.provider || '');
-    const clearInlineCloudKey = isFish
-      || (!!savedCloudProvider && savedCloudProvider !== form.tts.cloud.provider);
+    const cloudSave = decideCloudSave({
+      provider: form.tts.cloud.provider,
+      model: form.tts.cloud.model,
+      voice: form.tts.cloud.voice,
+      savedProvider: savedCloudProvider,
+      isFish,
+    });
+    const clearInlineCloudKey = cloudSave.clearInlineKey;
     // Redacted sentinel: 'set' means an inline key is on file in settings.json.
     const hadStoredInlineKey = data.values?.tts?.cloud?.apiKey === 'set';
     const settingsSaved = await saveSettings({
@@ -644,12 +657,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           // defaultEngine instead, but a form hydrated from an older build could
           // still carry it, and one stray value 400s the whole save — including
           // the unrelated LLM and pool settings the operator was there to change.
-          // openai is the enum's first member, so the fallback is always valid.
-          provider: (CLOUD_PROVIDER_IDS as readonly string[]).includes(form.tts.cloud.provider)
-            ? form.tts.cloud.provider
-            : 'openai',
-          model: form.tts.cloud.model,
-          voice: form.tts.cloud.voice,
+          provider: cloudSave.provider,
+          // Omitted rather than sent blank when the form has none: the
+          // controller rejects a blank model for every provider, and omitting
+          // leaves it holding the value it already has.
+          ...(cloudSave.model !== undefined ? { model: cloudSave.model } : {}),
+          ...(cloudSave.voice !== undefined ? { voice: cloudSave.voice } : {}),
           baseUrl: form.tts.cloud.baseUrl,
           voiceStability: form.tts.cloud.voiceStability,
           voiceStyle: form.tts.cloud.voiceStyle,

@@ -61,8 +61,45 @@ test('the persisted provider still wins when the engine is not gemini', () => {
   assert.equal(selectedCard('cloud', 'openai-compatible'), 'openai-compatible');
 });
 
-test('a persona on the station default does not light up any provider card', () => {
-  // `inherit` resolves to whatever the station default is; the selector must not
-  // invent a selection from a stale provider on the slot.
-  assert.equal(selectedCard('inherit', 'openai'), 'openai');
+/** The condition under which EngineVoiceFields renders the provider selector at
+ *  all, evaluated against an engine + gemini-selected pair.
+ *
+ *  This exists because the case it replaces asserted the WRONG THING. For a
+ *  persona on the station default, `selectedCard('inherit', 'openai')` returned
+ *  'openai' — and the test was named "does not light up any provider card",
+ *  which is the opposite of what returning 'openai' means. It passed, and it was
+ *  checking a value the component never produces: the selector is rendered only
+ *  when the engine is `cloud` or Gemini is selected, so for `inherit` there is
+ *  no card to light up at all. An assertion whose name contradicts its own
+ *  expectation is worse than a missing one — it reads as coverage of a
+ *  regression that it does not cover. */
+function selectorIsRendered(engine: string, geminiSelected: boolean): boolean {
+  const at = fields.indexOf('<CloudProviderSelector');
+  assert.ok(at > 0, 'EngineVoiceFields must render a CloudProviderSelector');
+  const block = fields.slice(at, fields.indexOf('/>', at));
+  const guard = /\{\(([^)]*?)\)\s*&&\s*\(/.exec(fields.slice(0, at));
+  assert.ok(guard?.[1],
+    'expected the selector to be rendered behind a guard, e.g. '
+      + '{(cond) && (() => { ... <CloudProviderSelector ... /> })()}');
+  const expr = guard[1]
+    .replace(/value\.engine/g, JSON.stringify(engine))
+    .replace(/geminiSelected/g, String(geminiSelected));
+  assert.ok(block.length > 0, 'the selector must exist in the guarded branch');
+  return Boolean(new Function(`return (${expr});`)());
+}
+
+test('the provider cards only exist for the engines that own a provider', () => {
+  // The real invariant, and the one the operator can see: a persona on the
+  // station default has no provider card to select, so there is nothing to light
+  // up and nothing to click. The cards belong to the two engines that carry a
+  // cloudProvider — `cloud`, and Gemini, which presents as a card while writing
+  // its own engine id.
+  assert.equal(selectorIsRendered('inherit', false), false,
+    'a persona on the station default must not render provider cards');
+  assert.equal(selectorIsRendered('cloud', false), true,
+    'the cloud engine owns the provider choice');
+  assert.equal(selectorIsRendered(GEMINI_CLOUD_PROVIDER, true), true,
+    'Gemini is an engine that presents as a provider card');
+  assert.equal(selectorIsRendered(GEMINI_CLOUD_PROVIDER, false), false,
+    'geminiSelected is what admits the card, not the engine id alone');
 });
