@@ -78,14 +78,41 @@ export interface CloudSaveInput {
   isFish?: boolean;
 }
 
+// WHY BLANK FIELDS ARE OMITTED — AND ONLY SOMETIMES
+// ---------------------------------------------------
+// `settings.ts` merges the cloud block field by field (`if (c.model !== undefined)`,
+// `if (c.voice !== undefined)`, …). Omitting a key therefore means KEEP the stored
+// value, which is the whole basis of the two rules below:
+//
+//   the controller rejects a blank `tts.cloud.model` unconditionally
+//     ("must be 1-100 chars"), so a blank model used to 400 the ENTIRE save,
+//     taking the unrelated LLM and provider settings with it.
+//
+//   a blank voice is accepted only by `openai-compatible`
+//     (`allowEmpty`), whose voices are server-specific and default server-side.
+//
+// But preserving is only correct when the field the controller would keep belongs
+// to the provider now being saved. On a real TRANSITION it is the previous
+// provider's value: switching OpenAI -> Fish with a blank voice would otherwise
+// send `provider: 'fish-audio'` and inherit voice `alloy`, producing a saved
+// configuration that is silently wrong and that the controller has no reason to
+// reject. A 400 on an incomplete transition is loud and correct; a Fish account
+// silently voicing every segment with an OpenAI id is neither.
+//
+// So blanks are omitted only when nothing moved — the same-provider edit and the
+// stale-form recovery both land on the provider the server already holds. On a
+// genuine transition they are sent verbatim, which restores the rejection.
+
 export interface CloudSaveDecision {
   provider: CloudProviderId;
-  /** Omitted when blank: the controller rejects a blank model outright. */
+  /** Omitted when blank AND nothing moved. Sent verbatim on a transition. */
   model?: string;
-  /** '' only for the one provider that accepts it; omitted otherwise. */
+  /** Sent as '' only for the provider that accepts it, or on a transition. */
   voice?: string;
   /** Whether to send `apiKey: ''`. Compared against the NORMALIZED provider. */
   clearInlineKey: boolean;
+  /** True when the provider actually changed, so a caller can explain a 400. */
+  isTransition: boolean;
 }
 
 export function decideCloudSave(input: CloudSaveInput): CloudSaveDecision {
@@ -94,12 +121,18 @@ export function decideCloudSave(input: CloudSaveInput): CloudSaveDecision {
   const model = String(input.model ?? '').trim();
   const voice = String(input.voice ?? '').trim();
 
+  // Nothing moved when the normalised provider IS the stored one. That covers
+  // both the ordinary same-provider edit and the stale-form case, because a stale
+  // form normalises to the SAVED provider — so the server's stored model and
+  // voice are already the right ones to keep.
+  const isTransition = !!saved && saved !== provider;
+  const mayOmitBlanks = !isTransition;
+
   return {
     provider,
-    // Blank model is never sendable. Omitting keeps the controller's stored
-    // value, which is the only non-arbitrary answer.
-    ...(model ? { model } : {}),
-    ...(voice || allowsBlankVoice(provider) ? { voice } : {}),
-    clearInlineKey: !!input.isFish || (!!saved && saved !== provider),
+    ...(model || !mayOmitBlanks ? { model } : {}),
+    ...(voice || !mayOmitBlanks || allowsBlankVoice(provider) ? { voice } : {}),
+    clearInlineKey: !!input.isFish || isTransition,
+    isTransition,
   };
 }

@@ -68,22 +68,74 @@ test('Fish always clears the legacy shared key slot', () => {
   assert.equal(fish.clearInlineKey, true);
 });
 
-test('a blank model is OMITTED, never sent — the controller rejects it outright', () => {
-  // `settings.ts`: `if (v.length < 1 || v.length > 100) throw` — unconditionally.
-  // There is no provider for which a blank model is valid, so a blank one used to
-  // 400 the entire settings save, taking the unrelated LLM and provider fields
-  // the operator opened the page to change with it. Omitting the key leaves the
-  // controller holding whatever it already had, which is the only non-arbitrary
-  // answer: inventing a default would silently change the station's model.
+test('a blank model is omitted when nothing moved, and SENT on a transition', () => {
+  // `settings.ts`: `if (v.length < 1 || v.length > 100) throw` — unconditionally,
+  // so there is no provider for which a blank model is valid. On a same-provider
+  // save, omitting the key leaves the controller holding the value it already has,
+  // which beats 400-ing the entire save (and with it the unrelated LLM and
+  // provider settings the operator opened the page to change).
   for (const provider of TTS_CLOUD_PROVIDERS) {
     const d = decideCloudSave({ provider, savedProvider: provider, model: '', voice: 'v' });
-    assert.equal('model' in d, false, `${provider}: a blank model must be omitted, not sent`);
+    assert.equal('model' in d, false, `${provider}: nothing moved, so keep the stored model`);
   }
   // A present model is sent verbatim.
   assert.equal(
     decideCloudSave({ provider: 'openai', savedProvider: 'openai', model: ' gpt-4o-mini-tts ', voice: 'alloy' }).model,
     'gpt-4o-mini-tts', 'the model is trimmed on the way out',
   );
+});
+
+test('a genuine provider TRANSITION must not inherit the old provider\'s fields', () => {
+  // The regression this module was first written to prevent, reintroduced by the
+  // fix for the stale-form 400.
+  //
+  // `settings.ts` merges the cloud block field by field (`if (c.model !== undefined)`,
+  // `if (c.voice !== undefined)`), so OMITTING a key means the controller KEEPS the
+  // stored value. On a transition that stored value belongs to the provider being
+  // switched AWAY from. Saving OpenAI -> Fish with a blank voice therefore wrote
+  // `provider: 'fish-audio'` and inherited voice `alloy`: silently wrong, and not
+  // invalid in isolation, so the controller has no reason to reject it. A station
+  // with a configured Fish key would save "successfully" and then voice every
+  // segment with an OpenAI id.
+  //
+  // Previously this 400'd, which is loud and correct. That is restored here.
+  const toFish = decideCloudSave({
+    provider: 'fish-audio', savedProvider: 'openai', model: '', voice: '',
+  });
+  assert.equal(toFish.provider, 'fish-audio');
+  assert.equal(toFish.isTransition, true);
+  assert.ok('model' in toFish, 'a blank model on a transition must be SENT, so the controller rejects it');
+  assert.ok('voice' in toFish, 'a blank voice on a transition must be SENT, not inherited from openai');
+  assert.equal(toFish.voice, '', 'and sent blank, not backfilled with the previous provider id');
+  assert.equal(toFish.clearInlineKey, true);
+
+  // Same for a compat server whose base URL is configured and whose model was cleared.
+  const toCompat = decideCloudSave({
+    provider: 'openai-compatible', savedProvider: 'openai', model: '', voice: 'ref-1',
+  });
+  assert.equal(toCompat.isTransition, true);
+  assert.equal(toCompat.model, '', 'a transition must not inherit the previous provider\'s model');
+  assert.ok('model' in toCompat);
+});
+
+test('stale-form recovery is not a transition, because it normalises to the saved provider', () => {
+  // The two cases that justify omission. Both leave the server holding the value
+  // that already belongs to it, so preserving is correct rather than merely safe.
+  const stale = decideCloudSave({
+    provider: 'gemini', savedProvider: 'fish-audio', model: '', voice: '',
+  });
+  assert.equal(stale.provider, 'fish-audio');
+  assert.equal(stale.isTransition, false, 'recovering the saved provider did not move anything');
+  assert.equal('model' in stale, false);
+  assert.equal('voice' in stale, false);
+  assert.equal(stale.clearInlineKey, false);
+
+  const same = decideCloudSave({
+    provider: 'openai', savedProvider: 'openai', model: '', voice: 'alloy',
+  });
+  assert.equal(same.isTransition, false);
+  assert.equal('model' in same, false);
+  assert.equal(same.voice, 'alloy');
 });
 
 test('a blank voice is sent only for the one provider that accepts it', () => {
@@ -122,4 +174,12 @@ test('omitted keys really are absent from the JSON body', () => {
   });
   assert.match(JSON.stringify(compat), /"voice":""/,
     'the one deliberate blank must survive as an explicit empty string');
+
+  // The transition blank must survive too, or the controller retains the old
+  // provider's field and the entire point of sending it is lost.
+  const tb = JSON.stringify(decideCloudSave({
+    provider: 'fish-audio', savedProvider: 'openai', model: '', voice: '',
+  }));
+  assert.match(tb, /"model":""/, 'a transition blank model must reach the wire as an empty string');
+  assert.match(tb, /"voice":""/, 'a transition blank voice must reach the wire as an empty string');
 });

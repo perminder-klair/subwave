@@ -16,22 +16,96 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import ts from 'typescript';
 import { GEMINI_CLOUD_PROVIDER } from './engineMeta';
 
 const here = join(process.cwd(), 'components/admin/tts');
 const fields = readFileSync(join(here, 'EngineVoiceFields.tsx'), 'utf8');
 
-// Renders the whole component: EngineVoiceFields is where the card is wired, and
-// a test of CloudProviderSelector alone passes against the broken code — the
-// selector highlights whatever it is HANDED, so the bug lives entirely in the
-// value its caller passes. Asserting the selector proves nothing about it.
+// WHAT THIS FILE DOES, PRECISELY
+// --------------------------------
+// It does NOT render anything. `web/` has no DOM test environment — no
+// testing-library, no jsdom — so this parses EngineVoiceFields.tsx with the
+// TypeScript compiler, lifts the two expressions out of the AST, and evaluates
+// them. An earlier version of this comment claimed it "renders the whole
+// component", which it never did, and a reviewer was right to call that out: a
+// comment overstating what a test does is the same defect as an assertion that
+// cannot fail.
+//
+// What this therefore proves, and what it does not:
+//   PROVES    the value the caller hands the selector, and the condition under
+//             which the selector is rendered at all. Both are the whole bug —
+//             the selector highlights whatever it is HANDED, so the defect lives
+//             entirely in its caller, and a test of CloudProviderSelector alone
+//             passes against broken code.
+//   DOES NOT  prove anything about React's rendering, the card's DOM, or the
+//             click handler. That needs a DOM harness, and until one exists this
+//             file must not claim it.
+//
+// The AST is used rather than a regex because the previous guard locator was
+// positional: it took the FIRST `{(...) && (` in the file, which is not
+// necessarily the selector's parent. An unrelated conditional earlier in the
+// component would have silently supplied the answer.
+const sf: ts.SourceFile = ts.createSourceFile(
+  'EngineVoiceFields.tsx', fields, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
+);
+
+const SELECTOR_TAG = 'CloudProviderSelector';
+
+/** The JSX element for the provider selector, located structurally.
+ *
+ *  Both node kinds are checked because the call site is SELF-CLOSING
+ *  (`<CloudProviderSelector ... />`), which TypeScript models as
+ *  `JsxSelfClosingElement` and NOT `JsxOpeningElement`. Matching only the
+ *  opening-element kind finds nothing and reports a missing selector. */
+function selectorElement(): ts.JsxOpeningElement | ts.JsxSelfClosingElement {
+  let found: ts.JsxOpeningElement | ts.JsxSelfClosingElement | undefined;
+  const visit = (node: ts.Node) => {
+    if (found) return;
+    if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node))
+      && node.tagName.getText(sf) === SELECTOR_TAG) {
+      found = node;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  assert.ok(found, `EngineVoiceFields must render a ${SELECTOR_TAG}`);
+  return found!;
+}
+
+/** The `value={...}` expression handed to the selector. */
 function providerSelectorValue(): string {
-  const at = fields.indexOf('<CloudProviderSelector');
-  assert.ok(at > 0, 'EngineVoiceFields must render a CloudProviderSelector');
-  const block = fields.slice(at, fields.indexOf('/>', at));
-  const value = block.match(/value=\{([^}]+)\}/);
-  assert.ok(value?.[1], `the selector must be given an explicit value, saw: ${block.slice(0, 200)}`);
-  return value[1].trim();
+  const attr = selectorElement().attributes.properties.find(
+    (p): p is ts.JsxAttribute => ts.isJsxAttribute(p)
+      && ts.isIdentifier(p.name) && p.name.text === 'value',
+  );
+  assert.ok(attr?.initializer, 'the selector must be given an explicit value');
+  return attr.initializer.getText(sf).replace(/^\{|\}$/g, '');
+}
+
+/**
+ * The CONDITION under which the selector is rendered, found by walking up from
+ * the element rather than by searching the file.
+ */
+function providerSelectorGuard(): string {
+  let node: ts.Node | undefined = selectorElement();
+  let guard: ts.BinaryExpression | undefined;
+  while (node && !guard) {
+    // The call site is `{cond && (() => { ... })}`, which TypeScript models as a
+    // BinaryExpression with an AmpersandAmpersandToken — NOT a
+    // ConditionalExpression. Searching for the ternary type finds no ancestor at
+    // all and reports "no guard" for a selector that plainly has one.
+    if (ts.isBinaryExpression(node)
+      && node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+      guard = node;
+    }
+    node = node.parent;
+  }
+  assert.ok(guard,
+    'expected the selector to be rendered behind a condition, e.g. '
+      + '{cond && (() => { ... <CloudProviderSelector /> })()}');
+  return guard.left.getText(sf);
 }
 
 // Evaluates the derivation expression against a slot, so the assertion is about
@@ -61,30 +135,19 @@ test('the persisted provider still wins when the engine is not gemini', () => {
   assert.equal(selectedCard('cloud', 'openai-compatible'), 'openai-compatible');
 });
 
-/** The condition under which EngineVoiceFields renders the provider selector at
- *  all, evaluated against an engine + gemini-selected pair.
+/** Whether the provider cards render at all, for a given slot.
  *
- *  This exists because the case it replaces asserted the WRONG THING. For a
- *  persona on the station default, `selectedCard('inherit', 'openai')` returned
- *  'openai' — and the test was named "does not light up any provider card",
- *  which is the opposite of what returning 'openai' means. It passed, and it was
- *  checking a value the component never produces: the selector is rendered only
- *  when the engine is `cloud` or Gemini is selected, so for `inherit` there is
- *  no card to light up at all. An assertion whose name contradicts its own
- *  expectation is worse than a missing one — it reads as coverage of a
- *  regression that it does not cover. */
+ *  This replaces the case that asserted the opposite of its own name.
+ *  `selectedCard('inherit', 'openai')` returned 'openai', and the test was named
+ *  "does not light up any provider card" — which is the opposite of what returning
+ *  'openai' means. It passed while checking a value the component never produces:
+ *  the selector is not rendered for an inheriting persona at all, so there is no
+ *  card to light up. An assertion whose name contradicts its own expectation
+ *  reads as coverage of a regression it does not cover. */
 function selectorIsRendered(engine: string, geminiSelected: boolean): boolean {
-  const at = fields.indexOf('<CloudProviderSelector');
-  assert.ok(at > 0, 'EngineVoiceFields must render a CloudProviderSelector');
-  const block = fields.slice(at, fields.indexOf('/>', at));
-  const guard = /\{\(([^)]*?)\)\s*&&\s*\(/.exec(fields.slice(0, at));
-  assert.ok(guard?.[1],
-    'expected the selector to be rendered behind a guard, e.g. '
-      + '{(cond) && (() => { ... <CloudProviderSelector ... /> })()}');
-  const expr = guard[1]
+  const expr = providerSelectorGuard()
     .replace(/value\.engine/g, JSON.stringify(engine))
     .replace(/geminiSelected/g, String(geminiSelected));
-  assert.ok(block.length > 0, 'the selector must exist in the guarded branch');
   return Boolean(new Function(`return (${expr});`)());
 }
 
