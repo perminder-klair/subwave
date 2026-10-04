@@ -36,6 +36,7 @@ import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
 // refusal cannot drift apart.
 import { GEMINI_LIBRARY_LANGUAGE_MAX } from '../../../lib/schemas.generated';
 import { VoicePicker } from '../tts/VoicePicker';
+import { buildGeminiSaveBlock } from './geminiSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
@@ -633,15 +634,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         kokoro: { voice: form.tts.kokoro?.voice, lang: form.kokoroLang },
         chatterbox: { referenceVoice: form.tts.chatterbox?.referenceVoice ?? '' },
         pocketTts: { voice: form.tts.pocketTts?.voice ?? 'alba' },
-        gemini: {
-          // '' is sent verbatim for the model: it is the "walk the fallback
-          // chain" choice, not a blank field for the server to fill in.
-          model: form.tts.gemini?.model ?? '',
-          voice: form.tts.gemini?.voice ?? 'Puck',
-          // '' is a real choice here too — no pronunciation notes is the
-          // default for every station, so it must survive the round trip.
-          pronunciation: form.tts.gemini?.pronunciation ?? '',
-        },
+        gemini: buildGeminiSaveBlock(form.tts.gemini),
         cloud: {
           enabled: true,
           provider: form.tts.cloud.provider,
