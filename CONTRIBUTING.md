@@ -22,10 +22,13 @@ See [`README.md`](README.md) for the architecture and [`DEPLOY.md`](DEPLOY.md)
 for deployment. For local development:
 
 ```bash
-cd docker && docker compose up -d        # Icecast + Liquidsoap + Controller
+docker compose -f docker-compose.dev.yml up -d   # Icecast + Liquidsoap + Controller
 cd controller && npm install && npm run dev
 cd web && npm install && npm run dev     # web UI on :7700
 ```
+
+Compose files live at the repo root, not under `docker/` — the full set, and what
+each deployment shape is for, is in [`CLAUDE.md`](CLAUDE.md).
 
 `controller/`, `web/` and `mcp-subwave/` each expose `npm run lint` (`eslint . &&
 `tsc --noEmit`; `mcp-subwave` is `tsc` only), and CI runs all three on every PR.
