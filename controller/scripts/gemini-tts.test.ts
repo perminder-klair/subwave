@@ -83,9 +83,21 @@ test('splitCues: the prompt’s own cue spellings never reach the transcript', (
   // `[sighs]`, `[whispers]`, `[excited]` and `[soft and warm]`. Gemini 3.8
   // treats `text` as a verbatim transcript, so an unrecognised bracket is
   // RECITED — the cue becomes an audible artefact instead of a performance.
+  // Each spelling now emits ITSELF. The guide offers `<sigh> / <sighs>` as
+  // alternatives (and likewise `<chuckle> / <chuckles>`), so normalising the
+  // plural away threw away a documented tag. What this test is actually for is
+  // unchanged and is asserted first: the cue must never survive as a spoken
+  // word, which held under both spellings.
+  //
+  // The brackets are stripped BEFORE that check, not after: `<sighs>` is a
+  // correct tag, and a bare `\bsighs\b` matches inside it because `<` is a word
+  // boundary. Checking the raw text flags the fix as the bug.
+  const recited = splitCues('Honestly? [laughs] I told you so. [sighs] Anyway.');
+  assert.doesNotMatch(recited.text.replace(/<[^>]+>/g, ''), /\b(laughs|sighs)\b/,
+    'a cue that reaches the transcript is recited aloud by Gemini 3.8');
   assert.deepEqual(
-    splitCues('Honestly? [laughs] I told you so. [sighs] Anyway.'),
-    { text: 'Honestly? <laugh> I told you so. <sigh> Anyway.', styles: [] },
+    recited,
+    { text: 'Honestly? <laugh> I told you so. <sighs> Anyway.', styles: [] },
   );
   assert.deepEqual(
     splitCues('A [excited] little number'),
