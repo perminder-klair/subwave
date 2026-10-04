@@ -409,6 +409,109 @@ test('facets are published only after a COMPLETE walk', async () => {
   assert.equal(lib.isLibraryVoice('A'), true, 'membership still records what was served');
 });
 
+test('a walk stopped at the page cap does NOT publish facets as if complete', async () => {
+  // Hitting the cap with a continuation token still in hand means the walk did
+  // not finish. Publishing anyway set `ready` true over a PARTIAL catalogue —
+  // the exact failure staging was introduced to prevent, reached by a different
+  // route: accents and languages past the cap would be silently absent while the
+  // cache claimed completeness, and `ensureFacets` would not retry.
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  let call_ = 0;
+  // Every page succeeds and every page hands back another token, so the walk
+  // runs until the cap rather than finishing or failing.
+  globalThis.fetch = (async () => {
+    call_ += 1;
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        voices: [{ id: `v${call_}`, display_name: `V${call_}`, language_code: `en-U${call_}`,
+          accent: `Accent ${call_}`, gender: 'male', pitch: 'low' }],
+        next_page_token: `p${call_ + 1}`,
+      }),
+      text: async () => '{}',
+    } as unknown as Response;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-cap-tests';
+  try {
+    await lib.prewarm({ force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+
+  const f = lib.catalogueFacets();
+  assert.equal(f.ready, false, 'a capped walk is incomplete and must not publish');
+  assert.deepEqual(f.accents, [], 'and must not publish the pages it did see');
+  // Membership is per page on purpose, so it survives a truncated walk.
+  assert.equal(lib.isLibraryVoice('V1'), true, 'what Google served is still known');
+});
+
+test('an upstream timeout degrades to the unavailable envelope, it does not reject', async () => {
+  // `fetchWithTimeout` aborts its OWN controller, so a timeout and a caller
+  // disconnect are the same `name: 'AbortError'`. Rethrowing on the name alone
+  // let the internal 15-second timeout escape, and the Express 4 handler
+  // (`await listLibraryVoices(...)`, no catch) never answered the request — the
+  // operator saw a spinner instead of an unavailable-library envelope.
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  globalThis.fetch = (async () => {
+    const e = new Error('The operation was aborted');
+    e.name = 'AbortError';
+    throw e;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-timeout-tests';
+  try {
+    // No caller signal: this is the module's own timeout, and it must resolve.
+    const page = await lib.listLibraryVoices({});
+    assert.equal(page.ok, false, 'a timeout is an unavailable library, not a thrown error');
+    assert.deepEqual(page.voices, []);
+    assert.ok(page.message, 'and it carries a message the UI can show');
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+});
+
+test('a genuine caller cancellation still propagates', async () => {
+  // The counterpart, and the reason the timeout case must be distinguished rather
+  // than blanket-caught: TanStack Query aborts on unmount and on refetch, and it
+  // needs that rejection to settle its own state. Swallowing it would leave the
+  // query hanging instead.
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  globalThis.fetch = (async () => {
+    const e = new Error('The operation was aborted');
+    e.name = 'AbortError';
+    throw e;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-cancel-tests';
+  const ac = new AbortController();
+  ac.abort();
+  try {
+    await assert.rejects(
+      () => lib.listLibraryVoices({ signal: ac.signal }),
+      (err: unknown) => (err as { name?: string }).name === 'AbortError',
+      'a caller abort must still reject so the query can settle',
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+});
+
 test('the catalogue walk accumulates facets across pages', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();

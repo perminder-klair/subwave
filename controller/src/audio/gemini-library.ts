@@ -40,6 +40,11 @@ const LIST_TIMEOUT_MS = 15_000;
 
 // Google's own cap; the docs say page_size maxes at 1000.
 const MAX_PAGE_SIZE = 1000;
+// A guard against an upstream that hands back an endless token chain. Sized so a
+// real catalogue finishes inside it (2,277 names at 1,000/page is three pages);
+// hitting it means the walk is INCOMPLETE, which is handled below rather than
+// published as though it were the whole thing.
+const MAX_WALK_PAGES = 5;
 
 // A voice value is short. Anything longer is a paste accident, not an id.
 const MAX_ID_LEN = 100;
@@ -167,7 +172,19 @@ export async function listLibraryVoices(f: LibraryFilters = {}): Promise<Library
     const next = str(json?.next_page_token) || str(json?.nextPageToken);
     return { ok: true, voices, nextPageToken: next, applied };
   } catch (err: unknown) {
-    if ((err as { name?: string })?.name === 'AbortError') throw err;
+    // Caller cancellation is rethrown; OUR timeout is not.
+    //
+    // `fetchWithTimeout` aborts its own controller, so a timeout and a caller
+    // disconnect produce the same `name: 'AbortError'` and nothing in the error
+    // distinguishes them. Rethrowing on the name alone therefore propagated the
+    // internal 15-second timeout out of this function, and the Express 4 handler
+    // (`await listLibraryVoices(...)`, no catch) never answered the request — the
+    // operator saw a spinner until the browser gave up, instead of the
+    // unavailable-library envelope every other failure already returns.
+    //
+    // The caller's signal is the only thing that can tell the two apart.
+    const callerAborted = f.signal?.aborted === true;
+    if (callerAborted && (err as { name?: string })?.name === 'AbortError') throw err;
     return { ok: false, voices: [], message: (err as { message?: string })?.message || 'Voice library unreachable' };
   }
 }
@@ -308,8 +325,23 @@ export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
       staged.push(...page.voices);
       token = page.nextPageToken;
       pages += 1;
-      if (pages >= 5) break;
+      if (pages >= MAX_WALK_PAGES) break;
     } while (token);
+
+    // Stopping at the cap with a continuation token still in hand means the walk
+    // did NOT finish, so the vocabulary is partial. Publishing it would set
+    // `ready` true over an incomplete catalogue — the exact failure staging was
+    // introduced to prevent, just reached by a different route: accents and
+    // languages past the cap would be silently absent while the cache claimed to
+    // be complete, and `ensureFacets` would not retry.
+    //
+    // Nothing is published and the index is not marked warm, so the next call
+    // walks again. Membership recorded so far is kept: a voice Google served is a
+    // voice that exists, whoever asked for it.
+    if (token) {
+      console.warn(`[tts] gemini voice library: walk stopped at the ${MAX_WALK_PAGES}-page cap with pages remaining; facets left unpublished`);
+      return known.size;
+    }
     publishFacets(staged);
     warmedAt = Date.now();
     return known.size;

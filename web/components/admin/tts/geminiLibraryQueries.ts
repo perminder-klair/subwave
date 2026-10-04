@@ -41,10 +41,26 @@ export interface LibraryFacets {
 /** The NORMALISED filters a page was requested with. Keys describe the server
  *  resource and its inputs only — never `adminFetch` identity. */
 export interface LibraryInput {
-  /** A BCP-47 tag, or `any` for every language. `any` is explicit, not an
-   *  omission: the route reads an absent `language` as "use the station's saved
-   *  default", which is not what the control means. */
-  language: string;
+  /** A BCP-47 tag, `any` for every language, or OMITTED to defer to the station's
+   *  saved `tts.gemini.libraryLanguage`.
+   *
+   *  Three distinct states, and conflating any two produces a wrong request
+   *  rather than a missing one:
+   *
+   *    omitted — "whatever the station is configured to browse". Sent as an
+   *              ABSENT `language`, which the route reads as the saved default.
+   *    'any'   — the operator explicitly asked for every language. MUST be sent
+   *              explicitly, because absent means the saved default, so a control
+   *              labelled "Every language" would silently return one region.
+   *    'en-AU' — an explicit filter.
+   *
+   *  UI sentinels never reach this type. A `__any__`-style placeholder is a Radix
+   *  Select requirement, not a server value, and letting one through put
+   *  `language=__any__` on the wire, which the route forwarded upstream as a
+   *  literal language code — an empty library that reads as "no voices" rather
+   *  than as a bug. `normalizeLibraryInput` is the boundary that translates them,
+   *  and it is tested directly for that reason. */
+  language?: string;
   gender?: string;
   pitch?: string;
   accent?: string;
@@ -69,16 +85,19 @@ export const geminiLibraryKeys = {
  *  ONE cache entry. Without this, `gender: undefined` and an absent `gender`
  *  would key differently and defeat the de-duplication entirely. */
 export function normalizeLibraryInput(input: LibraryInput): LibraryInput {
-  const compact = (v: string | undefined) => {
-    const t = (v ?? '').trim();
-    return t && t !== 'any' ? t : t === 'any' ? 'any' : undefined;
-  };
+  // A UI placeholder is not a language. `__any__` is truthy, so treating it as a
+  // value kept it, and `?language=__any__` reached Google as
+  // `language_code=__any__` — a filter matching nothing.
+  const PLACEHOLDERS = new Set(['', '__any__', '__station_default__']);
+  const lang = (input.language ?? '').trim();
   return {
-    language: input.language?.trim() || 'any',
-    ...(compact(input.gender) ? { gender: compact(input.gender) } : {}),
-    ...(compact(input.pitch) ? { pitch: compact(input.pitch) } : {}),
-    ...(compact(input.accent) ? { accent: compact(input.accent) } : {}),
-    ...(compact(input.search) ? { search: compact(input.search) } : {}),
+    // An absent language is meaningful — it defers to the station's saved
+    // default — so it is omitted from the key rather than defaulted to 'any'.
+    ...(lang && !PLACEHOLDERS.has(lang) ? { language: lang } : {}),
+    ...(input.gender?.trim() ? { gender: input.gender.trim() } : {}),
+    ...(input.pitch?.trim() ? { pitch: input.pitch.trim() } : {}),
+    ...(input.accent?.trim() ? { accent: input.accent.trim() } : {}),
+    ...(input.search?.trim() ? { search: input.search.trim() } : {}),
     ...(input.pageSize ? { pageSize: input.pageSize } : {}),
   };
 }

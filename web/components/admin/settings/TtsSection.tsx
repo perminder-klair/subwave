@@ -720,6 +720,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
     pocketTts?: { voice?: string };
+    // The Gemini block, absent from this hand-written shape until now — which is
+    // why no Gemini field appeared in `ttsDirty`. Kept in step with the save
+    // payload in geminiSavePayload.ts.
+    gemini?: { model?: string; voice?: string; pronunciation?: string; libraryLanguage?: string };
     cloud?: SavedCloud;
     remote?: { url?: string };
     gainDb?: Record<string, number>;
@@ -731,6 +735,13 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const savedChatterboxVoice: string = savedTts.chatterbox?.referenceVoice || '';
   const savedPocketTtsVoice: string = savedTts.pocketTts?.voice || '';
   const savedCloud: SavedCloud = savedTts.cloud || {};
+  // The whole Gemini block, not just the newest field. `ttsDirty` drives the
+  // "Your edits below aren't live until you Save" banner, so a field missing from
+  // it is a field the operator can change and be told is already saved. Every
+  // Gemini control on this panel writes through `save()`; none of them were
+  // listed here, which is why libraryLanguage could be edited and described as
+  // live while the banner stayed clean.
+  const savedGemini = savedTts.gemini || {};
   const savedRemoteUrl: string = savedTts.remote?.url || '';
   const savedEngineLabel = engineLabelOf(savedEngine);
   const formEngineLabel = engineLabelOf(form.tts.defaultEngine);
@@ -771,6 +782,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     || form.tts.cloud.temperature !== (savedCloud.temperature ?? FISH_TTS_DEFAULTS.temperature)
     || form.tts.cloud.topP !== (savedCloud.topP ?? FISH_TTS_DEFAULTS.topP)
     || form.tts.cloud.latency !== (savedCloud.latency ?? FISH_TTS_DEFAULTS.latency)
+    // `?? ''` on every side: an absent saved value and an empty control are the
+    // same state, so an untouched pre-upgrade settings.json is not dirty.
+    || (form.tts.gemini?.model || '') !== (savedGemini.model ?? '')
+    || (form.tts.gemini?.voice || '') !== (savedGemini.voice ?? '')
+    || (form.tts.gemini?.pronunciation || '') !== (savedGemini.pronunciation ?? '')
+    || (form.tts.gemini?.libraryLanguage || '') !== (savedGemini.libraryLanguage ?? '')
     || (form.tts.remote.url || '').trim() !== savedRemoteUrl
     || gainDirty
     || speedDirty;

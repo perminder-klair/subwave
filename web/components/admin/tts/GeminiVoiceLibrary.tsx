@@ -47,7 +47,14 @@ function withSelection(options: string[], selected: string): string[] {
   return [...options, selected].sort();
 }
 
-const ANY = '__any__';
+/** Radix Select rejects an empty-string item value, so "no filter" and
+ *  "every language" each need a placeholder. They are DIFFERENT requests — the
+ *  first defers to the station's saved default, the second overrides it — so
+ *  they get different placeholders. They were one value before, and the merged
+ *  case sent `language=__any__` on the wire. Both are translated away by
+ *  `normalizeLibraryInput`; neither is ever a server value. */
+const ANY = 'any';
+const STATION_DEFAULT = '__station_default__';
 // Google's own page_size ceiling is 1000; 200 keeps a browse responsive while
 // still covering one language in a single request (en-AU is 44).
 const PAGE_SIZE = 200;
@@ -142,6 +149,11 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       audioRef.current = el;
       audioUrl.current = url;
       await el.play().catch(() => {
+        // A refused play() (autoplay policy) leaves a live object URL and a live
+        // element that nothing will ever release: `onended` never fires for audio
+        // that never started. The message also stays up until the next audition,
+        // so a blocked sample reads as a permanent error rather than a retry.
+        if (audioRef.current === el) releaseCurrent();
         if (mine === auditionSeq.current) setAuditionError('Playback was blocked — press play again');
       });
     } catch (e: unknown) {
@@ -151,10 +163,10 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       if (abortRef.current === ac) abortRef.current = null;
       if (mine === auditionSeq.current) setAuditioning(null);
     }
-  }, [adminFetch, speed, sampleLanguage]);
+  }, [adminFetch, speed, sampleLanguage, releaseCurrent, stopCurrent]);
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [language, setLanguage] = useState<string>(ANY);
+  const [language, setLanguage] = useState<string>(STATION_DEFAULT);
   const [gender, setGender] = useState<string>(ANY);
   const [pitch, setPitch] = useState<string>(ANY);
   const [accent, setAccent] = useState<string>(ANY);
@@ -163,7 +175,12 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
   // must never be combined with another. Both fall out of the query owning the
   // cursor: it is one cache entry per applied filter set, so a stale one is not
   // merely hidden, it is unreachable.
-  const [appliedInput, setAppliedInput] = useState<LibraryInput>({ language: ANY });
+  // First open DEFERS to the station's saved libraryLanguage rather than
+  // overriding it. The old default was "every language", which meant opening the
+  // browser silently ignored whatever default the operator had configured — the
+  // setting read as broken, because its effect was invisible until the control was
+  // touched and re-applied.
+  const [appliedInput, setAppliedInput] = useState<LibraryInput>({});
 
   const library = useGeminiLibraryQuery(adminFetch, appliedInput, open);
   const { voices, facets } = useMemo(() => flattenLibraryPages(library.data?.pages), [library.data?.pages]);
@@ -175,7 +192,10 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
 
   const apply = useCallback(() => {
     setAppliedInput(normalizeLibraryInput({
-      language,
+      // STATION_DEFAULT -> undefined, so the request omits `language` and the
+      // route applies the saved default. ANY -> 'any', sent explicitly so it
+      // overrides that default rather than being absorbed by it.
+      language: language === STATION_DEFAULT ? undefined : language,
       gender: gender === ANY ? undefined : gender,
       pitch: pitch === ANY ? undefined : pitch,
       accent: accent === ANY ? undefined : accent,
@@ -202,10 +222,26 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
 
   // A saved library voice must stay visible even when a filter set excludes it,
   // or the operator cannot tell what the persona is actually using.
-  const selected = useMemo(() => {
+  // Whether the persona's SAVED voice is among the CURRENT results. Two separate
+  // facts, previously conflated into one `selected` derived from `voices` and then
+  // required to be absent from `voices` — a condition that can never hold, so the
+  // "not in these results" note was dead code and a saved voice excluded by the
+  // filters was invisible. `onList` is recorded on select so the name can still be
+  // shown after it drops out of the page.
+  const [savedLabel, setSavedLabel] = useState<string | null>(null);
+  const onList = useMemo(() => {
     if (!value) return null;
     return voices.find(v => v.id === value || v.label === value) || null;
   }, [voices, value]);
+
+  // Remember the label as long as the voice is on screen, so a filter change that
+  // excludes it can still name it.
+  useEffect(() => {
+    if (onList) setSavedLabel(onList.label);
+  }, [onList]);
+
+  const selectedName = onList?.label ?? savedLabel;
+  const savedIsHidden = !!value && !onList;
 
   if (!open) {
     return (
@@ -243,7 +279,7 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
         <button
           type="button"
           className="cursor-pointer text-[9px] font-bold tracking-[0.2em] text-muted uppercase hover:text-ink"
-          onClick={() => { setOpen(false); }}
+          onClick={() => { auditionSeq.current += 1; stopCurrent(); setOpen(false); }}
         >
           Close
         </button>
@@ -261,7 +297,21 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        {filter('Language', language, setLanguage, catalogue.languages, 'Every language')}
+        {/* Language is the one control with two distinct non-filter states, so it
+            * cannot use the shared `filter` helper: "Station default" omits the
+            * parameter and "Every language" sends `any`, and offering only the
+            * latter is what made the saved default unreachable. */}
+        <div className="field">
+          <Label>Language</Label>
+          <Select value={language} onValueChange={setLanguage}>
+            <SelectTrigger aria-label="Language"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value={STATION_DEFAULT}>Station default</SelectItem>
+              <SelectItem value={ANY}>Every language</SelectItem>
+              {catalogue.languages.map(l => <SelectItem key={l} value={l}>{l}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
         {filter('Gender', gender, setGender, catalogue.genders, 'Any')}
         {filter('Pitch', pitch, setPitch, catalogue.pitches, 'Any')}
         {filter('Accent', accent, setAccent, catalogue.accents, 'Any')}
@@ -287,9 +337,9 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
         </div>
       )}
 
-      {selected && !voices.some(v => v.id === selected.id) && (
+      {savedIsHidden && (
         <div className="mt-2 text-[10px] text-muted">
-          Currently saved: <strong>{selected.label}</strong> — not in these results.
+          Currently saved: <strong>{selectedName || value}</strong> — not in these results.
         </div>
       )}
 
