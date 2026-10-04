@@ -1533,3 +1533,46 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
       return v;
     });
 }
+
+// ── Gemini Extended Voice Library default filter ──────────────────────────────
+// A BCP-47 language tag, used ONLY to decide which page of the voice catalogue
+// the admin browser opens on. It is not a constraint on a persona's voice and it
+// never reaches the engine — Gemini takes its accent from the voice itself.
+//
+// Deliberately NOT an enum of the languages Google currently serves. That
+// vocabulary changes under us, and a list here would silently exclude a voice
+// the operator can see in AI Studio (the failure being fixed). The shape is
+// checked instead; the real values are discovered at browse time.
+export const GEMINI_LIBRARY_LANGUAGE_MAX = 35;
+
+// language[-Script][-REGION][-variant…]: a 2-3 letter (or 5-8 letter) primary
+// subtag, then optional 4-letter script, 2-letter/3-digit region, and any number
+// of 1-8 alphanumeric subtags. Structural only — it proves the string is a tag,
+// never that Google serves it.
+const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/i;
+
+/** Canonicalise a BCP-47 tag so `en-au`, `EN-AU` and `en-AU` cannot become three
+ *  dropdown entries: primary subtag lowercase, script Titlecase, region
+ *  UPPERCASE. Google's filter is a case-insensitive exact match, so this is
+ *  safe, and an unrecognisable tag is returned trimmed rather than dropped. */
+export function normalizeGeminiLibraryLanguage(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  const parts = v.split('-');
+  const out = [parts[0].toLowerCase()];
+  for (const p of parts.slice(1)) {
+    if (/^[a-z]{4}$/i.test(p)) out.push(p[0].toUpperCase() + p.slice(1).toLowerCase());
+    else if (/^([a-z]{2}|[0-9]{3})$/i.test(p)) out.push(p.toUpperCase());
+    else out.push(p.toLowerCase());
+  }
+  return out.join('-');
+}
+
+/** Whether a value is a usable `libraryLanguage`. Empty is valid and means
+ *  "every language". Shared by the strict save path and the lenient load path
+ *  so a hand-edited settings.json cannot wedge boot — and mirrored, so the
+ *  admin form pre-flights with the same rule the route enforces. */
+export function isGeminiLibraryLanguage(raw: unknown): boolean {
+  const v = normalizeGeminiLibraryLanguage(raw);
+  return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
+}

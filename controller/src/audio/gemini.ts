@@ -196,6 +196,11 @@ export function geminiStyle(
 }
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+// Circular by construction: gemini-library needs apiKey() from here, and this
+// needs isLibraryVoice() from there. ESM handles the cycle because neither is
+// called at module-evaluation time — apiKey() reads process.env on call, and
+// usableVoice() runs per render.
+import { isLibraryVoice } from './gemini-library.js';
 
 // 3 minutes: TTS renders are slow and retried per model; the caller's abort
 // (preview cancel, shutdown) still wins via signal composition.
@@ -327,9 +332,18 @@ export function usableVoice(name: unknown): string | undefined {
   const raw = String(name ?? '').trim();
   if (!raw) return undefined;
   if (/^(voice|voicekey)_/i.test(raw)) return raw;
-  const hit = (GEMINI_TTS_VOICES as readonly string[])
+  const featured = (GEMINI_TTS_VOICES as readonly string[])
     .find((v) => v.toLowerCase() === raw.toLowerCase());
-  return hit;
+  if (featured) return featured;
+  // The Extended Voice Library is ~2,000 more prebuilt voices under different
+  // ids (`en-us-varo`), and an operator picks those in the picker, so a
+  // persona can legitimately carry one. Membership is tested against what
+  // Google has actually SERVED this process (gemini-library's index), never
+  // against a structural guess — accepting anything shaped like an id would put
+  // a typo back on the wire, and a typo is a 400 that throws the segment into
+  // the fallback chain. See that module for why the index is prewarmed at boot.
+  if (isLibraryVoice(raw)) return raw;
+  return undefined;
 }
 
 // ── Multi-line ────────────────────────────────────────────────────────────────

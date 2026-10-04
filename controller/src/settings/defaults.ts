@@ -315,7 +315,15 @@ export const DEFAULTS = {
     // pinning a model at install time would freeze the chain at whatever was
     // newest today. `pronunciation` is free text and empty by default: it is for
     // ONE station's place names, and nothing ships enabled for anyone else.
-    gemini: { model: '', voice: 'Puck', pronunciation: '' },
+    // `libraryLanguage` is the DEFAULT language filter for the Extended Voice
+    // Library browser — NOT a constraint on what a persona may use, and NOT a
+    // hint handed to the engine. Gemini takes its accent from the voice you
+    // pick (Google: "do not try to change immutable speaker traits in style …
+    // pick a regional voice"), so this only decides which page of the ~2,000
+    // voice catalogue the admin UI opens on. Empty means "no filter", so a
+    // station that does not care is not narrowed, and nothing is hardcoded:
+    // the dropdown is populated from what Google currently serves.
+    gemini: { model: '', voice: 'Puck', pronunciation: '', libraryLanguage: '' },
     // Used when an engine resolves to 'cloud'. A persona chooses provider+voice;
     // `model` stays shared. `enabled: false` makes the engine report unavailable
     // regardless of key, so the pickers grey it out.
