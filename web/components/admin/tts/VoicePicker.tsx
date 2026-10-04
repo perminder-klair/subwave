@@ -52,6 +52,7 @@ export interface VoicePickerPreviewParams {
   // Persona's free-text on-air language — the server renders the sample
   // sentence in this language when it recognizes it.
   language?: string;
+  voiceStyle?: string;
   fishSettings?: {
     temperature: number;
     topP: number;
@@ -129,6 +130,8 @@ export function VoicePicker({
         speed: preview.speed,
         lang: preview.lang,
         language: preview.language,
+        voiceStyle: preview.voiceStyle,
+        geminiModel: preview.geminiModel,
         fishSettings: preview.fishSettings,
       }, ac.signal);
     } catch (e) {

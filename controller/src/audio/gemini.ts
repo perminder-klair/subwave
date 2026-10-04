@@ -206,7 +206,10 @@ async function postInteraction(body: unknown, signal?: AbortSignal, modelPref?: 
   if (!key) throw new Error('GOOGLE_GENERATIVE_AI_API_KEY not set');
   let lastErr: unknown = null;
   for (const model of modelChain(modelPref)) {
+    signal?.throwIfAborted();
     let res: Response;
+    let json: any;
+    let errorText = '';
     try {
       res = await fetchWithTimeout(`${API_BASE}/interactions`, {
         method: 'POST',
@@ -214,10 +217,15 @@ async function postInteraction(body: unknown, signal?: AbortSignal, modelPref?: 
         body: JSON.stringify({ model, ...(body as Record<string, unknown>) }),
         signal,
         timeoutMs: REQUEST_TIMEOUT_MS,
+        bodyDeadline: true,
       });
+      if (res.ok) json = await res.json();
+      else errorText = await res.text();
+      signal?.throwIfAborted();
     } catch (err) {
-      // Timeout or caller abort: a stall here must not wedge the render —
-      // try the next model, then let the controller fallback chain cover.
+      // A provider timeout or malformed body can recover on another model.
+      // Caller cancellation is terminal, including during body consumption.
+      signal?.throwIfAborted();
       lastErr = err;
       continue;
     }
@@ -226,21 +234,19 @@ async function postInteraction(body: unknown, signal?: AbortSignal, modelPref?: 
       continue; // fail over immediately; the controller fallback chain covers
     }
     if (res.status >= 500) {
-      const text = await res.text().catch(() => '');
-      lastErr = new Error(`Gemini TTS ${model} HTTP ${res.status}: ${text.slice(0, 200)}`);
+      lastErr = new Error(`Gemini TTS ${model} HTTP ${res.status}: ${errorText.slice(0, 200)}`);
       continue; // transient server error — try the next model before giving up
     }
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Gemini TTS ${model} HTTP ${res.status}: ${text.slice(0, 200)}`);
+      throw new Error(`Gemini TTS ${model} HTTP ${res.status}: ${errorText.slice(0, 200)}`);
     }
-    const json = (await res.json()) as any;
+    const steps = Array.isArray(json?.steps) ? json.steps : [];
     const data: string | undefined = json?.output_audio?.data
-      ?? json?.steps?.filter((s: any) => s?.type === 'model_output')
-        .flatMap((s: any) => s?.content ?? [])
+      ?? steps.filter((s: any) => s?.type === 'model_output')
+        .flatMap((s: any) => Array.isArray(s?.content) ? s.content : [])
         .filter((c: any) => c?.type === 'audio')
         .at(-1)?.data;
-    if (!data) {
+    if (typeof data !== 'string' || !data) {
       lastErr = new Error(`Gemini TTS ${model} returned no audio`);
       continue;
     }

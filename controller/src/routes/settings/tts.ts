@@ -44,6 +44,7 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,
+      voiceStyle: typeof body.voiceStyle === 'string' ? body.voiceStyle : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
       corrections: Array.isArray(body.corrections) ? body.corrections : undefined,
       voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
@@ -114,5 +115,4 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
     clearTimeout(timer);
   }
 });
-
 
