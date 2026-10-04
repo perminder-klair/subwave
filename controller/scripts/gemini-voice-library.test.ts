@@ -369,6 +369,46 @@ test('a FILTERED browse must not populate the facet vocabulary', async () => {
     'a filtered page must not be mistaken for the catalogue vocabulary');
 });
 
+test('facets are published only after a COMPLETE walk', async () => {
+  // A partial walk must not be published. Publishing per page made `ready` true
+  // on page one, so a failure on page three handed the caller a vocabulary that
+  // claimed to be complete while later accents were simply missing — and with no
+  // retry until a restart. Staging, then publishing, is the fix.
+  const lib = await import('../src/audio/gemini-library.js');
+  lib._resetLibraryIndex();
+
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  let call_ = 0;
+  globalThis.fetch = (async () => {
+    // page 1 OK with "Sydney English"; page 2 FAILS.
+    if (call_++ === 0) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({ voices: [{ id: 'a', display_name: 'A', language_code: 'en-AU', accent: 'Sydney English', gender: 'male', pitch: 'low' }], next_page_token: 'p2' }),
+        text: async () => '{}',
+      } as unknown as Response;
+    }
+    return { ok: false, status: 503, json: async () => ({}), text: async () => 'boom' } as unknown as Response;
+  }) as typeof fetch;
+  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
+  try {
+    await lib.prewarm({ force: true });
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
+  }
+
+  const f = lib.catalogueFacets();
+  assert.equal(f.ready, false,
+    'an incomplete walk must leave the vocabulary unpublished, not half-published');
+  assert.deepEqual(f.accents, []);
+  // Membership is per page on purpose: a voice Google served is a voice that
+  // exists, whoever asked for it.
+  assert.equal(lib.isLibraryVoice('A'), true, 'membership still records what was served');
+});
+
 test('the catalogue walk accumulates facets across pages', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
@@ -397,7 +437,7 @@ test('the catalogue walk accumulates facets across pages', async () => {
   const f = lib.catalogueFacets();
   assert.equal(f.ready, true);
   assert.deepEqual(f.accents, ['General American', 'Sydney English'],
-    'both pages must contribute — a replace would drop one');
+    'both pages must contribute to the published vocabulary');
   assert.deepEqual(f.languages, ['en-AU', 'en-US']);
   assert.deepEqual(f.genders, ['female', 'male']);
   assert.deepEqual(f.pitches, ['high', 'low']);

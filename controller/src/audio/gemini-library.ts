@@ -226,7 +226,10 @@ const EMPTY_FACETS: CatalogueFacets = {
 
 let facetCache: CatalogueFacets | null = null;
 
-function noteFacets(voices: LibraryVoice[]): void {
+/** Replace the cached vocabulary from a COMPLETE walk. Publishing a partial
+ *  walk is the bug this signature exists to prevent, so the function is whole
+ *  set replacement rather than an accumulation step. */
+function publishFacets(voices: LibraryVoice[]): void {
   const lang = new Set<string>(), acc = new Set<string>(), gen = new Set<string>();
   const pit = new Set<string>(), ctx = new Set<string>();
   for (const v of voices) {
@@ -237,15 +240,12 @@ function noteFacets(voices: LibraryVoice[]): void {
     if (v.context) ctx.add(v.context);
   }
   const sorted = (s: Set<string>) => [...s].sort();
-  // Union with what is already cached: pages are walked incrementally and a
-  // later page must not erase a value the first one contributed.
-  const prev = facetCache;
   facetCache = {
-    languages: sorted(new Set([...(prev?.languages ?? []), ...lang])),
-    accents: sorted(new Set([...(prev?.accents ?? []), ...acc])),
-    genders: sorted(new Set([...(prev?.genders ?? []), ...gen])),
-    pitches: sorted(new Set([...(prev?.pitches ?? []), ...pit])),
-    contexts: sorted(new Set([...(prev?.contexts ?? []), ...ctx])),
+    languages: sorted(lang),
+    accents: sorted(acc),
+    genders: sorted(gen),
+    pitches: sorted(pit),
+    contexts: sorted(ctx),
   };
 }
 
@@ -286,6 +286,7 @@ export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
   if (!opts.force && warmedAt && Date.now() - warmedAt < TTL_MS) return known.size;
   let token: string | undefined;
   let pages = 0;
+  const staged: LibraryVoice[] = [];
   try {
     // Bounded: Google serves ~2,100 prebuilt voices in three pages of 1000.
     // The bound is a stop, not an expectation — a catalogue that grew past it
@@ -293,17 +294,23 @@ export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
     do {
       const page = await listLibraryVoices({ pageSize: MAX_PAGE_SIZE, pageToken: token, signal: AbortSignal.timeout(WARM_TIMEOUT_MS) });
       if (!page.ok) return known.size;
-      // Facets are collected HERE and nowhere else. A browse is usually
-      // FILTERED, and accumulating facets from a filtered page would rebuild
-      // the very bug this replaces: the menu would once again describe the
-      // current result instead of the catalogue. Membership, by contrast, is
-      // safe to note from any page — a voice Google served is a voice that
-      // exists, whoever asked for it.
-      noteFacets(page.voices);
+      // Facets are STAGED here and PUBLISHED once pagination completes. Facets
+      // are collected HERE and nowhere else — a browse is usually FILTERED, and
+      // accumulating from a filtered page would rebuild the bug this replaces:
+      // the menu would describe the current result instead of the catalogue.
+      //
+      // Staging matters as much as the placement. Publishing per page makes
+      // `ready` true on the FIRST page, so if page three fails the caller gets
+      // a partial vocabulary that claims to be complete — later accents and
+      // languages simply absent, with no retry until a restart. Membership is
+      // unaffected: it is recorded per page on purpose, since a voice Google
+      // served exists whoever asked for it.
+      staged.push(...page.voices);
       token = page.nextPageToken;
       pages += 1;
       if (pages >= 5) break;
     } while (token);
+    publishFacets(staged);
     warmedAt = Date.now();
     return known.size;
   } catch {
