@@ -580,6 +580,12 @@ export function nextHourlyTimeClause(clock: any) {
   return `Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`;
 }
 
+// Hourly-only override after the saved persona: omitting weather context alone
+// still lets a weather-inviting soul or seasonal angle invent conditions (#1752).
+const HOURLY_NO_WEATHER_RULE = 'For this hourly time check, do not mention weather or outdoor conditions.'
+  + ' Do not infer them from persona instructions, the day, season, daypart, daylight or darkness, or recent speech/recap.'
+  + ' This rule overrides persona and tone instructions for this segment; weather belongs only in the dedicated weather segment.';
+
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null, showWelcome = false }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   const timeClause = nextHourlyTimeClause(context?.clock);
@@ -588,7 +594,7 @@ export async function generateHourlyTime({ recap = null, context = null, recentO
     ctxLines.push(`This is the first spoken segment of the newly started show "${context.activeShow.name}". After the required time check, add one short, natural welcome to that show. The complete line may be two short sentences. Do not introduce yourself by name, mention an outgoing presenter, or imply the show began before this hour.`);
   }
   return djText({
-    system: djSystem(persona || undefined),
+    system: djSystem(persona || undefined) + '\n\n' + HOURLY_NO_WEATHER_RULE,
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
     temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
     kind: 'generateHourlyTime',
