@@ -76,6 +76,63 @@ test('openai models without an instructions channel stay ungated-safe', () => {
   }
 });
 
+/**
+ * A DEFINING occurrence of the bare `voiceStyle` token inside `cloudOverride` —
+ * every way a property can be introduced there.
+ *
+ * The previous guard was `voiceStyle\s*(?![,}\s]*[,}])`, which is exempt for
+ * shorthand `voiceStyle,` and `voiceStyle}` — the two spellings that reach
+ * ElevenLabs without an explicit value. So the guard missed the shorthand while
+ * its own failure message promised the directive could not be passed "under any
+ * spelling". An assertion that overclaims is worse than none: it reads as
+ * coverage and is not.
+ *
+ * The rule is narrower and does not need to enumerate spellings. Inside
+ * `cloudOverride` the token may only ever appear as a MEMBER READ
+ * (`opts.voiceStyle`, `cloudVoiceSettings.voiceStyle`) — pulling the numeric out
+ * of an object that legitimately holds it. Any bare token is a property being
+ * DEFINED there, and `cloudOverride` is composed from spreads alone.
+ */
+const BARE_VOICE_STYLE = /(?<![.\w$])voiceStyle\b/;
+
+// The guard is only worth having if it fires on every spelling it claims to, so
+// it is checked against the shapes themselves before it is used on real source.
+// A regex that silently matches nothing reports a clean file forever.
+test('the cloudOverride guard fires on every spelling it claims to', () => {
+  for (const spelling of [
+    'voiceStyle: opts.voiceStyle',   // the obvious regression
+    'voiceStyle,',                   // shorthand among other properties
+    'voiceStyle }',                  // shorthand as the last property
+    '{ voiceStyle }',                // shorthand alone
+    'voiceStyle: DIRECTIVE',
+    'voiceStyle :style',             // whitespace before the colon
+  ]) {
+    assert.match(spelling, BARE_VOICE_STYLE,
+      `the guard must flag a DEFINING \`voiceStyle\` in cloudOverride: ${spelling}`);
+  }
+  // Member reads are the legitimate case and must not be flagged: those are how
+  // the numeric slider reaches ElevenLabs.
+  for (const reading of [
+    '...(opts.cloudVoiceSettings || {})',
+    'opts.voiceStyle',
+    'cloudVoiceSettings.voiceStyle',
+  ]) {
+    assert.doesNotMatch(reading, BARE_VOICE_STYLE,
+      `a MEMBER READ of voiceStyle is how the numeric gets through: ${reading}`);
+  }
+
+  // A KNOWN false positive, pinned rather than hidden. In
+  // `const { voiceStyle: n } = source` the token is a READ, but a destructuring
+  // rename is textually identical to an object-literal property definition —
+  // there is no way to tell them apart without knowing whether the enclosing
+  // brace is a pattern. Flagging it is the safe direction: the guarded slice is
+  // four lines of pure spreads, so a destructuring read there would be obvious
+  // and is not a shape this codebase writes. Listed here so the limitation is a
+  // recorded decision rather than a surprise for whoever hits it next.
+  assert.match('const { voiceStyle: numeric } = opts.cloudVoiceSettings;',
+    BARE_VOICE_STYLE, 'documented limitation: a destructuring RENAME reads as a definition');
+});
+
 // The name collision. `voiceStyle` is BOTH this station's string delivery
 // directive AND ElevenLabs' numeric style slider (0–1). They are different
 // fields that happen to share a name, on different objects: the number rides
@@ -101,7 +158,7 @@ test('the ElevenLabs numeric slider and the string directive cannot collide', as
     fs.readFileSync(new URL('../src/audio/tts.ts', import.meta.url), 'utf8'));
   const compose = src.slice(src.indexOf('const cloudOverride'), src.indexOf('return cloud.speak'));
   assert.match(compose, /cloudVoiceSettings/, 'cloudOverride must merge the slider object');
-  assert.doesNotMatch(compose, /voiceStyle\s*(?![,}\s]*[,}])/,
+  assert.doesNotMatch(compose, BARE_VOICE_STYLE,
     'cloudOverride must not be handed the string directive under any spelling');
 
   // Both values coexist as distinct types at the speak() boundary.

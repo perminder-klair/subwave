@@ -16,7 +16,7 @@ import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
-import { Textarea } from '../../ui/textarea';
+import { TextareaField } from '@/lib/form-fields';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
 import { composeTtsControlSpeeds, PERSONA_VOICE_STYLE_MAX } from '../../../lib/schemas.generated';
@@ -201,44 +201,34 @@ export function PersonaVoiceCard({
             on the way to a dead end is the wrong default. That is also why it
             lives outside the `tts` block.
           */}
-          <div className="field mt-4">
-            <Label>How this persona speaks</Label>
-            <Textarea
-              value={styleValue}
-              disabled={!styleSupported}
-              maxLength={PERSONA_VOICE_STYLE_MAX}
-              rows={2}
-              onChange={e => voiceStyle.field.onChange(e.target.value)}
-              aria-label="Voice delivery directive"
-              aria-describedby={`${uid}-style-hint`}
-              placeholder="tired Australian dad, warm, unhurried"
-              className={cn('mt-1.5', !styleSupported && 'opacity-40')}
-            />
-            <div id={`${uid}-style-hint`} className="field-hint">
-              {styleSupported ? (
-                <>
-                  Free text describing <em>how</em> to read the line &mdash;
-                  accent, pace, tone. Distinct from{' '}
-                  <strong>Character</strong>, which describes who this persona
-                  is and also guides what the DJ writes. Gemini and OpenAI send
-                  this to the model on every line.
-                </>
-              ) : (
-                <>
-                  Only Gemini and OpenAI accept a written delivery instruction;
-                  this engine ignores it. The text is kept, so it comes back if
-                  you switch. For OpenAI it needs a{' '}
-                  <code>gpt-4o</code>-<code>tts</code> model &mdash;{' '}
-                  <code>tts-1</code> rejects it.
-                </>
-              )}
+          {/* Rendered through the shared bound component per web/CLAUDE.md: the
+            * `tts` block above is a bespoke composite control, which is the
+            * documented exception, but a plain textarea is not one of the five
+            * that justify dropping to raw `useController`. Binding it here also
+            * means `fieldAria` owns the labelling, so the hint below is reached
+            * through the description rather than a hand-rolled
+            * `aria-describedby` id that could drift from its element. */}
+          <TextareaField
+            control={control}
+            name={`personas.${index}.voiceStyle`}
+            label="How this persona speaks"
+            description={styleSupported
+              ? 'Free text describing HOW to read the line — accent, pace, tone. Distinct from Character, which describes who this persona is and also guides what the DJ writes. Gemini and OpenAI send this to the model on every line.'
+              : 'Only Gemini and OpenAI accept a written delivery instruction; this engine ignores it. The text is kept, so it comes back if you switch. For OpenAI it needs a gpt-4o-tts model — tts-1 rejects it.'}
+            placeholder="tired Australian dad, warm, unhurried"
+            maxLength={PERSONA_VOICE_STYLE_MAX}
+            rows={2}
+            disabled={!styleSupported}
+            className={cn('mt-4', !styleSupported && 'opacity-40')}
+          />
+          {/* The bound component already renders the hint as its description, so
+            * this div is only the CHARACTER COUNTER — the one thing the shared
+            * component has no slot for. */}
+          {styleSupported && (
+            <div className="field-hint text-right">
+              {styleValue.length}/{PERSONA_VOICE_STYLE_MAX}
             </div>
-            {styleSupported && (
-              <div className="mt-1 text-[10px] font-bold tracking-[0.08em] text-muted tabular-nums">
-                {styleValue.length}/{PERSONA_VOICE_STYLE_MAX}
-              </div>
-            )}
-          </div>
+          )}
         </div>
       </div>
     </Card>
