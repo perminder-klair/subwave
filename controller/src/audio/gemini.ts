@@ -110,26 +110,44 @@ const VOCAL_BURSTS: Record<string, string> = {
   // Breath, effort, and the vocal noises.
   breath: 'breath', 'heavy breath': 'heavy breath', exhale: 'exhales', exhales: 'exhales',
   pant: 'pant', panting: 'pant', gasp: 'gasp', sigh: 'sigh',
+  // `<sigh> / <sighs>` is one of the pairs the guide lists as ALTERNATIVES, so
+  // both spellings are named rather than leaving `sighs` to the inflection
+  // stripper below — a pair the guide spells out is a pair the reader expects
+  // to find in this table.
+  sighs: 'sighs',
   cough: 'cough', sneeze: 'sneeze', snort: 'snort', sob: 'sob', cry: 'cry',
   groan: 'groan', moan: 'moan', growl: 'growl', grunt: 'grunt',
+  // `<grr>` is in the guide's list, directly between `<grunt>` and `<hiss>`. It
+  // was missing here, so `[grr]` fell through to the free-text rule and became
+  // the style string "grr" — a growl rendered as prose rather than a sound.
+  grr: 'grr',
   yell: 'shout', shout: 'shout', scream: 'scream', shriek: 'shriek',
   tsk: 'tsk', hiss: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
   whimper: 'whimper', yawn: 'yawn',
   'throat-clearing': 'throat-clearing', throatclear: 'throat-clearing',
-  // WHISPERING IS ASPECT-SENSITIVE, AND THE THREE SPELLINGS SPLIT
-  // ----------------------------------------------------------
-  // `whisper` and `whispers` are a one-shot vocalised noise and become a TAG;
-  // `whispering` is the MANNER of the following speech and becomes a STYLE.
-  // Google's tag list carries both spellings, so both are legitimate output —
-  // what differs is which channel they belong in, and `speech_metadata.style`
-  // is where a sustained modifier is supposed to live.
+  // WHISPER: EACH SPELLING EMITS ITS OWN DOCUMENTED TAG
+  // ------------------------------------------------------
+  // The guide lists `<whispers> / <whispering>` as a PAIR OF ALTERNATIVES in the
+  // same breath — it does not say one is a tag and the other a style. An earlier
+  // version of this comment claimed Google classes whispering as "a sustained
+  // modifier of the following speech"; that was our own reading, not Google's
+  // instruction, and it was cited as though it were sourced. Corrected.
   //
-  // `whispers` is spelled out rather than left to the trailing-`s` fallback
-  // below. It would currently resolve to the same tag either way, but this is a
-  // deliberate grammatical distinction, and a distinction that exists only as
-  // an artefact of plural-stripping is one refactor away from silently
-  // disappearing: delete the fallback and `[whispers]` becomes a style.
-  whisper: 'whispering', whispers: 'whispering',
+  // So the mapping is deliberately flat and literal: every documented spelling
+  // emits ITSELF, and `<whispers>` is reachable as `<whispers>` rather than
+  // being credited to `<whispering>` by the inflection stripper. That matters
+  // because the coverage test used to accept "some tag" as proof of reachability
+  // — under which `[whispers]` counted as coverage for `<whispers>` while
+  // emitting `<whispering>`, and a missing mapping read as a passing suite.
+  // The test now asserts exact input -> output identities.
+  //
+  // `whispering` is the one spelling routed to `speech_metadata.style` instead.
+  // That is a STATION CHOICE, and it is deliberate: it is the gerund, and it is
+  // the spelling the guide's own scope table lists among turn-level style
+  // examples ("whispers", "whispered"). It is recorded here as our routing, not
+  // as something the provider requires — the guide lists it as a tag too, so
+  // nothing guarantees the style channel is the better one for it.
+  whisper: 'whispering', whispers: 'whispers',
   // Pacing. `medium pause` is absent from Google's list but does pause on both
   // models in MODELS. The magnitude is not pinned down — see the note above on
   // why a single noisy sample cannot grade short against medium.

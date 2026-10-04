@@ -29,13 +29,21 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { splitCues } from '../src/audio/gemini.js';
 
-/** Google's documented <...> vocabulary, from the 3.8 speech-generation
- *  prompting guide's "vocal tag list". */
+/** Google's documented <...> vocabulary, transcribed from the "Vocal bursts and
+ *  non-speech sounds" list in the speech-generation guide:
+ *    https://ai.google.dev/gemini-api/docs/speech-generation
+ *
+ *  Transcribed as printed, including the pairs the guide offers as
+ *  alternatives (`<chuckle> / <chuckles>`, `<laugh> / <laughter>`,
+ *  `<pff> / <phew>`, `<sigh> / <sighs>`, `<whispers> / <whispering>`). `grr` and
+ *  `sighs` were both absent from this list while being present in the guide's,
+ *  which is how `[grr]` ended up rendering as the style string "grr" instead of
+ *  a sound. */
 const DOCUMENTED = [
   'argh', 'breath', 'heavy breath', 'exhales', 'cackle', 'cheer', 'chuckle',
   'chuckles', 'cough', 'cry', 'gasp', 'giggle', 'groan', 'growl', 'grunt',
-  'hiss', 'laugh', 'laughter', 'moan', 'pant', 'pff', 'phew', 'scream',
-  'shout', 'shriek', 'sigh', 'sneeze', 'snicker', 'snort', 'sob',
+  'grr', 'hiss', 'laugh', 'laughter', 'moan', 'pant', 'pff', 'phew', 'scream',
+  'shout', 'shriek', 'sigh', 'sighs', 'sneeze', 'snicker', 'snort', 'sob',
   'throat-clearing', 'tsk', 'whimper', 'whispers', 'whispering', 'yawn',
   'short pause', 'long pause',
 ];
@@ -84,67 +92,94 @@ test('`pant` emits the documented `<pant>`, not `<panting>`', () => {
   assert.deepEqual(splitCues('Hi. [panting heavily] There.').styles, ['panting heavily']);
 });
 
-test('the whole documented vocabulary is reachable from a bracket cue', () => {
-  // Coverage, not just safety: a documented tag the DJ cannot reach is a
-  // control that does not exist. `[tsk]` used to fall through to the free-text
-  // rule and become the style string "tsk", which is not a sound effect.
+test('every documented tag is emitted as ITSELF, not as some other tag', () => {
+  // Coverage, not just safety: a documented tag the DJ cannot reach is a control
+  // that does not exist. `[tsk]` used to fall through to the free-text rule and
+  // become the style string "tsk", which is not a sound effect.
+  //
+  // The assertion is an EXACT IDENTITY, and that is the whole point. This loop
+  // used to ask only whether the bracket produced "some" tag, so `[whispers]`
+  // counted as coverage for `<whispers>` while emitting `<whispering>` — a
+  // missing mapping read as a green suite. It also carried a hand-written
+  // `tag === 'whispering' ? 'whispers' : tag` remap, which is the workaround
+  // that hid the gap in the first place: no mapping emitted `<whispers>` at all,
+  // and the remap is what made that invisible.
+  //
+  // `whispering` is the one documented tag with no bracket of its own, because
+  // it is deliberately routed to speech_metadata.style instead. That is a
+  // STATION CHOICE, not something the guide requires — it lists `<whispers> /
+  // <whispering>` as a pair of alternatives. So it is asserted as a style in
+  // `whispering is the one spelling routed to the style field` below, and
+  // excluded here with a reason rather than quietly skipped.
+  const STYLE_ROUTED = new Set(['whispering']);
   const unreachable: string[] = [];
+  const wrongIdentity: string[] = [];
   for (const tag of DOCUMENTED) {
-    const spelling = tag === 'whispering' ? 'whispers' : tag;
-    if (tagsFor(spelling).length === 0) unreachable.push(tag);
+    if (STYLE_ROUTED.has(tag)) continue;
+    const emitted = tagsFor(tag);
+    if (emitted.length === 0) unreachable.push(tag);
+    else if (emitted.length !== 1 || emitted[0] !== tag) {
+      wrongIdentity.push(`[${tag}] -> <${emitted.join('>, <')}>`);
+    }
   }
   assert.deepEqual(unreachable, [],
     `documented tags the DJ cannot reach: ${unreachable.join(', ')}`);
+  assert.deepEqual(wrongIdentity, [],
+    `these brackets emit a tag other than the one asked for: ${wrongIdentity.join('; ')}`);
 });
 
-test('a one-shot breath cue is a sound, and a sustained one is a style', () => {
-  // Google classes `[whispering]` as a modifier of the FOLLOWING speech, not a
-  // one-shot noise — so it belongs in speech_metadata.style. `[whispers]` is the
-  // third-person form the prompt suggests and is the sound. The asymmetry is
-  // deliberate; both are asserted so a "simplification" cannot collapse it.
+test('`[grr]` and `[sighs]` are sounds, not style strings', () => {
+  // The two documented tags that were missing outright. `[grr]` fell through to
+  // the free-text rule and became the style string "grr" — a growl rendered as
+  // prose, which is the same lost-sound failure this file exists to catch.
+  for (const spelling of ['grr', 'sighs']) {
+    const r = splitCues(`Hi. [${spelling}] There.`);
+    assert.deepEqual(tagsFor(spelling), [spelling],
+      `[${spelling}] is in the guide's list and must emit <${spelling}>`);
+    assert.deepEqual(r.styles, [], `[${spelling}] must not also become a style`);
+  }
+  // `<sigh> / <sighs>` is a pair the guide spells out, so both spellings are
+  // named in the mapping rather than one relying on the inflection stripper.
+  assert.deepEqual(tagsFor('sigh'), ['sigh']);
+  assert.deepEqual(tagsFor('sighs'), ['sighs']);
+});
+
+test('[medium pause] emits its tag and adds no style', () => {
+  // `<medium pause>` is absent from the guide but MEASURED to pause on both
+  // models. The suite allows the output and never once exercised the cue, so a
+  // mapping that silently dropped it would not have failed anything.
+  const r = splitCues('Wait... <medium pause> ...did you hear that?');
+  assert.match(r.text, /<medium pause>/);
+  assert.deepEqual(r.styles, [], 'a pause tag must not also add a style');
+  assert.match(tagsFor('medium pause').join(','), /medium pause/);
+});
+
+test('`whispers` is a sound, and `whispering` is a style', () => {
+  // The guide lists `<whispers> / <whispering>` as a PAIR OF ALTERNATIVES. An
+  // earlier version of this test asserted they differ because "Google classes
+  // [whispering] as a modifier of the FOLLOWING speech" — that was our reading,
+  // presented as though it were sourced. Google says no such thing; it lists
+  // both, and its scope table uses "whispers" among the STYLE examples too.
+  // What is actually asserted here is the station's routing decision, and it is
+  // labelled as one.
+  //
+  // The old assertion was `/<whispers?ing>/`, which never matched `<whispers>`:
+  // `s?` makes two branches that spell the SAME word, so it accepted only
+  // `<whispering>` while claiming to allow either. The exact-identity assertion
+  // below is what it should have said.
   const sound = splitCues('Hi. [whispers] There.');
-  assert.match(sound.text, /<whispers?ing>/);
+  assert.deepEqual(tagsFor('whispers'), ['whispers'],
+    '`[whispers]` emits its own documented tag, not <whispering>');
   assert.deepEqual(sound.styles, []);
 
+  // `[whisper]` is the spelling that exercises `<whispering>`, so that documented
+  // tag stays reachable even though the gerund routes to the style field.
+  assert.deepEqual(tagsFor('whisper'), ['whispering']);
+
+  // The style routing itself, asserted exactly rather than by "no angle bracket".
   const sustained = splitCues('Hi. [whispering] There.');
   assert.doesNotMatch(sustained.text, /</);
   assert.deepEqual(sustained.styles, ['whispered']);
-});
-
-test('the whisper split is grammatical, not an artefact of plural-stripping', () => {
-  // The three spellings split on ASPECT — `whispers` is a vocalised noise,
-  // `whispering` is the manner of the speech that follows. Google's tag list
-  // carries both, so both are legitimate; only the channel differs.
-  //
-  // This case exists because that split was once an emergent property of the
-  // generic trailing-`s` fallback rather than a stated one: `[whispers]`
-  // resolved by stripping the `s` and hitting `whisper`, which happened to be
-  // right. Delete the fallback, or add an unrelated `whispers` entry to
-  // DELIVERY_STYLES, and the sound silently becomes a style — the same
-  // sound-versus-style confusion this suite already caught for `[tsk]`.
-  //
-  // The bare `whisper` is asserted too: it is the third spelling, and it is a
-  // TAG. It is also the one DELIVERY_STYLES used to list, where it was
-  // unreachable — vocalBurstFor is consulted first. An entry that cannot be
-  // reached reads as live behaviour, which is how the comment above it came to
-  // describe the opposite of what the code does.
-  for (const spelling of ['whisper', 'whispers']) {
-    const asTag = splitCues(`Hi. [${spelling}] There.`);
-    assert.match(asTag.text, /<whispers?ing>/,
-      `[${spelling}] is a one-shot noise and must stay a tag`);
-    assert.deepEqual(asTag.styles, [], `[${spelling}] must not also add a style`);
-  }
-
-  const asStyle = splitCues('Hi. [whispering] There.');
-  assert.equal(asStyle.text, 'Hi. There.', 'the gerund is consumed, not spoken');
-  assert.deepEqual(asStyle.styles, ['whispered']);
-
-  // And the plural forms of the OTHER burst tags must keep working, since that
-  // fallback is still load-bearing for `[laughs]`, `[sighs]` and friends.
-  for (const [spelling, tag] of [['laughs', 'laugh'], ['sighs', 'sigh'], ['chuckles', 'chuckles']]) {
-    assert.match(splitCues(`Hi. [${spelling}] There.`).text, new RegExp(`<${tag}>`),
-      `[${spelling}] relies on the trailing-s fallback`);
-  }
 });
 
 test('Google Mode 3 — the vocalized adjectives — never become tags', () => {
