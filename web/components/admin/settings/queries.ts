@@ -53,6 +53,8 @@ export function useSettingsQuery<T>({
 export interface SettingsSaveReceipt {
   requiresRestart?: boolean;
   refreshError?: string;
+  /** Revision of the authoritative redacted GET, absent when it failed. */
+  refreshedAt?: number;
 }
 
 export function patchSettingsAudio(
@@ -116,6 +118,10 @@ export function useSettingsMutation<TSettings>({
           queryFn: ({ signal }) => adminJson<TSettings>(adminFetch, '/settings', undefined, signal),
           staleTime: 0,
         });
+        receiptRef.current = {
+          ...receiptRef.current,
+          refreshedAt: client.getQueryState(settingsKeys.detail())?.dataUpdatedAt,
+        };
       } catch (error) {
         // The POST committed. Keep the last redacted envelope usable, but mark
         // it stale so the next observer retries instead of treating it as a
