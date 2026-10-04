@@ -9,7 +9,8 @@
     "start": "next start -p 7700",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/run-tests.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -81,6 +82,7 @@
     "eslint-plugin-react": "^7.37.5",
     "postcss": "^8.4.0",
     "tailwindcss": "^4.3.0",
+    "tsx": "^4.19.2",
     "typescript": "5.8.2",
     "typescript-eslint": "^8.59.4"
   }
