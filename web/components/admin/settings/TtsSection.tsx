@@ -31,6 +31,10 @@ import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
 import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
+// From the generated mirror, not a hand-stated copy: the bound is declared beside
+// the BCP-47 validator that enforces it, so the form's maxLength and the route's
+// refusal cannot drift apart.
+import { GEMINI_LIBRARY_LANGUAGE_MAX } from '../../../lib/schemas.generated';
 import { VoicePicker } from '../tts/VoicePicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
@@ -39,7 +43,7 @@ import {
   KeyStatus, KeyTestResult, KEY_HINTS, ELEVENLABS_VS_DEFAULTS,
   FISH_TTS_DEFAULTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
-  type TtsFallbackForm,
+  type TtsFallbackForm, type TtsForm,
 } from './shared';
 
 // Kokoro phonemizer language labels, keyed by the controller's lang codes —
@@ -1106,7 +1110,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
         {geminiSelected && (() => {
           const geminiAvail = data.tts?.available?.gemini;
-          const setGemini = (patch: Partial<{ model: string; voice: string; pronunciation: string }>) =>
+          // Keyed off the shared TtsForm shape rather than restating the three
+          // fields inline — restating it is how the next gemini field becomes a
+          // type error in exactly one of the two places that has to know it.
+          const setGemini = (patch: Partial<TtsForm['gemini']>) =>
             setForm(f => ({
               ...f,
               tts: { ...f.tts, gemini: { ...f.tts.gemini, ...patch } },
@@ -1164,6 +1171,23 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   The station-wide Gemini voice. A persona that names its own voice still
                   overrides this; one that leaves it blank — or that follows the station
                   default — inherits it, which is why this is a floor and not a lock.
+                </div>
+              </div>
+              <div className="field">
+                <Label>Voice library default language</Label>
+                <Input
+                  aria-label="Gemini voice library default language"
+                  value={form.tts.gemini?.libraryLanguage || ''}
+                  maxLength={GEMINI_LIBRARY_LANGUAGE_MAX}
+                  placeholder="en-AU — or blank for every language"
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setGemini({ libraryLanguage: e.target.value })}
+                  className="max-w-[360px] font-mono text-[13px]"
+                />
+                <div className="field-hint">
+                  Which page of Google&apos;s voice library the persona voice cards open on —
+                  a browsing default, <strong>not</strong> a limit. A persona can still pick any
+                  voice on any page. Gemini takes its accent from the voice itself, so this is
+                  never sent to the engine. Leave blank to browse every language.
                 </div>
               </div>
               <div className="field">

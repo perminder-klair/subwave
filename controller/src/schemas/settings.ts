@@ -1558,12 +1558,21 @@ const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/
 export function normalizeGeminiLibraryLanguage(raw: unknown): string {
   const v = String(raw ?? '').trim();
   if (!v) return '';
+  // Index-safe rather than `parts[0]` / `p[0]`: this file is COPIED into the web
+  // bundle, which compiles it with `noUncheckedIndexedAccess`, and a mirror that
+  // does not typecheck is a mirror nobody can regenerate.
+  const out: string[] = [];
   const parts = v.split('-');
-  const out = [parts[0].toLowerCase()];
-  for (const p of parts.slice(1)) {
-    if (/^[a-z]{4}$/i.test(p)) out.push(p[0].toUpperCase() + p.slice(1).toLowerCase());
-    else if (/^([a-z]{2}|[0-9]{3})$/i.test(p)) out.push(p.toUpperCase());
-    else out.push(p.toLowerCase());
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i] ?? '';
+    if (!p) continue;
+    if (i > 0 && /^[a-z]{4}$/i.test(p)) {
+      out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {
+      out.push(p.toUpperCase());
+    } else {
+      out.push(p.toLowerCase());
+    }
   }
   return out.join('-');
 }

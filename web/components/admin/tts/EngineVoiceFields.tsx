@@ -19,6 +19,7 @@ import { EngineSelector } from './EngineSelector';
 import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
+import { GeminiVoiceLibrary } from './GeminiVoiceLibrary';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
 import { ENGINES, GEMINI_CLOUD_PROVIDER, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
@@ -551,12 +552,24 @@ export function EngineVoiceFields({
                         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange({ voice: e.target.value })}
                       />
                     )}
+                    {geminiSelected && (
+                      <GeminiVoiceLibrary
+                        adminFetch={adminFetch}
+                        value={value.voice}
+                        onChange={id => onChange({ voice: id })}
+                        speed={previewSpeed}
+                        sampleLanguage={previewLanguage}
+                      />
+                    )}
                     <div className="field-hint">
                       {geminiSelected
-                        ? <>Pick one of Google&apos;s 30 prebuilt voices, or choose{' '}
-                            <em>Custom voice id…</em> for a Voice Design (<code>voice_…</code>) or
-                            Voice Replication (<code>voicekey_…</code>) id. The sample button auditions
-                            the saved voice plus the persona&apos;s voice style.</>
+                        ? <>Pick one of Google&apos;s 30 featured voices, browse the voice library
+                            for the ~2,000 more, or choose <em>Custom voice id…</em> for a Voice
+                            Design (<code>voice_…</code>) or Voice Replication
+                            (<code>voicekey_…</code>) id. Accent and gender come from the voice
+                            you pick, not from the delivery note above — Gemini treats those as
+                            fixed traits. The sample button auditions the saved voice plus the
+                            persona&apos;s voice style.</>
                         : discoveredVoices.length > 0
                         ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
                             on your {isCompat ? 'server' : 'account'}. Choose <em>Custom voice id…</em> to

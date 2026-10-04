@@ -465,6 +465,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         // Absent block = the engine's own defaults, matching the controller's
         // coercion: an empty model means "walk the fallback chain".
         gemini: {
+          // Absent = browse every language, which is the pre-existing behaviour
+          // of a station that never set it.
+          libraryLanguage: v.tts?.gemini?.libraryLanguage ?? '',
           model: v.tts?.gemini?.model ?? '',
           voice: v.tts?.gemini?.voice ?? 'Puck',
           pronunciation: v.tts?.gemini?.pronunciation ?? '',

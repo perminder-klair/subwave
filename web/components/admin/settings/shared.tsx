@@ -99,7 +99,9 @@ export interface TtsForm {
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
-  gemini: { model: string; voice: string; pronunciation: string };
+  // libraryLanguage is the voice-library BROWSER default, not a voice constraint
+  // and never sent to the engine — see the Gemini panel's hint.
+  gemini: { model: string; voice: string; pronunciation: string; libraryLanguage: string };
   cloud: CloudTtsCfg;
   remote: { url: string };
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
@@ -484,7 +486,7 @@ export interface SettingsData {
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
-      gemini?: { model?: string; voice?: string; pronunciation?: string };
+      gemini?: { model?: string; voice?: string; pronunciation?: string; libraryLanguage?: string };
       // The saved shape also carries the redacted key sentinels ('set' when a
       // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
