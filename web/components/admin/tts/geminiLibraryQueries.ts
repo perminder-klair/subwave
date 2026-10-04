@@ -15,7 +15,7 @@
 // one-shot previews as commands, and an `Audio` element has no cacheable
 // payload.
 
-import { useInfiniteQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, type QueryClient, type QueryFilters } from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
 
 export interface LibraryVoice {
@@ -81,6 +81,19 @@ export const geminiLibraryKeys = {
   catalogue: (input: LibraryInput) => ['gemini-voice-library', input] as const,
 };
 
+/** A saved default changes the effective filter of every omitted-language read.
+ * Clear its pages and cursors together, including inactive queries, and cancel
+ * old requests before a mounted browser starts again at page one. Explicit
+ * language filters, including `any`, do not depend on that setting. */
+export async function resetGeminiLibraryDefaults(client: QueryClient): Promise<void> {
+  const filters: QueryFilters = {
+    queryKey: geminiLibraryKeys.all,
+    predicate: query => !(query.queryKey[1] as LibraryInput | undefined)?.language,
+  };
+  await client.cancelQueries(filters);
+  await client.resetQueries(filters);
+}
+
 /** Drop unset filters so two controls holding the same effective choices share
  *  ONE cache entry. Without this, `gender: undefined` and an absent `gender`
  *  would key differently and defeat the de-duplication entirely. */
@@ -120,6 +133,10 @@ export async function fetchLibraryPage(
   const body = await adminJson<LibraryPage>(
     adminFetch, `/settings/tts/voices?${q}`, undefined, signal,
   );
+  // The controller reports upstream failures inside an HTTP-200 envelope.
+  // Reject it so an infinite query keeps its successful pages and next cursor
+  // instead of appending an empty, apparently final page.
+  if (!body.ok) throw new Error(body.error || 'Voice library unavailable');
   return {
     ok: body.ok,
     voices: Array.isArray(body.voices) ? body.voices : [],

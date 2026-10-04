@@ -185,10 +185,9 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
   const library = useGeminiLibraryQuery(adminFetch, appliedInput, open);
   const { voices, facets } = useMemo(() => flattenLibraryPages(library.data?.pages), [library.data?.pages]);
   const loading = library.isPending || library.isFetchingNextPage;
-  const firstPage = library.data?.pages?.[0];
   const error = library.isError
-    ? 'Voice library unreachable'
-    : (firstPage && !firstPage.ok ? (firstPage.error || 'Voice library unavailable') : null);
+    ? (library.error?.message || 'Voice library unreachable')
+    : null;
 
   const apply = useCallback(() => {
     setAppliedInput(normalizeLibraryInput({
@@ -326,7 +325,21 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
         {loading ? 'Searching…' : 'Apply filters'}
       </button>
 
-      {error && <div className="mt-2 text-[10px] text-[var(--danger)]">{error}</div>}
+      {error && (
+        <div className="mt-2 text-[10px] text-[var(--danger)]">
+          <div role="alert">{error}</div>
+          {!library.isFetchNextPageError && (
+            <button
+              type="button"
+              disabled={library.isFetching}
+              className="mt-2 cursor-pointer border border-ink px-2 py-1 text-ink disabled:opacity-40"
+              onClick={() => void library.refetch()}
+            >
+              Retry search
+            </button>
+          )}
+        </div>
+      )}
       {auditionError && <div className="mt-2 text-[10px] text-[var(--danger)]">{auditionError}</div>}
 
       {!loading && !error && voices.length === 0 && (
@@ -380,7 +393,7 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
           className="mt-2 w-full cursor-pointer border border-ink bg-transparent py-[6px] text-[9px] font-bold tracking-[0.2em] text-ink uppercase hover:bg-[var(--ink-soft)] disabled:opacity-40"
           onClick={() => void library.fetchNextPage()}
         >
-          {loading ? 'Loading…' : 'Load more'}
+          {loading ? 'Loading…' : library.isFetchNextPageError ? 'Retry load more' : 'Load more'}
         </button>
       )}
     </div>

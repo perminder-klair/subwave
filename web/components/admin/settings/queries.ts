@@ -14,6 +14,7 @@ import {
 } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
 import { errorMessage } from '@/lib/notify';
+import { resetGeminiLibraryDefaults } from '../tts/geminiLibraryQueries';
 
 export const settingsKeys = {
   all: ['settings'] as const,
@@ -104,6 +105,13 @@ export function useSettingsMutation<TSettings>({
       });
       receiptRef.current = { requiresRestart: result.requiresRestart };
       try {
+        // This POST committed even if the redacted refresh below fails. Reset
+        // default-dependent catalogue pages before another browse can reuse a
+        // cursor from the old language. Rejected saves never reach this step.
+        const ttsPatch = patch.tts as { gemini?: { libraryLanguage?: unknown } } | undefined;
+        if (ttsPatch?.gemini?.libraryLanguage !== undefined) {
+          await resetGeminiLibraryDefaults(client);
+        }
         // A 3s settings poll may already be in flight with a pre-write
         // envelope. Await its exact cancellation before starting the
         // authoritative read so fetchQuery cannot dedupe onto that promise.
