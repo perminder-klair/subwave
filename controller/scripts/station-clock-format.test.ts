@@ -37,6 +37,33 @@ test('New York, en-US: compact date and a 12-hour clock', () => {
   );
 });
 
+test('ICU weekday punctuation does not change the compact station date', (t) => {
+  const DateTimeFormat = Intl.DateTimeFormat;
+  t.mock.method(Intl, 'DateTimeFormat', function (
+    ...args: ConstructorParameters<typeof Intl.DateTimeFormat>
+  ) {
+    const formatter = new DateTimeFormat(...args);
+    if (args[1]?.weekday === 'short') {
+      // Reproduce ICU 74's comma even when this test runs on newer ICU.
+      // Keep real zoned parts so weekday/date/time must still be correct.
+      Object.defineProperty(formatter, 'format', {
+        value: (date: Date | number) => {
+          const parts = formatter.formatToParts(date);
+          const part = (type: Intl.DateTimeFormatPartTypes) =>
+            parts.find((p) => p.type === type)?.value ?? '';
+          return `${part('weekday')}, ${part('day')} ${part('month')}`;
+        },
+      });
+    }
+    return formatter;
+  });
+
+  const yearEnd = Date.UTC(2026, 11, 31, 23, 30, 0);
+  assert.equal(norm(fmt(yearEnd, 'UTC', 'en-GB')), 'Thu 31 Dec · 23:30:00');
+  assert.equal(norm(fmt(yearEnd, 'Asia/Tokyo', 'en-GB')), 'Fri 1 Jan · 08:30:00');
+  assert.equal(norm(fmt(yearEnd, 'America/New_York', 'en-US')), 'Thu 31 Dec · 6:30:00 PM');
+});
+
 test('the date follows the station zone across a day and year boundary', () => {
   const t = Date.UTC(2026, 11, 31, 23, 30, 0); // 31 Dec 23:30 UTC
   assert.equal(norm(fmt(t, 'UTC', 'en-GB')), 'Thu 31 Dec · 23:30:00');
