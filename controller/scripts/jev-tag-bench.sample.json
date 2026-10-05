@@ -1,0 +1,30 @@
+{
+  "moods": ["calm", "energetic", "reflective", "spiritual", "workout"],
+  "tracks": [
+    {
+      "id": "example-1",
+      "title": "Teardrop",
+      "artist": "Massive Attack",
+      "album": "Mezzanine",
+      "year": 1998,
+      "genres": ["Trip-Hop"],
+      "split": "tune"
+    },
+    {
+      "id": "example-2",
+      "title": "Windowlicker",
+      "artist": "Aphex Twin",
+      "album": "Windowlicker",
+      "year": 1999,
+      "genres": ["Electronic"],
+      "split": "eval"
+    },
+    {
+      "id": "unknown-example",
+      "title": "Track 07",
+      "artist": "Unknown",
+      "genres": [],
+      "split": "eval"
+    }
+  ]
+}

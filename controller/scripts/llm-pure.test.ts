@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { z } from 'zod';
-import { generateText, APICallError } from 'ai';
+import { generateText, APICallError, ToolChoiceViolationError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
@@ -727,7 +727,10 @@ async function main() {
   }
   await test('the emit instruction reaches the model alongside the caller system prompt', async () => {
     const { seen, err } = await forcedToolCall('CALLER SYSTEM PROMPT');
-    assert.match(String(err?.message), /never called the emit tool/);
+    // AI SDK 7.0.106 rejects the missing required call before our own
+    // captured-result guard runs. The wire contract below is unchanged.
+    assert.ok(ToolChoiceViolationError.isInstance(err));
+    assert.equal(err.toolChoice.type, 'required');
     // Serialised, so the assertion does not depend on how the SDK shapes the
     // system turn — only on the text having been sent.
     const wire = JSON.stringify(seen.prompt);
