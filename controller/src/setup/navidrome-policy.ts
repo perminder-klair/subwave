@@ -5,6 +5,8 @@ import { savedNavidromeCredentialsSchema } from '../schemas/onboarding.js';
 
 export type NavidromeCredentials = Partial<ReturnType<typeof savedNavidromeCredentialsSchema.parse>>;
 
+export const NAVIDROME_PROFILE_POLICY = 'profile-v1';
+
 export function navidromeEnvLocks(allowEnv: boolean) {
   return {
     url: allowEnv && !!process.env.NAVIDROME_URL,
@@ -13,11 +15,11 @@ export function navidromeEnvLocks(allowEnv: boolean) {
   };
 }
 
-export function resolveNavidrome(raw: unknown = {}, allowEnv = false) {
+export function resolveNavidrome(raw: unknown = {}, allowEnv = false, { reportIssue = true } = {}) {
   const nv = savedNavidromeCredentialsSchema.parse(raw);
   const locks = navidromeEnvLocks(allowEnv);
   return {
-    url: locks.url ? envUrl('NAVIDROME_URL', 'http://navidrome:4533')
+    url: locks.url ? envUrl('NAVIDROME_URL', 'http://navidrome:4533', { reportIssue })
       : nv.url || (allowEnv ? 'http://navidrome:4533' : ''),
     user: locks.user ? envStr('NAVIDROME_USER', '') : nv.user || '',
     password: locks.pass ? process.env.NAVIDROME_PASS! : nv.pass || '',

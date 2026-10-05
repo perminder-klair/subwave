@@ -75,6 +75,7 @@ test('missing, partial and corrupt station connections never fall back to shared
   try {
     const dir = join(root, 'stations', 'main');
     mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'station.json'), '{"navidromePolicy":"profile-v1"}');
     writeFileSync(join(root, 'stations', 'active.json'), '{"activeId":"main"}');
     for (const contents of ['{}', '{"navidrome":{"url":"http://music:4533"}}', 'broken']) {
       writeFileSync(join(dir, 'setup-config.json'), contents);
@@ -96,6 +97,7 @@ test('malformed saved connection objects leave both setup readers unconfigured',
   try {
     const dir = join(root, 'stations', 'main');
     mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'station.json'), '{"navidromePolicy":"profile-v1"}');
     writeFileSync(join(root, 'stations', 'active.json'), '{"activeId":"main"}');
     for (const navidrome of [
       null, false, 42, 'invalid', [], [b],

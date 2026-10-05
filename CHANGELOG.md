@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Bug fixes
+
+* **upgrade:** Preserve existing multi-station Navidrome connections with a
+  one-time startup migration before environment credentials become inactive
+  ([#1785](https://github.com/perminder-klair/subwave/issues/1785)). The migration
+  covers inactive profiles, preserves per-field environment overrides, and
+  resumes after interrupted writes. New and duplicated profiles remain
+  independent. Operators who already reconfigured profiles under #1777 must
+  mark those profiles before upgrading. See [upgrade and recovery steps](docs/multi-station.md#upgrading-existing-profiles).
+
 ## [1.13.0](https://github.com/perminder-klair/subwave/compare/v1.12.0...v1.13.0) (2026-09-06)
 
 

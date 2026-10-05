@@ -13,7 +13,7 @@ import {
 } from './pure.js';
 import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js';
 import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
-import { hasNavidrome, type NavidromeCredentials } from '../setup/navidrome-policy.js';
+import { hasNavidrome, NAVIDROME_PROFILE_POLICY, type NavidromeCredentials } from '../setup/navidrome-policy.js';
 import { writeFileAtomicSync } from '../util/atomic-file.js';
 import { firstMessage } from '../util/zod-error.js';
 
@@ -161,7 +161,7 @@ function writeActivePointer(root: string, id: string): void {
 function writeCard(dir: string, name: string): void {
   writeFileSync(
     join(dir, 'station.json'),
-    JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2),
+    JSON.stringify({ name, createdAt: new Date().toISOString(), navidromePolicy: NAVIDROME_PROFILE_POLICY }, null, 2),
   );
 }
 
@@ -189,7 +189,7 @@ export function convertToMultiStation(
     if (hasNavidrome(currentNavidrome)) {
       const path = join(dest, 'setup-config.json');
       const stored = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
-      writeFileAtomicSync(path, JSON.stringify({ ...stored, navidrome: currentNavidrome }, null, 2), { mode: 0o600 });
+      writeFileAtomicSync(path, JSON.stringify({ ...stored, navidrome: currentNavidrome, navidromePolicy: NAVIDROME_PROFILE_POLICY }, null, 2), { mode: 0o600 });
       if (!moved.includes('setup-config.json')) moved.push('setup-config.json');
     }
   } catch (err) {

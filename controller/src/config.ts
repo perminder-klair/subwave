@@ -5,12 +5,17 @@ import { resolveNavidrome } from './setup/navidrome-policy.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { resolveActiveStationDir } from './stations/resolve.js';
+import { migrateNavidromeProfiles } from './stations/navidrome-migration.js';
 import { envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
 
 // Shared state ROOT. Compose passes STATE_DIR=/var/sub-wave; native dev falls
 // back to the repo-local state/ dir.
 export const STATE_ROOT = process.env.STATE_DIR
   || resolve(dirname(fileURLToPath(import.meta.url)), '../../state');
+
+// A code/image replacement must preserve legacy connections before the new
+// profile-only policy takes effect, including profiles that are currently idle.
+migrateNavidromeProfiles(STATE_ROOT);
 
 // The ACTIVE station's state dir — every file-based IPC channel lives here.
 // Single-station installs resolve to the root. Resolved once per boot: switching

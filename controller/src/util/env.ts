@@ -30,12 +30,12 @@ function note(name: string, value: string, problem: string, usedInstead: unknown
 
 // ABSENT and EMPTY both mean "not set" (`ANALYZE_PYTHON=` is an ordinary compose
 // line); a value present but unparseable warns and falls back.
-function read<T>(name: string, schema: z.ZodType<T>, fallback: T): T {
+function read<T>(name: string, schema: z.ZodType<T>, fallback: T, reportIssue = true): T {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return fallback;
   const parsed = schema.safeParse(raw.trim());
   if (parsed.success) return parsed.data;
-  note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
+  if (reportIssue) note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
   return fallback;
 }
 
@@ -71,7 +71,7 @@ export function envFloat(name: string, fallback: number, opts: NumOptions = {}):
 }
 
 /** An http(s) URL var; a bare host or non-http scheme is rejected. */
-export function envUrl(name: string, fallback: string): string {
+export function envUrl(name: string, fallback: string, { reportIssue = true } = {}): string {
   // One check, not `z.url().refine(…)`: zod runs every check even after one
   // fails, so the refine would see unparseable input and `new URL()` would throw
   // straight out, breaking the never-throw contract.
@@ -82,7 +82,7 @@ export function envUrl(name: string, fallback: string): string {
       return false;
     }
   }, 'is not an http(s) URL');
-  return read(name, schema, fallback);
+  return read(name, schema, fallback, reportIssue);
 }
 
 /** A plain string var; nothing to fail, so it never warns. */

@@ -13,7 +13,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { resolveNavidrome } from './navidrome-policy.js';
+import { NAVIDROME_PROFILE_POLICY, resolveNavidrome } from './navidrome-policy.js';
 import { config, STATE_DIR, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
@@ -27,6 +27,7 @@ export interface SetupConfig {
   };
   // ISO timestamp written when the wizard saves successfully.
   setupCompletedAt?: string;
+  navidromePolicy?: typeof NAVIDROME_PROFILE_POLICY;
 }
 
 // No in-process cache: the file is ~200 bytes and only read on the rare
@@ -51,6 +52,7 @@ export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<Setu
     ...current,
     ...patch,
     navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
+    ...(!NAVIDROME_ENV_ENABLED && patch.navidrome ? { navidromePolicy: NAVIDROME_PROFILE_POLICY } : {}),
   };
   await mkdir(dirname(PATH), { recursive: true });
   await writeFileAtomic(PATH, JSON.stringify(next, null, 2), { mode: 0o600 });

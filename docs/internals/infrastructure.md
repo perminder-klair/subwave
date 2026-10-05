@@ -70,5 +70,20 @@ controller and both maintenance workers call `loadNavidromeConfig`; setup
 status and admin environment locks use the same policy. Once `stations/`
 exists, only the active profile's `setup-config.json` supplies its connection.
 Conversion saves the original station's effective connection before restarting.
+Before this policy applies, `stations/navidrome-migration.ts` runs synchronously
+from `config.ts`. Its first boot freezes all unmarked profile IDs and their
+legacy effective connections in a private, atomic, fsynced journal under
+`stations/navidrome-migration.json`. Truthy environment fields override saved
+fields independently, including complete saved connections. Replay uses the
+snapshot, not the current environment, and skips profiles marked
+`navidromePolicy: 'profile-v1'` in their card or setup config. Creates and
+conversions mark the card; multi-station connection saves mark the setup config.
+Only successful persistence of the whole cohort replaces the journal with a
+credential-free completion record. Persistence failures stop controller boot
+with a fixed error that cannot include JSON or credential text. A completed
+journal never expands its cohort. #1777 did not stamp its writes, so operators
+must explicitly mark profiles reconfigured during that interval before their
+first migration boot; see `docs/multi-station.md`. Do not infer policy from
+file timestamps or reintroduce an indefinite environment fallback.
 Duplication omits music credentials, the library database and playlist recipes,
 and clears show playlist IDs in both current and legacy settings storage.

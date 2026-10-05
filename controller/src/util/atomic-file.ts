@@ -9,7 +9,8 @@
 // ORIGINAL error still propagates; cleanup must not mask it.
 
 import { randomBytes } from 'node:crypto';
-import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { closeSync, fsyncSync, linkSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { rename, unlink, writeFile } from 'node:fs/promises';
 
 export async function writeFileAtomic(
@@ -47,12 +48,26 @@ export function createSerialFileWriter(path: string) {
 export function writeFileAtomicSync(
   path: string,
   contents: string | Buffer,
-  { mode }: { mode?: number } = {},
+  { mode, durable = false, replace = true }: { mode?: number; durable?: boolean; replace?: boolean } = {},
 ): void {
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
   try {
     writeFileSync(tmp, contents, mode != null ? { mode } : {});
-    renameSync(tmp, path);
+    if (durable) {
+      const fd = openSync(tmp, 'r');
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
+    if (replace) renameSync(tmp, path);
+    else {
+      // Claim an immutable recovery snapshot without replacing another boot's
+      // journal. link(2) publishes atomically and refuses an existing target.
+      linkSync(tmp, path);
+      unlinkSync(tmp);
+    }
+    if (durable) {
+      const fd = openSync(dirname(path), 'r');
+      try { fsyncSync(fd); } finally { closeSync(fd); }
+    }
   } catch (err) {
     try { unlinkSync(tmp); } catch {}
     throw err;

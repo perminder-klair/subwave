@@ -60,9 +60,8 @@ including things you might not expect, like `library.db` — is per-station.
   `NAVIDROME_PASS` neither supply nor override a station's connection. A new
   or duplicated station needs setup even if those variables are present.
   Single-station installs retain environment configuration until conversion.
-  Existing multi-station installs that relied on environment credentials must
-  save a connection for each affected profile after upgrading; existing saved
-  connections are retained. Two profiles may explicitly configure the same
+  Upgrading an older multi-station install migrates its existing connections
+  once, as described below. Two profiles may explicitly configure the same
   server, but neither inherits the other's connection.
 - **Cloud API keys supplied through the environment remain shared.** This
   change scopes only the Navidrome connection, not LLM/TTS credentials.
@@ -82,6 +81,66 @@ including things you might not expect, like `library.db` — is per-station.
   `state/logs` over `/var/log/liquidsoap`, so `radio.log` is shared across
   stations regardless of which one is live. Only the controller's event logs
   (`logs/events-*.jsonl`) live inside each station's directory.
+
+## Upgrading existing profiles
+
+The first controller start with the #1785 fix migrates every existing,
+unmarked profile, including inactive ones, before disabling Navidrome
+environment configuration. This runs from the controller source in the
+image, so replacing an image while retaining the state volume and environment
+is sufficient. Keep the old `NAVIDROME_*` values for this first start.
+
+For each field, the migration preserves the pre-#1777 precedence. A nonempty
+environment variable overrides the saved field. Otherwise the saved field
+applies. A missing URL defaults to `http://navidrome:4533`; a missing username
+or password stays empty. Environment URLs and usernames are trimmed, while
+password bytes stay unchanged. A whitespace-only environment URL uses the
+default, a whitespace-only username stays empty, and an invalid environment
+URL uses the old default. Saved strings retain their original bytes.
+
+The migration first writes a private snapshot to
+`state/stations/navidrome-migration.json`. It then atomically saves the
+effective connection to each profile's `setup-config.json`, preserving other
+setup fields and adding `"navidromePolicy": "profile-v1"`. Both files use mode
+0600, and migration writes sync the file and directory to disk. Once all
+profiles are saved, the journal becomes `{"version":1,"phase":"complete"}`
+and no longer contains credentials. Later restarts and profile switches use
+only the saved connection. New and duplicated profiles remain independent.
+
+### Installations already running #1777
+
+#1777 wrote no policy marker. Its saved files cannot distinguish an old
+connection from one you deliberately reconfigured after that upgrade.
+Before the first start with #1785, protect each such profile by adding
+`"navidromePolicy": "profile-v1"` to its `station.json` or `setup-config.json`.
+Preserve the file's existing fields. The migration skips that profile entirely.
+This also protects fresh or duplicated profiles created under #1777 that you
+want to leave unconfigured. Creates, conversions and connection saves made
+with #1785 write this marker automatically.
+
+### Verification and recovery
+
+After upgrading, confirm `/api/state` reports `needsSetup: false`, refresh
+the music library or fallback playlist, restart the controller again, and
+switch to each migrated profile to confirm its library connection. Health
+and stream audio alone cannot prove Navidrome access works.
+
+If the migration cannot read or persist state, the controller stops with a
+credential-free migration error. The existing mixer can continue serving
+audio. Repair the volume permissions or malformed JSON and restart the
+controller. A pending journal retains the original cohort and connection
+values, so retries do not adopt changed environment values or new profiles.
+Do not delete that journal or publish it in diagnostics; a pending journal
+contains passwords.
+
+To repair one profile manually, stop the controller, validate its credentials
+against Navidrome, and save them in the profile's `setup-config.json` under
+`navidrome` as `url`, `user` and `pass`. Add `"navidromePolicy": "profile-v1"`
+at the top level and restrict the file to mode 0600. A pending migration will
+leave that repair intact on restart. If environment credentials were removed
+before the first migration start, restore their previous values first or
+configure the affected profiles manually. Keep a backup of the full state
+volume before upgrading.
 
 ## Dev mode
 
