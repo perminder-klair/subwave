@@ -24,6 +24,17 @@ import { PERSONA_VOICE_STYLE_MAX } from '../src/schemas/persona.js';
 const SOUL = 'Observant, dry, favours one good image over a list. '.repeat(6);
 const STATION_NOTE = 'Sook rhymes with look';
 
+/** `VOICE_STYLE_MAX` read from its declaration. It lives in a different module
+ *  from the schema — a zod-only file and the audio engine — because the generated
+ *  mirror is one flat concatenation, which is how 300 came to equal 300 unnoticed. */
+async function voiceStyleBudget(): Promise<number> {
+  const src = await import('node:fs').then((fs) =>
+    fs.readFileSync(new URL('../src/audio/gemini.ts', import.meta.url), 'utf8'));
+  const m = /const VOICE_STYLE_MAX = (\d+);/.exec(src);
+  assert.ok(m, 'VOICE_STYLE_MAX must still be declared in gemini.ts');
+  return Number(m[1]);
+}
+
 test('a directive at the cap leaves the character excerpt alive', () => {
   const style = geminiStyle({
     soul: SOUL,
@@ -36,12 +47,20 @@ test('a directive at the cap leaves the character excerpt alive', () => {
   assert.ok(style.includes(STATION_NOTE), 'the station pronunciation note is never budget-limited');
 });
 
-test('the cap is below the whole style budget, not equal to it', () => {
-  // The regression in one assertion. Equal is as wrong as larger: a directive that
-  // can claim the entire budget has, by definition, nothing left to give.
-  const budget = SOUL.length; // any value; the relationship is what matters
+test('the cap is HALF the style budget — the derivation, not merely a smaller number', async () => {
+  // The first version of this asserted only `cap < budget`. That is strictly
+  // weaker than the contract it claims to pin: raising the cap to 200 while the
+  // budget stayed 300 leaves every other assertion in this file green, even
+  // though 200 is not the half the declaration and the PR both state. A test that
+  // cannot distinguish the stated value from a wrong one is not testing the
+  // statement, it is testing the original bug and calling it a rule.
+  const budget = await voiceStyleBudget();
+  assert.equal(PERSONA_VOICE_STYLE_MAX, budget / 2,
+    `PERSONA_VOICE_STYLE_MAX is ${PERSONA_VOICE_STYLE_MAX} but the derivation is half of `
+      + `VOICE_STYLE_MAX (${budget}) = ${budget / 2}. If the relationship itself is changing, `
+      + 'change the declaration comment and this assertion together — do not drift one alone.');
   assert.ok(PERSONA_VOICE_STYLE_MAX < budget,
-    'the per-persona cap must be a share of the composed-style budget, not the whole of it');
+    'and half is still strictly below the whole budget, which is the original regression');
 });
 
 test('raising the cap past the budget would erase the character — pin the arithmetic', () => {
@@ -58,16 +77,14 @@ test('raising the cap past the budget would erase the character — pin the arit
     'at the current cap the character excerpt must get a usable share, not a token one');
 });
 
-test('VOICE_STYLE_MAX has not moved out from under the cap', async () => {
-  // The two numbers live in different modules — a zod-only schema file and the
-  // audio engine — because the generated mirror is one flat concatenation. That
-  // makes drift possible and invisible, which is how 300 came to equal 300.
-  const src = await import('node:fs').then((fs) =>
-    fs.readFileSync(new URL('../src/audio/gemini.ts', import.meta.url), 'utf8'));
-  const m = /const VOICE_STYLE_MAX = (\d+);/.exec(src);
-  assert.ok(m, 'VOICE_STYLE_MAX must still be declared in gemini.ts');
-  const budget = Number(m[1]);
-  assert.ok(PERSONA_VOICE_STYLE_MAX < budget,
-    `PERSONA_VOICE_STYLE_MAX (${PERSONA_VOICE_STYLE_MAX}) must stay below VOICE_STYLE_MAX `
-      + `(${budget}); equal or above leaves the character excerpt nothing`);
+test('VOICE_STYLE_MAX is even, so half of it is a whole number', async () => {
+  // Half of an odd budget is a fraction, and a character cap cannot be. Silently
+  // rounding it would put the constant and its own stated derivation out of
+  // agreement with nothing to catch it — the exact failure the assertion above
+  // exists to prevent, one step removed.
+  const budget = await voiceStyleBudget();
+  assert.equal(budget % 2, 0,
+    `VOICE_STYLE_MAX is ${budget}; PERSONA_VOICE_STYLE_MAX is derived as half of it, so an `
+      + 'odd budget makes the derivation unrepresentable. Fix the budget or the derivation '
+      + 'deliberately, not by rounding.');
 });
