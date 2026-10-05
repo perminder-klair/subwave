@@ -22,6 +22,7 @@ import { join } from 'node:path';
 process.env.STATE_DIR ??= mkdtempSync(join(tmpdir(), 'google-pool-'));
 
 import {
+  __expireHoldsForTest,
   __resetHoldsForTest,
   allKeysHeld,
   currentKey,
@@ -817,8 +818,47 @@ test('a successful call clears the recorded failure it would otherwise replay', 
     // K1's hold is still set from the first call, so the replay path is not
     // reachable — but the failure record must not outlive a working key either.
     assert.equal(getLastFailure()?.status ?? 429, 429);
-    reportKeySuccess(K1);
     assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+// The version above called `reportKeySuccess(K1)` by hand, which made it a test
+// of the HELPER rather than of the transport: deleting the transport's own call
+// left it green, while a station whose keys had all recovered kept replaying a
+// quota error from a pool with nothing wrong with it. Driven through
+// `googleKeyFetch` so the assertion can only pass if the reset happens where a
+// real request succeeded.
+test('the transport itself forgets a recovered pool — no helper called by hand', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  try {
+    // 1. A single-key pool 429s: the failure is recorded and the key parked.
+    setPool(K1);
+    globalThis.fetch = (async () => new Response(
+      code('quota_exceeded'), { status: 429, headers: { 'retry-after': '3600' } },
+    )) as unknown as typeof fetch;
+    const exhausted = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(exhausted.status, 429);
+    assert.ok(getLastFailure(), 'the failure must be recorded for the replay to carry');
+
+    // 2. The hold expires and the SAME key answers 200. The transport's success
+    //    path is the only thing that may clear the recorded failure.
+    __expireHoldsForTest();
+    globalThis.fetch = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+    assert.equal((await googleKeyFetch('https://example.test/v1/x', {})).status, 200);
+    assert.equal(getLastFailure(), null,
+      'a pool whose key just answered must not still be replaying a quota failure — that '
+        + 'is what turned a recovered pool into a station that stays silent');
+
+    // 3. And the replay path is genuinely unreachable now, rather than merely
+    //    unexercised: a fresh pool that DOES fail still records truthfully.
+    setPool(K2);
+    globalThis.fetch = (async () => new Response(code('quota_exceeded'), { status: 429 })) as unknown as typeof fetch;
+    await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(getLastFailure()?.status, 429,
+      'clearing on success must not clear on the next failure');
   } finally {
     globalThis.fetch = realFetch;
   }
@@ -1199,8 +1239,13 @@ test('a replayed exhausted-pool response keeps the Retry-After header', async ()
     // backup leg from ever being selected.
     const replay = await googleKeyFetch('https://example.test/v1/x', {});
     assert.equal(replay.status, 429);
-    assert.ok(replay.headers.get('retry-after'),
-      'the replay must carry a retry hint or the retry layer mis-times the fallback');
+    // The UPSTREAM value, not merely a hint: the caller sets a 60s default when
+    // the record carries none, so asserting only that SOME retry-after exists
+    // passed even with the recorded headers thrown away — which is the defect
+    // this test exists for. A 3600s hold replayed as 60s mis-times the retry
+    // layer and can prevent the backup leg from ever being selected.
+    assert.equal(replay.headers.get('retry-after'), '3600',
+      'the replay must carry the upstream retry hint, not the fallback default');
   } finally {
     globalThis.fetch = realFetch;
   }

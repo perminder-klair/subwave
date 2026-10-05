@@ -336,6 +336,29 @@ export function reportKeySuccess(key: string): void {
   if (!key) return;
   holds.delete(key);
   strikes.delete(key);
+  // The RECORDED failure is about the pool, not about one key, so a key that
+  // just answered invalidates it. Left in place, an exhausted-pool replay kept
+  // answering with a quota error for a pool whose keys had all since recovered
+  // — the hold and the strikes were forgotten, the evidence was not (#1719).
+  //
+  // Cleared only when a SUCCESS actually happened. A single-key pool that
+  // legitimately 429s and then succeeds elsewhere must still replay a truthful
+  // failure, so this is not called on any path that did not reach a 2xx.
+  lastFailure = null;
+}
+
+/**
+ * Test seam: expire every hold WITHOUT forgetting the recorded failure.
+ *
+ * This is the state a real pool reaches on its own — a key's hold lapses with
+ * time while the last 429 stays on record for the replay to carry — and it is
+ * the only state in which "does a success forget the recorded failure?" is a
+ * question with an answer. `__resetHoldsForTest()` clears both, so a test using
+ * it to set up that state asserts a value it just zeroed.
+ */
+export function __expireHoldsForTest(): void {
+  holds = new Map();
+  strikes.clear();
 }
 
 /** Everything the admin UI needs, with no secret material in it. The
@@ -455,7 +478,15 @@ export function withPoolLock<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-/** Test seam: forget every hold and the memo without touching configuration. */
+/**
+ * Test seam: forget every hold and the memo without touching configuration.
+ *
+ * Note this also clears `lastFailure`, so it CANNOT be used to model "the hold
+ * expired but the pool's last failure is still on record" — a test that needs
+ * that state must expire the holds without this. Using it produced a green test
+ * that asserted nothing: the reset it called had already cleared the value the
+ * next line checked.
+ */
 export function __resetHoldsForTest(): void {
   holds = new Map();
   strikes.clear();
