@@ -181,3 +181,32 @@ export async function probeRequesty(args: {
     return { ok: false, reason: fetchErrorReason(e) };
   }
 }
+
+// Atlas Cloud's /v1/models is fully public — it returns 200 even for a bad
+// key — so unlike probeRequesty this cannot verify the key against the catalog.
+// A minimal chat completion is the cheapest call that actually authenticates.
+export async function probeAtlasCloud(args: {
+  apiKey: string;
+  timeoutMs?: number;
+}): Promise<ProbeResult> {
+  const { apiKey } = args;
+  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!apiKey) return { ok: false, reason: 'no api key' };
+  try {
+    const res = await fetch('https://api.atlascloud.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-ai/DeepSeek-V3.1-Terminus',
+        messages: [{ role: 'user', content: 'ping' }],
+        max_tokens: 1,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+    return { ok: true, detail: 'key accepted' };
+  } catch (e) {
+    return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+  }
+}

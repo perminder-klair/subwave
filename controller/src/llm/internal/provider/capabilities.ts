@@ -161,6 +161,13 @@ const CAPS: Record<string, ProviderCapabilities> = {
       (reasoning && !forceNoThink ? undefined : 'minimal'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
+  atlascloud: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'minimal'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+  },
   // The gateway serializes the top-level level to whatever vendor the
   // `provider/model` id resolves to. Gemma downstreams are the exception, same
   // 400 as the google entry (#1044), so omit the param for them.

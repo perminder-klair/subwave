@@ -242,6 +242,7 @@ export const LLM_PROVIDERS = [
   'locca',
   'openrouter',
   'requesty',
+  'atlascloud',
   'anthropic',
   'openai',
   'google',

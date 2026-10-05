@@ -151,6 +151,7 @@ export function loccaEmbedBaseUrl(cfg: any): string {
 // Requesty is a fixed-endpoint OpenAI-compatible aggregator, so the base URL is
 // not operator-configurable. Keyed by REQUESTY_API_KEY.
 export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
+export const DEFAULT_ATLASCLOUD_BASE_URL = 'https://api.atlascloud.ai/v1';
 
 // OpenRouter app attribution (openrouter.ai/docs/app-attribution). Sent on every
 // OpenRouter request — chat, embeddings and the key-validation probes.
@@ -292,6 +293,19 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
         baseURL: DEFAULT_REQUESTY_BASE_URL,
         apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
         name: 'requesty',
+        fetch: debugFetch,
+      });
+      model = provider.chat(id);
+      break;
+    }
+    case 'atlascloud': {
+      // Same createOpenAI transport as requesty on a fixed base URL. Hosted
+      // aggregator with no thinking knob, so no body injection. A real key is
+      // required.
+      const provider = createOpenAI({
+        baseURL: DEFAULT_ATLASCLOUD_BASE_URL,
+        apiKey: cfg.apiKey || process.env.ATLASCLOUD_API_KEY || 'unused',
+        name: 'atlascloud',
         fetch: debugFetch,
       });
       model = provider.chat(id);
