@@ -600,6 +600,17 @@ class Queue {
         .filter((i: QueueItem) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
       this.current = stored.current || null;
       this.history = Array.isArray(stored.history) ? stored.history : [];
+      // Older snapshots named the outgoing cue blendStartSec. It was already
+      // the stamped cue, so migrate the name without adding another overlap.
+      for (const item of [...this.upcoming, this.current, ...this.history]) {
+        const blend = item?.stemBlend;
+        if (blend && typeof blend === 'object' && 'blendStartSec' in blend) {
+          if (blend.outCueSec == null && typeof blend.blendStartSec === 'number') {
+            blend.outCueSec = blend.blendStartSec;
+          }
+          delete blend.blendStartSec;
+        }
+      }
       // Restore the rotate's count (#1619). Repaired, not trusted: this file is
       // on the operator's disk, and a junk value here decides how long the
       // station goes without a stinger. A snapshot written before this field
@@ -1969,10 +1980,10 @@ class Queue {
                 delete item.track.loopBar;
                 item.track.crossSec = stemBlend.CLIP_SEAM_CROSS_SEC;
                 item.stemBlend = blend;
-                item.cueOutSec = blend.blendStartSec;
+                item.cueOutSec = blend.outCueSec;
                 successor.stemSeam = true;
                 successor.stemCueInSec = blend.inCueSec;
-                this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
+                this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.outCueSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
               }
             } catch (err) {
               this.log('error', `Stem blend failed (falling back to plain crossfade): ${(err as Error).message}`);
@@ -2006,7 +2017,7 @@ class Queue {
         // seam's cue-in is DEEPER into the track than any leading silence (the
         // clip already played that head), so the later of the two is the one
         // that leaves no audio played twice.
-        const cueOutCandidates = positiveCues([item.stemBlend?.blendStartSec, trim.cueOutSec, boundaryCueSec]);
+        const cueOutCandidates = positiveCues([item.stemBlend?.outCueSec, trim.cueOutSec, boundaryCueSec]);
         const cueInCandidates = positiveCues([item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]);
         item.cueInSec = cueInCandidates.length ? Math.max(...cueInCandidates) : undefined;
         const uri = subsonic.getAnnotatedUri(item.track, {

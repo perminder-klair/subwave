@@ -5,6 +5,7 @@
 
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
 import type { HostSpeechStamp } from '../session.js';
+import type { ClipSeamCues } from '../stem-seam.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -172,7 +173,7 @@ export interface QueueItem {
   // behind its own URI). `stemSeam`/`stemCueInSec` ride the INCOMING item:
   // its entry-side effects are stripped at its own drain (the seam INTO it
   // is pre-rendered) and it cues in past the head the clip already played.
-  stemBlend?: { clipPath: string; blendStartSec: number; inCueSec: number } | null;
+  stemBlend?: ClipSeamCues & { clipPath: string } | null;
   stemSeam?: boolean;
   stemCueInSec?: number;
 }

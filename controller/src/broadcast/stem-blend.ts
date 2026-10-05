@@ -1,7 +1,7 @@
 // Controller side of the pre-rendered seam (docs/stem-transitions-research.md).
 // Decides whether an X→Y seam earns a rendered blend, asks the analyzer to mix one
 // from cached stems (cache-hit-only), and returns the cue points the drain stamps:
-// X cuts at blendStartSec, the clip airs annotated as Y, Y enters at inCueSec —
+// X cuts at outCueSec, the clip airs annotated as Y, Y enters at inCueSec —
 // both cues one seam overlap outside the clip's own edges (stem-seam.ts).
 // Any miss or failure returns null and the seam falls back to the plain pair-aware
 // crossfade — this may only upgrade a transition, never break one.
@@ -17,7 +17,7 @@ import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
 import { readPidfile, isPidAlive } from '../music/tagger-lock.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
-import { CLIP_SEAM_CROSS_SEC, clipSeamCues } from './stem-seam.js';
+import { CLIP_SEAM_CROSS_SEC, clipSeamCues, type ClipSeamCues } from './stem-seam.js';
 
 // Cross length at the two clip seams (X→clip, clip→Y); the overlap arithmetic
 // lives with it in broadcast/stem-seam.ts.
@@ -33,10 +33,8 @@ export type BlendTrack = loudness.LoudnessTrack & {
   gainDb?: number;
 };
 
-interface BlendPlan {
+interface BlendPlan extends ClipSeamCues {
   clipPath: string;
-  blendStartSec: number; // X's liq_cue_out (the clip's start + the seam overlap)
-  inCueSec: number;      // Y's liq_cue_in (the clip's end − the seam overlap)
   clipSec: number;
 }
 
@@ -151,8 +149,7 @@ export async function maybeRenderBlend(
   if (opts.outTrimEndSec != null && opts.outTrimEndSec < cues.outCueSec) return null;
   return {
     clipPath: result.path,
-    blendStartSec: cues.outCueSec,
-    inCueSec: cues.inCueSec,
+    ...cues,
     clipSec: result.clipSec,
   };
 }
