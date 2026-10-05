@@ -1,29 +1,11 @@
-// Every tag we put on the wire is pinned to Google's documented vocabulary.
+// Pin request vocabulary independently of the implementation table, including
+// the station's explicit medium-pause extension. This verifies emitted text
+// and style channels, not the acoustic performance of documented or custom
+// tags. Author-provided transcription samples cannot prove that a nonverbal
+// sound was performed or establish pause durations.
 //
-// WHY THIS IS A TEST AND NOT A COMMENT
-// ------------------------------------
-// Google's guidance is "test and verify new tags" — a station cannot audition
-// two thousand of them, so the curated list IS the verification, and a
-// contributor adding a tag by hand should have to decide that consciously
-// rather than by editing a map.
-//
-// WHAT THIS IS NOT
-// ----------------
-// An earlier draft of this file claimed an undocumented tag would be spoken
-// aloud, because Gemini 3.8 reads `text` verbatim. That was inferred, not
-// measured, and it is wrong for angle-bracket tags: rendering
-// `I am fine. <panting> I am fine.` and transcribing the result with Gemini's
-// own audio understanding gives "I am fine. I am fine." — no "panting". Same
-// for `<tsk>`, `<argh>` and `<throat-clearing>`. Google's own tag guide allows
-// for custom tags and says only that they require testing.
-//
-// The hazard that IS real is the square-bracket Mode 3 adjectives — `[scared]`,
-// `[curious]`, `[bored]` — which are spoken as words. Those are kept out of the
-// wire by the free-text→style rule in splitCues, asserted below.
-//
-// The list is transcribed from Google's tag guide rather than derived from our
-// source. Deriving it would make the assertion vacuous: it would pass against
-// any map, including a broken one.
+// The documented list is transcribed from Google's guide rather than derived
+// from our source; deriving it would also accept a broken implementation.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -48,13 +30,10 @@ const DOCUMENTED = [
   'short pause', 'long pause',
 ];
 
-/** Not in Google's list, but MEASURED to pause rather than speak, on both
- *  models in MODELS including the one a station with no explicit model pick
- *  actually sends first. How MUCH it pauses is not established — single samples
- *  could not separate short from medium. Listed explicitly so a future
- *  contributor cannot "fix" it away as undocumented, and so this is visibly the
- *  one place an undocumented tag is permitted. */
-const VERIFIED_UNDOCUMENTED = ['medium pause'];
+// Explicit station extension, not a documented tag or independently verified
+// acoustic contract. Author-provided renders motivated retaining the spelling;
+// these tests establish only its request mapping, not a pause or its duration.
+const STATION_EXTENSIONS = ['medium pause'];
 
 // Spellings the DJ actually writes. The third-person `-s` forms matter: the
 // station's own system prompt suggests `[laughs]` and `[sighs]`.
@@ -69,20 +48,19 @@ function tagsFor(spelling: string): string[] {
   return [...text.matchAll(/<([^>]+)>/g)].map(m => m[1] as string);
 }
 
-test('every tag we emit is on the verified list', () => {
+test('every tag we emit is documented or an explicit station extension', () => {
   const emitted = new Set<string>();
   for (const s of DJ_SPELLINGS) for (const t of tagsFor(s)) emitted.add(t);
-  const allowed = new Set([...DOCUMENTED, ...VERIFIED_UNDOCUMENTED]);
+  const allowed = new Set([...DOCUMENTED, ...STATION_EXTENSIONS]);
   const unverified = [...emitted].filter(t => !allowed.has(t));
   assert.deepEqual(unverified, [],
-    `these tags are neither documented nor individually verified: ${unverified.join(', ')}`);
+    `these tags are neither documented nor explicit station extensions: ${unverified.join(', ')}`);
 });
 
 test('`pant` emits the documented `<pant>`, not `<panting>`', () => {
   // The specific regression. `<panting>` is not a tag; `<pant>` is.
-  // Both spellings the DJ might write resolve to the DOCUMENTED tag. Measured:
-  // `<panting>` would also have been performed rather than spoken, so this is
-  // about pinning to the verified spelling, not about preventing an error.
+  // Both DJ spellings resolve to the documented tag. This tests vocabulary,
+  // not acoustic behavior of the documented or undocumented spelling.
   assert.deepEqual(tagsFor('pant'), ['pant']);
   assert.deepEqual(tagsFor('panting'), ['pant']);
   // A MULTI-WORD cue is not a tag lookup at all — `[panting heavily]` is a
@@ -145,9 +123,8 @@ test('`[grr]` and `[sighs]` are sounds, not style strings', () => {
 });
 
 test('[medium pause] emits its tag and adds no style', () => {
-  // `<medium pause>` is absent from the guide but MEASURED to pause on both
-  // models. The suite allows the output and never once exercised the cue, so a
-  // mapping that silently dropped it would not have failed anything.
+  // The station extension must be exercised as an input cue, not merely
+  // accepted in an output allowlist. No acoustic claim follows from this test.
   const r = splitCues('Wait... <medium pause> ...did you hear that?');
   assert.match(r.text, /<medium pause>/);
   assert.deepEqual(r.styles, [], 'a pause tag must not also add a style');
@@ -202,4 +179,10 @@ test('a proper-noun bracket still survives into the transcript', () => {
   assert.deepEqual(r.styles, []);
   const digits = splitCues('That was Track [2] on the album.');
   assert.match(digits.text, /\[2\]/);
+});
+
+test('the DJ inflection hisses emits hiss rather than a style', () => {
+  assert.deepEqual(splitCues('Hi. [hisses] There.'), {
+    text: 'Hi. <hiss> There.', styles: [],
+  });
 });

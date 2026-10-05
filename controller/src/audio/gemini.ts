@@ -63,42 +63,25 @@ export function isAvailable(): boolean {
 // doubling this table, because a missing `-s` used to mean the bracket SURVIVED
 // into the transcript and Gemini 3.8 — which treats `text` as a verbatim
 // transcript — read the word "laughs" out loud on air.
-// Every value below is a tag from Google's own vocabulary list.
+// Values follow Google's documented vocabulary, with `medium pause` retained
+// as an explicit station extension:
+// https://ai.google.dev/gemini-api/docs/speech-generation
 //
-// WHY A CURATED LIST, MEASURED RATHER THAN ASSUMED
-// -------------------------------------------------
-// Google says to "test and verify new tags" because "a tag you assume is a style
-// modifier might be vocalized". An earlier draft of this comment asserted that
-// an undocumented tag WOULD be read aloud on Gemini 3.8. That was an inference,
-// and measurement does not support it: rendering `I am fine. <panting> I am
-// fine.` and transcribing the audio with Gemini's own audio understanding
-// returns "I am fine. I am fine." — no "panting". Same for `<tsk>`, `<argh>` and
-// `<throat-clearing>`. Angle-bracket tags are performed, documented or not.
+// Documentation establishes the supported spelling, not acoustic performance.
+// The author reported renders of undocumented tags on both models in MODELS
+// whose transcriptions omitted those tags. That does not establish that a
+// sound was performed, that every undocumented tag works, or that the result
+// holds across future model versions. Mapping `panting` to the documented
+// `pant` is a vocabulary choice, not proof that `panting` is spoken or broken.
 //
-// So the list is kept as a VERIFIED set, not as a safety rail: a station cannot
-// audition two thousand tags, and Google's own instruction is to verify before
-// shipping. `panting` maps to `<pant>` because that is the documented spelling,
-// and because the two are not guaranteed to behave identically forever — not
-// because `<panting>` was known to be broken.
+// Square-bracket delivery adjectives go to `speech_metadata.style` rather
+// than the transcript. Unknown capitalised titles remain speech. Tests pin
+// those request channels; they do not verify how the provider sounds.
 //
-// THE HAZARD THAT IS REAL, AND WHERE IT IS HANDLED
-// ------------------------------------------------
-// Google warns about tags that are SPOKEN, and the ones that do that are the
-// square-bracket emotional adjectives — `[scared]`, `[curious]`, `[bored]` —
-// whose Mode 3 is "the tag itself is spoken as a word". Those never reach the
-// wire: FREEFORM_STYLE_RE below routes an unrecognised bracket to
-// `speech_metadata.style` instead, which is what Google recommends over speaking
-// the adjective. That is the mechanism that protects us, not this table.
-//
-// `medium pause` was missing entirely and fell through to the free-text rule, so
-// `[medium pause]` became the STYLE STRING "medium pause" rather than an actual
-// pause. It does produce a pause, on BOTH models in MODELS — verified by
-// rendering four of them and transcribing: silence is added and nothing is
-// spoken. How much silence is NOT established: single samples were far too
-// noisy to grade short vs medium vs long, and on flash-lite two runs of
-// `<short pause>` and `<medium pause>` came out within 0.04s of each other. So
-// the tag is here because it pauses, not because it has been shown to pause by
-// a specific amount.
+// `medium pause` is not in the documented list. The author reported pauses
+// from sample renders, but neither that effect nor its duration has been
+// independently verified. In particular, those samples cannot establish a
+// reliable short/medium/long duration ordering.
 //
 // Keys are the spellings the DJ actually writes, including the third-person
 // `-s` forms the system prompt itself suggests (`[laughs]`, `[sighs]`).
@@ -122,7 +105,7 @@ const VOCAL_BURSTS: Record<string, string> = {
   // the style string "grr" — a growl rendered as prose rather than a sound.
   grr: 'grr',
   yell: 'shout', shout: 'shout', scream: 'scream', shriek: 'shriek',
-  tsk: 'tsk', hiss: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
+  tsk: 'tsk', hiss: 'hiss', hisses: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
   whimper: 'whimper', yawn: 'yawn',
   'throat-clearing': 'throat-clearing', throatclear: 'throat-clearing',
   // WHISPER: EACH SPELLING EMITS ITS OWN DOCUMENTED TAG
@@ -148,9 +131,8 @@ const VOCAL_BURSTS: Record<string, string> = {
   // as something the provider requires — the guide lists it as a tag too, so
   // nothing guarantees the style channel is the better one for it.
   whisper: 'whispering', whispers: 'whispers',
-  // Pacing. `medium pause` is absent from Google's list but does pause on both
-  // models in MODELS. The magnitude is not pinned down — see the note above on
-  // why a single noisy sample cannot grade short against medium.
+  // Pacing: documented short/long plus the station's medium-pause extension.
+  // See the author-provided evidence and its limits above.
   'short pause': 'short pause', 'medium pause': 'medium pause', 'long pause': 'long pause',
   uhm: 'breath',
 };
