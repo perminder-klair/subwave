@@ -46,6 +46,8 @@ export interface PlayerAudio {
 
 export interface PlayerActions {
   tune: () => void;
+  play: () => void;
+  pause: () => void;
   stop: () => void;
   toggleMute: () => void;
   setVolume: Dispatch<SetStateAction<number>>;
@@ -92,10 +94,13 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     audioRef,
     attachAudio,
     tunedIn,
+    playbackState,
     status,
     volume,
     setVolume,
     tune,
+    play,
+    pause,
     stop,
     toggleMute,
     muted,
@@ -109,15 +114,21 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // usePlayer's tune/stop/toggleMute close over per-render state, so bridge
   // through refs and create the actions context value exactly once.
   const tuneRef = useRef(tune);
+  const playRef = useRef(play);
+  const pauseRef = useRef(pause);
   const stopRef = useRef(stop);
   const muteRef = useRef(toggleMute);
   tuneRef.current = tune;
+  playRef.current = play;
+  pauseRef.current = pause;
   stopRef.current = stop;
   muteRef.current = toggleMute;
 
   const actions = useMemo<PlayerActions>(
     () => ({
       tune: () => tuneRef.current(),
+      play: () => playRef.current(),
+      pause: () => pauseRef.current(),
       stop: () => stopRef.current(),
       toggleMute: () => muteRef.current(),
       setVolume,
@@ -159,10 +170,11 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // Wire OS-level media controls. No onSkip on the public listener: a stray
   // AirPods double-tap shouldn't skip the song for everyone.
   useMediaSession({
-    tunedIn,
+    playbackState,
     nowPlaying: feed.nowPlaying,
-    audioRef,
-    onTune: actions.tune,
+    onPlay: actions.play,
+    onPause: actions.pause,
+    onStop: actions.stop,
     boothFeed: feed.session.messages,
     personaAvatarUrl,
     personaName,
