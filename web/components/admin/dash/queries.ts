@@ -12,6 +12,7 @@ import {
   type RequestEntry,
 } from './types';
 import { scheduleKeys, type ScheduleLiveData } from '../schedule/queries';
+import { toConnectionsState } from './connections';
 
 export const dashKeys = {
   all: ['dash'] as const,
@@ -53,13 +54,7 @@ export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal)
   const body = await adminJson<Partial<ConnectionsState>>(
     fetcher, '/listeners/connections', undefined, signal,
   );
-  return {
-    count: body?.count ?? 0,
-    connections: body?.connections ?? [],
-    // An older controller omits the key entirely; `known: false` is the same
-    // "say nothing" verdict the controller's own unknown case produces.
-    trustedProxies: body?.trustedProxies ?? UNKNOWN_TRUSTED_PROXIES,
-  };
+  return toConnectionsState(body, UNKNOWN_TRUSTED_PROXIES);
 }
 
 export function fetchHealthStats(fetcher: AdminFetch, signal: AbortSignal): Promise<HealthStats> {

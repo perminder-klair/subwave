@@ -45,14 +45,15 @@ assert.ok(STATION_ID_RE.test(slugifyStationName('Ünïcode Béats!!')));
 // --- duplicate allowlist (spec §5) ------------------------------------------
 // copy: station identity + derived config
 for (const f of [
-  'settings.json', 'setup-config.json', 'secrets.env', 'moods.json',
+  'settings.json', 'secrets.env',
   'schedule.json', 'jingles.m3u', 'jingles.json', 'beds.json', 'bed.mp3',
   'voices', 'persona-avatars', 'jingles', 'beds', 'skills', 'sfx',
   'liquidsoap_crossfade.txt', 'liquidsoap_station_name.txt',
-  'icecast_listener_auth.txt', 'themes', 'sfx.json', 'playlist-recipes.json',
+  'icecast_listener_auth.txt', 'themes', 'sfx.json',
 ]) assert.equal(duplicateAction(f), 'copy', f);
-// library.db goes through better-sqlite3 .backup(), not a file copy
-assert.equal(duplicateAction('library.db'), 'backup');
+// Credentials and source-specific data must be configured for the new station.
+for (const f of ['setup-config.json', 'library.db', 'moods.json', 'playlist-recipes.json'])
+  assert.equal(duplicateAction(f), 'skip');
 // skip: runtime + listener history + everything unknown (allowlist default)
 for (const f of [
   'session.json', 'sessions', 'logs', 'archive', 'queue.json',

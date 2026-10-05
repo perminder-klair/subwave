@@ -9,6 +9,7 @@ import { rm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
+import { recordHttpAttempt } from './subsonic-log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
 
@@ -788,8 +789,10 @@ export interface RenderTransitionPayload {
 
 export interface RenderTransitionResult {
   path: string;
-  blendStartSec: number; // absolute in the OUTGOING track — its liq_cue_out
-  inCueSec: number;      // absolute in the INCOMING track — its liq_cue_in
+  blendStartSec: number; // absolute in the OUTGOING track — where the clip's first sample continues it
+  inCueSec: number;      // absolute in the INCOMING track — where the clip's last sample reaches it
+  // (the stamped liq_cue_out / liq_cue_in sit one seam overlap outside these:
+  // broadcast/stem-seam.ts)
   clipSec: number;
 }
 
@@ -898,6 +901,7 @@ export async function downloadCapped(
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
   try {
+    recordHttpAttempt('stream', 'analysis-download');
     const res = await fetch(url, {
       headers: { 'User-Agent': 'subwave-analyzer/1' },
       signal: ac.signal,

@@ -13,6 +13,8 @@ import {
 } from './pure.js';
 import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js';
 import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
+import { hasNavidrome, NAVIDROME_PROFILE_POLICY, type NavidromeCredentials } from '../setup/navidrome-policy.js';
+import { writeFileAtomicSync } from '../util/atomic-file.js';
 import { firstMessage } from '../util/zod-error.js';
 
 // Thrown by createStation(). `converted` says the legacy-root conversion already
@@ -38,7 +40,7 @@ export class StationCreateError extends Error {
 export interface StationInfo {
   id: string | null;          // null = unconverted single-station root
   name: string;
-  configured: boolean;        // has setup-config.json, OR env creds cover the install
+  configured: boolean;        // complete connection; env allowed only before conversion
   createdAt: string | null;
   active: boolean;
 }
@@ -92,9 +94,31 @@ function patchSettingsStation(dir: string, name: string): void {
   writeFileSync(p, JSON.stringify(s, null, 2));
 }
 
-// envConfigured: env-supplied Navidrome creds apply to EVERY station and such
-// installs never write setup-config.json, so without the flag they all read
-// "needs setup". Threaded in from the route so this module stays fs-only.
+function stationHasNavidrome(dir: string): boolean {
+  try {
+    return hasNavidrome(JSON.parse(readFileSync(join(dir, 'setup-config.json'), 'utf8'))?.navidrome);
+  } catch {
+    return false;
+  }
+}
+
+// Playlist IDs belong to the old music server. Keep the programme structure,
+// but make the operator choose its playlist anchors on the new connection.
+function clearCopiedPlaylistIds(dir: string): void {
+  for (const name of ['settings.json', 'schedule.json']) {
+    const path = join(dir, name);
+    if (!existsSync(path)) continue;
+    const data = JSON.parse(readFileSync(path, 'utf8'));
+    if (!Array.isArray(data.shows)) continue;
+    for (const show of data.shows) {
+      delete show.playlistIds;
+      delete show.excludedPlaylistIds;
+    }
+    writeFileAtomicSync(path, JSON.stringify(data, null, 2));
+  }
+}
+
+// envConfigured applies only before conversion to station profiles.
 export function listStations(
   root: string,
   fallbackName: string,
@@ -104,7 +128,7 @@ export function listStations(
     return [{
       id: null,
       name: fallbackName,
-      configured: envConfigured || existsSync(join(root, 'setup-config.json')),
+      configured: envConfigured || stationHasNavidrome(root),
       createdAt: null,
       active: true,
     }];
@@ -118,7 +142,7 @@ export function listStations(
       return {
         id: e.name,
         name: typeof card.name === 'string' && card.name ? card.name : e.name,
-        configured: envConfigured || existsSync(join(dir, 'setup-config.json')),
+        configured: stationHasNavidrome(dir),
         createdAt: card.createdAt || null,
         active: e.name === active,
       };
@@ -137,7 +161,7 @@ function writeActivePointer(root: string, id: string): void {
 function writeCard(dir: string, name: string): void {
   writeFileSync(
     join(dir, 'station.json'),
-    JSON.stringify({ name, createdAt: new Date().toISOString() }, null, 2),
+    JSON.stringify({ name, createdAt: new Date().toISOString(), navidromePolicy: NAVIDROME_PROFILE_POLICY }, null, 2),
   );
 }
 
@@ -145,6 +169,7 @@ export function convertToMultiStation(
   root: string,
   currentName: string,
   renameFn: (src: string, dest: string) => void = renameSync,
+  currentNavidrome?: NavidromeCredentials,
 ): string {
   if (isMultiStation(root)) throw new Error('already multi-station');
   const id = 'main';
@@ -158,6 +183,14 @@ export function convertToMultiStation(
       if (conversionAction(entry) === 'keep') continue;
       renameFn(join(root, entry), join(dest, entry));
       moved.push(entry);
+    }
+    // Preserve the original station's effective connection before env overrides
+    // become inactive. This write is part of the rollback-protected conversion.
+    if (hasNavidrome(currentNavidrome)) {
+      const path = join(dest, 'setup-config.json');
+      const stored = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+      writeFileAtomicSync(path, JSON.stringify({ ...stored, navidrome: currentNavidrome, navidromePolicy: NAVIDROME_PROFILE_POLICY }, null, 2), { mode: 0o600 });
+      if (!moved.includes('setup-config.json')) moved.push('setup-config.json');
     }
   } catch (err) {
     // Best-effort move-back. If any move-back itself fails, leave dest in place
@@ -195,7 +228,7 @@ export async function createStation(root: string, opts: {
   name: string;
   mode?: 'fresh' | 'duplicate';
   currentName: string;
-  backupLibraryDb?: (dest: string) => Promise<void>;
+  currentNavidrome?: NavidromeCredentials;
 }): Promise<{ id: string; converted: boolean }> {
   // The chokepoint, not the route: this runs the same schema the route and the
   // admin form do. Rethrown as a plain Error because a raw ZodError's .message is
@@ -206,7 +239,7 @@ export async function createStation(root: string, opts: {
 
   let converted = false;
   if (!isMultiStation(root)) {
-    convertToMultiStation(root, opts.currentName);
+    convertToMultiStation(root, opts.currentName, undefined, opts.currentNavidrome);
     converted = true;
   }
   // Counts real station dirs, post-conversion.
@@ -240,15 +273,10 @@ export async function createStation(root: string, opts: {
           // Async: voices/ and jingles/ can run to hundreds of MB, and a sync
           // copy would block the event loop for the whole duplicate.
           await cp(join(src, entry), join(dest, entry), { recursive: true });
-        } else if (action === 'backup') {
-          if (opts.backupLibraryDb) {
-            await opts.backupLibraryDb(join(dest, entry));
-          } else {
-            console.warn('[stations] duplicate: no backupLibraryDb callback — library.db not copied');
-          }
         }
       }
     }
+    if (mode === 'duplicate') clearCopiedPlaylistIds(dest);
     // Fresh: seeds settings.json so first boot isn't "SUB/WAVE". Duplicate:
     // overwrites the name copied from the source.
     patchSettingsStation(dest, name);

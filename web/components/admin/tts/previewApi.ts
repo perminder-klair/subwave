@@ -21,6 +21,7 @@ export interface PreviewParams {
   // Free-text on-air language ("Turkish", "Türkçe"); the server renders the sample
   // sentence in it, falling back to English when it doesn't recognize it.
   language?: string;
+  voiceStyle?: string;
   // Explicit sample text, overriding both the default sentence and the
   // language-localized one. Truncated server-side at PREVIEW_TEXT_MAX (200).
   text?: string;

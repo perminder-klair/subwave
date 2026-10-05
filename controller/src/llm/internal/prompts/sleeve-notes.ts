@@ -13,7 +13,7 @@ function text(value: unknown, max = 180): string {
 }
 
 /** Facts derived from controller/library state, safe to hand to the DJ as facts. */
-export function sleeveNotesFor(track: any, playCount: number | null = null): string[] {
+export function sleeveNotesFor(track: any): string[] {
   const notes: string[] = [];
   const album = text(track?.album);
   const title = text(track?.title);
@@ -24,41 +24,42 @@ export function sleeveNotesFor(track: any, playCount: number | null = null): str
   if (year != null && Number.isInteger(year) && year >= 1880 && year <= new Date().getFullYear()) {
     notes.push(`Release year: ${year}.`);
   }
-  if (Number.isInteger(playCount) && playCount! > 0) {
-    notes.push(`Lifetime station plays: ${playCount}.`);
-  }
   return notes;
 }
 
-// A small amount of station memory makes a link feel like it belongs to this
-// broadcast, but an empty/unavailable play index must never be presented as a
-// first play. `unairedFlag` makes exactly that distinction for the picker.
-// A rare return needs both a low lifetime count and a meaningful gap; without
-// the gap, a new station would call every second spin "rare".
+// A first station play is useful on air only as a current-music cue, never as
+// routine station bookkeeping. Vanilla Subwave has a trusted *year*, not a
+// reliable original-release date, so use a conservative editorial window:
+// Jan–Jun admits this and the preceding year; Jul–Dec admits this year only.
+// `nowMs` is derived from the station date where available, rather than the
+// controller host's timezone.
 export function stationHistoryNoteFor(
   track: any,
-  stats: { count: number; lastPlayedAtMs: number } | null,
   index: AiredIndex,
   nowMs = Date.now(),
 ): string | null {
-  if (unairedFlag(track, index)) return 'First station play.';
-  if (!stats || stats.count < 1 || stats.count > 2) return null;
-  const days = Math.floor((nowMs - stats.lastPlayedAtMs) / 86_400_000);
-  if (!Number.isFinite(days) || days < 30) return null;
-  const times = stats.count === 1 ? 'once' : 'twice';
-  return `Played here only ${times} before; last heard ${days} days ago.`;
+  if (!unairedFlag(track, index)) return null;
+  const releaseYear = trackEraYear(track);
+  if (releaseYear == null) return null;
+  const now = new Date(nowMs);
+  const currentYear = now.getUTCFullYear();
+  const earliestYear = now.getUTCMonth() <= 5 ? currentYear - 1 : currentYear;
+  return releaseYear >= earliestYear && releaseYear <= currentYear
+    ? 'First station play.'
+    : null;
 }
 
 // Extra facts are derived from controller context, never model knowledge.
 export function contextSleeveNotesFor(
   track: any,
   context: any,
-  playCount: number | null = null,
   stationHistoryNote: string | null = null,
 ): string[] {
   void context;
-  const notes = sleeveNotesFor(track, playCount);
-  if (stationHistoryNote) notes.push(stationHistoryNote);
+  const notes = sleeveNotesFor(track);
+  // A qualifying first play is a deliberately scarce current-music cue, so it
+  // takes one of the two link slots ahead of routine album/year metadata.
+  if (stationHistoryNote) notes.unshift(stationHistoryNote);
   // The default Sleeve Notes packet is track/library/station history only.
   // Show identity and an explicit near-boundary handover remain available in
   // Current Context; themes, episode angles and festivals are editorial
@@ -109,12 +110,11 @@ export function releaseYearMentionEligible(
 
 /**
  * The complete prompt packet. The track identity is always present when it is
- * known; up to two supplemental sleeve notes follow it. A malformed/raw
- * track degrades to no packet rather than creating an assertion from guesswork.
+ * known; up to two supplemental sleeve notes follow it. A malformed/raw track
+ * degrades to no packet rather than creating an assertion from guesswork.
  */
 export function verifiedFactsForLink(
   track: any,
-  playCount: number | null = null,
   random: () => number = Math.random,
 ): string[] {
   const title = text(track?.title);
@@ -122,7 +122,7 @@ export function verifiedFactsForLink(
   const artist = text(track?.artist) || 'unknown artist';
   return [
     `Track: "${title}" by ${artist}.`,
-    ...selectSleeveNotes(sleeveNotesFor(track, playCount), random),
+    ...selectSleeveNotes(sleeveNotesFor(track), random),
   ];
 }
 

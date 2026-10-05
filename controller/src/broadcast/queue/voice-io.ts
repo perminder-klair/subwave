@@ -14,7 +14,7 @@ import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } fro
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { config } from '../../config.js';
-import { writeFileAtomic } from '../../util/atomic-file.js';
+import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep } from './pure.js';
 import { awaitVoiceAir } from './voice-marker.js';
@@ -34,7 +34,7 @@ async function waitForConsumed(path: string, maxWaitMs: number) {
   // Timed out — file still on disk. Caller proceeds anyway.
 }
 
-export async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 } = {}) {
+export async function writeHandoff(path: string, contents: string | (() => string), { maxWaitMs = 1500, beforeWrite = () => true, onWritten }: { maxWaitMs?: number; beforeWrite?: () => boolean; onWritten?: () => void } = {}) {
   const prev = _handoffChains.get(path) || Promise.resolve();
   const next = prev
     .catch(() => undefined)
@@ -48,7 +48,10 @@ export async function writeHandoff(path: string, contents: string, { maxWaitMs =
       // half-written (or truncated-but-empty) file — its poll handlers read,
       // DELETE, then check non-empty, so a poll landing mid-write would drop
       // this handoff silently. rename(2) is atomic on the same volume.
-      await writeFileAtomic(path, contents);
+      if (!beforeWrite()) return false;
+      writeFileAtomicSync(path, typeof contents === 'function' ? contents() : contents);
+      onWritten?.();
+      return true;
     });
   // Hold the slot until liquidsoap consumes THIS write too, so the next
   // queued writer waits for the audio to land, not just for the write call to

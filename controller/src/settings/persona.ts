@@ -76,6 +76,17 @@ export function effectiveMaxTrackSec(
   return sec && sec > 0 ? sec : null;
 }
 
+// One policy result for selection and playback; malformed/absent mode is legacy cut.
+export function effectiveTrackLengthLimits(
+  show: { maxTrackSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { maxTrackSeconds?: unknown; maxTrackLengthMode?: unknown } | null | undefined = get(),
+): { selectionMaxSec: number | null; playbackMaxSec: number | null } {
+  const maxSec = effectiveMaxTrackSec(show, s);
+  return s?.maxTrackLengthMode === 'exclude'
+    ? { selectionMaxSec: maxSec, playbackMaxSec: null }
+    : { selectionMaxSec: null, playbackMaxSec: maxSec };
+}
+
 // Effective minimum track length in SECONDS for the moment a pick is made, or
 // null for "no floor" (#1573). Exactly the precedence effectiveMaxTrackSec
 // applies to the cap: a scheduled show's own floor (when set) overrides the
@@ -84,7 +95,7 @@ export function effectiveMaxTrackSec(
 // disagree about how short is too short.
 //
 // The two are NOT symmetric in what they do with the answer: the cap is an
-// on-air cue_out cut, so an over-long track stays eligible, while the floor is
+// on-air cue_out cut in legacy mode (a hard ceiling in exclude), while the floor is
 // a SELECTION filter — a 40-second interlude cannot be stretched.
 export function effectiveMinTrackSec(
   show: { minTrackLengthSeconds?: unknown } | null | undefined = resolveActiveShow(),

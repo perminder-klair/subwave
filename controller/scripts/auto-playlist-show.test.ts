@@ -211,7 +211,7 @@ test('every refresh stamps what the file now holds', () => {
   );
   const inner = scheduler.slice(scheduler.indexOf('async function refreshAutoPlaylistInner'));
   const stamp = inner.indexOf('autoPlaylistBuild.built(show)');
-  const write = inner.indexOf('writeFileAtomic(config.liquidsoap.autoPlaylist');
+  const write = inner.indexOf('writeFileAtomicSync(config.liquidsoap.autoPlaylist');
   assert.ok(write >= 0 && stamp > write, 'the stamp records a build that LANDED — it comes after the write');
 });
 

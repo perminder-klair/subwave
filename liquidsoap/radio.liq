@@ -415,11 +415,80 @@ music = cue_cut(music)
 # through its internal simple_transition and ignores a custom callback. `a`/`b`
 # are records with .source/.metadata/.db_level.
 #
-# `cross` sizes this transition's buffer from the OUTGOING track's
-# liq_cross_duration stamp, so the fade must read `a.metadata` too or fade !=
-# buffer (longer is truncated into a gap, shorter sums to +6 dB).
+# CROSS STAMPS — the controller stamps ONE value per track, liq_cross_duration,
+# meaning "how long the transition OUT of this track lasts". `cross` needs it
+# twice: as the END duration of this track and as the START duration of the
+# next one. This rewrite runs on the source feeding `cross`, so it sees tracks
+# in the order cross pulls them, and it emits both explicitly:
+#   liq_cross_end_duration   = this track's own stamp (station crossfade if the
+#                              track carries none — a jingle, a cold-boot auto
+#                              pick — instead of inheriting the last one)
+#   liq_cross_start_duration = the PREVIOUS track's end value
+# A replayed metadata chunk must not advance the chain. The request's `rid`
+# distinguishes new airings of the same local file, including repeated jingles;
+# fallback metadata replay keeps that request ID and reuses its stamps.
+cross_prev_end = ref(crossfade_duration())
+cross_last_file = ref("")
+cross_last_rid = ref("")
+cross_last_stamps = ref([])
+
+def cross_stamps(m) =
+  # `fname`, not `file`: a local `file` shadows the stdlib file.* module
+  # (Liquidsoap Warning 6 at startup).
+  fname = m["filename"]
+  rid = m["rid"]
+  if fname != "" and fname == cross_last_file() and rid == cross_last_rid() then
+    cross_last_stamps()
+  else
+    own = float_of_string(default=crossfade_duration(), m["liq_cross_duration"])
+    own = if own < 0. then crossfade_duration() else own end
+    stamps = [
+      ("liq_cross_start_duration", string(cross_prev_end())),
+      ("liq_cross_end_duration", string(own)),
+      ("liq_cross_duration", "")
+    ]
+    cross_prev_end := own
+    cross_last_file := fname
+    cross_last_rid := rid
+    cross_last_stamps := stamps
+    stamps
+  end
+end
+
+# Remove every cross override key from what the transition EMITS. `cross`
+# processes override keys on its output frames too; without this the replayed
+# outgoing metadata re-sizes the incoming track's own end buffer.
+def strip_cross_stamps(s) =
+  metadata.map(update=true, strip=true, fun (_) -> [
+    ("liq_cross_duration", ""),
+    ("liq_cross_start_duration", ""),
+    ("liq_cross_end_duration", "")
+  ], s)
+end
+
+# BUFFER SIZING (measured on air, 2.4.5): `cross` sizes the outgoing TAIL from its
+# end duration and the incoming HEAD from its start duration, then trims both to
+# the shorter one before calling this function. A single liq_cross_duration
+# stamp could not keep those in step: cross re-applies the override keys it
+# finds in its OWN output, and the transition replays the OUTGOING track's
+# metadata, so each tail was sized by the stamp of the track BEFORE the
+# outgoing one (3931 of 3997 logged transitions), while the head followed the
+# incoming stamp. CROSS STAMPS below translates the controller's one stamp into
+# explicit start/end values per track, and STRIP_CROSS_STAMPS keeps cross from
+# re-reading them off its output.
+#
+# The fade length is the length actually buffered, not a stamp: the two a/b
+# sources are already equal length here, so `d` from them is the one value
+# that can never disagree with the buffer. The stamp is only the fallback for a
+# source that cannot report its length. A mismatch is logged so a regression
+# shows up in radio.log, not on air.
 def dj_transition(a, b) =
-  d = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_duration"])
+  stamp = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_end_duration"])
+  buffered = min(source.remaining(a.source), source.remaining(b.source))
+  d = if buffered > 0. and buffered < 600. then buffered else stamp end
+  if abs(d - stamp) > 0.25 then
+    log(label="cross.size", level=2, "transition buffer #{d}s differs from the outgoing stamp #{stamp}s — fading over the buffer")
+  end
   # EFFECT ARMING. Every effect is APPLIED to the outgoing branch, but which
   # track carries the FLAG differs, which is why there is no arming state and no
   # remaining() watcher:
@@ -962,7 +1031,7 @@ def dj_transition(a, b) =
     else
       b_source
     end
-  add(normalize=false, [a_source, b_source])
+  strip_cross_stamps(add(normalize=false, [a_source, b_source]))
 end
 
 # The PRE-cross handle for the on_metadata hook attached further down. Hooking
@@ -1051,6 +1120,11 @@ music = amplify(override="liq_amplify", 1., music)
 # (fx-render-test.sh xdur: a stamped 12 renders 86s without persist, 78s with).
 # The flip side is that a stamp lingers over later UNstamped tracks, so the
 # controller stamps every track it annotates.
+#
+# The cross_stamps rewrite (see CROSS STAMPS above dj_transition) runs right
+# here, on the source cross reads, and below every on_metadata consumer, so
+# now-playing and the ICY title never see the rewritten keys.
+music = metadata.map(update=true, strip=true, cross_stamps, music)
 music = cross(
   duration=crossfade_duration(),
   persist_override=true,

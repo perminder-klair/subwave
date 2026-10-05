@@ -6,6 +6,7 @@ import { unverifiedCfIp, clientIp } from '../middleware/ratelimit.js';
 import * as audience from '../broadcast/audience.js';
 import { resolveListenerCountry } from '../broadcast/listener-country.js';
 import { lookupCountry } from '../broadcast/geoip.js';
+import { rememberBeaconCountry } from '../broadcast/beacon-countries.js';
 import * as settings from '../settings.js';
 
 export const router = express.Router();
@@ -25,14 +26,20 @@ router.post('/beacon', (req, res) => {
     try {
       countryHeader = String((settings.get() as any)?.stream?.countryHeader || '');
     } catch { /* fall through to the header/GeoIP links */ }
+    const country = resolveListenerCountry({
+      headers: req.headers as Record<string, unknown>,
+      ip,
+      countryHeader,
+      geoipLookup: lookupCountry,
+    });
+    // For the Dash Listeners table's Country column. Keyed on clientIp(), the
+    // left-most X-Forwarded-For, NOT the CF hint above: that is the address
+    // Icecast's trusted-proxy rule records for the same listener, so the two
+    // line up. Memory only (see beacon-countries.ts).
+    rememberBeaconCountry(clientIp(req), country);
     audience.record({
       ip,
-      country: resolveListenerCountry({
-        headers: req.headers as Record<string, unknown>,
-        ip,
-        countryHeader,
-        geoipLookup: lookupCountry,
-      }),
+      country,
       referrer: typeof body.referrer === 'string' ? body.referrer.slice(0, 500) : undefined,
       utmSource: typeof body.utmSource === 'string' ? body.utmSource.slice(0, 60) : undefined,
       path: typeof body.path === 'string' ? body.path.slice(0, 200) : undefined,

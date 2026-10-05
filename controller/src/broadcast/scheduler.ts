@@ -4,13 +4,15 @@
 
 import cron, { type ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
-import { writeFileAtomic } from '../util/atomic-file.js';
+import { writeFileAtomicSync } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import * as subsonic from '../music/subsonic.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import { onCacheChange } from '../settings/store.js';
+import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
 import { jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
@@ -72,13 +74,13 @@ const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for sho
 // matches music/picker.ts.
 const SHOW_GENRE_FETCH_CONCURRENCY = 4;
 
-async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
+async function tracksFromAlbums(albums: any[], perAlbum: number, max: number, maxTrackSec: number | null) {
   const out: any[] = [];
   for (const a of albums) {
     if (out.length >= max) break;
     try {
       const songs = await subsonic.getAlbum(a.id);
-      out.push(...shuffle(songs).slice(0, perAlbum));
+      out.push(...shuffle(applyKnownTrackCeiling(songs, maxTrackSec)).slice(0, perAlbum));
     } catch {}
   }
   return out;
@@ -126,7 +128,26 @@ export async function refreshAutoPlaylistOnShowChange(reason: string): Promise<b
   return true;
 }
 
+// All settings entrances (save, restore and load) publish through this seam.
+// The epoch also catches A → B → A while a slow catalogue build is pending.
+let lengthPolicyEpoch = 0;
+const lengthPolicyKey = () => JSON.stringify({
+  mode: settings.get().maxTrackLengthMode,
+  max: settings.get().maxTrackSeconds,
+  effectiveMax: settings.effectiveMaxTrackSec(),
+});
+let publishedLengthPolicy = lengthPolicyKey();
+onCacheChange(() => {
+  const key = lengthPolicyKey();
+  if (key === publishedLengthPolicy) return;
+  publishedLengthPolicy = key;
+  lengthPolicyEpoch++;
+  void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Length-policy fallback refresh failed: ${err.message}`));
+});
+
 async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<RefreshResult> {
+  const epoch = lengthPolicyEpoch;
+  const policyKey = lengthPolicyKey();
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
   // Same library-scaled recency window as the live picker, keyed by BOTH id and
@@ -196,7 +217,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   const nz = (cap: number) => ((narrow || hasPlaylist) ? Math.max(2, Math.ceil(cap * SHOW_NARROW_FACTOR)) : cap);
 
   // Length cap in seconds, show override or station default (#447). null = no cap.
-  const maxDurationSec = settings.effectiveMaxTrackSec(show);
+  const { playbackMaxSec: maxDurationSec, selectionMaxSec } = settings.effectiveTrackLengthLimits(show);
   // Minimum track length (#1573) is a SELECTION filter, not a cue_out cut like
   // the cap: applied to the assembled pool below, never-starve.
   const minDurationSec = settings.effectiveMinTrackSec(show);
@@ -208,10 +229,12 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     recentKeys,
     targetPool: TARGET_POOL,
     maxPerArtist: AUTO_MAX_PER_ARTIST,
+    selectionMaxSec,
   });
   const pool = builder.pool;
   const fromSource = builder.fromSource;
-  const take = builder.take;
+  const take: typeof builder.take = (label, items, cap, opts) =>
+    builder.take(label, applyKnownTrackCeiling(items, selectionMaxSec), cap, opts);
   // Replace the pool in place, aliasing-safe: a never-starve filter that hands
   // its input back would otherwise be cleared by `pool.length = 0`, emptying
   // the coast.
@@ -328,7 +351,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // 3. Recently-added albums — surfaces new music without any tagging.
   try {
     const recentAlbums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
-    const tracks = await tracksFromAlbums(shuffle(recentAlbums).slice(0, 4), 2, RECENT_WEIGHT * 2);
+    const tracks = await tracksFromAlbums(shuffle(recentAlbums).slice(0, 4), 2, RECENT_WEIGHT * 2, selectionMaxSec);
     take('recent', enforce(tracks), nz(RECENT_WEIGHT));
   } catch (err) {
     queue.log('error', `Recent-albums fetch failed: ${err.message}`);
@@ -341,7 +364,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     const freqOffset = Math.floor(Math.random() * 3) * 8;
     let freqAlbums = await subsonic.getFrequentAlbums({ size: 8, offset: freqOffset });
     if (!freqAlbums.length && freqOffset > 0) freqAlbums = await subsonic.getFrequentAlbums({ size: 8 });
-    const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2);
+    const tracks = await tracksFromAlbums(shuffle(freqAlbums).slice(0, 4), 2, FREQUENT_WEIGHT * 2, selectionMaxSec);
     take('frequent', enforce(tracks), nz(FREQUENT_WEIGHT));
   } catch (err) {
     queue.log('error', `Frequent-albums fetch failed: ${err.message}`);
@@ -427,6 +450,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // loudness gain (same resolver, so both paths level identically), the
   // max-track cue_out cap (#447) and the silence trim (music/silence-trim.ts).
   // No loudness / off / unmeasured → no stamp → unity and an untouched entry.
+  replacePool(applyKnownTrackCeiling(pool, selectionMaxSec));
+  if (selectionMaxSec && !pool.length) queue.log('scheduler', 'Auto-playlist empty: no eligible tracks under the hard maximum; using existing dead-air safety');
   for (const t of pool) await queue.applyLoudnessGain(t);
 
   const lines = ['#EXTM3U', ...pool.map((t: any) => {
@@ -441,8 +466,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // in-place write can trigger a reload of a truncated playlist.
   // A pause can land during catalogue work. Do not trigger either watcher or
   // telnet reload in that case; already-started work cannot be cancelled.
-  if (!canPublish()) return 'deferred';
-  await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  if (!canPublish() || epoch !== lengthPolicyEpoch || policyKey !== lengthPolicyKey()) return 'deferred';
+  // Small IPC file: synchronous atomic commit leaves no policy-change gap
+  // between the freshness check and rename. Catalogue work stays asynchronous.
+  writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
   // The atomic rename swaps the inode, so the inotify watch can orphan itself
   // and loop a stale snapshot forever (#874). Force a telnet reload;
   // best-effort, so an unreachable mixer never fails the refresh.

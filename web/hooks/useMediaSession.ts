@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useStationClient } from '@/lib/stationClient';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 
@@ -10,10 +10,11 @@ import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 const TALKING_LINGER_MS = 15_000;
 
 export interface UseMediaSessionParams {
-  tunedIn: boolean;
+  playbackState: MediaSessionPlaybackState;
   nowPlaying: NowPlayingTrack | null;
-  audioRef: RefObject<HTMLAudioElement | null>;
-  onTune?: () => void;
+  onPlay: () => void;
+  onPause: () => void;
+  onStop: () => void;
   onSkip?: () => void;
   /** Booth-feed messages, most recent last; the tail decides whether the DJ is
    *  talking now. Omitting it means the persona avatar is never swapped in. */
@@ -68,7 +69,7 @@ function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
 // OS lock screen, Android shade, Control Centre, Bluetooth and car displays,
 // with hardware play/pause/headphone buttons routed through these handlers.
 // Tied to the <audio> element usePlayer owns, and play/pause/stop go through
-// usePlayer.tune() so the rest of the UI state stays consistent.
+// explicit usePlayer commands so repeated OS commands remain idempotent.
 //
 // "seekto"/"seekbackward"/"seekforward" are deliberately NOT wired — a live
 // stream can't be scrubbed, and leaving them unset removes the lock-screen
@@ -76,10 +77,11 @@ function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
 // "next" means skip the song you're hearing) but gated on the skip callback so
 // consumers like a public listener page can opt out.
 export function useMediaSession({
-  tunedIn,
+  playbackState,
   nowPlaying,
-  audioRef,
-  onTune,
+  onPlay,
+  onPause,
+  onStop,
   onSkip,
   boothFeed,
   personaAvatarUrl,
@@ -109,14 +111,18 @@ export function useMediaSession({
   // correct even while the <audio> readyState is still loading.
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-    navigator.mediaSession.playbackState = tunedIn ? 'playing' : 'paused';
-  }, [tunedIn]);
+    navigator.mediaSession.playbackState = playbackState;
+  }, [playbackState]);
 
   // Artwork routes through /api/cover/:id so the controller proxies the Subsonic
   // bytes and credentials never leak into the page. Falls back to the app icon
   // when there's no id (jingles, station idents, scanning state).
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    if (playbackState === 'none') {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
     if (!('MediaMetadata' in window)) return;
 
     const subsonicId = nowPlaying?.subsonic_id;
@@ -165,6 +171,7 @@ export function useMediaSession({
       artwork,
     });
   }, [
+    playbackState,
     nowPlaying?.title,
     nowPlaying?.artist,
     nowPlaying?.album,
@@ -175,50 +182,39 @@ export function useMediaSession({
     client,
   ]);
 
-  // Rebound on every dependency change so the handlers always close over the
-  // latest tune / skip callbacks.
+  // The core supplies stable callbacks that read the current transport intent.
   useEffect(() => {
     if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
 
     const session = navigator.mediaSession;
 
-    const handlePlay = () => {
-      if (!tunedIn) onTune?.();
-      else audioRef.current?.play().catch(() => {});
+    const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler | null>> = {
+      play: onPlay,
+      pause: onPause,
+      stop: onStop,
+      nexttrack: onSkip ?? null,
+      previoustrack: null,
+      seekto: null,
+      seekbackward: null,
+      seekforward: null,
     };
-    const handlePause = () => {
-      if (tunedIn) onTune?.();
-      else audioRef.current?.pause();
+    const setHandler = (action: MediaSessionAction, handler: MediaSessionActionHandler | null) => {
+      try { session.setActionHandler(action, handler); } catch {
+        // Unsupported actions must not prevent registration of later ones.
+      }
     };
-    const handleStop = () => {
-      if (tunedIn) onTune?.();
-    };
-    const handleNext = () => {
-      onSkip?.();
-    };
-
-    try {
-      session.setActionHandler('play', handlePlay);
-      session.setActionHandler('pause', handlePause);
-      session.setActionHandler('stop', handleStop);
-      session.setActionHandler('nexttrack', onSkip ? handleNext : null);
-      // Explicitly null so the UI hides these rather than greying them out.
-      session.setActionHandler('previoustrack', null);
-      session.setActionHandler('seekto', null);
-      session.setActionHandler('seekbackward', null);
-      session.setActionHandler('seekforward', null);
-    } catch {
-      // Older Safari throws on unsupported action types; the supported subset is
-      // still registered.
+    for (const [action, handler] of Object.entries(handlers)) {
+      setHandler(action as MediaSessionAction, handler);
     }
 
     return () => {
-      try {
-        session.setActionHandler('play', null);
-        session.setActionHandler('pause', null);
-        session.setActionHandler('stop', null);
-        session.setActionHandler('nexttrack', null);
-      } catch {}
+      for (const action of Object.keys(handlers)) setHandler(action as MediaSessionAction, null);
     };
-  }, [tunedIn, onTune, onSkip, audioRef]);
+  }, [onPlay, onPause, onStop, onSkip]);
+
+  useEffect(() => () => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.playbackState = 'none';
+    navigator.mediaSession.metadata = null;
+  }, []);
 }

@@ -102,15 +102,19 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
     const startsAt = clockIsAirTime ? String(handover.nextShow.startsAt || "").trim() : "";
     moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + (startsAt ? ", starting " + startsAt : "") + ".");
   }
-  const playStats = current ? library.trackPlayStatsFor(current) : null;
-  const playCount = playStats?.count ?? null;
+  // `context.date.iso` is already rendered in the station's configured
+  // timezone. Anchor the year-based first-play window to that date, not the
+  // controller host's clock; noon avoids any UTC date-boundary shift.
+  const stationDate = /^\d{4}-\d{2}-\d{2}$/.test(String(context?.date?.iso ?? ''))
+    ? Date.parse(`${context.date.iso}T12:00:00.000Z`)
+    : Date.now();
   const stationHistoryNote = current
-    ? stationHistoryNoteFor(current, playStats, library.lastAiredInfo())
+    ? stationHistoryNoteFor(current, library.lastAiredInfo(), stationDate)
     : null;
   const releaseYearMentions = settings.get().djBehaviour.releaseYearMentions;
   const sleeves = includeSleeves
     ? selectSleeveNotes(
-      contextSleeveNotesFor(current, context, playCount, stationHistoryNote),
+      contextSleeveNotesFor(current, context, stationHistoryNote),
       Math.random,
       releaseYearMentionEligible(current, context, releaseYearMentions),
     )
@@ -580,6 +584,12 @@ export function nextHourlyTimeClause(clock: any) {
   return `Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`;
 }
 
+// Hourly-only override after the saved persona: omitting weather context alone
+// still lets a weather-inviting soul or seasonal angle invent conditions (#1752).
+const HOURLY_NO_WEATHER_RULE = 'For this hourly time check, do not mention weather or outdoor conditions.'
+  + ' Do not infer them from persona instructions, the day, season, daypart, daylight or darkness, or recent speech/recap.'
+  + ' This rule overrides persona and tone instructions for this segment; weather belongs only in the dedicated weather segment.';
+
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null, showWelcome = false }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   const timeClause = nextHourlyTimeClause(context?.clock);
@@ -588,7 +598,7 @@ export async function generateHourlyTime({ recap = null, context = null, recentO
     ctxLines.push(`This is the first spoken segment of the newly started show "${context.activeShow.name}". After the required time check, add one short, natural welcome to that show. The complete line may be two short sentences. Do not introduce yourself by name, mention an outgoing presenter, or imply the show began before this hour.`);
   }
   return djText({
-    system: djSystem(persona || undefined),
+    system: djSystem(persona || undefined) + '\n\n' + HOURLY_NO_WEATHER_RULE,
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
     temperature: 0.9, topP: 0.95, repeatPenalty: 1.15, seed: randomSeed(),
     kind: 'generateHourlyTime',

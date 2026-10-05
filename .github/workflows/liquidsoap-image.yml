@@ -1,0 +1,54 @@
+name: Liquidsoap image
+
+on:
+  pull_request:
+    paths:
+      - 'docker/Dockerfile.broadcast'
+      - 'docker/Dockerfile.aio'
+      - 'docker/liquidsoap/**'
+      - 'docker/broadcast-entrypoint.sh'
+      - 'docker/icecast.xml.template'
+      - 'liquidsoap/radio.liq'
+      - 'scripts/liquidsoap-image-smoke*'
+      - '.github/workflows/liquidsoap-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  broadcast:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test smoke and soak progress validation
+        run: python3 scripts/liquidsoap-image-smoke.test.py -v
+      - name: Install capture decoder
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Build broadcast (includes unifier regression)
+        run: docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:unifier .
+      - name: Build AIO Liquidsoap stage
+        run: docker build -f docker/Dockerfile.aio --target liquidsoap-patched -t subwave-test/aio-liquidsoap:unifier .
+      - name: Compare AIO and broadcast executables
+        run: |
+          docker run --rm --entrypoint sha256sum subwave-test/broadcast:unifier /usr/bin/liquidsoap > /tmp/broadcast.sha256
+          docker run --rm --entrypoint sha256sum subwave-test/aio-liquidsoap:unifier /usr/bin/liquidsoap > /tmp/aio.sha256
+          diff -u /tmp/broadcast.sha256 /tmp/aio.sha256
+      - name: Exercise the baked radio script and all four codecs
+        run: python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: liquidsoap-smoke-${{ matrix.runner }}
+          path: |
+            /tmp/subwave-liquidsoap-smoke-*/broadcast.log
+            /tmp/subwave-liquidsoap-smoke-*/radio.log
+            /tmp/subwave-liquidsoap-smoke-*/stats.jsonl
+            /tmp/subwave-liquidsoap-smoke-*/intervals.jsonl
+            /tmp/subwave-liquidsoap-smoke-*/status.json
+            /tmp/subwave-liquidsoap-smoke-*/capture.*

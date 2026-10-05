@@ -611,6 +611,13 @@ export interface SceneReference {
 // forwards partial patches to settings.update(), and z.object would strip
 // whatever the wizard learns to send next.
 
+// Persisted connection reads drop malformed fields so setup stays recoverable.
+export const savedNavidromeCredentialsSchema = z.object({
+  url: z.string().catch(''),
+  user: z.string().catch(''),
+  pass: z.string().catch(''),
+}).catch({ url: '', user: '', pass: '' });
+
 /**
  * One normalisation for Navidrome credentials: trim, and strip trailing slashes
  * off the url (`${url}/rest/ping` against a stored `…:4533/` double-slashes and
@@ -705,6 +712,25 @@ export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
+// HALF the composed-style budget, and that is the whole derivation.
+//
+// The 300 this replaces equalled `VOICE_STYLE_MAX` — the entire budget
+// `geminiStyle()` composes for one render — so a directive at the cap consumed
+// all of it and `budget = max(0, 300 - operator - station)` left the persona's
+// character excerpt at zero. Every station with a pronunciation note lost the
+// character on every segment, silently, with no error anywhere.
+//
+// It is NOT a provider limit. `speech_metadata.style` has no documented
+// per-field cap, and rendering with 300 / 1000 / 3000 / 6000-character styles all
+// returned 200 against both models in MODELS. The ceiling that matters is local:
+// operator directive first, station note second, character excerpt with whatever
+// is left. 300 therefore could never be right, because it is the total.
+//
+// Half the budget leaves the other half to the two things this must not crowd
+// out. With a typical station note that is a ~130-character character excerpt —
+// enough to read as character — and the note is still honoured in full, because
+// only the excerpt is budget-limited.
+export const PERSONA_VOICE_STYLE_MAX = 150;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
@@ -1090,6 +1116,7 @@ export interface PersonaParsed {
   warmth: number;
   soul: string;
   language: string;
+  voiceStyle: string;
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
@@ -1150,6 +1177,12 @@ export const personaSchema = z
         .string({ error: 'language must be a string' })
         .trim()
         .max(PERSONA_LANGUAGE_MAX, `language must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
+    voiceStyle: z.preprocess(
+      personaNullToUndefined,
+      z.string({ error: 'voiceStyle must be a string' }).trim()
+        .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
@@ -1249,6 +1282,7 @@ export const personaSchema = z
       warmth: p.warmth,
       soul: p.soul,
       language: p.language,
+      voiceStyle: p.voiceStyle,
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
@@ -1286,6 +1320,9 @@ export function repairPersonaForLoad(
       typeof raw.language === 'string'
         ? raw.language.trim().slice(0, PERSONA_LANGUAGE_MAX)
         : undefined,
+    voiceStyle: typeof raw.voiceStyle === 'string'
+      ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+      : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',
@@ -1499,6 +1536,47 @@ export function resolvePersonaVoiceSlot(
     speed,
   };
 }
+
+// ─── from controller/src/schemas/playback-failures.ts ────────────────────
+
+// Preserve the historical reader's repair rules for missing or unsafe metadata.
+// Never retain URLs, annotated URIs, absolute paths or unrecognised fields.
+const playbackFailureScalarSchema = z.unknown().optional().transform((value): string | null => {
+  if (typeof value !== 'string' || /(?:\w+:\/\/|^\/|^[A-Za-z]:\\|^annotate:)/.test(value)) return null;
+  return value.slice(0, 500);
+});
+
+export const playbackFailureIdentitySchema = z.object({
+  attemptId: playbackFailureScalarSchema.pipe(z.string().min(1)),
+  sourceTrackId: playbackFailureScalarSchema,
+  title: playbackFailureScalarSchema,
+  artist: playbackFailureScalarSchema,
+  album: playbackFailureScalarSchema,
+  source: z.enum(['ai', 'request', 'operator']),
+});
+
+export const playbackFailureSchema = playbackFailureIdentitySchema.extend({
+  t: z.string().refine(value => Number.isFinite(Date.parse(value)))
+    .transform(value => new Date(value).toISOString()),
+  stage: z.literal('fetch'),
+  reason: z.literal('source-resolution-failed'),
+});
+
+export const playbackFailureEventSchema = playbackFailureSchema.extend({
+  type: z.literal('track.failed'),
+});
+
+export const playbackFailureHistorySchema = z.object({
+  failures: z.array(playbackFailureSchema),
+  retentionDays: z.number(),
+  truncated: z.boolean(),
+  warnings: z.array(z.string()),
+});
+
+export type PlaybackFailure = z.output<typeof playbackFailureSchema>;
+export type PlaybackFailureInput = Pick<PlaybackFailure, 'attemptId' | 'source'>
+  & Partial<Pick<PlaybackFailure, 'sourceTrackId' | 'title' | 'artist' | 'album'>>;
+export type PlaybackFailureHistory = z.output<typeof playbackFailureHistorySchema>;
 
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────
 
@@ -3561,6 +3639,8 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
+export const maxTrackLengthModeSchema = z.enum(['cut', 'exclude'], { error: 'maxTrackLengthMode must be cut or exclude' });
+
 // ── maxTrackSeconds ──────────────────────────────────────────────────────────
 
 /**
@@ -3655,6 +3735,62 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
       }
       return v;
     });
+}
+
+// ── Gemini Extended Voice Library default filter ──────────────────────────────
+// A BCP-47 language tag, used ONLY to decide which page of the voice catalogue
+// the admin browser opens on. It is not a constraint on a persona's voice and it
+// never reaches the engine — Gemini takes its accent from the voice itself.
+//
+// Deliberately NOT an enum of the languages Google currently serves. That
+// vocabulary changes under us, and a list here would silently exclude a voice
+// the operator can see in AI Studio (the failure being fixed). The shape is
+// checked instead; the real values are discovered at browse time.
+export const GEMINI_LIBRARY_LANGUAGE_MAX = 35;
+
+// language[-Script][-REGION][-variant…]: a 2-3 letter (or 5-8 letter) primary
+// subtag, then optional 4-letter script, 2-letter/3-digit region, and any number
+// of 1-8 alphanumeric subtags. Structural only — it proves the string is a tag,
+// never that Google serves it.
+const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/i;
+
+/** Canonicalise a BCP-47 tag so `en-au`, `EN-AU` and `en-AU` cannot become three
+ *  dropdown entries: primary subtag lowercase, script Titlecase, region
+ *  UPPERCASE. Google's filter is a case-insensitive exact match, so this is
+ *  safe, and an unrecognisable tag is returned trimmed rather than dropped. */
+export function normalizeGeminiLibraryLanguage(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  // Index-safe rather than `parts[0]` / `p[0]`: this file is COPIED into the web
+  // bundle, which compiles it with `noUncheckedIndexedAccess`, and a mirror that
+  // does not typecheck is a mirror nobody can regenerate.
+  const out: string[] = [];
+  const parts = v.split('-');
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i] ?? '';
+    // Empty segments are KEPT, not skipped. Skipping them turned the malformed
+    // `en-AU-` into the valid `en-AU`, so a typo was silently repaired into a
+    // setting the operator never typed — the exact silent-repair behaviour the
+    // patch-path rules forbid. Preserved, the trailing hyphen fails BCP47 below
+    // and the save is refused, which is the answer the operator needs.
+    if (i > 0 && /^[a-z]{4}$/i.test(p)) {
+      out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {
+      out.push(p.toUpperCase());
+    } else {
+      out.push(p.toLowerCase());
+    }
+  }
+  return out.join('-');
+}
+
+/** Whether a value is a usable `libraryLanguage`. Empty is valid and means
+ *  "every language". Shared by the strict save path and the lenient load path
+ *  so a hand-edited settings.json cannot wedge boot — and mirrored, so the
+ *  admin form pre-flights with the same rule the route enforces. */
+export function isGeminiLibraryLanguage(raw: unknown): boolean {
+  const v = normalizeGeminiLibraryLanguage(raw);
+  return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
 }
 
 // ─── from controller/src/schemas/show.ts ─────────────────────────────────

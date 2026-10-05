@@ -45,6 +45,7 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     warmth: typeof p?.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
     soul: p?.soul ?? '',
     language: typeof p?.language === 'string' ? p.language : '',
+    voiceStyle: typeof p?.voiceStyle === 'string' ? p.voiceStyle : '',
     avatar: typeof p?.avatar === 'string' ? p.avatar : '',
     tts: {
       engine: p?.tts?.engine ?? 'piper',

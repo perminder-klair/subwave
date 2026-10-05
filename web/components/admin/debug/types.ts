@@ -220,4 +220,4 @@ export interface DebugData {
   error?: string;
 }
 
-
+export type { PlaybackFailureHistory } from '../../../lib/schemas.generated';

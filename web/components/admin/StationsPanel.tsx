@@ -625,7 +625,7 @@ export default function StationsPanel() {
                   {
                     id: 'duplicate' as const,
                     label: 'Duplicate current',
-                    desc: `Copies ${live?.name ?? 'the live station'}'s settings, DJ personas, schedule, library analysis, jingles, beds and voices. Play history starts clean.`,
+                    desc: `Copies ${live?.name ?? 'the live station'}'s settings, DJ personas, schedule, jingles, beds and voices. Requires its own Navidrome connection; library and play history start empty.`,
                   },
                 ] as const
               ).map(opt => (

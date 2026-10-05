@@ -57,10 +57,11 @@ export const DEFAULTS = {
   // time, weather, request intros); `intro` is the light talk-over duck
   // (intro.txt: between-track links) that leaves the song audible underneath.
   ducking: { voice: 0.22, intro: 0.30 },
-  // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
+  // Station-wide maximum on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  maxTrackLengthMode: 'cut',
   // Fade a long track out at the next show change instead of letting it spill
   // into the following show (#1574). Off by default, and a show's own
   // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
@@ -315,7 +316,15 @@ export const DEFAULTS = {
     // pinning a model at install time would freeze the chain at whatever was
     // newest today. `pronunciation` is free text and empty by default: it is for
     // ONE station's place names, and nothing ships enabled for anyone else.
-    gemini: { model: '', voice: 'Puck', pronunciation: '' },
+    // `libraryLanguage` is the DEFAULT language filter for the Extended Voice
+    // Library browser — NOT a constraint on what a persona may use, and NOT a
+    // hint handed to the engine. Gemini takes its accent from the voice you
+    // pick (Google: "do not try to change immutable speaker traits in style …
+    // pick a regional voice"), so this only decides which page of the ~2,000
+    // voice catalogue the admin UI opens on. Empty means "no filter", so a
+    // station that does not care is not narrowed, and nothing is hardcoded:
+    // the dropdown is populated from what Google currently serves.
+    gemini: { model: '', voice: 'Puck', pronunciation: '', libraryLanguage: '' },
     // Used when an engine resolves to 'cloud'. A persona chooses provider+voice;
     // `model` stays shared. `enabled: false` makes the engine report unavailable
     // regardless of key, so the pickers grey it out.

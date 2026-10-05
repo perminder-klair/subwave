@@ -2,6 +2,7 @@ import * as library from './library.js';
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
 import { applyStrictLocks, hasEraBound, type VocalMode } from './show-filter.js';
+import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 
@@ -29,7 +30,7 @@ export function candidateCoverage(rows: Candidate[]): CandidateCoverage {
 
 // Pure count funnel. It deliberately excludes recency and journey state: those
 // are transient discovery constraints, not properties of a show configuration.
-export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, excludedIds, locks, minTrackSec = null, warnings = [] }: { show: any; libraryRows: Candidate[]; playlistRows: Candidate[] | null; excludedIds: Set<string> | null; locks: Locks; minTrackSec?: number | null; warnings?: string[] }): ShowCandidateDiagnostic {
+export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, excludedIds, locks, minTrackSec = null, maxTrackSec = null, warnings = [] }: { show: any; libraryRows: Candidate[]; playlistRows: Candidate[] | null; excludedIds: Set<string> | null; locks: Locks; minTrackSec?: number | null; maxTrackSec?: number | null; warnings?: string[] }): ShowCandidateDiagnostic {
   const strict = show?.filtersStrict === true && hasMusicFilter(show);
   // Minimum track length (#1573) applies FIRST and to both universes, before the
   // strict split, because unlike the music locks it is not gated on
@@ -39,8 +40,8 @@ export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, 
   // It does NOT move the funnel's INPUT figures: `library.indexed` counts the
   // indexed library and `playlist.total` the playlist. The floor's effect shows
   // up as the drop to the steps below.
-  const libraryPool = applyTrackFloor(libraryRows, minTrackSec, { starve: true });
-  const playlistPool = playlistRows ? applyTrackFloor(playlistRows, minTrackSec, { starve: true }) : null;
+  const libraryPool = applyTrackFloor(applyKnownTrackCeiling(libraryRows, maxTrackSec), minTrackSec, { starve: true });
+  const playlistPool = playlistRows ? applyTrackFloor(applyKnownTrackCeiling(playlistRows, maxTrackSec), minTrackSec, { starve: true }) : null;
   const libraryFiltered = filtered(libraryPool, locks);
   const playlistFiltered = playlistPool ? filtered(playlistPool, locks) : null;
   const libraryEffective = exclude(strict ? libraryFiltered : libraryPool, excludedIds);
@@ -79,6 +80,8 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
   // would refuse. Named in a warning, since an unexplained drop reads as a
   // broken library.
   const minTrackSec = settings.effectiveMinTrackSec(show);
+  const maxTrackSec = settings.effectiveTrackLengthLimits(show).selectionMaxSec;
+  if (maxTrackSec) warnings.push(`Tracks with known duration above ${maxTrackSec}s are excluded. Unknown durations pass. An empty eligible pool stays empty; the station relies on its dead-air safety.`);
   if (minTrackSec) warnings.push(`Minimum track length is ${minTrackSec}s, so shorter tracks are excluded from the counts below. If that leaves nothing, the station still plays: the pool picker and the offline fallback both keep going rather than go quiet.`);
-  return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, warnings });
+  return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, maxTrackSec, warnings });
 }

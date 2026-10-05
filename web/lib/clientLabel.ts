@@ -10,6 +10,10 @@ export interface ListenerConnection {
   // Raw sockets folded into this row. Safari opens 2 per client (counts as one
   // listener); >1 surfaces as a ×N badge. Absent/1 for normal single-socket clients.
   connections?: number;
+  // ISO alpha-2 from GET /listeners/connections: that IP's own player beacon
+  // first, else the operator's GeoIP database. Absent when neither knows.
+  country?: string;
+  countrySource?: 'beacon' | 'geoip';
 }
 
 // Hours is the coarsest unit; listeners rarely sit for days.

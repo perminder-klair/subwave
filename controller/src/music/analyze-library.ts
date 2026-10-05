@@ -15,9 +15,8 @@ import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
-import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
-import { loadSetupConfig } from '../setup/config.js';
+import { loadNavidromeConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
@@ -39,7 +38,7 @@ function parseIntFlag(args: string[], name: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-// Mirror of tag-library.ts applyWizardOverlay — env wins, setup-config fills gaps.
+// Both maintenance workers use the same connection policy as the controller.
 async function applyWizardOverlay() {
   try {
     await loadSecretsIntoEnv();
@@ -47,12 +46,7 @@ async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    const sc = await loadSetupConfig();
-    if (sc.navidrome) {
-      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
-      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
-      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass) config.navidrome.password = sc.navidrome.pass;
-    }
+    await loadNavidromeConfig();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

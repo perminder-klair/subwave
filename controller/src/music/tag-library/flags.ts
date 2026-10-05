@@ -6,9 +6,8 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
-import { config } from '../../config.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
-import { loadSetupConfig } from '../../setup/config.js';
+import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
@@ -207,13 +206,7 @@ export async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    const sc = await loadSetupConfig();
-    if (sc.navidrome) {
-      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
-      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
-      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
-        config.navidrome.password = sc.navidrome.pass;
-    }
+    await loadNavidromeConfig();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

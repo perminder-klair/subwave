@@ -19,6 +19,7 @@ import { EngineSelector } from './EngineSelector';
 import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
+import { GeminiVoiceLibrary } from './GeminiVoiceLibrary';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
 import { ENGINES, GEMINI_CLOUD_PROVIDER, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
@@ -92,6 +93,7 @@ interface EngineVoiceFieldsProps {
   // Omitted where the slot has no rate of its own (the fallback slot).
   previewSpeed?: number;
   previewLanguage?: string;
+  previewVoiceStyle?: string;
   // Body of the red notice when `engine` can't speak; wording is caller-supplied.
   unavailableNote: (engine: string) => ReactNode;
   // Cloud-specific "this won't play" notice (missing key, disabled engine).
@@ -113,7 +115,7 @@ interface EngineVoiceFieldsProps {
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
-  previewSpeed, previewLanguage,
+  previewSpeed, previewLanguage, previewVoiceStyle,
   unavailableNote, cloudIssue, engineHint, previewHint,
   allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
@@ -477,7 +479,14 @@ export function EngineVoiceFields({
               <div className="field">
                 <Label>Cloud provider</Label>
                 <CloudProviderSelector
-                  value={value.cloudProvider}
+                  // Gemini is an ENGINE that presents as a provider card, and
+                  // picking it writes `engine`, never `cloudProvider` — so
+                  // reading the displayed value off cloudProvider alone left the
+                  // Gemini card unhighlighted while it was plainly the active
+                  // selection (the click landed, the state just had nowhere to
+                  // show). Deriving the value from whichever field actually
+                  // carries the choice is what makes the card light up.
+                  value={geminiSelected ? GEMINI_CLOUD_PROVIDER : value.cloudProvider}
                   providerIds={cloudProviders}
                   availability={{
                     cloudByProvider: resolveKeyPresence(
@@ -534,7 +543,7 @@ export function EngineVoiceFields({
                       groups={voiceGroups}
                       title={geminiSelected ? 'Voice' : 'Cloud voice'}
                       preview={geminiSelected
-                        ? { engine: 'gemini', speed: previewSpeed, language: previewLanguage, adminFetch }
+                        ? { engine: 'gemini', speed: previewSpeed, language: previewLanguage, voiceStyle: previewVoiceStyle, adminFetch }
                         : { engine: 'cloud', cloudProvider, speed: previewSpeed, adminFetch }}
                     />
                     {!isPreset && (
@@ -551,12 +560,24 @@ export function EngineVoiceFields({
                         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange({ voice: e.target.value })}
                       />
                     )}
+                    {geminiSelected && (
+                      <GeminiVoiceLibrary
+                        adminFetch={adminFetch}
+                        value={value.voice}
+                        onChange={id => onChange({ voice: id })}
+                        speed={previewSpeed}
+                        sampleLanguage={previewLanguage}
+                      />
+                    )}
                     <div className="field-hint">
                       {geminiSelected
-                        ? <>Pick one of Google&apos;s 30 prebuilt voices, or choose{' '}
-                            <em>Custom voice id…</em> for a Voice Design (<code>voice_…</code>) or
-                            Voice Replication (<code>voicekey_…</code>) id. The sample button auditions
-                            the saved voice plus the persona&apos;s voice style.</>
+                        ? <>Pick one of Google&apos;s 30 featured voices, browse the voice library
+                            for the ~2,000 more, or choose <em>Custom voice id…</em> for a Voice
+                            Design (<code>voice_…</code>) or Voice Replication
+                            (<code>voicekey_…</code>) id. Accent and gender come from the voice
+                            you pick, not from the delivery note above — Gemini treats those as
+                            fixed traits. The sample button auditions the saved voice plus the
+                            persona&apos;s voice style.</>
                         : discoveredVoices.length > 0
                         ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
                             on your {isCompat ? 'server' : 'account'}. Choose <em>Custom voice id…</em> to
@@ -579,6 +600,7 @@ export function EngineVoiceFields({
           cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
+          voiceStyle={previewVoiceStyle}
           adminFetch={adminFetch}
         />
         {previewHint && <div className="field-hint mt-1.5">{previewHint}</div>}

@@ -22,7 +22,8 @@ import {
   buildBackupZip,
 } from '../backup/zip.js';
 import { isScheduledBackupName } from '../backup/pure.js';
-import { clearUserThemeCache } from '../themes.js';
+import { clearUserThemeCache, themeIdsAfterImport } from '../themes.js';
+import { migrateImportedPersona } from '../personas/import-migration.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
@@ -93,6 +94,37 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     return { ok: false, status: 400, error: `unsupported backup version: ${manifest?.version}` };
   }
 
+  const settingsEntry = zip.getEntry('settings.json');
+  let settingsPatch: Record<string, unknown> | null = null;
+  if (settingsEntry) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(settingsEntry.getData().toString('utf8'));
+    } catch {
+      return { ok: false, status: 400, error: 'corrupt settings.json in backup' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, status: 400, error: 'settings.json must be a settings object' };
+    }
+    settingsPatch = { ...parsed };
+    if (Array.isArray(settingsPatch.personas)) {
+      settingsPatch.personas = settingsPatch.personas.map(migrateImportedPersona);
+    }
+    const themes = new Map<string, string>();
+    for (const entry of zip.getEntries()) {
+      const name = entry.entryName.replace(/\\/g, '/');
+      if (!entry.isDirectory && name === `themes/${basename(name)}` && name.endsWith('.json')) {
+        themes.set(basename(name), entry.getData().toString('utf8'));
+      }
+    }
+    const themeIds = await themeIdsAfterImport(themes);
+    try {
+      await settings.prepareUpdate(settingsPatch, { themeIds });
+    } catch (err) {
+      return { ok: false, status: 400, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   const restored: string[] = [];
   let requiresRestart = false;
   let tmpDir: string | null = null;
@@ -115,15 +147,8 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
 
     // 2) Settings — via update() so the 'set' apiKey sentinel keeps existing keys
     //    and liquidsoap_*.txt + schedule.json are regenerated.
-    const settingsEntry = zip.getEntry('settings.json');
-    if (settingsEntry) {
-      let parsed: any;
-      try {
-        parsed = JSON.parse(settingsEntry.getData().toString('utf8'));
-      } catch {
-        return { ok: false, status: 400, error: 'corrupt settings.json in backup' };
-      }
-      const result = await settings.update(parsed);
+    if (settingsPatch) {
+      const result = await settings.update(settingsPatch);
       requiresRestart = Boolean(result.requiresRestart);
       restored.push('settings.json');
     }

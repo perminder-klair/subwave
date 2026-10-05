@@ -28,14 +28,13 @@ export function parseActivePointer(raw: string): string | null {
 // Allowlist (default 'skip') so a future state file must be classified
 // deliberately before it rides along into a duplicate.
 const DUPLICATE_COPY = new Set([
-  'settings.json', 'setup-config.json', 'secrets.env', 'moods.json',
+  'settings.json', 'secrets.env',
   'schedule.json', 'jingles.m3u', 'jingles.json', 'beds.json', 'bed.mp3',
   'voices', 'persona-avatars', 'jingles', 'beds', 'skills', 'sfx',
-  'icecast_listener_auth.txt', 'themes', 'sfx.json', 'playlist-recipes.json',
+  'icecast_listener_auth.txt', 'themes', 'sfx.json',
 ]);
 
-export function duplicateAction(entry: string): 'copy' | 'backup' | 'skip' {
-  if (entry === 'library.db') return 'backup'; // live WAL handle → .backup() snapshot
+export function duplicateAction(entry: string): 'copy' | 'skip' {
   if (DUPLICATE_COPY.has(entry)) return 'copy';
   // Derived-from-settings.json files: copying keeps the pair consistent
   // (skipping them would leave a drift window until the first settings save).

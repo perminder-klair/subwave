@@ -83,9 +83,21 @@ test('splitCues: the prompt’s own cue spellings never reach the transcript', (
   // `[sighs]`, `[whispers]`, `[excited]` and `[soft and warm]`. Gemini 3.8
   // treats `text` as a verbatim transcript, so an unrecognised bracket is
   // RECITED — the cue becomes an audible artefact instead of a performance.
+  // Each spelling now emits ITSELF. The guide offers `<sigh> / <sighs>` as
+  // alternatives (and likewise `<chuckle> / <chuckles>`), so normalising the
+  // plural away threw away a documented tag. What this test is actually for is
+  // unchanged and is asserted first: the cue must never survive as a spoken
+  // word, which held under both spellings.
+  //
+  // The brackets are stripped BEFORE that check, not after: `<sighs>` is a
+  // correct tag, and a bare `\bsighs\b` matches inside it because `<` is a word
+  // boundary. Checking the raw text flags the fix as the bug.
+  const recited = splitCues('Honestly? [laughs] I told you so. [sighs] Anyway.');
+  assert.doesNotMatch(recited.text.replace(/<[^>]+>/g, ''), /\b(laughs|sighs)\b/,
+    'a cue that reaches the transcript is recited aloud by Gemini 3.8');
   assert.deepEqual(
-    splitCues('Honestly? [laughs] I told you so. [sighs] Anyway.'),
-    { text: 'Honestly? <laugh> I told you so. <sigh> Anyway.', styles: [] },
+    recited,
+    { text: 'Honestly? <laugh> I told you so. <sighs> Anyway.', styles: [] },
   );
   assert.deepEqual(
     splitCues('A [excited] little number'),
@@ -414,13 +426,28 @@ test('the station Voice panel offers model, voice and pronunciation', async () =
     new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
   // Model list sourced from the generated mirror, so the dropdown and the
   // server's validation cannot drift into offering something save rejects.
-  assert.match(panel, /import \{ GEMINI_TTS_MODELS \} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
+  // Aliased as CLOUD_PROVIDER_IDS alongside it — the same import statement, so
+  // the regex allows a named-alias form rather than pinning one spelling.
+  assert.match(panel, /import \{[^}]*GEMINI_TTS_MODELS[^}]*\} from '\.\.\/\.\.\/\.\.\/lib\/schemas\.generated'/);
   assert.match(panel, /GEMINI_TTS_MODELS\.map\(/);
   // '' is the "walk the fallback chain" choice and must survive the round trip.
   assert.match(panel, /<SelectItem value="">Automatic \(fallback chain\)<\/SelectItem>/);
-  assert.match(panel, /model: form\.tts\.gemini\?\.model \?\? ''/, 'the payload must send the model');
-  assert.match(panel, /voice: form\.tts\.gemini\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
-  assert.match(panel, /pronunciation: form\.tts\.gemini\?\.pronunciation \?\? ''/,
+  // The save payload moved out of the component and into its own module, because
+  // `save()` REBUILDS the gemini block field by field — a field it does not name is
+  // not unsaved, it is silently discarded while still rendering perfectly. These
+  // three assertions therefore read the module that now owns those defaults; the
+  // panel no longer contains them and asserting it did would only re-introduce the
+  // coupling that let the field be forgotten in the first place.
+  //
+  // The behavioural owner of these invariants is web/tests/gemini-save-payload.test.ts,
+  // which calls the builder and checks the wire shape, and controller/scripts/
+  // gemini-save-contract.test.ts, which fails if the schema gains a gemini field
+  // neither side names. These regexes are the secondary guard only.
+  const payload = fs.readFileSync(
+    new URL('../../web/components/admin/settings/geminiSavePayload.ts', import.meta.url), 'utf8');
+  assert.match(payload, /model: input\?\.model \?\? ''/, 'the payload must send the model');
+  assert.match(payload, /voice: input\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
+  assert.match(payload, /pronunciation: input\?\.pronunciation \?\? ''/,
     'a blank pronunciation note is a real choice and must survive the round trip');
   // The station pronunciation note is one free-text field, capped at the
   // engine's own bound.

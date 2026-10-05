@@ -13,8 +13,8 @@ const track = (over: Record<string, unknown> = {}) => ({
   yearUntrusted: false, ...over,
 });
 
-assert.deepEqual(sleeveNotesFor(track(), 3), [
-  'Album: After Laughter Comes Tears.', 'Release year: 1964.', 'Lifetime station plays: 3.',
+assert.deepEqual(sleeveNotesFor(track()), [
+  'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
 assert.deepEqual(contextSleeveNotesFor(track(), {
   date: { season: 'summer' }, weather: { condition: 'cloudy', location: 'The Ribble Valley' },
@@ -22,13 +22,16 @@ assert.deepEqual(contextSleeveNotesFor(track(), {
 assert.deepEqual(contextSleeveNotesFor(track({ album: '', year: null, originalYear: null }), {
   activeShow: { topic: 'songs for the long way home', episodeAngle: 'late-night departures' },
   festival: { name: 'Solstice' },
-}, null, 'First station play.'), ['First station play.'],
+}, 'First station play.'), ['First station play.'],
 'sparse metadata must not let show or festival steering leak into Sleeve Notes');
-assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track(), 3)), [
+assert.deepEqual(contextSleeveNotesFor(track(), {}, 'First station play.').slice(0, 2), [
+  'First station play.', 'Album: After Laughter Comes Tears.',
+], 'a qualifying first play must not be displaced by routine album/year metadata');
+assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track())), [
   'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
-assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track(), 3), Math.random, false), [
-  'Album: After Laughter Comes Tears.', 'Lifetime station plays: 3.',
+assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track()), Math.random, false), [
+  'Album: After Laughter Comes Tears.',
 ]);
 
 const yearGateContext = { date: { iso: '2026-09-08' }, clock: { hhmm: '11:30' } };
@@ -53,15 +56,14 @@ const airingIndex = {
   ]),
   byKey: new Map(),
 };
-assert.equal(stationHistoryNoteFor({ id: 'first-track' }, null, airingIndex), 'First station play.');
-assert.equal(
-  stationHistoryNoteFor({ id: 'rare-track' }, { count: 1, lastPlayedAtMs: Date.now() - 91 * 86_400_000 }, airingIndex),
-  'Played here only once before; last heard 91 days ago.',
-);
-assert.equal(
-  stationHistoryNoteFor({ id: 'recent-track' }, { count: 1, lastPlayedAtMs: Date.now() - 29 * 86_400_000 }, airingIndex),
-  null,
-);
+const march2026 = Date.UTC(2026, 2, 1, 12);
+const september2026 = Date.UTC(2026, 8, 1, 12);
+assert.equal(stationHistoryNoteFor({ id: 'first-track', year: 2025 }, airingIndex, march2026), 'First station play.');
+assert.equal(stationHistoryNoteFor({ id: 'first-track', year: 2024 }, airingIndex, march2026), null);
+assert.equal(stationHistoryNoteFor({ id: 'first-track', year: 2026 }, airingIndex, september2026), 'First station play.');
+assert.equal(stationHistoryNoteFor({ id: 'first-track', year: 2025 }, airingIndex, september2026), null);
+assert.equal(stationHistoryNoteFor({ id: 'first-track', year: 2026, yearUntrusted: true }, airingIndex, september2026), null);
+assert.equal(stationHistoryNoteFor({ id: 'rare-track', year: 2026 }, airingIndex, september2026), null);
 
 const prompt = linkPrompt({
   current: track(), clockIsAirTime: true,
@@ -82,4 +84,5 @@ assert.match(prompt, /Approximate air time: around half past 8pm/);
 assert.match(prompt, /Current show: "Night Drive"/);
 assert.match(prompt, /Track on air:\n- After Laughter \(Comes Tears\) by Wendy Rene/);
 assert.doesNotMatch(prompt, /sustained energy|euphoric/);
+
 console.log('verified facts: all tests passed');

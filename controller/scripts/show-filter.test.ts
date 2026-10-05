@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  normGenre, genreMatches, genreResolutionWarning, preferGenre,
+  normGenre, genreMatches, trackGenres, genreResolutionWarning, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
   resolveEraYear, trackEraYear,
   preferEnergy, preferEnergyStrict, preferMood,
@@ -34,6 +34,12 @@ await test('genreMatches matches ANY normalised target', () => {
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock'), normGenre('Jazz')]), true);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock')]), false);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), []), false);
+});
+await test('trackGenres flattens OpenSubsonic {name} genre objects', () => {
+  assert.deepEqual(trackGenres(t({ genres: [{ name: 'Darkwave' }, 'Cold Wave', { name: '' }] })), ['Darkwave', 'Cold Wave']);
+  assert.equal(genreMatches(t({ genres: [{ name: 'Gothic Rock' }] }), [normGenre('Gothic Rock')]), true);
+  // All-empty objects fall through to the scalar tag.
+  assert.deepEqual(trackGenres(t({ genres: [{ name: '' }], genre: 'Rock' })), ['Rock']);
 });
 await test('genreMatches: a track tag may REFINE the show genre', () => {
   assert.equal(genreMatches(t({ genre: 'Punk Rock' }), [normGenre('Punk')]), true);

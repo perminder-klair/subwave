@@ -3,6 +3,7 @@
 
 import { effectiveNoRepeatWindow, exhaustiveNoRepeatWindow, trackKey } from './recency.js';
 import { applyStrictLocks, type FilterTrack, type VocalMode, type YearRange } from './show-filter.js';
+import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 
 type ShowTrack = FilterTrack & {
@@ -42,6 +43,7 @@ export function showNoRepeatGuard(
     excludedIds,
     resolvedGenres,
     minTrackSec,
+    maxTrackSec,
   }: {
     show: RecencyShow;
     playlistTracks: ShowTrack[] | null;
@@ -52,6 +54,7 @@ export function showNoRepeatGuard(
     // settings.effectiveMinTrackSec (#1573). Counted HARD: a track that will
     // never air must not size the window.
     minTrackSec?: number | null;
+    maxTrackSec?: number | null;
   },
 ): ShowNoRepeatGuard {
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
@@ -73,7 +76,7 @@ export function showNoRepeatGuard(
     : playlistTracks;
   // Hard, unlike the pool picker's never-starve use of the same floor: a count of
   // what can air, not a pool that must not empty. Nothing left = zero window.
-  const airable = applyTrackFloor(filtered, minTrackSec ?? null, { starve: true });
+  const airable = applyTrackFloor(applyKnownTrackCeiling(filtered, maxTrackSec), minTrackSec ?? null, { starve: true });
 
   // Count audible identities, not Subsonic rows: duplicate rips with different
   // ids consume one slot in the real rotation and must not inflate its capacity.
