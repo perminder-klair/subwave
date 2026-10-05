@@ -25,7 +25,25 @@ export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
-export const PERSONA_VOICE_STYLE_MAX = 300;
+// HALF the composed-style budget, and that is the whole derivation.
+//
+// The 300 this replaces equalled `VOICE_STYLE_MAX` — the entire budget
+// `geminiStyle()` composes for one render — so a directive at the cap consumed
+// all of it and `budget = max(0, 300 - operator - station)` left the persona's
+// character excerpt at zero. Every station with a pronunciation note lost the
+// character on every segment, silently, with no error anywhere.
+//
+// It is NOT a provider limit. `speech_metadata.style` has no documented
+// per-field cap, and rendering with 300 / 1000 / 3000 / 6000-character styles all
+// returned 200 against both models in MODELS. The ceiling that matters is local:
+// operator directive first, station note second, character excerpt with whatever
+// is left. 300 therefore could never be right, because it is the total.
+//
+// Half the budget leaves the other half to the two things this must not crowd
+// out. With a typical station note that is a ~130-character character excerpt —
+// enough to read as character — and the note is still honoured in full, because
+// only the excerpt is budget-limited.
+export const PERSONA_VOICE_STYLE_MAX = 150;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
