@@ -35,8 +35,10 @@ export function assertAdminConfigured() {
   console.log(`[auth] admin gate ${ADMIN_AUTH_REQUIRED ? 'ENABLED' : 'disabled (set ADMIN_USER+ADMIN_PASS to enable)'}`);
 }
 
-export function requireAdmin(req, res, next) {
+function authenticateAdmin(req, res, next, challenge = true) {
   if (!ADMIN_AUTH_REQUIRED) return next();
+
+  if (!challenge) res.setHeader('Cache-Control', 'no-store');
 
   // Keys on clientIp(), which a client can choose behind a misconfigured edge —
   // defence in depth, not a guarantee. Durable enforcement belongs at the edge.
@@ -85,6 +87,16 @@ export function requireAdmin(req, res, next) {
     }
   }
 
-  res.setHeader('WWW-Authenticate', 'Basic realm="SUB/WAVE admin"');
+  if (challenge) res.setHeader('WWW-Authenticate', 'Basic realm="SUB/WAVE admin"');
   return res.status(401).json({ error: 'admin auth required' });
+}
+
+export function requireAdmin(req, res, next) {
+  return authenticateAdmin(req, res, next);
+}
+
+// The web sign-in form handles the 401 itself. Suppressing the challenge here
+// keeps a rejected fetch from opening the browser's native Basic Auth dialog.
+export function requireAdminUi(req, res, next) {
+  return authenticateAdmin(req, res, next, false);
 }

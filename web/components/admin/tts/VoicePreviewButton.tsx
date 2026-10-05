@@ -34,6 +34,7 @@ interface VoicePreviewButtonProps {
   // Persona's free-text on-air language ("Turkish", "Türkçe") — the server
   // renders the sample sentence in this language when it recognizes it.
   language?: string;
+  voiceStyle?: string;
   // Explicit sample text (overrides the default/localized sentence).
   text?: string;
   // Unsaved corrections override — tests rules that haven't been saved yet.
@@ -59,7 +60,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +84,7 @@ export function VoicePreviewButton({
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, speed, lang, language, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
@@ -96,7 +97,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, text, corrections, voiceSettings, fishSettings },
+        { engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, text, corrections, voiceSettings, fishSettings },
         ac.signal,
       );
       if (ac.signal.aborted) return;

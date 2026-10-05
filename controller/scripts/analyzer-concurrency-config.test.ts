@@ -12,7 +12,10 @@ function readConcurrency(value: string | undefined): number {
   const env = { ...process.env };
   delete env.ANALYZE_CONCURRENCY;
   if (value !== undefined) env.ANALYZE_CONCURRENCY = value;
-  const script = "import('./src/config.js').then(({ config }) => console.log(config.analyzer.concurrency))";
+  // Print a string: console.log colours a bare number when FORCE_COLOR is
+  // inherited (node --test sets it for its children under a TTY), and the
+  // escape codes would make Number() below read NaN.
+  const script = "import('./src/config.js').then(({ config }) => console.log(String(config.analyzer.concurrency)))";
   const output = execFileSync(tsx, ['-e', script], {
     cwd: process.cwd(),
     encoding: 'utf8',

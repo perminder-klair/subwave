@@ -11,6 +11,7 @@ import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { fieldAria } from '@/lib/form';
+import { TextareaField } from '@/lib/form-fields';
 import { Field, FieldLabel, FieldError } from '@/components/ui/field';
 import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
@@ -18,7 +19,7 @@ import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
-import { composeTtsControlSpeeds } from '../../../lib/schemas.generated';
+import { PERSONA_VOICE_STYLE_MAX, composeTtsControlSpeeds } from '../../../lib/schemas.generated';
 
 interface PersonaVoiceCardProps {
   persona: Persona; // read-only: language (preview) + on-screen labels only
@@ -75,6 +76,7 @@ export function PersonaVoiceCard({
             adminFetch={adminFetch}
             previewSpeed={previewSpeed}
             previewLanguage={persona.language}
+            previewVoiceStyle={persona.voiceStyle}
             cloudIssue={cloudIssueText && (
               <>
                 <strong>This cloud voice won’t play.</strong> {cloudIssueText}{' '}
@@ -119,6 +121,17 @@ export function PersonaVoiceCard({
         </Field>
 
         <div className="field mt-3.5 max-w-[360px] lg:mt-0 lg:max-w-[460px]">
+          {resolvedEngine === 'gemini' && (
+            <TextareaField
+              control={control}
+              name={`personas.${index}.voiceStyle`}
+              label="Delivery style"
+              description="How Gemini should sound. Try warm and unhurried, or dry and understated. The sample uses your current style."
+              maxLength={PERSONA_VOICE_STYLE_MAX}
+              rows={3}
+              placeholder="Warm and unhurried"
+            />
+          )}
           <div className="flex items-baseline justify-between gap-3">
             <Label>Voice level (dB)</Label>
             <span className="font-mono text-[15px] font-extrabold text-[var(--accent)] tabular-nums">{gainLabel}</span>
