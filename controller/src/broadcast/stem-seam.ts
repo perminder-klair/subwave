@@ -1,7 +1,7 @@
 // Cue arithmetic for the two seams around a rendered stem-blend clip
 // (broadcast/stem-blend.ts). Dependency-free on purpose: the render harness
-// (scripts/fx-render-test.sh stemseam) imports this file directly with Node's
-// type stripping, so the audio check runs against the controller's own numbers.
+// (scripts/stem-seam-test.sh) imports this arithmetic, so the audio check runs
+// against the controller's own numbers.
 //
 // The clip airs as  X ──cross──▶ clip ──cross──▶ Y,  and the worker reports two
 // sample-exact points: the clip's first sample continues X at `blendStartSec`,
@@ -23,6 +23,8 @@
 
 // Cross length at the two clip seams (X→clip, clip→Y): long enough to declick,
 // short enough that the rendered mix, not the crossfader, is the transition.
+// These cues require #1774's mixer buffer wiring at short station crossfades;
+// see docs/stem-transitions-research.md, "Stem-seam validation".
 export const CLIP_SEAM_CROSS_SEC = 0.3;
 
 export interface ClipSeamCues {

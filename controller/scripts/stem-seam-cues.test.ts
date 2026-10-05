@@ -11,7 +11,7 @@
 // The tests model the timeline the way `cross` builds it (each item starts
 // `crossSec` before the previous one's cue-out) and check that every crossfade
 // mixes the same instant of the music on both sides. The audio-level twin is
-// `scripts/fx-render-test.sh stemseam` (real Liquidsoap, measured onsets).
+// `scripts/stem-seam-test.sh` (real Liquidsoap, measured onsets).
 // Run: `tsx scripts/stem-seam-cues.test.ts` (folded into `npm test`).
 
 import assert from 'node:assert/strict';
