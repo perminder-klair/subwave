@@ -30,10 +30,17 @@ cd web && npm install && npm run dev     # web UI on :7700
 Compose files live at the repo root, not under `docker/` — the full set, and what
 each deployment shape is for, is in [`CLAUDE.md`](CLAUDE.md).
 
-`controller/`, `web/` and `mcp-subwave/` each expose `npm run lint` (`eslint . &&
-`tsc --noEmit`; `mcp-subwave` is `tsc` only), and CI runs all three on every PR.
-`controller/` and `web/` also have `npm test`, which auto-discovers the `*.test.ts`
-and `*.test.tsx` files already in the tree — `npm test -- <substring>` filters.
+All three packages expose `npm run lint` and CI runs all three on every PR.
+`controller/` and `web/` also expose `npm test`; `npm test -- <substring>` filters
+to matching paths.
+
+- `controller/` — `eslint . && tsc --noEmit`. Tests are `node:test` files under
+  `controller/scripts/`, discovered as `*.test.ts`.
+- `web/` — `eslint . && tsc --noEmit`. Tests are discovered under `tests/`,
+  `components/`, `hooks/`, `lib/` and `scripts/`, as `*.test.ts`, `*.test.tsx` or
+  `*.test.mjs`.
+- `mcp-subwave/` — `tsc --noEmit` only. No tests.
+
 **Neither test suite runs in CI**, so run it yourself before pushing: a green
 lint says nothing about it. There is no formatter; match the style of the
 surrounding code.

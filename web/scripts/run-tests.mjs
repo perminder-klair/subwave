@@ -36,11 +36,24 @@ const ROOTS = ['tests', 'components', 'hooks', 'lib', 'scripts'];
 const SKIP = new Set(['node_modules', '.next', '.git']);
 const EXTS = ['.test.ts', '.test.tsx', '.test.mjs'];
 
+/** Errors a missing OPTIONAL root legitimately produces. `ENOENT` is the root
+ *  simply not existing; `ENOTDIR` is a path component that is a file. Both mean
+ *  "nothing here", and both are expected for a root that does not exist yet.
+ *
+ *  Everything else is a real failure and is rethrown. A blanket `catch {}` treats
+ *  an EACCES or an EIO as an empty directory, so a permissions problem or a
+ *  corrupted subtree would silently REDUCE COVERAGE while the remaining tests
+ *  still passed green — the runner reporting success over tests it never ran.
+ *  That is the same failure shape as an assertion that cannot fail: it looks
+ *  like coverage and is not. */
+const ABSENT_ROOT = new Set(['ENOENT', 'ENOTDIR']);
+
 function walk(dir, out = []) {
   let entries;
   try {
     entries = readdirSync(dir);
-  } catch {
+  } catch (err) {
+    if (!ABSENT_ROOT.has(err.code)) throw err;
     return out;
   }
   for (const name of entries) {
