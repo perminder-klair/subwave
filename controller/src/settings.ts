@@ -253,6 +253,7 @@ export {
   effectiveFadeAtShowEnd,
   effectiveFrequency,
   effectiveMaxTrackSec,
+  effectiveTrackLengthLimits,
   effectiveMinTrackSec,
   effectsActive,
   getActivePersona,
@@ -448,6 +449,7 @@ export async function load() {
       voice: normalizeDuckDepth(stored.ducking?.voice, DEFAULTS.ducking.voice),
       intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
     },
+    maxTrackLengthMode: stored.maxTrackLengthMode === 'exclude' ? 'exclude' : 'cut',
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     // Station default for the show-boundary fade (#1574). Anything but an
     // explicit boolean reads as the shipped default (off), which is what makes
@@ -1354,6 +1356,9 @@ export async function update(patch) {
       next.ducking.intro = dk.intro;
       restart = true;
     }
+  }
+  if ('maxTrackLengthMode' in patch) {
+    next.maxTrackLengthMode = parseSettingsPatchKey('maxTrackLengthMode', patch.maxTrackLengthMode);
   }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
     // The bound lives once, in the shared schema — this applies it to the

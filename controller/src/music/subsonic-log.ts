@@ -3,8 +3,9 @@
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync } from 'node:fs';
+import { basename } from 'node:path';
 import { STATE_DIR } from '../config.js';
-import { logEvent } from '../observability/events.js';
+import { currentTrace, logEvent } from '../observability/events.js';
 
 const MAX_CALLS = 150;
 export const recentCalls: any[] = [];
@@ -13,6 +14,33 @@ export const recentCalls: any[] = [];
 const endpointStats = new Map<string, any>();
 // songId -> { id, title, artist, count }: how often each song has come back.
 const songCoverage = new Map<string, any>();
+
+type RequestPurpose = 'api' | 'connection-test' | 'cover' | 'analysis-download';
+interface RequestProducer {
+  endpoint: string;
+  purpose: RequestPurpose;
+  traceKind: string | null;
+  attempts: number;
+}
+let attemptsSince = new Date().toISOString();
+const requestProducers = new Map<string, RequestProducer>();
+const processName = basename(process.argv[1] || 'node');
+
+// Count at fetch dispatch, including failed connects and retries. These are
+// attempts, not proof of receipt by Navidrome, DNS queries, or redirect hops.
+// Never accept a URL/params here: Subsonic URLs contain credentials.
+export function recordHttpAttempt(endpoint: string, purpose: RequestPurpose) {
+  const traceKind = currentTrace()?.kind ?? null;
+  const key = JSON.stringify([endpoint, purpose, traceKind]);
+  const producer = requestProducers.get(key);
+  if (producer) producer.attempts++;
+  else requestProducers.set(key, { endpoint, purpose, traceKind, attempts: 1 });
+  // Child taggers/analyzers write to the same event files, while /debug only
+  // sees this process's counters. The pid + entrypoint keep those distinguishable.
+  logEvent('navidrome.http-attempt', {
+    endpoint, purpose, traceKind, pid: process.pid, process: processName,
+  });
+}
 
 // Durable append-only log; the maps above are lost on restart. Best-effort — a
 // write failure must never break a request.
@@ -98,6 +126,15 @@ export function snapshot(libraryTotal = null) {
   return {
     recentCalls,
     endpoints,
+    httpAttempts: {
+      since: attemptsSince,
+      pid: process.pid,
+      process: processName,
+      total: [...requestProducers.values()].reduce((sum, p) => sum + p.attempts, 0),
+      producers: [...requestProducers.values()]
+        .map(p => ({ ...p }))
+        .sort((a, b) => b.attempts - a.attempts),
+    },
     coverage: {
       distinctSongs: songs.length,
       totalSongResults: songs.reduce((sum, s) => sum + s.count, 0),
@@ -111,4 +148,6 @@ export function reset() {
   recentCalls.length = 0;
   endpointStats.clear();
   songCoverage.clear();
+  requestProducers.clear();
+  attemptsSince = new Date().toISOString();
 }

@@ -5,7 +5,8 @@
 //
 // Not part of show-filter.ts's strict locks: it applies whether or not a show
 // is strict, like the track-length CAP. It is the mirror image of that cap —
-// an over-long track is cut on air (liq_cue_out) and stays eligible, whereas a
+// the default maximum cuts on air (liq_cue_out); exclusion instead filters
+// known long tracks. A
 // 40-second skit cannot be lengthened and has to leave the pool.
 //
 // Pure and import-free, so it unit-tests without a library, settings cache or

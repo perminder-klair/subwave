@@ -5,7 +5,7 @@
 //
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
-import * as library from '../../music/library.js';
+import { knownTrackLengthSeconds } from '../../music/track-duration.js';
 import * as settings from '../../settings.js';
 import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
 import type { QueueItem, Track } from './types.js';
@@ -281,9 +281,7 @@ export function playAlreadyRecorded(
 // blend on an ending the cap never lets air (and strips the auto-washout
 // protecting the forced cut).
 export function knownDurationSec(track: Track): number {
-  const dur = Number(track.duration) || 0;
-  if (dur) return dur;
-  return track.id ? Number(library.get(track.id)?.durationSec) || 0 : 0;
+  return knownTrackLengthSeconds(track) ?? 0;
 }
 
 

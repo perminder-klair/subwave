@@ -121,6 +121,7 @@ async function boundedFetch(
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     try {
+      subLog.recordHttpAttempt(endpoint, 'api');
       return await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
     } catch (err: any) {
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
@@ -243,6 +244,7 @@ async function pingWithOnce({
     probeUrl.searchParams.set('c', client);
     probeUrl.searchParams.set('f', 'json');
 
+    subLog.recordHttpAttempt('ping', 'connection-test');
     const res = await fetch(probeUrl.toString(), { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return { ok: false, error: `Subsonic ping returned HTTP ${res.status}` };
 

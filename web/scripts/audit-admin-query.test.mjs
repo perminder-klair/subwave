@@ -34,6 +34,10 @@ const validImperativeFixtures = {
   // admin-query-imperative: persona-bundle-export
   return adminResponse(adminFetch, \`/personas/\${id}/export\`);
 }\n`,
+  'debug/PlaybackFailures.tsx': `export async function run(adminFetch) {
+  // admin-query-imperative: playback-failure-export
+  return adminResponse(adminFetch, '/debug/playback-failures/export');
+}\n`,
   'debug/LlmCalls.tsx': `export async function run(adminFetch, format) {
   // admin-query-imperative: llm-call-export
   return adminResponse(adminFetch, \`/debug/llm-calls/export?format=\${format}\`);

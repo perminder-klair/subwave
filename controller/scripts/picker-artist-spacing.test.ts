@@ -219,3 +219,20 @@ test('hard track recency and artist-rescue exclusions survive spacing relaxation
   assert.equal(await pick(24, q, [repeat], 'choose', [], { avoidArtist: 'Jimi Hendrix' }), null);
   assert.equal(modelCalls, 0);
 });
+
+// Combined #1705/#1739 regression: a fresh artist prohibited by the length
+// ceiling must not prevent spacing from relaxing to an eligible recent artist.
+test('length exclusion survives artist-spacing relaxation and model fallback', async () => {
+  const { q, logs } = snapshot();
+  await settings.update({ maxTrackSeconds: 300, maxTrackLengthMode: 'exclude' });
+  try {
+    const tooLong = { ...fresh, duration: 600 };
+    assert.equal((await pick(24, q, [repeat, tooLong], 'fail'))?.song.id, repeat.id);
+    for (const candidates of offered) assert.deepEqual(candidates.map(s => s.id), [repeat.id]);
+    assert.ok(logs.some(l => l.includes('spacing relaxed')));
+    assert.equal(await pick(24, q, [tooLong]), null);
+    assert.equal(modelCalls, 0, 'an over-limit pool cannot reach the model');
+  } finally {
+    await settings.update({ maxTrackSeconds: 0, maxTrackLengthMode: 'cut' });
+  }
+});

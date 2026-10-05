@@ -57,10 +57,11 @@ export const DEFAULTS = {
   // time, weather, request intros); `intro` is the light talk-over duck
   // (intro.txt: between-track links) that leaves the song audible underneath.
   ducking: { voice: 0.22, intro: 0.30 },
-  // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
+  // Station-wide maximum on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  maxTrackLengthMode: 'cut',
   // Fade a long track out at the next show change instead of letting it spill
   // into the following show (#1574). Off by default, and a show's own
   // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is

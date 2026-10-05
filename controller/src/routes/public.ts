@@ -6,6 +6,7 @@ import { stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
+import { recordHttpAttempt } from '../music/subsonic-log.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
 import * as settings from '../settings.js';
@@ -111,7 +112,9 @@ router.get('/cover/:id', async (req, res) => {
   }
 
   try {
-    const r = await fetchWithTimeout(subsonic.getCoverArtUrl(id, 512), { timeoutMs: 5000 });
+    const url = subsonic.getCoverArtUrl(id, 512);
+    recordHttpAttempt('getCoverArt', 'cover');
+    const r = await fetchWithTimeout(url, { timeoutMs: 5000 });
     if (!r.ok) return res.status(502).end();
     const entry = {
       buf: Buffer.from(await r.arrayBuffer()),

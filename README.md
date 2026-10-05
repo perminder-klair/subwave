@@ -348,6 +348,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`docs/gpu-tts.md`](docs/gpu-tts.md):** running Chatterbox on an NVIDIA GPU — via the OpenAI layer, or by GPU-enabling the bundled sidecar.
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
+- **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.

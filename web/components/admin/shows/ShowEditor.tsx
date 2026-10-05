@@ -808,10 +808,11 @@ export function ShowEditor({
               ref={maxTrackSecondsCtl.field.ref}
             />
             <FieldDescription {...maxTrackSecondsAria.descriptionProps}>
-              The longest a single track plays during this show; anything longer
-              fades out at the limit. Blank uses the station limit, 0 means no
-              limit (good for long mixes or DJ sets), or set at
-              least {minTrackSeconds ?? 30}s to cap it here.
+              Uses the station maximum-length behavior: Cut on air fades longer automatic
+              tracks at the limit; Exclude filters known longer tracks before selection and
+              lets unknown durations pass without a maximum cut. Requests and studio choices
+              are exempt. Blank inherits the station limit, 0 means unlimited, or set at
+              least {minTrackSeconds ?? 30}s for this show.
             </FieldDescription>
             <FieldError {...maxTrackSecondsAria.errorProps} errors={maxTrackSecondsCtl.fieldState.error ? [maxTrackSecondsCtl.fieldState.error] : undefined} />
           </div>
