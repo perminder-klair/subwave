@@ -1327,13 +1327,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            How many slots the DJ waits before returning to an artist. The pick is
-            re-taken from the run&apos;s other candidates when it lands inside the
-            window &mdash; and quietly stands if nothing fresher turned up, so this
-            never costs you a track. Raise it on a deep library where one artist
-            keeps circling back; lower it if the DJ is reaching too far from the
-            show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
-            never follow itself whatever this says. 0&ndash;25.
+            Best-effort artist spacing across queued, on-air and recent tracks.
+            The agent tries another eligible candidate; the candidate pool
+            prefers artists outside this window, including when its model call
+            fails. Spacing can relax when eligible choices are limited or an
+            agent re-pick fails, and the picker logs why. {' '}<strong>0 = off</strong>.
+            The agent still tries to avoid repeating its pick-anchor artist.
+            Listener requests are exempt. Emergency playlist playback has no
+            live spacing check. 0&ndash;25.
           </div>
         </div>
 

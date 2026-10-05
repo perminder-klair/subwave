@@ -5,6 +5,7 @@ import { useRef, useState } from 'react';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { cn } from '../../../lib/cn';
+import { adminResponse } from '../../../lib/admin-query';
 import { Card, Btn } from '../ui';
 import { PERSONA_TTS_INHERIT, personasPinningOtherEngine } from '../../../lib/schemas.generated';
 import {
@@ -128,7 +129,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     setTesting(true);
     setTest(null);
     try {
-      const r = await adminFetch('/settings/llm/probe-compat', {
+      const r = await adminResponse(adminFetch, '/settings/llm/probe-compat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: token.trim(), baseUrl: baseUrl.trim(), model: chatModel.trim() }),

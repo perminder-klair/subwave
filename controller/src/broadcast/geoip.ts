@@ -28,18 +28,68 @@ export function geoipDbPath(): string {
 }
 
 // One opened reader, keyed by its path. A FAILED open caches `null` under the
-// same key so a missing file isn't re-read and re-logged on every beacon.
-let opened: { path: string; reader: Reader<CountryResponse | CityResponse> | null } | null = null;
+// same key so a missing file isn't re-read on every beacon, but only for
+// FAILED_OPEN_RETRY_MS: a failure used to stick until the controller restarted,
+// so fixing the file's permissions changed nothing until then.
+export const FAILED_OPEN_RETRY_MS = 60_000;
 
-function openReader(path: string): Reader<CountryResponse | CityResponse> | null {
+let opened: {
+  path: string;
+  reader: Reader<CountryResponse | CityResponse> | null;
+  /** Why the open failed, for the admin Listeners card. */
+  error?: string;
+  at: number;
+} | null = null;
+
+function openReader(path: string): { reader: Reader<CountryResponse | CityResponse> | null; error?: string } {
   try {
     // Sync read, once per path per process — on the first beacon, not per
     // request. An async load would hand the first callers undefined anyway.
-    return new Reader<CountryResponse | CityResponse>(readFileSync(path));
+    return { reader: new Reader<CountryResponse | CityResponse>(readFileSync(path)) };
   } catch (err: any) {
-    console.warn(`[geoip] cannot read ${path}: ${err?.message || err} — listener country falls back to headers only`);
-    return null;
+    return { reader: null, error: String(err?.code || err?.message || err) };
   }
+}
+
+// The reader for the configured path, opening (or re-trying a failed open) as
+// needed. Logs only when the outcome changes, so a retry every minute on a
+// broken file does not fill the log.
+function currentReader(path: string, now = Date.now()): Reader<CountryResponse | CityResponse> | null {
+  const stale = !opened || opened.path !== path
+    || (!opened.reader && now - opened.at >= FAILED_OPEN_RETRY_MS);
+  if (stale) {
+    const prev = opened;
+    const next = { path, ...openReader(path), at: now };
+    if (!next.reader && (prev?.path !== path || prev?.error !== next.error)) {
+      console.warn(`[geoip] cannot read ${path}: ${next.error} — listener country falls back to headers only`);
+    } else if (next.reader && prev?.path === path && !prev.reader) {
+      console.log(`[geoip] opened ${path}`);
+    }
+    opened = next;
+  }
+  return opened!.reader;
+}
+
+export interface GeoipStatus {
+  /** Where the path came from; `none` = no database configured. */
+  source: 'env' | 'setting' | 'none';
+  path: string;
+  ok: boolean;
+  /** Short reason when `ok` is false and a path is set (e.g. ENOENT, EACCES). */
+  error?: string;
+}
+
+// For the admin Listeners card, so a blank Country column explains itself.
+// Opens the database if nothing has yet, exactly as a lookup would.
+export function geoipStatus(now = Date.now()): GeoipStatus {
+  const path = geoipDbPath();
+  if (!path) {
+    opened = null;
+    return { source: 'none', path: '', ok: false };
+  }
+  const source = config.geoip.dbPath ? 'env' : 'setting';
+  const reader = currentReader(path, now);
+  return reader ? { source, path, ok: true } : { source, path, ok: false, error: opened?.error };
 }
 
 // `::ffff:1.2.3.4` → `1.2.3.4`, `[::1]` → `::1`. A dual-stack listener reports
@@ -62,13 +112,13 @@ export function lookupCountry(rawIp: string): string | undefined {
     opened = null; // a cleared setting must release the buffer, not keep serving it
     return undefined;
   }
-  if (!opened || opened.path !== path) opened = { path, reader: openReader(path) };
-  if (!opened.reader) return undefined;
+  const reader = currentReader(path);
+  if (!reader) return undefined;
 
   const ip = normalizeLookupIp(rawIp);
   if (!ip) return undefined;
   try {
-    const res = opened.reader.get(ip);
+    const res = reader.get(ip);
     const code = res?.country?.iso_code || res?.registered_country?.iso_code;
     return typeof code === 'string' ? code : undefined;
   } catch {

@@ -34,7 +34,7 @@
 
 import assert from 'node:assert/strict';
 import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
-import { PICK_SHOW_LOOKAHEAD_SEC, linkAirDate, pickLeadSec } from '../src/broadcast/queue/pure.js';
+import { PICK_SHOW_LOOKAHEAD_SEC, heldAnchorPlayableSec, linkAirDate, pickLeadSec } from '../src/broadcast/queue/pure.js';
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
@@ -228,6 +228,45 @@ function main() {
   test('a track past its cue-out clamps at 0, never pulls showAt backwards', () => {
     assert.equal(pickLeadSec(-12), 0);
     assert.equal(pickLeadSec(-12, 240), 240);
+  });
+
+  console.log('\nheld anchor length (heldAnchorPlayableSec):');
+
+  test('a held continuous mix counts its CAPPED span, not its tagged length', () => {
+    // Reported case: Future Frequencies 18:00-20:00 → Shadowplay. At 18:00:39
+    // the deadline pick ran with 90s left on air and a 2h35 continuous mix
+    // held behind it under a 600s cap. The raw length probed 20:39, resolved
+    // Shadowplay and aired the handoff at 18:02; the capped span keeps the
+    // pick inside Future Frequencies.
+    const now = Date.parse('2026-09-28T15:00:39.000Z');
+    const boundary = Date.parse('2026-09-28T17:00:00.000Z');
+    const held = heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 600 });
+    assert.equal(held, 600);
+    const showAt = now + ((pickLeadSec(90, held) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+    assert.ok(showAt < boundary, `showAt ${new Date(showAt).toISOString()} crossed the boundary`);
+    const oldShowAt = now + ((pickLeadSec(90, 9300) as number) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+    assert.ok(oldShowAt > boundary, 'the pre-fix raw length should have crossed it');
+  });
+
+  test('a held track under the cap keeps its full length', () => {
+    assert.equal(heldAnchorPlayableSec({ durationSec: 240, maxTrackSec: 600 }), 240);
+  });
+
+  test('no cap (null/0) or a listener request → the tagged length', () => {
+    assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: null }), 9300);
+    assert.equal(heldAnchorPlayableSec({ durationSec: 9300, maxTrackSec: 0 }), 9300);
+  });
+
+  test('earliest cue wins: a trim tail inside the cap, then the head trim', () => {
+    assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [540, null] }), 540);
+    assert.equal(heldAnchorPlayableSec({ durationSec: 700, maxTrackSec: 600, cueOutSecs: [null], cueInSec: 3 }), 597);
+  });
+
+  test('unknown length → null, which the caller hands pickLeadSec as 0 (no look-ahead)', () => {
+    for (const bad of [0, null, undefined, NaN]) {
+      assert.equal(heldAnchorPlayableSec({ durationSec: bad as any, maxTrackSec: 600 }), null, `dur=${String(bad)}`);
+    }
+    assert.equal(pickLeadSec(90, 0), null);
   });
 
   console.log(failures ? `\n${failures} failing` : '\nall passing');

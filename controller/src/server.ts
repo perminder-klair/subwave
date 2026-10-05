@@ -18,6 +18,8 @@ import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import * as geminiTts from './audio/gemini.js';
+import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
@@ -217,6 +219,20 @@ app.listen(config.server.port, async () => {
   // Must be in memory before the first auto-playlist build and queue push.
   // load() never throws (a corrupt file starts empty).
   await blocklist.load();
+
+  // Warm the Gemini Extended Voice Library membership index OFF the boot path.
+  // usableVoice() trusts the index rather than a structural guess, so a
+  // controller that has never browsed the library would reject a persona's
+  // library voice and fall back to the station voice — the station would sound
+  // right until the first restart and wrong after it, which is the worst way to
+  // fail. Deliberately not awaited: boot must not block on Google, and a
+  // failure here just leaves the pre-existing graceful fallback in place.
+  if (geminiTts.isAvailable()) {
+    void geminiLibrary.prewarm().then(
+      (n) => { if (n) console.log(`[tts] gemini voice library: ${n} names indexed`); },
+      () => { /* never fatal — see above */ },
+    );
+  }
 
   // Recover journaled Navidrome ID adoption before the first queue build or
   // playlist sync. Works before library.load(); a failed/deferred apply leaves

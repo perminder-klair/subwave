@@ -63,22 +63,90 @@ export function isAvailable(): boolean {
 // doubling this table, because a missing `-s` used to mean the bracket SURVIVED
 // into the transcript and Gemini 3.8 — which treats `text` as a verbatim
 // transcript — read the word "laughs" out loud on air.
+// Values follow Google's documented vocabulary, with `medium pause` retained
+// as an explicit station extension:
+// https://ai.google.dev/gemini-api/docs/speech-generation
+//
+// Documentation establishes the supported spelling, not acoustic performance.
+// The author reported renders of undocumented tags on both models in MODELS
+// whose transcriptions omitted those tags. That does not establish that a
+// sound was performed, that every undocumented tag works, or that the result
+// holds across future model versions. Mapping `panting` to the documented
+// `pant` is a vocabulary choice, not proof that `panting` is spoken or broken.
+//
+// Square-bracket delivery adjectives go to `speech_metadata.style` rather
+// than the transcript. Unknown capitalised titles remain speech. Tests pin
+// those request channels; they do not verify how the provider sounds.
+//
+// `medium pause` is not in the documented list. The author reported pauses
+// from sample renders, but neither that effect nor its duration has been
+// independently verified. In particular, those samples cannot establish a
+// reliable short/medium/long duration ordering.
+//
+// Keys are the spellings the DJ actually writes, including the third-person
+// `-s` forms the system prompt itself suggests (`[laughs]`, `[sighs]`).
 const VOCAL_BURSTS: Record<string, string> = {
+  // Laughter and its neighbours.
   laugh: 'laugh', laughing: 'laugh', laughter: 'laughter',
-  chuckle: 'chuckle', giggle: 'giggle', snicker: 'snicker',
-  sigh: 'sigh', cough: 'cough', breath: 'breath', gasp: 'gasp',
-  groan: 'groan', moan: 'moan', pant: 'panting', yawn: 'yawn',
-  sneeze: 'sneeze', snort: 'snort', sob: 'sob', cry: 'cry',
-  shout: 'shout', scream: 'scream', whisper: 'whispering',
-  'short pause': 'short pause', 'long pause': 'long pause',
+  chuckle: 'chuckle', chuckles: 'chuckles', giggle: 'giggle', snicker: 'snicker',
+  cackle: 'cackle', cheer: 'cheer',
+  // Breath, effort, and the vocal noises.
+  breath: 'breath', 'heavy breath': 'heavy breath', exhale: 'exhales', exhales: 'exhales',
+  pant: 'pant', panting: 'pant', gasp: 'gasp', sigh: 'sigh',
+  // `<sigh> / <sighs>` is one of the pairs the guide lists as ALTERNATIVES, so
+  // both spellings are named rather than leaving `sighs` to the inflection
+  // stripper below — a pair the guide spells out is a pair the reader expects
+  // to find in this table.
+  sighs: 'sighs',
+  cough: 'cough', sneeze: 'sneeze', snort: 'snort', sob: 'sob', cry: 'cry',
+  groan: 'groan', moan: 'moan', growl: 'growl', grunt: 'grunt',
+  // `<grr>` is in the guide's list, directly between `<grunt>` and `<hiss>`. It
+  // was missing here, so `[grr]` fell through to the free-text rule and became
+  // the style string "grr" — a growl rendered as prose rather than a sound.
+  grr: 'grr',
+  yell: 'shout', shout: 'shout', scream: 'scream', shriek: 'shriek',
+  tsk: 'tsk', hiss: 'hiss', hisses: 'hiss', pff: 'pff', phew: 'phew', argh: 'argh',
+  whimper: 'whimper', yawn: 'yawn',
+  'throat-clearing': 'throat-clearing', throatclear: 'throat-clearing',
+  // WHISPER: EACH SPELLING EMITS ITS OWN DOCUMENTED TAG
+  // ------------------------------------------------------
+  // The guide lists `<whispers> / <whispering>` as a PAIR OF ALTERNATIVES in the
+  // same breath — it does not say one is a tag and the other a style. An earlier
+  // version of this comment claimed Google classes whispering as "a sustained
+  // modifier of the following speech"; that was our own reading, not Google's
+  // instruction, and it was cited as though it were sourced. Corrected.
+  //
+  // So the mapping is deliberately flat and literal: every documented spelling
+  // emits ITSELF, and `<whispers>` is reachable as `<whispers>` rather than
+  // being credited to `<whispering>` by the inflection stripper. That matters
+  // because the coverage test used to accept "some tag" as proof of reachability
+  // — under which `[whispers]` counted as coverage for `<whispers>` while
+  // emitting `<whispering>`, and a missing mapping read as a passing suite.
+  // The test now asserts exact input -> output identities.
+  //
+  // `whispering` is the one spelling routed to `speech_metadata.style` instead.
+  // That is a STATION CHOICE, and it is deliberate: it is the gerund, and it is
+  // the spelling the guide's own scope table lists among turn-level style
+  // examples ("whispers", "whispered"). It is recorded here as our routing, not
+  // as something the provider requires — the guide lists it as a tag too, so
+  // nothing guarantees the style channel is the better one for it.
+  whisper: 'whispering', whispers: 'whispers',
+  // Pacing: documented short/long plus the station's medium-pause extension.
+  // See the author-provided evidence and its limits above.
+  'short pause': 'short pause', 'medium pause': 'medium pause', 'long pause': 'long pause',
   uhm: 'breath',
 };
 
 // Delivery modifiers become part of `speech_metadata.style`, never inline tags:
 // they sustain across the whole turn, which is what the style field is for.
+//
+// Only REACHABLE spellings appear here. `whisper` is absent because
+// vocalBurstFor() is consulted first and resolves it to a tag — an entry here
+// would be unreachable, and an unreachable entry in a lookup table reads as
+// live. The sustained spelling is `whispering`; see the note on VOCAL_BURSTS.
 const DELIVERY_STYLES: Record<string, string> = {
   sarcasm: 'sarcastic', sarcastic: 'sarcastic',
-  shouting: 'loud', whispering: 'whispered', whisper: 'whispered',
+  shouting: 'loud', whispering: 'whispered',
   robotic: 'flat and mechanical', 'extremely fast': 'speaking rapidly',
   excited: 'excited, upbeat',
 };
@@ -196,6 +264,11 @@ export function geminiStyle(
 }
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+// Circular by construction: gemini-library needs apiKey() from here, and this
+// needs isLibraryVoice() from there. ESM handles the cycle because neither is
+// called at module-evaluation time — apiKey() reads process.env on call, and
+// usableVoice() runs per render.
+import { isLibraryVoice } from './gemini-library.js';
 
 // 3 minutes: TTS renders are slow and retried per model; the caller's abort
 // (preview cancel, shutdown) still wins via signal composition.
@@ -333,9 +406,18 @@ export function usableVoice(name: unknown): string | undefined {
   const raw = String(name ?? '').trim();
   if (!raw) return undefined;
   if (/^(voice|voicekey)_/i.test(raw)) return raw;
-  const hit = (GEMINI_TTS_VOICES as readonly string[])
+  const featured = (GEMINI_TTS_VOICES as readonly string[])
     .find((v) => v.toLowerCase() === raw.toLowerCase());
-  return hit;
+  if (featured) return featured;
+  // The Extended Voice Library is ~2,000 more prebuilt voices under different
+  // ids (`en-us-varo`), and an operator picks those in the picker, so a
+  // persona can legitimately carry one. Membership is tested against what
+  // Google has actually SERVED this process (gemini-library's index), never
+  // against a structural guess — accepting anything shaped like an id would put
+  // a typo back on the wire, and a typo is a 400 that throws the segment into
+  // the fallback chain. See that module for why the index is prewarmed at boot.
+  if (isLibraryVoice(raw)) return raw;
+  return undefined;
 }
 
 // ── Multi-line ────────────────────────────────────────────────────────────────

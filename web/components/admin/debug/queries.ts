@@ -1,8 +1,9 @@
 import { adminJson, type AdminFetch } from '../../../lib/admin-query';
-import type { DebugData } from './types';
+import type { DebugData, PlaybackFailureHistory } from './types';
 
 export const debugKeys = {
   all: ['debug'] as const,
+  playbackFailures: () => ['debug', 'playback-failures'] as const,
   status: () => ['debug', 'status'] as const,
   stateFiles: () => ['debug', 'state-files'] as const,
   stateFile: (path: string) => ['debug', 'state-files', path] as const,
@@ -37,4 +38,13 @@ export function fetchStateListing(
   signal: AbortSignal,
 ): Promise<StateListing> {
   return adminJson(fetcher, `/debug/state-tree?path=${encodeURIComponent(path)}`, undefined, signal);
+}
+
+export async function fetchPlaybackFailures(fetcher: AdminFetch, signal: AbortSignal): Promise<PlaybackFailureHistory> {
+  const body = await adminJson<PlaybackFailureHistory>(fetcher, '/debug/playback-failures', undefined, signal);
+  if (!body || !Array.isArray(body.failures) || !Array.isArray(body.warnings)
+    || typeof body.retentionDays !== 'number' || typeof body.truncated !== 'boolean') {
+    throw new Error('Unexpected failure history response');
+  }
+  return body;
 }

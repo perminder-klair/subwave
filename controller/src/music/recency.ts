@@ -39,6 +39,10 @@ interface CandidateFilterState {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;
   recentArtists?: Set<string>;
+  // Configured slot spacing, using the SAME lead-artist keys and queue snapshot
+  // as the agent guard. Separate from raw recentArtists so identity/dedup keys
+  // and discovery-tool callers keep their existing semantics. Relaxable.
+  recentArtistRoots?: Set<string>;
   // Album cooldown (#1485 FR 3) — albumKey()s heard inside picker.albumHours,
   // from queue.recentAlbumKeys(). Relaxable, and the FIRST guard the cascade
   // drops (longest memory, so its loss costs least on a starved pool). Empty =
@@ -338,6 +342,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     recentIds = new Set<string>(),
     recentKeys = new Set<string>(),
     recentArtists = new Set<string>(),
+    recentArtistRoots = new Set<string>(),
     recentAlbums = new Set<string>(),
     albumKeyOf = albumKey,
     hardRecentIds = new Set<string>(),
@@ -350,11 +355,9 @@ export function filterPickerCandidates<T extends CandidateLike>(
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
-  // Neither track-length bound is applied here. The CAP (#447) is an on-air
-  // cue_out cut, so an over-length track stays eligible; filtering it here
-  // would only starve the pool. The FLOOR (#1573) does remove candidates, but
-  // its posture differs per pick path, so it lives in music/track-floor.ts and
-  // each call site applies it just before this one.
+  // Duration policy is applied BEFORE this relaxation cascade: the legacy
+  // cut mode does not filter; exclude's hard ceiling must never be rescued.
+  // The floor's posture differs per path and remains in track-floor.ts.
   const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields
@@ -406,6 +409,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
       // answer a block on "Marvin Gaye".
       if (key && (blockedArtists.has(key) || blockedArtists.has(artistRootKey(song)))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
+      if (mode.recentArtists && recentArtistRoots.has(artistRootKey(song))) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;
         if (count >= maxPerArtist) continue;

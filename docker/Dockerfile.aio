@@ -11,6 +11,13 @@
 # CI also publishes `subwave-aio-heavy` (WITH_CLAP=1 WITH_DEMUCS=1) and
 # `subwave-aio-cuda` (+ WITH_CUDA=1) — see docs/unraid.md.
 
+# Rebuild only Liquidsoap 2.4.5 with upstream #5257. Keep this stage identical
+# in both Dockerfiles; the shared script pins source and tests the patch.
+FROM ghcr.io/savonet/liquidsoap:ci-debian_trixie-4.14.2@sha256:8ba05311100a0271f2aa544d56b5dec301885bd0e35c21aea203b41125807822 AS liquidsoap-build
+USER opam
+COPY --chown=opam:opam docker/liquidsoap/build.sh docker/liquidsoap/unifier-path-compression.patch docker/liquidsoap/unifier-test.ml /patch/
+RUN sh /patch/build.sh
+
 # ---- web build: Next.js standalone (mirrors web/Dockerfile) ----------------
 FROM node:22-bookworm-slim AS webbuild
 WORKDIR /web
@@ -43,7 +50,16 @@ FROM node:22-bookworm-slim AS nodebin
 # ---- final: everything under the liquidsoap (Debian) base -------------------
 # v2.4.5 minimum — same reason as Dockerfile.broadcast (2.4.4's O(n) clock scan
 # stalled the stream at every DJ-effect crossfade).
-FROM savonet/liquidsoap:v2.4.5
+FROM savonet/liquidsoap:v2.4.5@sha256:206664046c8cd012151928a6ea903a6ab65c20295b84c0891b33b93fbf5a8f24 AS liquidsoap-patched
+COPY --from=liquidsoap-build /tmp/out/liquidsoap /usr/bin/liquidsoap
+COPY --from=liquidsoap-build /tmp/out/*.txt /usr/share/doc/liquidsoap-subwave/
+USER root
+# Cached OCaml values from the stock executable must not survive the rebuild.
+RUN rm -rf /var/cache/liquidsoap/*
+USER liquidsoap
+RUN liquidsoap --cache-stdlib
+
+FROM liquidsoap-patched AS runtime
 
 USER root
 ENV DEBIAN_FRONTEND=noninteractive

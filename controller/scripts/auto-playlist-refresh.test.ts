@@ -104,8 +104,8 @@ test('production rechecks idle before replacing watched file, and startup awaits
   const start = scheduler.indexOf('async function refreshAutoPlaylistInner');
   assert.ok(start >= 0, 'refresh builder must exist');
   const inner = scheduler.slice(start);
-  const gate = inner.indexOf("if (!canPublish()) return 'deferred'");
-  const write = inner.indexOf('await writeFileAtomic(config.liquidsoap.autoPlaylist');
+  const gate = inner.indexOf("if (!canPublish() || epoch !== lengthPolicyEpoch || policyKey !== lengthPolicyKey()) return 'deferred'");
+  const write = inner.indexOf('writeFileAtomicSync(config.liquidsoap.autoPlaylist');
   assert.ok(gate >= 0, 'pre-publication gate must exist');
   assert.ok(write >= 0, 'watched file publication must exist');
   assert.ok(gate < write, 'idle recheck must precede publication');

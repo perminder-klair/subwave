@@ -340,7 +340,7 @@ export async function synthesizeSample(
   const activeCorrections = corrections !== undefined
     ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections, language);
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections, language, engine);
   // `speed` is already the final preview multiplier. A persona preview can
   // compose two saved 0.05-grid controls into a non-grid rate (0.90 x 1.15 =
   // 1.035), so only bounds-clamp here; snapping again would diverge from air.
@@ -407,7 +407,7 @@ export async function speakExchange(
   // so it is resolved once here rather than per line.
   const { model } = stationGeminiPick({}, resolved[0].personaTts);
   const geminiLines = resolved.map(({ line: l, personaTts }) => ({
-    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections, String(l.persona?.language || '')),
+    text: normalizeForSpeech(stripThinking(l.text), settings.get().tts?.corrections, String(l.persona?.language || ''), 'gemini'),
     voice: stationGeminiPick({}, personaTts).voice,
     style: typeof (l.persona as any)?.voiceStyle === 'string' ? (l.persona as any).voiceStyle : undefined,
     // Each speaker's own character, so a host and a guest don't come out of one
@@ -450,19 +450,20 @@ export async function speak(
   const language = GLOBAL_VOICE_KINDS.has(kind)
     ? ''
     : String(personaFor(persona)?.language || '').trim();
+  // `persona` overrides the effective persona for an outgoing handoff voice.
+  // Resolve the requested engine before normalization so only Gemini keeps
+  // its supported pause cues; fallbackTextFor still strips cues for rescues.
+  const personaTts = djPersonaTts(kind, persona);
+  const requested = requestedEngine(kind, personaTts);
   // Scrub leaked reasoning at the single point every booth-bound string
   // converges (#949): a structured say/intro field can carry a <think> token
   // that the free-text generators' own stripThinking never sees. No-op on clean
   // text. Operator speech corrections are read live, so a saved rule applies to
   // the next spoken line with no restart.
-  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language);
+  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections, language, requested);
   const speakText = GLOBAL_VOICE_KINDS.has(kind)
     ? normalizedText
     : scrubCjkForSpeech(normalizedText, language);
-  // `persona` overrides the effective persona so the handoff mic-pass can voice
-  // the outgoing DJ after the hour has flipped.
-  const personaTts = djPersonaTts(kind, persona);
-  const requested = requestedEngine(kind, personaTts);
   const primarySlot = resolveEngine(kind, personaTts);
   const primary = primarySlot.engine;
   // A pre-flight reroute onto the operator's configured fallback carries THAT

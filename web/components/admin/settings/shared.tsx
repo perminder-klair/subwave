@@ -99,7 +99,9 @@ export interface TtsForm {
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
-  gemini: { model: string; voice: string; pronunciation: string };
+  // libraryLanguage is the voice-library BROWSER default, not a voice constraint
+  // and never sent to the engine — see the Gemini panel's hint.
+  gemini: { model: string; voice: string; pronunciation: string; libraryLanguage: string };
   cloud: CloudTtsCfg;
   remote: { url: string };
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
@@ -371,6 +373,7 @@ export interface FormState {
   crossfadeDuration: string;
   ducking: DuckingForm;
   maxTrackSeconds: string;
+  maxTrackLengthMode: 'cut' | 'exclude';
   /** Station default for the show-boundary fade (#1574). A show's own
    *  tri-state overrides it; this level is only ever on or off. */
   fadeAtShowEnd: boolean;
@@ -422,6 +425,7 @@ export interface SettingsData {
     crossfadeDuration?: number;
     ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
+    maxTrackLengthMode?: 'cut' | 'exclude';
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     /** Scheduled backups (#1570). No FormState entry and no settings section —
@@ -484,7 +488,7 @@ export interface SettingsData {
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
-      gemini?: { model?: string; voice?: string; pronunciation?: string };
+      gemini?: { model?: string; voice?: string; pronunciation?: string; libraryLanguage?: string };
       // The saved shape also carries the redacted key sentinels ('set' when a
       // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
