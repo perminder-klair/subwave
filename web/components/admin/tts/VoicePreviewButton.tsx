@@ -4,7 +4,7 @@
 // unavailable engine returns a real error here rather than quietly playing Piper.
 // Gain (dB) is a playout-time mix trim, so only voice + speed are auditioned, and
 // a sample is discarded as stale the moment either changes.
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { Btn } from '../ui';
 import {
@@ -78,13 +78,41 @@ export function VoicePreviewButton({
   // Unmounting mid-sample must abort synthesis and revoke the object URL.
   useEffect(() => () => discardSample(), [discardSample]);
 
-  // The player must never replay the old voice under a new label. voiceSettings is
-  // deliberately absent from the deps: it's an unstable inline object at the call site.
+  // The player must never replay the old voice under a new label, so every prop
+  // that changes the RENDERED WAV has to invalidate the sample now playing.
+  //
+  // That set is not the request payload, and the gap is a live bug rather than a
+  // hypothetical one. `text`, `corrections` and `voiceSettings` all reach
+  // `fetchPreviewSample` and none of them were listed, so editing the sample text
+  // left the PREVIOUS audio playable under the new label — a stale sample the
+  // player had no way to know was stale.
+  //
+  // `voiceSettings` and `corrections` are excluded as OBJECTS, because both are
+  // unstable at the call site: depend on an inline `{}` or a fresh array and the
+  // effect re-runs every render, discarding a sample the instant it finishes
+  // rendering. Their SCALAR fields are stable and are listed individually, which
+  // is what `fishSettings` already did. `corrections` is an array of pairs, so it
+  // gets a content-stable key instead.
+  //
+  // `tests/voice-preview-invalidation.test.ts` compares this array against the
+  // request payload by AST, so the next prop added to one and not the other is a
+  // test failure rather than a review comment.
+  const correctionsKey = useMemo(
+    () => (corrections ?? []).map((c) => `${c.from} ${c.to}`).join('|'),
+    [corrections],
+  );
   useEffect(() => {
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [
+    engine, voice, cloudProvider, cloudModel, geminiModel, voiceStyle,
+    speed, lang, language, text, correctionsKey,
+    voiceSettings?.voiceStability, voiceSettings?.voiceStyle,
+    voiceSettings?.voiceSimilarityBoost, voiceSettings?.voiceUseSpeakerBoost,
+    fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency,
+    discardSample,
+  ]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
