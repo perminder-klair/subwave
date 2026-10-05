@@ -74,6 +74,15 @@ The boundary must be driven by confirmed playback state where possible. A
 queued URI is only handed to Liquidsoap, not proof that a listener has reached
 the corresponding on-air moment.
 
+If the recorded final track remains unconfirmed six minutes after the scheduled
+boundary, the next confirmed music start may replace its identity, including an
+untracked auto-playlist fallback. Read/debug/pick paths do not relax this gate.
+The replacement remains recorded while the pair renders so generic callers
+cannot bypass the confirmed runner's placement policy. A newly armed pair on a
+track already playing uses that same runner, awaiting the track's complete
+intro-publication promise, including any pending TTS. If another track starts
+while that intro is pending, the old runner yields to the newer track.
+
 ## Design constraints
 
 - Keep look-ahead selection: it is needed to choose music appropriate for the

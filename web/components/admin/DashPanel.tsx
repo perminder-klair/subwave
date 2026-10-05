@@ -66,6 +66,9 @@ import {
   SEGMENTS,
   maskIp,
   sortConnections,
+  countryFlag,
+  countryTitle,
+  geoipHint,
   trustedProxyHint,
 } from './dash/types';
 import {
@@ -136,6 +139,7 @@ export default function DashPanel() {
   const err = statusQuery.error ? errorMessage(statusQuery.error) : null;
   const conns = connectionsQuery.data ?? null;
   const proxyHint = trustedProxyHint(conns?.trustedProxies);
+  const countryHint = geoipHint(conns?.geoip, conns?.connections);
   const connErr = connectionsQuery.error ? errorMessage(connectionsQuery.error) : null;
   const stats = statsQuery.data ?? null;
   const requests = requestsQuery.data ?? null;
@@ -720,13 +724,9 @@ export default function DashPanel() {
           connErr ? (
             <Pill>unavailable</Pill>
           ) : conns && conns.connections.length > 0 ? (
-            <button
-              type="button"
-              className="inline-flex min-h-9 items-center text-[9px] font-bold tracking-[0.2em] text-muted uppercase hover:text-ink sm:min-h-0"
-              onClick={() => setRevealIps(v => !v)}
-            >
-              {revealIps ? 'hide IPs' : 'show IPs'}
-            </button>
+            <Btn sm onClick={() => setRevealIps(v => !v)}>
+              {revealIps ? 'Hide IPs' : 'Show IPs'}
+            </Btn>
           ) : null
         }
       >
@@ -744,6 +744,11 @@ export default function DashPanel() {
             >
               reverse-proxy guide
             </a>
+          </div>
+        ) : null}
+        {!connErr && conns && countryHint ? (
+          <div className="mb-2 border-l-2 border-separator-strong pl-2 text-[11px] text-muted">
+            {countryHint}
           </div>
         ) : null}
         {connErr ? (
@@ -766,7 +771,14 @@ export default function DashPanel() {
                     onSort={setSort}
                     className={STICKY_TH + ' pr-3'}
                   />
-                  {/* Mount is dropped on a phone; the other three fit 390px. */}
+                  <SortableTh
+                    label="Country"
+                    col="country"
+                    sort={sort}
+                    onSort={setSort}
+                    className={STICKY_TH + ' pr-3'}
+                  />
+                  {/* Mount is dropped on a phone; the other four fit 390px. */}
                   <SortableTh
                     label="Mount"
                     col="mount"
@@ -799,6 +811,16 @@ export default function DashPanel() {
                   >
                     <td className="py-1.5 pr-3 font-mono whitespace-nowrap" title={c.ip}>
                       {revealIps ? c.ip || '—' : maskIp(c.ip)}
+                    </td>
+                    <td className="py-1.5 pr-3 whitespace-nowrap" title={countryTitle(c)}>
+                      {c.country ? (
+                        <>
+                          <span aria-hidden="true">{countryFlag(c.country)}</span>{' '}
+                          <span className="font-mono">{c.country}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
                     </td>
                     <td className="hidden py-1.5 pr-3 whitespace-nowrap text-muted sm:table-cell">
                       {c.mount}

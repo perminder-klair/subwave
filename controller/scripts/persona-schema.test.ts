@@ -574,6 +574,7 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     warmth: 7,
     soul: 'dry and specific',
     language: 'Turkish',
+    voiceStyle: 'Warm and unhurried.',
     avatar: 'p_rich.webp',
     tts: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 1.5, speed: 1.1 },
     skills: ['news', 'weather'],

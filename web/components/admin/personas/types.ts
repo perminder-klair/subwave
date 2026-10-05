@@ -33,6 +33,7 @@ export interface Persona {
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;
+  voiceStyle?: string;
   // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;

@@ -86,3 +86,52 @@ export function resolveListenerCountry(input: CountryResolveInput): string | und
 
   return undefined;
 }
+
+// ---------------------------------------------------------------------------
+// The country beside an Icecast connection (admin Dash → Listeners)
+// ---------------------------------------------------------------------------
+//
+// Icecast knows only the IP, so the header links above cannot run. Two sources
+// remain, in the SAME order of trust as the chain:
+//
+//  1. `beacon` — what that IP's own POST /beacon resolved through the full chain
+//     (Cloudflare, the operator's header, then the database). Remembered in
+//     memory by broadcast/beacon-countries.ts. Covers web-player listeners.
+//  2. `geoip` — the offline database over the Icecast IP. The only source for
+//     VLC, Sonos and hardware radios, which never load the page.
+//
+// Same failure posture: every link is a miss, never an error, and an exhausted
+// chain returns no country rather than a guess.
+
+export type ConnectionCountrySource = 'beacon' | 'geoip';
+
+export interface ConnectionCountry {
+  country: string;
+  source: ConnectionCountrySource;
+}
+
+export interface ConnectionCountryInput {
+  ip?: string;
+  /** Injected so the order stays testable without the process-wide cache. */
+  beaconLookup?: (ip: string) => unknown;
+  geoipLookup?: (ip: string) => unknown;
+}
+
+export function resolveConnectionCountry(input: ConnectionCountryInput): ConnectionCountry | undefined {
+  const ip = String(input.ip ?? '').trim();
+  if (!ip) return undefined;
+  const links: [ConnectionCountrySource, ((ip: string) => unknown) | undefined][] = [
+    ['beacon', input.beaconLookup],
+    ['geoip', input.geoipLookup],
+  ];
+  for (const [source, lookup] of links) {
+    if (!lookup) continue;
+    try {
+      const country = normalizeCountryCode(lookup(ip));
+      if (country) return { country, source };
+    } catch {
+      /* a failing link is a miss */
+    }
+  }
+  return undefined;
+}

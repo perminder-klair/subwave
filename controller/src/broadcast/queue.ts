@@ -27,7 +27,7 @@ import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
-import { speak, speakExchange, voiceGainDb } from '../audio/tts.js';
+import { speak, voiceGainDb } from '../audio/tts.js';
 import {
   writeSilentWav,
   discardSilentWav,
@@ -111,6 +111,7 @@ import {
   boundaryCarriesTrackVoice,
   exchangeSegment,
   formatAgo,
+  heldAnchorPlayableSec,
   knownDurationSec,
   linkClockDrifted,
   nextTransitionLabel,
@@ -420,6 +421,7 @@ class Queue {
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _handoffBoundaryTimer: NodeJS.Timeout | null = null;
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
+  private _introPublications = new WeakMap<QueueItem, Promise<void>>();
   // Jingle handoffs made but not yet heard — see playJingle. ONE map for both
   // callers on purpose: the de-duplication question ("is this clip already
   // waiting?") has to be answered across the operator's presses and the
@@ -2295,36 +2297,13 @@ class Queue {
     // label picks any name on the call sheet, including the one it is replying to.
     const knownNames = [...castNames, ...lines.map(l => l.persona?.name).filter(Boolean) as string[]];
     try {
-      // One conversational render when every line is gemini-voiced — the whole
-      // exchange in a single request, so turn-taking is generated as dialogue
-      // rather than stitched from N independent clips. Anything else (a
-      // mixed-engine roster, or more voices than Google's 2-speaker cap) throws
-      // and falls through to the per-line loop below, which is the long-standing
-      // behaviour and must keep working unchanged.
-      //
-      // The batched path strips the speaker label for the same reason the
-      // per-line loop does (#1715): Gemini reads its transcript verbatim, so a
-      // prefixed "Roxy:" is spoken aloud as a name rather than stripped as a
-      // label. The name is carried by `speech_metadata.speaker` instead, which
-      // is what the batching exists to do.
-      const stripped = lines.map(l => normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames)));
-      const single = await speakExchange(
-        lines.map((l, i) => ({ ...l, text: stripped[i] })),
-        { kind },
-      ).catch(() => null);
-      if (single) {
-        const text = lines
-          .map((l, i) => `${l.persona?.name || 'DJ'}: ${stripped[i]}`)
-          .filter(t => !t.endsWith(': '))
-          .join('\n');
-        rendered.push({ persona: lines[0].persona, text, wavPath: single });
-      } else {
-        for (const [i, l] of lines.entries()) {
-          const text = stripped[i];
-          if (!text) continue;
-          const wavPath = await this._speak(text, { kind, persona: l.persona });
-          rendered.push({ ...l, text, wavPath });
-        }
+      // Each clip owns its speaker's gain, attribution and live-edge marker.
+      // Conversational batching must preserve those before it can air here.
+      for (const l of lines) {
+        const text = normalizeForDisplay(stripSpeakerLabel(l.text || '', knownNames));
+        if (!text) continue;
+        const wavPath = await this._speak(text, { kind, persona: l.persona });
+        rendered.push({ ...l, text, wavPath });
       }
     } catch (err) {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);
@@ -2842,7 +2821,26 @@ class Queue {
   // would hand the one failure case this feature exists to prevent a LIGHTER
   // duck than it had before #1465. Same rule as onSpoken's channel: passed by
   // whoever knows, never re-derived (#1382).
-  async airIntro(item: QueueItem, predecessor: Track | null = null, { overBed = false }: { overBed?: boolean } = {}) {
+  // Track the complete TTS-to-publication promise, not introAired, which is
+  // claimed before rendering. Both handoff release paths must wait for it.
+  airIntro(item: QueueItem, predecessor: Track | null = null, { overBed = false }: { overBed?: boolean } = {}): Promise<void> {
+    if (!item) return Promise.resolve();
+    const pending = this._introPublications.get(item);
+    if (pending) return pending;
+    const publication = this.publishIntro(item, predecessor, { overBed })
+      .catch(err => { this.log('error', `Final-track intro failed: ${(err as Error).message}`); });
+    this.trackIntroPublication(item, publication);
+    return publication;
+  }
+
+  private trackIntroPublication(item: QueueItem, publication: Promise<void>) {
+    this._introPublications.set(item, publication);
+    void publication.then(() => {
+      if (this._introPublications.get(item) === publication) this._introPublications.delete(item);
+    });
+  }
+
+  private async publishIntro(item: QueueItem, predecessor: Track | null, { overBed }: { overBed: boolean }) {
     // Station voice off (settings.tts.enabled). The generation sites already
     // skip writing intros, so this only catches an item queued BEFORE the
     // switch was flipped — it must not air its script now. Backstop, not the
@@ -3215,6 +3213,10 @@ class Queue {
       // item is a spread clone, so carry the lifecycle across that identity
       // hand-off before airIntro tries to reuse it.
       this._introRenders.transfer(item, this.current);
+      // A bed can start publishing the link before the song starts. Keep
+      // waiting for that same publication after cloning the queued item.
+      const introPublication = this._introPublications.get(item);
+      if (introPublication) this.trackIntroPublication(this.current, introPublication);
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
       // A tracked item matched → controller and Liquidsoap are in sync; clear any
       // dj_queue-empty desync streak accumulated from prior untracked plays.
@@ -3230,14 +3232,7 @@ class Queue {
       // writeHandoff can block for maxWaitMs and must not stall the watcher
       // tick. Uses the live `this.current` so introAired lands on the tracked
       // object, and passes the REAL predecessor for the stale-link drop.
-      const introQueued = this.airIntro(this.current, this.history[0]?.track || null);
-      // Pair-drain may have armed this handoff while the preceding track was on
-      // air. Confirmed playback of the recorded final track is the permission to
-      // speak; queue its own intro first, then let the handoff take the voice
-      // chain behind it.
-      void introQueued
-        .catch(err => this.log('error', `Final-track intro failed: ${(err as Error).message}`))
-        .then(() => this.runArmedBoundaryHandoff());
+      void this.airIntro(this.current, this.history[0]?.track || null);
     } else {
       // Not a tracked request → auto-playlist or jingle.
       // If we see untracked plays while there are sent items in `upcoming`,
@@ -3259,6 +3254,11 @@ class Queue {
       };
       this.log('playing', `${np.title} — ${np.artist}`, { source: 'auto' });
     }
+
+    // Every real music start can confirm an overdue handoff, including an
+    // untracked auto-playlist fallback. The runner waits for a tracked intro's
+    // complete publication before taking the voice chain behind it.
+    void this.runArmedBoundaryHandoff();
 
     // Record the play into the live session's chat history.
     session.appendTurn({
@@ -3378,13 +3378,19 @@ class Queue {
     preparePlan?: typeof programme.prepareBoundaryPlan;
     runHandoff?: (ctx: session.SessionContext) => Promise<void>;
   } = {}) {
-    const track = this.current?.track ?? null;
-    if (!session.boundaryHandoffReadyForTrack(track)) return;
-    const contextAt = session.boundaryHandoffContextAt();
-    if (!contextAt) return;
+    const item = this.current;
+    if (!item) return;
     try {
+      await this._introPublications.get(item);
+      // A slow intro may finish after another track starts. Its old runner
+      // must not claim that newer track's boundary or overtake its intro.
+      if (this.current !== item) return;
+      if (!session.confirmBoundaryHandoffTrack(item.track)) return;
+      const contextAt = session.boundaryHandoffContextAt();
+      if (!contextAt) return;
       const ctx = await getContext(contextAt);
       await preparePlan(ctx);
+      if (this.current !== item || !session.boundaryHandoffReadyForTrack(item.track)) return;
       if (talkOnlyBetweenTracks()) {
         await withTalkAir('next-track', () => runHandoff(ctx));
       } else {
@@ -3393,6 +3399,39 @@ class Queue {
     } catch (err) {
       this.log('error', `Boundary handoff failed: ${(err as Error).message}`);
     }
+  }
+
+  // Seconds a held, not-yet-drained item will actually air. Resolves the cap
+  // and trim exactly as drainToLiquidsoap will when it sends the item (wall-clock
+  // show, requests exempt), so the pick look-ahead and the drain agree on how
+  // long the anchor plays. Null when its length is unknown.
+  heldPlayableSec(item: QueueItem): number | null {
+    const trim = silenceTrim.resolveSilenceTrim(item.track);
+    return heldAnchorPlayableSec({
+      durationSec: knownDurationSec(item.track),
+      maxTrackSec: item.requestedBy ? null : settings.effectiveMaxTrackSec(),
+      cueOutSecs: [trim.cueOutSec, item.cueOutSec],
+      cueInSec: trim.cueInSec,
+    });
+  }
+
+  // A pick cycle that arms the boundary handoff with NO held anchor records the
+  // track already on air as the outgoing show's final track
+  // (armBoundaryHandoff(pickCtx, this.current.track)). The pair is released by
+  // that track's confirmed START — onTrackStarted → runArmedBoundaryHandoff —
+  // and that start has already happened, so without this nothing speaks until
+  // the six-minute overdue relax hands it to whatever track comes next. Seen
+  // live: armed 36s into the 22:55 track for a 23:00 boundary, aired at 23:09
+  // over the middle of the incoming show's second song. The deadline path
+  // (held anchor) is left alone: its final track has not started yet.
+  // Fire-and-forget, like onTrackStarted: the render must not hold the pick.
+  // Not private: scripts/handoff-armed-on-air.test.ts drives it.
+  confirmOnAirBoundaryHandoff(armed: boolean, pickAnchorItem: QueueItem | null): boolean {
+    if (!armed || pickAnchorItem) return false;
+    if (!session.boundaryHandoffReadyForTrack(this.current?.track ?? null)) return false;
+    void this.runArmedBoundaryHandoff()
+      .catch(err => this.log('error', `Boundary handoff failed: ${(err as Error).message}`));
+    return true;
   }
 
   // One full DJ pick cycle: session roll, programme plan, persona handoff, link
@@ -3425,7 +3464,9 @@ class Queue {
         // recovery, part-way through a track, where the elapsed part would push
         // `showAt` over the next boundary early (#1205). With a held pick anchor
         // (deadline path) the pick follows the HELD track instead, so the lead
-        // adds that track's length. Unknown clock → no look-ahead.
+        // adds that track's length — the span it will AIR, after the length
+        // cap and trim the drain has not stamped on it yet, never its raw
+        // tagged duration. Unknown clock → no look-ahead.
         //
         // This ONE date then drives the whole boundary sequence below — roll,
         // episode plan, mic-pass, episode hook — not just the pick. Leaving the
@@ -3436,7 +3477,9 @@ class Queue {
         // With one date there is no second date to disagree with.
         const leadSec = pickLeadSec(
           this.remainingSecOnAir(),
-          pickAnchorItem ? knownDurationSec(pickAnchorItem.track) : null,
+          // 0 (unknown) keeps pickLeadSec's "held, length unknown → no
+          // look-ahead"; null would read as "no held anchor" instead.
+          pickAnchorItem ? (this.heldPlayableSec(pickAnchorItem) ?? 0) : null,
         );
         let showAt: Date | null = null;
         if (leadSec != null) {
@@ -3494,6 +3537,9 @@ class Queue {
         } catch (err) {
           this.log('error', `Persona handoff failed: ${(err as Error).message}`);
         }
+        // Armed on the track ALREADY on air: the start that normally releases
+        // the pair (onTrackStarted → runArmedBoundaryHandoff) has passed.
+        this.confirmOnAirBoundaryHandoff(finalTrackHandoff, pickAnchorItem);
         // Programme shows: open the episode if the hourly cron hasn't
         // already (whichever call site settles the session first wins; the
         // beat flag makes the other a no-op).

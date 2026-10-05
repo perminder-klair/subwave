@@ -313,6 +313,10 @@ export interface ListenerConnection {
   connectedSeconds: number;
   /** Raw sockets folded into this row by groupConnections (Safari opens 2). */
   connections?: number;
+  /** ISO alpha-2, added by GET /listeners/connections when known (never guessed). */
+  country?: string;
+  /** Which link named it: that IP's own beacon, or the offline GeoIP database. */
+  countrySource?: 'beacon' | 'geoip';
 }
 
 const BROADCAST_MOUNTS = ['/stream.mp3', '/stream.opus', '/stream.flac', '/stream.aac'];

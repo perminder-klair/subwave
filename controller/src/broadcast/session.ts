@@ -493,6 +493,46 @@ function stampRolledFrom(next: Session, prev: Session) {
     : null;
 }
 
+// How long an armed handoff waits for its recorded final track specifically
+// to be confirmed on air before giving up on that exact identity. Deliberately
+// NOT HANDOFF_MAX_AGE_MS (dj-agent/breaker.ts) — that constant times a
+// RENDERED clip's spoken content going stale, a different question. A track
+// is a few minutes at most, so several minutes past a boundary still
+// unconfirmed means the recorded track was skipped, swapped for a fallback
+// pick, or otherwise never played — not that it's merely running long.
+const BOUNDARY_TRACK_CONFIRM_MAX_AGE_MS = 6 * 60_000;
+
+// Whether the current boundaryHandoff still expects a SPECIFIC recorded final
+// track (armBoundaryHandoff/boundaryHandoffReadyForTrack) and has waited past
+// due for it without confirmation. Once queued or aired the identity check
+// has already served its purpose and this no longer applies.
+function boundaryHandoffTrackOverdue(now: number): boolean {
+  const h = _session?.boundaryHandoff;
+  if (!h || h.aired || h.queued || !h.finalTrack) return false;
+  return handoffIsStale(h.boundaryAt, now, BOUNDARY_TRACK_CONFIRM_MAX_AGE_MS);
+}
+
+// Only confirmed playback may replace an overdue final-track identity. Keep
+// the replacement identity while rendering so generic pick/roll callers still
+// stand down and cannot bypass the confirmed runner's talk placement scope.
+function relaxOverdueBoundaryHandoffTrack(
+  track: { id?: string | null; title?: string | null; artist?: string | null },
+  now: number = Date.now(),
+) {
+  if (!boundaryHandoffTrackOverdue(now)) return;
+  const h = _session!.boundaryHandoff!;
+  logEvent('handoff.finalTrackAbandoned', {
+    from: h.personaName,
+    to: h.incomingPersonaName,
+    show: h.incomingShowName,
+    boundaryAt: h.boundaryAt,
+    finalTrack: h.finalTrack,
+  });
+  h.contextAt = new Date(now).toISOString();
+  h.finalTrack = { id: track.id ?? null, title: track.title ?? null, artist: track.artist ?? null };
+  schedulePersist();
+}
+
 // The pending on-air handoff for the live session (outgoing persona metadata),
 // or null when there's nothing to air (no persona change, or already aired).
 export function pendingHandoff(): RolledFrom | BoundaryHandoff | null {
@@ -506,12 +546,42 @@ export function pendingHandoff(): RolledFrom | BoundaryHandoff | null {
 
 // Mark the handoff heard at the stream edge. A final-track handoff is queued
 // first, so a restart before this point can regenerate its lost audio.
+// An aired boundary record only guards anything BEFORE the roll: it stops the
+// outgoing show's stale roster from speaking over the boundary it already
+// covered, and tells maybeRoll not to air a second mic-pass. A record carried
+// onto the incoming session while still armed/queued (the pair aired after the
+// station clock rolled: a late final-track handoff, a between-tracks deferral
+// past the boundary, a restart past the boundary) is flipped to aired THERE,
+// where its target is the live show itself. It stays for /debug and for its
+// programme, but it is history: it must neither hold the air for the whole
+// incoming show ("the show handoff has already claimed this boundary" on every
+// scheduled segment) nor block arming the next boundary. Seen live after a
+// 23:07 restart past a 23:00 boundary: the pair aired at 23:10 and the DJ
+// stayed silent for the rest of the show.
+function airedOnLiveShow(): boolean {
+  const h = _session?.boundaryHandoff;
+  return !!(_session && h?.aired && h.targetKey === _session.key);
+}
+
 export function markHandoffAired() {
   if (!_session) return;
   if (_session.boundaryHandoff && !_session.boundaryHandoff.aired) {
-    _session.boundaryHandoff.queued = false;
-    _session.boundaryHandoff.aired = true;
+    const h = _session.boundaryHandoff;
+    h.queued = false;
+    h.aired = true;
     _resumedQueuedHandoff = false;
+    if (h.targetKey === _session.key) {
+      // Aired after the roll: the greeting opened this show, so it counts as
+      // this session's mic-pass, and the plan prepared for it is this show's.
+      if (h.programme && !_session.programme) _session.programme = h.programme;
+      _session.handoffAired = true;
+      logEvent('handoff.airedAfterRoll', {
+        from: h.personaName,
+        to: h.incomingPersonaName,
+        show: h.incomingShowName,
+        boundaryAt: h.boundaryAt,
+      });
+    }
     schedulePersist();
     return;
   }
@@ -548,7 +618,8 @@ export function armBoundaryHandoff(
   ctx: SessionContext,
   finalTrack: { id?: string | null; title?: string | null; artist?: string | null } | null = null,
 ): boolean {
-  if (!_session || _session.boundaryHandoff) return false;
+  // A record aired on this very show is history and gives way to the next one.
+  if (!_session || (_session.boundaryHandoff && !airedOnLiveShow())) return false;
   const targetKey = sessionKeyFor(ctx);
   if (targetKey === _session.key) return false;
   if (!_session.key.startsWith('show:') && !targetKey.startsWith('show:')) return false;
@@ -591,6 +662,16 @@ export function boundaryHandoffReadyForTrack(
   return expected.title === (track.title ?? null) && expected.artist === (track.artist ?? null);
 }
 
+// Called only by the confirmed-track runner, including a newly armed handoff
+// on the track already on air. Read/debug/pick paths must not relax its gate.
+export function confirmBoundaryHandoffTrack(
+  track: { id?: string | null; title?: string | null; artist?: string | null } | null,
+): boolean {
+  if (!track) return false;
+  relaxOverdueBoundaryHandoffTrack(track);
+  return boundaryHandoffReadyForTrack(track);
+}
+
 export function boundaryHandoffContextAt(): Date | null {
   const raw = _session?.boundaryHandoff?.contextAt;
   if (typeof raw !== 'string') return null;
@@ -609,6 +690,7 @@ export function boundaryHandoffAwaitsTrack(): boolean {
 // Once a final-track handoff has claimed the outgoing show's air, no ordinary
 // speech from its stale roster may cross the boundary.
 export function handoffInProgress(): boolean {
+  if (airedOnLiveShow()) return false;
   return !!(_session?.boundaryHandoff?.queued || _session?.boundaryHandoff?.aired);
 }
 
