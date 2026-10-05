@@ -1183,6 +1183,8 @@ SITE_URL=
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
 # only if you want env to win (12-factor / CI / GitOps style deploys).
+# Navidrome env overrides apply only to single-station installs. With station
+# profiles, configure each connection through onboarding or admin settings.
 # NAVIDROME_URL=http://host.docker.internal:4533
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
