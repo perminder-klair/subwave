@@ -4624,14 +4624,22 @@ export function normalizeSkillVoice(data: Record<string, unknown> | null | undef
   const engine = String((data as Record<string, unknown>)[SKILL_VOICE_ENGINE_KEY] ?? '').trim();
   if (!engine) return null;
   if (!(SKILL_VOICE_ENGINES as readonly string[]).includes(engine)) return null;
-  const voice = String((data as Record<string, unknown>)[SKILL_VOICE_ID_KEY] ?? '').trim().slice(0, SKILL_VOICE_MAX);
+  let voice = String((data as Record<string, unknown>)[SKILL_VOICE_ID_KEY] ?? '').trim().slice(0, SKILL_VOICE_MAX);
   if (voice && isUnsafeVoiceId(voice)) return null;
   const provider = String((data as Record<string, unknown>)[SKILL_VOICE_PROVIDER_KEY] ?? '').trim();
-  return {
-    engine,
-    voice,
-    cloudProvider: (SKILL_VOICE_PROVIDERS as readonly string[]).includes(provider) ? provider : 'openai',
-  };
+  const cloudProvider = (SKILL_VOICE_PROVIDERS as readonly string[]).includes(provider) ? provider : 'openai';
+  // Same rule the strict schema applies below, and the same one both persona
+  // paths already carry: a managed cloud provider needs a voice id, and an empty
+  // one is not "use the station default" — it reaches the provider as an empty
+  // `voice`/`reference_id` and the render fails into the rescue chain. The
+  // strict schema DEFAULTS to a valid id so the form round-trips; the disk path
+  // mirrors it rather than returning null, because a hand-written `voiceEngine:
+  // cloud` with no `voiceId` is an incomplete override, not a broken one.
+  //
+  // `openai-compatible` is the exception in both directions: its voices are
+  // server-specific, so empty genuinely means "let the server pick".
+  if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
+  return { engine, voice, cloudProvider };
 }
 
 // Strict form-side twin: null/undefined reads as "no override" (same as the

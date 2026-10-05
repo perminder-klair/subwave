@@ -162,3 +162,50 @@ test('SKILL.md round trip: voice lines written, read back, and cleared', async (
   const { data: clearedData } = parseFrontmatter(cleared);
   assert.equal(normalizeSkillVoice(clearedData), null);
 });
+
+// A managed cloud provider needs a voice id. Fish sends it as `reference_id`,
+// ElevenLabs as the voice name, and OpenAI as `voice`; an empty value reaches
+// all three as empty and the render fails into the rescue chain. Every other
+// normaliser in the station defaults it — the strict skill schema below does,
+// and so do both persona paths — so the disk path being the one that left it
+// blank made a hand-written `voiceEngine: cloud` override that could never
+// render.
+test('a managed cloud provider defaults a blank voice instead of rendering empty', () => {
+  for (const provider of ['openai', 'elevenlabs', 'fish-audio']) {
+    const out = normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: '', voiceProvider: provider });
+    assert.equal(out?.voice, 'alloy',
+      `${provider} requires a voice id — an empty one fails every render and falls through `
+        + 'the rescue chain instead of leniently reading as "no override"');
+    assert.equal(out?.cloudProvider, provider, `${provider} must survive the default`);
+  }
+});
+
+// The one provider where empty is meaningful: its voices are server-specific,
+// so "let the server pick its own default" has to survive normalisation. This is
+// the exception that would be lost if the rule above were written as a blanket
+// "cloud always gets a voice".
+test('openai-compatible keeps a blank voice — empty means the server picks', () => {
+  const out = normalizeSkillVoice({
+    voiceEngine: 'cloud', voiceId: '', voiceProvider: 'openai-compatible',
+  });
+  assert.equal(out?.voice, '',
+    'openai-compatible voices are server-specific; blank is its documented "use your own default"');
+  assert.equal(out?.cloudProvider, 'openai-compatible');
+});
+
+// An explicit voice is never overwritten, and the rule does not leak to engines
+// that read empty as their own default.
+test('the default only fills a blank voice, and only for cloud', () => {
+  assert.equal(
+    normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: 'Kore', voiceProvider: 'elevenlabs' })?.voice,
+    'Kore', 'an explicit provider voice must survive',
+  );
+  assert.equal(
+    normalizeSkillVoice({ voiceEngine: 'cloud', voiceId: 'my-server-voice', voiceProvider: 'openai-compatible' })?.voice,
+    'my-server-voice', 'an explicit compatible voice must survive',
+  );
+  for (const [engine, voice] of [['piper', ''], ['kokoro', ''], ['chatterbox', ''], ['gemini', '']]) {
+    assert.equal(normalizeSkillVoice({ voiceEngine: engine, voiceId: voice, voiceProvider: 'openai' })?.voice, '',
+      `${engine} reads an empty voice as its own default and must be left alone`);
+  }
+});
