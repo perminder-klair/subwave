@@ -3,58 +3,32 @@ import { createReadStream } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { logEvent, EVENTS_MAX_AGE_DAYS } from './events.js';
+import {
+  playbackFailureIdentitySchema, playbackFailureEventSchema,
+  type PlaybackFailure, type PlaybackFailureInput, type PlaybackFailureHistory,
+} from '../schemas/playback-failures.js';
 
-export interface PlaybackFailureInput {
-  attemptId: string;
-  sourceTrackId?: string | null;
-  title?: string | null;
-  artist?: string | null;
-  album?: string | null;
-  source: 'ai' | 'request' | 'operator';
-}
-export interface PlaybackFailure extends PlaybackFailureInput {
-  t: string;
-  stage: 'fetch';
-  reason: 'source-resolution-failed';
-}
+export type { PlaybackFailure, PlaybackFailureInput } from '../schemas/playback-failures.js';
 
-// Scalars only. Reject misplaced URIs and absolute paths as well as dropping
-// all unrecognised fields; never persist an annotated URI or raw exception.
-function scalar(value: unknown): string | null {
-  if (typeof value !== 'string' || /(?:\w+:\/\/|^\/|^[A-Za-z]:\\|^annotate:)/.test(value)) return null;
-  return value.slice(0, 500);
-}
-function identity(input: PlaybackFailureInput) {
-  return {
-    attemptId: scalar(input.attemptId), sourceTrackId: scalar(input.sourceTrackId),
-    title: scalar(input.title), artist: scalar(input.artist), album: scalar(input.album),
-    source: input.source, stage: 'fetch' as const, reason: 'source-resolution-failed' as const,
-  };
-}
 export function recordPlaybackFailure(input: PlaybackFailureInput, emit: typeof logEvent = logEvent): void {
   try {
-    const data = identity(input);
-    if (!data.attemptId || !['ai', 'request', 'operator'].includes(input.source)) return;
-    emit('track.failed', data);
+    const result = playbackFailureIdentitySchema.safeParse(input);
+    if (!result.success) return;
+    emit('track.failed', { ...result.data, stage: 'fetch', reason: 'source-resolution-failed' });
   } catch { /* Observability must not interrupt queue recovery. */ }
 }
 
 function failureRow(row: unknown): PlaybackFailure | null {
-  if (!row || typeof row !== 'object') return null;
-  const r = row as Record<string, unknown>;
-  if (r.type !== 'track.failed' || r.stage !== 'fetch' || r.reason !== 'source-resolution-failed'
-    || typeof r.source !== 'string' || !['ai', 'request', 'operator'].includes(r.source)
-    || typeof r.t !== 'string' || !Number.isFinite(Date.parse(r.t))
-    || typeof r.attemptId !== 'string') return null;
-  const data = identity(r as unknown as PlaybackFailureInput);
-  if (!data.attemptId) return null;
-  return { ...data, attemptId: data.attemptId, t: new Date(r.t).toISOString() };
+  const result = playbackFailureEventSchema.safeParse(row);
+  if (!result.success) return null;
+  const { type: _type, ...failure } = result.data;
+  return failure;
 }
 const newest = (a: PlaybackFailure, b: PlaybackFailure) => b.t.localeCompare(a.t) || a.attemptId.localeCompare(b.attemptId);
 
 export async function readPlaybackFailures({ stationDir, now = new Date(), limit = 1000 }: {
   stationDir: string; now?: Date; limit?: number;
-}): Promise<{ failures: PlaybackFailure[]; retentionDays: number; truncated: boolean; warnings: string[] }> {
+}): Promise<PlaybackFailureHistory> {
   const bound = Number.isFinite(limit) ? Math.max(1, Math.min(1000, Math.floor(limit))) : 1000;
   const warnings: string[] = [];
   let rows: PlaybackFailure[] = [];

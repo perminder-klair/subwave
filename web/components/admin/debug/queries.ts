@@ -1,4 +1,5 @@
 import { adminJson, type AdminFetch } from '../../../lib/admin-query';
+import { playbackFailureHistorySchema } from '../../../lib/schemas.generated';
 import type { DebugData, PlaybackFailureHistory } from './types';
 
 export const debugKeys = {
@@ -41,10 +42,10 @@ export function fetchStateListing(
 }
 
 export async function fetchPlaybackFailures(fetcher: AdminFetch, signal: AbortSignal): Promise<PlaybackFailureHistory> {
-  const body = await adminJson<PlaybackFailureHistory>(fetcher, '/debug/playback-failures', undefined, signal);
-  if (!body || !Array.isArray(body.failures) || !Array.isArray(body.warnings)
-    || typeof body.retentionDays !== 'number' || typeof body.truncated !== 'boolean') {
+  const body = await adminJson<unknown>(fetcher, '/debug/playback-failures', undefined, signal);
+  const result = playbackFailureHistorySchema.safeParse(body);
+  if (!result.success) {
     throw new Error('Unexpected failure history response');
   }
-  return body;
+  return result.data;
 }
