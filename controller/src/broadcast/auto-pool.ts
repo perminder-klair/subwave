@@ -8,12 +8,14 @@
 //   3. Artist cap — cap one artist's share; per-source overridable for a source
 //      that IS an exact operator-pinned set.
 
+import { aboveTrackCeiling } from '../music/track-ceiling.js';
 import { artistKey, trackKey } from '../music/recency.js';
 
 export interface PoolBuilderOpts {
   recentIds: Set<string>;
   recentKeys: Set<string>;   // lowercased `title|artist` of recent plays
   targetPool: number;        // stop accepting once the pool reaches this size
+  selectionMaxSec?: number | null;
   maxPerArtist: number;      // cap any one artist's share of the pool
 }
 
@@ -50,7 +52,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= targetPool) break;
-      if (!t?.id) continue;
+      if (!t?.id || aboveTrackCeiling(t, opts.selectionMaxSec)) continue;
       // Key only when the song has a title (mirrors queue.recentlyPlayed) so a
       // title-less row can't collapse an artist's whole catalogue.
       const tk = t.title ? trackKey(t) : '';

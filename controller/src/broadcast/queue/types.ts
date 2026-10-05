@@ -120,6 +120,9 @@ export interface QueueItem {
   // session — even when the same persona hosts both shows.
   introSessionKey?: string | null;
   aiPicked?: boolean;
+  // Picker's padded show forecast, independent of whether its link spoke a
+  // clock. Persisted so selection checks follow that show's live length limit.
+  selectionShowAt?: number | null;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
   // only when the generator actually handed the model a clock to speak
@@ -172,8 +175,16 @@ export interface QueueItem {
   // behind its own URI). `stemSeam`/`stemCueInSec` ride the INCOMING item:
   // its entry-side effects are stripped at its own drain (the seam INTO it
   // is pre-rendered) and it cues in past the head the clip already played.
-  stemBlend?: { clipPath: string; blendStartSec: number; inCueSec: number } | null;
+  stemBlend?: {
+    clipPath: string;
+    blendStartSec: number;
+    inCueSec: number;
+    // Persist the provisional exit so restart recovery can undo it exactly.
+    originalExit?: Pick<Track, 'washout' | 'washoutAuto' | 'washoutDelay' | 'loop' | 'loopBar' | 'crossSec'>;
+  } | null;
   stemSeam?: boolean;
+  // Outgoing music already committed an early ending into this clip/track.
+  lengthPolicyCommitted?: boolean;
   stemCueInSec?: number;
 }
 

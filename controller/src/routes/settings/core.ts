@@ -91,6 +91,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         handover: { offsetMinutes: handoverOffsetMinutes() },
         djBehaviour: s.djBehaviour,
         maxTrackSeconds: s.maxTrackSeconds,
+        maxTrackLengthMode: s.maxTrackLengthMode,
         // Crossfade-relative floor, shared with the admin/show UI so client
         // hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),

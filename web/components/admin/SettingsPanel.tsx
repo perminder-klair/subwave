@@ -270,6 +270,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const [confirmStop, setConfirmStop] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>('station');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const lengthModeAria = fieldAria('max-track-length-mode',
+    fieldErrors.maxTrackLengthMode ? { message: fieldErrors.maxTrackLengthMode } : undefined);
   // Portal target for the one sticky save bar. Null while nothing is unsaved,
   // which is what makes every section's SaveBar render nothing when clean.
   const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
@@ -317,6 +319,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         voice: String(v.ducking?.voice ?? 0.22),
         intro: String(v.ducking?.intro ?? 0.3),
       },
+      maxTrackLengthMode: v.maxTrackLengthMode === 'exclude' ? 'exclude' : 'cut',
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       fadeAtShowEnd: v.fadeAtShowEnd === true,
       silenceTrim: {
@@ -753,6 +756,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         voice: n.float('ducking.voice', form.ducking.voice),
         intro: n.float('ducking.intro', form.ducking.intro),
       },
+      maxTrackLengthMode: form.maxTrackLengthMode,
       maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
       fadeAtShowEnd: form.fadeAtShowEnd,
       silenceTrim: {
@@ -1495,7 +1499,18 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             )}
 
             {form && (
-              <Card title="Max track length" sub="cut over-length tracks on air">
+              <Card title="Max track length" sub={form.maxTrackLengthMode === 'exclude' ? 'exclude known over-length automatic tracks' : 'cut over-length tracks on air'}>
+                <div className="field">
+                  <Label {...lengthModeAria.labelProps}>Maximum length behavior</Label>
+                  <Select value={form.maxTrackLengthMode} onValueChange={v => setForm(f => f ? { ...f, maxTrackLengthMode: v as 'cut' | 'exclude' } : f)}>
+                    <SelectTrigger {...lengthModeAria.controlProps}><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="cut">Cut on air (legacy)</SelectItem>
+                      <SelectItem value="exclude">Exclude longer automatic tracks</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <SettingsFieldError path="maxTrackLengthMode" errors={fieldErrors} id={lengthModeAria.errorProps.id} />
+                </div>
                 <div className="field">
                   <Label>Maximum track length</Label>
                   <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
@@ -1517,10 +1532,13 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                   </div>
                   <SettingsFieldError path="maxTrackSeconds" errors={fieldErrors} />
                   <div className="field-hint">
-                    The DJ won&rsquo;t auto-pick tracks longer than this, handy for hour-long
-                    album mixes or DJ sets that keep landing in rotation. Listener requests still
-                    play any length, and a show can override this with its own limit (0 there means
-                    unlimited). Applies on the next pick; no restart needed.
+                    {form.maxTrackLengthMode === 'exclude'
+                      ? 'Automatic picks and fallback playlists exclude tracks with known duration above the limit. Tracks exactly at the limit are allowed. Tracks with unknown durations remain eligible and play without this cutoff. A library of only longer tracks can leave no eligible music.'
+                      : 'Long tracks remain eligible for automatic picks and fade out at this limit on air.'}
+                    {' '}Listener requests and explicit studio choices are exempt. Shows inherit this
+                    station behavior and can override the limit (0 means unlimited). Changes apply to
+                    future automatic tracks without a restart. Already handed-off playback keeps its
+                    previous policy. Silence trimming and show-boundary fades still apply.
                   </div>
                 </div>
               </Card>
@@ -1555,7 +1573,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     // cuts at this cap. Shows can override the station cap.
                     const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
                     const cap = Number(form.maxTrackSeconds);
-                    if (!form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
+                    if (form.maxTrackLengthMode !== 'cut' || !form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
                     return (
                       <div className="field-hint italic">
                         With <b>Maximum track length</b> at {cap}s, boundary fading cannot apply
@@ -2145,7 +2163,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               onSave={saveDanger}
               saveLabel="Save danger zone"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'maxTrackLengthMode', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
             />
           </>
         )}

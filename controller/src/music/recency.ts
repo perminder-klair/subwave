@@ -350,11 +350,9 @@ export function filterPickerCandidates<T extends CandidateLike>(
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
-  // Neither track-length bound is applied here. The CAP (#447) is an on-air
-  // cue_out cut, so an over-length track stays eligible; filtering it here
-  // would only starve the pool. The FLOOR (#1573) does remove candidates, but
-  // its posture differs per pick path, so it lives in music/track-floor.ts and
-  // each call site applies it just before this one.
+  // Duration policy is applied BEFORE this relaxation cascade: the legacy
+  // cut mode does not filter; exclude's hard ceiling must never be rescued.
+  // The floor's posture differs per path and remains in track-floor.ts.
   const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields

@@ -373,6 +373,7 @@ export interface FormState {
   crossfadeDuration: string;
   ducking: DuckingForm;
   maxTrackSeconds: string;
+  maxTrackLengthMode: 'cut' | 'exclude';
   /** Station default for the show-boundary fade (#1574). A show's own
    *  tri-state overrides it; this level is only ever on or off. */
   fadeAtShowEnd: boolean;
@@ -424,6 +425,7 @@ export interface SettingsData {
     crossfadeDuration?: number;
     ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
+    maxTrackLengthMode?: 'cut' | 'exclude';
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     /** Scheduled backups (#1570). No FormState entry and no settings section —
