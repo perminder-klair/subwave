@@ -17,6 +17,7 @@ import {
   AudioPlayerTimeRange,
 } from '../../ai-elements/audio-player';
 import { fetchPreviewSample } from './previewApi';
+import { correctionsKey as correctionsDependency } from './correctionsKey';
 
 interface VoicePreviewButtonProps {
   engine: string;
@@ -97,10 +98,7 @@ export function VoicePreviewButton({
   // `tests/voice-preview-invalidation.test.ts` compares this array against the
   // request payload by AST, so the next prop added to one and not the other is a
   // test failure rather than a review comment.
-  const correctionsKey = useMemo(
-    () => (corrections ?? []).map((c) => `${c.from} ${c.to}`).join('|'),
-    [corrections],
-  );
+  const correctionsKey = useMemo(() => correctionsDependency(corrections), [corrections]);
   useEffect(() => {
     discardSample();
     setState('idle');

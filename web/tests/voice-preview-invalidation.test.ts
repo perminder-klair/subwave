@@ -119,9 +119,42 @@ function coverage(): Map<string, string> {
   return map;
 }
 
+/**
+ * For each prop whose declared type is an inline object literal, the member names
+ * it declares — i.e. the settings that actually reach the render request.
+ *
+ * Read from the `VoicePreviewButtonProps` interface rather than restated, because
+ * a restated list is a list that stops being true the moment someone adds a
+ * slider. `fishSettings` is included on purpose: it is the field that was already
+ * listed correctly, so if this ever starts exempting it the exemption is visible.
+ */
+function nestedMemberProps(): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const file = sourceFile();
+  const visit = (node: ts.Node) => {
+    if (ts.isInterfaceDeclaration(node) && node.name.text === 'VoicePreviewButtonProps') {
+      for (const member of node.members) {
+        if (!ts.isPropertySignature(member) || !member.name || !ts.isIdentifier(member.name)) continue;
+        const t = member.type;
+        if (!t || !ts.isTypeLiteralNode(t)) continue;
+        const names = t.members
+          .filter((m): m is ts.PropertySignature => ts.isPropertySignature(m))
+          .map((m) => (m.name && ts.isIdentifier(m.name) ? m.name.text : ''))
+          .filter(Boolean);
+        if (names.length) out.set(member.name.text, names);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  assert.ok(out.size >= 2, `expected voiceSettings and fishSettings in the props, found [${[...out.keys()]}]`);
+  return out;
+}
+
 test('every prop that shapes the sample invalidates it', () => {
   const requested = requestProps();
   const covered = coverage();
+  const roots = new Set(invalidationDeps().map(rootName));
 
   assert.ok(requested.length >= 10, `expected a full payload, parsed ${requested.length}`);
 
@@ -131,6 +164,33 @@ test('every prop that shapes the sample invalidates it', () => {
     `these props reach the render request but no dependency invalidates the sample, so `
       + `changing them leaves the previous voice playing under the new label: ${missing.join(', ')}`,
   );
+
+  // A root match is NOT coverage for an object's fields. `voiceSettings` reaching
+  // the request as a whole object means the request carries FOUR sliders, and one
+  // surviving dependency satisfies `roots.has('voiceSettings')` — so deleting
+  // `voiceSettings?.voiceStability` on its own still passed. That is not a
+  // hypothetical: it is exactly what a partial cleanup leaves behind, and the
+  // previous version of this test could not see it.
+  //
+  // The required members are read from the declared props interface rather than
+  // restated here, so adding a slider to the component cannot quietly exempt it.
+  const nested = nestedMemberProps();
+  const uncoveredMembers: string[] = [];
+  for (const [parent, members] of nested) {
+    if (!requested.includes(parent)) continue;
+    for (const member of members) {
+      if (!invalidationDeps().includes(`${parent}?.${member}`)) {
+        uncoveredMembers.push(`${parent}?.${member}`);
+      }
+    }
+  }
+  assert.deepEqual(
+    uncoveredMembers, [],
+    `these settings reach the render request but no dependency invalidates the sample when `
+      + `they change: ${uncoveredMembers.join(', ')}. Each field needs its own dependency — one `
+      + `surviving \`${Object.keys(nested)[0]}?.…\` entry is not coverage for the rest.`,
+  );
+  assert.ok(roots.size > 0, 'deps must parse to something');
 });
 
 test('editing the sample text discards the stale audio', () => {
@@ -149,14 +209,32 @@ test('every derived dependency is derived from the prop it stands for', () => {
   for (const [prop, derived] of Object.entries(DERIVED)) {
     assert.ok(invalidationDeps().map(rootName).includes(derived),
       `${derived} is allowlisted for ${prop} but is not a dependency`);
+    // `\s*` rather than `\n\s*` before the dep array: what matters is that the
+    // memo depends on `[corrections]`, not that the call happens to be wrapped
+    // across lines. Requiring the line break made the assertion fail on a purely
+    // cosmetic refactor, which is how an assertion starts being worked around.
     const memo = new RegExp(
-      `const\\s+${derived}\\s*=\\s*useMemo\\([\\s\\S]*?\\n\\s*\\[${prop}\\][\\s\\S]*?\\);`,
+      `const\\s+${derived}\\s*=\\s*useMemo\\([\\s\\S]*?\\s*\\[${prop}\\][\\s\\S]*?\\);`,
     ).exec(SRC);
     assert.ok(memo,
       `${derived} must be a useMemo whose dependency array is [${prop}] — otherwise the `
       + `allowlist is covering ${prop} with something unrelated`);
+    // The key itself lives in its own module so its injectivity can be tested
+    // directly — an AST check cannot see a collision INSIDE the key function, which
+    // is the failure that shipped here once already. Assert the memo delegates to
+    // it rather than recomputing a key inline, so the two cannot drift apart.
+    if (DERIVED_CALL[derived]) {
+      assert.ok(memo[0].includes(DERIVED_CALL[derived]),
+        `${derived} must delegate to ${DERIVED_CALL[derived]}() so the tested key function is `
+          + 'the one the component uses');
+    }
   }
 });
+
+/** Where each derived dependency's key function lives, keyed by the dep name. */
+const DERIVED_CALL: Record<string, string> = {
+  correctionsKey: 'correctionsDependency',
+};
 
 test('no dep is an unstable object or array literal', () => {
   // The reason voiceSettings and corrections are absent as objects. If someone
