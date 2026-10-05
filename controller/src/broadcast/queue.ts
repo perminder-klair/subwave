@@ -52,6 +52,7 @@ import { getFullContext, getClockContext, energyForDaypart } from '../context.js
 import * as settings from '../settings.js';
 import { TRANSITION_EFFECTS } from '../settings/vocab.js';
 import { logEvent } from '../observability/events.js';
+import { recordPlaybackFailure } from '../observability/playback-failures.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed, stationIdDaypartDrifted, stationIdDaypartStamp } from './clock-policy.js';
@@ -3650,6 +3651,12 @@ class Queue {
     const idx = this.upcoming.indexOf(item);
     if (idx < 0) return;  // raced with a cancel/air between verdict and action
     this.upcoming.splice(idx, 1);
+    if (item.resolveProbeId) recordPlaybackFailure({
+      attemptId: item.resolveProbeId,
+      sourceTrackId: item.track?.id,
+      title: item.track?.title, artist: item.track?.artist, album: item.track?.album,
+      source: item.operator ? 'operator' : item.requestedBy ? 'request' : 'ai',
+    });
     this._resolveFailStreak++;
     this.persist();
 

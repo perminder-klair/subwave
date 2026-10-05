@@ -1,5 +1,6 @@
 // Admin-gated GET /debug — everything-at-a-glance for the debug UI.
 import express from 'express';
+import { readPlaybackFailures } from '../observability/playback-failures.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { config } from '../config.js';
@@ -371,3 +372,25 @@ router.post('/debug/subsonic/reset', requireAdmin, (req, res) => {
   subsonicLog.reset();
   res.json({ ok: true });
 });
+
+// Explicit historical scans, deliberately separate from the fast /debug poll.
+for (const exportRows of [false, true]) {
+  router.get(`/debug/playback-failures${exportRows ? '/export' : ''}`,
+    (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); },
+    requireAdmin, async (_req, res) => {
+      try {
+        const history = await readPlaybackFailures({ stationDir: config.stateDir });
+        if (!exportRows) { res.json(history); return; }
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Content-Disposition', `attachment; filename="subwave-playback-failures-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson"`);
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-History-Retention-Days, X-History-Limit, X-History-Truncated, X-History-Warnings');
+        res.setHeader('X-History-Retention-Days', String(history.retentionDays));
+        res.setHeader('X-History-Limit', '1000');
+        res.setHeader('X-History-Truncated', String(history.truncated));
+        res.setHeader('X-History-Warnings', String(history.warnings.length));
+        res.send(history.failures.map(row => JSON.stringify(row) + '\n').join(''));
+      } catch {
+        res.status(500).json({ error: 'Failure history could not be read.' });
+      }
+    });
+}

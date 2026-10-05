@@ -16,6 +16,7 @@ import { Terminal, TerminalContent } from '../ai-elements/terminal';
 import { BudgetMeter } from './debug/BudgetMeter';
 import { StateTree } from './debug/StateTree';
 import { DjContext } from './debug/DjContext';
+import { PlaybackFailures } from './debug/PlaybackFailures';
 import { LlmCalls } from './debug/LlmCalls';
 import { MountsTable } from './debug/MountsTable';
 import { SessionChat } from './debug/SessionChat';
@@ -109,6 +110,8 @@ export default function DebugPanel() {
           />
         </div>
       </section>
+
+      <PlaybackFailures timezone={data?.timezone} locale={data?.locale} />
 
       {err && <ErrorState error={err} />}
 
