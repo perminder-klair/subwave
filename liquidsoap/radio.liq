@@ -424,17 +424,20 @@ music = cue_cut(music)
 #                              track carries none — a jingle, a cold-boot auto
 #                              pick — instead of inheriting the last one)
 #   liq_cross_start_duration = the PREVIOUS track's end value
-# A repeat metadata chunk for the same file (fallback switches replay it) must
-# not advance the chain, so the last file's answer is reused.
+# A replayed metadata chunk must not advance the chain. The request's `rid`
+# distinguishes new airings of the same local file, including repeated jingles;
+# fallback metadata replay keeps that request ID and reuses its stamps.
 cross_prev_end = ref(crossfade_duration())
 cross_last_file = ref("")
+cross_last_rid = ref("")
 cross_last_stamps = ref([])
 
 def cross_stamps(m) =
   # `fname`, not `file`: a local `file` shadows the stdlib file.* module
   # (Liquidsoap Warning 6 at startup).
   fname = m["filename"]
-  if fname != "" and fname == cross_last_file() then
+  rid = m["rid"]
+  if fname != "" and fname == cross_last_file() and rid == cross_last_rid() then
     cross_last_stamps()
   else
     own = float_of_string(default=crossfade_duration(), m["liq_cross_duration"])
@@ -446,6 +449,7 @@ def cross_stamps(m) =
     ]
     cross_prev_end := own
     cross_last_file := fname
+    cross_last_rid := rid
     cross_last_stamps := stamps
     stamps
   end

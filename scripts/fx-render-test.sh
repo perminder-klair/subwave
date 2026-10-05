@@ -14,8 +14,8 @@
 #       (mirrored from radio.liq) and print an RMS-over-time table. Default
 #       renders every variant.
 #   scripts/fx-render-test.sh xchain
-#       Regression check — five tracks with distinct cross stamps; fail unless
-#       every transition buffers the outgoing track's own stamp (2.4.5 lag).
+#       Regression checks for distinct tracks, repeated files/jingles and
+#       metadata replay; every transition must buffer its outgoing stamp.
 #   scripts/fx-render-test.sh loopcheck
 #       Regression check — fail if Loop's capture-pass level differs from the
 #       plain transition by more than 1 dB on deterministic pink noise.
@@ -612,7 +612,9 @@ xchain() {
   # tones with distinct stamps run through the OLD wiring (raw
   # liq_cross_duration) and the NEW one (cross_stamps + strip_cross_stamps,
   # lifted verbatim from radio.liq so the harness cannot drift from the mixer).
-  # PASS = every new-mode transition buffers its outgoing stamp on both sides.
+  # Repeated files are new airings, while injected metadata repeats within an
+  # airing must retain its original incoming stamp. Unstamped jingles use the
+  # station default. Expected durations come from the input, not the rewrite.
   local f
   for f in 1 2 3 4 5; do
     [ -f "$WORK/x$f.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=$((220 + f * 110)):duration=30" -af volume=-12dB -ar 44100 -ac 2 "$WORK/x$f.wav"
@@ -625,22 +627,38 @@ settings.log.stdout := true
 settings.log.level := 3
 crossfade_duration = ref(5.0)
 mode = environment.get(default="new", "MODE")
+scenario = environment.get(default="distinct", "SCENARIO")
 q = request.queue(id="q")
-list.iter(fun (p) -> ignore(q.push(request.create(p))), [
-  'annotate:title="x1",liq_cross_duration="4":/work/x1.wav',
-  'annotate:title="x2",liq_cross_duration="9":/work/x2.wav',
-  'annotate:title="x3",liq_cross_duration="3":/work/x3.wav',
-  'annotate:title="x4",liq_cross_duration="7":/work/x4.wav',
-  'annotate:title="x5",liq_cross_duration="6":/work/x5.wav'
-])
+repeated = scenario == "repeated-file" or scenario == "repeated-jingle"
+jingles = scenario == "repeated-jingle"
+tracks = [
+  ("x1", "/work/x1.wav", "4"),
+  ("x2", "/work/x2.wav", if jingles then "" else "9" end),
+  ("x3", if repeated then "/work/x2.wav" else "/work/x3.wav" end,
+         if jingles then "" else "3" end),
+  ("x4", "/work/x4.wav", "7"),
+  ("x5", "/work/x5.wav", "6")
+]
+list.iter(fun ((title, fname, stamp)) -> begin
+  expected = if stamp == "" then string(crossfade_duration()) else stamp end
+  uri = 'annotate:title="#{title}",liq_cross_duration="#{stamp}",expected_cross="#{expected}":#{fname}'
+  ignore(q.push(request.create(uri)))
+end, tracks)
+if scenario == "metadata-replay" then
+  q.on_position(position=1., synchronous=true, fun (_, m) -> begin
+    log("XCHAIN REPLAY: #{m['title']}")
+    q.insert_metadata(new_track=false, m)
+  end)
+end
 %include "/work/xchain-stamps.liq"
 def t(a, b) =
   key = if mode == "new" then "liq_cross_end_duration" else "liq_cross_duration" end
   stamp = float_of_string(default=crossfade_duration(), a.metadata[key])
+  expected = float_of_string(default=crossfade_duration(), a.metadata["expected_cross"])
   ra = source.remaining(a.source)
   rb = source.remaining(b.source)
   if b.metadata["title"] != "" then
-    log("XCHAIN: #{a.metadata['title']} -> #{b.metadata['title']} stamp=#{stamp} a_buf=#{ra} b_buf=#{rb}")
+    log("XCHAIN: #{a.metadata['title']} -> #{b.metadata['title']} expected=#{expected} stamp=#{stamp} a_buf=#{ra} b_buf=#{rb}")
   end
   d = if mode == "new" then min(ra, rb) else stamp end
   out = add(normalize=false, [fade.out(duration=d, initial_metadata=a.metadata, a.source),
@@ -649,23 +667,30 @@ def t(a, b) =
 end
 music = if mode == "new" then metadata.map(update=true, strip=true, cross_stamps, q) else q end
 music = cross(duration=crossfade_duration(), persist_override=true, t, music)
-output.file(%wav, fallible=true, "/work/xchain-#{mode}.wav", music)
+output.file(%wav, fallible=true, "/work/xchain-#{scenario}-#{mode}.wav", music)
 clock.assign_new(sync="none", [music])
 thread.run(delay=25., fun() -> shutdown())
 LIQ
-  local m log bad=0
-  for m in old new; do
-    log=$(liq xchain.liq -e MODE=$m)
-    echo "== $m"
-    echo "$log" | grep -E "XCHAIN:|rror" || true
-    if [ "$m" = new ]; then
-      # Buffers sit one 0.02 s frame under the stamp at most.
-      echo "$log" | grep "XCHAIN:" | awk '{
-        for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
-        if (v["a_buf"] < v["stamp"] - 0.05 || v["a_buf"] > v["stamp"] + 0.05 || v["b_buf"] < v["stamp"] - 0.05 || v["b_buf"] > v["stamp"] + 0.05) bad++
-        n++
-      } END { exit !(n == 4 && bad == 0) }' || bad=1
-    fi
+  local scenario m log bad=0
+  for scenario in distinct repeated-file repeated-jingle metadata-replay; do
+    for m in old new; do
+      # The old distinct chain is the reference for the original buffer lag.
+      [ "$m" = new ] || [ "$scenario" = distinct ] || continue
+      echo "== $scenario ($m)"
+      log=$(liq xchain.liq -e MODE=$m -e SCENARIO=$scenario) || { echo "$log"; return 1; }
+      echo "$log" | grep -E "XCHAIN:|XCHAIN REPLAY:|rror" || true
+      if [ "$m" = new ]; then
+        # Buffers sit one 0.02 s frame under the stamp at most.
+        echo "$log" | grep "XCHAIN:" | awk '{
+          for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+          if (v["stamp"] != v["expected"] || v["a_buf"] < v["expected"] - 0.05 || v["a_buf"] > v["expected"] + 0.05 || v["b_buf"] < v["expected"] - 0.05 || v["b_buf"] > v["expected"] + 0.05) bad++
+          n++
+        } END { exit !(n == 4 && bad == 0) }' || bad=1
+        if [ "$scenario" = metadata-replay ]; then
+          [ "$(echo "$log" | grep -c 'XCHAIN REPLAY:')" = 5 ] || bad=1
+        fi
+      fi
+    done
   done
   [ "$bad" = 0 ] || { echo "XCHAIN FAIL — a transition did not buffer its outgoing track's own stamp"; return 1; }
   echo "XCHAIN PASS — every transition buffers its outgoing stamp on both sides"
