@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -88,5 +88,54 @@ test('missing, partial and corrupt station connections never fall back to shared
     // A real station may use the conventional container hostname too.
     writeFileSync(join(dir, 'setup-config.json'), JSON.stringify({ navidrome: { ...b, url: 'http://navidrome:4533' } }));
     assert.equal(boot(root).sync.needsSetup, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('malformed saved connection objects leave both setup readers unconfigured', () => {
+  const root = mkdtempSync(join(tmpdir(), 'subwave-station-nv-malformed-'));
+  try {
+    const dir = join(root, 'stations', 'main');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(root, 'stations', 'active.json'), '{"activeId":"main"}');
+    for (const navidrome of [
+      null, false, 42, 'invalid', [], [b],
+      { ...b, url: { host: 'music-b' } },
+      { ...b, user: ['station-b'] },
+      { ...b, pass: 42 },
+    ]) {
+      writeFileSync(join(dir, 'setup-config.json'), JSON.stringify({ navidrome }));
+      const result = boot(root);
+      assert.equal(result.status.needsSetup, true, JSON.stringify(navidrome));
+      assert.equal(result.sync.needsSetup, true, JSON.stringify(navidrome));
+      assert.equal(listStations(root, 'unused', true)[0].configured, false);
+      for (const value of Object.values(connection(result))) assert.equal(typeof value, 'string');
+    }
+    const repaired = boot(root, `await saveSetupConfig({ navidrome: ${JSON.stringify(b)} }); await loadNavidromeConfig();`);
+    assert.deepEqual(connection(repaired), b);
+    assert.equal(repaired.status.needsSetup, false);
+    assert.equal(repaired.sync.needsSetup, false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('duplicating a profile never imports its retained legacy mood library', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'subwave-station-legacy-library-'));
+  try {
+    const legacy = JSON.stringify({ tracks: {
+      'legacy-source-id': { title: 'Source song', artist: 'Source artist', moods: ['calm'], energy: 'low' },
+    } });
+    writeFileSync(join(root, 'moods.json'), legacy);
+    const duplicate = await createStation(root, { name: 'Copy', currentName: 'A', mode: 'duplicate', currentNavidrome: a });
+    activateStation(root, duplicate.id);
+    boot(root, `
+      const assert = await import('node:assert/strict');
+      const db = await import('./src/music/library-db.ts');
+      await db.open({ embeddingDim: 3 });
+      try {
+        assert.equal(db.getTrack('legacy-source-id'), null, 'duplicate must not inherit source library rows');
+        assert.equal(db.stats().mirrorTotal, 0);
+      } finally { db.close(); }
+    `);
+    assert.equal(existsSync(join(root, 'stations', duplicate.id, 'moods.json')), false);
+    assert.equal(readFileSync(join(root, 'stations', 'main', 'moods.json'), 'utf8'), legacy);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

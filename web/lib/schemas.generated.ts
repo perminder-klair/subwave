@@ -611,6 +611,13 @@ export interface SceneReference {
 // forwards partial patches to settings.update(), and z.object would strip
 // whatever the wizard learns to send next.
 
+// Persisted connection reads drop malformed fields so setup stays recoverable.
+export const savedNavidromeCredentialsSchema = z.object({
+  url: z.string().catch(''),
+  user: z.string().catch(''),
+  pass: z.string().catch(''),
+}).catch({ url: '', user: '', pass: '' });
+
 /**
  * One normalisation for Navidrome credentials: trim, and strip trailing slashes
  * off the url (`${url}/rest/ping` against a stored `…:4533/` double-slashes and

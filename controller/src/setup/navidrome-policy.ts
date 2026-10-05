@@ -1,12 +1,9 @@
 // Connection precedence shared by boot, maintenance workers and setup status.
 // Multi-station profiles never inherit installation-wide music credentials.
 import { envStr, envUrl } from '../util/env.js';
+import { savedNavidromeCredentialsSchema } from '../schemas/onboarding.js';
 
-export interface NavidromeCredentials {
-  url?: string;
-  user?: string;
-  pass?: string;
-}
+export type NavidromeCredentials = Partial<ReturnType<typeof savedNavidromeCredentialsSchema.parse>>;
 
 export function navidromeEnvLocks(allowEnv: boolean) {
   return {
@@ -16,7 +13,8 @@ export function navidromeEnvLocks(allowEnv: boolean) {
   };
 }
 
-export function resolveNavidrome(nv: NavidromeCredentials = {}, allowEnv = false) {
+export function resolveNavidrome(raw: unknown = {}, allowEnv = false) {
+  const nv = savedNavidromeCredentialsSchema.parse(raw);
   const locks = navidromeEnvLocks(allowEnv);
   return {
     url: locks.url ? envUrl('NAVIDROME_URL', 'http://navidrome:4533')
@@ -26,6 +24,7 @@ export function resolveNavidrome(nv: NavidromeCredentials = {}, allowEnv = false
   };
 }
 
-export function hasNavidrome(nv: NavidromeCredentials | undefined): boolean {
-  return !!nv && [nv.url, nv.user, nv.pass].every(v => typeof v === 'string' && v.trim() !== '');
+export function hasNavidrome(raw: unknown): boolean {
+  const nv = savedNavidromeCredentialsSchema.parse(raw);
+  return Object.values(nv).every(v => v.trim() !== '');
 }

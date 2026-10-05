@@ -28,7 +28,7 @@ export function parseActivePointer(raw: string): string | null {
 // Allowlist (default 'skip') so a future state file must be classified
 // deliberately before it rides along into a duplicate.
 const DUPLICATE_COPY = new Set([
-  'settings.json', 'secrets.env', 'moods.json',
+  'settings.json', 'secrets.env',
   'schedule.json', 'jingles.m3u', 'jingles.json', 'beds.json', 'bed.mp3',
   'voices', 'persona-avatars', 'jingles', 'beds', 'skills', 'sfx',
   'icecast_listener_auth.txt', 'themes', 'sfx.json',
