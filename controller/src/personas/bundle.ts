@@ -34,6 +34,7 @@ import { appVersion } from '../backup/zip.js';
 import { personaSchema } from '../schemas/persona.js';
 import { validatePersonasStrict } from '../settings/validate.js';
 import { installPersona, personaSlotError, type PersonaInstallResult } from './install.js';
+import { migrateImportedPersona } from './import-migration.js';
 import {
   BUNDLE_JINGLE_DIR,
   BUNDLE_MANIFEST_ENTRY,
@@ -225,7 +226,7 @@ async function applyPersonaBundleLocked(body: Buffer): Promise<BundleImportResul
   // The same schema the /settings save runs. A bundle from a newer station can
   // carry a field this one has never heard of; the schema drops it, exactly as
   // it does for a restored backup.
-  const parsed = personaSchema.safeParse({ ...raw, id: undefined, avatar: '' });
+  const parsed = personaSchema.safeParse(migrateImportedPersona({ ...raw, id: undefined, avatar: '' }));
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     return fail(400, `persona.json is not a valid persona: ${issue?.message || 'unknown error'}`);

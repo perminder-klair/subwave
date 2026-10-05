@@ -63,18 +63,12 @@ test('the cap is HALF the style budget — the derivation, not merely a smaller 
     'and half is still strictly below the whole budget, which is the original regression');
 });
 
-test('raising the cap past the budget would erase the character — pin the arithmetic', () => {
-  // If someone raises PERSONA_VOICE_STYLE_MAX toward VOICE_STYLE_MAX again, this
-  // fails before it ships, and the failure message states the actual consequence
-  // rather than "value changed".
-  const VOICE_STYLE_MAX = 300; // mirrored deliberately; asserted below against the real one
-  const remaining = (directive: number, station: string) =>
-    Math.max(0, VOICE_STYLE_MAX - directive - station.length);
-
-  assert.equal(remaining(300, STATION_NOTE), 0,
-    'this is what the old cap did: a full-length directive left nothing for the character');
-  assert.ok(remaining(PERSONA_VOICE_STYLE_MAX, STATION_NOTE) > 60,
-    'at the current cap the character excerpt must get a usable share, not a token one');
+test('a directive claiming the whole budget erases the character', async () => {
+  const budget = await voiceStyleBudget();
+  const directive = 'x'.repeat(budget);
+  const style = geminiStyle({ soul: SOUL, voiceStyle: directive, pronunciation: STATION_NOTE });
+  assert.equal(style, `${directive}. ${STATION_NOTE}`,
+    'a full-budget directive leaves nothing for the character, while the station note survives');
 });
 
 test('VOICE_STYLE_MAX is even, so half of it is a whole number', async () => {
