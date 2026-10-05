@@ -29,9 +29,9 @@ const SRC = readFileSync(
 // is per-request; neither is part of a sample's identity.
 const NOT_SAMPLE_IDENTITY = new Set(['adminFetch', 'signal']);
 
-function sourceFile(): ts.SourceFile {
+function sourceFile(source = SRC): ts.SourceFile {
   return ts.createSourceFile(
-    'VoicePreviewButton.tsx', SRC, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
+    'VoicePreviewButton.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX,
   );
 }
 
@@ -102,10 +102,10 @@ function rootName(expr: string): string {
  *
  *  `corrections` is an array, so listing the array itself re-runs the effect on
  *  every render and discards a sample the instant it finishes. The component
- *  therefore depends on `correctionsKey`, a useMemo over the joined pairs. An
+ *  therefore depends on `correctionsKey`, a useMemo over the serialized pairs. An
  *  allowlist is only honest if the derivation is checked too, so
  *  `every derived dependency is derived from the prop it stands for` verifies each
- *  entry is a useMemo whose dependency array is the prop it claims to cover. */
+ *  entry returns the key helper applied to the prop and depends on that prop. */
 const DERIVED: Record<string, string> = { corrections: 'correctionsKey' };
 
 /** Every request prop, mapped to the dep that covers it. */
@@ -202,33 +202,58 @@ test('editing the sample text discards the stale audio', () => {
     'text must invalidate the sample; without it the preview ignores the text it is previewing');
 });
 
+function assertDerivedMemo(source: string, prop: string, derived: string): void {
+  const declarations: ts.VariableDeclaration[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+      && node.name.text === derived) declarations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile(source));
+  assert.equal(declarations.length, 1, `expected one declaration of ${derived}`);
+  const memo = declarations[0]?.initializer;
+  assert.ok(memo && ts.isCallExpression(memo) && ts.isIdentifier(memo.expression)
+    && memo.expression.text === 'useMemo', `${derived} must be a useMemo`);
+  const [callback, deps] = memo.arguments;
+  assert.ok(deps && ts.isArrayLiteralExpression(deps), `${derived} must have a dependency array`);
+  assert.deepEqual(deps.elements.map((dep) => dep.getText()), [prop],
+    `${derived} must depend on [${prop}]`);
+  assert.ok(callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)),
+    `${derived} must have a memo callback`);
+
+  // Check the value the callback returns, not a helper name anywhere in its text.
+  // [corrections] alone also permits a constant key computed from [].
+  const body = callback.body;
+  const statement = ts.isBlock(body) && body.statements.length === 1 ? body.statements[0] : undefined;
+  let returned = ts.isBlock(body)
+    ? (statement && ts.isReturnStatement(statement) ? statement.expression : undefined)
+    : body;
+  while (returned && ts.isParenthesizedExpression(returned)) returned = returned.expression;
+  const helper = DERIVED_CALL[derived];
+  assert.ok(helper, `expected a key helper for ${derived}`);
+  assert.ok(returned && ts.isCallExpression(returned)
+    && ts.isIdentifier(returned.expression) && returned.expression.text === helper
+    && returned.arguments.length === 1
+    && returned.arguments[0] && ts.isIdentifier(returned.arguments[0])
+    && returned.arguments[0].text === prop,
+  `${derived} must return ${helper}(${prop})`);
+}
+
 test('every derived dependency is derived from the prop it stands for', () => {
-  // Without this the allowlist above is just a way to make the test pass: an
-  // unrelated useMemo named correctionsKey would satisfy it while the real array
-  // stayed untracked.
   for (const [prop, derived] of Object.entries(DERIVED)) {
     assert.ok(invalidationDeps().map(rootName).includes(derived),
       `${derived} is allowlisted for ${prop} but is not a dependency`);
-    // `\s*` rather than `\n\s*` before the dep array: what matters is that the
-    // memo depends on `[corrections]`, not that the call happens to be wrapped
-    // across lines. Requiring the line break made the assertion fail on a purely
-    // cosmetic refactor, which is how an assertion starts being worked around.
-    const memo = new RegExp(
-      `const\\s+${derived}\\s*=\\s*useMemo\\([\\s\\S]*?\\s*\\[${prop}\\][\\s\\S]*?\\);`,
-    ).exec(SRC);
-    assert.ok(memo,
-      `${derived} must be a useMemo whose dependency array is [${prop}] — otherwise the `
-      + `allowlist is covering ${prop} with something unrelated`);
-    // The key itself lives in its own module so its injectivity can be tested
-    // directly — an AST check cannot see a collision INSIDE the key function, which
-    // is the failure that shipped here once already. Assert the memo delegates to
-    // it rather than recomputing a key inline, so the two cannot drift apart.
-    if (DERIVED_CALL[derived]) {
-      assert.ok(memo[0].includes(DERIVED_CALL[derived]),
-        `${derived} must delegate to ${DERIVED_CALL[derived]}() so the tested key function is `
-          + 'the one the component uses');
-    }
+    assertDerivedMemo(SRC, prop, derived);
   }
+});
+
+test('the derived dependency guard rejects a key computed from an empty list', () => {
+  const mutated = SRC.replace('correctionsDependency(corrections)', 'correctionsDependency([])');
+  assert.notEqual(mutated, SRC, 'the mutation must replace the real key input');
+  assert.throws(
+    () => assertDerivedMemo(mutated, 'corrections', 'correctionsKey'),
+    /must return correctionsDependency\(corrections\)/,
+  );
 });
 
 /** Where each derived dependency's key function lives, keyed by the dep name. */
