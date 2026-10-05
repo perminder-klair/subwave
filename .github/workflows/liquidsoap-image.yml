@@ -9,7 +9,7 @@ on:
       - 'docker/broadcast-entrypoint.sh'
       - 'docker/icecast.xml.template'
       - 'liquidsoap/radio.liq'
-      - 'scripts/liquidsoap-image-smoke.py'
+      - 'scripts/liquidsoap-image-smoke*'
       - '.github/workflows/liquidsoap-image.yml'
   workflow_dispatch:
 
@@ -26,6 +26,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - name: Test smoke and soak progress validation
+        run: python3 scripts/liquidsoap-image-smoke.test.py -v
       - name: Install capture decoder
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Build broadcast (includes unifier regression)
@@ -45,5 +47,8 @@ jobs:
           name: liquidsoap-smoke-${{ matrix.runner }}
           path: |
             /tmp/subwave-liquidsoap-smoke-*/broadcast.log
+            /tmp/subwave-liquidsoap-smoke-*/radio.log
             /tmp/subwave-liquidsoap-smoke-*/stats.jsonl
+            /tmp/subwave-liquidsoap-smoke-*/intervals.jsonl
+            /tmp/subwave-liquidsoap-smoke-*/status.json
             /tmp/subwave-liquidsoap-smoke-*/capture.*

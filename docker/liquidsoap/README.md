@@ -49,14 +49,27 @@ docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:unifier .
 docker build -f docker/Dockerfile.aio --target liquidsoap-patched \
   -t subwave-test/aio-liquidsoap:unifier .
 python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier
+python3 scripts/liquidsoap-image-smoke.test.py -v
 ```
 
 The smoke test uses a unique container, an ephemeral loopback port, disposable
 state and generated tones. It runs the baked `radio.liq`, checks repeated track
 changes, both voice channels and a manual jingle, then decodes non-silent MP3,
 Opus, AAC and FLAC captures. It retains logs and per-minute Docker CPU/memory
-samples and removes its container on exit. It needs Docker, Python 3 and ffmpeg.
+samples and removes its container on exit, including SIGTERM. Containers default
+to 2 CPUs, 512 MiB, 128 processes and bounded Docker logs; `--cpus` and `--memory`
+can override those resource limits. It needs Docker, Python 3 and ffmpeg.
 It does not start a controller or connect to a music library.
+
+Music gets a 30-second startup allowance. Thereafter the generated tracks must
+produce at least three new starts in every 60-second interval, and the latest
+`now-playing.json` timestamp must remain at most 30 seconds old. Re-reading an
+unchanged marker never refreshes it. Future/backwards timestamps and markers
+for anything other than the generated music are rejected. Missing/partially
+written files may recover only while the last valid timestamp remains fresh.
+Healthy emergency audio cannot satisfy these music-progress checks. The
+deterministic CLI tests include the old false-pass case, normal progress and
+delayed startup, without needing Docker or sleeping in real time.
 
 The AIO target above validates its patched Liquidsoap stage, not the complete
 AIO application. Full AIO builds remain part of release validation.
@@ -64,10 +77,31 @@ AIO application. Full AIO builds remain part of release validation.
 Before production rollout, run a 24–48-hour soak with frequent transitions:
 
 ```sh
-python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier --seconds 86400
+python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier \
+  --seconds 86400 --evidence-dir /real-disk/new-soak-directory \
+  --test-source-sha "$(git rev-parse HEAD)" --image-source-sha BUILD_COMMIT
 ```
 
-Review the retained CPU samples for growth and logs for latency warnings.
+Use a durable supervisor such as a dedicated systemd service for a day-long
+run, with stdout/stderr redirected to a persistent log. Do not hold a shared
+build/test resource lock for the duration. Give that service a stop timeout and
+an independent cleanup action for the unique container name in `status.json`,
+so forced termination also removes only its disposable container.
+
+`--evidence-dir` must be new or empty. `status.json` is atomically updated with
+the immutable image ID, supplied image/test commit SHAs, runner SHA-256, UTC
+start/deadline, resource limits, progress heartbeat, final result and cleanup
+status. `stats.jsonl` retains per-minute CPU/memory samples plus track counts
+and marker age; `intervals.jsonl` records successful music-progress intervals.
+Both Docker and Liquidsoap's file diagnostics are retained and checked during
+the run, so a warning cannot disappear unnoticed when Docker logs rotate.
+Timestamped clock catch-up warnings inside the same 30-second startup allowance
+are retained in `status.json` as `startup_latency_warnings`. Any later warning,
+or one whose timestamp cannot be parsed, fails the run. The container uses UTC
+for these comparisons. This allows the observed stock and patched cold-boot
+catch-up without excusing latency during steady operation.
+
+Review the retained CPU samples for growth and both logs for latency warnings.
 Passing the short smoke test or structural regression does not establish
 long-uptime production behaviour. Deploy the tested broadcast image during a
 quiet period, retain the previous image for rollback and monitor CPU over the
