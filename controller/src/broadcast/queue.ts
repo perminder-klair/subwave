@@ -3220,7 +3220,7 @@ class Queue {
   // never an explicit press.
   //
   // Deliberately NOT the sfx path, which is where this request first arrived:
-  // an effect is amplified to 0.7 and mixed UNDER the programme with only a
+  // an effect is mixed UNDER the programme at its own level with only a
   // light duck, so anything past a stinger's length drones on over the music —
   // which is exactly what SFX_MAX_SEC exists to prevent, and why raising that
   // cap would not have given anyone a usable announcement. A jingle instead
