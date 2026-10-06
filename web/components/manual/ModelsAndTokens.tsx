@@ -44,10 +44,25 @@ export default function ModelsAndTokens() {
             </a>
           </li>
           <li>
-            <strong>OpenAI-compatible</strong> — any self-hosted server that speaks the
-            OpenAI API (llama.cpp, vLLM, LM Studio); you supply its URL.
+            <strong>OpenAI-compatible</strong> — any server that speaks the OpenAI
+            Chat Completions API. Local mode supports llama.cpp, vLLM and LM
+            Studio. Hosted mode uses native structured output and leaves local
+            sampling extensions off the request.
           </li>
         </ul>
+        <p>
+          For <strong>Atlas Cloud</strong>, choose OpenAI-compatible in Admin &rarr; LLM,
+          press <strong>Use Atlas Cloud</strong>, enter a Bearer token and choose a
+          model from its catalog. For <strong>Azure OpenAI v1</strong>, press
+          <strong> Use Azure OpenAI v1</strong>, enter your resource URL ending in
+          <code> /openai/v1</code>, add an <code>api-key</code> custom request header,
+          and enter your chat deployment name as the model. Azure embedding
+          deployments have their own names: set that name in Library tagger,
+          with an embedding URL and header if they use a different resource.
+          These presets use the same OpenAI-compatible provider; older Azure
+          deployment URLs with dated <code>api-version</code> paths are outside
+          this v1 setup.
+        </p>
         <p>
           <strong>The provider is part of the choice.</strong> The same model can behave
           differently through different routes, because each provider translates tools and

@@ -28,9 +28,10 @@ const embedCache = new Map();
 function embeddingCfg() {
   const s: any = settings.get().embedding || {};
   const llm = llmCfg();
+  const provider = s.provider || llm.provider || 'ollama';
   return {
     enabled: s.enabled !== false,
-    provider: s.provider || llm.provider || 'ollama',
+    provider,
     model: s.model || '',
     // Key precedence: the saved settings field wins, then a dedicated
     // `EMBEDDING_API_KEY` env var (the env path most installs use -- keys live in
@@ -43,6 +44,8 @@ function embeddingCfg() {
     apiKey: s.apiKey || process.env.EMBEDDING_API_KEY || llm.apiKey || '',
     ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
     baseUrl: s.baseUrl || llm.baseUrl || '',
+    headers: Object.keys(s.headers || {}).length ? s.headers
+      : provider === llm.provider ? (llm.headers || {}) : {},
   };
 }
 
@@ -151,6 +154,7 @@ export interface EmbeddingCfg {
   apiKey: string;
   ollamaUrl: string;
   baseUrl: string;
+  headers?: Record<string, string>;
 }
 
 export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
@@ -164,6 +168,7 @@ export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): Embe
     apiKey: overrides.apiKey || base.apiKey,
     ollamaUrl: overrides.ollamaUrl || base.ollamaUrl,
     baseUrl: overrides.baseUrl || base.baseUrl,
+    headers: overrides.headers ?? base.headers,
   };
 }
 
@@ -208,6 +213,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
         baseURL,
         apiKey: cfg.apiKey || 'unused',
         name: cfg.provider,
+        ...(Object.keys(cfg.headers || {}).length ? { headers: cfg.headers } : {}),
       });
       return provider.textEmbeddingModel(id);
     }
@@ -266,7 +272,8 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
 export function embeddingModel() {
   const cfg = resolveEmbeddingCfg();
   const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
-  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}`;
+  const headerSig = Object.entries(cfg.headers || {}).sort(([a], [b]) => a.localeCompare(b));
+  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}|${JSON.stringify(headerSig)}`;
 
   const cached = embedCache.get(sig);
   if (cached) return cached;

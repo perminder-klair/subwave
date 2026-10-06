@@ -185,9 +185,19 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
   return (provider && CAPS[provider]) || DEFAULT_CAPS;
 }
 
+// Hosted OpenAI-compatible APIs can provide native structured output and do not
+// understand llama.cpp's chat_template_kwargs / repeat_penalty extensions.
+// The historical local mode remains the default for existing stations.
+function capabilitiesForCfg(cfg: any): ProviderCapabilities {
+  if (cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted') {
+    return DEFAULT_CAPS;
+  }
+  return capabilitiesFor(cfg?.provider);
+}
+
 // True when the active provider needs the tool-call structured-output path.
 export function needsToolCallObject(cfg: any): boolean {
-  return capabilitiesFor(cfg?.provider).objectStrategy === 'tool';
+  return capabilitiesForCfg(cfg).objectStrategy === 'tool';
 }
 
 // Free discovery steps this leg gets before `done` is forced.
@@ -206,7 +216,8 @@ export function discoveryStepsFor(cfg: any): number {
   if (Number.isFinite(override as number) && (override as number) > 0) {
     return clampDiscoverySteps(override as number);
   }
-  const declared = capabilitiesFor(cfg?.provider).discoverySteps;
+  const declared = cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted'
+    ? NATIVE_DISCOVERY_STEPS : capabilitiesForCfg(cfg).discoverySteps;
   if (!Number.isFinite(declared as number)) return DISCOVERY_STEPS_MIN;
   return clampDiscoverySteps(declared as number);
 }
@@ -267,7 +278,7 @@ export function googleSafetyOptions(cfg: any): Record<string, unknown> {
 // when the provider dropped it. Currently false everywhere; kept as the
 // chokepoint for when the Ollama per-call channel is restored.
 export function repeatPenaltyApplies(cfg: any): boolean {
-  return capabilitiesFor(cfg?.provider).repeatPenaltyApplies;
+  return capabilitiesForCfg(cfg).repeatPenaltyApplies;
 }
 
 // The repeat_penalty a body-injection provider will send this leg, or null.
@@ -275,7 +286,7 @@ export function repeatPenaltyApplies(cfg: any): boolean {
 // dropped and the tool-loop agent can run away repeating a token block until the
 // output cap, never emitting `done`. 1.0 or below is a no-op and is skipped.
 export function appliedRepeatPenalty(cfg: any): number | null {
-  if (!capabilitiesFor(cfg?.provider).samplingViaBody) return null;
+  if (!capabilitiesForCfg(cfg).samplingViaBody) return null;
   const rp = Number(cfg?.repeatPenalty);
   return Number.isFinite(rp) && rp > 1.0 ? rp : null;
 }
@@ -317,7 +328,7 @@ export function reasoningFor(
   cfg: any,
   { forceNoThink = false }: { forceNoThink?: boolean } = {},
 ): ReasoningLevel | undefined {
-  return capabilitiesFor(cfg?.provider).reasoningLevel({
+  return capabilitiesForCfg(cfg).reasoningLevel({
     modelId: cfg?.model || '',
     reasoning: cfg?.reasoning === true,
     forceNoThink,

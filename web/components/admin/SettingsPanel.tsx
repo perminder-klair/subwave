@@ -493,6 +493,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           return legacy ? { [prov]: legacy } : {};
         })(),
         headers: headerRows(v.llm?.headers),
+        compatibleMode: v.llm?.compatibleMode === 'hosted' ? 'hosted' : 'local',
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -529,6 +530,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             return legacy ? { [prov]: legacy } : {};
           })(),
           headers: headerRows(v.llm?.fallback?.headers),
+          compatibleMode: v.llm?.fallback?.compatibleMode === 'hosted' ? 'hosted' : 'local',
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
@@ -544,6 +546,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         enabled: v.embedding?.enabled ?? true,
         provider: v.embedding?.provider ?? '',
         model: v.embedding?.model ?? '',
+        headers: headerRows(v.embedding?.headers),
         providerBaseUrls: (() => {
           const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
           if (stored && typeof stored === 'object') return { ...stored };

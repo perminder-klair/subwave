@@ -408,6 +408,7 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
+    compatibleMode: 'local' as 'local' | 'hosted',
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -524,6 +525,7 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
+      compatibleMode: 'local' as 'local' | 'hosted',
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
@@ -555,6 +557,7 @@ export const DEFAULTS = {
     baseUrl: '',          // deprecated single slot — migration source only
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty → inherit settings.llm.apiKey
+    headers: {} as Record<string, string>, // embedding-only headers; empty → inherit matching chat leg
     seedCount: 0,         // 0 → auto (autoSeedCount: ~4% of the library, 200–2500)
     // Confidence is topSim x coverage — a product of two sub-1 terms (see
     // tag-propagator.ts) — so the original 0.6 gates rejected even strong matches

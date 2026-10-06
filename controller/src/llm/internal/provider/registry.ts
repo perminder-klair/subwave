@@ -165,7 +165,8 @@ export const OPENROUTER_APP_HEADERS = {
 // accept any non-empty key, so fall back to a placeholder.
 function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
   // debugFetch is the inner transport, so the capture is the body as sent.
-  const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
+  const fetchImpl = cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted'
+    ? debugFetch : openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const headers = customHeaders(cfg);
   const provider = createOpenAI({
     baseURL,
@@ -228,10 +229,11 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   // suppresses per-call. Keyed into the sig so the variants don't collide.
   const caps = capabilitiesFor(cfg.provider);
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
-  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
+  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true
+    && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}`;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;

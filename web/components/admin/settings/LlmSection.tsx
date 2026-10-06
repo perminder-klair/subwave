@@ -89,7 +89,7 @@ function GeminiSafetyEditor({ value, onChange, idPrefix }: {
 // Values already on file arrive redacted as the literal 'set' (getRedacted),
 // and posting that back keeps the stored value — so an untouched row shows as
 // "on file" and is left alone rather than being re-typed to survive a save.
-function HeaderRowsEditor({
+export function HeaderRowsEditor({
   rows, onChange, disabled, idPrefix,
 }: {
   rows: LlmHeaderRow[];
@@ -160,6 +160,7 @@ interface LlmSectionProps extends SectionProps {
   refresh: () => void;
 }
 export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
+  const [resetCompatKey, setResetCompatKey] = useState(false);
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
   const [primaryKeyTest, setPrimaryKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
@@ -354,6 +355,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         repeatPenalty: form.llm.repeatPenalty,
         providerBaseUrls: form.llm.providerBaseUrls,
         headers: headerMap(form.llm.headers),
+        compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
@@ -368,7 +370,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         maxOutputTokens: form.llm.maxOutputTokens,
         discoverySteps: form.llm.discoverySteps,
         geminiSafety: { ...form.llm.geminiSafety },
-        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
+        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && (compatKeyInput.trim() || resetCompatKey)
           ? { apiKey: compatKeyInput.trim() }
           : {}),
         fallback: {
@@ -382,6 +384,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           geminiSafety: { ...form.llm.fallback.geminiSafety },
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           headers: headerMap(form.llm.fallback.headers),
+          compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
@@ -410,6 +413,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     if (INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()) {
       setCompatKeyInput('');
     }
+    setResetCompatKey(false);
     if (INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
       setCompatFallbackKeyInput('');
     }
@@ -514,6 +518,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           {form.llm.provider === 'openai-compatible' && (
             <div className="field">
               <Label>Server base URL</Label>
+              <div className="flex flex-wrap gap-2">
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': 'https://api.atlascloud.ai/v1' } } })); }}>
+                  Use Atlas Cloud
+                </Btn>
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': '' } } })); }}>
+                  Use Azure OpenAI v1
+                </Btn>
+              </div>
               <Input
                 value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -523,10 +535,28 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
-                including the <code>/v1</code> suffix. Must be reachable from the
-                controller container. Use the host’s LAN or Tailscale IP, not
-                <code>127.0.0.1</code>.
+                Include the <code>/v1</code> suffix. For Azure, enter
+                <code> https://YOUR-RESOURCE.openai.azure.com/openai/v1</code>,
+                then add an <code>api-key</code> custom header below and enter the
+                deployment name as the model. The Atlas preset fills its URL;
+                enter your key in the Bearer token field. The URL must be
+                reachable from the controller container. A preset clears the
+                previous custom headers and saved compatible-provider Bearer
+                token on Save; primary and backup share that token.
+              </div>
+            </div>
+          )}
+
+          {form.llm.provider === 'openai-compatible' && (
+            <div className="field">
+              <Label>API behavior</Label>
+              <Seg value={form.llm.compatibleMode}
+                options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as 'local' | 'hosted' } }))} />
+              <div className="field-hint">
+                Hosted uses native structured output and leaves sampling and reasoning
+                controls to the service. Local keeps the llama.cpp/vLLM request
+                adjustments. Existing stations stay on Local.
               </div>
             </div>
           )}
@@ -620,7 +650,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
+          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'local')) && (
             <div className="field">
               <Label>Repetition penalty (repeat_penalty)</Label>
               <Input
@@ -881,6 +911,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup API behavior</Label>
+                  <Seg value={form.llm.fallback.compatibleMode}
+                    options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as 'local' | 'hosted' } } }))} />
+                </div>
+              )}
+
               {form.llm.fallback.provider === 'locca' && (
                 <div className="field">
                   <Label>Backup locca server base URL</Label>
@@ -952,7 +991,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>
               )}
 
-              {(form.llm.fallback.provider === 'openai-compatible' || form.llm.fallback.provider === 'locca') && (
+              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'local')) && (
                 <div className="field">
                   <Label>Repetition penalty (repeat_penalty)</Label>
                   <Input
@@ -1093,8 +1132,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                    Whether the backup model may emit a reasoning step. Off by
-                    default, like the primary.
+                    {form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'hosted'
+                      ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
+                      : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
                 </div>
                 <Seg
@@ -1119,12 +1159,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
-              When off, thinking-capable models skip their internal reasoning
+              {form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection.'
+                : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
               DeepSeek). DJ scripts and structured picks are short, so thinking
               mostly just adds latency and cost; leave it off unless your model
               needs it. On Claude and DeepSeek, structured/tool calls always skip
-              thinking anyway, so the toggle only affects free-text lines there.
+              thinking anyway, so the toggle only affects free-text lines there.</>}
             </div>
           </div>
           <Seg
