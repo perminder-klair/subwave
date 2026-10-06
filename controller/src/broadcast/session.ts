@@ -15,7 +15,7 @@ import { nextShowBoundaryMs } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
-export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
+export type SessionContext = Awaited<ReturnType<typeof getFullContext>> & { episodeOccurrenceId?: string | null };
 
 export interface HostSpeechStamp {
   readonly showKey: string;
@@ -55,12 +55,17 @@ interface ProgrammePlan {
   [k: string]: unknown;
 }
 
-export interface ProgrammeState {
+interface ProgrammeEpisode {
   status: 'pending' | 'ok' | 'fallback';
   preparationSubject?: string;
+  preparationOccurrence?: { id: string; endsAt: number };
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;
   introAiredAt: string | null;
+}
+
+export interface ProgrammeState extends ProgrammeEpisode {
+  interruptedEpisodes?: ProgrammeEpisode[];
 }
 
 // Stamped on a hard roll so a caller can air the two-voice mic-pass.
@@ -74,6 +79,8 @@ export interface RolledFrom {
   at?: number;
   /** A single-host acknowledgement for two adjacent scheduled shows. */
   sameHost?: boolean;
+  /** Saved source data for the outgoing sign-off, never its raw speech. */
+  episodeEditorial?: string;
 }
 
 // A mic-pass armed while the final outgoing track is on air. Look-ahead is
@@ -116,6 +123,9 @@ interface Session {
   rolledFrom?: RolledFrom | null;
   boundaryHandoff?: BoundaryHandoff | null;
   hostRevision?: number;
+  /** The occurrence which opened this session; same-show takeovers may differ. */
+  episodeOccurrenceId?: string | null;
+  episodeEditorial?: string;
 }
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
@@ -399,6 +409,8 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     programme: null,
     messages: [],
     hostRevision: 0,
+    episodeOccurrenceId: ctx.episodeOccurrenceId,
+    episodeEditorial: ctx.episodeEditorial,
   };
   // Debounced persist only. An immediate unawaited write here could land after
   // maybeRoll's awaited post-stampRolledFrom persist() and leave a stale file.
@@ -459,6 +471,7 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   await end();
   const next = start(ctx, buildHandoff(prev));
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
+  carryInterruptedProgramme(next, prev.programme, contextDate(ctx));
   if (boundaryProgramme) next.programme = boundaryProgramme;
   stampRolledFrom(next, prev);
   if (handoffAlreadyCovered) next.handoffAired = true;
@@ -490,6 +503,7 @@ function stampRolledFrom(next: Session, prev: Session) {
         showName: prev?.show?.name ?? null,   // null for an auto block
         at: Date.now(),
         sameHost: sameHostShowChange,
+        episodeEditorial: prev.episodeEditorial || '',
       }
     : null;
 }
@@ -645,6 +659,7 @@ export function armBoundaryHandoff(
     } : null,
     aired: false,
     at: Date.now(),
+    episodeEditorial: _session.episodeEditorial || '',
   };
   schedulePersist();
   return true;
@@ -723,6 +738,45 @@ export function boundaryHandoffStatus() {
 
 export function getProgramme(): ProgrammeState | null {
   return _session?.programme || null;
+}
+
+export function unexpiredProgrammeEpisodes(programme: ProgrammeState, at: number): ProgrammeEpisode[] {
+  const { interruptedEpisodes = [], ...current } = programme;
+  const retained = new Map<string, ProgrammeEpisode>();
+  for (const episode of [...interruptedEpisodes, current]) {
+    const occurrence = episode.preparationOccurrence;
+    if (occurrence && occurrence.endsAt > at) retained.set(occurrence.id, episode);
+  }
+  return [...retained.values()].slice(-16);
+}
+
+// Boundary-prepared and continuous-cap objects retain ownership. A fresh
+// session can still resume any unexpired occurrence after a roll or restart.
+function carryInterruptedProgramme(next: Session, previous: ProgrammeState | null | undefined, at: Date) {
+  if (next.programme || !previous) return;
+  const retained = unexpiredProgrammeEpisodes(previous, at.getTime());
+  if (retained.length) next.programme = { status: 'pending', plan: null, beats: {}, introAiredAt: null, interruptedEpisodes: retained };
+}
+
+// Called only for the live preparation occurrence, so look-ahead research
+// cannot overwrite the outgoing presenter's source snapshot.
+export function rememberEpisodeEditorial(ctx: SessionContext) {
+  if (!_session || _session.key !== sessionKeyFor(ctx)) return;
+  if (_session.episodeEditorial === ctx.episodeEditorial) return;
+  _session.episodeEditorial = ctx.episodeEditorial;
+  const handoff = _session.boundaryHandoff;
+  if (handoff && handoff.targetKey !== _session.key && !handoff.aired) handoff.episodeEditorial = ctx.episodeEditorial;
+  schedulePersist();
+}
+
+export function rememberOpeningOccurrence(occurrence: { id: string; endsAt: number }) {
+  if (!_session) return;
+  const legacyProgramme = _session.programme && !_session.programme.preparationOccurrence && !_session.programme.interruptedEpisodes
+    ? _session.programme : null;
+  const missing = !_session.episodeOccurrenceId || legacyProgramme;
+  _session.episodeOccurrenceId ??= occurrence.id;
+  if (legacyProgramme) legacyProgramme.preparationOccurrence = occurrence;
+  if (missing) schedulePersist();
 }
 
 export function attachProgramme(programme: ProgrammeState) {
@@ -850,7 +904,8 @@ export async function recover(ctx: SessionContext): Promise<Session> {
           && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)) {
         const next = start(ctx, buildHandoff(stored as Session));
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
-        next.programme = boundary.programme ?? null;
+        carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
+        if (boundary.programme) next.programme = boundary.programme;
         if (boundary.aired) {
           stampRolledFrom(next, stored as Session);
           next.handoffAired = true;
@@ -867,6 +922,10 @@ export async function recover(ctx: SessionContext): Promise<Session> {
       if (stored?.id) {
         stored.endedAt = stored.endedAt || new Date().toISOString();
         await archive(stored);
+        const next = start(ctx);
+        carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
+        await persist();
+        return next;
       }
     } catch {}
   }

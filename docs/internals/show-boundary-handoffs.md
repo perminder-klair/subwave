@@ -129,6 +129,11 @@ while that intro is pending, the old runner yields to the newer track.
   starts with clean prompt memory. If the incoming show is a programme, its plan
   is prepared onto the boundary record and transferred at the real roll so the
   greeting carries the incoming angle and durably replaces the standalone intro.
+- Episode research for the outgoing half is saved on the session and copied into
+  the handoff record. Both ordinary post-roll and armed handoffs recover that
+  source snapshot after restart. Preparing an incoming occurrence cannot replace
+  the live outgoing snapshot. A legacy record without source data omits it rather
+  than reconstructing the outgoing episode from a roll timestamp.
 - Handoff suppression applies only inside the scheduled-talk scope. Manual
   operator speech remains immediate, and listener-request intros remain governed
   by their request/session rules rather than by the handoff lifecycle.

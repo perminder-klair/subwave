@@ -93,13 +93,28 @@ TTS engine routing, personas, guests, programmes and the policy switches
 
 `prepareEpisodeContext` supplies a bounded `episodeEditorial` from the durable
 show preparation result. Programme plans, solo and guest beats, picker links,
-and incoming greetings use that snapshot. The outgoing sign-off reads the prior
-occurrence instead of inheriting the incoming subject. This source data is not a
-session turn and does not carry outgoing speech into the incoming session.
+and incoming greetings use that snapshot. The live session saves its outgoing
+editorial data, and both ordinary and armed handoff records persist that snapshot
+for the sign-off. A delayed roll or a cancelled takeover cannot resolve it through
+the incoming schedule. Legacy handoffs without a snapshot omit episode research.
+This source data is not a session turn and does not carry outgoing speech into
+the incoming session.
 The snapshot includes a bounded list of resolved library records, so an empty
 web search still supplies track and album facts. The programme state records the
-prepared subject. If usable preparation arrives after an ordinary plan was
-created, the producer replaces that plan while retaining every aired beat stamp.
+prepared subject and occurrence ID. If usable preparation arrives after an
+ordinary plan was created within that occurrence, the producer replaces the plan
+while retaining every aired beat stamp. A new occurrence starts with fresh beats
+even if its subject name repeats. Legacy programme state infers its occurrence
+from the session's original context before a same-show takeover can overwrite it.
+
+Unexpired interrupted episodes are stored with the programme, capped at sixteen.
+A session roll or fresh-session recovery with no owned incoming programme carries
+these snapshots into a fresh pending object. `fillPlan` restores a matching occurrence before buying a
+plan, so cancelling or expiring a takeover resumes the scheduled episode's plan
+and consumed beats across rolls and restarts. Boundary-prepared programmes retain
+precedence; a continuous cap keeps the owned programme object. Delayed producer
+completion may attach only while that object is still owned by the live session
+or its boundary record.
 
 Preparation runs with station voice off too because it can constrain music. It
 executes one configured data tool, behind its existing eight-second deadline,

@@ -83,6 +83,30 @@ test('catalogue failure persists the selected result and restart retries it with
   assert.match(degraded.editorial, /Do not claim exclusive/);
 });
 
+test('exhausted catalogue retries remain degraded after restart and allow an explicit retry', async () => {
+  const f = fixture('exhausted-catalogue');
+  f.catalogue(true);
+  const owner = createShowPreparation(f.options);
+  assert.equal((await owner.ensure({ context })).status.kind, 'degraded');
+  f.move(60_001);
+  assert.equal((await owner.ensure({ context })).status.kind, 'degraded');
+  assert.deepEqual(f.counts(), { calls: 1, sourceCalls: 2 });
+
+  const restarted = createShowPreparation(f.options);
+  await restarted.recover();
+  const status = restarted.read({ context }).status;
+  assert.equal(status.kind, 'degraded', 'the editor must keep offering Retry catalogue');
+  assert.ok(status.kind !== 'unconfigured');
+  assert.equal(status.subject, 'Artist');
+  assert.equal(status.reason, 'Catalogue unavailable');
+  f.catalogue(false);
+  f.move(60_001);
+  assert.equal((await restarted.ensure({ context })).status.kind, 'degraded');
+  assert.deepEqual(f.counts(), { calls: 1, sourceCalls: 2 }, 'restart cannot reset automatic retry limits');
+  assert.equal((await restarted.retry({ context })).status.kind, 'ready');
+  assert.deepEqual(f.counts(), { calls: 1, sourceCalls: 3 }, 'explicit retry keeps the accepted subject');
+});
+
 test('invalid data fails open with bounded retries and permits explicit retry before acceptance', async () => {
   const f = fixture('invalid'); f.tool(true);
   const owner = createShowPreparation(f.options);

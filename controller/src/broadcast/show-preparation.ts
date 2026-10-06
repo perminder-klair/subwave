@@ -9,7 +9,7 @@ import { skillEligible } from '../skills/eligibility.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { logEvent } from '../observability/events.js';
 import { resolveShowOccurrence } from './show-occurrence.js';
-import type { SessionContext } from './session.js';
+import { getSession, rememberOpeningOccurrence, rememberEpisodeEditorial, type SessionContext } from './session.js';
 import { resolveArtistEpisodeSource, type ArtistEpisodeSource } from '../music/episode-source.js';
 import {
   preparationResultSchema, preparationStoreSchema,
@@ -93,7 +93,7 @@ export function createShowPreparation(deps: PreparationDeps) {
     const cached = views.get(snapshot.occurrence.id);
     if (cached) return cached;
     return {
-      status: { kind: record.kind === 'ready' ? 'selected' : record.kind, occurrence: record.occurrence, skill: record.skill,
+      status: { kind: record.kind === 'selected' && record.reason !== null ? 'degraded' : record.kind === 'ready' ? 'selected' : record.kind, occurrence: record.occurrence, skill: record.skill,
         subject: record.kind === 'failed' ? null : record.result.subject, reason: record.kind === 'ready' ? null : record.reason },
       music: null, editorial: '',
     };
@@ -181,7 +181,8 @@ export function createShowPreparation(deps: PreparationDeps) {
     views.delete(snapshot.occurrence.id);
     return ensure({ context });
   };
-  return { recover, read, ensure, retry };
+  const occurrence = ({ context }: { context: SessionContext }) => deps.snapshot(context)?.occurrence ?? null;
+  return { recover, read, ensure, retry, occurrence };
 }
 
 const occurrenceCache: Array<{ key: string; occurrence: PreparationOccurrence }> = [];
@@ -250,7 +251,16 @@ export function preparationIdentity(context: SessionContext): string {
 export async function prepareEpisodeContext(context: SessionContext): Promise<SessionContext> {
   try {
     const view = await showPreparation.ensure({ context });
-    return { ...context, episodeEditorial: view.editorial };
+    const occurrence = showPreparation.occurrence({ context });
+    const owner = getSession();
+    if (owner && (!owner.episodeOccurrenceId || (owner.programme && !owner.programme.preparationOccurrence))) {
+      const opening = showPreparation.occurrence({ context: { ...context, at: owner.ctxAt ?? owner.startedAt } });
+      if (opening && opening.showId === owner.show?.id) rememberOpeningOccurrence({ id: opening.id, endsAt: opening.endsAt });
+    }
+    const prepared = { ...context, episodeEditorial: view.editorial, episodeOccurrenceId: occurrence?.id ?? null };
+    const live = showPreparation.occurrence({ context: { ...context, at: new Date(Date.now()).toISOString() } });
+    if (occurrence?.id === live?.id) rememberEpisodeEditorial(prepared);
+    return prepared;
   } catch (error) {
     logEvent('show.preparation', { stage: 'storage', error: errorMessage(error) });
     return { ...context, episodeEditorial: '' };

@@ -1189,9 +1189,7 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
     ? { ...speechContext, episodeEditorial: incomingEditorial }
     : speechContext;
 
-  const outgoingAt = isBoundaryHandoff ? pending.boundaryAt : pending.at;
-  const outgoingContext = boundarySpeechContext({ ...ctx, at: undefined }, typeof outgoingAt === 'number' ? outgoingAt - 1 : outgoingAt);
-  const outgoingEditorial = outgoingContext?.at ? showPreparation.read({ context: outgoingContext }).editorial : '';
+  const outgoingEditorial = pending.episodeEditorial || '';
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
     // A boundary handoff is generated while the outgoing session is deliberately

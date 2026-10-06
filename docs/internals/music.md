@@ -91,6 +91,10 @@ intersects mirrored candidates with the artist index so track-only combined
 credits cannot masquerade as an indexed artist with albums. Catalogue retries
 reuse the durable result; the admin retry can recheck a failed source without
 re-executing its tool.
+An initially selected result whose catalogue failed recovers as `degraded`, with
+its saved reason and editor retry action. Restart preserves the two-attempt
+automatic catalogue limit; an explicit retry can recover the same subject after
+that limit is exhausted.
 Its `ArtistEpisodeSource` travels whole through `PickerScope`; every discovery tool
 intersects with it before recording candidates. `episodeArtistTracks` is the
 in-catalogue source. The pool picker and auto-playlist draw directly from the same
