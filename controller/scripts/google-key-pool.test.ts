@@ -15,7 +15,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,6 +30,8 @@ import {
   getLastFailure,
   holdRemainingMs,
   isHeld,
+  GOOGLE_KEY_MAX,
+  poolKeyProblem,
   invalidatePool,
   parsePool,
   sanitizeName,
@@ -1123,7 +1125,7 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
   assert.match(routes, /case GOOGLE_KEYS_ENV:\s*\n\s*case GOOGLE_KEY_ENV:/,
     'the pool variable must reach the Google probe branch');
 
-  const core = fs.readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const core = readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
   assert.match(core, /GOOGLE_GENERATIVE_AI_API_KEY: !!process\.env\.GOOGLE_GENERATIVE_AI_API_KEY \|\| poolConfigured\(\)/,
     'a pool-only station must still report a Google key on file, or Test stays disabled');
 });
@@ -1494,4 +1496,44 @@ test('a 429 then a 200 on the same key does clear it — the fix is not over-bro
     globalThis.fetch = realFetch;
     setPool();
   }
+});
+
+// ─── reserved separators ─────────────────────────────────────────────────────
+// The bug: `/add` checked that a key was non-empty and within the length bound,
+// but the pool format's own separators were unchecked. `parsePool` splits on a
+// comma and `serializePool` joins on one, so pasting `AIzaX,AIzaY` persisted TWO
+// credentials from one paste — the operator was told one key was added and got a
+// pool of two, one of which they never configured. A colon was worse: it is the
+// key/name boundary, so `AIzaX:junk` persisted a key truncated at the colon,
+// which reports a fingerprint, looks configured, and 401s forever.
+
+test('a key carrying a reserved separator is refused, not silently reshaped', () => {
+  const comma = poolKeyProblem(`${K1},${K2}`);
+  assert.match(String(comma), /comma/, 'a comma must be named, since it becomes a second credential');
+  const colon = poolKeyProblem(`${K1}:Free tier`);
+  assert.match(String(colon), /colon/, 'a colon must be named, since it truncates the key');
+  assert.equal(poolKeyProblem(''), 'key is required');
+  assert.equal(poolKeyProblem(K1), null, 'a real key must pass');
+  assert.match(String(poolKeyProblem('x'.repeat(GOOGLE_KEY_MAX + 1))), /at most/);
+});
+
+test('the add endpoint validates separators before it persists anything', async () => {
+  // Driven through the ROUTE, not the helper: the helper existing is not the
+  // contract, the endpoint calling it is. A comma key must not reach
+  // serializePool, where it would split into two entries.
+  const core = readFileSync(new URL('../src/routes/settings/core.ts', import.meta.url), 'utf8');
+  const handler = core.slice(core.indexOf("google-key-pool/add'"), core.indexOf("google-key-pool/move'"));
+  assert.match(handler, /poolKeyProblem\(trimmed\)/, 'the add endpoint must validate reserved separators');
+  assert.ok(
+    handler.indexOf('poolKeyProblem(trimmed)') < handler.indexOf('serializePool(entries)'),
+    'validation must happen BEFORE the pool is serialised',
+  );
+});
+
+test('a comma in one pasted key never becomes two credentials', () => {
+  // The end-to-end shape, at the parse level: what the operator would have got.
+  setPool(`${K1},${K2}`);
+  assert.equal(poolSize(), 2, 'this is the bug being pinned — one paste, two slots');
+  // And the fix at the boundary means that shape can no longer be WRITTEN.
+  assert.ok(poolKeyProblem(`${K1},${K2}`), 'so the entry point refuses it');
 });

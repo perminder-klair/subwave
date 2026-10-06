@@ -9,7 +9,7 @@ import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.js';
-import { invalidatePool, poolConfigured, poolSize, poolStatus } from '../../util/google-key-pool.js';
+import { invalidatePool, poolConfigured, poolKeyProblem, poolSize, poolStatus } from '../../util/google-key-pool.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
@@ -29,7 +29,6 @@ import { briefLlmError } from './llm.js';
 import {
   bumpPoolRevision,
   entryId,
-  GOOGLE_KEY_MAX,
   GOOGLE_KEYS_ENV,
   GOOGLE_KEY_ENV,
   GOOGLE_POOL_MAX,
@@ -388,10 +387,14 @@ router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) =
 router.post('/settings/google-key-pool/add', requireAdmin, async (req, res) => {
   const { key, name } = (req.body || {}) as { key?: unknown; name?: unknown };
   const trimmed = String(key ?? '').trim();
-  if (!trimmed) return res.status(400).json({ error: 'key is required' });
-  if (trimmed.length > GOOGLE_KEY_MAX) {
-    return res.status(400).json({ error: `key must be at most ${GOOGLE_KEY_MAX} characters` });
-  }
+  // Reserved separators are refused, not repaired. `parsePool` splits on a comma
+  // and takes the first colon as the key/name boundary, so a pasted key carrying
+  // either persists as something the operator did not ask for — a comma as a
+  // SECOND credential, a colon as a truncated key that 401s forever. Length and
+  // emptiness were already checked; this is the same check for the two characters
+  // the format cannot represent.
+  const problem = poolKeyProblem(trimmed);
+  if (problem) return res.status(400).json({ error: problem });
   if (name != null && typeof name !== 'string') {
     return res.status(400).json({ error: 'name must be a string' });
   }

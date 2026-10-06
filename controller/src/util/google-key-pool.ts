@@ -120,6 +120,35 @@ export function sanitizeName(raw: unknown): string {
     .slice(0, GOOGLE_KEY_NAME_MAX);
 }
 
+/** The characters this format reserves, and cannot escape.
+ *
+ *  A comma separates ENTRIES and the first colon separates a key from its name,
+ *  so neither can appear inside a key. Neither can occur in a real Google key —
+ *  `AIza` plus URL-safe base64 — but a pasted value can carry one, and the
+ *  failure mode is silent and bad in both directions:
+ *
+ *    `AIzaX,AIzaY`  persists as TWO credentials from one paste. The operator is
+ *      told one key was added and gets a pool of two, one of which they never
+ *      configured and cannot explain.
+ *    `AIzaX:junk`   persists as a key TRUNCATED at the colon plus a label. The
+ *      pool reports a fingerprint, looks configured, and every request 401s.
+ *
+ *  So the entry point refuses both instead of quietly repairing them. Repairing
+ *  was the alternative and it is worse: a silently mangled credential is
+ *  indistinguishable from a working one until Google rejects it. */
+export function poolKeyProblem(raw: unknown): string | null {
+  const key = String(raw ?? '');
+  if (!key) return 'key is required';
+  if (key.length > GOOGLE_KEY_MAX) return `key must be at most ${GOOGLE_KEY_MAX} characters`;
+  if (key.includes(',')) {
+    return 'a key cannot contain a comma — it separates keys in the pool, so it would be saved as two';
+  }
+  if (key.includes(':')) {
+    return 'a key cannot contain a colon — it separates a key from its name, so it would be saved truncated';
+  }
+  return null;
+}
+
 /** Inverse of parsePool. Entries with no name serialise as a bare key, so a
  *  pool nobody has labelled still reads as a plain list of keys by hand. */
 export function serializePool(entries: PoolEntry[]): string {
