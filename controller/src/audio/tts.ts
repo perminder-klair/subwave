@@ -79,10 +79,23 @@ function fallbackSlot(): RescueSlot | null {
   return configuredSlot(settings.get().tts?.fallback, ENGINES);
 }
 
-// A slot for an engine chosen by the system, not the operator: no voice
-// override, so the engine speaks with its own default.
+// A slot for an engine the system picked, with no operator voice of its own.
+// The persona's own voice STILL applies on this slot — this is the ordinary
+// resolution result, not a rescue.
 function plainSlot(engine: string): RescueSlot {
   return { engine, personaTts: null };
+}
+
+// A slot that deliberately speaks with the STATION's credentials: the engine
+// was substituted because the persona's own was unusable, so reattaching the
+// persona's override here would send the render back to the provider the
+// availability probe just rejected.
+//
+// This is NOT `plainSlot`. That one is `resolveEngine`'s normal return, where
+// the persona's voice is supposed to ride along — marking it as a station
+// default silently dropped every persona's own voice (#1719).
+function stationSlot(engine: string): RescueSlot {
+  return { engine, personaTts: null, stationDefault: true };
 }
 
 // What a render is aimed at: the engine, plus (for `cloud` only) the provider.
@@ -123,7 +136,7 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
   } else {
     chosen = tts.defaultEngine || 'piper';   // jingle / fallback
   }
-  if (!ENGINES.includes(chosen)) return plainSlot('piper');
+  if (!ENGINES.includes(chosen)) return stationSlot('piper');
   // Known-unavailable engine: route to the operator's configured fallback if it
   // can speak, else their saved default engine, else Piper. The default engine
   // branch is deliberately NOT probed; the runtime chain in speak() catches it.
@@ -138,7 +151,7 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
     ) {
       return configured;
     }
-    if (tts.defaultEngine && tts.defaultEngine !== chosen) return plainSlot(tts.defaultEngine);
+    if (tts.defaultEngine && tts.defaultEngine !== chosen) return stationSlot(tts.defaultEngine);
     // Same engine id as the unusable primary, which only a different cloud
     // provider can survive (#1345). Probed, unlike the branch above.
     if (
@@ -146,9 +159,9 @@ function resolveEngine(kind: string, personaTts: any): RescueSlot {
       && rerouted(tts.defaultEngine, null, chosen, personaTts)
       && engineUsable(tts.defaultEngine, null)
     ) {
-      return plainSlot(tts.defaultEngine);
+      return stationSlot(tts.defaultEngine);
     }
-    return plainSlot('piper');
+    return stationSlot('piper');
   }
   return plainSlot(chosen);
 }
@@ -468,7 +481,13 @@ export async function speak(
   const primary = primarySlot.engine;
   // A pre-flight reroute onto the operator's configured fallback carries THAT
   // slot's voice; an ordinary resolve leaves the persona's own override.
-  const primaryPersonaTts = primarySlot.personaTts ?? personaTts;
+  // A station-default slot means "speak with the engine's own credentials", and
+  // reattaching the persona's override here is what defeated the same-engine
+  // cloud hop: `plainSlot('cloud')` carries `null`, `?? personaTts` cannot tell
+  // that apart from the configured-slot case, and the render went back to the
+  // cloud provider the availability probe had just rejected (#1719).
+  const primaryPersonaTts = primarySlot.personaTts
+    ?? (primarySlot.stationDefault ? null : personaTts);
   const primaryFellBack = rerouted(requested, personaTts, primary, primaryPersonaTts);
   // Engine-native bracket cues reach the expressive primary untouched; a
   // local/remote rescue would speak them literally, so sanitize only that.
@@ -610,8 +629,14 @@ export function describeRouting() {
     voice = slot.personaTts.voice || null;
     provider = engine === 'cloud' ? (slot.personaTts.cloudProvider || null) : null;
   } else if (engine === 'cloud') {
-    voice = personaTts?.engine === 'cloud' ? personaTts.voice : tts.cloud?.voice;
-    provider = (personaTts?.engine === 'cloud' ? personaTts.cloudProvider : tts.cloud?.provider) as any;
+    // `personaCloud` has to respect stationDefault as well. speak() sends a
+    // station-default cloud hop with the STATION's credentials, so deriving the
+    // reported voice/provider from the persona here would have /debug naming the
+    // provider the availability probe just rejected while a different one
+    // actually speaks (#1793).
+    const personaCloud = personaTts?.engine === 'cloud' && !slot.stationDefault;
+    voice = personaCloud ? personaTts.voice : tts.cloud?.voice;
+    provider = (personaCloud ? personaTts.cloudProvider : tts.cloud?.provider) as any;
   } else if (engine === 'kokoro') {
     voice = (personaTts?.engine === 'kokoro' && personaTts.voice)
       ? personaTts.voice
@@ -656,7 +681,12 @@ export function describeRouting() {
       voice: voice || null,
       provider: provider || null,
       // Provider-aware like speak()'s: a cloud→cloud reroute is still a fallback.
-      fellBack: rerouted(requested, personaTts, engine, slot.personaTts ?? personaTts),
+      // Same station-default distinction as speak(): a hardcoded rung's `null`
+      // must not be backfilled with the persona's own override.
+      fellBack: rerouted(
+        requested, personaTts, engine,
+        slot.personaTts ?? (slot.stationDefault ? null : personaTts),
+      ),
       warning,
     },
     fallback: {
