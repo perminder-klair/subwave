@@ -11,6 +11,7 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
+import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
 import { nextShowBoundaryMs, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
 
@@ -129,6 +130,9 @@ interface Session {
   /** The occurrence which opened this session; same-show takeovers may differ. */
   episodeOccurrenceId?: string | null;
   episodeEditorial?: string;
+  /** The outgoing show's recent booth tail (#1690). Display only: read solely
+   *  by GET /session, never by prompt memory or the agent window (#1479). */
+  boothCarry?: BoothCarry | null;
 }
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
@@ -471,6 +475,8 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
+  // Display-only booth tail for GET /session (#1690); never prompt memory.
+  next.boothCarry = snapshotBoothCarry(prev, next, Date.now());
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
   carryInterruptedProgramme(next, prev.programme, contextDate(ctx));
   // A continuous 4h cap is still the same episode: keep its plan and aired
@@ -938,6 +944,7 @@ export async function recover(ctx: SessionContext): Promise<Session> {
           && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
           && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
+        next.boothCarry = snapshotBoothCarry(stored as Session, next, Date.now());
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         if (boundary.programme) next.programme = boundary.programme;
@@ -959,6 +966,8 @@ export async function recover(ctx: SessionContext): Promise<Session> {
         stored.endedAt = stored.endedAt || new Date().toISOString();
         await archive(stored);
         const next = start(ctx);
+        // The lookback keeps a long outage from carrying stale turns (#1690).
+        next.boothCarry = snapshotBoothCarry(stored as Session, next, Date.now());
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         await persist();
         return next;

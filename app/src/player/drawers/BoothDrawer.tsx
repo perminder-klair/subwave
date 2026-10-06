@@ -1,17 +1,21 @@
 // Live booth transcript with All / DJ / Tracks filters. System turns are
-// operator-facing and never shown.
+// operator-facing and never shown, except the show-boundary separator that
+// follows the previous show's dimmed tail after a hard roll (#1690).
 
 import { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import {
+  isCarriedTurn,
   isDjTurn,
+  isShowBoundary,
+  showBoundaryLabel,
   turnClass,
   turnKey,
   turnText,
   type TurnDisplayClass,
 } from '@/lib/sessionFeed';
 import type { SessionTurn } from '@/lib/types';
-import { fmtClock, type StationLocale } from '@/lib/format';
+import { fmtClock, fmtClockMinute, type StationLocale } from '@/lib/format';
 import { useTheme } from '@/theme/ThemeContext';
 
 type FilterId = 'all' | 'dj' | 'tracks';
@@ -36,9 +40,12 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
 
   const filtered = useMemo<SessionTurn[]>(() => {
     if (!items?.length) return [];
-    const ordered = [...items].filter((t) => turnClass(t) !== 'system').reverse();
+    const ordered = [...items]
+      .filter((t) => turnClass(t) !== 'system' || isShowBoundary(t))
+      .reverse();
     if (filter === 'all') return ordered;
-    return ordered.filter((t) => (filter === 'dj' ? isDjTurn(t) : turnClass(t) === 'track'));
+    return ordered.filter((t) =>
+      isShowBoundary(t) || (filter === 'dj' ? isDjTurn(t) : turnClass(t) === 'track'));
   }, [items, filter]);
 
   const classColor = (cls: TurnDisplayClass) => (cls === 'voice' ? colors.accent : colors.muted);
@@ -84,6 +91,24 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
       ) : null}
 
       {filtered.map((turn, i) => {
+        if (isShowBoundary(turn)) {
+          const label = showBoundaryLabel(turn, (at) => fmtClockMinute(at, timezone, locale));
+          return (
+            <View
+              key={turnKey(turn, i)}
+              accessibilityRole="text"
+              accessibilityLabel={`Show boundary: ${label}`}
+              className="flex-row items-center"
+              style={{ gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
+            >
+              <View style={{ flex: 1, height: 1, backgroundColor: colors.softBorder }} />
+              <Text className="font-mono text-muted" style={{ fontSize: 10, letterSpacing: 2 }}>
+                {label}
+              </Text>
+              <View style={{ flex: 1, height: 1, backgroundColor: colors.softBorder }} />
+            </View>
+          );
+        }
         const cls = turnClass(turn);
         const isVoice = cls === 'voice';
         const text = turnText(turn);
@@ -91,6 +116,8 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
           <View
             key={turnKey(turn, i)}
             style={{
+              // The previous show's carried tail is dimmed (#1690).
+              opacity: isCarriedTurn(turn) ? 0.6 : 1,
               paddingVertical: 12,
               borderBottomWidth: 1,
               borderBottomColor: colors.softBorder,

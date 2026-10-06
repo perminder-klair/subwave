@@ -20,6 +20,31 @@ export const isDjTurn = (turn: SessionTurn | null | undefined): boolean => {
   return c === 'voice' || c === 'dj';
 };
 
+// After a hard roll GET /session briefly leads with the outgoing show's tail
+// (`meta.carried: true`) and one `kind: 'show-boundary'` separator (#1690).
+export function isShowBoundary(turn: SessionTurn | null | undefined): boolean {
+  return turn?.role === 'event' && turn.kind === 'show-boundary';
+}
+
+export function isCarriedTurn(turn: SessionTurn | null | undefined): boolean {
+  return turn?.meta?.carried === true;
+}
+
+// Separator text: the boundary moment in the client's clock style plus the
+// incoming show (or host). Falls back to the server-rendered `text`.
+export function showBoundaryLabel(
+  turn: SessionTurn | null | undefined,
+  clock: (at: string) => string,
+): string {
+  const b = turn?.meta?.boundary as { at?: unknown; show?: unknown; persona?: unknown } | undefined;
+  const at = typeof b?.at === 'string' && Number.isFinite(Date.parse(b.at)) ? b.at : null;
+  if (!at) return turn?.text || '';
+  const name = (typeof b?.show === 'string' && b.show)
+    || (typeof b?.persona === 'string' && b.persona)
+    || 'On air';
+  return `${clock(at)} · ${name}`;
+}
+
 export function turnKey(turn: SessionTurn | null | undefined, i: number): string {
   return `${turn?.t || 'x'}-${i}`;
 }
@@ -34,6 +59,7 @@ export function turnText(turn: SessionTurn | null | undefined): string {
 // written at the previous track's start, so its meta.trackId is the NEXT
 // track and turns for other tracks are skipped (#546). Voice turns carry no
 // trackId, so an aired back-announce wins over this track's pick reason.
+// A carried turn belongs to the previous show (#1690) and never qualifies.
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,
@@ -43,6 +69,7 @@ export function selectThinkingTurn(
     const turn = feed[i];
     const cls = turnClass(turn);
     if (!turn?.text || (cls !== 'voice' && cls !== 'dj')) continue;
+    if (isCarriedTurn(turn)) continue;
     const trackId = turn.meta?.trackId as string | undefined;
     if (cls === 'dj' && trackId && trackId !== currentTrackId) continue;
     return turn;

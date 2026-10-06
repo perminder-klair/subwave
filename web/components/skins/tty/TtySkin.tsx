@@ -263,12 +263,18 @@ export default function TtySkin(_props: SkinProps) {
                 {booth.length === 0 && (
                   <div className="text-[12px] text-muted">▸ waiting for the booth…</div>
                 )}
-                {booth.map((line, i) => (
-                  <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
+                {/* After a show boundary the previous show's tail is dimmed and
+                    voiced under its own host, below a rule (#1690). */}
+                {booth.map((line, i) => line.boundary ? (
+                  <div key={`${line.t ?? i}-${i}`} role="separator" className="truncate text-[12px] leading-relaxed text-muted">
+                    ──── {line.text} ────
+                  </div>
+                ) : (
+                  <div key={`${line.t ?? i}-${i}`} className={cn('text-[12px] leading-relaxed break-words', line.carried && 'opacity-60')}>
                     <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
                     {line.kind === 'voice' ? (
                       <>
-                        <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
+                        <span className="font-bold text-[var(--accent)]">{(line.speaker ?? djName).toUpperCase()} ●</span>{' '}
                         <span>“{line.text}”</span>
                       </>
                     ) : (

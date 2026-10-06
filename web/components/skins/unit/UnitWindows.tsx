@@ -435,10 +435,22 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
               {tail.length === 0 && (
                 <div className={CAPTION}>the log fills as the session runs</div>
               )}
-              {tail.map((line, i) => (
+              {/* Newest first: the previous show's dimmed tail sits below the
+                  boundary rule after a hard roll (#1690). */}
+              {tail.map((line, i) => line.boundary ? (
                 <div
                   key={`${line.t ?? i}-${i}`}
-                  className="grid grid-cols-[58px_72px_minmax(0,1fr)] items-baseline gap-3.5"
+                  role="separator"
+                  className="flex items-center gap-3 font-mono text-[10px] tracking-[0.16em] text-[#7c7669]"
+                >
+                  <span className="h-px flex-1 bg-white/12" aria-hidden="true" />
+                  <span className="truncate">{line.text}</span>
+                  <span className="h-px flex-1 bg-white/12" aria-hidden="true" />
+                </div>
+              ) : (
+                <div
+                  key={`${line.t ?? i}-${i}`}
+                  className={cn('grid grid-cols-[58px_72px_minmax(0,1fr)] items-baseline gap-3.5', line.carried && 'opacity-60')}
                 >
                   <span className={cn(styles.doto, 'text-[13px] text-[#7c7669]')}>
                     {turnClock(line.t, timezone, stationLocale)}

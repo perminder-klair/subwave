@@ -42,6 +42,26 @@ export function fmtClock(
   }
 }
 
+// HH:MM (no seconds) in the station's zone; mirrors web's fmtClockMinute.
+// Used for the booth's show-boundary separator (#1690). '' when unparseable.
+export function fmtClockMinute(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  const stationLocale = normalizeStationLocale(locale);
+  try {
+    return new Date(t).toLocaleTimeString(stationLocale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...stationClockOptions(stationLocale),
+      ...(tz ? { timeZone: tz } : {}),
+    });
+  } catch {
+    return '';
+  }
+}
+
 export function relTime(t: string | number | Date): string {
   const diff = (Date.now() - new Date(t).getTime()) / 1000;
   if (diff < 60) return `${Math.max(1, Math.floor(diff))}s`;
