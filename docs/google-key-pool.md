@@ -113,6 +113,12 @@ key is moved or removed. A Google key can't contain a colon, so the first colon
 is the split point and a name may contain colons of its own. Commas are stripped
 from names when they save, since they separate entries.
 
+**A key itself cannot contain a comma or a colon.** If you paste one that does,
+the add endpoint refuses it with a clear message rather than silently saving it
+as two credentials (comma) or a truncated key that 401s forever (colon). Neither
+can occur in a real Google key — `AIza` plus URL-safe base64 — so nothing
+legitimate is turned away.
+
 The single `GOOGLE_GENERATIVE_AI_API_KEY` is **untouched by this feature**. It is
 not read as a one-key pool: a station that has never set the plural variable
 keeps exactly the single-key behaviour it had before — no holds, no rotation, no
@@ -172,8 +178,16 @@ over.
 
 ## What the pool covers today
 
-**The Gemini LLM leg** — the `google` provider, including its embeddings and the
-model list used by discovery.
+**The Gemini LLM leg — both the primary and the fallback provider.**
+
+`googleKeyFetch` is installed on every `google` client the registry builds, and
+it consults one process-wide pool. So a pool is the station's only Google
+credential for **both** legs: a fallback Google key typed in the admin UI while a
+pool exists is stored, reported as saved, and then never read by anything — the
+same as the primary field was before it was guarded. The fallback field is now
+greyed out and says so, exactly like the primary.
+
+It also covers **Google embeddings and the model list used by discovery**.
 
 It does **not** yet cover Gemini TTS. The native Gemini TTS engine (#1718) is a
 separate PR, and it will read this same pool when it lands; until then a
