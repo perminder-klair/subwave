@@ -73,11 +73,12 @@ test('legacy recovery in next week\'s same show starts a fresh programme and arc
   assert.deepEqual(JSON.parse(readFileSync(join(config.session.dir, `${old.id}.json`), 'utf8')).programme, episode());
   await settings.update({ tts: { enabled: false } });
   await programme.ensurePlan(ctx(friday));
-  assert.ok(next.programme);
-  assert.equal(next.programme.status, 'pending');
-  assert.equal(next.programme.plan, null);
-  assert.deepEqual(next.programme.beats, {});
-  assert.equal(next.programme.introAiredAt, null);
+  const planned = session.getProgramme();
+  assert.ok(planned);
+  assert.equal(planned.status, 'pending');
+  assert.equal(planned.plan, null);
+  assert.deepEqual(planned.beats, {});
+  assert.equal(planned.introAiredAt, null);
 });
 
 test('a missed one-hour gap starts the next same-key airing even below the cap', async () => {
@@ -217,9 +218,15 @@ test('an old aired boundary record cannot restore a later airing\'s programme on
   assert.equal((await session.recover(ctx(friday))).programme, null);
 });
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
 function deferredPlan() {
-  const started = Promise.withResolvers<void>();
-  const result = Promise.withResolvers<Awaited<ReturnType<typeof generateProgrammePlan>>>();
+  const started = deferred<void>();
+  const result = deferred<Awaited<ReturnType<typeof generateProgrammePlan>>>();
   return { started, result, generateProgrammePlan: async () => { started.resolve(); return result.promise; } };
 }
 

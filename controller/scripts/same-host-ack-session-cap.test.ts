@@ -22,6 +22,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
+const stationContext = await import('../src/context.js');
 
 after(() => rmSync(root, { recursive: true, force: true }));
 
@@ -33,11 +34,13 @@ const DAWN = { id: 's_dawn', name: 'Sunrise On The Beach' };
 function context(show: { id: string; name: string }, atMs: number): SessionContext {
   return {
     at: new Date(atMs).toISOString(),
-    time: { period: 'night', vibe: 'night', mood: 'calm' },
+    time: { ...stationContext.getTimeContext(new Date(atMs)), period: 'night', vibe: 'night', mood: 'calm' },
     weather: null, festival: null, dominantMood: 'calm',
-    date: {}, clock: {}, listeners: 1,
+    date: stationContext.getDateContext(new Date(atMs)),
+    clock: stationContext.getClockContext(new Date(atMs)),
+    listeners: { count: 1 }, showHandover: null,
     activeShow: { ...show, topic: '', moods: ['calm'] },
-  } as SessionContext;
+  };
 }
 
 async function setup() {
