@@ -182,10 +182,31 @@ export function poolKeys(): string[] {
   return poolEntries().map(e => e.key);
 }
 
+let poolEpochCounter = 0;
+
 /** Drop the memo. The settings save path calls this after writing a new pool so
- *  the change is visible without waiting out the TTL. */
+ *  the change is visible without waiting out the TTL.
+ *
+ *  It also bumps the pool EPOCH, and that is the load-bearing half. The provider
+ *  registry caches built clients by configuration, and the pool was not part of
+ *  that configuration — so an added, removed or replaced key left the cached
+ *  client holding the credential it was BUILT with. The pooled transport
+ *  re-stamps the key on every request, so a stale construction key is invisible
+ *  while a pool exists; the moment the pool is emptied the transport stops
+ *  re-stamping, the SDK falls back to the construction value, and a key the
+ *  operator deleted minutes ago is what still goes on the wire. Keying the cache
+ *  on this epoch is the only way a cached client can be guaranteed to match the
+ *  pool it was built from.
+ */
 export function invalidatePool(): void {
   poolCache = null;
+  poolEpochCounter += 1;
+}
+
+/** Monotonic marker for "the configured pool is not the one this client was
+ *  built from". Zero on a fresh process; bumped by `invalidatePool()`. */
+export function poolEpoch(): number {
+  return poolEpochCounter;
 }
 
 export function poolSize(): number {

@@ -1294,3 +1294,98 @@ test('the recorded failure keeps the headers a classifier reads', () => {
   assert.equal(kept['x-trace-id'], undefined,
     'tracing metadata must not ride along in a response the SDK treats as real');
 });
+
+// ─── a cached client cannot outlive the pool ─────────────────────────────────
+// The bug: `createGoogleGenerativeAI` captures `apiKey` at CONSTRUCTION, and the
+// client cache was keyed on operator configuration that did not include the pool.
+// So a client built while key A was live kept A after A was removed from the pool.
+// It stayed invisible while a pool existed — googleKeyFetch re-stamps the header
+// on every request — and surfaced the moment the pool was emptied and the
+// transport stopped re-stamping: a deleted credential going out on the wire.
+
+test('a cached client does not keep using a key the pool no longer contains', async () => {
+  const { generateText } = await import('ai');
+  const { languageModel, __clearClientCacheForTest } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  __clearClientCacheForTest();
+  const seen: string[] = [];
+  globalThis.fetch = (async (_url: any, init: any) => {
+    seen.push(new Headers(init?.headers || {}).get('x-goog-api-key') || '');
+    return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  const cfg = () => ({ provider: 'google', model: 'gemini-3.5-flash-lite', apiKey: '', baseUrl: '', ollamaUrl: '', reasoning: false, numCtx: undefined, repeatPenalty: undefined, headers: undefined, compatibleMode: undefined });
+  const call = async () => {
+    await generateText({ model: languageModel(cfg() as any), prompt: 'hi', maxOutputTokens: 8 }).catch(() => {});
+  };
+
+  try {
+    setPool(K1);
+    await call();
+    assert.ok(seen.includes(K1), `expected K1 to be used while configured, saw ${JSON.stringify(seen)}`);
+
+    // The operator removes K1 and the pool ends up empty. Whatever happens next,
+    // K1 must not be what the station sends.
+    setPool();
+    seen.length = 0;
+    await call();
+
+    assert.ok(
+      !seen.includes(K1),
+      `a removed key was still sent after the pool changed: ${JSON.stringify(seen)}`,
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a client can be built while every key is held, and works once the hold lapses', async () => {
+  const { generateText } = await import('ai');
+  const { languageModel, __clearClientCacheForTest } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let status = 200;
+  globalThis.fetch = (async () => new Response(
+    status === 200
+      ? JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] })
+      : JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '30s' }] } }),
+    { status, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+
+  const cfg = { provider: 'google', model: 'gemini-3.5-flash-lite', apiKey: '', baseUrl: '', ollamaUrl: '', reasoning: false, numCtx: undefined, repeatPenalty: undefined, headers: undefined, compatibleMode: undefined };
+  try {
+    setPool(K1);
+    // K1 429s and is parked for 30s.
+    status = 429;
+    await generateText({ model: languageModel(cfg as any), prompt: 'hi', maxOutputTokens: 8 }).catch(() => {});
+    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+
+    // Clear the cache HERE, not at the top. The call above already built and
+    // cached a client — while K1 was still live, so its construction key was
+    // perfectly good — and the signature is unchanged by a hold. Without this the
+    // `languageModel` call below is a cache hit and `googleApiKeyForSdk` is never
+    // reached, which is exactly how this test passed against broken code.
+    __clearClientCacheForTest();
+
+    // The whole pool is held. Building a client must still WORK: `currentKey()`
+    // is empty here, and falling straight through to the legacy singular
+    // variable left a pool-only station with no construction credential at all.
+    // The SDK then throws LoadAPIKeyError BEFORE the fetch runs — measured: zero
+    // fetch calls — so googleKeyFetch never gets to replay the held-pool 429 and
+    // the station can never notice the hold lapsed. A wait it cannot come out of.
+    const model = languageModel(cfg as any);
+    assert.ok(model, 'a client must be constructible while the pool is fully held');
+
+    // And once the hold lapses the SAME client works — which is the reviewer's
+    // "even after the holds expire" half.
+    __expireHoldsForTest();
+    status = 200;
+    const out = await generateText({ model, prompt: 'hi', maxOutputTokens: 8 });
+    assert.ok(out.text, 'the client built during the hold must serve once the hold lapses');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});

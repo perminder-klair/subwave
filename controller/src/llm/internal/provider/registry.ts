@@ -13,10 +13,12 @@ import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import {
   currentKey,
+  currentKeyOrHead,
   fingerprint,
   getLastFailure,
   GOOGLE_KEY_ENV,
   poolConfigured,
+  poolEpoch,
   recordLastFailure,
   reportKeyFailure,
   reportKeySuccess,
@@ -98,12 +100,29 @@ export function debugFetch(url: any, init: any) {
  * placeholder would be sent as the key whenever the pool has nothing live.
  */
 export function googleApiKeyForSdk(cfg: any): string | undefined {
-  // Order matters, and the last element is deliberately the LEGACY variable:
-  // a station that has never configured a pool still needs a construction key,
-  // and `undefined` here lets the SDK read that variable itself exactly as it
-  // always did. A pool-only station has the plural set and the singular unset,
-  // which is the case the SDK cannot help with — hence the pool lookup first.
-  return cfg.apiKey || currentKey() || process.env[GOOGLE_KEY_ENV] || undefined;
+  // Order matters, and the pool is consulted for TWO different reasons, so the
+  // two middle entries are not interchangeable.
+  //
+  // `cfg.apiKey` first: it is the operator's explicitly configured single key,
+  // and it is the only credential a legacy station has.
+  //
+  // Then the pool, and here the distinction is the whole fix. `currentKey()` is
+  // the LIVE key, and it is deliberately empty when every key is held. Falling
+  // straight through to the legacy variable in that state meant a pool-only
+  // station — no singular variable at all — had nothing to construct a client
+  // with, so `createGoogleGenerativeAI` threw LoadAPIKeyError and every
+  // generation failed while the pool was merely WAITING. That is the
+  // "creating a client while every key is held leaves it failing" case: the
+  // station's ability to recover was gated on a client that could not be built,
+  // so nothing ever reached the code that would have noticed the hold lapsed.
+  // `currentKeyOrHead()` hands back a real configured credential instead, which
+  // the per-request transport re-stamps the moment a live key exists again — so
+  // the hold becomes a wait rather than a failure.
+  //
+  // The legacy variable stays last: it is the only credential a station with no
+  // pool has, and `undefined` here is what lets the SDK read it itself exactly as
+  // it always did.
+  return cfg.apiKey || currentKey() || currentKeyOrHead() || process.env[GOOGLE_KEY_ENV] || undefined;
 }
 
 export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
@@ -365,7 +384,21 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
+  // The POOL EPOCH is part of the signature, for the google provider only.
+  //
+  // Every other field here is operator configuration, so a cache hit provably
+  // describes the settings it was built from. The Google pool was not in that
+  // set, which is the hole: `createGoogleGenerativeAI` captures its `apiKey` at
+  // CONSTRUCTION, so a client built while key A was live kept sending A after A
+  // was removed — invisibly, because googleKeyFetch re-stamps the header on every
+  // request and the cached value only surfaces once the pool stops re-stamping
+  // (an emptied pool falls through to the SDK's own transport, which uses the
+  // construction value). Keying on the epoch means every pool write yields a
+  // different client, so a cached client can never outlive the pool it came from.
+  // Scoped to google so an unrelated provider's client is not rebuilt when the
+  // operator edits a Google key.
+  const poolSig = cfg.provider === 'google' ? `|gp${poolEpoch()}` : '';
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}${poolSig}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -461,6 +494,23 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
 
   clientCache.set(sig, model);
   return model;
+}
+
+/**
+ * Test seam: forget every built client.
+ *
+ * The cache is module-level and outlives any single test, so a test that builds
+ * a Google client can be handed the one an EARLIER test built — same
+ * configuration, same signature — and then assert against a client whose
+ * construction it never triggered. That is how "a client can be built while every
+ * key is held" passed against the broken code: the cached client short-circuited
+ * `googleApiKeyForSdk` entirely, so the branch under test was never reached.
+ *
+ * A distinct model id would dodge it too, but invisibly and only for that test.
+ * Clearing the cache states the precondition outright.
+ */
+export function __clearClientCacheForTest(): void {
+  clientCache.clear();
 }
 
 // Log-friendly label for the active model, used by record() and /debug.
