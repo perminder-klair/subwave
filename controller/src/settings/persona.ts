@@ -252,6 +252,7 @@ function resolveShowShape(show, s) {
     // optional segmentSkill pins the feature beat to one capability kind.
     programme: show.programme === true,
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
+    preparationSkill: typeof show.preparationSkill === 'string' ? show.preparationSkill : '',
   };
 }
 

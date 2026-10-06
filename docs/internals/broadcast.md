@@ -88,3 +88,21 @@ TTS engine routing, personas, guests, programmes and the policy switches
   to the engine's own reading, i.e. the pre-change behaviour — and `during
   1990's final month` still reads as a decade. Operator corrections remain the
   override for any case the rule gets wrong.
+
+## Episode preparation research
+
+`prepareEpisodeContext` supplies a bounded `episodeEditorial` from the durable
+show preparation result. Programme plans, solo and guest beats, picker links,
+and incoming greetings use that snapshot. The outgoing sign-off reads the prior
+occurrence instead of inheriting the incoming subject. This source data is not a
+session turn and does not carry outgoing speech into the incoming session.
+The snapshot includes a bounded list of resolved library records, so an empty
+web search still supplies track and album facts. The programme state records the
+prepared subject. If usable preparation arrives after an ordinary plan was
+created, the producer replaces that plan while retaining every aired beat stamp.
+
+Preparation runs with station voice off too because it can constrain music. It
+executes one configured data tool, behind its existing eight-second deadline,
+and bounds catalogue lookup to twelve seconds. Purpose-aware `skillEligible`
+reserves the configured skill from automatic speech while retaining the enabled
+and host checks for data preparation. Manual commands remain exempt.

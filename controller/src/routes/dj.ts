@@ -1,3 +1,4 @@
+import { showPreparation } from '../broadcast/show-preparation.js';
 // Admin-gated DJ command center behind /admin/dash. Manual triggers are an
 // operator override: they bypass the shouldFire frequency gate and cooldowns.
 import express from 'express';
@@ -109,6 +110,21 @@ const SAY_TEXT_MAX = 500;
 // Duck level: 'dj-speak' → say.txt (heavy duck, solo DJ moment);
 // 'link' → intro.txt (light duck, voice over the track).
 const SAY_KINDS = ['dj-speak', 'link'];
+
+router.get('/dj/show-preparation', requireAdmin, async (_req, res) => {
+  const context = await getFullContext();
+  res.json({ status: showPreparation.read({ context }).status });
+});
+
+router.post('/dj/show-preparation/retry', requireAdmin, async (_req, res) => {
+  try {
+    const context = await getFullContext();
+    const view = await showPreparation.retry({ context });
+    res.json({ status: view.status });
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
 
 router.get('/dj/skills', requireAdmin, (req, res) => {
   res.json({ skills: skillCatalog() });

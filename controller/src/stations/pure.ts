@@ -35,6 +35,7 @@ const DUPLICATE_COPY = new Set([
 ]);
 
 export function duplicateAction(entry: string): 'copy' | 'skip' {
+  if (entry === 'show-preparations.json') return 'skip'; // new station, fresh episode choices
   if (DUPLICATE_COPY.has(entry)) return 'copy';
   // Derived-from-settings.json files: copying keeps the pair consistent
   // (skipping them would leave a drift window until the first settings save).
@@ -49,5 +50,6 @@ const INSTALL_LEVEL = new Set([
 ]);
 
 export function conversionAction(entry: string): 'move' | 'keep' {
+  if (entry === 'show-preparations.json') return 'move';
   return INSTALL_LEVEL.has(entry) ? 'keep' : 'move';
 }

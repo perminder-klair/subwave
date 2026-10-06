@@ -57,6 +57,7 @@ interface ProgrammePlan {
 
 export interface ProgrammeState {
   status: 'pending' | 'ok' | 'fallback';
+  preparationSubject?: string;
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;
   introAiredAt: string | null;

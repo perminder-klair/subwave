@@ -40,6 +40,7 @@ export function showNoRepeatGuard(
   {
     show,
     playlistTracks,
+    episodeTracks = null,
     excludedIds,
     resolvedGenres,
     minTrackSec,
@@ -47,6 +48,7 @@ export function showNoRepeatGuard(
   }: {
     show: RecencyShow;
     playlistTracks: ShowTrack[] | null;
+    episodeTracks?: ShowTrack[] | null;
     excludedIds: Set<string> | null;
     // Free-text show genres already resolved onto library tags, so capacity and
     // eligibility agree.
@@ -57,6 +59,10 @@ export function showNoRepeatGuard(
     maxTrackSec?: number | null;
   },
 ): ShowNoRepeatGuard {
+  if (episodeTracks) {
+    const identities = new Set(episodeTracks.map(track => track.title ? `key:${trackKey(track)}` : `id:${track.id}`));
+    return { window: effectiveNoRepeatWindow(configuredN, identities.size), exhaustive: false };
+  }
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
   // no playlist lock at runtime. Both still need the library-wide window.
   if (!show?.playlistStrict || playlistTracks == null) {

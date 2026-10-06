@@ -272,6 +272,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
+      preparationSkill: z.preprocess(nullToUndefined, z.string().trim().max(SHOW_SEGMENT_SKILL_MAX).default('')),
       // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
@@ -401,6 +402,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
+      if (c.value.preparationSkill && c.value.preparationSkill === c.value.segmentSkill) {
+        c.issues.push({ code: 'custom', input: c.value.segmentSkill, path: ['segmentSkill'], message: 'must differ from the show preparation skill' });
+      }
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
           code: 'custom',
@@ -507,9 +511,10 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
-    segmentSkill: typeof raw.segmentSkill === 'string'
+    segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
+    preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,

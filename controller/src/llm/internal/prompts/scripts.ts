@@ -353,7 +353,7 @@ export function linkPrompt({
     'The named track is already playing. Focus on it and do not refer to the previous track.',
     'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
     'The supplied day of week is for accuracy, not generic atmosphere. Mention it only when it adds something specific and natural; do not use it as a default opener or repeat it from link to link.',
-    'Music facts are limited to the exact entries in Verified facts: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',
+    'Music facts are limited to the exact entries in Verified facts and the supplied episode source data: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',
     'Never strengthen an approved station-history fact: “First station play” is not a premiere or a world premiere, and an album fact never means the album belongs to the station or presenter.',
     'Do not describe instrumentation, production, lyrics or other audio properties unless they are explicitly supplied. Subjective reaction is welcome, but do not present it as observation.',
     'Prefer a plain, accurate introduction to invented atmosphere. Do not add weather, season, local scenery, programme progress or station activity unless it appears in Current Context.',
@@ -382,6 +382,7 @@ export function linkPrompt({
     'Task: Give a brief spoken introduction to the track now playing.',
     `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
     facts,
+    context?.episodeEditorial || '',
   ];
   if (guestContribution?.name) {
     sections.push("Editorial Context:\n- " + String(guestContribution.name).trim() + " had a verified editorial hand in choosing this track. If natural, the host may briefly credit them; do not call it a favourite or explain selection mechanics.");

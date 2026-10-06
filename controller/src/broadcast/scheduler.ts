@@ -1,3 +1,5 @@
+import { prepareEpisodeContext, showPreparation, onPreparationChange, preparationIdentity, preparationSkillAt } from './show-preparation.js';
+import { autoPlaylistShowKey } from './auto-playlist-show.js';
 // Scheduler: the auto-playlist refresh, the per-minute talk tick over
 // talk-scheduler.ts's slot table (every spoken segment the station produces on
 // its own, plus the unconditional :00 session roll), and the maintenance crons.
@@ -110,7 +112,9 @@ const autoPlaylistBuild = createShowBuildTracker();
 // every show transition runs through — never a second cron. Returns whether it
 // rebuilt.
 export async function refreshAutoPlaylistOnShowChange(reason: string): Promise<boolean> {
-  const show: any = settings.resolveActiveShow();
+  const liveCtx = await getFullContext();
+  const active = settings.resolveActiveShow();
+  const show = active ? { ...active, preparationIdentity: preparationIdentity(liveCtx) } : null;
   if (!autoPlaylistBuild.needsRebuild(show)) return false;
   const rollback = autoPlaylistBuild.claim(show);
   queue.log('scheduler',
@@ -130,25 +134,34 @@ export async function refreshAutoPlaylistOnShowChange(reason: string): Promise<b
 
 // All settings entrances (save, restore and load) publish through this seam.
 // The epoch also catches A → B → A while a slow catalogue build is pending.
-let lengthPolicyEpoch = 0;
-const lengthPolicyKey = () => JSON.stringify({
+let autoPlaylistPolicyEpoch = 0;
+const autoPlaylistPolicyKey = () => JSON.stringify({
   mode: settings.get().maxTrackLengthMode,
   max: settings.get().maxTrackSeconds,
   effectiveMax: settings.effectiveMaxTrackSec(),
+  shows: settings.get().shows,
+  schedule: settings.get().schedule,
+  override: settings.get().scheduleOverride,
+  timezone: settings.get().timezone,
+  skills: settings.get().skills?.enabled,
+  hosts: settings.get().personas.map(persona => [persona.id, persona.skills]),
 });
-let publishedLengthPolicy = lengthPolicyKey();
+let publishedAutoPlaylistPolicy = autoPlaylistPolicyKey();
+onPreparationChange(() => {
+  void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Episode fallback refresh failed: ${err.message}`));
+});
 onCacheChange(() => {
-  const key = lengthPolicyKey();
-  if (key === publishedLengthPolicy) return;
-  publishedLengthPolicy = key;
-  lengthPolicyEpoch++;
-  void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Length-policy fallback refresh failed: ${err.message}`));
+  const key = autoPlaylistPolicyKey();
+  if (key === publishedAutoPlaylistPolicy) return;
+  publishedAutoPlaylistPolicy = key;
+  autoPlaylistPolicyEpoch++;
+  void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Settings fallback refresh failed: ${err.message}`));
 });
 
 async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<RefreshResult> {
-  const epoch = lengthPolicyEpoch;
-  const policyKey = lengthPolicyKey();
-  const ctx = await getFullContext();
+  const epoch = autoPlaylistPolicyEpoch;
+  const policyKey = autoPlaylistPolicyKey();
+  const ctx = await prepareEpisodeContext(await getFullContext());
   const mood = ctx.dominantMood;
   // Same library-scaled recency window as the live picker, keyed by BOTH id and
   // lowercased `title|artist` — an id-only filter lets duplicate copies of a
@@ -162,7 +175,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
 
   // The fallback steers by the active show's genre/era/energy, mirroring
   // music/picker.ts (#629).
-  const show: any = settings.resolveActiveShow();
+  const active = settings.resolveActiveShow();
+  const episodeSource = showPreparation.read({ context: ctx }).music;
+  const show = active ? { ...active, preparationIdentity: preparationIdentity(ctx) } : null;
+  const buildKey = autoPlaylistShowKey(show);
   // Multi-value lists (#929): OR within an attribute, AND across attributes.
   const showGenres: string[] = show?.genres ?? [];
   const eras = (show?.eras ?? []) as { fromYear: number | null; toYear: number | null }[];
@@ -244,6 +260,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     pool.push(...next);
   };
 
+  if (episodeSource) take('episode-artist', shuffle(episodeSource.tracks), TARGET_POOL, { neverStarve: true, maxPerArtist: Infinity });
+  else {
   // 0. Dedicated show-genre/era source, the dominant contributor when a show
   // pins a genre or year window. Both Navidrome queries filter server-side, so
   // this source is genre/era-pure. Placed first so genre-native tracks fill the
@@ -413,6 +431,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     }
   }
 
+  }
+
   // Strict playlist: drop every off-playlist track, but never-starve to the
   // unfiltered pool if not one survived (dead-air guard).
   if (strictPlaylist) {
@@ -466,7 +486,13 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // in-place write can trigger a reload of a truncated playlist.
   // A pause can land during catalogue work. Do not trigger either watcher or
   // telnet reload in that case; already-started work cannot be cancelled.
-  if (!canPublish() || epoch !== lengthPolicyEpoch || policyKey !== lengthPolicyKey()) return 'deferred';
+  const currentContext = { ...ctx, at: new Date().toISOString() };
+  const currentShow = settings.resolveActiveShow();
+  const currentKey = autoPlaylistShowKey(currentShow ? { ...currentShow, preparationIdentity: preparationIdentity(currentContext) } : null);
+  if (!canPublish() || epoch !== autoPlaylistPolicyEpoch || policyKey !== autoPlaylistPolicyKey() || currentKey !== buildKey) {
+    if (currentKey !== buildKey) setTimeout(() => { void refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Episode fallback refresh failed: ${err.message}`)); }, 0);
+    return 'deferred';
+  }
   // Small IPC file: synchronous atomic commit leaves no policy-change gap
   // between the freshness check and rename. Catalogue work stays asynchronous.
   writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
@@ -487,7 +513,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   }
 
   const playlistTag = hasPlaylist
-    ? (playlistPool!.names.length ? playlistPool!.names.join('/') : `${show.playlistIds.length} playlist(s)`)
+    ? (playlistPool!.names.length ? playlistPool!.names.join('/') : `${show?.playlistIds.length ?? 0} playlist(s)`)
     : '';
   const eraTag = eras
     .filter(e => e.fromYear != null || e.toYear != null)
@@ -519,7 +545,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
 // an operator override. The cron wrapper below adds the frequency gate.
 export async function runHourlyCheck({ showWelcome = false, automatic = false }: { showWelcome?: boolean; automatic?: boolean } = {}) {
   return withTrace({ kind: 'hourly' }, async () => {
-    const ctx = await getFullContext();
+    const ctx = await prepareEpisodeContext(await getFullContext());
     // Guest rotation: on a show with co-hosts the ordinary time check may come
     // from a guest. A show welcome belongs to the incoming host: it establishes
     // that show's voice, rather than making a guest appear to take it over.
@@ -568,7 +594,7 @@ export async function rollSessionNow(
   const previousShowId = priorSession?.show?.id ?? null;
   let showStarted = false;
   try {
-    ctx = await getFullContext();
+    ctx = await prepareEpisodeContext(await getFullContext());
     await session.maybeRoll(ctx);
     // Only entering an actual scheduled show earns the optional hourly
     // welcome. A show ending into autonomous radio has nothing to welcome.
@@ -624,7 +650,7 @@ export async function runLink() {
     const current = queue.current?.track;
     if (!current) throw new Error('nothing is playing — no track to link from');
     const previous = queue.history[0]?.track || null;
-    const ctx = await getFullContext();
+    const ctx = await prepareEpisodeContext(await getFullContext());
     const speaker = settings.pickOnAirSpeaker();
     const script = await dj.generateLink({
       previous,
@@ -663,7 +689,7 @@ export async function runBanter() {
     if (!host || !guests.length) {
       throw new Error('banter needs a show with guest co-hosts on air');
     }
-    const ctx = await getFullContext();
+    const ctx = await prepareEpisodeContext(await getFullContext());
     const lines = await dj.generateBanter({
       host, guests, show,
       current: queue.current?.track || null,
@@ -702,7 +728,7 @@ function segmentEligible(): boolean {
 
 async function runSegmentTick() {
   await withTrace({ kind: 'segment' }, async () => {
-    const ctx = await getFullContext();
+    const ctx = await prepareEpisodeContext(await getFullContext());
     await agenticTick(ctx);
   });
 }
@@ -716,7 +742,7 @@ async function runSegmentTick() {
 // autonomous path doesn't re-open or re-close the show; a manual feature
 // deliberately doesn't consume the hour's planned beat.
 export async function runProgrammeIntro() {
-  const ctx = await getFullContext();
+  const ctx = await prepareEpisodeContext(await getFullContext());
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runIntro(queue, ctx);
@@ -725,14 +751,14 @@ export async function runProgrammeIntro() {
 }
 
 export async function runProgrammeFeature() {
-  const ctx = await getFullContext();
+  const ctx = await prepareEpisodeContext(await getFullContext());
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   return programme.runFeature(queue, ctx);
 }
 
 export async function runProgrammeOutro() {
-  const ctx = await getFullContext();
+  const ctx = await prepareEpisodeContext(await getFullContext());
   await session.maybeRoll(ctx);
   await programme.ensurePlan(ctx);
   const out = await programme.runOutro(queue, ctx);
@@ -745,7 +771,7 @@ export async function runProgrammeOutro() {
 // rather than ducking mid-vocal.
 export async function runStationId({ atNextTrack = false, automatic = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
-    const ctx = await getFullContext();
+    const ctx = await prepareEpisodeContext(await getFullContext());
     let speaker = settings.pickOnAirSpeaker();
     const speechOwner = automatic
       ? session.captureAutomaticHostSpeech(speaker)
@@ -902,7 +928,7 @@ async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>, rolled
         await queue.playRotateJingle();
         return;
       case 'programme': {
-        const ctx = await getFullContext();
+        const ctx = await prepareEpisodeContext(await getFullContext());
         if (plan.slot === 'feature') await programme.featureTick(queue, ctx);
         else await programme.outroTick(queue, ctx);
         return;
@@ -1119,8 +1145,9 @@ export function skillCronAllowed(gates: SkillCronGates): boolean {
   return skillCronStandDownReason(gates) === null;
 }
 
-export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[]) {
+export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[], preparationSkill: string | null = null) {
   return skillEligible({
+    preparationSkill,
     seeded: cap.seeded,
     skill: cap.skill,
     enabled,
@@ -1163,6 +1190,7 @@ export function syncSkillCrons() {
         settings.get().skills?.enabled || {},
         host,
         guests,
+        preparationSkillAt(await getFullContext()),
       );
       if (!eligible.allowed) {
         queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
@@ -1170,7 +1198,7 @@ export function syncSkillCrons() {
       }
       try {
         await withTrace({ kind: 'segment' }, async () => {
-          const ctx = await getFullContext();
+          const ctx = await prepareEpisodeContext(await getFullContext());
           await runCapability(cap.kind, ctx, { automaticHostSpeech: true });
         });
       } catch (err: any) {

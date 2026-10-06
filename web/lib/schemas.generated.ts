@@ -3794,6 +3794,67 @@ export function isGeminiLibraryLanguage(raw: unknown): boolean {
   return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
 }
 
+// ─── from controller/src/schemas/show-preparation.ts ─────────────────────
+
+export const preparationResultSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), reason: z.string().max(500).optional() }),
+  z.object({
+    available: z.literal(true),
+    subject: z.string().trim().min(1).max(160),
+    data: z.json().default(null).refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 32768, 'preparation data must be at most 32 KB'),
+    music: z.object({ type: z.literal('artist'), artistId: z.string().trim().min(1).max(256) }).optional(),
+  }),
+]);
+
+export const preparationOccurrenceSchema = z.object({
+  id: z.string().min(1), showId: z.string().min(1),
+  source: z.enum(['scheduled', 'takeover']),
+  startsAt: z.number().finite(), endsAt: z.number().finite(),
+});
+
+const preparationRecordBase = z.object({
+  occurrence: preparationOccurrenceSchema,
+  skill: z.string(), configuration: z.string(),
+});
+export const preparationRecordSchema = z.discriminatedUnion('kind', [
+  preparationRecordBase.extend({
+    kind: z.literal('failed'), reason: z.string(), attempts: z.number().int(), retryAt: z.number().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('selected'),
+    result: preparationResultSchema.options[1],
+    attempts: z.number().int(), retryAt: z.number(), reason: z.string().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('ready'), result: preparationResultSchema.options[1], preparedAt: z.number(),
+  }),
+]);
+export const preparationStoreSchema = z.object({ version: z.literal(1), records: z.array(preparationRecordSchema).max(256) });
+export type PreparationResult = z.output<typeof preparationResultSchema>;
+export type AcceptedPreparation = Extract<PreparationResult, { available: true }>;
+export type PreparationOccurrence = z.output<typeof preparationOccurrenceSchema>;
+export type PreparationRecord = z.output<typeof preparationRecordSchema>;
+
+export const preparationStatusSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unconfigured') }),
+  z.object({ kind: z.enum(['selected', 'ready', 'failed', 'degraded']), occurrence: preparationOccurrenceSchema,
+    skill: z.string(), subject: z.string().nullable(), reason: z.string().nullable() }),
+]);
+export type PreparationStatus = z.output<typeof preparationStatusSchema>;
+
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
+export const preparationTrackSchema = z.object({
+  id: z.string().min(1), artistId: z.string().nullable().optional(),
+  artists: z.array(preparationArtistCreditSchema).optional(),
+  albumArtists: z.array(preparationArtistCreditSchema).optional(),
+  title: z.string().default(''), artist: z.string().default(''),
+  album: z.string().nullish().transform(value => value ?? undefined), albumId: z.string().nullish().transform(value => value ?? undefined),
+  duration: z.number().nullable().optional(), durationSec: z.number().nullable().optional(),
+  year: z.number().nullable().optional(),
+}).passthrough();
+export type PreparationTrack = z.output<typeof preparationTrackSchema>;
+
 // ─── from controller/src/schemas/show.ts ─────────────────────────────────
 
 // Shared show schema — run by validateShowsStrict (the update() chokepoint),
@@ -4069,6 +4130,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
+      preparationSkill: z.preprocess(nullToUndefined, z.string().trim().max(SHOW_SEGMENT_SKILL_MAX).default('')),
       // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
@@ -4198,6 +4260,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
+      if (c.value.preparationSkill && c.value.preparationSkill === c.value.segmentSkill) {
+        c.issues.push({ code: 'custom', input: c.value.segmentSkill, path: ['segmentSkill'], message: 'must differ from the show preparation skill' });
+      }
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
           code: 'custom',
@@ -4304,9 +4369,10 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
-    segmentSkill: typeof raw.segmentSkill === 'string'
+    segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
+    preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,

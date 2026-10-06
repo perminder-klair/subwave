@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { fork, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
+import { createServer as createPortReservation } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Hold a real settings read, rather than racing a sleep against a fast machine.
 // Only the test preload changes I/O: the production server has no test switches.
-test('HTTP readiness waits for startup recovery, then a new reconciliation survives', { timeout: 45_000 }, async () => {
+test('HTTP readiness waits for startup recovery, then a new reconciliation survives', { timeout: 45_000 }, async (t) => {
   const state = mkdtempSync(join(tmpdir(), 'subwave-startup-'));
   const preload = join(state, 'hold-startup.mjs');
   writeFileSync(join(state, 'settings.json'), JSON.stringify({
@@ -71,6 +72,12 @@ globalThis.fetch = (input, init) => {
   const mockAddress = mock.address();
   assert.ok(mockAddress && typeof mockAddress === 'object');
   const mockUrl = `http://127.0.0.1:${mockAddress.port}`;
+  // PORT=0 is invalid boot config; reserve a valid port so a live station can coexist.
+  const reservation = createPortReservation();
+  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const address = reservation.address();
+  assert.ok(address && typeof address === 'object');
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
   const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   const orphanExit = once(orphan, 'exit');
   writeFileSync(join(state, 'tagger.pid'), JSON.stringify({
@@ -79,7 +86,7 @@ globalThis.fetch = (input, init) => {
   const child = fork(join(controller, 'src/server.ts'), [], {
     cwd: controller,
     execArgv: ['--import', 'tsx', '--import', pathToFileURL(preload).href],
-    env: { ...process.env, STATE_DIR: state, PORT: '0', NODE_ENV: 'production',
+    env: { ...process.env, STATE_DIR: state, PORT: String(address.port), NODE_ENV: 'production',
       ADMIN_USER: 'test', ADMIN_PASS: 'test', NAVIDROME_URL: mockUrl,
       NAVIDROME_USER: 'test', NAVIDROME_PASS: 'test', ICECAST_STATUS_URL: mockUrl,
       LIQUIDSOAP_HOST: '127.0.0.1', LIQUIDSOAP_PORT: '1', ANALYZE_URL: mockUrl },
@@ -90,7 +97,7 @@ globalThis.fetch = (input, init) => {
   child.stderr!.on('data', chunk => { logs += chunk; });
   const childExit = once(child, 'exit');
   try {
-    const [held] = await once(child, 'message');
+    const [held] = await once(child, 'message', { signal: t.signal });
     assert.equal(held.type, 'startup-held');
     assert.ok(held.port > 0);
     const url = `http://127.0.0.1:${held.port}`;

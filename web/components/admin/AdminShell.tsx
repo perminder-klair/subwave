@@ -46,6 +46,7 @@ import {
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import AdminQueryProvider from './AdminQueryProvider';
+import { AdminLoading } from './AdminLoading';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
@@ -300,11 +301,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }, [hydrated, pathname, router]);
 
   if (!hydrated) {
-    return (
-      <div className="admin-root paper flex min-h-screen items-center justify-center">
-        <span className="caption">loading…</span>
-      </div>
-    );
+    return <AdminLoading href={pathname || '/admin'} />;
   }
 
   if (!auth || needsAuth) {

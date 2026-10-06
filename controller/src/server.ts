@@ -1,3 +1,4 @@
+import { showPreparation } from './broadcast/show-preparation.js';
 // Controller HTTP API — thin entry point: wires middleware, mounts routes/ and
 // starts the background services.
 import express from 'express';
@@ -290,6 +291,7 @@ app.listen(config.server.port, async () => {
   // the queue and scheduler append turns into it.
   try {
     const ctx = await getFullContext();
+    await showPreparation.recover();
     const s = await session.recover(ctx);
     console.log(`[session] ${s.id} (${s.kind}/${s.key})`);
   } catch (err) {

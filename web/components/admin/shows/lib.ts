@@ -49,6 +49,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
+    preparationSkill: m.preparationSkill ?? '',
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
@@ -124,6 +125,7 @@ export function showPayload(s: Show) {
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
+    preparationSkill: s.preparationSkill || '',
     // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
   };

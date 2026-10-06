@@ -1,3 +1,4 @@
+import { prepareEpisodeContext } from './show-preparation.js';
 // Queue manager — keeps the in-memory queue and writes track URIs
 // to the file Liquidsoap watches. A now-playing watcher rotates items
 // between upcoming → current → history based on what Liquidsoap reports.
@@ -3712,8 +3713,8 @@ class Queue {
         const forecastNow = Date.now();
         const nextBoundaryAt = showBoundary.nextShowBoundaryMs(forecastNow, 6 * 3600);
         const showAt = pickShowDate(forecastNow, leadSec, nextBoundaryAt);
-        const pickCtx = await getFullContext(showAt ?? undefined);
-        const liveCtx = await getFullContext();
+        const pickCtx = await prepareEpisodeContext(await getFullContext(showAt ?? undefined));
+        const liveCtx = await prepareEpisodeContext(await getFullContext());
         await session.maybeRoll(liveCtx);
         // Keep the live session and roster outgoing until the actual boundary.
         // The look-ahead context is only for selecting the track that follows.
