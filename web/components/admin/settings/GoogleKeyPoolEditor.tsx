@@ -19,6 +19,7 @@ import { adminResponse } from '@/lib/admin-query';
 import { Btn } from '../ui';
 import { Input } from '@/components/ui/input';
 import { notify } from '@/lib/notify';
+import { refetchReconciled } from './googlePoolUi';
 
 export interface GooglePoolKey {
   /** Stable opaque identity. Every mutation addresses this, never `index`. */
@@ -64,7 +65,10 @@ export function GoogleKeyPoolEditor({
 }: {
   pool?: GooglePoolState;
   adminFetch: AdminAuth['adminFetch'];
-  onChanged?: () => void;
+  /** Runs after a mutation to reconcile the rows. Its RESULT is inspected, so it
+   *  must return the refetch outcome — a `void` signature would erase the very
+   *  signal `refetchReconciled` exists to read. */
+  onChanged?: () => unknown;
 }) {
   const [adding, setAdding] = useState('');
   const [addingName, setAddingName] = useState('');
@@ -118,8 +122,12 @@ export function GoogleKeyPoolEditor({
       notify.err(e instanceof Error ? e.message : 'Request failed');
     }
     try {
-      await onChanged?.();
-      setDesynced(false);
+      // The refetch's OUTCOME, not merely that it did not throw. React Query's
+      // `refetch` resolves with `{ isError: true }` on failure, so a failed
+      // refresh used to take the success path: `desynced` cleared, every row
+      // control re-enabled against a list the screen no longer matched.
+      const result = await onChanged?.();
+      setDesynced(!refetchReconciled(result));
     } catch {
       setDesynced(true);
     } finally {

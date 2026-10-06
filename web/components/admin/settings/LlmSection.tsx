@@ -17,6 +17,7 @@ import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { GoogleKeyPoolEditor, type GooglePoolState } from './GoogleKeyPoolEditor';
+import { GOOGLE_KEY_VAR, googleKeyFieldInert } from './googlePoolUi';
 import { Advanced } from './section-chrome';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
@@ -158,7 +159,8 @@ export function HeaderRowsEditor({
 
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  refresh: () => void;
+  /** Returns the refetch outcome; `void` would erase the signal the pool editor reads. */
+  refresh: () => unknown;
 }
 export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
   const [resetCompatKey, setResetCompatKey] = useState(false);
@@ -694,14 +696,18 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
           {LLM_ENV_VARS[form.llm.provider] && (() => {
             const keyVar = LLM_ENV_VARS[form.llm.provider]!;
-            const isGoogle = keyVar === 'GOOGLE_GENERATIVE_AI_API_KEY';
+            const isGoogle = keyVar === GOOGLE_KEY_VAR;
             // A configured pool IS the Google credential, so the single-key
             // field is shown but inert while one exists. Visible-and-disabled
             // rather than hidden: an operator who cannot see the field cannot
             // tell whether their key was replaced or is merely parked, and the
             // obvious question ("where did my single key go?") deserves an
             // answer on screen instead of in a doc.
-            const poolActive = isGoogle && googlePoolCount > 0;
+            //
+            // `googleKeyFieldInert`, not a second copy of this condition: the
+            // fallback leg's identical field was left unguarded for exactly that
+            // reason, and two copies of one rule is how they drift.
+            const poolActive = googleKeyFieldInert(keyVar, googlePoolCount);
             return (
               <>
                 <div className="field">
@@ -1085,6 +1091,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
               {LLM_ENV_VARS[form.llm.fallback.provider] && (() => {
                 const keyVar = LLM_ENV_VARS[form.llm.fallback.provider]!;
+                // The SAME predicate the primary field uses, because the pool is
+                // equally this leg's only credential: googleKeyFetch is installed
+                // on every `google` client the registry builds and consults one
+                // process-wide pool. So a fallback Google key typed here was
+                // stored, reported as saved, and never read — while its twin in the
+                // primary card was greyed out saying exactly that.
+                const poolActive = googleKeyFieldInert(keyVar, googlePoolCount);
                 return (
                   <>
                     <div className="field">
@@ -1094,19 +1107,28 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                           type="password"
                           autoComplete="off"
                           value={fallbackKeyInput}
-                          placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
+                          disabled={poolActive}
+                          placeholder={poolActive || data.env?.[keyVar] ? '……… (on file)' : (KEY_HINTS[keyVar] ?? '')}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}
-                          className="max-w-[360px]"
+                          className="max-w-[360px] disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <Btn
                           onClick={() => testKey(keyVar, fallbackKeyInput, setFallbackKeyTesting, setFallbackKeyTest, () => setFallbackKeyInput(''))}
-                          disabled={fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
+                          disabled={poolActive || fallbackKeyTesting || (!fallbackKeyInput.trim() && !data.env?.[keyVar])}
                         >
                           {fallbackKeyTesting ? 'Testing…' : 'Test key'}
                         </Btn>
                       </div>
                       <div className="field-hint">
                         Stored in <code>state/secrets.env</code>, takes effect immediately. Leave blank to keep the existing key.
+                        {poolActive && (
+                          <>
+                            {' '}
+                            <strong className="text-ink">Not used while a key pool is set up</strong> — the pool is what the station
+                            calls Google with, on this leg as well as the primary, so this key is ignored. Remove the pool from the
+                            primary card above to go back to a single key.
+                          </>
+                        )}
                       </div>
                     </div>
                     {fallbackKeyTest && <KeyTestResult result={fallbackKeyTest} />}
