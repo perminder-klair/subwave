@@ -174,6 +174,32 @@ test('a member the mixer already took plays out; the rest still go', async () =>
   }
 });
 
+
+test('Never Play Again purge recalls sent duplicates and reports a copy the mixer can no longer remove', async () => {
+  reset();
+  const blockedA = { track: { id: 'dup', title: 'Dup A' }, sent: false } as any;
+  const blockedB = { track: { id: 'dup', title: 'Dup B' }, sent: true } as any;
+  const blockedC = { track: { id: 'dup', title: 'Dup C' }, sent: true } as any;
+  const keep = { track: { id: 'keep', title: 'Keep' }, sent: true } as any;
+  queue.upcoming = [blockedA, blockedB, blockedC, keep];
+  const original = (queue as any).removeUpcomingItem.bind(queue);
+  const seen: any[] = [];
+  (queue as any).removeUpcomingItem = async (item: any) => {
+    seen.push(item);
+    if (item === blockedC) return { ok: false, reason: 'already-playing' };
+    queue.upcoming.splice(queue.upcoming.indexOf(item), 1);
+    return { ok: true };
+  };
+  try {
+    const out = await queue.purgeBlockedIncludingSent((track: any) => track.id === 'dup');
+    assert.deepEqual(out, { removed: 2, kept: 1 });
+    assert.deepEqual(seen, [blockedA, blockedB, blockedC], 'sent and unsent blocked copies all use the mixer-aware cancel path');
+    assert.deepEqual(queue.upcoming, [blockedC, keep], 'only the unrecallable blocked copy and unrelated track remain');
+  } finally {
+    (queue as any).removeUpcomingItem = original;
+  }
+});
+
 test('cancelling an unknown block reports nothing rather than throwing', async () => {
   reset();
   assert.deepEqual(await queue.removeUpcomingBlock('nope'), { removed: 0, kept: 0, label: null });
