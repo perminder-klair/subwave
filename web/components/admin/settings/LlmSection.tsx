@@ -525,6 +525,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': '' } } })); }}>
                   Use Azure OpenAI v1
                 </Btn>
+                <Btn onClick={() => { setCompatKeyInput(''); setResetCompatKey(true); setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: 'hosted', headers: [], providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': 'https://api.mistral.ai/v1' } } })); }}>
+                  Use Mistral
+                </Btn>
               </div>
               <Input
                 value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
@@ -539,7 +542,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <code> https://YOUR-RESOURCE.openai.azure.com/openai/v1</code>,
                 then add an <code>api-key</code> custom header below and enter the
                 deployment name as the model. The Atlas preset fills its URL;
-                enter your key in the Bearer token field. The URL must be
+                enter your key in the Bearer token field. The Mistral preset
+                fills <code>https://api.mistral.ai/v1</code>; enter your Mistral
+                API key in the Bearer token field. The URL must be
                 reachable from the controller container. A preset clears the
                 previous custom headers and saved compatible-provider Bearer
                 token on Save; primary and backup share that token.

@@ -59,6 +59,11 @@ export default function ModelsAndTokens() {
           and enter your chat deployment name as the model. Azure embedding
           deployments have their own names: set that name in Library tagger,
           with an embedding URL and header if they use a different resource.
+          For <strong>Mistral</strong>, choose OpenAI-compatible, press
+          <strong> Use Mistral</strong> (Hosted service, <code>https://api.mistral.ai/v1</code>),
+          enter your Mistral API key in the Bearer token field and choose a model from
+          its catalog. Keep it on Hosted service: Local mode adds llama.cpp request
+          fields that Mistral rejects with &ldquo;Unprocessable Entity&rdquo;.
           These presets use the same OpenAI-compatible provider; older Azure
           deployment URLs with dated <code>api-version</code> paths are outside
           this v1 setup.
