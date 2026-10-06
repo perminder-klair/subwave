@@ -5,7 +5,7 @@
 // without re-running the full fixture set.
 import assert from 'node:assert/strict';
 import {
-  stripScriptedOpener, echoesRequest, cleanRequesterName, guardIntro, guardAck, stillInFlight,
+  stripScriptedOpener, echoesRequest, cleanRequesterName, guardIntro, stillInFlight,
   screenAck, echoesRecentRequest,
 } from '../src/util/request-guard.js';
 
@@ -135,9 +135,7 @@ assert.equal(cleanRequesterName('Asant'), 'Asant');
 assert.equal(cleanRequesterName('Хозяин'), 'Хозяин');              // ordinary Cyrillic word survives
 assert.equal(cleanRequesterName('a'.repeat(60)).length, 40);
 
-// --- guardAck / guardIntro ---------------------------------------------------
-assert.equal(guardAck('Coming right up.', REQ_CRANK, 'fallback'), 'Coming right up.');
-assert.equal(guardAck(AIRED_CRANK, REQ_CRANK, 'fallback'), 'fallback');
+// --- guardIntro -------------------------------------------------------------
 {
   const out = await guardIntro(AIRED_CRANK, REQ_CRANK, async () => 'Stan-X, Get Crank — orchestral dubstep, buckle up.');
   assert.equal(out.guard, 'echo-regenerated');
@@ -182,7 +180,7 @@ assert.equal(
   false,
 ); // failed entry never holds, even with a stray pick
 
-// --- screenAck (guardAck's reporting form) -----------------------------------
+// --- screenAck verdicts -----------------------------------
 // Same policy, but the verdict reaches the operator: a silently swapped ack
 // left conversational trolling completely invisible in the booth log.
 assert.deepEqual(

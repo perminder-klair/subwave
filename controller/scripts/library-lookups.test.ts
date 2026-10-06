@@ -20,6 +20,36 @@ function seed(id: string, moods = ['reflective']) {
   db.upsertTrackTags(id, { moods, energy: 'low', source: 'manual' });
 }
 
+test('history and sync metadata retain values without reading acoustic blobs', () => {
+  seed('lean-read', ['calm', 'reflective']);
+  const d = db.getDb()!;
+  d.prepare(`UPDATE tracks SET tagged_at='2026-10-06T12:00:00Z',
+    beats_json='[1,2,3]', structure_json='broken', pace_json='broken'
+    WHERE id='lean-read'`).run();
+  const full = library.get('lean-read');
+  const prepare = d.prepare.bind(d);
+  const statements: string[] = [];
+  d.prepare = (sql: string) => { statements.push(sql); return prepare(sql); };
+  try {
+    const lean = library.getPlaybackMeta('lean-read');
+    assert.deepEqual(lean?.moods, full.moods);
+    assert.equal(lean?.energy, full.energy);
+    assert.equal(library.taggedAtOf('lean-read'), full.taggedAt);
+  } finally { d.prepare = prepare; }
+  assert.equal(statements.length, 2);
+  for (const sql of statements) {
+    assert.doesNotMatch(sql, /SELECT\s+\*|\w+_json/i);
+    const plan = (prepare(`EXPLAIN QUERY PLAN ${sql}`).all('lean-read') as Array<{ detail: string }>).map(r => r.detail).join('\n');
+    assert.match(plan, /SEARCH tracks USING/);
+  }
+  assert.equal(library.getPlaybackMeta('missing'), null);
+  assert.equal(library.taggedAtOf('missing'), null);
+  d.prepare(`UPDATE tracks SET moods='broken', energy=NULL, tagged_at=NULL WHERE id='lean-read'`).run();
+  assert.deepEqual(library.getPlaybackMeta('lean-read')?.moods, []);
+  assert.equal(library.getPlaybackMeta('lean-read')?.energy, null);
+  assert.equal(library.taggedAtOf('lean-read'), null);
+});
+
 test('public pools preserve payloads and required acoustic values', () => {
   seed('payload');
   db.getDb()!.prepare(`UPDATE tracks SET original_year=1990, is_compilation=1,

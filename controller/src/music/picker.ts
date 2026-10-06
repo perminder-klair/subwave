@@ -595,7 +595,7 @@ function summariseRecent(queue: { current?: QueueEntry | null; history: QueueEnt
   return items
     .filter((i) => i?.track?.title)
     .map((i) => {
-      const tags = i.track.id ? library.get(i.track.id) : null;
+      const tags = i.track.id ? library.getPlaybackMeta(i.track.id) : null;
       // Omitted, not nulled: nulls on un-tagged entries are wasted tokens.
       return {
         title: i.track.title,

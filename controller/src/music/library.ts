@@ -206,8 +206,8 @@ export function getAlbumFacts(songId: string) {
   return loaded ? db.getAlbumFacts(songId) : null;
 }
 
-// Lean metadata for the /now-playing hot path, so a per-listener poll never
-// parses the heavy acoustic *_json blobs (#723).
+// Lean metadata for /now-playing and picker history, avoiding the heavy
+// acoustic *_json blobs (#723).
 export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
@@ -217,7 +217,7 @@ export function getPlaybackMeta(songId: string): db.TrackLite | null {
 // null and is never blind-appended.
 export function taggedAtOf(songId: string): string | null {
   if (!loaded) return null;
-  return db.getTrack(songId)?.taggedAt ?? null;
+  return db.getTaggedAt(songId);
 }
 
 // Musically-adjacent moods. The tagger tags by how a track FEELS, so

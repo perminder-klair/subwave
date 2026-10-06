@@ -234,16 +234,8 @@ export {
 export {
   assertNoOrphanMoods,
   validateDjPromptsStrict,
-  // The mood family delegates to schemas/settings.ts now (#1348); update() calls
-  // the registry directly, so these are re-exported straight from the source
-  // module for the callers that still take the validator API — backup import,
-  // onboarding, and scripts/moods.test.ts.
-  validateFestivalsStrict,
-  validateMoodScheduleStrict,
-  validateMoodsStrict,
   validatePersonasStrict,
   validateShowsStrict,
-  validateWeatherMoodsStrict,
 } from './settings/validate.js';
 export {
   agentLanguageReminder,

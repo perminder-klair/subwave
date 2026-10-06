@@ -146,12 +146,6 @@ export function screenAck(
   return { ack: fallback, guard: 'ack-replaced' };
 }
 
-// Plain-string form of screenAck. Prefer `screenAck`: a replacement the operator
-// cannot see is invisible under attack.
-export function guardAck(ack: string | null | undefined, requestText: string, fallback: string): string {
-  return screenAck(ack, requestText, fallback).ack;
-}
-
 // Pick-path echo guard: the session window carries request text verbatim, so an
 // injected phrasing can resurface in a LATER pick's link, which neither
 // guardIntro nor screenAck sees. `recent` is the request log's newest-first
