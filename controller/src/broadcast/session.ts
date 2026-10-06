@@ -11,7 +11,7 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
-import { nextShowBoundaryMs } from './show-boundary.js';
+import { nextShowBoundaryMs, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
@@ -86,6 +86,7 @@ export interface BoundaryHandoff extends RolledFrom {
   targetKey: string;
   boundaryAt: number | null;
   contextAt?: string;
+  takeoverStartedAt?: number | null;
   finalTrack?: { id: string | null; title: string | null; artist: string | null } | null;
   /** Rendered into the queue, but not confirmed at the stream edge yet. */
   queued?: boolean;
@@ -104,6 +105,8 @@ interface Session {
   // roll puts it ahead of startedAt. maybeRoll refuses an older moment
   // (rollIsBackward); absent, the guard never blocks.
   ctxAt?: string;
+  /** Episode owner; null means the weekly grid, absent means a legacy session. */
+  takeoverStartedAt?: number | null;
   endedAt: string | null;
   show: { id?: string; name?: string; topic?: string } | null;
   persona: { id: string; name: string } | null;
@@ -386,6 +389,7 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     key: sessionKeyFor(ctx),
     startedAt: new Date().toISOString(),
     ctxAt: at.toISOString(),
+    takeoverStartedAt: showTakeoverStartedAt(at.getTime()),
     endedAt: null,
     show: ctx?.activeShow
       ? { id: ctx.activeShow.id, name: ctx.activeShow.name, topic: ctx.activeShow.topic }
@@ -424,15 +428,15 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
+  const at = contextDate(ctx);
+  // A look-ahead context has already advanced ownership; an older caller must
+  // not reset it simply because continuity cannot run backwards.
+  if (!aged && rollIsBackward(at, _session.ctxAt)) return _session;
+  const continuous = _session.key === nextKey && sessionRunContinues(_session, at);
   if (_session.key === nextKey) {
-    refreshHost(contextDate(ctx));
-    if (!aged) return _session;
+    refreshHost(at);
+    if (!aged && continuous) return _session;
   }
-
-  // A key change that only exists because the CALLER's clock is behind the
-  // look-ahead roll is not a boundary. Rolling here would archive the
-  // just-started session and hand onAirPersona() back to the outgoing DJ.
-  if (!aged && rollIsBackward(contextDate(ctx), _session.ctxAt)) return _session;
 
   const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
   if (bothAuto && !aged) return softShift(ctx, nextKey);
@@ -442,16 +446,13 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   // An armed final-track handoff may already have voiced (or, in
   // between-tracks mode, rendered and queued) this exact changeover. Do not
   // create a second mic-pass when the station clock reaches the boundary.
-  const handoffAlreadyCovered = prev.boundaryHandoff?.aired
-    && prev.boundaryHandoff.targetKey === nextKey;
-  const pendingBoundaryHandoff = prev.boundaryHandoff
-    && !prev.boundaryHandoff.aired
-    && prev.boundaryHandoff.targetKey === nextKey
-    ? prev.boundaryHandoff
+  const boundary = prev.boundaryHandoff?.targetKey === nextKey
+    && boundaryRunContinues(prev.boundaryHandoff, at) ? prev.boundaryHandoff : null;
+  const handoffAlreadyCovered = boundary?.aired;
+  const pendingBoundaryHandoff = boundary && !boundary.aired
+    ? boundary
     : null;
-  const boundaryProgramme = prev.boundaryHandoff?.targetKey === nextKey
-    ? prev.boundaryHandoff.programme ?? null
-    : null;
+  const boundaryProgramme = boundary?.programme ?? null;
   // Snapshot before end()/start() replace the live session — the outgoing DJ's
   // sign-off is generated after this returns (see priorPromptMemory above).
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
@@ -459,6 +460,11 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   const next = start(ctx, buildHandoff(prev));
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
   if (boundaryProgramme) next.programme = boundaryProgramme;
+  // The 4h safety cap rolls the session with the show unchanged. It is the
+  // same episode on air: keep its plan and aired beats, or the programme
+  // re-plans "today's episode" and re-airs the show's intro mid-show (seen
+  // live at 03:00 into a show that began at 23:00).
+  else if (continuous && prev.programme) next.programme = prev.programme;
   stampRolledFrom(next, prev);
   if (handoffAlreadyCovered) next.handoffAired = true;
   if (pendingBoundaryHandoff) {
@@ -478,8 +484,12 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
 function stampRolledFrom(next: Session, prev: Session) {
   const prevId = prev?.persona?.id ?? null;
   const nextId = next?.persona?.id ?? null;
+  // A genuine change of show only. The 4h safety cap also hard-rolls, with the
+  // key unchanged: without the key check a long show (e.g. 23:00-06:00) had
+  // its host "acknowledge a show change" to themself four hours in.
   const sameHostShowChange = !!prevId && !!nextId && prevId === nextId
     && prev.key.startsWith('show:') && next.key.startsWith('show:')
+    && prev.key !== next.key
     && settings.get().djBehaviour.sameHostAcknowledgement;
   next.handoffAired = false;
   next.rolledFrom = (prevId && nextId && (prevId !== nextId || sameHostShowChange))
@@ -623,7 +633,8 @@ export function armBoundaryHandoff(
   const targetKey = sessionKeyFor(ctx);
   if (targetKey === _session.key) return false;
   if (!_session.key.startsWith('show:') && !targetKey.startsWith('show:')) return false;
-  const incoming = settings.getEffectivePersona(contextDate(ctx));
+  const at = contextDate(ctx);
+  const incoming = settings.getEffectivePersona(at);
   const outgoingId = _session.persona?.id;
   if (!outgoingId || !incoming?.id || outgoingId === incoming.id) return false;
   const boundaryAt = nextShowBoundaryMs(Date.now(), 6 * 3600);
@@ -637,6 +648,7 @@ export function armBoundaryHandoff(
     targetKey,
     boundaryAt,
     contextAt: typeof ctx?.at === 'string' ? ctx.at : new Date(boundaryAt ?? Date.now()).toISOString(),
+    takeoverStartedAt: showTakeoverStartedAt(at.getTime()),
     finalTrack: finalTrack ? {
       id: finalTrack.id ?? null,
       title: finalTrack.title ?? null,
@@ -820,22 +832,46 @@ export function windowMessages() {
   return out;
 }
 
-// Boot recovery: resume the persisted session if its key still matches, else
+function sessionRunContinues(stored: Session, at: Date): boolean {
+  return showRunContinues({
+    key: stored.key,
+    fromMs: new Date(stored.ctxAt ?? stored.startedAt).getTime(),
+    toMs: at.getTime(),
+    takeoverStartedAt: stored.takeoverStartedAt,
+  });
+}
+
+function boundaryRunContinues(boundary: BoundaryHandoff, at: Date): boolean {
+  const fromMs = boundary.boundaryAt ?? (boundary.contextAt ? new Date(boundary.contextAt).getTime() : null);
+  // Older handoff records without an anchor retain their recovery behaviour.
+  return fromMs === null || showRunContinues({
+    key: boundary.targetKey, fromMs, toMs: at.getTime(),
+    takeoverStartedAt: boundary.takeoverStartedAt,
+  });
+}
+
+// Boot recovery: resume the persisted session if its show run still matches, else
 // archive it and start fresh.
 export async function recover(ctx: SessionContext): Promise<Session> {
   if (existsSync(config.session.currentFile)) {
     try {
       const stored = JSON.parse(await readFile(config.session.currentFile, 'utf8'));
       if (stored?.id && !stored.endedAt && stored.key === sessionKeyFor(ctx)
-          && Array.isArray(stored.messages)) {
+          && Array.isArray(stored.messages) && sessionRunContinues(stored, contextDate(ctx))) {
         _session = stored as Session;
+        const takeoverRepaired = _session.takeoverStartedAt === undefined;
+        if (takeoverRepaired) _session.takeoverStartedAt = showTakeoverStartedAt(contextDate(ctx).getTime());
+        const boundary = _session.boundaryHandoff;
+        const boundaryRepaired = boundary?.targetKey === _session.key && boundary.takeoverStartedAt === undefined
+          && boundaryRunContinues(boundary, contextDate(ctx));
+        if (boundaryRepaired) boundary.takeoverStartedAt = _session.takeoverStartedAt;
         const normalizedRevision = normalizedHostRevision(_session.hostRevision);
         const revisionRepaired = _session.hostRevision !== normalizedRevision;
         _session.hostRevision = normalizedRevision;
         _resumedQueuedHandoff = _session.boundaryHandoff?.queued === true;
         appendTurn({ role: 'event', kind: 'scenario', text: 'Controller restarted — session resumed.' });
         const repaired = refreshHost(contextDate(ctx));
-        if (repaired || revisionRepaired) await persist();
+        if (repaired || revisionRepaired || takeoverRepaired || boundaryRepaired) await persist();
         return _session;
       }
       // The restart happened after the station clock crossed the boundary, so
@@ -846,9 +882,11 @@ export async function recover(ctx: SessionContext): Promise<Session> {
       // An aired pair transfers its programme and covered-intro stamp without
       // reopening the show.
       if (stored?.boundaryHandoff
-          && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)) {
+          && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
+          && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
+        if (boundary.takeoverStartedAt === undefined) boundary.takeoverStartedAt = next.takeoverStartedAt;
         next.programme = boundary.programme ?? null;
         if (boundary.aired) {
           stampRolledFrom(next, stored as Session);

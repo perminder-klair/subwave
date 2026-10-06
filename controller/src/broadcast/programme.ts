@@ -127,6 +127,10 @@ interface PlanDeps {
 
 type ProgrammeShow = NonNullable<ReturnType<typeof settings.resolveActiveShow>>;
 
+function programmeIsOwned(prog: session.ProgrammeState): boolean {
+  return session.getProgramme() === prog || session.getBoundaryProgramme() === prog;
+}
+
 async function fillPlan(
   show: ProgrammeShow,
   ctx: SessionContext,
@@ -157,18 +161,26 @@ async function fillPlan(
         skillKinds: pinned ? [] : featureKindMenu(roster.host, roster.guests.length > 0),
         pinnedKind: pinned,
       }));
+    // A cap keeps the same object, including in-flight work. A later airing
+    // owns a new object: a delayed producer must not replace its plan/beats.
+    if (!programmeIsOwned(prog)) return;
     prog.status = 'ok';
     prog.plan = plan;
     attach(prog);
     logEvent('programme.plan', { show: show.name, angle: plan?.angle || null });
   } catch (err) {
+    if (!programmeIsOwned(prog)) return;
     prog.status = 'fallback';
     attach(prog);
     logEvent('programme.plan', { show: show.name, error: (err as Error).message });
   }
 }
 
-export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
+export async function ensurePlan(
+  ctx: SessionContext,
+  now = session.contextDate(ctx),
+  deps: PlanDeps = {},
+): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;
   let prog = session.getProgramme();
@@ -176,7 +188,7 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
     prog = { status: 'pending', plan: null, beats: {}, introAiredAt: null };
     session.attachProgramme(prog);
   }
-  await fillPlan(ep.show, ctx, now, prog, session.attachProgramme);
+  await fillPlan(ep.show, ctx, now, prog, session.attachProgramme, deps);
 }
 
 // Build the incoming episode while the final outgoing track is still live.
@@ -197,7 +209,12 @@ export async function prepareBoundaryPlan(
     prog = { status: 'pending', plan: null, beats: {}, introAiredAt: null };
     session.attachBoundaryProgramme(prog);
   }
-  await fillPlan(show, ctx, now, prog, session.attachBoundaryProgramme, deps);
+  await fillPlan(show, ctx, now, prog, next => {
+    // It may have transferred from the boundary to the live session while the
+    // producer was awaiting the model. Persist through its current owner.
+    if (session.getProgramme() === next) session.attachProgramme(next);
+    else session.attachBoundaryProgramme(next);
+  }, deps);
 }
 
 // Intro — the top of the show. Fires from the same call sites as the persona
