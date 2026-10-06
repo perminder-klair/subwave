@@ -12,7 +12,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
@@ -99,7 +99,12 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
             enable_thinking: false,
           };
           if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
-          if (body.thinking === undefined) body.thinking = { type: 'disabled' };
+          // A proxy forwarding this to a thinking-mandatory Claude model would
+          // turn it into the 400 it exists to avoid; `reasoning` below carries
+          // the minimal-effort ask for those instead.
+          if (body.thinking === undefined && !thinkingMandatoryModel(String(body.model || ''))) {
+            body.thinking = { type: 'disabled' };
+          }
           if (body.reasoning === undefined) {
             body.reasoning = reasoningMandatoryModel(String(body.model || ''))
               ? { effort: 'minimal' }
@@ -118,10 +123,11 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
 }
 
 // Model families that 400 on `reasoning:{enabled:false}` (OpenAI gpt-5/o-series,
-// DeepSeek R1 variants) and must be minimised with `effort:'minimal'` instead.
-// Deliberately broad at openai/* — harmless on non-reasoning openai models.
+// DeepSeek R1 variants, the thinking-mandatory Claude generations) and must be
+// minimised with `effort:'minimal'` instead. Deliberately broad at openai/* —
+// harmless on non-reasoning openai models.
 export function reasoningMandatoryModel(id: string): boolean {
-  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
+  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id) || thinkingMandatoryModel(id);
 }
 
 // Ollama server URL: settings field, else the config default.

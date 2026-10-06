@@ -9,7 +9,7 @@ import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
-import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
+import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, thinkingMandatoryModel, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { objectViaToolCall, emitInstructions, EMIT_ANSWER_INSTRUCTION } from '../src/llm/internal/strategy/object-via-tool.js';
 import { NATIVE_JSON_INSTRUCTION } from '../src/llm/internal/strategy/object.js';
@@ -481,6 +481,17 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: true }, { forceNoThink: true }), 'none');
     assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: false }), 'none');
   });
+  await test('anthropic: thinking-mandatory generations never get none (it 400s) — minimal floor, medium when on', () => {
+    for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'claude-fable-5', 'claude-mythos-5-1']) {
+      assert.equal(reasoningFor({ provider: 'anthropic', model, reasoning: false }), 'minimal', model);
+      // forced-tool legs too: these models are never forced (forcedToolChoice), so thinking may stay on.
+      assert.equal(reasoningFor({ provider: 'anthropic', model, reasoning: false }, { forceNoThink: true }), 'minimal', model);
+      assert.equal(reasoningFor({ provider: 'anthropic', model, reasoning: true }, { forceNoThink: true }), 'medium', model);
+    }
+    // Earlier generations that still accept thinking:disabled keep the old mapping.
+    assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-sonnet-5', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-opus-5', reasoning: false }), 'none');
+  });
   await test('google: none when reasoning off (provider maps it per family), default when on', () => {
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-3.5-flash', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-2.5-flash', reasoning: false }), 'none');
@@ -515,6 +526,11 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: true }), undefined);
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'gateway', model: 'deepseek/deepseek-v4', reasoning: true }, { forceNoThink: true }), 'none');
+  });
+  await test('gateway: a thinking-mandatory Claude downstream gets minimal, never none', () => {
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-sonnet-5.5', reasoning: false }), 'minimal');
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-opus-5.5', reasoning: true }, { forceNoThink: true }), 'minimal');
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-opus-5.5', reasoning: true }), undefined);
   });
   await test('gateway: Gemma downstream (google/gemma-*) omits the param — no thinkingConfig to a non-thinking model (issue #1044)', () => {
     assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemma-4-31b-it', reasoning: false }), undefined);
@@ -588,6 +604,21 @@ async function main() {
     assert.equal(sent.reasoning_format, 'deepseek');
     assert.deepEqual(sent.reasoning, { enabled: false });
   });
+  await test('proxy to a thinking-mandatory Claude model: no thinking:disabled, reasoning effort:minimal', async () => {
+    // A proxy translating this to Anthropic Messages would turn thinking:disabled
+    // into a 400 on Sonnet 5.5 / Opus 5.5 / Fable 5.
+    let sent: any = null;
+    const impl = openAICompatibleFetch({ provider: 'openai-compatible', reasoning: false }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, true);
+    for (const model of ['claude-sonnet-5-5', 'anthropic/claude-opus-5.5', 'claude-fable-5-1']) {
+      await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model, messages: [] }) });
+      assert.equal(sent.thinking, undefined, model);
+      assert.deepEqual(sent.reasoning, { effort: 'minimal' }, model);
+    }
+    // Any other model keeps the full suppression set.
+    await impl('http://x/v1/chat/completions', { method: 'POST', body: JSON.stringify({ model: 'claude-sonnet-5', messages: [] }) });
+    assert.deepEqual(sent.thinking, { type: 'disabled' });
+    assert.deepEqual(sent.reasoning, { enabled: false });
+  });
   await test('aggregator dialect: reasoning-mandatory model ids get effort:minimal, never enabled:false; existing body.reasoning never clobbered', async () => {
     let sent: any = null;
     const impl = openAICompatibleFetch({ provider: 'openai-compatible', reasoning: false }, async (_u: any, init: any) => { sent = JSON.parse(init.body); return {} as any; }, false);
@@ -614,6 +645,28 @@ async function main() {
     // Garbage / missing cfg never accidentally weakens the default.
     assert.equal(forcedToolChoice({ toolChoice: 'whatever' }), 'required');
     assert.equal(forcedToolChoice(undefined), 'required');
+  });
+  await test('forcedToolChoice: thinking-mandatory Claude models are always auto — they 400 on tool_choice any/tool', () => {
+    // The live failure: openai-compatible proxy → claude-sonnet-5-5, required → any → 400.
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', model: 'claude-sonnet-5-5' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'openai-compatible', model: 'claude-sonnet-5-5', toolChoice: 'required' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'anthropic', model: 'claude-opus-5-5' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'anthropic', model: 'claude-fable-5-1' }), 'auto');
+    assert.equal(forcedToolChoice({ provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5' }), 'auto');
+    // Generations that accept forced tools are untouched.
+    assert.equal(forcedToolChoice({ provider: 'anthropic', model: 'claude-sonnet-5' }), 'required');
+    assert.equal(forcedToolChoice({ provider: 'anthropic', model: 'claude-opus-5' }), 'required');
+    assert.equal(forcedToolChoice({ provider: 'anthropic', model: 'claude-haiku-4-5' }), 'required');
+  });
+  await test('thinkingMandatoryModel: matches dash and dot spellings, prefixed ids and suffixes; no near misses', () => {
+    for (const id of ['claude-sonnet-5-5', 'claude-sonnet-5.5', 'anthropic/claude-opus-5-5', 'claude-opus-5-5-thinking',
+      'claude-fable-5', 'claude-fable-5-1', 'claude-mythos-5-1', 'CLAUDE-SONNET-5-5']) {
+      assert.equal(thinkingMandatoryModel(id), true, id);
+    }
+    for (const id of ['claude-sonnet-5', 'claude-opus-5', 'claude-sonnet-5-20260101', 'claude-opus-4-8', 'claude-sonnet-4-5',
+      'claude-haiku-4-5', 'claude-fable-50', 'claude-sonnet-5-55', 'gpt-5.5', '', undefined as any]) {
+      assert.equal(thinkingMandatoryModel(id), false, String(id));
+    }
   });
 
   console.log('embeddingBaseUrl(cfg):');

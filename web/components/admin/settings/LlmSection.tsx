@@ -793,7 +793,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 (notably Intel/XPU builds) mishandle the guided-decoding backend
                 that <code>required</code> engages, while <code>auto</code> never
                 does. On <code>Auto</code> a capable model still calls the tool;
-                misses fall back to the stateless picker.
+                misses fall back to the stateless picker. Claude Sonnet 5.5,
+                Opus 5.5 and Fable 5 refuse forced tool calls, so they always
+                run on <code>Auto</code> whatever this is set to.
               </div>
             </div>
           )}
