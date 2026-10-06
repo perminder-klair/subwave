@@ -168,13 +168,34 @@ async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promis
   headers.set('x-goog-api-key', key);
   const res = await debugFetch(url, { ...init, headers });
 
-  // A SUCCESS ends this call. It also clears the key's hold and strike count:
-  // a key that just answered is demonstrably not exhausted, so the next
-  // failure has to start from the short interval again. Without this the
-  // escalation ladder ratchets on failures separated by any number of
-  // successes, and a key that recovered stayed pinned at the ceiling.
-  if (res.status !== 429 && res.status !== 401) {
+  // Only a 2xx ends this call, and only a 2xx clears the key's history.
+  //
+  // A key that genuinely answered is demonstrably not exhausted, so its hold and
+  // strike count go and the next failure starts from the short interval again.
+  // Without that the escalation ladder ratchets on failures separated by any
+  // number of successes, and a key that recovered stayed pinned at the ceiling.
+  //
+  // The condition used to be "not a 429 and not a 401", on the reasoning that
+  // anything else means the key is fine. That is false for most of what is left.
+  // A 503 is Google being briefly overloaded and a 403 is this key's project
+  // refusing the request — neither says the QUOTA came back, and both arrive on
+  // a key that is frequently already parked. Treating them as success wiped the
+  // hold, zeroed the escalation strikes and dropped the pool's recorded failure,
+  // so a pool whose keys were all still exhausted reported itself healthy, and the
+  // next real 429 restarted the ladder from the bottom. The evidence about the
+  // pool must survive anything that is not an answer.
+  //
+  // 429 and 401 are the two statuses that mean something about the CREDENTIAL, so
+  // they park and rotate below; 402 and the generation-blocked codes return
+  // untouched, which is right — they are not key problems and another key would
+  // refuse the same input.
+  if (res.status >= 200 && res.status < 300) {
     reportKeySuccess(key);
+    return res;
+  }
+  if (res.status !== 429 && res.status !== 401) {
+    // Not a success, and not a credential verdict. Hand the response back with
+    // the key's history exactly as it was.
     return res;
   }
 

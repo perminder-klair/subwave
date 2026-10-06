@@ -29,6 +29,7 @@ import {
   fingerprint,
   getLastFailure,
   holdRemainingMs,
+  isHeld,
   invalidatePool,
   parsePool,
   sanitizeName,
@@ -1384,6 +1385,111 @@ test('a client can be built while every key is held, and works once the hold lap
     status = 200;
     const out = await generateText({ model, prompt: 'hi', maxOutputTokens: 8 });
     assert.ok(out.text, 'the client built during the hold must serve once the hold lapses');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+// ─── only a real answer clears a key's history ──────────────────────────────
+// The bug: the transport called reportKeySuccess for anything that was not a 429
+// or a 401, so a 503 (Google briefly overloaded) and a 403 (this project refuses
+// the request) each cleared the hold, zeroed the escalation strikes and dropped
+// the pool's recorded failure. Neither says the quota came back — both arrive on
+// keys that are usually already parked. The pool reported itself healthy while
+// every key in it was still spent, and the next real 429 restarted the ladder
+// from its shortest rung.
+
+// A key whose hold has LAPSED but whose failure history has not: the state a real
+// pool is in between two 429s, and the only state in which a non-quota status can
+// reach the wire at all. With every key still parked the transport short-circuits
+// and replays the recorded 429, so a test that leaves the pool fully held never
+// exercises the path it claims to — which is how the first draft of these two
+// passed against the unfixed code while asserting nothing about 503 or 403.
+//
+// The hold is made to lapse for real, with a 1ms RetryInfo and a real wait,
+// rather than through `__expireHoldsForTest()` — that helper clears the strike
+// ladder as well as the holds, so it cannot model the state under test. It was
+// doing exactly that here, and the assertion below passed against the unfixed
+// code for the same reason it should have failed.
+async function lapsedButTainted(fetchImpl: () => Promise<Response>): Promise<number> {
+  setPool(K1);
+  globalThis.fetch = (async () => new Response(
+    JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '1ms' }] } }),
+    { status: 429, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  await googleKeyFetch('https://example.test/v1/x', {});
+  const strikes = poolStatus()[0].strikes;
+  assert.ok(strikes >= 1, 'precondition: the key carries a failure');
+  assert.ok(getLastFailure(), 'precondition: a quota failure is on record');
+  await new Promise(r => setTimeout(r, 10));   // the hold lapses; the evidence does not
+  globalThis.fetch = fetchImpl as unknown as typeof fetch;
+  return strikes;
+}
+
+test('a 503 does not reset a key\'s quota history', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const strikesBefore = await lapsedButTainted(async () => new Response(
+    JSON.stringify({ error: { code: 503, message: 'The service is currently unavailable.' } }),
+    { status: 503, headers: { 'content-type': 'application/json' } },
+  ));
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 503, 'a 503 must be handed back untouched');
+    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 503 must not reset the escalation ladder');
+    assert.ok(getLastFailure(), 'a 503 must not drop the recorded quota failure');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a 403 does not reset quota history — it is not the credential failing', async () => {
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  const strikesBefore = await lapsedButTainted(async () => new Response(
+    JSON.stringify({ error: { code: 403, message: 'The caller does not have permission' } }),
+    { status: 403, headers: { 'content-type': 'application/json' } },
+  ));
+  try {
+    const res = await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(res.status, 403, 'a 403 must be handed back, not rotated away');
+    assert.equal(poolStatus()[0].strikes, strikesBefore, 'a 403 must not reset the escalation ladder');
+    assert.ok(getLastFailure(), 'a 403 must not drop the recorded quota failure');
+  } finally {
+    globalThis.fetch = realFetch;
+    setPool();
+  }
+});
+
+test('a 429 then a 200 on the same key does clear it — the fix is not over-broad', async () => {
+  // The guard above must not become "nothing ever clears". A key that answers is
+  // demonstrably not exhausted, and leaving its hold in place would shrink the
+  // pool for no reason — which is the failure the success-reset behaviour was
+  // introduced to stop.
+  const { googleKeyFetch } = await import('../src/llm/internal/provider/registry.js');
+  const realFetch = globalThis.fetch;
+  let status = 429;
+  globalThis.fetch = (async () => new Response(
+    status === 429
+      ? JSON.stringify({ error: { code: 429, message: 'quota', details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '30s' }] } })
+      : JSON.stringify({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }),
+    { status, headers: { 'content-type': 'application/json' } },
+  )) as unknown as typeof fetch;
+  try {
+    setPool(K1);
+    await googleKeyFetch('https://example.test/v1/x', {});
+    assert.equal(allKeysHeld(), true, 'precondition: the only key is parked');
+    assert.ok(getLastFailure(), 'precondition: a failure is on record');
+
+    __expireHoldsForTest();
+    status = 200;
+    await googleKeyFetch('https://example.test/v1/x', {});
+
+    assert.equal(allKeysHeld(), false, 'a 200 must release the key');
+    assert.equal(getLastFailure(), null, 'a 200 must drop the recorded failure');
   } finally {
     globalThis.fetch = realFetch;
     setPool();
