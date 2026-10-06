@@ -48,6 +48,13 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # Controller tests import web helpers (including dashboard types), so
+      # checking them also needs the dependencies declared by the web package.
+      - name: Install web deps (controller test cross-package imports)
+        if: matrix.package == 'controller'
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
       # mcp-subwave is a thin launcher that imports the shared MCP sources from
       # controller/src/mcp/**, so its `tsc --noEmit` type-checks those files —
       # which resolve @modelcontextprotocol/sdk + zod from controller/node_modules.
