@@ -2,10 +2,8 @@
 // matter-of-fact station whose links are exactly "This is <artist>." or
 // "Next up, <artist>." instead of the ordinary "set it up, name the artist"
 // contract. Covers: persona normalisation (absent/valid/garbage), the
-// settings.announceLinks() helper, the two pure prompt builders that carry a
-// fallback announce contract to the model (dj-agent's buildLinkClause and
-// llm/internal/prompts/scripts.ts's linkPrompt), and announce-line.ts — the
-// module that actually COMPOSES the announcement in code, since a model can
+// settings.announceLinks() helper, the isolated link writer's prompt, and
+// announce-line.ts, which composes the announcement in code, since a model can
 // neither hold a fixed string reliably nor alternate with a line it is never
 // shown. The compose is PURE: it alternates against the link that last AIRED
 // (handed in by the caller), refuses the artists an English frame cannot carry,
@@ -23,7 +21,6 @@ process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-link-style-'));
 
 const { normalizePersona } = await import('../src/settings/normalize.js');
 const { announceLinks } = await import('../src/settings/persona.js');
-const { buildLinkClause } = await import('../src/broadcast/dj-agent/link-clause.js');
 const { linkPrompt, generateLink } = await import('../src/llm/internal/prompts/scripts.js');
 const { announceLine, nextAnnounceForm } = await import('../src/broadcast/announce-line.js');
 const { queue } = await import('../src/broadcast/queue.js');
@@ -62,47 +59,6 @@ test('announceLinks is true only when linkStyle is exactly "announce"', () => {
   assert.equal(announceLinks({}), false);
   assert.equal(announceLinks(null), false);
   assert.equal(announceLinks(undefined), false);
-});
-
-// ── dj-agent's per-pick event clause (buildLinkClause) ───────────────────────
-
-test('announce link clause carries the fixed two-form contract, not the variety instructions or the alternate instruction', () => {
-  const clause = buildLinkClause({ djMode: true, announce: true, angle: null, recentOpeners: [] });
-  assert.match(clause, /This is/);
-  assert.match(clause, /Next up,/);
-  assert.doesNotMatch(clause, /Approach for this link/);
-  assert.doesNotMatch(clause, /start this one differently/);
-  // The station composes and alternates the final line (announce-line.ts) —
-  // the model is never asked to alternate with a line it can't see.
-  assert.doesNotMatch(clause, /[Aa]lternate/);
-});
-
-test('natural link clause keeps the pre-existing variety contract', () => {
-  const clause = buildLinkClause({
-    djMode: false,
-    announce: false,
-    angle: 'lead with one specific image from the track itself.',
-    recentOpeners: [],
-  });
-  assert.match(clause, /Approach for this link/);
-});
-
-test('natural link clause output is unchanged versus the pre-extraction template', () => {
-  const angle = 'lead with one specific image from the track itself.';
-  const withoutDjMode = buildLinkClause({ djMode: false, announce: false, angle, recentOpeners: [] });
-  assert.equal(
-    withoutDjMode,
-    ` Also write the "say" link — it airs as your pick starts.`
-      + ` Approach for this link: ${angle} Vary your first words — don't default to "here's", "this is", or "coming up".`,
-  );
-
-  const withDjMode = buildLinkClause({ djMode: true, announce: false, angle, recentOpeners: ['Here we go'] });
-  assert.equal(
-    withDjMode,
-    ` Also write the "say" link — it airs as your pick starts. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.`
-      + ` Approach for this link: ${angle} Vary your first words — don't default to "here's", "this is", or "coming up".`
-      + ` You opened recent lines with "Here we go…" — start this one differently.`,
-  );
 });
 
 // ── scripts.ts's isolated writer prompt ─────────────────────────────────────

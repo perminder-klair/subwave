@@ -5,10 +5,8 @@
 
 import { mountFor, type StreamFormat } from './streamFormat';
 import {
-  authorizationFor,
   normalizeStationBase,
   resolveStationConnection,
-  splitStationAddress,
   type StationCredentials,
 } from './station-credentials';
 import type {
@@ -84,19 +82,6 @@ export interface StationApi {
 /** Strip a trailing slash; default to https:// if the user typed a bare host. */
 export function normalizeBase(raw: string): string {
   return normalizeStationBase(raw);
-}
-
-/** Split a normalized base into a credential-free base URL and, if it carried
- *  `user:pass@` userinfo, an `Authorization: Basic` header value. */
-export function splitCredentials(rawBase: string): {
-  base: string;
-  authorization: string | null;
-} {
-  const split = splitStationAddress(rawBase);
-  return {
-    base: split.base,
-    authorization: split.credentials ? authorizationFor(split.credentials) : null,
-  };
 }
 
 // Hard timeout on every call so a hung origin can't stall the 5s feed poll.

@@ -160,11 +160,3 @@ export function useStation(): StationContextValue {
   if (!v) throw new Error('useStation must be used within StationProvider');
   return v;
 }
-
-/** Convenience: the active API client, throwing if no station is active. Use
- *  only inside the player tree where a station is guaranteed. */
-export function useStationApi(): StationApi {
-  const { api } = useStation();
-  if (!api) throw new Error('No active station');
-  return api;
-}

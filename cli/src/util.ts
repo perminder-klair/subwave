@@ -1,9 +1,8 @@
 // Misc helpers. Kept dependency-free so any module can pull these in.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { resolve } from 'node:path';
 import { requireSubwaveHome } from './home.ts';
 
 // Resolved lazily so `subwave init` (no home yet) and `subwave --version` can
@@ -16,20 +15,11 @@ export function getSubwaveHome(): string {
 
 // Call these rather than caching at module load; that would force home
 // resolution at import time and break `subwave init`.
-export function getScriptsDir(): string { return resolve(getSubwaveHome(), 'scripts'); }
 export function getRootEnv(): string { return resolve(getSubwaveHome(), '.env'); }
 export function getRootEnvExample(): string { return resolve(getSubwaveHome(), '.env.example'); }
 export function getStateDir(): string { return resolve(getSubwaveHome(), 'state'); }
 export function getSetupConfigPath(): string { return resolve(getStateDir(), 'setup-config.json'); }
-export function getSecretsEnvPath(): string { return resolve(getStateDir(), 'secrets.env'); }
 export function getLegacyControllerEnv(): string { return resolve(getSubwaveHome(), 'controller', '.env'); }
-export function getLegacyDockerEnv(): string { return resolve(getSubwaveHome(), 'docker', '.env'); }
-
-export function expandHome(p: string): string {
-  if (p.startsWith('~/')) return resolve(homedir(), p.slice(2));
-  if (p === '~') return homedir();
-  return p;
-}
 
 export function have(bin: string): boolean {
   // We only ship where `which` exists (macOS, Linux, WSL).
@@ -118,8 +108,7 @@ export function writeEnvFile(
   writeFileSync(path, content);
 }
 
-// Wizard overlay helpers. Mirror controller/src/setup/{config,secrets}.ts so the
-// CLI and web wizards write the same files in the same shape.
+// Read the wizard overlay to pre-fill setup prompts. The controller owns writes.
 
 export interface SetupConfig {
   navidrome?: { url?: string; user?: string; pass?: string };
@@ -134,112 +123,6 @@ export function readSetupConfig(): SetupConfig {
   } catch {
     return {};
   }
-}
-
-export function writeSetupConfig(patch: Partial<SetupConfig>): SetupConfig {
-  const current = readSetupConfig();
-  const next: SetupConfig = {
-    ...current,
-    ...patch,
-    navidrome: { ...(current.navidrome || {}), ...(patch.navidrome || {}) },
-  };
-  const p = getSetupConfigPath();
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileWithRecover(p, JSON.stringify(next, null, 2));
-  return next;
-}
-
-// A state file a container touched first is uid 0 mode 0644: host-readable but
-// not writable. Chown the tree back via a one-shot container, then retry once.
-function writeFileWithRecover(path: string, contents: string): void {
-  try {
-    writeFileSync(path, contents);
-    return;
-  } catch (e: unknown) {
-    const err = e as NodeJS.ErrnoException;
-    if (err?.code !== 'EACCES' && err?.code !== 'EPERM') throw err;
-    if (!chownStateDirToCurrentUser()) {
-      throw new Error(
-        `${path} is owned by another user (likely root from a Docker container) and Docker isn't available to fix it. ` +
-        `Fix manually: docker run --rm -v "$PWD/state:/state" alpine chown -R $(id -u):$(id -g) /state`,
-      );
-    }
-    // Still failing means the chown wasn't the problem (read-only mount, say).
-    writeFileSync(path, contents);
-  }
-}
-
-// Idempotent — chown -R over already-owned files is a no-op.
-function chownStateDirToCurrentUser(): boolean {
-  if (!have('docker')) return false;
-  const uid = process.getuid?.();
-  const gid = process.getgid?.();
-  if (uid === undefined || gid === undefined) return false; // non-POSIX
-  const r = spawnSync(
-    'docker',
-    ['run', '--rm', '-v', `${getStateDir()}:/state`, 'alpine', 'chown', '-R', `${uid}:${gid}`, '/state'],
-    { stdio: 'pipe' },
-  );
-  return r.status === 0;
-}
-
-// Mirrors SECRET_ENV_KEYS in controller/src/setup/secrets.ts. Anything not on
-// this list is silently ignored.
-export const WIZARD_SECRET_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'REQUESTY_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'AI_GATEWAY_API_KEY',
-  'ELEVENLABS_API_KEY',
-  'FISH_API_KEY',
-  'SEARCH_API_KEY',
-  'EMBEDDING_API_KEY',
-] as const;
-
-// Merges into state/secrets.env (0600), preserving hand-added keys. Same shape
-// the controller's saveSecrets() writes, so the next boot picks them up.
-export function writeSecretsEnv(patch: Record<string, string>): void {
-  const p = getSecretsEnvPath();
-  const current: Record<string, string> = {};
-  if (existsSync(p)) {
-    for (const rawLine of readFileSync(p, 'utf8').split('\n')) {
-      const line = rawLine.trim();
-      if (!line || line.startsWith('#')) continue;
-      const eq = line.indexOf('=');
-      if (eq < 0) continue;
-      const key = line.slice(0, eq).trim();
-      if ((WIZARD_SECRET_KEYS as readonly string[]).includes(key)) {
-        current[key] = line.slice(eq + 1);
-      }
-    }
-  }
-  for (const [key, value] of Object.entries(patch)) {
-    if (!(WIZARD_SECRET_KEYS as readonly string[]).includes(key)) continue;
-    current[key] = value;
-  }
-  const body = [
-    '# SUB/WAVE secrets — written by the install wizard.',
-    '# Sourced by the controller on boot. Mode 0600 enforced below.',
-    '',
-    ...Object.entries(current).map(([k, v]) => `${k}=${envEscape(v)}`),
-    '',
-  ].join('\n');
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileWithRecover(p, body);
-  try {
-    chmodSync(p, 0o600);
-  } catch {
-    // Non-POSIX filesystem (a Windows host) — non-fatal.
-  }
-}
-
-export function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms} ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
-  return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
 export function formatRelative(date: Date | number | string): string {

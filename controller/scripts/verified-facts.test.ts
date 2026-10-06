@@ -16,21 +16,19 @@ const track = (over: Record<string, unknown> = {}) => ({
 assert.deepEqual(sleeveNotesFor(track()), [
   'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
-assert.deepEqual(contextSleeveNotesFor(track(), {
-  date: { season: 'summer' }, weather: { condition: 'cloudy', location: 'The Ribble Valley' },
-}), ['Album: After Laughter Comes Tears.', 'Release year: 1964.']);
-assert.deepEqual(contextSleeveNotesFor(track({ album: '', year: null, originalYear: null }), {
-  activeShow: { topic: 'songs for the long way home', episodeAngle: 'late-night departures' },
-  festival: { name: 'Solstice' },
-}, 'First station play.'), ['First station play.'],
-'sparse metadata must not let show or festival steering leak into Sleeve Notes');
-assert.deepEqual(contextSleeveNotesFor(track(), {}, 'First station play.').slice(0, 2), [
+assert.deepEqual(contextSleeveNotesFor(track()), [
+  'Album: After Laughter Comes Tears.', 'Release year: 1964.',
+]);
+assert.deepEqual(contextSleeveNotesFor(track({ album: '', year: null, originalYear: null }),
+  'First station play.'), ['First station play.'],
+'a first play remains the only sleeve note when library metadata is sparse');
+assert.deepEqual(contextSleeveNotesFor(track(), 'First station play.').slice(0, 2), [
   'First station play.', 'Album: After Laughter Comes Tears.',
 ], 'a qualifying first play must not be displaced by routine album/year metadata');
 assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track())), [
   'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
-assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track()), Math.random, false), [
+assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track()), false), [
   'Album: After Laughter Comes Tears.',
 ]);
 
