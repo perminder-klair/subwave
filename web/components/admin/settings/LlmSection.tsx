@@ -689,6 +689,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
               {primaryDiscovery.models.length > 0 ? (
                 <ModelCombobox
+                  allowCustom
                   models={primaryDiscovery.models}
                   value={form.llm.model}
                   onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, model: v } }))}
@@ -724,7 +725,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
             <div className="field-hint">
               {primaryDiscovery.models.length > 0
-                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                ? `${primaryDiscovery.models.length} model${primaryDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one or enter a model ID.`
                 : !primaryDiscoveryEnabled
                   ? (form.llm.provider === 'openai-compatible'
                       ? 'Set a base URL above to discover available models.'
@@ -1037,6 +1038,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   {fallbackDiscovery.models.length > 0 ? (
                     <ModelCombobox
+                      allowCustom
                       models={fallbackDiscovery.models}
                       value={form.llm.fallback.model}
                       onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, model: v } } }))}
@@ -1072,7 +1074,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
                 <div className="field-hint">
                   {fallbackDiscovery.models.length > 0
-                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one from the list.`
+                    ? `${fallbackDiscovery.models.length} model${fallbackDiscovery.models.length !== 1 ? 's' : ''} discovered. Pick one or enter a model ID.`
                     : !fallbackDiscoveryEnabled
                       ? (form.llm.fallback.provider === 'openai-compatible'
                           ? 'Set a base URL above to discover available models.'

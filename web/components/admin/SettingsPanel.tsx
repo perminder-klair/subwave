@@ -871,8 +871,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   }), [saveSlot, reportDirty, advOpen, activeSection]);
 
   return (
-    <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
-      <aside className="grid gap-3.5 sm:sticky sm:top-6">
+    <div className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
+      <aside className="grid min-w-0 gap-3.5 lg:sticky lg:top-6">
         {SECTION_GROUPS.map(group => (
           <div key={group} className="grid gap-1">
             <span className="caption pb-1">{group}</span>
@@ -917,7 +917,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         ))}
       </aside>
 
-      <div className="grid gap-4">
+      <div className="grid min-w-0 grid-cols-1 gap-4">
         <SettingsSearch onJump={jumpTo} sections={sections} />
         {err && <ErrorState error={err} onRetry={refresh} />}
         {pendingRestart && (
