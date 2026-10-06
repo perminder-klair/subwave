@@ -164,6 +164,6 @@ test('the real pool path with clock speech disabled does not offer an approximat
 });
 
 test('the real pool handover packet keeps show identity but withholds its start time when clock speech is disabled', () => {
-  assert.match(linkWire, /Following show: \\"Lunchtime Rocks\\" with Wren/);
+  assert.match(linkWire, /Following show: Wren presents \\"Lunchtime Rocks\\"/);
   assert.doesNotMatch(linkWire, new RegExp(String(handover!.nextShow.startsAt).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });

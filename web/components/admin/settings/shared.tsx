@@ -162,6 +162,7 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  compatibleMode: 'local' | 'hosted';
   reasoning: boolean;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
@@ -175,6 +176,7 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  compatibleMode: 'local' | 'hosted';
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -212,6 +214,7 @@ export interface EmbeddingForm {
   provider: string;          // empty → follow llm.provider
   model: string;             // empty → sensible default per provider
   providerBaseUrls: Record<string, string>; // per-provider embedding server URLs; empty → inherit llm
+  headers: LlmHeaderRow[];
   ollamaUrl: string;         // dedicated embedding server URL (ollama); empty → inherit llm
   seedCount: string;         // '0' = auto
   knnNeighbours: string;
@@ -349,6 +352,7 @@ export interface DuckingForm {
 
 export interface DjBehaviourForm {
   showWelcome: boolean;
+  previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
@@ -361,6 +365,7 @@ export interface DjBehaviourForm {
  *  strings so a temporarily blank number input survives until Save. */
 export interface DjBehaviourValues {
   showWelcome?: boolean;
+  previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
@@ -511,6 +516,7 @@ export interface SettingsData {
       enabled?: boolean;
       provider?: string;
       model?: string;
+      headers?: Record<string, string>;
       baseUrl?: string;
       ollamaUrl?: string;
       seedCount?: number;

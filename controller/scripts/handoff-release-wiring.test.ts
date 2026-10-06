@@ -81,7 +81,8 @@ async function scenario() {
     }
     if (text === 'Final track intro') {
       introRenders++;
-      if (mode?.startsWith('pending-render') || mode === 'pending-bed-render') await waiting;
+      if (mode?.startsWith('pending-render') || mode === 'pending-bed-render'
+        || mode === 'generation-delayed-intro') await waiting;
       if (mode === 'failed-render') throw new Error('controlled intro render failure');
     }
     return wav;
@@ -96,6 +97,57 @@ async function scenario() {
   async function waitFor(check: () => boolean) {
     for (let n = 0; n < 300 && !check(); n++) await new Promise(resolve => setTimeout(resolve, 10));
     assert.ok(check(), `scenario ${mode} did not settle`);
+  }
+  if (mode === 'timer-lifetime') {
+    assert.equal(session.armBoundaryHandoff(getContext(next), { id: 'final' }), true);
+    queue.armHandoffGenerationFallback();
+    assert.ok(queue._handoffGenerationTimer);
+    return;
+  }
+  if (mode === 'generation-delayed-intro' || mode === 'generation-restart') {
+    queue.autoPick = false;
+    queue.upcoming = [{
+      track: { id: 'final', title: 'Final', artist: 'Artist', duration: 3_600 },
+      sent: true, aiPicked: true,
+      ...(mode === 'generation-delayed-intro' ? {
+        introScript: 'Final track intro', introKind: 'link', introPersona: outgoing,
+      } : {}),
+    }];
+    queue.onTrackStarted({ subsonic_id: 'final', title: 'Final', artist: 'Artist' });
+    if (mode === 'generation-delayed-intro') await waitFor(() => introRenders === 1);
+    else await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(session.armBoundaryHandoff(getContext(next), { id: 'final' }), true);
+    const record = session.getSession()!.boundaryHandoff!;
+    record.boundaryAt = Date.now() - 2 * 60_000 + 100;
+    let attempts = 0;
+    const runFallback = queue.runHandoffGenerationFallback.bind(queue);
+    queue.runHandoffGenerationFallback = async (...args) => {
+      attempts++;
+      await runFallback(...args);
+    };
+    if (mode === 'generation-restart') {
+      queue.persist();
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await session.recover(getContext());
+      queue.current = null;
+      queue.recover();
+    } else {
+      queue.armHandoffGenerationFallback();
+    }
+    if (mode === 'generation-delayed-intro') {
+      await waitFor(() => attempts === 1);
+      assert.deepEqual(writes, [], 'the expired deadline still waits for intro publication');
+      assert.equal(generations, 0);
+      release();
+    }
+    await waitFor(() => session.boundaryHandoffStatus()?.state === 'aired');
+    assert.ok(attempts >= 1, 'the real deadline timer attempted delivery');
+    assert.equal(generations, 2, 'the confirmed runner and fallback claim only one complete pair');
+    assert.deepEqual(writes, [
+      ...(mode === 'generation-delayed-intro' ? ['Final track intro'] : []),
+      'The hour is yours.', 'Thanks for the handover.',
+    ]);
+    return;
   }
   if (overdue) {
     const skipped = { id: 'skipped', title: 'Skipped final track', artist: 'Artist' };
@@ -211,9 +263,9 @@ if (mode) {
   await scenario();
   // Production persistence timers are irrelevant once all behavioral assertions
   // settle; exiting also keeps child module mocks out of the parent runner.
-  process.exit(0);
+  if (mode !== 'timer-lifetime') process.exit(0);
 } else {
-  for (const scenarioName of ['overdue-immediate', 'overdue-between-tracks', 'pending-render', 'pending-render-between-tracks', 'pending-render-superseded', 'pending-publication', 'pending-bed-render', 'pending-bed-publication', 'retry-muted', 'failed-render']) {
+  for (const scenarioName of ['timer-lifetime', 'generation-delayed-intro', 'generation-restart', 'overdue-immediate', 'overdue-between-tracks', 'pending-render', 'pending-render-between-tracks', 'pending-render-superseded', 'pending-publication', 'pending-bed-render', 'pending-bed-publication', 'retry-muted', 'failed-render']) {
     test(`handoff release: ${scenarioName}`, () => {
       const root = mkdtempSync(join(tmpdir(), 'subwave-handoff-release-'));
       try {

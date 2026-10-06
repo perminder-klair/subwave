@@ -163,7 +163,10 @@ for (const condition of ['stormy', 'rainy', 'clear', 'unknown', 'absent', 'null'
       assert.ok(said && hourlyContext.clock.spokenTimeOptions.includes(said));
       assert.match(user, /say exactly that time/);
       assert.match(user, /never a different time/);
-      assert.match(user, /first spoken segment of the newly started show "Equinox Top 100 UK & Australia Tunes"/);
+      assert.match(user, /The schedule is now in "Equinox Top 100 UK & Australia Tunes"/);
+      assert.match(user, /you may add one short, natural welcome/);
+      assert.match(user, /Do not .*claim the show began at a particular time/);
+      assert.doesNotMatch(user, /first spoken segment|newly started show/);
     } else {
       assert.match(user, /Say the time in natural spoken words/);
       assert.doesNotMatch(user, /first spoken segment/);
@@ -173,9 +176,9 @@ for (const condition of ['stormy', 'rainy', 'clear', 'unknown', 'absent', 'null'
 
 test('hourly show welcome requires both the flag and a named active show', async () => {
   const ordinary = await captureHourly(hourlyContext);
-  assert.doesNotMatch(ordinary.user, /first spoken segment/);
+  assert.doesNotMatch(ordinary.user, /The schedule is now in|natural welcome/);
   const unnamed = await captureHourly({ ...hourlyContext, activeShow: {} }, true);
-  assert.doesNotMatch(unnamed.user, /first spoken segment/);
+  assert.doesNotMatch(unnamed.user, /The schedule is now in|natural welcome/);
 });
 
 test('dedicated weather context still includes known conditions and excludes unknown', () => {

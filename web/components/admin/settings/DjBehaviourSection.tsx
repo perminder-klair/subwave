@@ -188,8 +188,23 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
         </p>
       </Card>
 
-      <Card title="Show changes" sub={form.djBehaviour.showWelcome ? 'welcome at the hour' : 'quiet'}>
+      <Card title="Show changes" sub={form.djBehaviour.previewNextShow || form.djBehaviour.showWelcome ? 'on-air cues' : 'quiet'}>
         <div className="field">
+          <Label>Preview next show</Label>
+          <Seg
+            value={form.djBehaviour.previewNextShow ? 'on' : 'off'}
+            options={[
+              { id: 'off', label: 'Off', title: 'Leave the handoff as the only acknowledgement of the next show' },
+              { id: 'on', label: 'On', title: 'Let the outgoing DJ naturally preview the following show near a scheduled change' },
+            ]}
+            onChange={v => setForm(f => ({ ...f, djBehaviour: { ...f.djBehaviour, previewNextShow: v === 'on' } }))}
+          />
+          <p className="mt-2 text-[13px] leading-[1.55] text-muted">
+            Lets the outgoing DJ mention the following presenter’s show near a scheduled
+            change. This is separate from the presenter handoff, which still happens normally.
+          </p>
+        </div>
+        <div className="field mt-5">
           <Label>Welcome the new show</Label>
           <Seg
             value={form.djBehaviour.showWelcome ? 'on' : 'off'}
