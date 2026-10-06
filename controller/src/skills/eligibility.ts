@@ -40,6 +40,8 @@ export interface SkillEligibilityInput {
   // resolved guest. Ordinary skills leave requiresCohosts false/absent.
   requiresCohosts?: boolean;
   hasCohosts?: boolean;
+  use?: 'speech' | 'preparation';
+  preparationSkill?: string | null;
 }
 
 export function skillEnabled({ seeded, skill, enabled }: SkillEligibilityInput): boolean {
@@ -56,6 +58,7 @@ export function personaRunsSkill({ skill, personaSkills }: SkillEligibilityInput
 export function skillEligible(input: SkillEligibilityInput): { allowed: boolean; reason?: string } {
   if (!skillEnabled(input)) return { allowed: false, reason: 'skill is disabled' };
   if (!personaRunsSkill(input)) return { allowed: false, reason: 'the on-air persona does not run this skill' };
-  if (input.requiresCohosts && !input.hasCohosts) return { allowed: false, reason: 'requires a co-hosted show' };
+  if (input.use !== 'preparation' && input.preparationSkill === input.skill) return { allowed: false, reason: 'reserved for show preparation' };
+  if (input.use !== 'preparation' && input.requiresCohosts && !input.hasCohosts) return { allowed: false, reason: 'requires a co-hosted show' };
   return { allowed: true };
 }

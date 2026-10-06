@@ -1,3 +1,4 @@
+import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
 // Session DJ agent — the conversational brain that runs over a stream session.
 //
 // This module owns the pick and request runs; the pieces they're built from
@@ -188,6 +189,8 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // pick's look-ahead moment (showAt) so the anchored playlist is the show's
   // that will be on air when the pick plays — same clock as pickSystem's brief
   // and buildTools' locks.
+  ctx = await prepareEpisodeContext(ctx);
+  const episodeSource = showPreparation.read({ context: ctx }).music;
   const activeShow = settings.resolveActiveShow(showAt ?? undefined);
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
@@ -255,6 +258,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     {
       show: activeShow,
       playlistTracks,
+      episodeTracks: episodeSource?.tracks,
       excludedIds,
       resolvedGenres: genreLock ?? [],
       minTrackSec,
@@ -275,6 +279,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // to the discovery tools without being unpacked on the way (see PickerRunArgs
   // in dj-agent/agents.ts for why that matters).
   const scope = pickerScope({
+    episodeSource,
     recentIds,
     recentKeys,
     hardRecentIds,
@@ -302,6 +307,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   });
 
   const run = await pickerAgent.run({
+    editorial: ctx.episodeEditorial,
     messages: session.windowMessages(),
     scope,
     showAt,
@@ -408,7 +414,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // Read once: the album guard below steps around the same neighbours, and two
   // reads of a live queue across two awaits could disagree.
   const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
-  const guarded = await runArtistGuard<any>({
+  const guarded: Awaited<ReturnType<typeof runArtistGuard<any>>> = episodeSource ? { kind: 'kept' } : await runArtistGuard<any>({
     song, object, pickAnchor,
     seen: extras.seen,
     // Every queue read stays here; the policy module is handed values only.
@@ -590,6 +596,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // tempo/key target instead of the pick-cycle anchor. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
   // run's current waypoint vector, drifting the pool toward the destination.
+  ctx = await prepareEpisodeContext(ctx);
   const result = await picker.pickViaPool(queue, ctx, rankTarget, audioWaypoint, opts);
   if (!result) {
     queue.log('picker', 'pool produced no pick');
@@ -1176,9 +1183,13 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   // speech facts belong to the scheduled boundary. Unknown legacy/malformed
   // boundaries fail silent for every temporal field rather than leaking the
   // look-ahead clock into either half of the handoff.
-  const promptContext = isBoundaryHandoff
-    ? boundarySpeechContext(ctx, pending.boundaryAt)
-    : ctx;
+  const speechContext = isBoundaryHandoff ? boundarySpeechContext(ctx, pending.boundaryAt) : ctx;
+  const incomingEditorial = showPreparation.read({ context: ctx }).editorial;
+  const promptContext = incomingEditorial
+    ? { ...speechContext, episodeEditorial: incomingEditorial }
+    : speechContext;
+
+  const outgoingEditorial = pending.episodeEditorial || '';
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
     // A boundary handoff is generated while the outgoing session is deliberately
@@ -1198,7 +1209,7 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
       try {
         signoffText = await generateSignoff({
           personaOut, personaIn, showOut, showIn,
-          context: promptContext, recap: outgoingRecap, recentOpeners: outgoingOpeners,
+          context: { ...promptContext, episodeEditorial: outgoingEditorial }, recap: outgoingRecap, recentOpeners: outgoingOpeners,
         });
       } catch (err: any) {
         queue.log('error', `Handoff sign-off failed: ${err.message}`);

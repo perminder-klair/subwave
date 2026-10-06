@@ -1,3 +1,4 @@
+import { z } from 'zod';
 // Subsonic API client for Navidrome. Salt+token auth, never plaintext.
 
 import crypto from 'node:crypto';
@@ -949,4 +950,10 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
   // No liq_amplify: the render already gain-matched both sources, so a stamp
   // here would double-apply.
   return `annotate:${fields.join(',')}:${clipPath}`;
+}
+
+export async function getLibraryArtists(): Promise<Array<{ id: string; name: string }>> {
+  const result = await call('getArtists', {}, RETRY_FAST_TRANSPORT);
+  const schema = z.object({ artists: z.object({ index: z.array(z.object({ artist: z.array(z.object({ id: z.string(), name: z.string() })) })).default([]) }) });
+  return schema.parse(result).artists.index.flatMap(index => index.artist);
 }

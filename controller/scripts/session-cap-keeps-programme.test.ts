@@ -38,7 +38,7 @@ function context(show: { id: string; name: string }, atMs: number): SessionConte
     weather: null, festival: null, dominantMood: 'calm',
     date: stationContext.getDateContext(new Date(atMs)),
     clock: stationContext.getClockContext(new Date(atMs)),
-    listeners: { count: 1 }, showHandover: null,
+    listeners: { count: 1 }, showHandover: null, episodeEditorial: '',
     activeShow: { ...show, topic: '', moods: ['calm'] },
   };
 }

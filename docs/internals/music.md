@@ -71,3 +71,33 @@ Failed or deferred state migration keeps automatic recovery retryable.
 - **One fold under every blocklist name tier** (#1611): the id list's ALBUM tier used to key through a module-local normaliser that folded case and whitespace only, while #1603 moved the ARTIST tier onto `recency.artistNameKey`, which folds curly-vs-straight apostrophes too — so an album entry stored from a row tagged "Guns N’ Roses" missed the same album tagged "Guns N' Roses" and an artist entry did not. Two tiers of one absolute list disagreeing about what one string means. The fold is now `recency.nameKey`, with `artistNameKey` kept as its artist-facing alias (one function, two names — an album title is not an artist, and a site keying one through a helper named for the other is what invites a local copy back in), and BOTH halves of the album key run it: an album title carries an apostrophe as often as a band name ("Sgt. Pepper’s", "Livin’ La Vida Loca"), so folding the artist half alone would move the disagreement one field over rather than close it. **This WIDENS an absolute list** — two spellings of one name collapse to one key, so album entries now block rows the stored spelling missed — which is why it did not ride inside #1608; it is safe for the same reason the artist fold was, since an apostrophe style is which ripper wrote the file and never which record it is. `schemas/blocklist.ts` `normText` — what the `album`/`title`/`tag`/`mood` RULES compile and match with — moved with it, because rules and id entries answer the same question about the same row and a fold on one side only is the same drift one field over; it RESTATES the fold rather than importing it (a mirrored schema module may import only zod) and the two are pinned in step by a table. Nothing else folds: a hyphen still separates `trip-hop` from `trip hop` (which `music/scene-references.ts`' orphan scan depends on), the album key is still a (title, artist) PAIR so a generic "Greatest Hits" cannot cross-match, and there is still no never-starve behind any of it. Pinned by `scripts/blocklist-name-fold.test.ts`.
 
 - **Navidrome 0.64 ID adoption (#1255, #1699)**: every authoritative library walk calls `id-rotation.adoptAndPrune` before deleting orphans. A track is adopted only if its canonical ID is present in the live walk. Derived columns, vectors and play attribution move in one SQLite transaction, which also inserts the confirmed map into `id_rotation_journal` (schema 26). Never publish the only copy of that map after committing adoption: a stopped child would delete the old rows and lose the map. The controller replays journal entries through blocklist, likes, recipes and settings; each replay must persist even when a previous failed write already changed its cache. Likes and blocklist saves share one ordered writer per store, including ordinary/debounced saves: atomic rename alone lets an older in-flight snapshot overwrite migrated IDs after the journal has been acknowledged. A failed save rejects its caller without poisoning the writer queue. Boot can read the journal before the library/vector handle opens. Stem-directory moves are replayable and best-effort. Playlist IDs require a live-index match; an unavailable index keeps the map and suppresses post-tag sync. Only successfully persisted mappings are acknowledged, and acknowledgement deletes just the consumed snapshot so a concurrent adoption survives. Legacy `id-rotation.json` handoffs remain readable; malformed/unreadable handoffs hold sync. Recovery tests exercise process exit after DB commit, transaction rollback, later-batch preservation, and failures in all four state stores. Already-pruned derived data requires a pre-migration backup. A failed Liquidsoap handoff may start this walk automatically only when `id-rotation-recovery.ts` proves the stored ID is absent and its deterministic canonical image resolves live; a generic fetch failure or canonical fixed point never starts maintenance. The detector and the maintenance child are both single-flight. A successful tag/reconcile run refreshes `auto.m3u` only after the rotation journal has settled, so the fallback cannot keep serving the pre-migration IDs until its hourly rebuild.
+
+## Prepared artist episodes
+
+`broadcast/show-preparation.ts` owns `state/show-preparations.json`. Its key is a
+scheduled occurrence or a takeover start, resolved by `show-occurrence.ts`, rather
+than a chat session or a spoken handoff. It saves the validated skill result
+before catalogue work and a ready result before exposing it to music or speech.
+Concurrent callers share one preparation. A restart never re-executes a tool whose
+subject was accepted. Arbitrary tool side effects before that save are not
+transactional.
+
+`music/episode-source.ts` validates the artist ID through Navidrome, reads the
+complete mirror or bounded album fetches, and applies show safety filters. The
+live album path accepts an exact track artist ID or the first explicit track or
+album artist ID, never a name match. The album artist matters for collaboration
+tracks whose combined track credit has its own Navidrome ID. Random preparation
+intersects mirrored candidates with the artist index so track-only combined
+credits cannot masquerade as an indexed artist with albums. Catalogue retries
+reuse the durable result; the admin retry can recheck a failed source without
+re-executing its tool.
+An initially selected result whose catalogue failed recovers as `degraded`, with
+its saved reason and editor retry action. Restart preserves the two-attempt
+automatic catalogue limit; an explicit retry can recover the same subject after
+that limit is exhausted.
+Its `ArtistEpisodeSource` travels whole through `PickerScope`; every discovery tool
+intersects with it before recording candidates. `episodeArtistTracks` is the
+in-catalogue source. The pool picker and auto-playlist draw directly from the same
+catalogue. Requests do not receive this scope. The auto-playlist build key carries
+the occurrence and prepared source identity, and publication checks the current
+show and settings epoch before replacing `auto.m3u`.

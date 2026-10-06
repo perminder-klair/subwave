@@ -30,7 +30,7 @@ function ctx(ms: number): SessionContext {
     date: context.getDateContext(at), clock: context.getClockContext(at),
     weather: { condition: 'unknown', mood: null, temp: null, tempUnit: 'C', location: '' },
     festival: null, dominantMood: 'calm', listeners: { count: 1 },
-    activeShow: settings.resolveActiveShow(at), showHandover: null,
+    activeShow: settings.resolveActiveShow(at), showHandover: null, episodeEditorial: '',
   };
 }
 

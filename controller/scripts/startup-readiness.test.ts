@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { fork, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
+import { createServer as createPortReservation } from 'node:net';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,8 +39,6 @@ import { syncBuiltinESMExports } from 'node:module';
 let port;
 const listen = net.Server.prototype.listen;
 net.Server.prototype.listen = function(...args) {
-  // PORT must be valid in config; the fixture still binds an ephemeral port.
-  if (typeof args[0] === 'number') args[0] = 0;
   this.once('listening', () => { port = this.address().port; });
   return listen.apply(this, args);
 };
@@ -83,6 +82,12 @@ globalThis.fetch = (input, init) => {
   const mockAddress = mock.address();
   assert.ok(mockAddress && typeof mockAddress === 'object');
   const mockUrl = `http://127.0.0.1:${mockAddress.port}`;
+  // PORT=0 is invalid boot config; reserve a valid port so a live station can coexist.
+  const reservation = createPortReservation();
+  await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const address = reservation.address();
+  assert.ok(address && typeof address === 'object');
+  await new Promise<void>(resolve => reservation.close(() => resolve()));
   const orphan = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' });
   const orphanExit = once(orphan, 'exit');
   writeFileSync(join(state, 'tagger.pid'), JSON.stringify({
@@ -91,7 +96,7 @@ globalThis.fetch = (input, init) => {
   const child = fork(join(controller, 'src/server.ts'), [], {
     cwd: controller,
     execArgv: ['--import', 'tsx', '--import', pathToFileURL(preload).href],
-    env: { ...process.env, STATE_DIR: state, PORT: '7701', NODE_ENV: 'production',
+    env: { ...process.env, STATE_DIR: state, PORT: String(address.port), NODE_ENV: 'production',
       ADMIN_USER: 'test', ADMIN_PASS: 'test', NAVIDROME_URL: mockUrl,
       NAVIDROME_USER: 'test', NAVIDROME_PASS: 'test', ICECAST_STATUS_URL: mockUrl,
       LIQUIDSOAP_HOST: '127.0.0.1', LIQUIDSOAP_PORT: '1', ANALYZE_URL: mockUrl },

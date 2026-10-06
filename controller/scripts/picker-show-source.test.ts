@@ -153,7 +153,7 @@ test('scheduler.ts keeps the cap on every discovery source', () => {
 test('scope.ts uncaps the agent tools under a playlistLock', () => {
   // The agent path is the DEFAULT picker; collect() applies playlistLock as a
   // hard intersection above this filter.
-  const m = scope.match(/^\s*maxPerArtist: opts\.maxPerArtist.*$/m);
+  const m = scope.match(/^\s*maxPerArtist:.*opts\.maxPerArtist.*$/m);
   assert.ok(m, 'no maxPerArtist default found in scope.ts collect()');
   assert.ok(
     /playlistLock\s*\?\s*Infinity/.test(m![0]),

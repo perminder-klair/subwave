@@ -458,5 +458,6 @@ export async function getFullContext(at?: Date) {
       ? showHandoverContext(now)
       : null,
     listeners,
+    episodeEditorial: '',
   };
 }

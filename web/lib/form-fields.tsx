@@ -173,17 +173,18 @@ export function SelectField<T extends FieldValues>({
   description,
   options,
   placeholder,
+  emptyValue,
   disabled,
   className,
   ...rest
-}: BaseProps<T> & { options: Option[]; placeholder?: string } & SelectFieldRest) {
+}: BaseProps<T> & { options: Option[]; placeholder?: string; emptyValue?: string } & SelectFieldRest) {
   const { field, fieldState, aria } = useBoundField(control, name, !!description);
   return (
     <Field data-invalid={aria.invalid || undefined} className={className}>
       <FieldLabel {...aria.labelProps}>{label}</FieldLabel>
       <Select
-        value={field.value == null ? '' : String(field.value)}
-        onValueChange={field.onChange}
+        value={field.value == null || field.value === '' ? emptyValue ?? '' : String(field.value)}
+        onValueChange={value => field.onChange(value === emptyValue ? '' : value)}
         disabled={disabled}
       >
         <SelectTrigger {...rest} {...aria.controlProps} onBlur={field.onBlur} ref={field.ref}>

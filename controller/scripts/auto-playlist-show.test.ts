@@ -264,3 +264,11 @@ test('deferred show refresh rolls back rather than reporting success', () => {
   assert.match(hook, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
   assert.match(hook, /result === 'deferred'[\s\S]*?rollback\(\);[\s\S]*?return false/);
 });
+
+test('an artist preparation becoming ready or a new occurrence requires a fallback rebuild', () => {
+  const ready = { ...FAULTLINE, preparationIdentity: 'occurrence:ready:artist-a' };
+  const tracker = createShowBuildTracker(); tracker.built(ready);
+  assert.equal(tracker.needsRebuild({ ...ready }), false);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'occurrence:degraded:' }), true);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'next:ready:artist-a' }), true);
+});

@@ -17,8 +17,10 @@ import { applyTrackFloor } from '../../../../music/track-floor.js';
 import { freshnessBiasedOrder } from '../../../../music/airing.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../../../util/pick-seed.js';
 import { slim } from './slim.js';
+import { intersectEpisodeSource, type ArtistEpisodeSource } from '../../../../music/episode-source.js';
 
 export interface PickerScope {
+  episodeSource: ArtistEpisodeSource | null;
   recentIds: Set<string>;
   // lowercased "title|artist" — backfilled entries lack ids
   recentKeys: Set<string>;
@@ -70,6 +72,7 @@ export interface PickerScope {
 // Every field defaults to "no constraint". Spread over a partial so there is
 // exactly one place a new field's default lives.
 const NO_SCOPE: PickerScope = {
+  episodeSource: null,
   recentIds: new Set(),
   recentKeys: new Set(),
   hardRecentIds: new Set(),
@@ -156,7 +159,8 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // top-60 must not reach the model in similarity order, or the cap of 8 pins
     // the same neighbours every pick. Randomness stays dominant; with no play
     // history this is a plain shuffle.
-    let pool = applyStrictLocks(freshnessBiasedOrder((list || []) as any[], library.lastAiredInfo(), Date.now()), {
+    const items: any[] = Array.isArray(list) ? list : [];
+    let pool = applyStrictLocks(freshnessBiasedOrder(intersectEpisodeSource(items, scope.episodeSource), library.lastAiredInfo(), Date.now()), {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
     }, { starve: true });
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a
@@ -175,7 +179,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
       hardRecentIds,
       hardRecentKeys,
       seenIds: new Set(seen.keys()),
-      maxPerArtist: opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
+      maxPerArtist: scope.episodeSource ? Infinity : opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
       cap,
     });
     const out: any[] = [];

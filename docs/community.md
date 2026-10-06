@@ -174,6 +174,7 @@ filtersStrict: false             # true = hard filter instead of a soft lean
 programme: false                 # true = produced-episode mode (intro / feature / outro)
 banter: false                    # true = scripted multi-voice breaks (needs guests, added on install)
 segmentSkill: library-deep-cut   # optional skill kind to pin the programme feature to
+preparationSkill: random-artist-pick # optional preparation skill slug, installed separately
 ---
 A slow midnight drift for the people still awake. Long fades, quiet talk, the
 kind of records that only make sense after dark.
@@ -189,7 +190,11 @@ bias selection); `true` makes them a **hard filter** (tracks outside them are
 excluded). `programme` turns the show into a produced episode with an intro, an
 hourly feature beat, and an outro; `banter` airs scripted multi-voice breaks and
 needs guest co-hosts, which the operator seats on install; `segmentSkill` pins the
-programme's feature beat to a specific skill kind.
+programme's feature beat to a specific skill kind. `preparationSkill` names the
+skill whose data tool prepares the episode before music selection. Install and
+enable that skill separately, then allow it for the host. A missing reference
+stays visible in the show editor. Runtime subjects and research do not travel
+with the show template.
 
 #### What's portable vs. bound on install
 
@@ -201,6 +206,7 @@ install a show, you bind the rest to your own setup:
 | The topic brief (the body) | The host persona |
 | Music filters: `moods`, `genres`, `eras`, `energies`, `filtersStrict` | Guest co-hosts (needed for `banter`) |
 | Mode flags: `programme`, `banter`, `segmentSkill` | Theme / styling |
+| Preparation reference: `preparationSkill` | The installed skill and the host's skill allowlist |
 | | Playlist anchors (a Navidrome playlist) |
 | | The weekly schedule slot (day + hour) |
 

@@ -41,6 +41,7 @@ interface ShowLite {
   name: string;
   personaId: string;
   segmentSkill: string;
+  preparationSkill: string;
 }
 
 // Does this persona run the skill? `skills: null` is the "all skills" sentinel.
@@ -104,7 +105,7 @@ export default function SkillsPanel() {
   const settingsQuery = useSettingsQuery<{
     values?: {
       personas?: Array<{ id?: string; name?: string; skills?: string[] | null }>;
-      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string }>;
+      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string; preparationSkill?: string }>;
     };
   }>({ adminFetch, enabled: queryEnabled });
   const skills = skillsQuery.data ?? null;
@@ -128,6 +129,7 @@ export default function SkillsPanel() {
         name: String(s.name || ''),
         personaId: String(s.personaId || ''),
         segmentSkill: typeof s.segmentSkill === 'string' ? s.segmentSkill : '',
+        preparationSkill: typeof s.preparationSkill === 'string' ? s.preparationSkill : '',
       })).filter(s => s.id) as ShowLite[],
     };
   }, [settingsQuery.data]);
@@ -284,7 +286,7 @@ export default function SkillsPanel() {
     }
     const show = shows.find(x => x.id === who.slice(2));
     if (!show) return true;
-    if (show.segmentSkill === s.name) return true; // the show's pinned feature
+    if (show.segmentSkill === s.name || show.preparationSkill === s.name) return true; // the show's pinned feature
     const host = personas.find(x => x.id === show.personaId);
     return !!host && personaHasSkill(host, s.name);
   };
@@ -328,8 +330,10 @@ export default function SkillsPanel() {
   };
 
   // Only meaningful while the DJ/show filter is sitting on a show.
-  const isPinned = (s: Skill): boolean =>
-    who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+  const isPinned = (s: Skill): boolean => {
+    const show = who.startsWith('s:') ? shows.find(x => x.id === who.slice(2)) : null;
+    return !!show && (show.segmentSkill === s.name || show.preparationSkill === s.name);
+  };
 
   return (
     <div className="grid gap-4">

@@ -280,7 +280,7 @@ export default function ShowsPanel() {
       filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
       fadeAtShowEnd: null,
       playlistIds: [], playlistStrict: false, playlistExhaust: false, excludedPlaylistIds: [],
-      programme: false, segmentSkill: '', tags: [],
+      programme: false, segmentSkill: '', preparationSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge stays silent about why.
@@ -373,7 +373,7 @@ export default function ShowsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="definitions">
-          <ErrorState error={err} onRetry={load} />
+          <ErrorState error={err} onRetry={load} retrying={settingsQuery.isFetching} />
         </Card>
       </div>
     );

@@ -390,3 +390,13 @@ test('a show with no tags round-trips byte-identically apart from the empty list
   assert.deepEqual(loaded.tags, []);
   assert.deepEqual(strict().tags, loaded.tags);
 });
+
+test('preparation references survive strict saves and lenient loads; duplicate feature usage is refused on save', () => {
+  assert.equal(strict({ preparationSkill: ' random-artist-pick ' }).preparationSkill, 'random-artist-pick');
+  assert.equal(strict({ preparationSkill: null }).preparationSkill, '');
+  assert.throws(() => strict({ preparationSkill: 'pick', segmentSkill: 'pick', programme: true }), /segmentSkill/);
+  const [loaded] = normalizeShows([show({ preparationSkill: 'pick', segmentSkill: 'pick' })], personaIds);
+  assert.ok(loaded, 'a hand-edited conflicting feature must not delete the entire show');
+  assert.equal(loaded.preparationSkill, 'pick');
+  assert.equal(loaded.segmentSkill, '');
+});

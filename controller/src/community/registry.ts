@@ -101,6 +101,7 @@ export interface CommunityShow {
   banter: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   maxTrackSeconds: number | null;
   /** Minimum track length in seconds (#1573). null = inherit the station. */
   minTrackLengthSeconds: number | null;
@@ -261,6 +262,7 @@ function normalizeShow(raw: any): CommunityShow | null {
     banter: raw?.banter === true,
     programme: raw?.programme === true,
     segmentSkill: str(raw?.segmentSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
+    preparationSkill: str(raw?.preparationSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
     maxTrackSeconds: Number.isInteger(seconds) && seconds >= 0 ? seconds : null,
     // Bounds are the show validator's, applied on install — a catalog value out
     // of range is clamped there rather than dropped here, same as the cap.

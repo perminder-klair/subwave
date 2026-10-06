@@ -1,3 +1,4 @@
+import { loadedCapabilities as readCapabilities, replaceLoadedCapabilities } from './registry.js';
 // Skill loader — the single source of truth for the DJ's between-track segment
 // capabilities. Every skill, shipped or operator-added, is a self-contained
 // directory under ONE runtime load root, ${STATE_DIR}/skills/<slug>/:
@@ -94,12 +95,11 @@ const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 
 export const SEEDED_KINDS = new Set<string>();
 export const RESERVED_KINDS = new Set<string>(QUEUE_INTERNAL_KINDS);
 
-let loadedSkills: any[] = []; // the single live capability set (seeded + custom)
 let importCounter = 0;        // cache-buster for re-importing edited tool.mjs
 
 // The full live capability set — seeded built-ins and operator skills, loaded on
 // identical footing. Read live so a rescan takes effect without a restart.
-export function loadedCapabilities(): any[] { return loadedSkills; }
+export function loadedCapabilities(): any[] { return readCapabilities(); }
 
 // Frontmatter parsing. SKILL.md is operator-authored — by hand on disk as much
 // as through /admin/skills — so the block is parsed as REAL YAML rather than by
@@ -449,9 +449,9 @@ export async function loadSkills(): Promise<any[]> {
     const dirents = await readdir(SKILLS_DIR, { withFileTypes: true });
     entries = dirents.filter(d => d.isDirectory()).map(d => d.name);
   } catch {
-    loadedSkills = []; // no state/skills dir yet → nothing to load
+    replaceLoadedCapabilities([]); // no state/skills dir yet → nothing to load
     registerSkillKinds([]);
-    return loadedSkills;
+    return loadedCapabilities();
   }
 
   const out: any[] = [];
@@ -477,12 +477,12 @@ export async function loadSkills(): Promise<any[]> {
     }
   }
 
-  loadedSkills = out;
+  replaceLoadedCapabilities(out);
   // Register every loaded kind as a recap voice/dedupe kind, so the DJ's
   // anti-repeat memory covers them without a hand-maintained list.
   registerSkillKinds(out.map(c => c.kind));
   const seededN = out.filter(c => c.seeded).length;
   const customN = out.length - seededN;
   queue.log('scheduler', `[skills] loaded ${out.length} skill(s): ${seededN} built-in, ${customN} custom`);
-  return loadedSkills;
+  return loadedCapabilities();
 }

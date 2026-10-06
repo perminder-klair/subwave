@@ -7,6 +7,7 @@
 // fallback should contain. Lists are sorted, so re-ordering never rebuilds.
 
 export interface AutoPlaylistShow {
+  preparationIdentity?: string;
   id?: unknown;
   name?: unknown;
   genres?: unknown;
@@ -39,6 +40,7 @@ const eras = (v: unknown): string[] =>
 export function autoPlaylistShowKey(show: AutoPlaylistShow | null | undefined): string {
   if (!show) return 'default';
   return JSON.stringify({
+    preparationIdentity: show.preparationIdentity ?? '',
     id: typeof show.id === 'string' ? show.id : '',
     genres: strings(show.genres),
     eras: eras(show.eras),
