@@ -25,7 +25,7 @@
 // Run: `tsx scripts/analysis-failure.test.ts` (folded into `npm run test`).
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,7 +38,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  const stateDir = mkdtempSync(join(tmpdir(), 'subwave-analyze-fail-'));
+  const stateDir = createTempDir(join(tmpdir(), 'subwave-analyze-fail-'));
   process.env.STATE_DIR = stateDir;
 
   const db = await import('../src/music/library-db.js');

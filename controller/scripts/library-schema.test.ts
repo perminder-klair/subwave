@@ -12,12 +12,12 @@
 //
 // Run: npx tsx scripts/library-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-library-schema-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-library-schema-'));
 
 const {
   BLOCK_TYPES,
@@ -162,7 +162,12 @@ test('blocklist-rules re-exports the schema constants rather than restating them
 });
 
 // A minimal express-ish harness: run the middleware and capture what it wrote.
-function runMiddleware(mw: ReturnType<typeof validateBody>, body: unknown) {
+function runMiddleware(mw: ReturnType<typeof validateBody>, body: unknown): {
+  status: number;
+  payload: { error: string; fieldErrors: Record<string, string> } | null;
+  nexted: boolean;
+  req: { body: unknown };
+} {
   let status = 0;
   let payload: { error: string; fieldErrors: Record<string, string> } | null = null;
   let nexted = false;

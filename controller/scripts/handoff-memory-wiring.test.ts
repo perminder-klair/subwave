@@ -81,7 +81,7 @@ function generators() {
     recentOpeners: string[];
     personaOut: string;
     personaIn: string;
-    showOut: string | null;
+    showOut?: string | null;
     showIn: string | null;
     episodeAngle?: string | null;
     context: any;

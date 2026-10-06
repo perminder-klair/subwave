@@ -36,13 +36,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync,
-} from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-persona-bundle-'));
+const root = createTempDir(join(tmpdir(), 'subwave-persona-bundle-'));
 process.env.STATE_DIR = root;
 // These would move the voice folder out from under the test.
 delete process.env.TTS_VOICE_DIR;

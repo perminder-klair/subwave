@@ -8,7 +8,8 @@
 // Python environment. A box without python3 still skips cleanly (exit 0).
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +40,7 @@ const pythonEnv = { ...process.env };
 let depsDir: string | null = null;
 const numpyProbe = spawnSync('python3', ['-c', 'import numpy'], { stdio: 'ignore' });
 if (numpyProbe.status !== 0) {
-  depsDir = mkdtempSync(join(tmpdir(), 'subwave-python-test-deps-'));
+  depsDir = createTempDir(join(tmpdir(), 'subwave-python-test-deps-'));
   console.log(`— installing test dependency numpy==${NUMPY_VERSION}`);
   const install = spawnSync(
     'python3',

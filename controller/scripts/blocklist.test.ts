@@ -86,7 +86,9 @@ try {
     { id: 's13', artist: 'Ambient Guy' },
   ]);
   assert.equal(annotated.length, 3, 'annotate keeps blocked rows — the library browser shows the library');
-  assert.equal(annotated[0].blockedBy?.type, 'track');
+  assert.equal(annotated[0].blockedBy?.kind, 'entry');
+  assert.ok(annotated[0].blockedBy?.kind === 'entry');
+  assert.equal(annotated[0].blockedBy.type, 'track');
   assert.equal(annotated[1].blockedBy, null);
   assert.equal(annotated[2].blockedBy?.id, 'art1');
   assert.equal((annotated[0] as any).title, 'Song X', 'annotate preserves the row');

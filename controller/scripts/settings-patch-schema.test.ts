@@ -5,12 +5,12 @@
 // Run: npx tsx scripts/settings-patch-schema.test.ts (auto-discovered by npm test).
 // What these tests are really guarding is FIDELITY. The branches being replaced
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-settings-patch-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-settings-patch-'));
 
 const {
   BEDS_CROSS_SEC_BOUNDS,

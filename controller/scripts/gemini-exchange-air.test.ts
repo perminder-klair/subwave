@@ -26,7 +26,7 @@ const incoming = { ...template, id: 'p_incoming', name: 'Incoming', tts: { ...te
 const lines = [{ persona: outgoing, text: 'Outgoing: Goodbye.' }, { persona: incoming, text: 'Incoming: Hello.' }];
 after(async () => {
   resetVoiceMarkers();
-  queue.dropPendingVoice();
+  queue.dropPendingVoice('test cleanup');
   await new Promise(resolve => setTimeout(resolve, 1100));
   rmSync(root, { recursive: true, force: true });
 });

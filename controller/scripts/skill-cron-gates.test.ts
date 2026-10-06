@@ -18,13 +18,13 @@
 // Run: `tsx scripts/skill-cron-gates.test.ts`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // STATE_DIR must be set before config.js resolves it at import time — scheduler.ts
 // pulls in modules (settings, queue, …) that derive paths from it at module scope.
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-cron-gates-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'skill-cron-gates-'));
 
 const { skillCronAllowed, skillCronStandDownReason, skillCronEligibility } = await import('../src/broadcast/scheduler.js');
 

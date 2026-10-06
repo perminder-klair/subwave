@@ -3,7 +3,13 @@ import tseslint from 'typescript-eslint';
 
 export default defineConfig([
   ...tseslint.configs.recommended,
-  globalIgnores(['node_modules/**', 'scripts/**']),
+  globalIgnores([
+    'node_modules/**',
+    'scripts/*',
+    '!scripts/*.test.ts',
+    '!scripts/run-tests.ts',
+    '!scripts/test-utils/',
+  ]),
   {
     rules: {
       '@typescript-eslint/no-explicit-any': 'warn',

@@ -2,6 +2,7 @@
 // Model/context calls are controlled in child processes so module mocks cannot
 // leak into other tests. TTS and voice publication use the queue's existing seams.
 import assert from 'node:assert/strict';
+import type { SessionContext } from '../src/broadcast/session.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -39,12 +40,13 @@ async function scenario() {
   } as never);
   function getContext(at = new Date()) {
     return {
-      at: at.toISOString(), time: { period: 'evening', vibe: 'evening', mood: 'warm' },
-      weather: null, festival: null, dominantMood: 'warm', date: {}, clock: {}, listeners: 1,
+      at: at.toISOString(), time: { period: 'evening', vibe: 'evening', mood: 'warm', show: '' },
+      weather: null, festival: null, dominantMood: 'warm', date: context.getDateContext(at), clock: context.getClockContext(at), listeners: { count: 1 },
       activeShow: settings.resolveActiveShow(at),
-    } as session.SessionContext;
+      showHandover: null,
+    } as SessionContext;
   }
-  session.start({ ...getContext(), activeShow: outShow } as session.SessionContext);
+  session.start({ ...getContext(), activeShow: outShow } as SessionContext);
   if (overdue) await settings.update({ schedule } as never);
   const placements: string[] = [];
   let generations = 0;
@@ -55,7 +57,7 @@ async function scenario() {
     namedExports: {
       ...djAgent,
       runTrackEvent: async () => {},
-      runPersonaHandoff: async (queue: unknown, ctx: session.SessionContext) => {
+      runPersonaHandoff: async (queue: unknown, ctx: SessionContext) => {
         placements.push(currentTalkAir());
         await djAgent.runPersonaHandoff(queue, ctx, {
           generateSignoff: async () => { generations++; return 'The hour is yours.'; },

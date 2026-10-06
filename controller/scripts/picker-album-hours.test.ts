@@ -13,14 +13,15 @@
 // Run: npm test -- picker-album-hours
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import of
 // anything config-derived.
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-album-hours-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-album-hours-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');

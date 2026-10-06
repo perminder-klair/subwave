@@ -11,7 +11,8 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +47,7 @@ function writeSettings(dir: string, geoipDbPath: string) {
 // Root, then station "alpha", then "beta" — alphabetical, so a script that took
 // the first setting it found would answer with alpha's path. beta is active.
 function multiStationRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), 'subwave-geoip-check-'));
+  const root = createTempDir(path.join(tmpdir(), 'subwave-geoip-check-'));
   writeSettings(path.join(root, 'stations', 'alpha'), '/data/alpha.mmdb');
   writeSettings(path.join(root, 'stations', 'beta'), '/data/beta.mmdb');
   writeFileSync(path.join(root, 'stations', 'active.json'), JSON.stringify({ activeId: 'beta' }));
@@ -72,7 +73,7 @@ test('geoip-check reports GEOIP_DB_PATH over the setting', () => {
 });
 
 test('geoip-check on a single-station install reads the root settings', () => {
-  const root = mkdtempSync(path.join(tmpdir(), 'subwave-geoip-check-'));
+  const root = createTempDir(path.join(tmpdir(), 'subwave-geoip-check-'));
   writeSettings(root, '/data/root.mmdb');
   assert.match(runCheck(root), /path the controller uses: \/data\/root\.mmdb/);
 });

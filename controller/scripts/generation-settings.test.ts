@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-request-timeout-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-request-timeout-'));
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
 async function coldLoad(value?: unknown) {

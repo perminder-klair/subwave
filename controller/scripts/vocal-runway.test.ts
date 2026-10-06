@@ -19,12 +19,13 @@
 //    feature off in silence.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-vocal-runway-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-vocal-runway-'));
 process.env.STATE_DIR = stateRoot;
 // The trim ON, so the onset shift is live and a leading blank actually costs
 // runway. With it off shiftOnsetMs is the identity and half this file proves

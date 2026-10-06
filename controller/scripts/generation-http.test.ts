@@ -1,7 +1,8 @@
 // Real SDK adapters and local HTTP stubs exercise complete response consumption,
 // strategy recovery, failover attribution and the live admin health contract.
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer, type Server } from 'node:http';
@@ -10,7 +11,7 @@ import express from 'express';
 import { tool } from 'ai';
 import { z } from 'zod';
 
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-generation-http-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-generation-http-'));
 process.env.ADMIN_USER = 'test';
 process.env.ADMIN_PASS = 'test';
 process.env.DEEPSEEK_API_KEY = 'unused';
@@ -167,7 +168,9 @@ test('live generation diagnostics require admin; public health remains liveness 
   assert.equal((await fetch(`${base}/doctor/llm`)).status, 401);
   const response = await fetch(`${base}/doctor/llm`, { headers: { Authorization: `Basic ${Buffer.from('test:test').toString('base64')}` } });
   assert.equal(response.status, 200);
-  const health = await response.json();
+  const health = z.object({
+    status: z.string(), inFlightCount: z.number(), scope: z.string(),
+  }).parse(await response.json());
   assert.equal(health.status, 'fail');
   assert.equal(health.inFlightCount, 0);
   assert.match(health.scope, /process-local/);

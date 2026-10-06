@@ -22,11 +22,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-similar-seed-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-similar-seed-'));
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');

@@ -3,6 +3,7 @@
 // knob, a widened failover gate) fails an assert before it reaches a model.
 
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
@@ -21,13 +22,6 @@ import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
 import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
 
-let failures = 0;
-function test(name: string, fn: () => void | Promise<void>) {
-  return Promise.resolve()
-    .then(fn)
-    .then(() => console.log(`  ✓ ${name}`))
-    .catch((err) => { failures++; console.error(`  ✗ ${name}\n      ${err?.message || err}`); });
-}
 
 async function main() {
   console.log('isUnreachable vs isTransient (the failover gate):');
@@ -106,7 +100,7 @@ async function main() {
   });
   await test('OpenRouter out-of-credit 402 classifies by message when status is flattened', () => {
     // Canonical 402 — caught by the existing insufficient-credit branch.
-    assert.equal(isQuotaOrAuthError(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.')), true);
+    assert.equal(isQuotaOrAuthError(Object.assign(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.'), { cause: undefined })), true);
     // Per-request affordability 402 — no "insufficient"/"quota" token, so it used
     const afford: any = new Error('This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 118.');
     assert.equal(isQuotaOrAuthError(afford), true);
@@ -464,7 +458,7 @@ async function main() {
   await test('prefers a status when there is no errno, and never double-prints', () => {
     assert.equal(errReason({ statusCode: 503 }), '503');
     assert.equal(errReason({ message: '503 Service Unavailable', statusCode: 503 }), '503 Service Unavailable');
-    assert.equal(errReason(new Error('Insufficient credits. Add more credits and retry.')), 'Insufficient credits. Add more credits and retry.');
+    assert.equal(errReason(Object.assign(new Error('Insufficient credits. Add more credits and retry.'), { cause: undefined })), 'Insufficient credits. Add more credits and retry.');
     assert.equal(errReason(null), 'unknown');
   });
 
@@ -713,8 +707,11 @@ async function main() {
         seen = opts;
         return {
           content: [{ type: 'text', text: 'here is the answer instead of calling the tool' }],
-          finishReason: 'stop',
-          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          finishReason: { unified: 'stop', raw: 'stop' },
+          usage: {
+            inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+            outputTokens: { total: 1, text: 1, reasoning: 0 },
+          },
           warnings: [],
         };
       },
@@ -881,8 +878,10 @@ async function main() {
     assert.equal(truncationError({ finishReason: 'stop', text: 'Coming up next.' }), null);
     assert.equal(truncationError({ finishReason: 'unknown', text: 'x' }), null);
     assert.equal(truncationError({}), null);
-    const err = truncationError({ finishReason: 'length', text: 'We need to output spoken words only…', usage: { outputTokens: 4000 } });
-    assert.ok(err instanceof Error);
+    const result = truncationError({ finishReason: 'length', text: 'We need to output spoken words only…', usage: { outputTokens: 4000 } });
+    assert.ok(result instanceof Error);
+    assert.equal(result.cause, undefined);
+    const err = Object.assign(result, { cause: undefined });
     // Raw text/usage ride on the error so failureDiagnostics + the console
     // preview still show WHY the call failed.
     assert.equal(err.text, 'We need to output spoken words only…');
@@ -1677,9 +1676,6 @@ async function main() {
     // maxLength is still advertised to the model — the cap is a nudge, kept.
     assert.equal(rendered.properties.angle.maxLength, 200);
   });
-
-  console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);
-  if (failures > 0) process.exit(1);
 }
 
-main();
+await main();

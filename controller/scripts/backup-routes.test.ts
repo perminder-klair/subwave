@@ -21,12 +21,15 @@
 
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-backup-routes-'));
+const testRoot = createTempDir(path.join(tmpdir(), 'subwave-backup-routes-'));
+const stateRoot = path.join(testRoot, 'state');
+mkdirSync(stateRoot);
 process.env.STATE_DIR = stateRoot;
 delete process.env.ADMIN_USER;
 delete process.env.ADMIN_PASS;

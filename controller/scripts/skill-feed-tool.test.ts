@@ -15,14 +15,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AddressInfo } from 'node:net';
 
 // config.ts and everything under it resolve state paths at module scope, so
 // STATE_DIR and the fixtures must exist before the dynamic imports below.
-const STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-feed-tool-'));
+const STATE_DIR = createTempDir(join(tmpdir(), 'skill-feed-tool-'));
 process.env.STATE_DIR = STATE_DIR;
 
 // ---------------------------------------------------------------------------

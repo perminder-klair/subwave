@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-ceiling-mode-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-ceiling-mode-'));
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
 const { validateSettingsPatch } = await import('../src/settings/patch-registry.js');

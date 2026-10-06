@@ -32,7 +32,8 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path, { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +48,7 @@ const docker = join(here, '..', '..', 'docker');
 
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import of
 // anything config-derived (same pattern as scripts/llm-repeat-penalty.test.ts).
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-max-listeners-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-max-listeners-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
@@ -133,7 +134,7 @@ const SUPERVISORS = [
   { name: 'aio/supervisor.sh', path: join(docker, 'aio', 'supervisor.sh'), lib: 'SUBWAVE_SUPERVISOR_LIB' },
 ] as const;
 
-const shellTmp = mkdtempSync(join(tmpdir(), 'subwave-max-listeners-sh-'));
+const shellTmp = createTempDir(join(tmpdir(), 'subwave-max-listeners-sh-'));
 let caseNo = 0;
 
 // Drive resolve_max_clients() against a scratch state dir. `set -eu` is set

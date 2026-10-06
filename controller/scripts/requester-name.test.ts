@@ -8,10 +8,10 @@ import assert from 'node:assert/strict';
 
 import {
   ANON_REQUESTER, isNamedRequester, cleanRequesterName, sorryNoMatch,
-} from '../src/util/request-guard.ts';
+} from '../src/util/request-guard.js';
 import {
   REQUESTER_NAME_CLAUSE, REQUESTER_GREETING_CLAUSE,
-} from '../src/llm/internal/prompts/scripts.ts';
+} from '../src/llm/internal/prompts/scripts.js';
 
 test('isNamedRequester rejects the ledger stand-in and blanks', () => {
   assert.equal(isNamedRequester('María'), true);

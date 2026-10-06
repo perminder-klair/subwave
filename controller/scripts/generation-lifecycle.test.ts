@@ -22,10 +22,13 @@ test('a never-settling adapter is abandoned, aborted, and removed without SDK re
   assert.equal(lifecycle.snapshot().status, 'fail');
 });
 
-const reply = {
+const reply: Awaited<ReturnType<MockLanguageModelV3['doGenerate']>> = {
   content: [{ type: 'text' as const, text: 'ok' }],
-  finishReason: 'stop' as const,
-  usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  finishReason: { unified: 'stop', raw: 'stop' },
+  usage: {
+    inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+    outputTokens: { total: 1, text: 1, reasoning: 0 },
+  },
   warnings: [],
 };
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));

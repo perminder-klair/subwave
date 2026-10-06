@@ -17,14 +17,14 @@
 // Self-contained: points STATE_DIR at a throwaway dir and mutates settings
 // in-memory, so it never touches a live install's state/.
 
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 
 // Must be set BEFORE importing anything that reads config (config.ts captures
 // STATE_DIR at import time).
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-embed-test-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-embed-test-'));
 
 const settings = await import('../src/settings.js');
 const embeddings = await import('../src/music/embeddings.js');

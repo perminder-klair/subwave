@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after, type TestContext } from 'node:test';
 import { z } from 'zod';
+import type { MockLanguageModelV3 } from 'ai/test';
 
 const previousStateDir = process.env.STATE_DIR;
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-strategy-failover-'));
@@ -40,13 +41,16 @@ function configure(t: TestContext, provider: string, backup = true) {
   return { primary: primaryLeg(), backup: fallbackLeg() };
 }
 
-function response(text: string, toolName?: string) {
+function response(text: string, toolName?: string): Awaited<ReturnType<MockLanguageModelV3['doGenerate']>> {
   return {
     content: toolName
       ? [{ type: 'tool-call', toolCallId: 'answer', toolName, input: text }]
       : [{ type: 'text', text }],
     finishReason: { unified: toolName ? 'tool-calls' : 'stop', raw: 'stop' },
-    usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+    usage: {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    },
     warnings: [],
   };
 }
@@ -57,7 +61,7 @@ function mockGeneration(t: TestContext, leg: ReturnType<typeof primaryLeg>, gene
   }
 }
 
-function nativeAgentAnswer() {
+function nativeAgentAnswer(): ReturnType<typeof response> {
   const result = response(JSON.stringify(answer));
   // Native output must include discovery to be accepted by the actual agent.
   return { ...result, content: [...result.content,

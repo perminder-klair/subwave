@@ -2,12 +2,12 @@
 // chokepoint), normalizeShows (lenient load) and the POST /shows middleware.
 // Accept-vs-reject and the returned shape are the contract; wording is not.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-show-schema-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-show-schema-'));
 
 const { validateShowsStrict } = await import('../src/settings/validate.js');
 const { normalizeShows } = await import('../src/settings/normalize.js');

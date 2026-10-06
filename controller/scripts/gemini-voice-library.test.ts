@@ -24,7 +24,6 @@ import {
 import {
   _resetLibraryIndex,
   facets,
-  isLibraryVoice,
   looksLikeLibraryId,
 } from '../src/audio/gemini-library.js';
 

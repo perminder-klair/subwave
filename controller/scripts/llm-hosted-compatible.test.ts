@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-hosted-compat-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-hosted-compat-'));
 process.env.STATE_DIR = stateRoot;
 process.env.ADMIN_USER = 'hosted-test';
 process.env.ADMIN_PASS = 'hosted-test';

@@ -12,13 +12,14 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // config.ts and the modules pulled in by segment-tools.ts resolve state paths at
 // module scope, so fixtures and STATE_DIR must exist before dynamic imports.
-const STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-tool-loading-'));
+const STATE_DIR = createTempDir(join(tmpdir(), 'skill-tool-loading-'));
 process.env.STATE_DIR = STATE_DIR;
 
 function writeSkill(slug: string, skillMd: string, tool?: string) {

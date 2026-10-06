@@ -2,11 +2,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-length-broadcast-'));
+const root = createTempDir(join(tmpdir(), 'subwave-length-broadcast-'));
 process.env.STATE_DIR = root;
 const tracks = [1199, 1200, 1201, 2700].map((duration, i) => ({ id: `track${i}`, title: `Song ${i}`, artist: `Artist ${i}`, duration }));
 let source: object[] = tracks;
