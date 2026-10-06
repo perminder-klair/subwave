@@ -41,7 +41,7 @@ import {
   withPoolLock,
 } from '../../util/google-key-pool.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
-import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { saveSecretsWithinLock, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
@@ -288,15 +288,22 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     if (Object.keys(patch).length === 0) {
       return res.json({ saved: [] });
     }
-    // A patch naming either Google variable is a POOL MUTATION and takes the
-    // same lock as the pool endpoints. It is a whole-value REPLACE, so two
-    // writers here — this route and a pool endpoint — each read a list, mutate
-    // it differently and write it back; whichever finished last silently
-    // discarded the other. The lock is what makes "read, change, persist" one
-    // atomic step for both kinds of writer.
+    // A patch naming either Google variable is a POOL MUTATION, and this route
+    // takes the same lock as the pool endpoints for EVERY patch — not only a
+    // pool one. `saveSecrets` rewrites the whole file, so an unrelated key save
+    // and a pool mutation are the same read-modify-write of the same bytes; a
+    // lock that only the pool-touching half took left exactly the losing case
+    // unprotected (two unrelated keys saved concurrently lost one, 20 runs in 20,
+    // both answering 200).
+    //
+    // The whole body is inside the lock, INCLUDING the memo drop. Dropping it
+    // after the write released would let the next writer read the pre-write pool
+    // from the cache and write that stale list back — the same lost update one
+    // step later.
     const touchesPool = GOOGLE_KEYS_ENV in patch || GOOGLE_KEY_ENV in patch;
     const write = async () => {
-      await saveSecrets(patch);
+      // saveSecretsWithinLock, because the lock is already held here.
+      await saveSecretsWithinLock(patch);
       // saveSecrets writes process.env, but the Google pool memoizes its parsed
       // key list for a couple of seconds. Drop that memo here so the field's
       // "takes effect immediately" is true rather than nearly true — this is the
@@ -307,7 +314,7 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
       }
       return Object.keys(patch);
     };
-    res.json({ saved: touchesPool ? await withPoolLock(write) : await write() });
+    res.json({ saved: await withPoolLock(write) });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
@@ -350,9 +357,9 @@ router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) =
       // An emptied pool clears BOTH vars: leaving the legacy single-key var set
       // would silently resurrect the key the operator just removed.
       if (next.length) {
-        await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+        await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(next) });
       } else {
-        await saveSecrets({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
+        await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
         delete process.env[GOOGLE_KEYS_ENV];
         delete process.env[GOOGLE_KEY_ENV];
       }
@@ -398,7 +405,7 @@ router.post('/settings/google-key-pool/add', requireAdmin, async (req, res) => {
         return { full: true as const };
       }
       entries.push({ key: trimmed, name: sanitizeName(name ?? '') });
-      await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
       invalidatePool();
       bumpPoolRevision();
       return { count: entries.length };
@@ -443,7 +450,7 @@ router.post('/settings/google-key-pool/move', requireAdmin, async (req, res) => 
       }
       // Serialised from ENTRIES, not keys — a reorder that rewrote the pool from
       // bare keys would strip every label the operator just typed.
-      await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(next) });
       invalidatePool();
       bumpPoolRevision();
       return { count: next.length };
@@ -475,7 +482,7 @@ router.post('/settings/google-key-pool/rename', requireAdmin, async (req, res) =
       if (at === -1) return { conflict: true as const };
       const clean = sanitizeName(name ?? '');
       entries[at].name = clean;
-      await saveSecrets({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
       invalidatePool();
       bumpPoolRevision();
       // The STORED name, not the submitted one: sanitising can change what the

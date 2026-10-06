@@ -1134,7 +1134,12 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
 
 test('concurrent pool writers do not lose each other\'s additions', async () => {
   const stateRoot = mkdtempSync(join(tmpdir(), 'google-pool-race-'));
-  const { saveSecrets: realSave } = await import('../src/setup/secrets.js');
+  // saveSecretsWithinLock, NOT saveSecrets: this handler already holds the pool
+  // lock, and `saveSecrets` takes it itself. Calling the locked variant from
+  // inside the lock deadlocks the single chain against itself — which is exactly
+  // why the unlocked variant is exported and named for its precondition rather
+  // than left as an internal detail.
+  const { saveSecretsWithinLock: realSave } = await import('../src/setup/secrets.js');
   const { poolEntries: entriesOf } = await import('../src/util/google-key-pool.js');
   const { withPoolLock: lock } = await import('../src/util/google-key-pool.js');
 
@@ -1161,6 +1166,36 @@ test('concurrent pool writers do not lose each other\'s additions', async () => 
     assert.ok(persisted.includes(`RACE_${i}`), `RACE_${i} was lost — only ${persisted.join(',')}`);
   }
   assert.equal(stateRoot.length > 0, true);
+});
+
+// The review that produced `saveSecretsWithinLock`: two UNRELATED keys saved at
+// once, both handlers answering 200, one key silently gone — 20 runs out of 20.
+// Nothing about this is Google-specific. `saveSecrets` rewrites the WHOLE file,
+// so every save is a read-modify-write of one file and the pool lock covering
+// only the pool-touching half left the ordinary case unprotected. The test names
+// three different variables so a fix that only special-cases the pool still fails.
+test('concurrent saves of DIFFERENT keys all survive — the file is one transaction', async () => {
+  const { saveSecrets } = await import('../src/setup/secrets.js');
+  const { STATE_DIR } = await import('../src/config.js');
+  const { readFile } = await import('node:fs/promises');
+
+  await Promise.all([
+    saveSecrets({ OPENROUTER_API_KEY: 'sk-concurrent-A' }),
+    saveSecrets({ FISH_API_KEY: 'fish-concurrent-B' }),
+    saveSecrets({ DEEPSEEK_API_KEY: 'ds-concurrent-C' }),
+  ]);
+
+  const onDisk = await readFile(`${STATE_DIR}/secrets.env`, 'utf8');
+  for (const [envVar, value] of [
+    ['OPENROUTER_API_KEY', 'sk-concurrent-A'],
+    ['FISH_API_KEY', 'fish-concurrent-B'],
+    ['DEEPSEEK_API_KEY', 'ds-concurrent-C'],
+  ] as const) {
+    assert.ok(
+      onDisk.includes(value),
+      `${envVar} was lost to a concurrent save — the file holds only: ${onDisk.replace(/\n/g, ' | ')}`,
+    );
+  }
 });
 
 test('the lock rejects nothing: a failing mutation does not wedge the pool', async () => {
