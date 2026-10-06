@@ -87,3 +87,29 @@ test('tagged statistics exclude uncertain rows', () => {
   assert.deepEqual(stats.byGenre, { 'Tagged Genre': 1 });
   assert.deepEqual(stats.bySource, { llm: 1 });
 });
+
+test('aggregate statistics retain null, blank and multi-tag counting semantics', async () => {
+  const { requireDb } = await import('../src/music/library-db/handle.js');
+  const raw = requireDb();
+  raw.prepare("UPDATE tracks SET tagged_at = '2026-01-01' WHERE id = 'tagged'").run();
+  const insert = raw.prepare(`INSERT INTO tracks (id, artist, moods, genres, energy, source, tagged_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  insert.run('same-artist', ' TEST ARTIST ', '["calm","focused"]', '["Rock","Jazz"]', 'high', 'manual', '2026-02-01');
+  insert.run('other-artist', 'Other', '["calm","focused"]', '["Jazz"]', 'high', null, '2026-03-01');
+  insert.run('blank-artist', ' ', '["calm","calm"]', null, null, 'manual', '2026-04-01');
+  insert.run('null-artist', null, '["calm"]', '[]', 'low', '', '2026-03-01');
+  insert.run('untagged-newest', 'Excluded', null, '["Excluded"]', 'low', 'excluded', '2099-01-01');
+  insert.run('reserved-source', 'Other', '["focused"]', null, 'medium', 'constructor', null);
+  db.invalidateStats();
+
+  const stats = db.stats();
+  assert.deepEqual(stats, {
+    total: 6, mirrorTotal: 9, distinctArtists: 2,
+    byMood: { calm: 6, focused: 3 },
+    byEnergy: { medium: 2, high: 2, low: 1 },
+    byGenre: { 'Tagged Genre': 1, Rock: 1, Jazz: 2 },
+    bySource: { llm: 1, manual: 2, '': 1, constructor: 1 },
+    withEmbedding: 0, withAudioEmbedding: 0, updatedAt: '2026-04-01',
+  });
+  assert.equal(db.stats(), stats, 'the existing warm-cache behavior is retained');
+});

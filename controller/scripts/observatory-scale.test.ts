@@ -165,7 +165,7 @@ function makeRow(i: number, rng: () => number): SeedRow {
 }
 
 // Mirrors the GET /library/observatory row→payload projection in
-// routes/library.ts (kept inline: importing the router would drag express,
+// routes/library/observatory.ts (kept inline: importing the router would drag express,
 // subsonic and settings into this test). If the route's shape changes, update
 // this copy — the point is the WORK (field picks + stringify), not the shape.
 function projectRows(rows: any[]) {

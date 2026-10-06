@@ -168,7 +168,7 @@ test('DJ recap controls hydrate, save and display nested validation errors', () 
     'utf8',
   );
   const panel = readFileSync(
-    path.resolve(here, '../../web/components/admin/SettingsPanel.tsx'),
+    path.resolve(here, '../../web/components/admin/settings/form-state.ts'),
     'utf8',
   );
   for (const [field, fallback] of [

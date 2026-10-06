@@ -19,7 +19,7 @@ process.env.STATE_DIR = STATE;
 
 const COUNT_FILE = join(STATE, 'library-count.json');
 const SRC = new URL('../src/music/library-coverage.ts', import.meta.url);
-const ROUTES = new URL('../src/routes/library.ts', import.meta.url);
+const ROUTES = new URL('../src/routes/library/maintenance.ts', import.meta.url);
 
 const coverage = await import('../src/music/library-coverage.js');
 

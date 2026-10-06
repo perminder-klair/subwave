@@ -505,24 +505,3 @@ export async function speakMulti(
   await writeFile(outPath, audio);
   return outPath;
 }
-
-/** Prebuilt voice ids for the picker. Empty on any failure — the UI falls
- *  back to free text like cloud-compat. */
-export async function listVoices(): Promise<string[]> {
-  try {
-    const key = apiKey();
-    if (!key) return [];
-    const res = await fetch(`${API_BASE}/voices?pageSize=100&type=prebuilt`, {
-      headers: { 'x-goog-api-key': key },
-    });
-    if (!res.ok) return [];
-    const json = (await res.json()) as any;
-    const voices = Array.isArray(json?.voices) ? json.voices : [];
-    return voices
-      .map((v: any) => String(v?.name || v?.id || '').replace(/^voices\//, '').trim())
-      .filter((v: string) => v && v.length <= 100)
-      .slice(0, 200);
-  } catch {
-    return [];
-  }
-}

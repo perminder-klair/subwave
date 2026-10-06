@@ -27,7 +27,7 @@ import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields'
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
 import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
-import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
+import { GEMINI_TTS_MODELS, TTS_GAIN_CLAMP_DB, TTS_SPEED_MIN, TTS_SPEED_MAX } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
 import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
@@ -37,13 +37,13 @@ import { GEMINI_PRONUNCIATION_MAX } from '../../../lib/geminiLimits';
 import { GEMINI_LIBRARY_LANGUAGE_MAX } from '../../../lib/schemas.generated';
 import { VoicePicker } from '../tts/VoicePicker';
 import { buildGeminiSaveBlock } from './geminiSavePayload';
+import { ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS } from './form-state';
 import { decideCloudSave } from './cloudSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
   SectionHeader, SaveBar,
-  KeyStatus, KeyTestResult, KEY_HINTS, ELEVENLABS_VS_DEFAULTS,
-  FISH_TTS_DEFAULTS,
+  KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
   type TtsFallbackForm, type TtsForm,
 } from './shared';
@@ -86,10 +86,7 @@ function GroupHead({ children }: { children: ReactNode }) {
 }
 
 // Engine ids match the server contract exactly — note the hyphen in `pocket-tts`.
-// Range mirrors the server clamp (TTS_GAIN_CLAMP_DB=12).
 const TTS_GAIN_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote'] as const;
-const TTS_GAIN_MIN = -12;
-const TTS_GAIN_MAX = 12;
 const TTS_GAIN_STEP = 0.5;
 
 // Signed one-decimal dB with a real minus sign; unity prints as a bare "0 dB".
@@ -118,8 +115,8 @@ function TtsGainField({
       </div>
       <input
         type="range"
-        min={TTS_GAIN_MIN}
-        max={TTS_GAIN_MAX}
+        min={-TTS_GAIN_CLAMP_DB}
+        max={TTS_GAIN_CLAMP_DB}
         step={TTS_GAIN_STEP}
         value={value}
         onChange={(e: ChangeEvent<HTMLInputElement>) => {
@@ -141,8 +138,6 @@ function TtsGainField({
 
 // Range mirrors the server clamp (clampTtsSpeed: 0.5–2.0×). Piper, Kokoro,
 // Cloud and Remote honour speed; chatterbox/pocket-tts ignore it.
-const TTS_SPEED_MIN = 0.5;
-const TTS_SPEED_MAX = 2;
 const TTS_SPEED_STEP = 0.05;
 const TTS_SPEED_UNSUPPORTED = new Set(['chatterbox', 'pocket-tts']);
 

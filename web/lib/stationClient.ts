@@ -69,9 +69,9 @@ export interface StationClient {
    *  Empty/nullish input stays '' so `<img>` fallbacks keep working. */
   resolve(path: string | null | undefined): string;
   coverUrl(subsonicId: string): string;
-  nowPlaying(): Promise<NowPlayingResponse>;
-  state(): Promise<StationState>;
-  session(): Promise<SessionPayload>;
+  nowPlaying(init?: { signal?: AbortSignal }): Promise<NowPlayingResponse>;
+  state(init?: { signal?: AbortSignal }): Promise<StationState>;
+  session(init?: { signal?: AbortSignal }): Promise<SessionPayload>;
   /** The caller owns timeout/abort. */
   health(init?: { signal?: AbortSignal }): Promise<Response>;
   schedule(): Promise<SchedulePayload>;
@@ -97,9 +97,9 @@ export function createStationClient(origin: StationOrigin): StationClient {
     origin,
     resolve: path => (path ? `${api}${path}` : ''),
     coverUrl: subsonicId => `${api}/cover/${encodeURIComponent(subsonicId)}`,
-    nowPlaying: () => fetch(`${api}/now-playing`).then(r => json<NowPlayingResponse>(r)),
-    state: () => fetch(`${api}/state`).then(r => json<StationState>(r)),
-    session: () => fetch(`${api}/session`).then(r => json<SessionPayload>(r)),
+    nowPlaying: init => fetch(`${api}/now-playing`, { signal: init?.signal }).then(r => json<NowPlayingResponse>(r)),
+    state: init => fetch(`${api}/state`, { signal: init?.signal }).then(r => json<StationState>(r)),
+    session: init => fetch(`${api}/session`, { signal: init?.signal }).then(r => json<SessionPayload>(r)),
     health: init => fetch(`${api}/health`, { cache: 'no-store', signal: init?.signal }),
     schedule: async () => {
       const r = await fetch(`${api}/schedule`);

@@ -65,21 +65,6 @@ export interface CloudTtsCfg {
   compatParams: { key: string; value: string }[];
 }
 
-// The single client-side copy, read by both form hydration and the dirty-check.
-// Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
-export const ELEVENLABS_VS_DEFAULTS = {
-  voiceStability: 0.5,
-  voiceStyle: 0,
-  voiceSimilarityBoost: 0.75,
-  voiceUseSpeakerBoost: true,
-} as const;
-
-export const FISH_TTS_DEFAULTS = {
-  temperature: 0.7,
-  topP: 0.7,
-  latency: 'normal' as const,
-};
-
 export interface TtsFallbackForm {
   enabled: boolean;
   engine: string;
@@ -127,15 +112,6 @@ export interface TtsForm {
 export interface LlmHeaderRow {
   name: string;
   value: string;
-}
-
-/**
- * Wire map -> editor rows. Order is the stored order, so the list renders the
- * way the operator left it.
- */
-export function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
-  if (!raw || typeof raw !== 'object') return [];
-  return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
 }
 
 /**
