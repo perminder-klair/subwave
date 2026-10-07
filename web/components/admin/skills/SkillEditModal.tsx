@@ -488,6 +488,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       context: contextValue.join(', '),
       window: windowValue === 'commute' ? 'commute' : '',
       cohosts: cohostsValue ? 'true' : '',
+      // The form's feed fields are plain inputs, which GitHub prefills by id.
+      feed: config.feed,
+      'feed-max-items': config.feedMaxItems,
     });
     window.open(url, '_blank', 'noopener,noreferrer');
   };
