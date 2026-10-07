@@ -388,10 +388,12 @@ export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): 
 // Whether the measured pair supports the effect the agent proposed. Un-analysed
 // tracks pass. The grid:
 //   blend    rhythmic, for COMPATIBLE pairs
-//   washout  rhythmic exit (always allowed; the caller's cooldown rations it)
+//   washout  rhythmic exit (always allowed; the queue's anti-streak ledger
+//            rations it — there is no cooldown)
 //   sweep    dramatic textural move across a clash
 //   dissolve smooth textural move across a clash (reverb wash, hides the seam)
 //   chop     percussive move across a clash (crossfader cut, on the beat)
+//   loop     exit loop (always allowed here; the queue needs its own tempo)
 export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   // Editorial like the washout. The queue separately requires the flagged

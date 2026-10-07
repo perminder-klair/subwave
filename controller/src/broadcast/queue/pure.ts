@@ -10,6 +10,7 @@ import * as settings from '../../settings.js';
 import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
 import type { QueueItem, Track } from './types.js';
 import type { HostSpeechStamp } from '../session.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
 
 interface TransitionItem {
   track: Track;
@@ -24,13 +25,17 @@ interface TransitionItem {
 // admin honest until `sent` makes the pair authoritative. Exit gestures ride
 // the outgoing track while entry gestures ride the incoming track, so the
 // answer has to inspect both sides. Washout may combine with sweep/blend; stem
-// rendering owns the whole seam and therefore overrides every live effect.
+// rendering owns the whole seam and therefore overrides every live effect, and
+// a show-boundary cut on the outgoing track (#1574) stands every one down.
 export function nextTransitionLabel(
   outgoing: TransitionItem | null | undefined,
   incoming: TransitionItem | null | undefined,
 ): string | null {
   if (!incoming || incoming.sent !== true) return null;
   if (incoming.stemSeam) return 'Stem blend';
+  // radio.liq reads liq_show_fade off the OUTGOING track and disarms all six
+  // gestures, on both sides of the seam: what airs is the plain crossfade.
+  if (outgoing?.track.showFade) return 'Normal';
 
   const labels: string[] = [];
   const washing = outgoing?.track.washout === true;
@@ -47,6 +52,25 @@ export function nextTransitionLabel(
   if (!washing && !looping && incoming.track.chop) labels.push('Chop');
 
   return labels.length > 0 ? labels.join(' + ') : 'Normal';
+}
+
+// How many transition asks the anti-streak ledger keeps, and so how many the
+// pick prompts are shown.
+export const TRANSITION_LEDGER_SIZE = 4;
+
+// The transition the model ASKED FOR on a pick, as the anti-streak ledger
+// counts it: entry gestures first, then the exits, else 'normal'. A length-cap
+// auto-washout is the controller's, not the model's, so it is no ask at all —
+// null keeps it invisible to the ledger in both directions. One rule for the
+// drain's ledger and the prompts' preview of picks it has not reached yet.
+export function transitionAskOf(track: Track): TransitionEffect | 'normal' | null {
+  if (track.sweep) return 'sweep';
+  if (track.blend) return 'blend';
+  if (track.dissolve) return 'dissolve';
+  if (track.chop) return 'chop';
+  if (track.loop) return 'loop';
+  if (track.washout && !track.washoutAuto) return 'washout';
+  return track.washoutAuto ? null : 'normal';
 }
 
 export function pickLinkInterval() {
