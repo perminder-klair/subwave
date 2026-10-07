@@ -16,6 +16,7 @@ import * as likes from '../broadcast/likes.js';
 import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { reportRotation } from './tagger-progress.js';
+import { decidePrune, type PruneDecision } from './prune-policy.js';
 
 export interface RotationManifest {
   version: 1;
@@ -55,9 +56,13 @@ async function moveStemDirs(map: ReadonlyMap<string, string>): Promise<void> {
 
 // A complete walk calls this before pruning. No filesystem write is needed to
 // make recovery possible: adoptRotatedIds commits its journal with the rows.
+// The prune itself goes through music/prune-policy.ts: nothing is removed
+// while Navidrome is scanning, and a mass removal is held until the operator
+// confirms it. `held` carries the operator-facing reason when it is.
 export async function adoptAndPrune(
   liveIds: ReadonlySet<string>,
-): Promise<{ adopted: number; pruned: number }> {
+  opts: { confirmMassPrune?: boolean } = {},
+): Promise<{ adopted: number; pruned: number; held?: Extract<PruneDecision, { prune: false }> }> {
   const { adopted } = db.adoptRotatedIds(liveIds);
   const pending = db.pendingIdRotations();
   if (pending.size) {
@@ -66,6 +71,15 @@ export async function adoptAndPrune(
     // A stopped child may have missed the previous notification entirely.
     reportRotation({ adopted });
   }
+  const missing = db.countMissingTracks(liveIds);
+  if (missing === 0) return { adopted, pruned: 0 };
+  const decision = decidePrune({
+    missing,
+    knownTracks: db.trackCount(),
+    scanning: await subsonic.getScanStatus(),
+    confirmed: opts.confirmMassPrune === true,
+  });
+  if (!decision.prune) return { adopted, pruned: 0, held: decision };
   const pruned = db.pruneMissingTracks(liveIds);
   return { adopted, pruned };
 }

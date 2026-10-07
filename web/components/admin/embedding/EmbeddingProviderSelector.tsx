@@ -1,7 +1,4 @@
 'use client';
-// Reuses the LLM provider descriptors and status logic (embedding providers are a
-// subset of the LLM list) so blurbs and key badges stay in lockstep with the LLM tab.
-// Tailwind-only, no inline styles (issue #50).
 import { cn } from '../../../lib/cn';
 import { PROVIDER_META, providerStatus, type ProviderStatus } from '../llm/providerMeta';
 

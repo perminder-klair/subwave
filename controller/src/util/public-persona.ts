@@ -1,9 +1,6 @@
-// What an unauthenticated ROSTER-WIDE read may say about a persona, shared by
-// GET /schedule's persona index and GET /personas so the two cannot drift.
-// id/name/avatar/tagline always; `soul` is a system prompt and rides only behind
-// settings.privacy.publishPersonaSouls (default off). Never widen this to tts,
-// skills or the behaviour dials. GET /dj is out of scope: it has always
-// published the on-air persona's soul one at a time.
+// /schedule and /personas share this public roster shape. Soul requires
+// privacy.publishPersonaSouls; never expose TTS, skills or behavior fields.
+// /dj's existing on-air soul contract is separate.
 
 /** The subset of a stored persona these reads touch. */
 export interface PersonaLike {

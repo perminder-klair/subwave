@@ -1,7 +1,3 @@
-// Pure show helpers: hydration and the payload / table-row projections.
-// Validation lives in ShowsPanel/ShowEditor via the shared schema; what stays
-// here is what the schema does not express — tolerance for a half-finished show
-// and showPayload's "only means something with" conditionals.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';

@@ -1,12 +1,5 @@
 'use client';
 
-// The settings surface described once, so three things can read it instead of
-// re-deriving it: the grouped nav rail, the per-section dirty dot + sticky save
-// bar, and the search box that jumps to a field.
-//
-// Only the SHAPE lives here — labels, which section owns which slice of the
-// form, which paths cost a mixer restart. The controls themselves stay in their
-// section components; this file never renders anything.
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search,

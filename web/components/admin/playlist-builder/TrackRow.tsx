@@ -1,9 +1,5 @@
 'use client';
 
-// One row of the deck, sortable via dnd-kit (#1370). The grip is a real
-// focusable handle carrying the sensor listeners, so the same gesture works with
-// a mouse, a finger (long-press) and the arrow keys. It is not `sm:`-only: it is
-// the touch affordance. The up/down buttons stay as the explicit keyboard path.
 
 import { useCallback, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
@@ -58,10 +54,7 @@ export function TrackRow({
         isDragging && 'bg-bg opacity-90 shadow-drawer',
       )}
     >
-      {/* `touch-none` is load-bearing, not styling: without it the browser keeps
-          the touch gesture and scrolls the page alongside the drag, invisibly to
-          the sensor's delta. The cost is that this 28px strip no longer scrolls
-          the list. */}
+      {/* Prevent browser scrolling while dragging this handle. */}
       <button
         type="button"
         ref={setActivatorNodeRef}
@@ -108,9 +101,7 @@ export function TrackRow({
             {energyLabel(t.energy)}{t.year ? ` · ${t.year}` : ''}
           </span>
         </div>
-        {/* `group-focus-within` is not decoration: at lg the cluster is hidden
-            until hover, and a keyboard user never hovers -- without it, tabbing
-            lands on a fully transparent button. */}
+        {/* Reveal hover actions when their buttons receive keyboard focus. */}
         <div className="flex items-center gap-0.5 transition-opacity lg:opacity-0 lg:group-focus-within:opacity-100 lg:group-hover:opacity-100">
           <IconBtn className="size-9 sm:size-[30px]" onClick={() => onMove(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
           <IconBtn className="size-9 sm:size-[30px]" onClick={() => onMove(i, i + 1)} disabled={i === total - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>

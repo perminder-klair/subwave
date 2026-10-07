@@ -1,13 +1,7 @@
 'use client';
 
-// The headless player core -- the per-station singletons every skin shares,
-// split into three contexts by update cadence:
-//   feed    -- the /now-playing + /state + /session snapshot, 5s cadence.
-//   audio   -- tune state, volume, signal meter; user gestures and the 5s probe.
-//   actions -- permanently-stable callbacks, bridged through refs since
-//              usePlayer recreates its closures per render.
-// The provider also runs the OS media session (including the persona-avatar
-// swap while the DJ is talking). The <audio> element is rendered by the shell.
+// Split feed, audio, and actions contexts by update cadence. Ref-backed actions stay stable; the
+// shell owns the audio element.
 
 import {
   createContext,

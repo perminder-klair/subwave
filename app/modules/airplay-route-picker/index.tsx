@@ -1,7 +1,3 @@
-// In-app AirPlay button (iOS only): the native AVRoutePickerView, rendering
-// nothing on Android where output routing is Google Cast's job. Also exposes
-// the AVAudioSession route-change stream.
-
 import { requireNativeModule, requireNativeViewManager } from 'expo-modules-core';
 import type { ComponentType } from 'react';
 import { Platform, type StyleProp, type ViewStyle } from 'react-native';
@@ -47,8 +43,7 @@ export function addAudioRouteChangeListener(
   listener: (event: AudioRouteChange) => void,
 ): RouteSubscription | null {
   if (Platform.OS !== 'ios') return null;
-  // NativeModule instances are EventEmitters; the generic type doesn't carry
-  // our event map, hence the cast.
+  // NativeModule is an EventEmitter, but its generic type omits our event map.
   const mod = requireNativeModule('AirplayRoutePicker') as unknown as {
     addListener(event: 'onAudioRouteChange', fn: (e: AudioRouteChange) => void): RouteSubscription;
   };

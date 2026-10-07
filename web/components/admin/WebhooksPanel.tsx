@@ -1,7 +1,5 @@
 'use client';
 
-// Webhooks. See controller/src/broadcast/webhooks.ts for the fan-out and the
-// documented payload shapes.
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
@@ -504,12 +502,7 @@ export default function WebhooksPanel() {
                 <FieldLabel className="caption" {...authAria.labelProps}>
                   Authorization header (optional)
                 </FieldLabel>
-                {/* Controller, not register: the 'set' sentinel must RENDER as
-                    blank while remaining the stored form value, so the display
-                    value diverges from the field value. Spreading register()
-                    and overriding value/onChange would strand RHF's own
-                    onChange and make this a controlled input inside an
-                    uncontrolled registration. */}
+                {/* Display the stored 'set' sentinel as an empty input. */}
                 <Controller
                   control={form.control}
                   name={`webhooks.${i}.authHeader`}
@@ -540,9 +533,7 @@ export default function WebhooksPanel() {
                 />
               </Field>
 
-              {/* No single labelable control here, so the Field itself is the
-                  named group (it already carries role="group") and each chip
-                  reports its own on/off via aria-pressed. */}
+              {/* Label the group; each chip exposes its state through aria-pressed. */}
               <Field data-invalid={eventsAria.invalid} {...eventsAria.groupProps}>
                 <FieldLabel asChild className="caption" {...eventsAria.labelledByProps}>
                   <span>Events</span>

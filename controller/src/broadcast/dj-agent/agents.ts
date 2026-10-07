@@ -5,7 +5,7 @@
 import * as settings from '../../settings.js';
 import { defineAgent } from '../../llm/agent.js';
 import { buildPickerTools, type PickerScope } from '../../llm/tools.js';
-import { pickSchema, pickSystem, requestSchema, requestSystem } from './schemas.js';
+import { agenticDiscoverySchema, pickSystem, requestSchema, requestSystem } from './schemas.js';
 import { agentDeadline } from './breaker.js';
 import type { Persona } from '../queue/types.js';
 
@@ -38,7 +38,7 @@ export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
   kind: 'djAgentPick',
   // Function form: resolved per run so the transition coaching follows the
   // on-air persona's djMode and the say length its scriptLength.
-  schema: () => pickSchema(),
+  schema: () => agenticDiscoverySchema(),
   // Advisory floor only — on the done-tool path the cap is DERIVED per provider
   // (gatedMaxStepsFor in provider/capabilities.ts), so this reaches the model
   // only as the Math.max floor on the native leg.
@@ -47,7 +47,7 @@ export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
   // since a caller's pinned step cap can be load-bearing.
   providerDiscoveryBudget: true,
   timeoutMs: agentDeadline,
-  buildSystem: ({ showAt, scope, editorial }) => pickSystem(showAt ?? null, !!scope?.playlistTracks?.length)
+  buildSystem: ({ showAt, scope, editorial }) => pickSystem(showAt ?? null, !!scope?.playlistTracks?.length, { host: null, guest: null, promptValue: null })
     + (scope.episodeSource ? '\nLead with episodeArtistTracks; choose only the prepared artist catalogue.' : '') + (editorial ?? ''),
   buildTools: ({ scope }) => {
     const { tools, seen } = buildPickerTools(scope);

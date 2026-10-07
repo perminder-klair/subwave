@@ -1,10 +1,5 @@
-// Programme-outro timing policy. Persona handoffs are instead armed against
-// the final outgoing track (session.ts) so music selection can look ahead
-// without moving the on-air identity early.
-//
-// `handover.offsetMinutes` remains the dial for a programme episode's own
-// outro beat. It is constrained to the programme scheduler stride so a saved
-// value can never silently move that beat to an unsampled minute.
+// Programme outro offsets must align with the scheduler stride. Persona handoffs instead wait
+// for the confirmed final outgoing track.
 
 import * as settings from '../settings.js';
 import {

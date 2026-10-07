@@ -47,8 +47,6 @@ export default memo(function DotRail({ counts, active, onSelect }: DotRailProps)
             )}
             aria-pressed={isActive}
           >
-            {/* The spans below need `relative` to sit above this
-                absolutely-positioned element. */}
             {isActive && (
               <m.span
                 layoutId="dot-rail-active"

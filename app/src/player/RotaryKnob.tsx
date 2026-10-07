@@ -1,7 +1,3 @@
-// Rotary volume knob: an SVG tick ring and a pointer sweeping -135° to +135°
-// with the level. Drag up/right to raise, down/left to lower, cumulative from
-// the grab point.
-
 import { useRef } from 'react';
 import { PanResponder, View } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
@@ -41,7 +37,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
 
   return (
     <View style={{ width: size, height: size }} {...pan.panHandlers}>
-      {/* radial tick ring */}
       <Svg width={size} height={size} style={{ position: 'absolute' }}>
         {Array.from({ length: TICKS }).map((_, i) => {
           const a = (i / TICKS) * Math.PI * 2 - Math.PI / 2;
@@ -62,7 +57,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         })}
       </Svg>
 
-      {/* knob body */}
       <View
         style={{
           position: 'absolute',
@@ -77,7 +71,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         }}
       />
 
-      {/* pointer (rotates around knob centre) */}
       <View style={{ position: 'absolute', width: size, height: size, transform: [{ rotate: `${angle}deg` }] }}>
         <View
           style={{
@@ -92,7 +85,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         />
       </View>
 
-      {/* centre cap */}
       <View
         style={{ position: 'absolute', left: c - 3, top: c - 3, width: 6, height: 6, borderRadius: 3, backgroundColor: colors.ink }}
       />

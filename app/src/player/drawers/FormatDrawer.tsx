@@ -1,7 +1,3 @@
-// Stream-format sheet: which Icecast mount this device pulls. Everyone hears
-// the same broadcast; only the encoding changes. useStreamFormat has already
-// filtered the options to what is decodable and enabled.
-
 import { Check } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { Pressable, Text, View } from 'react-native';

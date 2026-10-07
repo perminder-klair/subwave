@@ -11,8 +11,10 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
-import { nextShowBoundaryMs, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
+import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
+import { BOUNDARY_MAX_HORIZON_SEC, nextShowBoundaryMs, showKeyAt, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
+import { leaningsBlindPickReason } from './dj-agent/leanings-review.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>> & { episodeOccurrenceId?: string | null };
@@ -129,6 +131,9 @@ interface Session {
   /** The occurrence which opened this session; same-show takeovers may differ. */
   episodeOccurrenceId?: string | null;
   episodeEditorial?: string;
+  /** The outgoing show's recent booth tail (#1690). Display only: read solely
+   *  by GET /session, never by prompt memory or the agent window (#1479). */
+  boothCarry?: BoothCarry | null;
 }
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
@@ -471,6 +476,8 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
+  // Display-only booth tail for GET /session (#1690); never prompt memory.
+  next.boothCarry = snapshotBoothCarry(prev, next, at.getTime());
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
   carryInterruptedProgramme(next, prev.programme, contextDate(ctx));
   // A continuous 4h cap is still the same episode: keep its plan and aired
@@ -867,7 +874,12 @@ export function windowMessages() {
       : null;
     // Model-only coaching clauses ride in meta.promptSuffix so the booth log's
     // verbatim turn text stays clean. Re-joined here for the model.
-    const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
+    // Keep the operator's original reason on disk, but remove preference prose
+    // from model history, including sessions written before this guard existed.
+    const promptText = m.role === 'dj' && m.kind === 'pick'
+      ? leaningsBlindPickReason(m.text, { title: m.meta?.title, artist: m.meta?.artist })
+      : m.text;
+    const text = m.meta?.promptSuffix ? `${promptText}${m.meta.promptSuffix}` : promptText;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${text}`
       : foreignSpeaker
@@ -901,6 +913,38 @@ function boundaryRunContinues(boundary: BoundaryHandoff, at: Date): boolean {
     key: boundary.targetKey, fromMs, toMs: at.getTime(),
     takeoverStartedAt: boundary.takeoverStartedAt,
   });
+}
+
+function recoveredBoothCarry(previous: Session, next: Session): BoothCarry | null {
+  const at = new Date(next.ctxAt ?? next.startedAt);
+  const nowMs = at.getTime();
+  const previousAt = Date.parse(previous.ctxAt ?? previous.startedAt);
+  const boundary = previous.boundaryHandoff;
+  const persistedAt = boundary?.boundaryAt ?? Date.parse(boundary?.contextAt ?? '');
+  // A cap within one show keeps its ordinary roll semantics. An aired record
+  // targeting the outgoing session itself describes an earlier boundary.
+  if (previous.key === next.key) return snapshotBoothCarry(previous, next, nowMs);
+  if (boundary && boundary.targetKey === next.key
+      && Number.isFinite(persistedAt) && persistedAt >= previousAt && persistedAt <= nowMs
+      && boundaryRunContinues(boundary, at)) {
+    return snapshotBoothCarry(previous, next, persistedAt);
+  }
+  // Use the same station-clock scan as the real handoff path. Bound long
+  // outages to its horizon; anything older is already beyond the carry TTL.
+  const fromMs = Math.max(previousAt, nowMs - BOUNDARY_MAX_HORIZON_SEC * 1000);
+  const outgoingKey = previous.key.startsWith('show:') ? previous.key : 'default';
+  const incomingKey = next.key.startsWith('show:') ? next.key : 'default';
+  if (Number.isFinite(fromMs) && showKeyAt(fromMs) === outgoingKey) {
+    const scheduledAt = nextShowBoundaryMs(fromMs, (nowMs - fromMs) / 1000);
+    if (scheduledAt !== null) {
+      if (showKeyAt(scheduledAt) !== incomingKey || !showRunContinues({
+        key: next.key, fromMs: scheduledAt, toMs: nowMs,
+        takeoverStartedAt: next.takeoverStartedAt,
+      })) return null;
+      return snapshotBoothCarry(previous, next, scheduledAt);
+    }
+  }
+  return snapshotBoothCarry(previous, next, nowMs);
 }
 
 // Boot recovery: resume the persisted session if its show run still matches, else
@@ -938,6 +982,7 @@ export async function recover(ctx: SessionContext): Promise<Session> {
           && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
           && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         if (boundary.programme) next.programme = boundary.programme;
@@ -959,6 +1004,8 @@ export async function recover(ctx: SessionContext): Promise<Session> {
         stored.endedAt = stored.endedAt || new Date().toISOString();
         await archive(stored);
         const next = start(ctx);
+        // The lookback keeps a long outage from carrying stale turns (#1690).
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         await persist();
         return next;

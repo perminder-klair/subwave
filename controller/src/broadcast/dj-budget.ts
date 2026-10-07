@@ -1,11 +1,5 @@
-// Daily LLM token budget. Live token tally + settings.llm cap resolved by the
-// pure `budgetMode`; this file is the glue and the yes/no questions.
-//
-//   normal — everything runs.
-//   soft   — at budgetSoftPct: cheap pool picker, no optional segments.
-//   hard   — at the cap: no model calls; Liquidsoap coasts on auto.m3u.
-//
-// cap = 0 (the default) is always normal.
+// At the soft token limit, use the pool picker and skip optional speech. At the hard cap, stop
+// model calls and use auto.m3u. A zero cap disables the budget.
 
 import * as settings from '../settings.js';
 import { dailyTokensUsed, budgetMode } from '../llm/log.js';

@@ -1,19 +1,11 @@
-// Shared display helpers for live-session turns from GET /session, the source
-// for every listener-facing booth log (player Booth feed, ticker, /admin/dash);
-// `djLog` is operator diagnostics behind /admin/debug.
-//
-// role → display class: voice (spoken on-air verbatim), dj (pick / request
-// reasoning), track (a track that aired), system (session events).
+// Listener booth logs use GET /session. djLog remains operator diagnostics in /admin/debug.
 
 import type { SessionTurn } from './types';
 
 export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
 
-// A spoken turn carries `meta.airedAt`, the live-edge moment it left the mixer
-// (#1382); this listener sits `leadMs` behind that edge (#1114), so hold the
-// line until its audio has arrived, as useStationFeed does for track switches.
-// An unstamped turn (every non-voice turn, or a mixer that could not measure)
-// is shown immediately rather than hidden.
+// Delay stamped speech by leadMs to match listener audio (#1382, #1114). Show unstamped turns
+// immediately.
 const MAX_HOLD_MS = 120_000;
 
 export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
@@ -23,9 +15,7 @@ export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-// Split a feed into what this listener can already have heard and when the next
-// held turn becomes audible (null = nothing pending). Pure, so the hook can run
-// it on both a poll and a timer without re-deriving the rule.
+// Return audible turns and the next pending display time. Use the same rule for polls and timers.
 export function splitAudibleTurns(
   messages: SessionTurn[] | null | undefined,
   leadMs: number,
@@ -62,6 +52,32 @@ export const isDjTurn = (turn: SessionTurn | null | undefined): boolean => {
   return c === 'voice' || c === 'dj';
 };
 
+// For a while after a hard roll GET /session leads with the outgoing show's
+// tail (`meta.carried: true`) and one `kind: 'show-boundary'` separator, so a
+// passive display does not go blank at a show boundary (#1690).
+export function isShowBoundary(turn: SessionTurn | null | undefined): boolean {
+  return turn?.role === 'event' && turn.kind === 'show-boundary';
+}
+
+export function isCarriedTurn(turn: SessionTurn | null | undefined): boolean {
+  return turn?.meta?.carried === true;
+}
+
+// Separator text: the boundary moment in the client's own clock style plus the
+// incoming show (or host). Falls back to the server-rendered `text`.
+export function showBoundaryLabel(
+  turn: SessionTurn | null | undefined,
+  clock: (at: string) => string,
+): string {
+  const b = turn?.meta?.boundary as { at?: unknown; show?: unknown; persona?: unknown } | undefined;
+  const at = typeof b?.at === 'string' && Number.isFinite(Date.parse(b.at)) ? b.at : null;
+  if (!at) return turn?.text || '';
+  const name = (typeof b?.show === 'string' && b.show)
+    || (typeof b?.persona === 'string' && b.persona)
+    || 'On air';
+  return `${clock(at)} · ${name}`;
+}
+
 // Session turns carry no id, so key off timestamp + index.
 export function turnKey(turn: SessionTurn | null | undefined, i: number): string {
   return `${turn?.t || 'x'}-${i}`;
@@ -97,11 +113,8 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
   return `${firstSentence.trim()} …`;
 }
 
-// The single voice/dj turn to surface as the DJ "thinking" line under
-// now-playing. Walks newest→oldest, skipping `dj`/pick turns whose
-// `meta.trackId` isn't on air: a pick turn is written at the previous track's
-// start, so its trackId is the NEXT track (#546). Voice turns carry no trackId
-// and always qualify; an unknown currentTrackId yields the latest voice turn.
+// Skip pick turns for tracks not yet on air (#546). Picks are logged during the preceding track;
+// voice turns qualify unless carried from the previous show (#1690).
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,
@@ -111,6 +124,7 @@ export function selectThinkingTurn(
     const turn = feed[i];
     const cls = turnClass(turn);
     if (!turn?.text || (cls !== 'voice' && cls !== 'dj')) continue;
+    if (isCarriedTurn(turn)) continue;
     const trackId = turn.meta?.trackId as string | undefined;
     if (cls === 'dj' && trackId && trackId !== currentTrackId) continue;
     return turn;

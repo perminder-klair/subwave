@@ -10,11 +10,6 @@ import {
   NavigationMenuTrigger,
 } from '@/components/ui/navigation-menu';
 
-// The masthead's "Community" item: four catalogs behind one trigger so the nav
-// row doesn't grow to ten links. Tags mirror StationFooter's BACK_PAGES so a
-// destination is named the same wherever a reader meets it. Stations is
-// deliberately absent — it's a directory rather than something you install, and
-// five items made the panel taller than the masthead it hangs from.
 const COMMUNITY = [
   { href: '/skills', tag: 'The Exchange', title: 'Skills', blurb: 'Segments to teach your DJ.' },
   { href: '/personas', tag: 'The Green Room', title: 'Personas', blurb: 'DJs to book for your booth.' },

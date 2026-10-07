@@ -1,12 +1,6 @@
-// The single answer to "how many dB does this track get on air" (#1240). Two
-// consumers that must agree: the queue drain stamps it as `liq_amplify`, and the
-// stem-blend render bakes the same figure into the clip (which carries no
-// liq_amplify of its own — see subsonic.getClipUri).
-//
-// Order is the operator's `settings.loudness.source`: embedded ReplayGain
-// (whole-file R128) first by default, else the analyzer's measured LUFS (leading
-// window only, so the two are not interchangeable). Null loudness from every
-// allowed source → null gain → unity.
+// Share gain resolution between real-track liq_amplify stamps and stem-render levels.
+// ReplayGain describes the whole file; analyzer LUFS describes its leading window. No usable
+// loudness means unity gain. #1240.
 
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';

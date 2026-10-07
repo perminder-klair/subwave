@@ -1,7 +1,5 @@
 'use client';
 
-// One table serves every listing variant (recent, browse, search, untagged, liked);
-// `variant` decides which columns and actions are offered.
 
 import { Fragment, useRef, useState } from 'react';
 import { RotateCcw, Sparkles, ListPlus, X, Pencil, Ban, Tags, MoreVertical, Undo2, Heart, HeartOff } from 'lucide-react';
@@ -90,8 +88,6 @@ export function TrackTable(p: TrackTableProps) {
   return (
     // Dim, don't blank, stale rows during a refetch so filter changes read as updating.
     <div className={cn(p.loading && 'opacity-60 transition-opacity')}>
-      {/* Below sm: the 5-column grid leaves the title ~60px, so rows lay out as
-          a plain flex line. `!` beats `.admin-root .lib-colhead/.lib-row`. */}
       <div className="lib-colhead !flex sm:!grid">
         <span>
           <label className={CHECK_HIT}>
@@ -125,17 +121,12 @@ export function TrackTable(p: TrackTableProps) {
               />
             </label>
             <Thumb track={t} />
-            {/* flex-1 drives the phone layout; grid items ignore flex-*. */}
             <div className="min-w-0 flex-1">
-              {/* Badge sits with the TITLE: .lib-tags is display:none below
-                  860px and this marker must survive a phone. */}
               <div className="flex min-w-0 items-center gap-2">
                 <div className="lib-title">{t.title || '—'}</div>
                 {t.blockedBy && (
                   <span className="lib-btag shrink-0" title={`blocked via ${blockedByLabel(t.blockedBy)}`}>
                     <Ban size={10} aria-hidden />
-                    {/* Scope word drops below sm:. The full scope stays in the
-                        row menu. */}
                     <span aria-hidden>
                       never play
                       {t.blockedBy.kind === 'rule' ? (
@@ -169,8 +160,6 @@ export function TrackTable(p: TrackTableProps) {
               {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
               {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
-            {/* Four 36px buttons cost more than the title is worth on a phone,
-                so below sm: they collapse into the overflow menu. */}
             <div className="flex items-center justify-end gap-1.5">
               <RowActionsMenu
                 track={t}
@@ -216,7 +205,6 @@ export function TrackTable(p: TrackTableProps) {
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
-              {/* Offered on every tab: an untagged row can be tagged on the spot. */}
               <Btn
                 sm
                 className="hidden sm:inline-flex"
@@ -229,9 +217,6 @@ export function TrackTable(p: TrackTableProps) {
                   ? <RotateCcw size={11} />
                   : <Sparkles size={11} />}
               </Btn>
-              {/* An entry-blocked row offers the reverse, not another scope: one
-                  click lifts the entry that matched. A RULE-blocked row keeps the
-                  block menu, since lifting a rule lives on the Blocked tab. */}
               {t.blockedBy && t.blockedBy.kind !== 'rule' ? (
                 <Btn
                   sm

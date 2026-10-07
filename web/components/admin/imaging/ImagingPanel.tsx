@@ -1,7 +1,5 @@
 'use client';
 
-/* Owns the state and handlers the Jingles / SFX / Beds / Voices sections need.
-   Tab pattern mirrors ConnectPanel (Seg control + ?tab= deep-link). */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';

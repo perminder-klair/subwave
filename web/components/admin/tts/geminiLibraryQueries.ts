@@ -1,19 +1,5 @@
 'use client';
 
-// The Gemini Extended Voice Library read, owned by TanStack Query per
-// `web/CLAUDE.md` ("cacheable admin reads … use those helpers plus a
-// feature-owned key factory"). An `audit-admin-query.mjs` run rejects a raw
-// `adminResponse` read in `components/admin`, so this is enforced, not stylistic.
-//
-// It is a CACHEABLE read — the same filter set is asked for by every persona
-// card on the Personas page, and the catalogue is identical for all of them.
-// As a per-component `useCallback` each card issued its own request; here one
-// request serves every card that asks for the same filters, and a filter set
-// revisited after navigating away is served from cache.
-//
-// The preview audio stays IMPERATIVE on purpose: `admin-query.ts` classifies
-// one-shot previews as commands, and an `Audio` element has no cacheable
-// payload.
 
 import { useInfiniteQuery, type QueryClient, type QueryFilters } from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
@@ -41,25 +27,8 @@ export interface LibraryFacets {
 /** The NORMALISED filters a page was requested with. Keys describe the server
  *  resource and its inputs only — never `adminFetch` identity. */
 export interface LibraryInput {
-  /** A BCP-47 tag, `any` for every language, or OMITTED to defer to the station's
-   *  saved `tts.gemini.libraryLanguage`.
-   *
-   *  Three distinct states, and conflating any two produces a wrong request
-   *  rather than a missing one:
-   *
-   *    omitted — "whatever the station is configured to browse". Sent as an
-   *              ABSENT `language`, which the route reads as the saved default.
-   *    'any'   — the operator explicitly asked for every language. MUST be sent
-   *              explicitly, because absent means the saved default, so a control
-   *              labelled "Every language" would silently return one region.
-   *    'en-AU' — an explicit filter.
-   *
-   *  UI sentinels never reach this type. A `__any__`-style placeholder is a Radix
-   *  Select requirement, not a server value, and letting one through put
-   *  `language=__any__` on the wire, which the route forwarded upstream as a
-   *  literal language code — an empty library that reads as "no voices" rather
-   *  than as a bug. `normalizeLibraryInput` is the boundary that translates them,
-   *  and it is tested directly for that reason. */
+  /** Omitted language uses the station default; any requests every language; a BCP-47 tag applies
+   * that filter. normalizeLibraryInput translates UI sentinels before requests. */
   language?: string;
   gender?: string;
   pitch?: string;

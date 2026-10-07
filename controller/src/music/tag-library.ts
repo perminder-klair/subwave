@@ -263,7 +263,8 @@ async function main() {
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
-    const { pruned } = await adoptAndPrune(liveIds);
+    const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: flags.confirmPrune });
+    if (held) logEvent('warning', held.message);
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }

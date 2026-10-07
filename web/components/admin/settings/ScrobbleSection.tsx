@@ -294,10 +294,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             </div>
           </div>
 
-          {/* Test probes the SAVED credentials, so it belongs in the card and
-              not beside the save button: the save bar renders only while the
-              section is dirty, which is the one state in which there is
-              nothing saved worth testing. */}
+          {/* Tests use saved credentials. */}
           <div className="field">
             <div className="flex flex-wrap items-center gap-3">
               <Btn sm onClick={() => sendTest('lastfm')} disabled={busy || !lfReady}>
@@ -415,10 +412,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             <div className="field-hint">Cosmetic only.</div>
           </div>
 
-          {/* Test probes the SAVED credentials, so it belongs in the card and
-              not beside the save button: the save bar renders only while the
-              section is dirty, which is the one state in which there is
-              nothing saved worth testing. */}
+          {/* Tests use saved credentials. */}
           <div className="field">
             <div className="flex flex-wrap items-center gap-3">
               <Btn sm onClick={() => sendTest('listenbrainz')} disabled={busy || !lbReady}>
@@ -483,9 +477,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             </div>
           </div>
 
-          {/* Test probes the SAVED setting against the live Navidrome, so it
-              belongs in the card and not beside the save button: the save bar
-              renders only while the section is dirty. */}
+          {/* Tests use the saved setting. */}
           <div className="field">
             <div className="flex flex-wrap items-center gap-3">
               <Btn sm onClick={() => sendTest('navidrome')} disabled={busy || !ndReady}>

@@ -1,8 +1,5 @@
-// What the now-playing strip says on surfaces outside the app's own UI. The
-// lock screen (useNowPlayingInfo) and the Live Activity (useLiveActivity) must
-// agree, so both resolve here. The one non-obvious rule: while the DJ is
-// talking the ARTIST slot and the artwork swap to the persona, but the TITLE
-// keeps the track, since the song has not changed.
+// While the DJ talks, replace the artist and artwork with the persona.
+// Keep the track title: the song has not changed.
 
 import type { StationApi } from './api';
 import type { ActiveShow, NowPlayingTrack } from './types';

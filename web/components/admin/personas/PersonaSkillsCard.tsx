@@ -1,6 +1,4 @@
 'use client';
-// A checklist, not one of the five bound shapes — wired through its own
-// `useController` on the whole `skills` array field.
 import { useController, type Control } from 'react-hook-form';
 import type { PersonasFormValues, SkillCatalogEntry } from './types';
 import { Card, Toggle } from '../ui';

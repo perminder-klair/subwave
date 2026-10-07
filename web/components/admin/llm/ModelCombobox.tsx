@@ -1,6 +1,5 @@
 'use client';
-// Shared by Settings and onboarding. Keep the popup anchored through page scroll
-// and virtual-keyboard viewport changes; neither is an outside interaction.
+// Keep the popup anchored during scrolling and virtual keyboard viewport changes.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../../lib/cn';

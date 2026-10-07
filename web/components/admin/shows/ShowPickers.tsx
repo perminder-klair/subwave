@@ -1,8 +1,5 @@
 'use client';
 
-// Visual pickers for the show editor's "persona owner" and "theme override"
-// fields. Swatch colours route through useDynamicStyle because the lint rule (#50)
-// bans the inline `style` prop.
 
 import { useRef, useState } from 'react';
 import { cn } from '../../../lib/cn';

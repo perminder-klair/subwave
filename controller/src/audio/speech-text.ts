@@ -1,48 +1,18 @@
-// Pure spoken-text normalizer — the defensive layer between generated radio
-// copy and the TTS engines (issue #963). The DJ prompts already ask for
-// "spoken words only", but a model can still emit display text — weather
-// units, markdown emphasis, currency symbols — and engines read it literally
-// ("seventy-six F", or an awkward beat where the asterisks were). Every
-// booth-bound string converges on normalizeForSpeech() in audio/tts.ts, so
-// the rules here must stay conservative: real artist/title text rides the
-// same lines ("Ke$ha", "AC/DC", "P!nk" must survive untouched). Expressive
-// engines may use bracketed performance cues, but they are structural input:
-// closing, excess or trailing cues must never reach TTS.
-//
-// Plain quantities still belong to the engines. Years/decades are the narrow
-// exception: engines can read "1967" as a quantity instead of a date (#1669).
-// Spell those consistently for every engine, after operator corrections.
-//
-// TWO passes, and the split is load-bearing (issue #1186):
-//
-//   normalizeForDisplay() — markup + entity cleanup only. Safe for anything a
-//     PERSON reads: the booth log, the session the DJ remembers, the player's
-//     feed. Stripping `**bold**` makes a line more readable, never differently
-//     spelled.
-//   normalizeForSpeech()  — the above PLUS the pronunciation layer: operator
-//     corrections, year/decade and unit/symbol expansion, SUB/WAVE → "Subwave".
-//     These are spelled for an ENGINE's benefit, not a reader's — "Ye" reads
-//     as "Yay" only so the voice says it right, and a listener seeing "Yay"
-//     in the written line is a bug, not a feature. Speech-only spellings must
-//     never be persisted anywhere a human sees them.
-//
-// No imports — pure module, unit-pinned by scripts/speech-text.test.ts.
+// normalizeForDisplay removes markup only. normalizeForSpeech also applies
+// pronunciation corrections, year/decade and unit expansion, and station spelling.
+// Persist only display text; speech spellings belong exclusively to TTS (#963, #1186, #1669).
+// Preserve artist/title punctuation and validate structural performance cues.
+// Pure helpers; see scripts/speech-text.test.ts.
 
-// Operator-defined speech correction: replace `from` with `to` wherever it
-// appears in booth-bound text (settings.tts.corrections, admin → Settings →
-// TTS voice). The operator-extensible sibling of the built-in SUB/WAVE →
-// "Subwave" rule below, for names and terms the engines mispronounce
-// ("Hozier" → "Ho-zeer", "GHz" → "gigahertz"). Passed in as an argument —
-// never read from settings here — so this module stays pure.
+// Apply operator from/to corrections from settings.tts.corrections.
+// Pass them explicitly so the normalizer remains pure.
 export interface SpeechCorrection {
   from: string;
   to: string;
 }
 
-// Matching is case-insensitive and word-bounded — but a \b anchor only where
-// the rule's own edge is a word character, mirroring the SUB/WAVE rule's
-// anchors: a rule for "live" must not fire inside "delivery", while a rule
-// whose edge is a symbol ("Ke$ha") has no word boundary there to anchor on.
+// Use case-insensitive matches and add word boundaries only at word-character
+// edges: live cannot match delivery, while symbol-edged names need no boundary there.
 const REGEX_SPECIALS_RE = /[.*+?^${}()|[\]\\]/g;
 // Reuse each row's pattern across lines; weak keys release old settings when
 // they are replaced. Check `from` on every use so in-place edits work too.

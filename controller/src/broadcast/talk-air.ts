@@ -1,9 +1,5 @@
-// Talk PLACEMENT policy: whether a scheduled spoken segment ducks the song or
-// waits for the next track boundary (#1485). `djTalkOnlyBetweenTracks` is the
-// switch, read once per minute by the talk tick and resolved into TalkPlan.air
-// by the pure planner. withTalkAir() is a SCOPE rather than a threaded flag, so
-// anything spoken inside a scheduled fire defers, and manual triggers — which
-// call the same runners from outside any scope — stay 'immediate'.
+// Resolve scheduled talk placement into TalkPlan.air. The withTalkAir scope defers scheduled
+// speech; manual callers outside it remain immediate. #1485.
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as settings from '../settings.js';

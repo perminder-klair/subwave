@@ -1,6 +1,5 @@
 'use client';
 
-// Shapes, vocab and the small formatters the playlist builder shares.
 
 import { SHOW_ENERGY } from '@/lib/schemas.generated';
 

@@ -1,10 +1,4 @@
 'use client';
-// Searchable voice picker for the long engine voice lists, wrapping the vendored
-// ai-elements VoiceSelector (cmdk inside a Radix dialog). Controlled like the
-// <Select> it replaces: `value` in, `onChange(id)` out, nothing persists until the
-// surrounding form saves. With `preview` set every row can audition through
-// POST /settings/tts/preview; one sample plays at a time and closing the dialog
-// stops playback and revokes the object URL.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronsUpDown } from 'lucide-react';
 import type { AdminAuth } from '../../../lib/adminAuth';

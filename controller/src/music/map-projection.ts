@@ -1,9 +1,5 @@
-// Sound-map projection: every stored CLAP audio vector to 2D with UMAP,
-// normalised to [0,1] per axis, persisted as tracks.map_x/map_y.
-// UMAP at library scale is minutes of synchronous CPU, so it NEVER runs on the
-// controller's event loop — runProjection() is the core the CLI child
-// (src/music/project-map.ts) runs; startProjection() spawns it. The child's final
-// transaction bumps data_version, so the observatory ETag invalidates itself.
+// Run UMAP projection in the CLI child, never the controller event loop. Its final transaction
+// updates data_version to invalidate the map ETag.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { UMAP } from 'umap-js';

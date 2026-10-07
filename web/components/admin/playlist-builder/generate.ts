@@ -1,10 +1,6 @@
 'use client';
 
-// A generation legitimately runs for minutes and Cloudflare cuts proxied responses
-// off at ~100s with an HTML error page, so the panel starts a job
-// (POST /playlists/generate/jobs) and polls it rather than holding one request
-// open. Bodies are never parsed before checking they ARE JSON: WebKit reports
-// r.json() on that HTML page as "The string did not match the expected pattern".
+// Poll generation jobs because Cloudflare ends long requests around 100 seconds. Check for JSON before parsing proxy errors.
 
 type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 

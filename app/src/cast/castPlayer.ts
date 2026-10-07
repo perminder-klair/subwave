@@ -1,10 +1,5 @@
-// Google Cast media loading. Cast is not audio routing: the Cast device
-// fetches the stream URL itself and local RNTP playback is torn down while a
-// session is active. The Default Media Receiver plays the live MP3 mount, so
-// no receiver registration is needed.
-//
-// Metadata is set once at load: per-track updates on the Default Receiver mean
-// reloading media, which is an audible gap on a live stream.
+// Cast fetches the MP3 stream itself while local playback is torn down.
+// Updating Default Receiver metadata requires a reload and causes an audible gap.
 
 import { MediaStreamType, type RemoteMediaClient } from 'react-native-google-cast';
 

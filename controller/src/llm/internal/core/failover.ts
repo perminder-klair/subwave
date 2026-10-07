@@ -1,16 +1,6 @@
-// Primary→fallback failover harness + the success/failure record writers.
-//
-// Every primitive (djText / djObject / djAgent) runs its per-leg generation
-// inside withFailover(): the primary leg is tried first, and the call retries
-// once against the optional fallback leg when the primary leg can't recover this
-// call — either its host is unreachable (connection refused / DNS / timeout —
-// see isUnreachable), it refused with a quota/usage-limit/auth error (see
-// isQuotaOrAuthError; issue #438), a reachable gateway relayed a saturated
-// upstream that survived same-leg retries (see isUpstreamOverloaded; issue #671),
-// or the leg's model itself is gone — retired, removed, or never present (see
-// isModelUnavailable). That last one is permanent: no retry and no wait brings
-// the model back, so the call must move to the fallback leg immediately.
-// record* lives here so a call is logged exactly once, with the leg that ran.
+// Try the fallback on unreachable hosts, quota/auth errors (#438), persistent
+// upstream overload (#671), or missing/retired models. Permanent model errors skip retries.
+// Record each call once against the leg that actually ran.
 
 import { createHash } from 'node:crypto';
 import * as settings from '../../../settings.js';

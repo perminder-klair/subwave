@@ -1,12 +1,6 @@
-// Listener likes (#991) — records in state/likes.json, each with a slim track
-// snapshot so the picker can feed favourites back without a Subsonic round-trip.
-// Dedup is one like per apparent listener per AIRING, keyed by HMAC(secret, ip):
-// the raw IP is never stored and the secret is persisted so dedup survives
-// restarts. Listeners behind one NAT share a key — dedup, not identity.
-//
-// Navidrome star write-back is the route's job, not this module's.
-// Operator likes (#1253) ride the same records under a reserved listener key and
-// are exempt from both the topLiked() window and the MAX_RECORDS trim.
+// Deduplicate likes per apparent listener and airing with a persisted HMAC secret; never store
+// raw IPs. Operator hearts are exempt from the time window and survive record trimming. Routes
+// own Navidrome star write-back. #991, #1253.
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';

@@ -1,6 +1,3 @@
-// The heart button's state machine (#991): refresh liked-state when the on-air
-// track changes, fill on tap, settle on the controller's answer.
-
 import { useCallback, useEffect, useState } from 'react';
 import type { StationApi } from '@/lib/api';
 
@@ -19,8 +16,7 @@ export interface TrackLike {
 }
 
 export function useTrackLike(api: StationApi | null, songId: string | null): TrackLike {
-  // Starts false so a station with likes off never flashes a heart; the first
-  // status fetch flips it on.
+  // Start disabled so stations with likes off never flash the heart.
   const [enabled, setEnabled] = useState(false);
   const [state, setState] = useState<{ songId: string | null; liked: boolean; count: number }>({
     songId: null,
@@ -36,8 +32,7 @@ export function useTrackLike(api: StationApi | null, songId: string | null): Tra
     api.likeStatus().then((st) => {
       if (cancelled || !st) return;
       setEnabled(st.enabled !== false);
-      // Only apply the answer for the track we asked about: a status that
-      // raced a track change would paint the wrong liked-state.
+      // Ignore status responses for a track that is no longer current.
       if (st.songId && st.songId !== songId) return;
       setState({ songId, liked: !!st.liked, count: st.count ?? 0 });
     });

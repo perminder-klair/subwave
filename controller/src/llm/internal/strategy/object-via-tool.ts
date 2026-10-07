@@ -1,10 +1,5 @@
-// Structured output via a forced tool call. The result schema is presented as
-// an `emit` tool the model MUST call (toolChoice:'required'); we capture and
-// Zod-validate its input. This is the reliable structured-output path for
-// models that ignore JSON mode but handle tool calls fine (Ollama). Single step
-// — the model's only legal move is to call `emit` once. Returns the validated
-// object plus a token-usage block so callers can log it alongside the other
-// branches.
+// Expose the schema as the sole required emit tool and Zod-validate its input.
+// One step returns the object and usage, including for models that ignore JSON mode.
 
 import { generateText, tool, isStepCount } from 'ai';
 import { usageOf, perfOf, warningsOf } from '../core/pure.js';

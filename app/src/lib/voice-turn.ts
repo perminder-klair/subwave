@@ -1,7 +1,5 @@
-// "Is the DJ talking right now?", for every surface that swaps the strip to
-// the persona. The booth feed is a chat log with no end stamp, so "talking" is
-// a window that opens when a voice turn lands and closes TALKING_LINGER_MS
-// later. Lives here so the lock screen and Live Activity can't disagree.
+// The booth feed has no speech-end stamp. A voice turn opens a shared
+// TALKING_LINGER_MS window for the lock screen and Live Activity.
 
 import type { SessionTurn } from './types';
 

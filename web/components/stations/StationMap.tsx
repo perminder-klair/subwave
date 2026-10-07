@@ -73,14 +73,12 @@ export default function StationMap({ stations }: { stations: Station[] }) {
         role="img"
         preserveAspectRatio="xMidYMid meet"
       >
-        {/* Land — stippled dot field */}
         <g className="bs-map-land">
           {points.map((p, i) => (
             <circle key={i} cx={p.x + offsetFor(p.y)} cy={p.y} r={0.55} />
           ))}
         </g>
 
-        {/* Stations */}
         {markers.map((m) => {
           const x = m.x + offsetFor(m.y);
           const y = m.y;
@@ -88,7 +86,6 @@ export default function StationMap({ stations }: { stations: Station[] }) {
           return (
             <g key={m.slug} className="bs-map-station">
               <title>{m.label === m.name ? m.name : `${m.name} — ${m.label}`}</title>
-              {/* Pulse ring */}
               <circle cx={x} cy={y} r={2.6} className="bs-map-pulse">
                 <animate
                   attributeName="r"

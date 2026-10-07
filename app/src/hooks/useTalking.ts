@@ -1,6 +1,3 @@
-// The "DJ is on the mic" window as a boolean, closing itself on a timer. The
-// rule lives in lib/voice-turn.ts; this is just its state machine.
-
 import { useEffect, useMemo, useState } from 'react';
 import { TALKING_LINGER_MS, lastVoiceTurnTime } from '@/lib/voice-turn';
 import type { SessionTurn } from '@/lib/types';
@@ -14,8 +11,7 @@ export function useTalking(boothFeed: SessionTurn[] | undefined): boolean {
       setTalking(false);
       return;
     }
-    // Measured from the turn's own stamp, not from now: a poll can land a
-    // 20s-old link, and an already-expired one must never open the window.
+    // Use the turn stamp so an old poll result cannot reopen an expired window.
     const remaining = TALKING_LINGER_MS - (Date.now() - lastVoiceTs);
     if (remaining <= 0) {
       setTalking(false);

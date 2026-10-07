@@ -1,7 +1,5 @@
 'use client';
 
-// Small shared atoms for the schedule page: colour chips, the underlined "slot"
-// dropdown, and the M T W T F S S day pills.
 
 import type { ReactNode } from 'react';
 import { useRef } from 'react';

@@ -1,7 +1,3 @@
-// The active station's runtime API client for the whole tree, plus recents and
-// the switch/forget actions. `api` is rebuilt whenever the active station
-// changes; every hook and screen reads `api`/`base` from here.
-
 import React, {
   createContext,
   useCallback,
@@ -63,9 +59,8 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
           ? await loadStationCredentials(s.activeStation)
           : null;
       } catch {
-        // A locked or corrupt keychain must not strand the app behind the
-        // splash. Start without the login; later station actions surface the
-        // failure and never overwrite the vault.
+        // Boot without credentials if the keychain fails; later actions report failure
+        // and leave the vault intact.
       }
       if (alive) {
         setStore(s);
@@ -87,15 +82,12 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
     const nextCredentials = suppliedCredentials === undefined
       ? await loadStationCredentials(ref.url)
       : suppliedCredentials;
-    // A saved-station switch already loaded its credential, so don't rewrite
-    // the same vault entry. New credentials are persisted before playback is
-    // interrupted.
+    // Persist new credentials before interrupting playback; saved switches reuse the vault entry.
     const next = await setActiveStation(
       ref,
       suppliedCredentials === undefined ? undefined : nextCredentials,
     );
-    // The one choke point for re-pointing the app: stop the current station
-    // before changing the base every screen consumes.
+    // Stop playback before changing the base consumed by every screen.
     await teardown();
     setCredentials(nextCredentials);
     setStore(next);

@@ -1,6 +1,5 @@
 import type { FormState, CloudTtsCfg } from './shared';
 
-/** Mark only the fields represented by a successful patch as clean. */
 export function rebaselineSavedPatch(
   baseline: FormState,
   current: FormState,

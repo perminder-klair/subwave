@@ -1457,9 +1457,11 @@ radio = smooth_add(
   special=intro
 )
 
-# SFX on top. A stinger rides BENEATH both the DJ and the music, so it barely
-# ducks; its own level and p are the two knobs.
-sfx_bed = amplify(0.7, sfx_queue)
+# SFX on top. smooth_add adds the stinger at its own level and only pulls the
+# programme under it to p (~-3 dB), so the stinger airs at unity. 0.7 here
+# buried stingers under the mic_chain-boosted DJ (#1689); the bus limiter below
+# catches the sum's peaks.
+sfx_bed = amplify(1.0, sfx_queue)
 radio = smooth_add(
   duration=0.3,     # snappier than voice — stingers are short, no lead-in clip
   p={0.7},          # ~-3 dB

@@ -1,7 +1,5 @@
 'use client';
 
-// DJ command center — /admin/dash. Speak custom text on air, fire voice segments,
-// flip the autonomous toggles, watch live status + the booth log.
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -432,9 +430,7 @@ export default function DashPanel() {
                         <QueueItemContent className="text-[12px] text-ink">
                           {t.title} <span className="text-muted">— {t.artist}</span>
                         </QueueItemContent>
-                        {/* `stemSeam` rides the successor, so keep its marker on
-                            that row even while the header describes the earlier
-                            current -> first-upcoming transition. */}
+                        {/* stemSeam belongs to the successor track. */}
                         {t.stemSeam ? (
                           <span
                             title="Arrives via a rendered blend mixed from cached stems"
@@ -443,11 +439,6 @@ export default function DashPanel() {
                             Stem blend
                           </span>
                         ) : null}
-                        {/* An operator block (#1622 FR 4): say which record this
-                            row belongs to and where it sits in it, and offer the
-                            inverse of the one press that queued it. Shown on the
-                            FIRST visible member only — a badge on all thirty rows
-                            is noise, and one cancel button is the whole point. */}
                         {t.block && upcoming.findIndex(u => u.block?.id === t.block!.id) === i ? (
                           <span className="flex shrink-0 items-center gap-1.5">
                             <span
@@ -473,7 +464,6 @@ export default function DashPanel() {
                             ? t.duration
                             : ''}
                         </span>
-                        {/* Per-track cancel (#1006). */}
                         {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
                           <QueueItemActions className="opacity-100">
                             <QueueItemAction
@@ -542,9 +532,6 @@ export default function DashPanel() {
               <div className="text-muted italic">no session turns yet</div>
             ) : (
               <div className="relative min-h-[220px] flex-1">
-                {/* The absolute-inset wrapper keeps the log out of the card's
-                    intrinsic height. The scroller stays anchored at the TOP:
-                    newest first means turns prepend. */}
                 <div className="absolute inset-0">
                   <div
                     className="h-full overflow-y-auto"
@@ -588,8 +575,6 @@ export default function DashPanel() {
 
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            {/* Chips fill the textarea, never send, and flip the box to Styled:
-                they are directions for the DJ, and raw would air the instruction. */}
             <div className="mb-2.5 flex items-center gap-1.5">
               <div className="min-w-0 flex-1">
                 <Suggestions className="gap-1.5">
@@ -632,8 +617,6 @@ export default function DashPanel() {
                   }
                 />
               </PromptInputBody>
-              {/* Two rows (controls, then a full-width send bar): on the ~550px
-                  column a single flex-wrap row broke unpredictably. */}
               <PromptInputFooter className="flex-col items-stretch gap-2.5">
                 <PromptInputTools className="grid w-full grid-cols-2 items-end gap-3 [&_[role=group]]:w-full [&_[role=group]]:flex-nowrap [&_button]:flex-1 [&_button]:px-2 [&_button]:tracking-normal">
                   <div className="grid min-w-0 gap-1.5">
@@ -652,8 +635,6 @@ export default function DashPanel() {
                   disabled={!!busy || !sayText.trim()}
                   className="w-full rounded-none px-3"
                 >
-                  {/* No children while in flight / erroring, so the status glyphs
-                      take over from the label. */}
                   {sayStatus === 'ready' ? 'Send to air →' : undefined}
                 </PromptInputSubmit>
               </PromptInputFooter>
@@ -661,7 +642,6 @@ export default function DashPanel() {
           </Card>
 
           <Card title="DJ segments" sub="fire on demand">
-            {/* 2-up on a phone so each pad keeps a full-width label. */}
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {[...SEGMENTS, ...((status?.activeShow?.guests?.length ?? 0) > 0 ? [BANTER_SEGMENT] : [])].map(s => {
                 const k = `seg:${s.type}`;
@@ -730,9 +710,6 @@ export default function DashPanel() {
           ) : null
         }
       >
-        {/* Why the IP column may be showing one repeated private address
-            (#1613). Advisory: shown only when the icecast render reported a
-            miss, never on a broadcast image too old to say. */}
         {!connErr && conns && proxyHint ? (
           <div className="mb-2 border-l-2 border-separator-strong pl-2 text-[11px] text-muted">
             {proxyHint}{' '}
@@ -778,7 +755,6 @@ export default function DashPanel() {
                     onSort={setSort}
                     className={STICKY_TH + ' pr-3'}
                   />
-                  {/* Mount is dropped on a phone; the other four fit 390px. */}
                   <SortableTh
                     label="Mount"
                     col="mount"

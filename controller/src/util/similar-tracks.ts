@@ -1,15 +1,6 @@
-// Pure decisions behind GET /similar-tracks (#1575), the listener-facing
-// "sounds like this" lookup over the CLAP index. Two contracts:
-//
-//   1. Empty-with-a-reason: the route always answers 200, and the reason
-//      distinguishes "no CLAP index" / "unknown seed" / "seed not analysed".
-//   2. The PUBLIC track shape carries only fields some existing unauthenticated
-//      or admin read already publishes. Nothing tagger-internal — no provenance,
-//      era-trust flags or `audioMoods`. Adding a field here publishes it to the
-//      internet.
-//
-// The blocklist is NOT applied here: `library.tracksLikeThisAudio` already runs
-// every row through `blocklist.rejectBlocked`.
+// Return 200 with a reason for empty results (#1575). Publish only public track
+// fields; exclude tagger provenance, era trust and audioMoods.
+// library.tracksLikeThisAudio already applies the blocklist.
 import { resolveEraYear } from '../music/era-year.js';
 import { isInstrumental } from '../music/lyric-vocal.js';
 

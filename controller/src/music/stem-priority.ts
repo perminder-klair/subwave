@@ -1,80 +1,7 @@
-// Stem scan-order and retention policy (#1622 FR 14).
-//
-// The stem cache is bound by bytes, not by library size: on a 55k-track
-// library `stem-cache.headroomTracks()` allows a few thousand slots at the
-// default 15 GB budget and the backfill stands down at zero. So the budget
-// ALWAYS binds, and *which* tracks get a stem pass is the entire feature.
-// Until this module it was `ORDER BY id` over Navidrome's opaque hashes —
-// i.e. chance.
-//
-// This file is the ranking rule, kept pure and away from the query that
-// applies it. `library-db/stem-scan.ts` holds the SQL, built from the same
-// constants and pinned row-for-row against `stemPriority()` by
-// scripts/stem-priority.test.ts — the era-filter discipline, because a JS
-// scorer and a SQL scorer that disagree pick different tracks and nothing
-// says so.
-//
-// ---------------------------------------------------------------------------
-// What the score is FOR
-// ---------------------------------------------------------------------------
-//
-// Stems have exactly one consumer: `broadcast/stem-blend.ts` renders a seam
-// from the OUTGOING track's tail stems and the INCOMING track's head stems.
-// Read its gates before changing a weight here — they are what the signals
-// below are derived from, not a guess about what stems "might" be worth:
-//
-//   * `!out.outro?.bars?.length || !out.durationSec` → no blend. A track with
-//     no measured tail bar grid can never be the outgoing side.
-//   * `!inn.bars?.length` → no blend. No head bar grid, never the incoming side.
-//   * everything else (bpm compatibility, the render deadline, the trim
-//     vetoes) is a property of the PAIR or of the moment, not of the track,
-//     so it cannot be ranked here.
-//
-// That makes the bar grids a HARD eligibility fact rather than a preference:
-// stems written for a track with neither grid are bytes the only consumer is
-// guaranteed to reject. They enter the score as a MULTIPLIER (0, 1 or 2 —
-// "how many sides of a seam can this track serve"), so a grid-less track is
-// worth zero however loved it is, while a one-sided track can still be lifted
-// past the untouched majority by real airplay or curation. Tiers that merely
-// ADD would have let a grid-less favourite outrank a blendable track; tiers
-// that merely GATE would have sealed the one-grid class off from curation.
-//
-// The value half is "will this track actually turn up at a seam": recent
-// airplay, then curation. Operator hearts outrank listener likes, and neither
-// is windowed here — the station-wide rule is that operator curation outranks
-// listener signal.
-//
-// ---------------------------------------------------------------------------
-// Why nothing is starved
-// ---------------------------------------------------------------------------
-//
-// The failure mode of any ranking over a scope larger than the budget is a
-// tail that is never even considered. Three things close it:
-//
-//   1. The untouched majority of a real library ties EXACTLY (both grids, no
-//      plays, no likes → `2 * base`), and the tie is broken by `RANDOM()`, not
-//      by id. A frozen id order is what made the old behaviour a lottery
-//      nobody could win twice; a fresh draw per pass gives every track in the
-//      tie class a chance on every pass. (`plays.deepCutTracks` samples the
-//      same way for the same reason.)
-//   2. No class is sealed. A one-grid track with an operator heart scores
-//      above a both-grid track with no signal at all, so airplay and curation
-//      move tracks across the class line rather than re-sorting within it.
-//   3. `stems_at` stamps the ATTEMPT, so a scanned track leaves the scope for
-//      good and every pass makes progress. Resumption is the stamp's job, not
-//      the order's — which is what lets the order be random at all.
-//
-// A grid-less track scoring zero is deliberate and is NOT the starvation this
-// guards against: it is the consumer's own eligibility gate, read forward. Give
-// it a bar grid (a re-analysis on a newer ANALYSIS_VERSION) and it ranks.
-
-// ---------------------------------------------------------------------------
-// Weights
-// ---------------------------------------------------------------------------
-
-// All integers, and the play term is a per-play increment rather than a
-// fraction of a maximum, so the JS score and the SQL score are the same
-// integer with no float comparison anywhere.
+// Stem priority multiplies seam eligibility (zero, one, or two measured bar grids) by airplay
+// and curation value. Operator hearts outrank listener likes. Random ties give unplayed tracks
+// another chance; stems_at records attempts for resumption. Keep JS and SQL scores as equal
+// integers. #1622 FR 14, scripts/stem-priority.test.ts.
 export const STEM_PRIORITY_WEIGHTS = {
   // Every blendable track's floor. Non-zero so the seam multiplier orders the
   // untouched majority (2 * 100 vs 1 * 100) on a library with no play history
@@ -181,16 +108,9 @@ export interface StemCacheDir {
   priority: number | null;
 }
 
-// Eviction order for the byte-budget sweep — first out first.
-//
-// This has to change WITH the scan order, not after it. The scan writes the
-// best tracks first, so they carry the OLDEST mtimes; a sweep that kept
-// evicting oldest-first would delete precisely the stems the ranking just
-// worked to earn, and `stems_at` stamps the attempt so they would never be
-// written again. Priority ascending fixes the inversion; mtime ascending stays
-// as the tiebreak, which keeps the old "a re-analysis refreshes a dir's slot"
-// behaviour inside every tie — including the all-unknown case, where this is
-// byte-for-byte the previous sort.
+// Evict lowest priority first, then oldest mtime. Ranking writes the best stems earliest, so
+// mtime-only eviction would remove them first; missing priorities retain the previous mtime
+// order.
 export function stemEvictionOrder<T extends StemCacheDir>(dirs: readonly T[]): T[] {
   return [...dirs].sort(
     (a, b) =>
