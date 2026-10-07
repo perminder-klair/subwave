@@ -42,6 +42,10 @@ Remove this backport once a tested stable upstream release includes #5257.
 
 ## Validation
 
+The [v1.18.0 validation report](../../docs/validation/liquidsoap-1.18.0/README.md)
+records published-image identity checks, broadcast and AIO smoke results, and
+the shortened endurance comparison. It also lists the checks still unverified.
+
 From the repository root:
 
 ```sh
