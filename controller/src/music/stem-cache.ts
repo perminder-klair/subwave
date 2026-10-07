@@ -8,7 +8,7 @@
 // ranking the backfill scans by); the analyzer owns the WRITES
 // (analyze_worker.py write_stems — the same shared volume).
 
-import { readdir, stat, rm, readFile, writeFile, rename } from 'node:fs/promises';
+import { readdir, stat, rm, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
@@ -16,6 +16,7 @@ import * as db from './library-db.js';
 import * as likes from '../broadcast/likes.js';
 import { stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
 import type { StemScanOpts } from './library-db.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 
 export const STEM_NAMES = ['drums', 'bass', 'other', 'vocals'] as const;
 export type StemWindow = 'head' | 'tail';
@@ -105,7 +106,7 @@ export function estimateTrackBytes(totalBytes: number, dirCount: number): number
 
 // Pure per-track gate for the analysis pass (#1257): stems ride along with every
 // analysis when the cache is on, but must not grow it past the budget. An
-// existing dir is a rewrite (no net-new bytes) and spends no slot.
+// existing dir spends no slot; its possible growth is measured after the pass.
 export function stemWriteDecision(opts: {
   cacheOn: boolean;
   slotsLeft: number;
@@ -162,6 +163,7 @@ async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: 
 export const SNAPSHOT_MAX_AGE_MS = 24 * 3600_000;
 // A pass that has been "running" longer than this is treated as dead.
 const PENDING_MAX_AGE_MS = 48 * 3600_000;
+let snapshotUntrusted = false;
 
 export interface UsageSnapshot {
   version: 1;
@@ -188,8 +190,6 @@ export function snapshotVerdict(opts: {
   const { snap } = opts;
   if (!snap || snap.version !== 1 || snap.root !== opts.root) return 'walk';
   if (!Number.isFinite(snap.bytes) || !Number.isFinite(snap.dirs)) return 'walk';
-  const measured = Date.parse(snap.measuredAt);
-  if (!Number.isFinite(measured) || opts.nowMs - measured > SNAPSHOT_MAX_AGE_MS || measured > opts.nowMs + 60_000) return 'walk';
   if (snap.pending) {
     const since = Date.parse(snap.pending.since);
     const fresh = Number.isFinite(since) && opts.nowMs - since < PENDING_MAX_AGE_MS;
@@ -197,6 +197,8 @@ export function snapshotVerdict(opts: {
     // written dirs nobody counted.
     return opts.pendingAlive && fresh ? 'pass-running' : 'walk';
   }
+  const measured = Date.parse(snap.measuredAt);
+  if (!Number.isFinite(measured) || opts.nowMs - measured > SNAPSHOT_MAX_AGE_MS || measured > opts.nowMs + 60_000) return 'walk';
   return 'use';
 }
 
@@ -212,15 +214,15 @@ async function readSnapshot(): Promise<UsageSnapshot | null> {
   }
 }
 
-async function writeSnapshot(snap: UsageSnapshot): Promise<void> {
-  const file = snapshotPath();
-  const tmp = `${file}.${process.pid}.tmp`;
+async function writeSnapshot(snap: UsageSnapshot): Promise<boolean> {
   try {
-    await writeFile(tmp, JSON.stringify(snap) + '\n');
-    await rename(tmp, file);
+    await writeFileAtomic(snapshotPath(), JSON.stringify(snap) + '\n');
+    snapshotUntrusted = false;
+    return true;
   } catch {
-    // Best effort: without a snapshot the next caller simply walks.
-    await rm(tmp, { force: true }).catch(() => {});
+    // The old file may still exist. This process must not reuse its totals.
+    snapshotUntrusted = true;
+    return false;
   }
 }
 
@@ -244,22 +246,25 @@ async function snapshotState(): Promise<{ snap: UsageSnapshot | null; verdict: S
     nowMs: Date.now(),
     pendingAlive: snap?.pending ? pidAlive(snap.pending.pid) : false,
   });
-  return { snap, verdict };
+  return { snap, verdict: snapshotUntrusted && verdict === 'use' ? 'walk' : verdict };
 }
 
-function snapshotFromWalk(bytes: number, dirs: number, keep?: UsageSnapshot | null): UsageSnapshot {
+function snapshotFromWalk(bytes: number, dirs: number): UsageSnapshot {
   const now = new Date().toISOString();
-  // A walk made while a live pass is running keeps its pending mark, so the
-  // pass's own settle still applies.
-  const pending = keep?.pending && pidAlive(keep.pending.pid) ? keep.pending : undefined;
-  return { version: 1, root: stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now, ...(pending ? { pending } : {}) };
+  return { version: 1, root: stemsRoot(), bytes, dirs, measuredAt: now, updatedAt: now };
 }
 
 async function walkUsage(): Promise<{ bytes: number; dirs: number }> {
-  const before = await readSnapshot();
+  const before = await snapshotState();
   const scanned = await scanDirs();
   const bytes = scanned.reduce((n, d) => n + d.bytes, 0);
-  await writeSnapshot(snapshotFromWalk(bytes, scanned.length, before));
+  const after = await snapshotState();
+  // A live pass owns the additive baseline. A read must not count its writes
+  // into that baseline, including when the pass starts during this walk.
+  if (before.verdict !== 'pass-running' && after.verdict !== 'pass-running'
+    && JSON.stringify(before.snap) === JSON.stringify(after.snap)) {
+    await writeSnapshot(snapshotFromWalk(bytes, scanned.length));
+  }
   return { bytes, dirs: scanned.length };
 }
 
@@ -275,10 +280,13 @@ export async function usage(): Promise<{ bytes: number; dirs: number; estTrackBy
 
 // The analysis pass marks the snapshot while it may write stem dirs. Called
 // after its headroom read, so that read could still use the snapshot.
-export async function markPassPending(): Promise<void> {
+export async function markPassPending(): Promise<boolean> {
   const { snap, verdict } = await snapshotState();
-  if (verdict !== 'use' || !snap) return; // no trusted snapshot: the next reader walks anyway
-  await writeSnapshot({ ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() });
+  if (verdict !== 'use' || !snap) {
+    snapshotUntrusted = true;
+    return false;
+  }
+  return writeSnapshot({ ...snap, pending: { pid: process.pid, since: new Date().toISOString() }, updatedAt: new Date().toISOString() });
 }
 
 // Bytes on disk under one track dir (one readdir + a stat per file).
@@ -296,17 +304,21 @@ async function dirBytes(dir: string): Promise<number | null> {
 
 // End of an analysis pass: add the NET-NEW dirs it allocated to the snapshot
 // (measuring just those), clear the pending mark, and say whether the cache is
-// still inside the budget. Rewrites of existing dirs are not re-measured; their
-// size barely moves and the daily walk corrects it. Returns null when there is
-// no trusted snapshot to settle against (the caller then sweeps with a walk).
+// still inside the budget. Existing dirs may gain a missing tail, so a pass
+// that rewrote one invalidates the snapshot and takes a full walk instead.
+// An untrusted settlement also invalidates old totals, even if its file remains.
 export async function settlePassWrites(
   newTrackIds: Iterable<string>,
   budget = budgetBytes(),
+  { rewroteExisting = false }: { rewroteExisting?: boolean } = {},
 ): Promise<{ bytes: number; dirs: number; withinBudget: boolean } | null> {
   const snap = await readSnapshot();
   const mine = snap?.pending?.pid === process.pid;
   const base = snapshotVerdict({ snap, root: stemsRoot(), nowMs: Date.now(), pendingAlive: true });
-  if (!snap || !mine || base !== 'pass-running') return null;
+  if (snapshotUntrusted || rewroteExisting || !snap || !mine || base !== 'pass-running') {
+    snapshotUntrusted = true;
+    return null;
+  }
   let bytes = snap.bytes;
   let dirs = snap.dirs;
   for (const id of newTrackIds) {
@@ -316,7 +328,7 @@ export async function settlePassWrites(
     dirs += 1;
   }
   const settled: UsageSnapshot = { version: 1, root: snap.root, bytes, dirs, measuredAt: snap.measuredAt, updatedAt: new Date().toISOString() };
-  await writeSnapshot(settled);
+  if (!(await writeSnapshot(settled))) return null;
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
 
@@ -413,7 +425,7 @@ function withPriorities(
 // swallowed (retry next sweep), but `failedDirs` and `overBudgetBytes` are what
 // let the call sites say out loud that nothing could be deleted — e.g. a stems
 // mount the controller container cannot delete from.
-export async function sweep(budget = budgetBytes()): Promise<{
+export async function sweep(budget = budgetBytes(), { force = false }: { force?: boolean } = {}): Promise<{
   removed: number;
   freedBytes: number;
   failedDirs: number;
@@ -427,13 +439,13 @@ export async function sweep(budget = budgetBytes()): Promise<{
   if (before.verdict === 'pass-running' && before.snap?.pending?.pid !== process.pid) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'pass-running' };
   }
-  if (before.verdict === 'use' && before.snap && before.snap.bytes <= budget) {
+  if (!force && before.verdict === 'use' && before.snap && before.snap.bytes <= budget) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'snapshot' };
   }
   const dirs = await scanDirs();
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) {
-    await writeSnapshot(snapshotFromWalk(total, dirs.length, before.snap));
+    await writeSnapshot(snapshotFromWalk(total, dirs.length));
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
   }
 
@@ -450,6 +462,6 @@ export async function sweep(budget = budgetBytes()): Promise<{
       removed += 1;
     } catch { failedDirs += 1; /* best-effort — retry next sweep */ }
   }
-  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed, before.snap));
+  await writeSnapshot(snapshotFromWalk(total, dirs.length - removed));
   return { removed, freedBytes, failedDirs, overBudgetBytes: Math.max(0, total - budget) };
 }

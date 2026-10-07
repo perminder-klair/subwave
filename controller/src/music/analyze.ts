@@ -283,12 +283,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   if (stemCache) {
     stemSlotsLeft = await stemCacheStore.headroomTracks();
     existingStemDirs = await stemCacheStore.cachedTrackIdSet();
-    // From here this pass may add stem dirs: the hourly sweep leaves the
-    // cache to it, and it settles the usage snapshot when it ends.
-    await stemCacheStore.markPassPending();
   }
   // Net-new stem dirs this pass allocated (settled at the end of the pass).
   const newStemIds: string[] = [];
+  let rewroteExistingStems = false;
   if (stemCache && !reAnalyzeScope) {
     // The loop spends stemSlotsLeft in ids order and the earlier widenings'
     // tracks run FIRST, draining slots before this slice is reached. Reserve
@@ -356,6 +354,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     await scoreAudioMoods();
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
+  if (stemCache) await stemCacheStore.markPassPending();
   logEvent('info', `Analysing audio for ${ids.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
 
@@ -418,6 +417,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       stemSlotsLeft -= 1;
       newStemIds.push(id);
     }
+    if (trackStemDecision.want && existingStemDirs.has(id)) rewroteExistingStems = true;
     if (stemCache && !trackStemDecision.want && !stemGateAnnounced) {
       stemGateAnnounced = true;
       console.log(
@@ -641,13 +641,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // NOT oldest first, or this pass's best writes would be the first evicted;
   // the hourly cleanup cron sweeps too, this just settles the bill promptly).
   if (stemCache) {
-    // Count just the dirs this pass added; a full walk only when that leaves
-    // the cache over budget (eviction needs the per-dir list) or there is no
-    // trusted snapshot to add them to.
-    const settled = await stemCacheStore.settlePassWrites(newStemIds).catch(() => null);
+    // New dirs can be added to the baseline. Rewrites and failed settlement
+    // require a fresh walk, even if an old under-budget snapshot remains.
+    const settled = await stemCacheStore.settlePassWrites(newStemIds, undefined, {
+      rewroteExisting: rewroteExistingStems,
+    }).catch(() => null);
     const swept = settled?.withinBudget
       ? null
-      : await stemCacheStore.sweep().catch(() => null);
+      : await stemCacheStore.sweep(undefined, { force: true }).catch(() => null);
     if (swept && swept.removed > 0) {
       console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
     }
