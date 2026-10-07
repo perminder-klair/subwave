@@ -57,7 +57,8 @@ router.post('/settings/music-source', requireAdmin, async (req, res) => {
       ...(result.routerError ? { error: result.routerError } : {}),
       switched: result.switched,
       reconcile: result.reconcile,
-      ...maskSelection(prepared.selection, plugins),
+      // A refused save changed nothing, so it reports what is still stored.
+      ...maskSelection(result.routerError ? prev : prepared.selection, plugins),
       router: result.router,
     });
   } catch (err: any) {

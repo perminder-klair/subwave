@@ -2,13 +2,13 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
-import { navidromeEnvLocks, resolveNavidrome } from '../../setup/navidrome-policy.js';
+import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
-import { applyNavidromeToLiveConfig, loadSetupConfig, saveSetupConfig } from '../../setup/config.js';
+import { applyNavidromeToLiveConfig, saveSetupConfig, storedNavidrome } from '../../setup/config.js';
 import { currentSelection } from '../../setup/music-source.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
@@ -31,13 +31,6 @@ import { skillCatalog } from '../../skills/_agent.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
-
-// The direct Navidrome connection as stored (env applied), whichever music
-// mode is live. In navidrome mode it equals config.navidrome.
-async function storedNavidrome(): Promise<{ url: string; user: string; password: string }> {
-  if (currentSelection().mode !== 'router') return config.navidrome;
-  return resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
-}
 
 async function storedNavidromeView() {
   const nv = await storedNavidrome();

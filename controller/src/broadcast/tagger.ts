@@ -10,6 +10,7 @@ import { clearPoolCache } from '../music/picker.js';
 import { clearPlaylistCache } from '../music/show-playlist.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
 import { applyPendingRotation } from '../music/id-rotation.js';
+import { afterMaintenanceRun, pendingSourceSwitch } from '../music/source-switch.js';
 import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEvidence } from '../music/id-rotation-recovery.js';
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
@@ -216,6 +217,20 @@ export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence }
   );
 }
 
+// A music-source switch saved while a run was going (#692) answered "pending":
+// that run walked the library it loaded at start, so its own adoption leaves
+// the marker alone. Carry the library across now that the slot is free.
+function resumeSourceSwitch(startedAt: string, outcome: TaggerLastRun['outcome']): void {
+  const next = afterMaintenanceRun(pendingSourceSwitch(), { startedAt, outcome });
+  if (next === 'stopped') {
+    queue.log('scheduler', 'The music source changed during the stopped run — run Reconcile to re-link the library');
+  } else if (next === 'reconcile' && !tagger.running) {
+    // A run started meanwhile began after the switch, so its walk carries it.
+    queue.log('scheduler', 'The music source changed during the last run — re-linking the library now');
+    startReconcile();
+  }
+}
+
 function spawnChild(
   mode: TaggerMode,
   args: string[],
@@ -402,7 +417,8 @@ function spawnChild(
       })
       .catch(() => {
         if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
-      });
+      })
+      .finally(() => resumeSourceSwitch(startedAt, outcome));
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);

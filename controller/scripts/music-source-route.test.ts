@@ -5,7 +5,7 @@
 // Navidrome section not hijacking a router-mode station.
 
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -115,6 +115,40 @@ test('switching to the router makes it the live Subsonic connection', async () =
   assert.deepEqual(await subsonic.ping(), { ok: true });
   const songs = await subsonic.getRandomSongs({ size: 2 });
   assert.match(songs[0].id, /^mock-/);
+});
+
+// #1827 review: the router is the one step that can still refuse a selection
+// (a plugin that throws on start-up). The save used to persist setup-config,
+// repoint the live connection and write a switch marker first, then answer
+// ok:false while the router kept serving the previous source.
+test('a selection the router refuses at start-up is rolled back, not half-applied', async () => {
+  const dir = path.join(routerDir, 'plugins', 'explodes');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(path.join(dir, 'subwave-source.json'), JSON.stringify({ name: 'explodes', label: 'Explodes', version: '1.0.0', apiVersion: 1, idPrefix: 'exp', entry: 'index.mjs', config: [] }));
+  writeFileSync(path.join(dir, 'index.mjs'), 'export default () => { throw new Error("cannot reach the backend at start-up"); };\n');
+  assert.equal((await call('POST', '/settings/music-source/rescan')).status, 200);
+
+  const before = {
+    setup: readFileSync(path.join(stateRoot, 'setup-config.json'), 'utf8'),
+    router: readFileSync(path.join(routerDir, 'config.json'), 'utf8'),
+    marker: readFileSync(path.join(stateRoot, 'music-source-switch.json'), 'utf8'),
+    live: { ...config.navidrome },
+  };
+  const res = await call('POST', '/settings/music-source', { mode: 'router', sources: [{ plugin: 'explodes', config: {} }] });
+  assert.equal(res.body.ok, false);
+  assert.match(res.body.error, /cannot reach the backend at start-up/);
+  assert.equal(res.body.switched, false);
+  assert.deepEqual(res.body.sources.map((s: any) => s.plugin), ['mock'], 'the reply shows what is still stored');
+
+  assert.equal(readFileSync(path.join(stateRoot, 'setup-config.json'), 'utf8'), before.setup);
+  assert.equal(readFileSync(path.join(routerDir, 'config.json'), 'utf8'), before.router, 'the router config is restored');
+  assert.equal(readFileSync(path.join(stateRoot, 'music-source-switch.json'), 'utf8'), before.marker, 'no marker for a library that never went live');
+  assert.deepEqual({ ...config.navidrome }, before.live);
+  assert.equal(ms.currentSelection().sources[0]!.plugin, 'mock');
+  const got = await call('GET', '/settings/music-source');
+  assert.equal(got.body.router.configError, null, 'the restored config is the one being served');
+  assert.deepEqual(got.body.router.active.map((a: any) => a.plugin), ['mock'], 'still serving the previous source');
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('secrets stay in the process; a blank secret keeps the stored one', async () => {

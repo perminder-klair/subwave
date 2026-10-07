@@ -81,6 +81,29 @@ test('a child that fails a merged read shrinks the answer instead of failing it'
   assert.ok(hit.songs.length > 0);
 });
 
+// The controller's library walk pages alphabeticalByName to the end and prunes
+// whatever it did not see. A merged answer that quietly left out a dead source
+// read as "that source's tracks were deleted".
+test('an enumeration fails when a source is down; discovery lists still shrink', async () => {
+  const m = await mock();
+  let down = true;
+  const g = await good();
+  const flaky: HostSource = {
+    ...g,
+    albumList: async (...args) => {
+      if (down) throw new Error('connection refused');
+      return g.albumList(...args);
+    },
+  };
+  const c = createComposite([m, flaky]);
+  await assert.rejects(c.albumList('alphabeticalByName', 500, 0), /Good did not answer \(connection refused\), so the merged library cannot be listed in full/);
+  const newest = await c.albumList('newest', 500, 0);
+  assert.equal(newest.length, 29, 'a discovery list leaves the dead source out');
+  // A failure is not cached: once the source answers again, the walk sees everything.
+  down = false;
+  assert.equal((await c.albumList('alphabeticalByName', 500, 0)).length, 29 + 1);
+});
+
 test('stars and playlists go to the owner; ids a backend cannot hold are dropped', async () => {
   const m = await mock();
   const c = createComposite([m, await good()]);

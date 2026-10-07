@@ -15,7 +15,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { STATE_DIR, STATE_ROOT } from '../config.js';
 import { envUrl } from '../util/env.js';
@@ -56,13 +56,23 @@ export function readSelection(setupConfig: { music?: unknown } | null | undefine
 // The live selection, for the synchronous readers (/state's needsSetup, the
 // doctor's labels). Set at boot by loadNavidromeConfig and on every save.
 let current: MusicSelection = DEFAULT_MUSIC_SELECTION;
+// When this process last resolved its selection (and with it the live
+// connection). A maintenance child's walk reads the library it loaded at this
+// moment, which is how adoption tells a walk of the old library from a walk of
+// the new one (music/source-switch.ts switchedAfter). null until loaded.
+let currentSince: number | null = null;
 
 export function currentSelection(): MusicSelection {
   return current;
 }
 
+export function currentSelectionSince(): number | null {
+  return currentSince;
+}
+
 export function setCurrentSelection(sel: MusicSelection): void {
   current = sel;
+  currentSince = Date.now();
 }
 
 export function isRouterMode(sel: MusicSelection = current): boolean {
@@ -212,7 +222,8 @@ export function selectionIdentity(sel: MusicSelection, plugins: readonly MusicPl
  */
 export async function markSourceSwitch(from: string, to: string): Promise<void> {
   await mkdir(path.dirname(SOURCE_SWITCH_PATH), { recursive: true });
-  await writeFile(SOURCE_SWITCH_PATH, JSON.stringify({ version: 1, at: new Date().toISOString(), from, to }, null, 2));
+  // Atomic: the reader treats an unparsable marker as no switch at all.
+  await writeFileAtomic(SOURCE_SWITCH_PATH, JSON.stringify({ version: 1, at: new Date().toISOString(), from, to }, null, 2));
 }
 
 // --- the router's internal API -------------------------------------------------

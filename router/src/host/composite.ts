@@ -18,6 +18,10 @@
 // A child that throws during a merge is logged and left out of that answer:
 // one dead backend shrinks the library instead of failing the request.
 // Routed ops surface the owner's error, since there is nothing to fall back to.
+// The exception is an ENUMERATION (the alphabetical album list a library walk
+// pages to the end): the controller treats what it walked as the whole
+// catalogue and prunes the rest, so a list missing a source would delete that
+// source's tracks. An enumeration is all-or-nothing.
 //
 // Nothing is deduplicated. The same album exposed by two sources appears twice
 // under two ids; the admin UI says so before merging.
@@ -30,6 +34,8 @@ import { UnsupportedError } from './types.js';
 const SNAPSHOT_TTL_MS = Number(process.env.ROUTER_SNAPSHOT_TTL_MS || 10 * 60_000);
 const SNAPSHOT_PAGE = 500;
 const SNAPSHOT_MAX = 200_000;
+/** Album lists a library walk pages through completely (controller music/subsonic.ts getAlbumList). */
+const ENUMERATIONS: ReadonlySet<AlbumListType> = new Set(['alphabeticalByName']);
 
 export function interleave<T>(lists: T[][]): T[] {
   const out: T[] = [];
@@ -57,11 +63,13 @@ export function createComposite(children: HostSource[]): HostSource {
   if (children.filter((c) => c.rawIds).length > 1) throw new Error('only one source in a merged set can keep raw ids');
   const owner = (id: string): HostSource | undefined => ordered.find((c) => c.owns(id));
 
-  async function fanOut<T>(op: string, fn: (c: HostSource) => Promise<T>): Promise<T[]> {
+  // `complete`: every child must answer, or the whole op fails (see ENUMERATIONS).
+  async function fanOut<T>(op: string, fn: (c: HostSource) => Promise<T>, { complete = false } = {}): Promise<T[]> {
     const settled = await Promise.allSettled(children.map(fn));
     const out: T[] = [];
     settled.forEach((r, i) => {
       if (r.status === 'fulfilled') out.push(r.value);
+      else if (complete) throw new Error(`${children[i]!.label} did not answer (${message(r.reason)}), so the merged library cannot be listed in full`);
       else if (!(r.reason instanceof UnsupportedError)) console.warn(`[merge] ${children[i]!.name}.${op} failed: ${message(r.reason)}`);
     });
     return out;
@@ -109,7 +117,7 @@ export function createComposite(children: HostSource[]): HostSource {
   function snapshot(type: AlbumListType): Promise<SubAlbum[]> {
     const hit = snapshots.get(type);
     if (hit && Date.now() - hit.at < SNAPSHOT_TTL_MS) return hit.albums;
-    const albums = fanOut('albumList', (c) => fullList(c, type)).then(interleave);
+    const albums = fanOut('albumList', (c) => fullList(c, type), { complete: ENUMERATIONS.has(type) }).then(interleave);
     albums.catch(() => snapshots.delete(type));
     snapshots.set(type, { at: Date.now(), albums });
     return albums;

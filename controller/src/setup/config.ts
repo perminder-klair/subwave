@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { NAVIDROME_PROFILE_POLICY, resolveNavidrome } from './navidrome-policy.js';
-import { readRouterAuth, readSelection, routerConnection, setCurrentSelection } from './music-source.js';
+import { currentSelection, readRouterAuth, readSelection, routerConnection, setCurrentSelection } from './music-source.js';
 import { config, STATE_DIR, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
@@ -74,6 +74,15 @@ export async function loadNavidromeConfig(): Promise<void> {
     config.navidrome,
     selection.mode === 'router' ? routerConnection(readRouterAuth()) : resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED),
   );
+}
+
+// The direct Navidrome connection as stored (env applied), whichever music
+// mode is live. In navidrome mode it equals config.navidrome; in router mode
+// config.navidrome is the ROUTER, which must never be saved or shown as the
+// station's Navidrome (settings, multi-station conversion).
+export async function storedNavidrome(): Promise<{ url: string; user: string; password: string }> {
+  if (currentSelection().mode !== 'router') return config.navidrome;
+  return resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
 }
 
 // Kept for callers that previously invalidated the (now-removed) cache.

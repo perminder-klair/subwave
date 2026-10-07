@@ -15,7 +15,7 @@ import test, { after } from 'node:test';
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-source-switch-'));
 process.env.STATE_DIR = stateDir;
 
-const { matchByMetadata, identityText, pendingSourceSwitch } = await import('../src/music/source-switch.js');
+const { matchByMetadata, identityText, pendingSourceSwitch, afterMaintenanceRun, switchedAfter } = await import('../src/music/source-switch.js');
 const db = await import('../src/music/library-db.js');
 const rotation = await import('../src/music/id-rotation.js');
 const ms = await import('../src/setup/music-source.js');
@@ -81,4 +81,44 @@ test('adoption carries tags across a switch only when the marker is set', async 
   assert.deepEqual(left, ['jf-aaa'], 'the unmatched row was pruned and the adopted one moved');
   // The pair is journalled for the state-file replay (likes, blocklist, stems).
   assert.equal(db.pendingIdRotations().get('nd0000000000000000000001'), 'jf-aaa');
+});
+
+// #1827 review: a walk already running when the operator switched sources
+// walked the OLD library. Spending the marker on it re-linked nothing, and the
+// first walk of the new source then found every row orphaned with no marker.
+test('a walk that began before the switch leaves the marker for the walk after it', async () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+  db.upsertTrackMeta('nd0000000000000000000003', { title: 'Quiet Room', artist: 'Low Tide', album: 'Rooms', year: 2001, duration: 180 });
+  db.upsertTrackTags('nd0000000000000000000003', { moods: ['calm'], energy: 'low', source: 'manual', confidence: 1 });
+
+  // The running child loaded its connection (the old library), then the save landed.
+  ms.setCurrentSelection(ms.readSelection({}));
+  await tick();
+  await ms.markSourceSwitch('navidrome', 'router');
+  const stale = await rotation.adoptAndPrune(new Set(['jf-aaa', 'nd0000000000000000000003']));
+  assert.equal(stale.adopted, 0, 'nothing re-linked from a walk of the old library');
+  assert.ok(pendingSourceSwitch(), 'the marker is kept for a walk of the new library');
+
+  // The reconcile the controller starts next loads the new selection.
+  ms.setCurrentSelection(ms.readSelection({ music: { mode: 'router', sources: [{ plugin: 'mock', config: {} }] } }));
+  db.upsertTrackMeta('jf-bbb', { title: 'Quiet Room', artist: 'Low Tide', album: 'Rooms', year: 2001, duration: 181 });
+  const fresh = await rotation.adoptAndPrune(new Set(['jf-aaa', 'jf-bbb']), { confirmMassPrune: true });
+  assert.equal(fresh.adopted, 1);
+  assert.equal(pendingSourceSwitch(), null, 'spent by the walk that used it');
+  const carried = db.requireDb().prepare('SELECT moods, source FROM tracks WHERE id = ?').get('jf-bbb') as any;
+  assert.match(carried.moods, /calm/);
+  assert.equal(carried.source, 'manual');
+});
+
+test('a run that predates the switch is followed by a reconcile; a later one is not', () => {
+  const marker = { at: '2026-10-07T12:00:00.000Z', from: 'navidrome', to: 'router' };
+  const before = '2026-10-07T11:59:00.000Z';
+  const after = '2026-10-07T12:00:01.000Z';
+  assert.equal(afterMaintenanceRun(null, { startedAt: before, outcome: 'ok' }), null);
+  assert.equal(afterMaintenanceRun(marker, { startedAt: before, outcome: 'ok' }), 'reconcile');
+  assert.equal(afterMaintenanceRun(marker, { startedAt: before, outcome: 'failed' }), 'reconcile');
+  assert.equal(afterMaintenanceRun(marker, { startedAt: before, outcome: 'stopped' }), 'stopped', 'Stop is not the moment to start another run');
+  assert.equal(afterMaintenanceRun(marker, { startedAt: after, outcome: 'failed' }), null, 'it had its chance; retrying could loop');
+  assert.equal(switchedAfter(marker, null), false, 'an unknown start keeps the original behaviour');
+  assert.equal(switchedAfter(marker, Date.parse(marker.at)), false, 'a connection loaded at the same moment is the new one');
 });

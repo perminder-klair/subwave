@@ -17,7 +17,8 @@ import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { reportRotation } from './tagger-progress.js';
 import { decidePrune, type PruneDecision } from './prune-policy.js';
-import { clearSourceSwitch, pendingSourceSwitch } from './source-switch.js';
+import { clearSourceSwitch, pendingSourceSwitch, switchedAfter } from './source-switch.js';
+import { currentSelectionSince } from '../setup/music-source.js';
 
 export interface RotationManifest {
   version: 1;
@@ -67,7 +68,13 @@ export async function adoptAndPrune(
   // After a music-source switch, the first complete walk also carries rows
   // across by metadata (#692). The marker is spent here: the pairs are
   // journalled in the same transaction, so recovery no longer needs it.
-  const switched = pendingSourceSwitch();
+  // A walk whose connection was loaded before the switch was recorded walked
+  // the old library; it leaves the marker for the walk that follows it.
+  const marker = pendingSourceSwitch();
+  const switched = marker && !switchedAfter(marker, currentSelectionSince()) ? marker : null;
+  if (marker && !switched) {
+    console.log('[id-rotation] music-source switch recorded after this walk began — left for the next walk');
+  }
   const { adopted } = db.adoptRotatedIds(liveIds, { matchByMetadata: switched !== null });
   if (switched) {
     clearSourceSwitch();

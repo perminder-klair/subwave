@@ -45,6 +45,32 @@ export function pendingSourceSwitch(): SourceSwitchMarker | null {
   }
 }
 
+/**
+ * Whether the switch was recorded after `sinceMs` — the moment a process
+ * resolved which library it talks to, or a maintenance run started. A walk
+ * whose connection predates the marker walked the OLD library, so it must
+ * neither match by metadata nor spend the marker. An unknown moment (null)
+ * keeps the original behaviour.
+ */
+export function switchedAfter(marker: SourceSwitchMarker, sinceMs: number | null): boolean {
+  return sinceMs !== null && Date.parse(marker.at) > sinceMs;
+}
+
+/**
+ * What the controller does with a still-pending marker when a maintenance
+ * run exits. A run that started before the switch could not carry it across,
+ * so a reconcile walk follows — unless the operator stopped the run, which
+ * is not the moment to start another one. A run that started after the
+ * switch had its chance; retrying it here could loop.
+ */
+export function afterMaintenanceRun(
+  marker: SourceSwitchMarker | null,
+  run: { startedAt: string; outcome: 'ok' | 'failed' | 'stopped' },
+): 'reconcile' | 'stopped' | null {
+  if (!marker || !switchedAfter(marker, Date.parse(run.startedAt))) return null;
+  return run.outcome === 'stopped' ? 'stopped' : 'reconcile';
+}
+
 export function clearSourceSwitch(): void {
   rmSync(SOURCE_SWITCH_PATH, { force: true });
 }

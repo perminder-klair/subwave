@@ -80,9 +80,15 @@ export async function prepareSelection(
 }
 
 /**
- * Persist a prepared selection and make it live: setup-config.json, the
- * router's config.json, the live Subsonic connection, and every cache that
+ * Persist a prepared selection and make it live: the router's config.json,
+ * setup-config.json, the live Subsonic connection, and every cache that
  * described the previous library. Returns the router's view afterwards.
+ *
+ * The router goes first because it is the one step that can still refuse the
+ * selection (a plugin that throws on start-up, a merge it rejects). A refusal
+ * restores the router's previous config and returns before anything else is
+ * touched, so the station keeps playing what it played and no switch marker
+ * is left for a library that never went live.
  */
 export async function applySelection(selection: MusicSelection, prev: MusicSelection, plugins: RouterStatus['plugins']): Promise<{
   router: RouterStatus | null;
@@ -91,8 +97,6 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   /** started: the carry-across walk is running now; pending: it waits for the running tagger. */
   reconcile: 'started' | 'pending' | null;
 }> {
-  await saveSetupConfig({ music: selection });
-  setCurrentSelection(selection);
   const auth = await writeRouterConfig(selection);
 
   let router: RouterStatus | null = null;
@@ -104,6 +108,15 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
     // In navidrome mode the router is optional; its absence is not an error.
     if (selection.mode === 'router') routerError = err?.message || 'router unreachable';
   }
+  if (routerError) {
+    await writeRouterConfig(prev);
+    // Best effort: the router also re-reads config.json on its own poll.
+    router = await routerReload().catch(() => router);
+    return { router, routerError, switched: false, reconcile: null };
+  }
+
+  await saveSetupConfig({ music: selection });
+  setCurrentSelection(selection);
 
   if (selection.mode === 'router') {
     Object.assign(config.navidrome, routerConnection(auth ?? readRouterAuth()));
@@ -129,17 +142,18 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   // Every track id just changed. A reconcile walk (no LLM) adopts library rows
   // by metadata under the switch marker, so tags, analysis, likes and the
   // blocklist follow the music now rather than whenever someone remembers to
-  // press the button. Busy tagger: its own walk honours the marker instead.
+  // press the button. Busy tagger: it walked the old library, so the reconcile
+  // follows when it exits (broadcast/tagger.ts resumeSourceSwitch).
   let reconcile: 'started' | 'pending' | null = null;
   const healthy = selection.mode !== 'router' || (router?.active.length ? router.active.every((a) => a.health.state === 'healthy') : false);
-  if (switched && healthy && !routerError) {
+  if (switched && healthy) {
     if (tagger.running) reconcile = 'pending';
     else {
       startReconcile();
       reconcile = 'started';
     }
   }
-  return { router, routerError, switched, reconcile };
+  return { router, routerError: null, switched, reconcile };
 }
 
 function describe(sel: MusicSelection, plugins: RouterStatus['plugins']): string {
