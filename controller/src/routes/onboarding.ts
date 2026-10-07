@@ -24,7 +24,9 @@ import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
+import { applyNavidromeToLiveConfig, loadSetupConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
+import { currentSelection, readSelection } from '../setup/music-source.js';
+import { applySelection, prepareSelection } from '../setup/music-source-save.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import { pingWith } from '../music/subsonic.js';
@@ -133,14 +135,26 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     const fishIssue = fishAudioIssue(b.tts?.cloud);
     if (fishIssue) throw new Error(fishIssue);
 
+    // A music-source choice (#692) is validated against the router's plugin
+    // manifests up front for the same reason: nothing is written if it fails.
+    const prevSelection = readSelection(await loadSetupConfig());
+    const music = b.music && typeof b.music === 'object' ? await prepareSelection(b.music, prevSelection) : null;
+    if (music && !music.ok) throw new Error(music.error);
+
     // Wizard-managed overlay only; never mutates the live env. Unlike the probe,
     // save does not require the fields (skipping Navidrome is supported).
     if (b.navidrome && typeof b.navidrome === 'object') {
       await saveSetupConfig({
         navidrome: normalizeNavidromeCredentials(b.navidrome),
       });
-      applyNavidromeToLiveConfig(b.navidrome);
+      // Router mode keeps these on file; the router stays the live connection.
+      if (currentSelection().mode !== 'router' && music?.ok !== true) applyNavidromeToLiveConfig(b.navidrome);
       clearSetupConfigCache();
+    }
+
+    if (music?.ok) {
+      const applied = await applySelection(music.selection, prevSelection, music.status?.plugins ?? []);
+      if (applied.routerError) throw new Error(applied.routerError);
     }
 
     // state/secrets.env (0600), also set on process.env for immediate use.

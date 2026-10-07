@@ -17,6 +17,7 @@ import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { reportRotation } from './tagger-progress.js';
 import { decidePrune, type PruneDecision } from './prune-policy.js';
+import { clearSourceSwitch, pendingSourceSwitch } from './source-switch.js';
 
 export interface RotationManifest {
   version: 1;
@@ -63,7 +64,15 @@ export async function adoptAndPrune(
   liveIds: ReadonlySet<string>,
   opts: { confirmMassPrune?: boolean } = {},
 ): Promise<{ adopted: number; pruned: number; held?: Extract<PruneDecision, { prune: false }> }> {
-  const { adopted } = db.adoptRotatedIds(liveIds);
+  // After a music-source switch, the first complete walk also carries rows
+  // across by metadata (#692). The marker is spent here: the pairs are
+  // journalled in the same transaction, so recovery no longer needs it.
+  const switched = pendingSourceSwitch();
+  const { adopted } = db.adoptRotatedIds(liveIds, { matchByMetadata: switched !== null });
+  if (switched) {
+    clearSourceSwitch();
+    console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) across by id or metadata`);
+  }
   const pending = db.pendingIdRotations();
   if (pending.size) {
     await moveStemDirs(pending);

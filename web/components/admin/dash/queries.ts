@@ -164,6 +164,8 @@ export interface NavidromeStatus {
   ok: boolean;
   reason?: string;
   url?: string;
+  /** Which backend the station plays from (#692); absent from older controllers. */
+  mode?: 'navidrome' | 'router';
 }
 
 export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): Promise<NavidromeStatus> {

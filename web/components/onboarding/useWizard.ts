@@ -2,11 +2,16 @@
 
 import { useCallback, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
-import { fishAudioIssue } from '@/lib/schemas.generated';
+import { fishAudioIssue, type MusicMode } from '@/lib/schemas.generated';
+import { selectionPayload, type DraftSource } from '../admin/music/sourceDraft';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
 export interface WizardData {
+  // Where the music comes from (#692): Navidrome directly, or a source served
+  // by the SUB/WAVE music router (Jellyfin, Plex, an installed plugin, or the
+  // demo library).
+  music: { mode: MusicMode; sources: DraftSource[]; label: string };
   navidrome: { url: string; user: string; pass: string };
   navidromeTest: { ok: boolean | null; msg?: string };
 
@@ -45,6 +50,7 @@ export interface WizardData {
 }
 
 export const DEFAULT_DATA: WizardData = {
+  music: { mode: 'navidrome', sources: [], label: '' },
   navidrome: { url: '', user: '', pass: '' },
   navidromeTest: { ok: null },
   llm: {
@@ -79,7 +85,7 @@ export type StepId = 'navidrome' | 'llm' | 'tts' | 'dj' | 'review';
 export const STEP_ORDER: StepId[] = ['navidrome', 'llm', 'tts', 'dj', 'review'];
 
 export const STEP_LABELS: Record<StepId, string> = {
-  navidrome: 'Navidrome',
+  navidrome: 'Music source',
   llm: 'LLM',
   tts: 'TTS',
   dj: 'DJ persona',
@@ -197,8 +203,13 @@ export function useWizard() {
     const fishIssue = fishAudioIssue(data.tts.cloud);
     if (fishIssue) return { ok: false, error: fishIssue };
 
+    const router = data.music.mode === 'router';
     const body = {
-      navidrome: data.navidrome,
+      // One music source or the other: a router station sends its selection and
+      // leaves any stored Navidrome connection alone for switching back.
+      ...(router
+        ? { music: selectionPayload('router', false, data.music.sources) }
+        : { navidrome: data.navidrome }),
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,

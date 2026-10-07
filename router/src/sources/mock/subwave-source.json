@@ -1,0 +1,14 @@
+{
+  "name": "mock",
+  "label": "Demo library",
+  "description": "A generated library of tones and gradient covers. No server, no music files — for development, tests and trying SUB/WAVE before connecting real music.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "idPrefix": "mock",
+  "entry": "index.ts",
+  "config": [
+    { "key": "songMinSec", "label": "Shortest track (seconds)", "type": "number", "default": 20, "env": "SONG_MIN_SEC", "help": "Generated tracks are short by default so the station cycles quickly in development." },
+    { "key": "songMaxSec", "label": "Longest track (seconds)", "type": "number", "default": 45, "env": "SONG_MAX_SEC" },
+    { "key": "sonicSimilarity", "label": "Advertise sonic similarity", "type": "boolean", "default": true }
+  ]
+}

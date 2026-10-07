@@ -70,7 +70,7 @@ here stays complete and free either way.
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
-- **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
+- **Your own music library.** Pulls from Navidrome over the Subsonic API, or from Jellyfin, Plex or any installed source plugin through the bundled music router. No external catalogue. See [`docs/music-source-plugins.md`](docs/music-source-plugins.md) to add a backend.
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
 - **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
@@ -347,7 +347,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`docs/custom-tts.md`](docs/custom-tts.md):** bring your own TTS server — point the DJ at any HTTP endpoint you run (your GPU box, a bridge in front of a vendor API), the same way the LLM side takes a custom base URL.
 - **[`docs/gpu-tts.md`](docs/gpu-tts.md):** running Chatterbox on an NVIDIA GPU — via the OpenAI layer, or by GPU-enabling the bundled sidecar.
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
-- **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
+- **[`docs/music-source-plugins.md`](docs/music-source-plugins.md):** playing from Jellyfin, Plex or anything else — and writing a music-source plugin for the router, with a worked example and a conformance kit.
 - **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.

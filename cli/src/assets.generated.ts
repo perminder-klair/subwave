@@ -148,6 +148,8 @@ services:
       # Acoustic-analysis sidecar (default-on below). Probed first, then a
       # local venv; falls through to NULL analysis. See music/analyzer.ts.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
+      # The music router (below). Only used when Settings → Music source selects it.
+      - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # Per-container stats for the admin Stats panel, via the socket-proxy —
       # the controller never touches the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -167,6 +169,48 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # ROUTER — music sources beyond Navidrome (#692)
+  # -------------------------------------------------------------------------
+  # Speaks the Subsonic API the controller already uses and answers it from
+  # music-source plugins: Jellyfin, Plex, Navidrome, the demo library, and any
+  # plugin dropped into state/router/plugins/. Idle until Admin → Settings →
+  # Music source selects it — a Navidrome station never routes through it.
+  # Internal only: the controller, Liquidsoap and the analyzer reach it on the
+  # compose network as http://router:4534. It mounts ONLY state/router (its
+  # config, plugins and plugin data): plugins are code, and must not see the
+  # station's other secrets.
+  router:
+    image: ghcr.io/perminder-klair/subwave-router:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.router
+    container_name: sub-wave-router
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: \${ROUTER_MEM_LIMIT:-512m}
+    environment:
+      - TZ=\${TZ:-Europe/London}
+      # Optional per-field overrides for the built-in sources. Env always wins
+      # over the admin form and locks the field there; blank = the form decides.
+      - JELLYFIN_URL=\${JELLYFIN_URL:-}
+      - JELLYFIN_API_KEY=\${JELLYFIN_API_KEY:-}
+      - JELLYFIN_USER=\${JELLYFIN_USER:-}
+      - PLEX_URL=\${PLEX_URL:-}
+      - PLEX_TOKEN=\${PLEX_TOKEN:-}
+      - PLEX_SECTION=\${PLEX_SECTION:-}
+    extra_hosts:
+      # A Jellyfin or Plex running on the Docker host itself.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - \${STATE_DIR:-./state}/router:/var/sub-wave-router
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4534/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 10s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -490,6 +534,8 @@ services:
       - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
+      # The music router (below). Only used when Settings → Music source selects it.
+      - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # Admin Stats panel via the socket-proxy — the controller never touches
       # the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -510,6 +556,48 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # ROUTER — music sources beyond Navidrome (#692)
+  # -------------------------------------------------------------------------
+  # Speaks the Subsonic API the controller already uses and answers it from
+  # music-source plugins: Jellyfin, Plex, Navidrome, the demo library, and any
+  # plugin dropped into state/router/plugins/. Idle until Admin → Settings →
+  # Music source selects it — a Navidrome station never routes through it.
+  # Internal only: the controller, Liquidsoap and the analyzer reach it on the
+  # compose network as http://router:4534. It mounts ONLY state/router (its
+  # config, plugins and plugin data): plugins are code, and must not see the
+  # station's other secrets.
+  router:
+    image: ghcr.io/perminder-klair/subwave-router:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.router
+    container_name: sub-wave-router
+    restart: unless-stopped
+    logging: *default-logging
+    mem_limit: \${ROUTER_MEM_LIMIT:-512m}
+    environment:
+      - TZ=\${TZ:-Europe/London}
+      # Optional per-field overrides for the built-in sources. Env always wins
+      # over the admin form and locks the field there; blank = the form decides.
+      - JELLYFIN_URL=\${JELLYFIN_URL:-}
+      - JELLYFIN_API_KEY=\${JELLYFIN_API_KEY:-}
+      - JELLYFIN_USER=\${JELLYFIN_USER:-}
+      - PLEX_URL=\${PLEX_URL:-}
+      - PLEX_TOKEN=\${PLEX_TOKEN:-}
+      - PLEX_SECTION=\${PLEX_SECTION:-}
+    extra_hosts:
+      # A Jellyfin or Plex running on the Docker host itself.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - \${STATE_DIR:-./state}/router:/var/sub-wave-router
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4534/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 10s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -797,6 +885,8 @@ services:
       - TTS_HEAVY_URL=\${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
+      # The music router (below). Only used when Settings → Music source selects it.
+      - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
       # Admin Stats panel via the socket-proxy — the controller never touches
       # the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -826,6 +916,46 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # ROUTER — music sources beyond Navidrome (#692)
+  # -------------------------------------------------------------------------
+  # Idle until Admin → Settings → Music source selects it. Dev runs \`tsx watch\`
+  # against bind-mounted source, like the controller. To develop SUB/WAVE with
+  # no music server at all, pick "Demo library" in the onboarding wizard (or
+  # set ROUTER_SOURCE=mock here for a router that serves it before setup).
+  # Bound to loopback only, for poking it with curl; mounts only state/router.
+  router:
+    image: ghcr.io/perminder-klair/subwave-router:\${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.router
+    container_name: sub-wave-router
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - TZ=\${TZ:-Europe/London}
+      - ROUTER_LOG_REQUESTS=\${ROUTER_LOG_REQUESTS:-}
+      - JELLYFIN_URL=\${JELLYFIN_URL:-}
+      - JELLYFIN_API_KEY=\${JELLYFIN_API_KEY:-}
+      - JELLYFIN_USER=\${JELLYFIN_USER:-}
+      - PLEX_URL=\${PLEX_URL:-}
+      - PLEX_TOKEN=\${PLEX_TOKEN:-}
+      - PLEX_SECTION=\${PLEX_SECTION:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:\${ROUTER_PORT:-4534}:4534"
+    command: ["node_modules/.bin/tsx", "watch", "src/server.ts"]
+    volumes:
+      - \${STATE_DIR:-./state}/router:/var/sub-wave-router
+      - ./router/src:/app/src
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4534/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
@@ -1056,7 +1186,7 @@ export const ENV_EXAMPLE = `# ════════════════�
 # ═══════════════════════════════════════════════════════════════
 #
 # Just three vars are required to boot the stack. Everything else
-# (Navidrome, LLM, TTS engine, DJ persona, …) is collected by the
+# (music source, LLM, TTS engine, DJ persona, …) is collected by the
 # first-run wizard at http://<your-host>/onboarding after the stack is up.
 #
 # The wizard writes those to state/settings.json, which is the
@@ -1196,6 +1326,19 @@ SITE_URL=
 # mismatch falls back to streaming, so it is safe to leave on — it just does
 # nothing for the tracks whose paths don't line up.
 # MUSIC_LIBRARY_PATH=
+#
+# Music router (#692) — Jellyfin, Plex or a plugin instead of Navidrome. Pick
+# the source in Admin → Settings → Music source (or the onboarding wizard);
+# these only pin a field from env, which then locks it in the form. They reach
+# the \`router\` service, never the controller.
+# JELLYFIN_URL=http://host.docker.internal:8096
+# JELLYFIN_API_KEY=
+# JELLYFIN_USER=
+# PLEX_URL=http://host.docker.internal:32400
+# PLEX_TOKEN=
+# PLEX_SECTION=
+# Where the controller reaches the router. Only for a router you run yourself.
+# MUSIC_ROUTER_URL=http://router:4534
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
 # default 60 (and values >=60) runs hourly at :07, not every N elapsed minutes.

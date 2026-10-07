@@ -1,0 +1,15 @@
+{
+  "name": "navidrome",
+  "label": "Navidrome",
+  "description": "Navidrome or another Subsonic-compatible server. A station on Navidrome alone connects to it directly; use this to merge it with another source.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "idPrefix": "nd",
+  "entry": "index.ts",
+  "homepage": "https://www.navidrome.org",
+  "config": [
+    { "key": "url", "label": "Server URL", "type": "url", "required": true, "placeholder": "http://navidrome:4533" },
+    { "key": "user", "label": "Username", "type": "string", "required": true },
+    { "key": "password", "label": "Password", "type": "secret", "required": true, "help": "Subsonic authenticates with the account password, not an API key." }
+  ]
+}

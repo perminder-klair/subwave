@@ -109,6 +109,8 @@ services:
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
+      # The music router (below). Only used when Settings → Music source selects it.
+      - MUSIC_ROUTER_URL=${MUSIC_ROUTER_URL:-http://router:4534}
       # Admin Stats panel via the socket-proxy — the controller never touches
       # the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -138,6 +140,46 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # ROUTER — music sources beyond Navidrome (#692)
+  # -------------------------------------------------------------------------
+  # Idle until Admin → Settings → Music source selects it. Dev runs `tsx watch`
+  # against bind-mounted source, like the controller. To develop SUB/WAVE with
+  # no music server at all, pick "Demo library" in the onboarding wizard (or
+  # set ROUTER_SOURCE=mock here for a router that serves it before setup).
+  # Bound to loopback only, for poking it with curl; mounts only state/router.
+  router:
+    image: ghcr.io/perminder-klair/subwave-router:${SUBWAVE_VERSION:-latest}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.router
+    container_name: sub-wave-router
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - TZ=${TZ:-Europe/London}
+      - ROUTER_LOG_REQUESTS=${ROUTER_LOG_REQUESTS:-}
+      - JELLYFIN_URL=${JELLYFIN_URL:-}
+      - JELLYFIN_API_KEY=${JELLYFIN_API_KEY:-}
+      - JELLYFIN_USER=${JELLYFIN_USER:-}
+      - PLEX_URL=${PLEX_URL:-}
+      - PLEX_TOKEN=${PLEX_TOKEN:-}
+      - PLEX_SECTION=${PLEX_SECTION:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${ROUTER_PORT:-4534}:4534"
+    command: ["node_modules/.bin/tsx", "watch", "src/server.ts"]
+    volumes:
+      - ${STATE_DIR:-./state}/router:/var/sub-wave-router
+      - ./router/src:/app/src
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4534/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      retries: 4
+      start_period: 15s
 
   # -------------------------------------------------------------------------
   # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel

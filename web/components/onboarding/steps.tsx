@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useController } from 'react-hook-form';
 import { useZodForm, fieldAria } from '@/lib/form';
@@ -34,6 +34,9 @@ import { LocationPicker } from '../LocationPicker';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { V3Alert } from '@/components/ui/alert';
+import { SourceFields } from '../admin/music/SourceFields';
+import { blankSource, missingFields, selectablePlugins, type DraftSource } from '../admin/music/sourceDraft';
+import type { MusicPluginInfo, RouterTestResult } from '@/lib/schemas.generated';
 
 // Presentation primitives kept local to the wizard, so a screen most operators
 // see once doesn't drag in the full admin UI library.
@@ -89,7 +92,162 @@ const navidromeStepSchema = z.object({
   pass: z.string(),
 });
 
+// Step 1 is "where the music comes from": Navidrome directly (the default, the
+// form below), or the SUB/WAVE music router serving Jellyfin, Plex, an
+// installed plugin or the demo library (#692).
 export function NavidromeStep({ w }: { w: WizardController }) {
+  const [mode, setMode] = useState(w.data.music.mode);
+  return mode === 'router'
+    ? <RouterSourceStep w={w} onMode={setMode} />
+    : <NavidromeForm w={w} onMode={setMode} />;
+}
+
+function ModeSwitch({ mode, onMode }: { mode: 'navidrome' | 'router'; onMode: (m: 'navidrome' | 'router') => void }) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-2" role="group" aria-label="Music source">
+      <Button type="button" variant={mode === 'navidrome' ? 'solid' : 'outline'} onClick={() => onMode('navidrome')}>
+        Navidrome
+      </Button>
+      <Button type="button" variant={mode === 'router' ? 'solid' : 'outline'} onClick={() => onMode('router')}>
+        Jellyfin · Plex · other
+      </Button>
+    </div>
+  );
+}
+
+function LicensingNote() {
+  return (
+    <V3Alert title="Music licensing">
+      Owning these files covers your own private listening, not{' '}
+      <em>public</em> broadcast. If anyone but you can hear the stream,
+      you&apos;re publicly performing copyrighted works and need the
+      relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
+      ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
+      content you&apos;re cleared to use (your own, Creative Commons,
+      royalty-free, public domain). You are the broadcaster and are
+      responsible for clearing these rights. Not legal advice.
+    </V3Alert>
+  );
+}
+
+function RouterSourceStep({ w, onMode }: { w: WizardController; onMode: (m: 'navidrome' | 'router') => void }) {
+  const [plugins, setPlugins] = useState<MusicPluginInfo[] | null>(null);
+  const [routerError, setRouterError] = useState<string | null>(null);
+  const [source, setSource] = useState<DraftSource>(() => w.data.music.sources[0] ?? { plugin: '', config: {}, secretsSet: [] });
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<{ ok: boolean | null; msg?: string }>({ ok: null });
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await w.auth.adminFetch('/settings/music-source', { signal: AbortSignal.timeout(20000) });
+        const j = (await r.json().catch(() => ({}))) as { router?: { plugins: MusicPluginInfo[] } | null; routerError?: string | null };
+        if (!live) return;
+        if (!j.router) {
+          setRouterError(j.routerError || `controller returned HTTP ${r.status}`);
+          return;
+        }
+        const usable = selectablePlugins(j.router.plugins);
+        setPlugins(usable);
+        setSource((s) => (s.plugin ? s : blankSource(usable.find((p) => p.name === 'jellyfin') ?? usable[0])));
+      } catch (err: unknown) {
+        if (live) setRouterError(err instanceof Error ? err.message : 'could not reach the controller');
+      }
+    })();
+    return () => { live = false; };
+  }, [w.auth]);
+
+  const plugin = plugins?.find((p) => p.name === source.plugin);
+  const missing = missingFields(source, plugin);
+
+  const onTest = async () => {
+    setTesting(true);
+    setTest({ ok: null });
+    try {
+      const r = await w.auth.adminFetch('/settings/music-source/test', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ plugin: source.plugin, config: source.config }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const j = (await r.json().catch(() => ({}))) as RouterTestResult;
+      setTest(j.ok
+        ? { ok: true, msg: j.stats ? `${j.stats.songs.toLocaleString()} songs, ${j.stats.albums.toLocaleString()} albums` : 'connected' }
+        : { ok: false, msg: j.error || j.state });
+    } catch (err: unknown) {
+      setTest({ ok: false, msg: err instanceof Error ? err.message : 'test failed' });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const onNext = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    if (!plugin || missing.length) return;
+    w.patch({ music: { mode: 'router', sources: [source], label: plugin.label } });
+    w.next();
+  };
+
+  return (
+    <form onSubmit={onNext} noValidate>
+      <StepHeader
+        title="Choose your music source"
+        blurb="SUB/WAVE's music router plays from Jellyfin, Plex, or any installed source plugin. Pick one and point it at your library."
+      />
+      <ModeSwitch mode="router" onMode={onMode} />
+      {routerError ? (
+        <V3Alert tone="error" title="music router unreachable">
+          {routerError}. Start it with <code>docker compose up -d router</code> and come back, or connect Navidrome instead.
+        </V3Alert>
+      ) : !plugins ? (
+        <p className="text-sm text-muted">Loading sources…</p>
+      ) : (
+        <div className="grid gap-4">
+          <Field>
+            <span className={WIZARD_LABEL_CLASS}>Source</span>
+            <Select
+              value={source.plugin}
+              onValueChange={(name: string) => {
+                setSource(blankSource(plugins.find((p) => p.name === name)));
+                setTest({ ok: null });
+              }}
+            >
+              <SelectTrigger className="w-[320px] max-w-full" aria-label="Music source plugin"><SelectValue placeholder="Choose…" /></SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {plugins.map((p) => <SelectItem key={p.name} value={p.name}>{p.label}</SelectItem>)}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            {plugin?.description && <p className="text-xs text-muted">{plugin.description}</p>}
+          </Field>
+          {plugin && (
+            <SourceFields
+              plugin={plugin}
+              source={source}
+              idPrefix="wizard-src"
+              onChange={(config) => {
+                setSource({ ...source, config });
+                setTest({ ok: null });
+              }}
+            />
+          )}
+          <div>
+            <Button type="button" variant="solid" onClick={onTest} disabled={testing || !plugin || missing.length > 0}>
+              {testing ? 'Testing…' : 'Test connection'}
+            </Button>
+            <TestPill result={test} />
+          </div>
+          <LicensingNote />
+          <NextButton disabled={!plugin || missing.length > 0} />
+        </div>
+      )}
+    </form>
+  );
+}
+
+function NavidromeForm({ w, onMode }: { w: WizardController; onMode: (m: 'navidrome' | 'router') => void }) {
   const [busy, setBusy] = useState(false);
   const form = useZodForm(navidromeStepSchema, { ...w.data.navidrome });
   const values = form.watch();
@@ -115,6 +273,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
     // to overwrite, never the whole object.
     w.patch({
       navidrome: vals,
+      music: { mode: 'navidrome', sources: w.data.music.sources, label: '' },
       // Commit clears the pill only when the committed values differ from what
       // was last tested.
       ...(testedRef.current !== JSON.stringify(vals) ? { navidromeTest: { ok: null } } : {}),
@@ -128,6 +287,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
         title="Connect Navidrome"
         blurb="SUB/WAVE plays from your Subsonic-compatible music library. Point it at your Navidrome and the AI DJ takes over."
       />
+      <ModeSwitch mode="navidrome" onMode={onMode} />
       <div className="grid gap-3">
         <TextField
           control={form.control}
@@ -161,16 +321,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
           </Button>
           <TestPill result={stale ? { ok: null } : w.data.navidromeTest} />
         </div>
-        <V3Alert title="Music licensing">
-          Owning these files covers your own private listening, not{' '}
-          <em>public</em> broadcast. If anyone but you can hear the stream,
-          you&apos;re publicly performing copyrighted works and need the
-          relevant licences (PRS&nbsp;+&nbsp;PPL in the UK,
-          ASCAP/BMI&nbsp;+&nbsp;SoundExchange in the US) — or broadcast only
-          content you&apos;re cleared to use (your own, Creative Commons,
-          royalty-free, public domain). You are the broadcaster and are
-          responsible for clearing these rights. Not legal advice.
-        </V3Alert>
+        <LicensingNote />
         <NextButton disabled={!form.formState.isValid} />
       </div>
     </form>
@@ -652,7 +803,9 @@ export function ReviewStep({
     }
   };
   const rows: Array<[string, string]> = [
-    ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
+    w.data.music.mode === 'router'
+      ? ['Music', `${w.data.music.label || w.data.music.sources[0]?.plugin || '—'} (via the music router)`]
+      : ['Navidrome', w.data.navidrome.url ? `${w.data.navidrome.user} @ ${w.data.navidrome.url}` : '— skipped —'],
     ['LLM', `${w.data.llm.provider} · ${w.data.llm.model}`],
     ['TTS', w.data.tts.defaultEngine + (w.data.tts.cloud.enabled ? ` (+ ${w.data.tts.cloud.provider})` : '')],
     ['Station', `${w.data.dj.stationName} — ${w.data.dj.locationName}`],

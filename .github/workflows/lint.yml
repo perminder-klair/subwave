@@ -2,7 +2,7 @@ name: Lint
 
 # Runs ESLint + tsc --noEmit on every PR and on pushes to main/develop.
 # controller/, web/ and app/ expose `npm run lint` (`eslint . && tsc --noEmit`);
-# mcp-subwave/ exposes `npm run lint` (`tsc --noEmit`). This just enforces them.
+# mcp-subwave/ and router/ expose `npm run lint` (`tsc --noEmit`). This just enforces them.
 #
 # Packages run in a matrix so one failure doesn't mask another.
 #
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [controller, web, mcp-subwave, app]
+        package: [controller, web, mcp-subwave, app, router]
     defaults:
       run:
         working-directory: ${{ matrix.package }}

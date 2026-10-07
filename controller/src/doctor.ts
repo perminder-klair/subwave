@@ -27,7 +27,7 @@ export { reviewReport } from './doctor/review.js';
 // the batch runner and the streaming generator drive the same list.
 const SECTION_CHECKS: Array<{ name: string; run: (s: StationSettings | null) => Promise<Finding[]> }> = [
   { name: 'LLM', run: (s) => checkLlm(s) },
-  { name: 'Navidrome & library', run: () => checkNavidrome() },
+  { name: 'Music library', run: () => checkNavidrome() },
   { name: 'Broadcast', run: () => checkBroadcast() },
   { name: 'Voice (TTS)', run: (s) => checkTts(s) },
   { name: 'Capabilities', run: (s) => checkCapabilities(s) },

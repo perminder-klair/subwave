@@ -482,6 +482,13 @@ export async function supportsSonicSimilarity(): Promise<boolean> {
   return ok;
 }
 
+// Both caches above describe ONE server. A music-source switch (#692) points
+// this client at a different library, so they are dropped with it.
+export function clearServerCaches(): void {
+  genresCache = null;
+  sonicExtCache = null;
+}
+
 export async function getSonicSimilarTracks(id, { count = 20 } = {}) {
   const r = await call('getSonicSimilarTracks', { id, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(sonicSimilarSongs(r));

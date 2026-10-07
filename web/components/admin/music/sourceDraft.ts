@@ -1,0 +1,108 @@
+// Draft state for the music-source forms (admin Settings → Music source and
+// the onboarding wizard). Pure, so the rules the forms enforce — when a draft
+// is dirty, when it changes the station's track ids, what is sent — are
+// tested without a browser.
+//
+// Secrets never come back from the controller: a saved source reports which
+// secret keys are on file (`secretsSet`), and a blank secret in the draft
+// means "keep the stored one".
+
+import type { MusicConfigField, MusicMode, MusicPluginInfo } from '../../../lib/schemas.generated';
+
+export type ConfigValue = string | number | boolean | null;
+
+export interface DraftSource {
+  plugin: string;
+  config: Record<string, ConfigValue>;
+  rawIds?: boolean;
+  /** Secret keys with a stored value (from the controller; never the values). */
+  secretsSet: string[];
+}
+
+export interface SavedSelectionView {
+  mode: MusicMode;
+  merge: boolean;
+  sources: DraftSource[];
+}
+
+export function blankSource(plugin: MusicPluginInfo | undefined): DraftSource {
+  const config: Record<string, ConfigValue> = {};
+  for (const f of plugin?.config ?? []) {
+    if (f.default !== undefined) config[f.key] = f.default;
+  }
+  return { plugin: plugin?.name ?? '', config, secretsSet: [] };
+}
+
+/** Plugins an operator can pick: loaded without errors. */
+export function selectablePlugins(plugins: readonly MusicPluginInfo[]): MusicPluginInfo[] {
+  return plugins.filter((p) => !p.error);
+}
+
+function isBlank(v: ConfigValue | undefined): boolean {
+  return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
+}
+
+/** Required fields the draft still lacks (env-locked and stored secrets count as set). */
+export function missingFields(source: DraftSource, plugin: MusicPluginInfo | undefined): MusicConfigField[] {
+  if (!plugin) return [];
+  return plugin.config.filter(
+    (f) =>
+      f.required &&
+      !plugin.envLocked.includes(f.key) &&
+      !(f.type === 'secret' && source.secretsSet.includes(f.key)) &&
+      isBlank(source.config[f.key]),
+  );
+}
+
+function comparable(sources: DraftSource[]): string {
+  return JSON.stringify(
+    sources.map((s) => ({
+      plugin: s.plugin,
+      rawIds: s.rawIds ?? null,
+      config: Object.fromEntries(
+        Object.entries(s.config)
+          .filter(([, v]) => !isBlank(v))
+          .sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    })),
+  );
+}
+
+/** Has the operator changed anything worth saving? A typed secret always counts. */
+export function draftDirty(saved: SavedSelectionView, mode: MusicMode, merge: boolean, sources: DraftSource[]): boolean {
+  if (saved.mode !== mode) return true;
+  if (mode !== 'router') return false;
+  if (saved.merge !== merge) return true;
+  return comparable(saved.sources) !== comparable(sources);
+}
+
+/**
+ * Will saving this draft change the station's track ids? Mirrors the
+ * controller's selectionIdentity: mode, sources and their non-secret config.
+ */
+export function changesTrackIds(saved: SavedSelectionView, mode: MusicMode, sources: DraftSource[], plugins: readonly MusicPluginInfo[]): boolean {
+  if (saved.mode !== mode) return true;
+  if (mode !== 'router') return false;
+  const visible = (list: DraftSource[]) =>
+    comparable(
+      list.map((s) => {
+        const secrets = new Set((plugins.find((p) => p.name === s.plugin)?.config ?? []).filter((f) => f.type === 'secret').map((f) => f.key));
+        return { ...s, config: Object.fromEntries(Object.entries(s.config).filter(([k]) => !secrets.has(k))) };
+      }),
+    );
+  return visible(saved.sources) !== visible(sources);
+}
+
+/** The body for POST /settings/music-source (and the wizard's `music` block). */
+export function selectionPayload(mode: MusicMode, merge: boolean, sources: DraftSource[]) {
+  if (mode !== 'router') return { mode };
+  return {
+    mode,
+    merge,
+    sources: sources.map((s) => ({
+      plugin: s.plugin,
+      config: Object.fromEntries(Object.entries(s.config).filter(([, v]) => v !== undefined)),
+      ...(s.rawIds !== undefined ? { rawIds: s.rawIds } : {}),
+    })),
+  };
+}

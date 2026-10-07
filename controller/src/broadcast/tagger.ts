@@ -287,7 +287,7 @@ function spawnChild(
         if (line.startsWith(ROTATION_PREFIX)) {
           try {
             const rot = JSON.parse(line.slice(ROTATION_PREFIX.length)) as TaggerRotation;
-            queue.log('scheduler', `id-rotation: adopted ${rot.adopted} rotated Navidrome id(s) — migrating state files`);
+            queue.log('scheduler', `id-rotation: re-linked ${rot.adopted} track id(s) — migrating state files`);
             void applyRotationNow();
           } catch { /* malformed sentinel — drop; the exit handler retries */ }
           continue;

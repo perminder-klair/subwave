@@ -2,13 +2,14 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
-import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
+import { navidromeEnvLocks, resolveNavidrome } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
-import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.js';
+import { applyNavidromeToLiveConfig, loadSetupConfig, saveSetupConfig } from '../../setup/config.js';
+import { currentSelection } from '../../setup/music-source.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
@@ -30,6 +31,18 @@ import { skillCatalog } from '../../skills/_agent.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
+
+// The direct Navidrome connection as stored (env applied), whichever music
+// mode is live. In navidrome mode it equals config.navidrome.
+async function storedNavidrome(): Promise<{ url: string; user: string; password: string }> {
+  if (currentSelection().mode !== 'router') return config.navidrome;
+  return resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
+}
+
+async function storedNavidromeView() {
+  const nv = await storedNavidrome();
+  return { url: nv.url, user: nv.user, passSet: !!nv.password };
+}
 
 // Everything the /settings UI needs, in one response.
 router.get('/settings', requireAdmin, async (req, res) => {
@@ -67,13 +80,14 @@ router.get('/settings', requireAdmin, async (req, res) => {
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
       // Password never leaves the process (passSet only). Env flags are
-      // per-field because server.ts applies setup-config per-field.
+      // per-field because server.ts applies setup-config per-field. This is
+      // the DIRECT Navidrome connection: in music-router mode the live
+      // connection points at the router, and these stay on file (#692).
       navidrome: {
-        url: config.navidrome.url,
-        user: config.navidrome.user,
-        passSet: !!config.navidrome.password,
+        ...(await storedNavidromeView()),
         env: navidromeEnvLocks(NAVIDROME_ENV_ENABLED),
       },
+      musicMode: currentSelection().mode,
       // What timezone '' (Auto) resolves to, for the UI's Auto label.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       values: {
@@ -292,16 +306,22 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
 
     // The merged connection must stay complete; a blank url/user is a cleared
     // field, not "keep".
+    const stored = await storedNavidrome();
     const merged = {
-      url: submitted.url ?? config.navidrome.url,
-      user: submitted.user ?? config.navidrome.user,
-      pass: submitted.pass ?? config.navidrome.password,
+      url: submitted.url ?? stored.url,
+      user: submitted.user ?? stored.user,
+      pass: submitted.pass ?? stored.password,
     };
     if (!merged.url || !merged.user || !merged.pass) {
       return res.status(400).json({ ok: false, error: 'url, user, and pass are all required' });
     }
 
     await saveSetupConfig({ navidrome: submitted });
+    // In music-router mode the router is the live connection; the Navidrome
+    // credentials are kept for switching back and must not hijack it.
+    if (currentSelection().mode === 'router') {
+      return res.json({ ok: true, live: false });
+    }
     applyNavidromeToLiveConfig(submitted);
     // Both caches describe the OLD server; drop them so the picker can't draw
     // song ids that no longer resolve.
@@ -324,12 +344,13 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
 // no stored-cred fallback on purpose.
 router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
   const b = req.body || {};
+  const stored = await storedNavidrome();
   const url =
     typeof b.url === 'string' && b.url.trim()
       ? b.url.trim().replace(/\/$/, '')
-      : config.navidrome.url;
-  const user = typeof b.user === 'string' && b.user.trim() ? b.user.trim() : config.navidrome.user;
-  const pass = typeof b.pass === 'string' && b.pass ? b.pass : config.navidrome.password;
+      : stored.url;
+  const user = typeof b.user === 'string' && b.user.trim() ? b.user.trim() : stored.user;
+  const pass = typeof b.pass === 'string' && b.pass ? b.pass : stored.password;
   if (!url || !user || !pass) {
     return res.json({ ok: false, error: 'url, user, and pass are required' });
   }

@@ -58,7 +58,7 @@ const HQ_URL_LIMIT = 7000;
 // seconds; the finished report renders whatever actually arrived.
 const EXPECTED_SECTIONS = [
   'LLM',
-  'Navidrome & library',
+  'Music library',
   'Broadcast',
   'Voice (TTS)',
   'Capabilities',

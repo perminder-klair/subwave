@@ -1,0 +1,25 @@
+{
+  "name": "folder",
+  "label": "Music folder",
+  "description": "Plays audio files straight from a folder laid out as Artist/Album/NN Title.ext. An example plugin: no tags are read, so there are no genres or durations until the analyzer measures them.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "idPrefix": "fold",
+  "entry": "index.mjs",
+  "config": [
+    {
+      "key": "path",
+      "label": "Folder",
+      "type": "string",
+      "required": true,
+      "placeholder": "/music",
+      "help": "A path inside the router container. Mount your music there read-only (see the plugin's README)."
+    },
+    {
+      "key": "rescanMinutes",
+      "label": "Rescan every (minutes)",
+      "type": "number",
+      "default": 30
+    }
+  ]
+}

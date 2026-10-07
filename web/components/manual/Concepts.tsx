@@ -37,7 +37,7 @@ const DAYPARTS: { period: string; hours: string }[] = [
 export default function Concepts() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 15"
+      eyebrow="MANUAL · 16"
       title="Concepts, explained."
       intro="Seven things that get asked over and over — not because they're broken, but because the name doesn't tell you what's underneath. What each one is, what changes when you move it, and where the control lives."
       current="/manual/concepts"
