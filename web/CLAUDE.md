@@ -4,7 +4,9 @@ Loaded when working under `web/`. Station-wide architecture lives in the root `C
 
 ### Web UI (`web/`)
 
-Next.js 15 App Router + Tailwind. Routes:
+Next.js App Router + Tailwind. Before upgrading dependencies, read
+[`DEPENDENCIES.md`](DEPENDENCIES.md) for peer compatibility limits and security overrides.
+Routes:
 
 - `/` — `PlayerApp` or `Landing`, chosen at request time by `SUBWAVE_HOMEPAGE` (`player` default).
 - `/listen` (always player), `/landing` (always broadsheet), `/setup` (docs), `/onboarding` (first-run wizard, the in-browser counterpart to `npm run setup`).
@@ -48,3 +50,13 @@ changes, re-capture against a running station:
 `cd web && npm i --no-save playwright sharp && npx tsx scripts/capture-gallery.mjs`.
 
 **Codec selection (browsers → Icecast).** The player streams via a direct `<audio>` on `…/stream.opus` (Blink) or `…/stream.mp3` (everything else). `usePlayer` (`web/hooks/usePlayer.ts`) probes `canPlayType('audio/ogg; codecs=opus')` once and upgrades to Opus only on a definitive `'probably'` **and** non-iOS, non-Firefox (both choke on Icecast's chained-Ogg page boundary at a crossfade — issues #168/#215). Opus is **off by default** (see Liquidsoap step 9), so a **fourth** gate decides whether the probe runs at all: the station's own `stream.opusEnabled`, published on `/now-playing` and threaded in from `useStationFeed` — only an explicit `true` upgrades, so an un-polled feed or an older controller that omits the key stays on MP3 rather than pointing Chrome at a 404 (issue #1300). That flag is the SETTING, not a live mount probe (it needs a mixer restart), so `onError` still pins MP3 permanently for the session on a genuine Opus failure. The upgrade never retargets a playing element — it lands on the next `tune()`/`reconnect()`, so tapping play before the first poll rides MP3 for that session. MP3 is the universal floor (Sonos, hardware radios, car receivers, pre-iOS-17 Safari). `useMediaSession` wires lock-screen / headphone / CarPlay controls, artwork from the controller's `/cover/:id` proxy.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+## This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

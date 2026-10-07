@@ -105,7 +105,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 
 - **Controller** (`controller/src/`, Express + ESM Node) — `server.js`, `config.js`, `settings.js`, `context.js` at the root; everything else under `routes/`, `middleware/`, `music/`, `broadcast/`, `audio/`, `llm/`, `skills/`.
 - **Liquidsoap** (`liquidsoap/radio.liq`) — request queue → auto playlist → jingle rotate → cross → dead-air guard → ducking layers → limiter → parallel Icecast mounts.
-- **Web** (`web/`) — Next.js 15 App Router + Tailwind; headless player core plus swappable **skins**.
+- **Web** (`web/`) — Next.js App Router + Tailwind; headless player core plus swappable **skins**.
 - **Native app** (`app/`) — a separate Expo SDK 57 / React Native project (own `package.json`, `node_modules`, `eas.json`). Architecture-critical and easy to break.
 
 ### Docker layout

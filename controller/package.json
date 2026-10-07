@@ -47,7 +47,7 @@
     "tsx": "^4.19.2",
     "umap-js": "^1.4.0",
     "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
