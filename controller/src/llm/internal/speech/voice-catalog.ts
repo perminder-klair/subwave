@@ -1,19 +1,6 @@
-// Voice-list discovery for the cloud TTS engine.
-//
-// `GET /v1/audio/voices` is NOT part of the OpenAI spec — it's a convention
-// self-hosted TTS servers converged on (Fish, Echo-TTS, Omnivoice, Kokoro-
-// FastAPI, openedai-speech, …), and each one invented its own path and payload
-// shape. So discovery is best-effort: probe a few known paths, accept every
-// response shape seen in the wild, and give up quietly. A station whose server
-// answers none of them is exactly where it was before — a free-text voice box.
-//
-// ElevenLabs is the other discoverable provider: it has a real voice-list API,
-// and it's the one that matters most, since an operator's *cloned* voices can
-// never appear in a hardcoded list.
-//
-// OpenAI is deliberately absent — it publishes no voice-list endpoint, and its
-// voice set is fixed, so the curated list in web/lib/cloudVoices.ts is correct
-// by construction.
+// Self-hosted voice endpoints and payloads are conventions, so discovery is best-effort.
+// ElevenLabs exposes cloned voices through its API. OpenAI has no voice-list
+// endpoint here; its curated list lives in web/lib/cloudVoices.ts.
 
 import { fetchWithTimeout } from '../../../util/fetch-timeout.js';
 import { listFishVoices } from './fish-audio.js';

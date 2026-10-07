@@ -1,10 +1,5 @@
-// Fish Audio managed cloud TTS provider.
-//
-// Fish is a peer of OpenAI and ElevenLabs under SUB/WAVE's existing `cloud`
-// engine, but its wire protocol is provider-specific: model selection is a
-// required header, voices are `reference_id` values, and successful responses
-// stream raw audio bytes. Keep those details here so cloud-speech.ts remains the
-// provider dispatcher rather than growing Fish request logic inline.
+// Fish requires a model header and reference_id voices, and streams raw audio bytes.
+// Keep its protocol here; cloud-speech.ts dispatches providers.
 
 import { open, rename, unlink } from 'node:fs/promises';
 import { resolveTtsOutPath } from '../../../audio/tts-out.js';

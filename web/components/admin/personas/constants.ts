@@ -1,8 +1,4 @@
-// Static config + tiny pure helpers for the personas editor. No React, no DOM.
-
-// Ordered ascending in chattiness / verbosity — rendered as the stops of a
-// SteppedFader, so the array order IS the fader travel. Ids must match the
-// controller's FREQUENCIES / SCRIPT_LENGTHS ladders (settings.ts).
+// Fader stops are ordered by increasing chattiness and verbosity. IDs match the controller ladders.
 export const FREQUENCIES = [
   { id: 'silent',     label: 'Silent',     desc: 'Never talks on its own — no links, idents, banter or segments. Manual triggers and listener requests still speak.' },
   { id: 'quiet',      label: 'Quiet',      desc: 'Talks every 8–20 tracks · station ID once an hour · segments at most every 30 min.' },

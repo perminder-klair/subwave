@@ -1,5 +1,3 @@
-// Shapes of the controller's /debug response. Admin endpoints return loose JSON,
-// so these are narrowed with optional-chaining at call sites, not trusted outright.
 
 import type { StationLocale } from '../../../lib/types';
 

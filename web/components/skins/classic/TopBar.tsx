@@ -91,7 +91,6 @@ export default memo(function TopBar({
           <ThemeSwitcher variant="player" />
         </div>
       </div>
-      {/* Too long to share the masthead row on mobile, so it drops below. */}
       {tagline && (
         <span
           className="v3-caption player-topbar-subline truncate text-muted md:hidden"

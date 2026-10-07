@@ -1,16 +1,5 @@
 import { prepareEpisodeContext } from './show-preparation.js';
-// Queue manager — keeps the in-memory queue and writes track URIs
-// to the file Liquidsoap watches. A now-playing watcher rotates items
-// between upcoming → current → history based on what Liquidsoap reports.
-//
-// This module owns the Queue class and the singleton every caller uses. The
-// pieces that aren't the class live in ./queue/ and are re-exported below, so
-// `from './queue.js'` still reaches the whole surface:
-//
-//   types.ts     the shapes that flow through the queue
-//   pure.ts      side-effect-free helpers and pacing constants
-//   kinds.ts     the voice-kind registry the DJ recap reads
-//   voice-io.ts  handoff-file writes + the spoken-segment serialiser
+// Queue class and public singleton; helper implementations live in queue/.
 
 import { readFile, unlink } from 'node:fs/promises';
 import { existsSync, readFileSync } from 'node:fs';
@@ -178,16 +167,8 @@ interface SegmentDesc {
   settlesHandoff?: boolean;
 }
 
-// A rendered segment waiting for the next track boundary — the one slot behind
-// announceAtNextTrack() and airPendingVoice().
-//
-// `clips` is a LIST because a segment is not always one utterance: a banter
-// exchange is several lines in several voices, rendered all-or-nothing and
-// aired back to back, and `djTalkOnlyBetweenTracks` (#1485 FR 5b) can defer one
-// of those exactly as it defers an ident. It is still ONE segment and one slot
-// — the queue never holds two deferred segments, and the talk-slot planner is
-// what stops a second one being written while this one waits (see
-// talk-scheduler's pendingHolds).
+// One pending slot holds one rendered segment. Its clip list supports multi-voice exchanges;
+// the talk planner prevents another scheduled segment replacing it. #1485 FR 5b.
 interface PendingVoice {
   kind: string;
   clips: {
@@ -371,22 +352,9 @@ function introSpeechUnchanged(item: QueueItem, expected: IntroSpeechIdentity): b
 // a runaway loop across different filenames, not a policy on how many
 // announcements an operator may line up.
 const PENDING_JINGLE_MAX = 3;
-// The automatic rotate's own budget, counted SEPARATELY (#1619). The two must
-// not share, because the shared form is how the operator's button gets wedged
-// shut by something the operator did not do: a mixer restart empties
-// jingle_now_queue with no signal, so three rotates inside the TTL below would
-// hold every slot and the next press would answer `queue-full` — the exact
-// failure PENDING_JINGLE_TTL_MS exists to prevent, reintroduced from the other
-// side. Reserving a slot instead would still shrink the operator's headroom
-// from 3 to 2 for a caller that is not a runaway risk at all.
-//
-// ONE, not three, and that is the honest number rather than a smaller share of
-// the same budget: the rotate is one-at-a-time by construction — the counter is
-// zeroed at handoff, so it cannot come due again until N more boundaries have
-// passed — which means a SECOND pending rotate can only mean the first never
-// aired. Queuing another on top of it is precisely the stinger-stacking the
-// FIFO has no remove path to undo. A rotate refused here spends its offer and
-// skips, which is the cheaper miss radio.liq's own `source.available` gate took.
+// Keep one pending automatic rotate separately from manual-jingle capacity. A second rotate
+// means the first never aired; skip the new offer rather than stacking clips with no remove
+// path. #1619.
 const PENDING_ROTATE_JINGLE_MAX = 1;
 // How long a press stays pending before it is assumed lost. A mixer restart
 // empties jingle_now_queue and drops the request with no signal, so this is what
@@ -521,12 +489,8 @@ class Queue {
     }, Math.max(0, Number(p.notBefore) + HANDOFF_BOUNDARY_WAIT_MS - Date.now()));
   }
 
-  // The rendered-pair fallback above starts only once TTS has completed. A
-  // very long final track can otherwise defer even STARTING that work well
-  // beyond the new show's boundary. Keep a separate deadline for the durable
-  // session record; at expiry the normal immediate voice path ducks the pair
-  // over the song already playing. Re-checking pendingHandoff() at fire time
-  // makes normal seam delivery and restart recovery harmless no-ops.
+  // Bound generation as well as rendered delivery. At the durable handoff deadline, recheck
+  // pendingHandoff and duck the pair over the current track.
   armHandoffGenerationFallback() {
     if (this._handoffGenerationTimer) clearTimeout(this._handoffGenerationTimer);
     this._handoffGenerationTimer = null;
@@ -622,13 +586,8 @@ class Queue {
           current: this.current,
           history: this.history,
           pendingHandoff: pendingHandoffSnapshot(this._pendingVoice),
-          // The rotate's boundary count (#1619). Snapshotted for the same
-          // reason the queue itself is — a controller restart is routine, every
-          // `--build controller` is one. This count is absolute: losing it
-          // costs up to a full
-          // `jingleRatio` of tracks before the next stinger, which at the
-          // default 30 is roughly two hours of silence from the rotate after
-          // every upgrade.
+          // Persist the absolute rotate count so controller restarts do not reset the jingle interval.
+          // #1619.
           tracksSinceJingle: this._tracksSinceJingle,
           lastRotateJingle: this._lastRotateJingle,
           savedAt: new Date().toISOString(),
@@ -655,12 +614,8 @@ class Queue {
     }, 500);
   }
 
-  // Boot recovery — reload the persisted queue so requests/picks already sent
-  // to Liquidsoap stay tracked across a controller restart. `lastSeenKey` is
-  // primed from the restored `current` so the watcher doesn't re-fire for the
-  // track that's still on air; if the track changed during the downtime the
-  // key differs and the watcher reconciles normally (see onTrackStarted, which
-  // drops any upcoming items Liquidsoap consumed while the controller was down).
+  // Recover sent requests and prime lastSeenKey from current to avoid replaying the same
+  // track-start event. A changed track is reconciled normally.
   recover() {
     if (existsSync(config.queue.file)) try {
       const stored = JSON.parse(readFileSync(config.queue.file, 'utf8'));
@@ -736,12 +691,8 @@ class Queue {
         console.error('[queue] recent-plays recover failed:', (err as Error).message);
       }
     }
-    // Backfill from the events JSONL log — without this, a controller restart
-    // resets the 12h block window to whatever's in the sidecar file (often
-    // empty or only minutes deep), leaving heavy-rotation tracks free to
-    // repeat right after boot. Observed: "2 AM" by Karan Aujla picked at
-    // 00:19 UTC because its actual last play (23:11 UTC) was outside the
-    // sidecar's reach. The events log has every track.play and is durable.
+    // Restore recency from durable track.play events; the queue snapshot may cover less than the
+    // repeat window.
     this.backfillRecentPlaysFromEvents();
     this.log('scheduler',
       `Recent-plays loaded: ${this._recentPlays.length} entries (last 24h)`);
@@ -849,13 +800,8 @@ class Queue {
     console.log(`[${kind}] ${message}`);
   }
 
-  // Compact recap of recent on-air DJ utterances for injection into Ollama
-  // prompts so the DJ stops repeating openers. Returns formatted lines or
-  // null when nothing relevant has aired. Wider window catches slow-firing
-  // kinds (hourly, station ID) so the DJ doesn't echo something it said
-  // an hour ago.
-  // `prior` reads the session a hard roll just archived instead of the live one
-  // — the mic-pass sign-off is the single caller (session.priorPromptMemory).
+  // Format aired session speech for recap, or return null. prior reads the archived outgoing
+  // session for the mic-pass sign-off.
   getDjRecap({
     limit = settings.get().djBehaviour.recapLimit,
     withinMinutes = settings.get().djBehaviour.recapMinutes,
@@ -928,14 +874,8 @@ class Queue {
     return out;
   }
 
-  // The text of the most recent between-track link that actually AIRED, or
-  // null. djLog entries for voice kinds are written by onSpoken — after the
-  // clip reached the stream — which is what makes this the right anchor for
-  // announce-mode's alternation (broadcast/announce-line.ts): a link that was
-  // composed and then dropped (silence ordered, intro budget, refused pick)
-  // never lands here, so the next one can't repeat the form the listener just
-  // heard. 'link' is the kind both link paths log under — enqueuePick's
-  // introKind and announce()'s own kind.
+  // Return the most recent link that aired, or null. Dropped compositions never affect
+  // announce-mode alternation.
   getLastLinkText(): string | null {
     for (const entry of this.djLog) {
       if (entry.kind === 'link') return entry.message || null;
@@ -943,12 +883,8 @@ class Queue {
     return null;
   }
 
-  // Timestamp (ms) of the most recent on-air spoken segment, or 0. Defaults to
-  // every voice kind; pass `kinds` to narrow it (the segment director's
-  // frequency floor asks only about the scheduler's wall-clock talkers —
-  // idents/hourly/handoff — since track-tied links would mute it entirely on a
-  // chatty station). Its private lastAnySegment counter only ever saw its own
-  // segments, so this is how a just-aired ident suppresses a back-to-back one.
+  // Return the latest aired speech timestamp in milliseconds, or zero. kinds narrows the set so
+  // standalone-talk cooldowns exclude track links.
   getLastVoiceAt(kinds?: readonly string[]) {
     const match = kinds ? new Set(kinds) : VOICE_KINDS;
     for (const entry of this.djLog) {

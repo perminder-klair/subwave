@@ -1174,8 +1174,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <Select value={form.tts.gemini?.model || ''} onValueChange={v => setGemini({ model: v })}>
                   <SelectTrigger aria-label="Gemini model" className="max-w-[360px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {/* '' is the "walk the fallback chain" choice, not a blank
-                        field for the server to fill in. */}
+                    {/* An empty value selects the server's fallback chain. */}
                     <SelectItem value="">Automatic (fallback chain)</SelectItem>
                     {GEMINI_TTS_MODELS.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
                   </SelectContent>
@@ -1604,8 +1603,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
-      {/* The operator's explicit rescue, ahead of the hardcoded
-          default-engine → Piper → Kokoro floor. */}
       <Advanced note="the rescue voice for a persona whose own engine fails">
       <Card
         title="Fallback voice"

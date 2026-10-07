@@ -10,17 +10,8 @@ import {
 } from '@/lib/stationOrigin';
 import type { ShowcaseStation } from '@/lib/stations';
 
-// Browser-window mock chrome wrapping the real player. Same React tree as the
-// rest of the page — no iframe — so theme switches and dev reloads flow
-// through. The player runs in `contained` mode, so it pins to the frame rather
-// than the viewport and its drawers/dialogs portal into the frame too.
-//
-// The tab strip is fed from the stations directory: the demo is a live tuner
-// across the network, not a screenshot of one station. Picking a tab swaps the
-// StationOrigin the player tree reads its API + stream URLs from and remounts
-// PlayerApp (via key) so feed state, the <audio> element and the tune-in gate
-// all reset. Tab 0 is always the local station, so a self-hosted landing page
-// still demos that operator's own broadcast.
+// Contained PlayerApp portals overlays into the frame. Changing stations remounts it to reset feed,
+// audio, and tune-in state.
 
 export interface PlayerShowcaseProps {
   stations?: ShowcaseStation[];
@@ -41,13 +32,7 @@ const LIVENESS_TIMEOUT_MS = 5000;
 export default function PlayerShowcase({ stations = [] }: PlayerShowcaseProps) {
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
 
-  // Remote stations earn their tab by answering a liveness probe — a dead or
-  // off-air station never shows up rather than presenting a broken demo. The
-  // set only ever grows (tabs pop in as probes land, the active tab can't be
-  // yanked away), and SSR + first client render agree on local-only, so
-  // there's no hydration mismatch. The local tab is exempt: it's the page's
-  // own station, and an off-air local stack should show the player's normal
-  // offline state, not an empty frame.
+  // Add remote tabs after a successful probe and retain them. Start with the local tab for consistent hydration.
   const [liveSlugs, setLiveSlugs] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
     for (const s of stations) {

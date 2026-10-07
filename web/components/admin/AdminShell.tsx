@@ -347,7 +347,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
           </SidebarInset>
         </SidebarProvider>
         <AdminCommandMenu />
-        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
       </div>
     </AdminQueryProvider>
   );
@@ -472,13 +471,9 @@ function AdminSidebar({
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-2 py-3">
-        {/* A dropdown rather than an inline collapsible so it stays reachable
-            when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            {/* Non-modal: a modal Radix menu locks body scroll, and the lock's
-                15px scrollbar compensation pulls the sticky top bar off the
-                right edge. */}
+            {/* Radix scroll locking shifts the sticky header with scrollbar compensation. */}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
@@ -765,8 +760,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        {/* modal={false} for the same reason as the sidebar's More menu: no body
-            scroll lock, so no scrollbar-compensation margin shift. */}
+        {/* Disable Radix scroll locking to avoid shifting the sticky header. */}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex min-h-9 cursor-pointer items-center gap-1 text-muted focus:outline-none sm:min-h-0"
@@ -803,25 +797,8 @@ function TopBar({ pathname }: { pathname: string | null }) {
   );
 }
 
-// Local station date + time, e.g. "Thursday 24 September 2026   04:37:45" —
-// the station's own zone/locale (from useStationFeed, already polled by
-// TopBar), not the operator's browser clock. Ticks every second; this is a
-// plain client-side setInterval + Date.now(), so the faster tick costs no
-// extra network traffic at all — the timezone/locale still ride on
-// useStationFeed's existing 5s poll, unrelated to this timer.
-//
-// Layout: the clock is an in-flow flex item between the breadcrumb and the
-// right-hand cluster, aligned right beside the status dot. `flex-1 min-w-0` lets it take only the
-// space those two leave over, so it can never paint on top of either of them
-// (an absolute overlay centred on the whole bar did, at tablet width with the
-// sidebar open). Whether it shows is decided by the width of THAT slot, not
-// the viewport: the sidebar, a long breadcrumb and the listener count all eat
-// into it, and a viewport breakpoint can see none of them. Measured tiers:
-// full date + time, then time only, then nothing.
-//
-// Until the first poll delivers the station timezone the slot shows a neutral
-// placeholder rather than the browser's local time, which would be a
-// different — wrong — clock for any operator outside the station's zone.
+// Wait for the station timezone before displaying its clock. Measure the available flex slot for
+// full date, time only, or hidden output; viewport breakpoints miss sidebar and breadcrumb widths.
 const CLOCK_PLACEHOLDER = '--:--:--';
 const CLOCK_TEXT_CLASS = 'text-[11px] font-normal whitespace-nowrap tabular-nums';
 
@@ -868,7 +845,6 @@ function StationClock({ tz, locale }: { tz: string | null; locale: Parameters<ty
 
   return (
     <span ref={slotRef} className="relative flex min-w-0 flex-1 items-center justify-end overflow-hidden">
-      {/* Invisible, out-of-flow copies, measured to decide which tier fits. */}
       <span ref={fullRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
         {full}
       </span>

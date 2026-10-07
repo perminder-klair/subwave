@@ -28,9 +28,6 @@ export default function NotFound() {
             does.
           </p>
 
-          {/* Primary recovery only — the StationFooter below already renders
-              the full "Back Pages" index (dispatches, stations, skills,
-              personas, shows), so repeating those links here is noise. */}
           <div className="bs-station-cta">
             <p className="bs-station-cta-copy">Try one of these instead.</p>
             <AnimatedLink href="/listen" variant="arrow" className="bs-station-cta-link">

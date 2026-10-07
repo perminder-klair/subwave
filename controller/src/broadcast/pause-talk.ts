@@ -1,12 +1,5 @@
-// Pause-and-talk policy. The decision is deliberately pure: rendering is the
-// first point at which a segment's real duration is known, while the queue is
-// the only place that may turn that decision into a music-timeline handoff.
-//
-// The shape (#551): a SILENT item rides the music timeline through next.txt,
-// and the voice itself still goes down say.txt. Sending the clip down the music
-// path instead would strip it of mic_chain and edge_fade (radio.liq applies
-// both to voice_queue/intro_queue only), making the one segment on the station
-// with no processing on it, and would need a parallel set of air-time stamps.
+// Send silence through next.txt and speech through say.txt. Speech must remain in the voice
+// queue for mic_chain, edge_fade, and air-time markers. #551.
 
 /** The next song's ramp-in under the tail of the break. Stamped on the silence
  *  item, so `cross` sizes the transition OUT of it from this. */
@@ -48,18 +41,8 @@ export function wantsPauseTalk({
     && (clipMs as number) >= thresholdMs;
 }
 
-// How much silence to write. Four terms, all of them real:
-//
-//   [ incoming cross ][ release latency ][ voice window ][ exit cross ][ safety ]
-//   ^ outgoing song                      ^ DJ speaks                  ^ next song
-//     still fading                         in the clear                 already up
-//
-// `cross` sizes a transition from the OUTGOING track's liq_cross_duration
-// (radio.liq's dj_transition reads `a.metadata`), so the previous song's tail
-// is mixed over the HEAD of this silence for its own crossfade duration —
-// 10s on the station default. Un-budgeted, that is where the whole segment
-// lands, and a break that plays under a fading song is the ducking this
-// feature exists to replace. The release is delayed to match (releaseDelayMs).
+// Budget silence for incoming crossfade, release latency, voice, exit crossfade, and safety.
+// The outgoing track's crossfade covers the silence's head, so delay release until it ends.
 export function silenceDurationMs({
   voiceWindowMs,
   incomingCrossMs,

@@ -1,7 +1,6 @@
 'use client';
 
-// The tune-in gate is inline, not an overlay: the deck loads un-tuned and the
-// ▶ click is the browser's audio-unblock gesture.
+// The inline play button provides the browser audio-unblock gesture.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
@@ -222,8 +221,7 @@ export default function SubampSkin(_props: SkinProps) {
               </div>
             </div>
 
-            {/* Keyed on the copy so the plate remounts and re-latches; the
-                inner key is what restarts the CSS scroll from the left. */}
+            {/* Remount on text changes to restart the CSS scroll. */}
             <m.div
               key={marqueeText}
               animate={latch}
@@ -313,8 +311,7 @@ export default function SubampSkin(_props: SkinProps) {
               >
                 REQ
               </button>
-              {/* VOL is last so it (not REQ) is the flex item that reflows to a
-                  full-width second line when the deck is too narrow for one row */}
+              {/* Keep VOL last so it takes the second row on narrow decks. */}
               <div className="ml-2 flex min-w-[120px] flex-1 items-center gap-2">
                 <span className="text-[9px] font-bold tracking-[0.16em] text-muted">VOL</span>
                 <input
@@ -333,8 +330,7 @@ export default function SubampSkin(_props: SkinProps) {
         </Window>
 
         <Window title={<>BOOTH FEED ▪ {djName.toUpperCase()}</>} className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none">
-          {/* Needs a definite height for the scroll region, hence lg:h-[240px]
-              rather than a content-driven max-height. */}
+          {/* A definite height lets the scroll region resolve. */}
           <Conversation className={cn('min-h-0 flex-1 lg:h-[240px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-2 px-4 py-3">
               {booth.length === 0 && (
@@ -364,7 +360,6 @@ export default function SubampSkin(_props: SkinProps) {
           title={<>STATION LOG{listenerCount != null ? ` ▪ ${listenerCount} LISTENING` : ''}</>}
           className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none"
         >
-          {/* Definite height so the scroll region resolves, as above. */}
           <Conversation className={cn('min-h-0 flex-1 lg:h-[200px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
               {history.map((h, i) => (
@@ -402,8 +397,6 @@ export default function SubampSkin(_props: SkinProps) {
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
               <div className="flex items-baseline gap-2.5">
-                {/* Fixed width on both label cells so the ask and the signature
-                    inputs share a left edge — the labels differ in length. */}
                 <span className="w-[68px] flex-none text-[10px] tracking-[0.14em] text-muted select-none">DEAR DJ —</span>
                 {slip.ack ? (
                   <>
@@ -440,8 +433,6 @@ export default function SubampSkin(_props: SkinProps) {
                   </>
                 )}
               </div>
-              {/* Sign the slip and the DJ says your name on air (#1347).
-                  Hidden once the ack lands — there is nothing left to sign. */}
               {!slip.ack && (
                 <div className="flex items-baseline gap-2.5">
                   <span className="w-[68px] flex-none text-[10px] tracking-[0.14em] text-muted select-none">FROM —</span>

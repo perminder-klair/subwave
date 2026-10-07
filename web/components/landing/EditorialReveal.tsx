@@ -8,11 +8,6 @@ interface EditorialRevealProps {
   className?: string;
 }
 
-// Restraint-by-default mount reveal for the landing broadsheet. Each section
-// fades + rises 12 px once on page load — the kind of "page is finishing
-// settling" feel that NYT / Atlantic features get for free with paper. NOT
-// scroll-triggered (no whileInView, no IntersectionObserver); the listener
-// sees everything as they scroll to it, no surprise pops.
 export default function EditorialReveal({
   children,
   className,

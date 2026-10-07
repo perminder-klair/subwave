@@ -1,20 +1,6 @@
-// "Until the schedule changes" — how a takeover's end instant is chosen (#1601).
-// The stored shape is an ordinary ScheduleOverride with an absolute `expiresAt`;
-// only the way that instant is chosen differs, and nothing downstream can tell.
-//
-// Three rules:
-//  - The boundary is the GRID's. The scan hands `resolveActiveShow` a snapshot
-//    with the override taken OUT rather than restating the lookup here, or a
-//    takeover replacing a takeover would measure itself against itself.
-//  - The scan walks the STATION clock minute by minute (slots sit at painted
-//    hours, zones at :30/:45), reusing show-boundary.ts's `nextShowChangeMs`
-//    with no `extra` candidates — a takeover's own start/expiry are excluded.
-//  - There is a CEILING and NO FLOOR. A ceiling trims an otherwise valid window;
-//    a floor cannot lengthen a genuinely short one, and applying
-//    OVERRIDE_MIN_MINUTES here is what made "end at the change" run PAST the
-//    change. The floor stays on `until: 'fixed'`, where it bounds what an
-//    operator may type. Accepted trade: the switch lands at the next track
-//    boundary, so a very short window may air late or lapse unaired.
+// Resolve takeover expiry from the weekly grid with overrides removed, scanning station-clock
+// boundaries. Apply a maximum duration but no minimum, which would extend a short window past
+// the change. Playback switches at a track boundary. #1601.
 
 import { OVERRIDE_MAX_MINUTES } from '../schemas/schedule.js';
 import { zonedParts } from '../time.js';

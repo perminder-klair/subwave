@@ -562,9 +562,6 @@ export function RequestWindow({
                     {slip.sending ? '…' : 'send'}
                   </button>
                 </div>
-                {/* A second, quieter row inside the same chassis — signing is
-                    optional, and a signed request gets the name read on air
-                    (#1347). Inside the form, so Enter still sends from here. */}
                 <div className="flex items-center gap-3 border-t border-white/18 px-5 py-3">
                   <span className={cn(CAPTION, 'flex-none select-none')}>from</span>
                   <input

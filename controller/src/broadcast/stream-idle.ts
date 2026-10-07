@@ -1,18 +1,6 @@
-// Stream idle monitor — pause the programme while the room is empty.
-//
-// With settings.stream.idleWhenEmpty on and zero listeners for
-// idleAfterMinutes, flip radio.liq's idle gate (telnet idle_on): the mounts
-// stay up serving silence but the music chain stops being pulled, frozen
-// mid-track. Any client still connects while idle, and the first connection
-// resumes (idle_off) exactly where it froze. Contrast POST /stream-stop
-// (stream_off), which tears the mounts down — the operator's hard off-air.
-//
-// Fail-OPEN: an unknown count (sustained failure, not one timed-out poll —
-// #1256) never holds the station silent. Telnet failures keep the current state
-// and retry next tick. State is not persisted; a mixer restart comes back live
-// and the monitor re-asserts idle_on, and on controller boot the gate's state
-// is adopted from Liquidsoap (idle_status). Transitions live in the pure
-// nextIdleState().
+// Pause the music chain after an empty-room timeout while keeping mounts available. Unknown
+// listener counts resume playback; telnet failures retain the current state and retry. Adopt
+// the mixer gate on controller boot. #1256.
 
 import * as settings from '../settings.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';

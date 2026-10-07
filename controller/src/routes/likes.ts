@@ -1,10 +1,5 @@
-// Listener likes (#991) — the heart button's HTTP surface.
-//
-// A like optionally mirrors to Navidrome as a Subsonic star
-// (settings.likes.starInNavidrome), fire-and-forget. Deleting likes here does
-// NOT unstar — that is the operator's catalogue data. The ONE exception is the
-// operator un-heart when no likes remain: their own toggle, and the "none
-// remain" guard is what stops a star earned by listener likes being discarded.
+// Mirroring likes to Navidrome is fire-and-forget (#991). Deleting likes must not unstar
+// operator catalogue data; only their own un-heart with no remaining likes may do so.
 
 import express from 'express';
 import { queue } from '../broadcast/queue.js';

@@ -1,21 +1,7 @@
-// djAgent — conversational tool-loop with structured output. Throws on failure
-// so the caller can fall back to a stateless path.
-//
-// Strategy, resolved per leg by agentPlan():
-//   1. Native-first (non-Ollama tool-using agents): Output.object with AUTO
-//      tool_choice, so no forced tool conflicts with thinking mode. Any miss
-//      falls through to (2).
-//   2. Done-tool (Ollama always; everyone else on a native miss): a synthetic
-//      `done` tool whose inputSchema IS the schema sits beside the discovery
-//      tools, toolChoice:'required' forces a call every step, and prepareStep
-//      corners the model into discovery-then-done. Ollama is excluded from
-//      native because its tool-loop Output.object returns schema-valid but
-//      EMPTY JSON without ever calling discovery.
-//
-// When the model declines `done` anyway: main run → done-only recovery
-// (carrying the trail) → single-turn terminal collapse (#1157) → text salvage →
-// throw. Every leg draws on ONE shared deadline, so the leg count is a budget
-// decision as much as a correctness one.
+// agentPlan resolves native output or forced done-tool output per leg. Ollama
+// skips native: it can return empty schema-valid JSON without discovery.
+// Recovery proceeds through done-only, terminal collapse (#1157), then text salvage.
+// All attempts share one deadline; throw so callers can use their stateless fallback.
 
 import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';

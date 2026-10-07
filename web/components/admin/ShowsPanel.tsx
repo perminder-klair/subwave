@@ -1,9 +1,5 @@
 'use client';
 
-// Show definitions. A scheduled show puts its persona on air and overrides the
-// autonomous mood (empty moods = Any/auto). /admin/shows/schedule owns the board
-// and PUT /schedule; this page loads the schedule read-only for the
-// hours-a-week counts. Putting a show on air right now is a takeover (dash).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { z } from 'zod';
@@ -465,8 +461,6 @@ export default function ShowsPanel() {
           </Btn>
         </div>
       </div>
-      {/* Hidden below a handful of shows: a filter bar over four rows is
-          furniture. */}
       {shows.length > 5 && (
         <RosterToolbar<ShowSort>
           query={query}
@@ -498,8 +492,6 @@ export default function ShowsPanel() {
           )}
         />
       )}
-      {/* The toolbar carries the view toggle once it is on screen; below the
-          threshold the header row keeps it. */}
       {shows.length > 0 && shows.length <= 5 && (
         <div className="flex justify-end">
           <RosterViewToggle view={view} onChange={setView} />

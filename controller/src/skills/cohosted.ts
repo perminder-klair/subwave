@@ -1,23 +1,6 @@
-// Dedicated co-hosted skill generation. This module owns the dynamic cast
-// schema and the selected skill's data-gathering run, but returns only
-// air-ready persona lines; queue.announceExchange remains the sole TTS/playback
-// boundary.
-//
-// TWO RUN SHAPES, chosen exactly the way every other segment path chooses one
-// (`settings.llm.pickerAgent`, the same branch as runSimpleDirector and
-// runCapability in _agent.ts):
-//
-//   agent mode — the skill's own tool loop, the model calls the tool itself and
-//     `onResult` records what it actually got back;
-//   pool mode  — the tool is called in CODE, an unusable result stands the
-//     discussion down before any model call, and one structured djObject call
-//     writes the discussion with the data inlined.
-//
-// Running the tool loop in pool mode was the bug: pool mode exists precisely
-// for operators whose model is not trusted with tool loops, so a grounded
-// co-hosted skill could never satisfy its grounding check there (the tool is
-// only reachable by a model tool call), standing down every tick after burning
-// a full agent run against the deadline.
+// Return persona lines; queue.announceExchange owns TTS and playback.
+// settings.llm.pickerAgent selects model tool calls or code-side data gathering.
+// Pool mode fetches and checks grounding before its single structured model call.
 
 import { djAgent, djObject } from '../llm/sdk.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';

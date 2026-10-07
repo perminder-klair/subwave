@@ -1548,8 +1548,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         )}
       />
 
-      {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit
-          confirm re-embeds on the new provider. */}
       <V3AlertDialog
         open={embedPinNotice != null}
         onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}

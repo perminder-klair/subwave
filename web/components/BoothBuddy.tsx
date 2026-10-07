@@ -4,12 +4,7 @@ import { memo } from 'react';
 import type { CSSProperties } from 'react';
 import { cn } from '@/lib/cn';
 
-// Pure-CSS mascot leading the DJ thinking line, animated with CSS keyframes
-// (globals.css `buddy-*`). Colours come from theme tokens, never hardcoded hex:
-// head fill is `--bg` and features are `--ink`, so the pairing is legible on any
-// palette. Decorative only -- the whole sprite is aria-hidden. Inline styles are
-// intentional (geometry is computed per-mood and per-size), so this file is
-// exempt from `react/forbid-dom-props`.
+// Decorative CSS mascot. Per-mood and per-size geometry requires inline styles.
 
 export type BuddyMood = 'content' | 'onair' | 'curious' | 'sleepy' | 'spooked';
 

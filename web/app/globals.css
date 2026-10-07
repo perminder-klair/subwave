@@ -1,20 +1,8 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* Dark variant. BOTH routes have to be in it. shadcn's stock recipe matches
-   [data-theme='dark'] alone, safe there because next-themes always writes the
-   attribute; this app REMOVES it (lib/theme.ts THEME_INIT_SCRIPT) to hand the
-   document back to prefers-color-scheme. A listener on a dark OS who never
-   touched the switcher then carries no attribute, and an attribute-only variant
-   left every `dark:` utility unapplied — light-tuned raw values on a fully dark
-   page. The media arm mirrors the :root block's condition exactly, the
-   :not([data-theme='light']) guard included, so a listener who pinned LIGHT on a
-   dark OS still reads light. Keep the two conditions in step.
-
-   Do NOT switch this to the `.dark` class `syncDarkClass` maintains: no CSS
-   targets it, and its prefers-color-scheme listener only feeds React state — a
-   live OS flip repaints the tokens (pure CSS) while the class goes stale, the
-   same styles-disagree-with-palette bug in a new coat. */
+/* Match both explicit dark themes and a dark OS without a light override. Keep the media condition
+   aligned with :root; the .dark class can lag behind live OS changes. */
 @custom-variant dark {
   &:where([data-theme='dark'], [data-theme='dark'] *) {
     @slot;
@@ -650,12 +638,7 @@ body::after {
     }
 }
 
-/* Now-playing cover — calm at rest, a CRT glitch when engaged. The channel ghosts
-   are copies of the same art (fed in via --cover on .v3-cover-frame), tinted and
-   screen-blended into chromatic-aberration fringes. "Engaged" = hover/focus OR
-   .v3-cover-live, which CenterStage toggles while the ripple waves run. The
-   hover-only lift stays off .v3-cover-live so the art doesn't jump every time the
-   DJ talks. */
+/* Cover ghosts use --cover. Keep hover lift separate from .v3-cover-live so DJ speech does not move the artwork. */
 .v3-cover-frame {
     cursor: pointer;
     transition:
@@ -923,11 +906,8 @@ body::after {
     }
 }
 
-/* Lite (low-power) mode — toggled from the player theme menu or pinned with
-   ?lite=1 (lib/lite.ts). Drops every backdrop-filter blur and animation so weak
-   GPUs stop re-compositing every frame; measured Pi 4 win is ~170% → ~40%
-   Chromium CPU. Transitions are left alone: they fire only on interaction and
-   are not the continuous repaint cost. */
+/* Lite mode disables blur and continuous animation. Keep interaction transitions; Pi 4 Chromium CPU
+   fell from about 170% to 40%. */
 html.lite *,
 html.lite *::before,
 html.lite *::after {
@@ -1256,12 +1236,8 @@ html.lite .sw-ripple-circle {
     line-height: 1;
 }
 
-/* Lifts the masthead above the article so the Community panel can hang out of it:
-   .bs-paper puts header and <main> both at z-index 1, so <main> wins on DOM order
-   and paints over the open dropdown. A Tailwind z-* utility can't fix it
-   (globals.css is unlayered and always beats @layer utilities) and neither can a
-   bare .bs-masthead-lift (.bs-paper is declared later and wins the tie) — hence
-   the element qualifier. */
+/* Use an element-qualified, unlayered selector to override the later .bs-paper stacking and keep
+   the Community dropdown above main. */
 header.bs-masthead-lift {
     z-index: 40;
 }
@@ -1369,11 +1345,7 @@ header.bs-masthead-lift {
     color: var(--muted);
 }
 
-/* Six letterspaced nav items only fit one line from ~640px up (measured). Below
-   that the Community dropdown is dropped rather than letting the row wrap — every
-   destination behind it also has a Back Pages panel. `display:none` takes its
-   ::after dot with it, so the separators stay correct. The panel therefore never
-   opens below 640px and needs no narrow-screen anchoring. */
+/* Hide Community below 640px; its destinations remain in Back Pages. display:none also removes its separator. */
 @media (max-width: 639px) {
     .bs-masthead-community {
         display: none;
@@ -1487,11 +1459,6 @@ header.bs-masthead-lift {
     }
 }
 
-/* Slash → disc morph on nameplate hover. The slash glyph keeps its box (opacity
-   only) so the nameplate never reflows; the disc is absolutely centred over it
-   and em-sized, so the morph scales with the clamp()ed wordmark. The face spins
-   on its own inner element — the outer owns the scale/fade transition, so the two
-   transforms never fight. */
 .bs-wordmark-slash {
     position: relative;
     display: inline-block;
@@ -3313,17 +3280,8 @@ header.bs-masthead-lift {
     overflow-x: clip;
 }
 
-/* Keep the page scrollbar permanently present across the admin console. Panels
-   vary wildly in height and the 120ms route cross-fade unmounts the outgoing
-   panel before the incoming one measures, so on a space-taking scrollbar the
-   viewport width jumps ~15px on every navigation and the sidebar snaps sideways.
-   NOT `scrollbar-gutter: stable`, the tidier tool but inert here: the
-   `overflow-x: clip` set on <html>/<body> stops the gutter ever being reserved —
-   measured in Chrome, the 15px jump survives it on html, on body, and with the
-   clip lifted. Scoped via :has() rather than globally because the player skins
-   are full-bleed 100vh surfaces; browsers without :has() keep the old behaviour.
-   The background match is what lets the track read as part of the admin surface
-   rather than a pale stripe — <html> paints it, outside .admin-root. */
+/* Reserve the admin scrollbar to prevent 15px navigation shifts. scrollbar-gutter did not reserve
+   space in this layout. Scope to admin because player skins fill the viewport. */
 html:has(.admin-root.paper) {
     overflow-y: scroll;
     background: var(--page-bg);
@@ -3368,11 +3326,6 @@ html:has(.admin-root.paper) {
     }
 }
 
-/* Settings search jumped to this card — a two-and-a-bit second accent ring so
-   the operator can see WHICH of six near-identical cards the result landed on.
-   Set as a DOM attribute rather than React state: the flash outlives the scroll
-   animation and belongs to no component's data. Respects reduced motion by
-   holding the ring steady instead of fading it. */
 .admin-root .card[data-flash] {
     outline: 2px solid var(--accent);
     outline-offset: 3px;
@@ -4286,14 +4239,8 @@ html:has(.admin-root.paper) {
 .admin-root .lib-colhead,
 .admin-root .lib-row {
     display: grid;
-    /* Leading 16px column is the row-selection checkbox. The trailing actions
-       column is FIXED, not auto: header and rows are sibling grids, so an auto
-       track resolves to 0 in the empty-celled header and ~240px in the rows,
-       skewing every fr column between them. 240px is measured: five 36px buttons
-       + four 6px gaps = 204px, and the heart runs to ~63px at its capped "99+"
-       label — 231px worst case. Keep in step with the button cluster in
-       library/TrackTable.tsx; it is justify-end, so overflow spills LEFT over the
-       mood/energy column rather than being clipped. */
+    /* Header and rows are sibling grids, so their action columns need the same fixed width. Keep
+       240px aligned with library/TrackTable.tsx; auto would misalign the other columns. */
     grid-template-columns: 16px 56px minmax(0, 2fr) minmax(0, 1fr) 240px;
     gap: 14px; align-items: center;
 }
@@ -5138,11 +5085,8 @@ html:has(.admin-root.paper) {
     text-underline-offset: 3px;
 }
 
-/* Type filter (/apps). components/apps/AppTypeFilter.tsx sets data-filter on this
-   wrapper and the rules below hide the cards that don't match, so the cards stay
-   server components with no client JS. One rule per type because CSS can't
-   compare one attribute against another. Chips only render for types present in
-   the catalog, so a selection can never empty the grid. */
+/* AppTypeFilter sets data-filter for server-rendered cards. CSS needs one rule per type because it
+   cannot compare two attributes. */
 .bs-apps-filter {
     display: flex;
     flex-wrap: wrap;

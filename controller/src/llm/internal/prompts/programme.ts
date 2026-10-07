@@ -1,12 +1,5 @@
-// Programme prompts — the "producer" layer behind broadcast/programme.ts.
-//
-// A programme show airs as a produced episode: intro → music → feature →
-// music → outro. One structured call at session start (generateProgrammePlan)
-// turns the show's topic brief + the moment into an episode plan; the beat
-// scripts below all reference that plan, which is what makes the hour read as
-// one produced sequence instead of three unrelated talk breaks. When the plan
-// call fails, the beats degrade to brief-only generation (the caller passes
-// plan: null) — the arc still airs, it just loses the cross-references.
+// Episode beats share a plan generated at session start. If planning fails,
+// plan:null falls back to the topic brief without cross-references.
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';

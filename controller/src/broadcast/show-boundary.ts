@@ -1,9 +1,5 @@
-// Show-boundary fade policy (#1574): whether an autonomous pick that would run
-// past the next show change is cut there, and where. The cut rides the existing
-// #447 `liq_cue_out` stamp (earliest-wins in subsonic.getAnnotatedUri) — never a
-// second cue writer, since the cap, the silence trim and a stem blend all cut the
-// same tail. The scan takes `minuteAt`/`keyAt` so it stays pure; the impure
-// wrappers are at the bottom.
+// Fold show-boundary cuts into the existing earliest-wins cue_out alongside caps, silence
+// trim, and stem blends. Clock/key inputs keep the scan pure. #1574, #447.
 
 import { zonedParts } from '../time.js';
 import { absoluteOffsetSec } from '../music/silence-trim.js';
@@ -83,13 +79,8 @@ export interface BoundaryCut {
 }
 
 /**
- * Where to cue this track out so it ends at the show boundary, or null to leave
- * it alone.
- *
- * The offset is ABSOLUTE (the shape `liq_cue_out` carries), so a head-trimmed
- * track's cut is measured from byte zero; the played-to-absolute shift belongs to
- * `music/silence-trim.ts`. `startMs` is the pick's EXPECTED air time, never "now"
- * — the drain's own clock would cut by however long the pick waits in dj_queue.
+ * Return an absolute cue-out offset or null. startMs is expected air time, and silence-trim
+ * owns the conversion from played time to byte-zero offsets.
  */
 export function resolveBoundaryCueSec(input: {
   startMs: number;

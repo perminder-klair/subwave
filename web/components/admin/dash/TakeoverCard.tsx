@@ -1,9 +1,5 @@
 'use client';
 
-// Show takeover (#930/#1507) -- pin a show or Default programming over the
-// weekly grid for a bounded window. Unlike the other dash cards this one fetches
-// for itself: GET /schedule and the two /schedule/override mutations are the
-// only calls on this screen no other card wants.
 
 import { useEffect, useState } from 'react';
 import { Controller } from 'react-hook-form';
@@ -301,10 +297,6 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
           <div className="grid items-end gap-3 @min-[420px]:grid-cols-[minmax(0,1fr)_8rem]">
             <div className="grid min-w-0 gap-2">
               <span className="text-sm font-medium">Duration</span>
-              {/* One control over two form fields: the three presets set a fixed
-                  window, the fourth switches to the boundary the controller
-                  resolves. Picking it CLEARS `minutes` rather than leaving the old
-                  value under the hidden input. */}
               <Controller
                 control={form.control}
                 name="until"
@@ -329,9 +321,6 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
                 )}
               />
             </div>
-            {/* Hidden rather than disabled under the schedule option: a minute
-                box beside a server-resolved window reads as the thing being
-                submitted, and it is not. */}
             {!untilSchedule && (
               <TextField
                 control={form.control}
@@ -344,9 +333,6 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               />
             )}
           </div>
-          {/* The failure states are checked FIRST inside this line: `data`
-              survives an error and a disable, so reading it first meant the
-              outage copy could never be reached once one fetch had landed. */}
           {untilSchedule && (
             <div className="mono-num text-[10px] text-muted">
               {windowQuery.isError

@@ -1,6 +1,3 @@
-// Times a cheap GET /health every few seconds while tuned in, surfacing the
-// round-trip latency and a derived quality band for the signal meter.
-
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
@@ -8,13 +5,11 @@ import type { PlayerStatus } from './usePlayer';
 
 export const SCALE_MAX = 250;
 const PROBE_INTERVAL_MS = 5000;
-// After a few consecutive failures the link is down; probe gently instead of
-// hammering a dead origin every 5s.
+// Back off after consecutive failures so a dead origin is not probed every 5s.
 const PROBE_BACKOFF_MS = 15000;
 const PROBE_BACKOFF_AFTER = 3;
 const PROBE_TIMEOUT_MS = 4000;
-// One full ruler width. 200-300ms is a normal phone-to-origin round trip and
-// irrelevant to a buffered live stream, so "good" spans the whole scale.
+// Phone round trips of 200–300ms are normal for buffered audio; keep the full scale good.
 const GOOD_MS = SCALE_MAX;
 
 export type SignalQuality =
@@ -86,9 +81,7 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
     };
   }, [api, tunedIn, offline, appActive]);
 
-  // The label grades playback health, not HTTP latency: audio playing and the
-  // station reachable is never worse than "fair", and "poor" is reserved for
-  // the station not answering probes at all.
+  // Grade playback health separately from latency; reserve poor for an unreachable station.
   const quality = useMemo<SignalQuality>(() => {
     if (offline) return 'offline';
     if (!tunedIn) return 'idle';

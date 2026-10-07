@@ -130,8 +130,6 @@ export function ManualTagEditor(props: {
             </Btn>
           )}
         </div>
-        {/* text-muted, not text-ink-soft: that is a surface token and renders
-            near-invisible as a text colour. */}
         <p className="mt-1 max-w-[68ch] text-[11px] leading-[1.6] text-muted">
           {eraSourceNote(track)}. Set the real recording year here — it
           outranks the album tag and MusicBrainz, and drives era shows, the
@@ -145,7 +143,6 @@ export function ManualTagEditor(props: {
           onChange={(e: ChangeEvent<HTMLInputElement>) => setApplyToAlbum(e.target.checked)}
           disabled={busy || eraBusy}
         />
-        {/* Shared by both saves below. */}
         apply to whole album{track.album ? ` “${track.album}”` : ''}
       </label>
       <div className="flex flex-wrap items-center gap-2">

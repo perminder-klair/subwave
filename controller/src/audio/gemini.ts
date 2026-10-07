@@ -1,18 +1,7 @@
-// Native Gemini TTS engine: Google's TTS API directly, no sidecar.
-//
-// Model order mirrors the sidecar (cheapest first): gemini-3.8-flash-lite-tts,
-// then gemini-3.8-flash-tts, via the Interactions API with delivery in
-// speech_metadata.style. The transcript is NEVER prefixed with [...] blocks —
-// 3.8 treats input as verbatim and lite vocalizes them (rambling/static tail).
-//
-// Key: GOOGLE_GENERATIVE_AI_API_KEY (state/secrets.env → process.env) — a real
-// Google AI key. A gateway/compatibility-server bearer for the LLM leg is not a
-// substitute: Google rejects one with API_KEY_INVALID, so every render fails
-// over.
-//
-// Cue translation (splitCues) replaces the old sidecar's split_cues; the
-// direct-Google engine has no Python peer to stay in sync with, so
-// scripts/gemini-tts.test.ts is the only thing pinning these vectors.
+// Use the Interactions API and speech_metadata.style. Gemini 3.8 reads input
+// verbatim, so never prepend performance cues to the transcript.
+// Requires GOOGLE_GENERATIVE_AI_API_KEY; a gateway bearer cannot authenticate Google.
+// Cue translation is pinned by scripts/gemini-tts.test.ts.
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import crypto from 'node:crypto';

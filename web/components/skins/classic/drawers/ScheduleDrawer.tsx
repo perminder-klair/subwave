@@ -253,26 +253,9 @@ function StationHeader({
   );
 }
 
-/**
- * Whether a clamped block is actually cut off.
- *
- * The affordance only earns its place when the text overflows, so this
- * measures rather than guesses: a two-word topic must not grow a "more"
- * button. Measurement happens only while COLLAPSED — expanding removes the
- * clamp, so `scrollHeight === clientHeight` there and a live measurement
- * would immediately report "fits" and pull the control out from under the
- * finger that just used it. The last collapsed reading therefore stands for
- * the whole expanded pass. Re-measures on resize (the drawer is a sheet that
- * changes width) and whenever the text itself changes.
- *
- * The handle is a CALLBACK ref held in state, not a `useRef`, and that is
- * load-bearing: finding overflow swaps `ExpandableText`'s root from a `<div>`
- * to a `<button>`, so React unmounts the measured span and mounts a fresh
- * one. With an object ref the effect's deps would not have changed, so it
- * would never re-run — leaving the ResizeObserver attached to a node that had
- * left the DOM, and every later width change unmeasured. The node itself is
- * therefore a dependency, and the observer follows the live span.
- */
+/** Measure overflow only while collapsed; expansion removes the clamp, so retain the last reading. A
+ * callback ref tracks the span when its parent switches between div and button, keeping the
+ * ResizeObserver on the live node. */
 function useClampOverflow(text: string, expanded: boolean) {
   const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const [overflows, setOverflows] = useState(false);
@@ -283,11 +266,8 @@ function useClampOverflow(text: string, expanded: boolean) {
     const measure = () => setOverflows(node.scrollHeight - node.clientHeight > 1);
     measure();
     let cancelled = false;
-    // A web font landing late re-flows the text without resizing the box, so
-    // the observer below cannot see it: at `line-clamp-3` the height is
-    // already pinned to three lines, and a 3→4 line growth changes nothing it
-    // watches. That is exactly the case where the affordance is needed and
-    // would silently never appear, so measure once more when the faces are in.
+    // Font loading can change overflow without resizing the clamped box. Measure again when fonts
+    // are ready.
     const fonts: FontFaceSet | undefined = document.fonts;
     if (fonts) {
       fonts.ready.then(
@@ -312,16 +292,8 @@ function useClampOverflow(text: string, expanded: boolean) {
   return { ref: setNode, overflows };
 }
 
-/**
- * A show topic, clamped until tapped.
- *
- * The whole paragraph is the control (that is the gesture #1621 asks for), so
- * it is a real `<button>` with `aria-expanded` — keyboard reachable, and
- * announced as a collapsed/expanded disclosure rather than as decorative
- * text. When the text fits it renders as a plain block with no control at
- * all. Clamping is visual only: the full topic is in the DOM either way, so a
- * screen reader never loses the tail.
- */
+/** Clamping is visual only; screen readers retain the full topic. Render a disclosure button only
+ * when the text overflows. */
 function ExpandableText({
   text,
   clampClass,
@@ -552,10 +524,7 @@ function OnNowCard(props: {
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
-          {/* Keyed on the show so the hour rolling over resets both
-              disclosures. Without it the card keeps its identity across the
-              change and the incoming show arrives with its topic already
-              expanded, under the outgoing DJ's opened panel. */}
+          {/* Reset disclosures when the on-air show changes. */}
           <PersonaName
             key={`persona-${onNow.show.id}`}
             persona={onNow.persona}

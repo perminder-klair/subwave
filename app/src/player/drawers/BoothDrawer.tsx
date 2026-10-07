@@ -1,5 +1,4 @@
-// Live booth transcript with All / DJ / Tracks filters. System turns are
-// operator-facing and never shown.
+// System turns are operator-only and excluded from this listener view.
 
 import { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';

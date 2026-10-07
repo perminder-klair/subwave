@@ -1,7 +1,3 @@
-// Scrollable page shell for the swipe-pager sections: a serif title with a
-// mono sub-label under an ink rule, then scrolling content. The Live section
-// is bespoke and doesn't use this.
-
 import type { ReactNode } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,12 +7,9 @@ export interface PagePanelProps {
   title: string;
   sub?: string;
   children: ReactNode;
-  /** Footprint of the overlaid masthead/dial header, so content starts clear of
-      it but scrolls under the frosted glass. Falls back to the safe area top. */
+  /** Measured header height; defaults to the safe-area top. */
   topInset?: number;
-  /** Footprint of the overlaid transport bar, so content can scroll clear of
-      it (and read as flowing under the frosted glass). Falls back to the safe
-      area when the bar hasn't measured yet. */
+  /** Measured transport height; defaults to the safe-area bottom. */
   bottomInset?: number;
 }
 

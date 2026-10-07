@@ -1,6 +1,4 @@
 'use client';
-// One "broadcast slate" card per persona, matching the show cards on /admin/shows.
-// The whole card is the edit target; adding lives in the hero's "+ Add persona".
 import { useRef } from 'react';
 import { Upload, Users } from 'lucide-react';
 import { API_BASE, PERSONA_MAX } from './constants';
@@ -65,16 +63,11 @@ export function PersonaRoster({
 
   return (
     <section className="grid gap-4">
-      {/* On phones the actions take a full row of their own under the count:
-          squeezed onto the count's line they run past the right edge. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">
           roster · {total} / {PERSONA_MAX} · on air first · then {PERSONA_SORT_LABELS[sort].toLowerCase()}
         </span>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          {/* Below the toolbar's threshold this is the only view toggle on the
-              page, so it stays here rather than moving into a bar that isn't
-              rendered. */}
           {total <= 5 && <RosterViewToggle view={view} onChange={setView} />}
           <Btn
             className="min-h-9 sm:min-h-0"
@@ -87,8 +80,7 @@ export function PersonaRoster({
               <span className="ml-1 text-vermilion">{communityCount}</span>
             )}
           </Btn>
-          {/* The other end of Edit → Export bundle. Reset to '' after the pick
-              so choosing the SAME file twice still fires a change event. */}
+          {/* Reset the file input so selecting the same file fires another change event. */}
           <input
             ref={bundleRef}
             type="file"
@@ -117,8 +109,6 @@ export function PersonaRoster({
           </Btn>
         </div>
       </div>
-      {/* Hidden on a small roster: a filter bar over four cards is furniture,
-          and the roster this exists for is the eleven-DJ one. */}
       {total > 5 && (
         <RosterToolbar<PersonaSort>
           query={query}
@@ -196,8 +186,6 @@ export function PersonaRoster({
             />
 
             <div className="card-body flex gap-3.5">
-              {/* Initials sit behind the image so a broken avatar still shows a
-                  readable placeholder. */}
               <span className="relative grid size-12 flex-none place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]">
                 <span className="text-[13px] font-extrabold text-muted">{initialsFor(p.name)}</span>
                 {src && (
@@ -210,8 +198,6 @@ export function PersonaRoster({
                 )}
               </span>
 
-              {/* body — text stack + right rail as siblings, so the taller rail
-                  never inflates the name row and pushes the facets down */}
               <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div className="grid min-w-0 flex-1 gap-2.5">
                   <div className="min-w-0">
@@ -243,7 +229,6 @@ export function PersonaRoster({
                   </p>
                 </div>
 
-                {/* right rail — status, skill count, edit affordance */}
                 <div className="flex flex-none flex-col items-end gap-1.5 text-right">
                   {!valid && (
                     <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>

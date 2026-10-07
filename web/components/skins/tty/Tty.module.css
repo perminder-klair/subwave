@@ -24,9 +24,7 @@
 .bootline:nth-child(5) { animation-delay: 1.2s; }
 .bootline:nth-child(6) { animation-delay: 1.55s; }
 
-/* html.lite (globals.css) kills every animation, but the boot lines only
-   become visible THROUGH theirs — without this exception the gate is an
-   invisible screen. */
+/* Boot lines normally become visible through animation. Set opacity explicitly when lite mode disables it. */
 :global(html.lite) .bootline {
   opacity: 1;
   animation: none;

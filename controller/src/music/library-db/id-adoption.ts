@@ -1,47 +1,13 @@
-// Adoption of rotated Navidrome ids (PR #5824's uniform_canonical_ids
-// migration). When Navidrome rewrites its ids, the walk inserts every track
-// under a NEW id and pruneMissingTracks would hard-delete every OLD row —
-// losing tags, enrichment, acoustic analysis and both vector indexes for the
-// whole library. This module runs between walk and prune: an orphan whose
-// canonicalId() image is a DIFFERENT id that the walk just saw live gets its
-// derived columns, vector rows and play attribution moved onto the new row,
-// then the old row is deleted so the prune has nothing left to do.
-//
-// Self-validating by construction: the mapping only fires when the canonical
-// image exists in the live-id set, so on a server that never migrated (or if
-// upstream changes the transform before release) nothing matches and the sync
-// behaves byte-for-byte like today. A genuinely deleted track fails the
-// `image !== old` test (hash-family ids are fixed points) and still prunes.
+// Before pruning, move derived data and vectors to a different canonical ID only when the walk
+// confirms that ID exists. Deleted tracks and unchanged canonical IDs still prune normally.
+// #5824.
 
 import { requireDb } from './handle.js';
 import { canonicalId } from '../id-canonical.js';
 
-// ---------------------------------------------------------------------------
-// Which columns move
-// ---------------------------------------------------------------------------
-//
-// **The carried set is DERIVED, not listed.** It is every physical column of
-// `tracks` minus the two sets below, read from PRAGMA table_info at call time.
-// The default therefore has to be "carry it", because the alternative is the
-// failure this whole module exists to prevent: the first version of this file
-// enumerated the carried columns by hand, and by the time it was reviewed the
-// schema had moved seven columns past it — lead/tail silence, tail_start, the
-// three analyze-failure counters and text_vector_dirty would all have been
-// silently dropped on every adopted row, with `analysis_version` carried on
-// top so nothing would ever re-derive them. A hand-written mirror of a schema
-// that gains a column every few weeks is a data-loss bug with a delay fuse.
-//
-// So: a NEW column is carried automatically, and the thing you have to
-// remember is the rarer case — a new column the WALK owns. `columnPlan()`
-// reports anything a rule doesn't name (`unclassified`) and anything a rule
-// names that the table doesn't have (`missing`); `scripts/id-adoption-columns.test.ts`
-// asserts both are empty, so the next migration fails the suite rather than
-// the operator's library.
-
-// Never written by the carry UPDATE. `id` is the primary key (it IS the thing
-// being changed), and `genre` is GENERATED ALWAYS — writing it throws. Today
-// `genre` is VIRTUAL and PRAGMA table_info omits it anyway; naming it here
-// keeps that true if it is ever made STORED.
+// Carry physical track columns by default, excluding ID/generated columns and walk-owned
+// metadata. columnPlan and the drift test require every column to be classified.
+// scripts/id-adoption-columns.test.ts.
 const NEVER_WRITTEN = ['id', 'genre'];
 
 // Re-derived by the walk on every sync (upsertTrackMeta), so the freshly
@@ -53,19 +19,9 @@ const WALK_OWNED = [
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
 ];
 
-// Column groups written atomically by ONE writer, anchored on the column that
-// proves the writer ran. If the new row already has the anchor (a re-run, or a
-// race with a later tagger phase) it keeps its whole group — mixing half a
-// fresh tag set with half a carried one would leave `tagged_at`/`prompt_hash`
-// describing values they didn't produce.
-//
-// The analyze-failure trio rides the analysis group deliberately: it is
-// upsertTrackAnalysis that NULLs them on success, so anchoring on
-// analysis_version is what makes "the new row was analysed cleanly" clear the
-// old row's strikes, while an un-analysed new row still inherits them (a track
-// that failed three times under the old id must stay out of scope under the
-// new one). A plain COALESCE would resurrect the strikes onto a row that had
-// just succeeded.
+// Carry each writer's column group atomically unless the new row has its anchor. Analysis
+// failure counters follow analysis_version so successful new analysis does not inherit old
+// failures.
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
   { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'enriched_at'] },
   { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
@@ -83,17 +39,8 @@ const GROUPS: Array<{ anchor: string; cols: string[] }> = [
 // explicitly in mergeRow(); listed here so columnPlan() can account for them.
 const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty'];
 
-// Carried as `new ?? old`, mirroring their own write-path COALESCE: each is
-// written only by a pass that could measure it (a complete-file decode, a
-// vocal pass, a stem pass, an answered MusicBrainz lookup), so a pass that
-// couldn't must not clear what an earlier one found — and neither must an
-// adoption.
-//
-// THIS LIST DOES NOT CONTROL BEHAVIOUR. A carried column that appears in no
-// list at all still gets exactly this treatment; the list exists so
-// columnPlan() can tell "COALESCE was chosen" from "nobody chose", and the
-// drift test can fail on the latter. Adding a column here is how you say
-// "checked — the default is right".
+// Default carried values to new ?? old. This list documents an explicit choice for columnPlan;
+// unlisted carried columns use the same behavior.
 const COALESCE_COLS = [
   'original_year_checked_at', 'vocal_ranges_json', 'outro_json', 'stems_at',
   'tail_silence_ms', 'tail_start_ms',

@@ -222,8 +222,6 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
               )}
             >
-              {/* minmax(0,1fr), not 1fr: an unbroken kind like `djAgentSegment` takes
-                  its min-content width and shoves the ms/clock cells off the card. */}
               <summary className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
                 <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                   {c.ok ? '✓' : '✗'}
@@ -249,7 +247,6 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.responseText && (
                   <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
-                    {/* Model free text may contain markdown — the one MessageResponse call. */}
                     <MessageResponse className="whitespace-normal">
                       {c.responseText}
                     </MessageResponse>

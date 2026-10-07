@@ -1,10 +1,6 @@
 'use client';
 
-/* Admin Stats page. Two data sources, two cadences:
-   - GET /stats (5s) aggregates the in-memory LLM / TTS / DJ-log / request rings
-     (since boot, lost on restart by design).
-   - GET /listeners (30s) returns the durable listener time-series persisted to
-     state/listeners.jsonl (24h–7d), drawn as the Audience trend chart. */
+// /stats reports activity since boot; /listeners reports persisted audience history.
 
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -678,8 +674,6 @@ export default function StatsPanel() {
         sub={`where listeners came from · last ${rangeLabel}`}
       >
         <div className="grid gap-0">
-          {/* Independent of the durable beacon rollup below, so it still shows on
-              a fresh boot. No IPs here — device class, counts and durations only. */}
           <div className="border-b border-separator-strong p-3.5">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
               <span className="caption">connected now · by device</span>
@@ -785,8 +779,6 @@ export default function StatsPanel() {
               ) : null
             }
           >
-            {/* Durable per-UTC-day tally, so it shows regardless of the
-                since-boot call count above, and only when a cap is set. */}
             {llm.budget?.enabled && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-separator-strong p-3.5">
                 <span className="caption">

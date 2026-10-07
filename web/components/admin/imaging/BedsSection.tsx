@@ -335,8 +335,6 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
 
       <PanelBox>
         <PanelHead label="when to use a bed" />
-        {/* One column on mobile: two 155px cells can't hold a sentence, a number
-            field and a unit. */}
         <div className="grid grid-cols-1 sm:grid-cols-2">
           <div className="border-b border-separator-soft p-[18px] sm:border-r">
             <div className="flex flex-wrap items-center gap-2.5">

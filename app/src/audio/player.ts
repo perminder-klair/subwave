@@ -1,7 +1,4 @@
-// RNTP setup and low-level controls for a live stream: one endless Track with
-// `isLiveStream: true` (hides the scrubber). RNTP's position is not used;
-// displayed elapsed comes from useStationFeed's derived timer, and lock-screen
-// metadata is pushed from /now-playing polls by useNowPlayingInfo.
+// RNTP position is not the displayed track clock; useStationFeed supplies it.
 
 import { Platform } from 'react-native';
 import TrackPlayer, {
@@ -20,22 +17,15 @@ export function setupPlayer(): Promise<void> {
   if (setupPromise) return setupPromise;
   setupPromise = (async () => {
     try {
-      // iosCategoryPolicy is read by the native module (SessionCategories.swift)
-      // but missing from the lib's PlayerOptions type — extend it locally.
+      // RNTP reads iosCategoryPolicy natively but omits it from PlayerOptions.
       const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
         autoHandleInterruptions: true,
-        // Deep buffering is ANDROID-ONLY; never set these unconditionally. On
-        // iOS minBuffer maps to preferredForwardBufferDuration, and any
-        // non-zero value silences AVPlayer on this infinite stream. On Android
-        // they map to ExoPlayer's LoadControl so a dead zone drains the buffer
-        // instead of stalling (#993); playBuffer stays small for instant
-        // tune-in.
+        // Android LoadControl needs deep buffering for dropouts (#993).
+        // iOS maps minBuffer to preferredForwardBufferDuration; a nonzero value silences this stream.
         ...(Platform.OS === 'android'
           ? { minBuffer: 60, maxBuffer: 120, playBuffer: 2, backBuffer: 0 }
           : {}),
-        // iOS remembers the chosen AirPlay device for this app and keeps
-        // routing to it through audio-session churn. Under the default policy
-        // a handoff yanks audio back to the built-in speaker.
+        // longFormAudio preserves the selected AirPlay route across audio-session changes.
         iosCategoryPolicy: 'longFormAudio',
       };
       await TrackPlayer.setupPlayer(options);
@@ -48,8 +38,6 @@ export function setupPlayer(): Promise<void> {
       }
     }
     await TrackPlayer.updateOptions({
-      // No RemoteNext (shared live broadcast, no per-listener skip) and no
-      // Seek (can't scrub live).
       capabilities: [Capability.Play, Capability.Pause, Capability.Stop],
       compactCapabilities: [Capability.Play, Capability.Pause],
       notificationCapabilities: [Capability.Play, Capability.Pause, Capability.Stop],
@@ -75,23 +63,15 @@ export interface LiveTrackMeta {
   headers?: Record<string, string>;
 }
 
-// Last loaded stream meta, so service.ts can re-load at the live edge on a
-// lock-screen RemotePlay instead of resuming a stale buffer. Module-level
-// because that service runs outside the React tree.
+// Module state lets the headless RemotePlay handler reload at the live edge.
 let lastLiveMeta: LiveTrackMeta | null = null;
 
-/** The meta of the currently-loaded live stream, or null when torn down. */
 export function getLastLiveMeta(): LiveTrackMeta | null {
   return lastLiveMeta;
 }
 
-/** Load (or reload) the live stream and start it. The cache-buster stops a
- *  reconnect replaying a dead buffered segment.
- *
- *  Must use `load()` (in-place swap), not `reset()`+`add()`: reset deactivates
- *  the iOS audio session, which reverts an active AirPlay route to the
- *  built-in speaker. `load()` also loads-as-first on an empty queue, so fresh
- *  tune-ins take the same path. */
+/** The cache-buster discards stale buffered audio. Use load() to preserve
+ *  the iOS AirPlay route; reset()+add() deactivates the audio session. */
 export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
   await setupPlayer();
   const bust = `${meta.url}${meta.url.includes('?') ? '&' : '?'}t=${Date.now()}`;

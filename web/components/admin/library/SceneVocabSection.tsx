@@ -1,9 +1,5 @@
 'use client';
 
-// Scene vocabulary (#1577) -- the genre tag set as one curatable list, inside
-// the Tagging panel. "Scene" is the Observatory's name for a genre tag; the
-// storage is `tracks.genres`. Self-contained (own fetching + merge, modelled on
-// BlockRulesCard). Fetched on EXPAND rather than polled.
 
 import { useMemo, useState } from 'react';
 import { useDebounceValue } from 'usehooks-ts';
@@ -345,8 +341,6 @@ export default function SceneVocabSection() {
                   <div className="mt-1 text-ink">
                     <ReferenceLines items={references} />
                   </div>
-                  {/* The merge is not blocked and the filter is not rewritten:
-                      genre matching is one-directional. */}
                   <span className="caption mt-1 block !tracking-[0.04em] !normal-case">
                     The merge is still fine to run — these just need repointing at “{to}”
                     afterwards, by hand.
@@ -381,8 +375,7 @@ export default function SceneVocabSection() {
                 Folds applied on every scan
                 <span className="mono-num">{aliases.length}</span>
               </span>
-              {/* The left side is the fold KEY the controller matches against,
-                  not any one retired spelling -- several can share it. */}
+              {/* The left side is the normalized genre key, shared by retired spellings. */}
               <span className="caption mt-0.5 block !tracking-[0.04em] !normal-case">
                 Matched on the left-hand key, ignoring case and spacing.
               </span>

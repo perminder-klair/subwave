@@ -1,12 +1,5 @@
-// Merges voices discovered from a cloud TTS provider with the curated fallback
-// list into VoicePicker groups. Shared by the Personas and Settings pages so
-// the two can't drift.
-//
-// Per provider: openai-compatible has no curated list (ids are server-specific)
-// so the picker is entirely discovered; elevenlabs / fish-audio list discovered
-// voices first under "Your voices", which is where an operator's CLONED voices
-// appear and a hardcoded list can never know about; openai is never
-// discoverable, so its curated list is complete by construction.
+// Merge discovered and curated voices for both Settings and Personas. OpenAI-compatible has no
+// curated list; ElevenLabs and Fish show discovered voices first; OpenAI uses its curated list.
 import { CLOUD_VOICES } from './cloudVoices';
 import type { VoicePickerGroup } from '../components/admin/tts/VoicePicker';
 import type { DiscoveredVoice } from '../hooks/useVoiceDiscovery';
@@ -40,12 +33,7 @@ export function isKnownCloudVoice(provider: string, discovered: DiscoveredVoice[
   return !!v && knownCloudVoiceIds(provider, discovered).has(v);
 }
 
-// Curated prebuilt Gemini voice ids with Google's own descriptors. Lives here,
-// beside the cloud lists, because the Gemini fold makes this the SAME field: one
-// voice picker whose contents follow whichever provider card is selected above
-// it. It used to live in the persona editor next to its JSX, which is where a
-// second copy would have been written the moment the station panel wanted the
-// same labels.
+// Keep Gemini descriptors shared between the persona and station voice pickers.
 const GEMINI_PREBUILT_VOICES: { id: string; label: string }[] = [
   { id: 'Zephyr', label: 'Zephyr — Bright' },
   { id: 'Puck', label: 'Puck — Upbeat' },

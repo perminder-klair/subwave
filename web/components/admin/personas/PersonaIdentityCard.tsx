@@ -110,10 +110,6 @@ export function PersonaIdentityCard({
             </div>
           </div>
 
-          {/* Filing, not personality: tags never reach a prompt, the public
-              roster or anything on air. They group this list and stop there,
-              which is why they sit below the fold of Identity rather than
-              beside Soul. */}
           <div>
             <Label>Tags</Label>
             <TagField

@@ -387,8 +387,6 @@ export default function DoctorPanel() {
         </Card>
       )}
 
-      {/* The animated indicator carries the 20–60s LLM call: a button-label
-          change alone read as stalled. */}
       {reviewing ? (
         <div role="status" aria-live="polite">
           <Card className="is-spotlight mt-6" title="DJ Doc says" sub="running the levels…">
@@ -435,7 +433,6 @@ export default function DoctorPanel() {
             <div className="flex items-start gap-4">
               <BoothBuddy mood={buddyMood} size={40} />
               <div className="min-w-0 flex-1">
-                {/* The LLM may hand back markdown — render it, don't print it. */}
                 {review.summary && (
                   <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
                 )}
@@ -525,8 +522,6 @@ export default function DoctorPanel() {
                       >
                         <StatusPill status={f.status} />
                         <span className="font-bold">{f.label}</span>
-                        {/* Machine values (model ids, paths, URLs) have no break
-                            opportunity — wrap them or they run past the card edge. */}
                         {f.detail && (
                           <span className="min-w-0 font-mono text-[12px] break-words text-muted">{f.detail}</span>
                         )}

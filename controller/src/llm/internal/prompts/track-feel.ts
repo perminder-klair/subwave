@@ -1,26 +1,5 @@
-// Qualitative feel for the track a script is introducing (issue #1443).
-//
-// The script generators ask the model to "capture its feel" but hand it only a
-// title and an artist, so it has to infer the sound from the words in the
-// title. That is a coin flip: "Balaclava" reads wintry, and the DJ introduced a
-// 143 BPM Arctic Monkeys track with "slow down and let a steady groove take
-// over". The library knew better the whole time — that track carries
-// audioMoods ["workout","festival","celebratory"].
-//
-// So: derive one adjective from what the AUDIO says and hand it over. No-op for
-// un-analysed tracks — same posture as introBudgetPhrase, the post is a bonus
-// when the data exists, never a precondition.
-//
-// Deliberately NOT derived from `moods`. That field is the tagger reading the
-// metadata, and on the reported track it says ["reflective","night"] — the
-// exact wrong steer. library.ts already draws this line: audioMoods is kept
-// separate "so consumers can tell 'the LLM read the metadata' from 'the audio
-// actually sounds like this'". This is a consumer that needs the second one.
-//
-// Deliberately NOT derived from bpm either, for now: #1417 has beat_track
-// reading slow material an octave high (a 76 BPM ballad stores as 152), so a
-// tempo band would be confidently wrong on exactly the slow tracks this is
-// meant to protect. Once that lands, a tempo word is a natural second signal.
+// Derive feel from audioMoods, not metadata moods (#1443). Unanalysed tracks add no hint.
+// Avoid BPM until octave errors on slow material are resolved (#1417).
 
 import * as library from '../../../music/library.js';
 import { HIGH_ENERGY_MOODS, LOW_ENERGY_MOODS } from '../../../music/audio-calibration.js';

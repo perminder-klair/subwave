@@ -65,17 +65,8 @@ function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
   return null;
 }
 
-// Wires the Media Session API to the now-playing feed: track/artist/album on the
-// OS lock screen, Android shade, Control Centre, Bluetooth and car displays,
-// with hardware play/pause/headphone buttons routed through these handlers.
-// Tied to the <audio> element usePlayer owns, and play/pause/stop go through
-// explicit usePlayer commands so repeated OS commands remain idempotent.
-//
-// "seekto"/"seekbackward"/"seekforward" are deliberately NOT wired — a live
-// stream can't be scrubbed, and leaving them unset removes the lock-screen
-// scrubber rather than showing a broken one. `nexttrack` IS wired (headphone
-// "next" means skip the song you're hearing) but gated on the skip callback so
-// consumers like a public listener page can opt out.
+// OS controls use explicit player commands so repeated commands are idempotent. Leave seeking unset
+// for live streams. Enable nexttrack only when a skip callback is supplied.
 export function useMediaSession({
   playbackState,
   nowPlaying,

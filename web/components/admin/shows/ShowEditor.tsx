@@ -370,8 +370,6 @@ export function ShowEditor({
                 {show.name.trim().length}/{NAME_MAX}
               </span>
 
-              {/* Sits in Identity, not Music: a tag files the show and reaches
-              nothing on air. */}
               <Field data-invalid={tagsAria.invalid || undefined}>
                 <FieldTitle {...tagsAria.labelledByProps}>tags</FieldTitle>
                 <div {...tagsAria.groupProps}>
@@ -398,8 +396,7 @@ export function ShowEditor({
               </Field>
             </div>
             <div className="grid content-start gap-5">
-              {/* Raw Controller: switching the host must re-trigger
-              `guestPersonaIds`' error entry. */}
+              {/* Changing the host must revalidate guestPersonaIds. */}
               <div className="field">
                 <Label {...personaIdAria.labelProps}>host</Label>
                 <Select
@@ -671,8 +668,6 @@ export function ShowEditor({
                       );
                     }}
                   />
-                  {/* Custom windows stay visible and removable so they can't
-                  silently constrain picks. */}
                   {customEras.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {customEras.map((e, i) => (
@@ -688,9 +683,7 @@ export function ShowEditor({
                       ))}
                     </div>
                   )}
-                  {/* Add a range the decade chips can't spell. Both inputs carry
-                  their own aria-label because the group title names the whole
-                  field, not either box. */}
+                  {/* Each range input needs a label separate from the group title. */}
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <Input
                       id={`${uid}-show-era-from`}
@@ -775,9 +768,7 @@ export function ShowEditor({
 
               <Field data-invalid={vocalsAria.invalid || undefined}>
                 <FieldTitle {...vocalsAria.labelledByProps}>vocals</FieldTitle>
-                {/* Single-valued: picking one REPLACES the other and clicking the
-                selected chip clears back to any -- which ToggleGroupField's
-                single-select branch blocks, so this stays a raw Controller. */}
+                {/* Clicking the selected chip clears the value, unlike ToggleGroupField. */}
                 <div {...vocalsAria.groupProps}>
                   <ChipRow
                     options={VOCAL_OPTIONS}
@@ -838,9 +829,6 @@ export function ShowEditor({
                 />
               )}
 
-              {/* Offered only behind the strict toggle: without it the show can
-              leave the playlist, so "every track once" has no set to be true
-              of. The controller treats the combination as inert. */}
               {show.playlistIds.length > 0 && show.playlistStrict && (
                 <SwitchField
                   control={control}
@@ -937,8 +925,6 @@ export function ShowEditor({
           description="Set track lengths and decide how this show hands over to the next."
         >
           <div className="grid items-start gap-6 xl:grid-cols-2">
-            {/* Raw Controller: the clamping onChange (floors at 0) is work
-              TextField's plain passthrough doesn't expose. */}
             <div className="field">
               <Label {...maxTrackSecondsAria.labelProps}>max track length (seconds)</Label>
               <Input
@@ -969,8 +955,6 @@ export function ShowEditor({
               />
             </div>
 
-            {/* Same raw-Controller reason as the cap. Separate fields because
-              each side is independently inheritable (blank). */}
             <div className="field">
               <Label {...minTrackLengthSecondsAria.labelProps}>minimum track length (seconds)</Label>
               <Input
@@ -1004,7 +988,6 @@ export function ShowEditor({
               />
             </div>
           </div>
-          {/* Tri-state: "inherit" is a real answer, so a Switch would be wrong. */}
           <div className="field">
             <Label {...fadeAtShowEndAria.labelProps}>fade out at the show change</Label>
             <Select
@@ -1048,8 +1031,6 @@ export function ShowEditor({
           title="Appearance"
           description="Choose the player palette listeners see while this show airs."
         >
-          {/* Raw Controller: ThemePicker renders colour swatches, not a
-              text dropdown. */}
           <Field data-invalid={themeAria.invalid || undefined}>
             <FieldTitle {...themeAria.labelledByProps}>player theme</FieldTitle>
             <div {...themeAria.groupProps}>

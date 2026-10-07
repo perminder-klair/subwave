@@ -1,7 +1,5 @@
 'use client';
 
-// Everything that moves is a co-located keyframe (Platter.module.css) so
-// playback churn never touches React.
 
 import { useCallback, useRef } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -90,11 +88,6 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* A 7" single, not an LP: the station airs one track at a time, so the
-          disc under the needle is always a 45 — a 7" label sits at half the
-          disc's width (an LP's is nearer a third), and Platter.module.css spins
-          it 1.35x faster. The spindle stays put: it's the deck's peg, one size
-          for either record. */}
       <div
         className={cn('absolute inset-[6%] rounded-full', styles.vinyl, styles.record, playing && styles.playing)}
         aria-hidden="true"
@@ -127,9 +120,7 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* One SVG in the deck's own coordinate space; the pivot at 86% 19% must
-          match .arm's transform-origin in Platter.module.css. .armLive sweeps
-          with the shared --pf var, .armRest parks it off the record. */}
+      {/* Match the pivot at 86% 19% to .arm transform-origin in Platter.module.css. */}
       <svg
         viewBox="0 0 100 100"
         className={cn(
@@ -248,15 +239,10 @@ export default function PlatterSkin(_props: SkinProps) {
             direct drive · quartz lock
           </span>
 
-          {/* On lg this wrapper collapses (display:contents) so the deck
-              centres in the whole plinth instead of this box. */}
           <div className="flex w-full items-center justify-center pt-8 lg:contents">
             <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
           </div>
 
-          {/* A row beneath the deck on phones; from lg the wrapper goes
-              display:contents so each cluster positions itself absolutely in
-              the plinth corners. */}
           <div className="flex w-full items-end justify-between gap-4 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
               <button
@@ -425,8 +411,6 @@ export default function PlatterSkin(_props: SkinProps) {
             )}
           </div>
 
-          {/* Hidden in the single-column layout so the deck fits one screen
-              without scrolling. */}
           {voice && (
             <div className="hidden flex-none flex-col gap-2 border border-ink bg-surface px-4 py-3.5 lg:flex">
               <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
@@ -437,9 +421,6 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           )}
 
-          {/* Desktop only, like the booth quote. Takes the leftover height and
-              ONLY its list scrolls — the surrounding column stays put
-              (lg:overflow-hidden), so the transport and slip don't move. */}
           <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-surface lg:flex">
             <div className="flex-none border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               recently spun
@@ -508,9 +489,6 @@ export default function PlatterSkin(_props: SkinProps) {
                     {slip.sending ? 'sending…' : 'send ↗'}
                   </button>
                 </div>
-                {/* The slip already reads as a letter, so the name is its
-                    sign-off. Optional — but when it's filled the DJ says it on
-                    air (#1347). */}
                 <div className="flex items-baseline gap-3">
                   <span className="w-[76px] flex-none font-mono text-[10px] font-bold tracking-[0.16em] text-muted uppercase">Yours —</span>
                   <input

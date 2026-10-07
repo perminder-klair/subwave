@@ -1,6 +1,5 @@
 'use client';
 
-// The registry aliases the retired `terminal` id to this skin (lib/skin.ts).
 
 import { useEffect, useRef, useState } from 'react';
 import { m, steps } from 'motion/react';
@@ -198,7 +197,6 @@ export default function TtySkin(_props: SkinProps) {
                 </div>
                 {!offline && nowPlaying?.artist && (
                   <div className="text-[15px] tracking-[0.08em] uppercase">
-                    {/* Delayed so the artist prints after the title. */}
                     <Printed
                       text={
                         nowPlaying.artist
@@ -350,9 +348,6 @@ export default function TtySkin(_props: SkinProps) {
                 </>
               )}
             </div>
-            {/* A second prompt line rather than a labelled field — signing is
-                optional, and a signed slip gets the name read on air (#1347).
-                Enter submits from here too, so a listener can tab down and go. */}
             {!slip.ack && (
               <div className="flex items-baseline gap-3">
                 <span className="text-muted select-none">:from ▸</span>

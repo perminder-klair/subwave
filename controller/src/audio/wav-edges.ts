@@ -1,12 +1,6 @@
-// Bake micro edge fades into a rendered voice WAV, in place. A hard clip
-// boundary reaches air as a click once the mic-chain compressor's makeup gain
-// lifts it. The TAIL fade cannot live in radio.liq: fade.out on a request.queue
-// source doesn't know the remaining time and silences the whole clip (#830), so
-// both edges are baked at render time, the only place the length is known.
-//
-// Only canonical PCM WAVs are edited: 16-bit int (format 1) and 32-bit float
-// (format 3). Everything else, notably the cloud engine's mp3, is left alone —
-// lossy encoders pad both ends, so the click doesn't arise.
+// Bake fades into 16-bit PCM or 32-bit float WAVs to prevent amplified edge clicks.
+// A request.queue source has no remaining-time information, so Liquidsoap fade.out
+// silences the whole clip (#830). Leave other formats unchanged.
 
 import { readFile, writeFile } from 'node:fs/promises';
 

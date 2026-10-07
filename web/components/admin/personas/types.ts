@@ -1,4 +1,3 @@
-// Shared types for the personas editor (/admin/personas).
 
 import type { EngineAvailability } from '../tts/engineMeta';
 export type { EngineAvailability };

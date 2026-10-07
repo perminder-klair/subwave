@@ -148,9 +148,6 @@ export default function DjThinkingLine({ feed, enabled, currentTrackId = null, b
           {MARKER[cls] || '·'}
         </span>
       )}
-      {/* Clamped so a long script can't grow the column and shove the title
-          under the header, or spill down over the waveform (issue #576).
-          Tighter on short windows; the full text stays in the Booth. */}
       <span className="line-clamp-2 min-w-0 flex-1 [overflow-wrap:anywhere] [@media(min-height:760px)]:line-clamp-6">
         <AnimatePresence mode="wait">
           <m.span

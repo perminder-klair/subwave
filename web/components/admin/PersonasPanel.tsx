@@ -1,8 +1,5 @@
 'use client';
 
-// Personas editor. One persona is active at a time (a scheduled Show can
-// override who is on air for its hour); '' = the built-in default prompt.
-// Everything POSTs to /settings and applies live, no mixer restart.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useQueryClient } from '@tanstack/react-query';

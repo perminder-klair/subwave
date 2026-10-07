@@ -278,9 +278,6 @@ export default memo(function TransportBar({
             </div>
           ) : (
             <div className="flex items-center gap-3 lg:gap-4">
-              {/* role="slider" + the ARIA value attrs keep the drag gesture
-                  readable by screen readers; touch-none stops the page
-                  scrolling out from under a drag. */}
               <div
                 ref={knobWrapRef}
                 role="slider"

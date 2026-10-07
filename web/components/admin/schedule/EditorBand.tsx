@@ -1,8 +1,5 @@
 'use client';
 
-// The order desk under the board: the sentence order editor, the week's numbers,
-// computed suggestions and airtime-vs-target bars, all rendered from the same grid
-// the board uses.
 
 import { useRef } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
@@ -66,10 +63,6 @@ export function LineEditor({
     <div className="min-w-0">
       <div className="mb-0.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
         <span className="eyebrow flex-none whitespace-nowrap text-ink">Write an order</span>
-        {/* The instruction half is the part that truncates on a phone, and the
-            sentence below it is self-evidently a sentence to fill in. What the
-            operator cannot get anywhere else is what those hours run right
-            now, so that half stays at every width. */}
         <Mu className="min-w-0 flex-1 truncate tracking-[0.08em]">
           <span className="hidden sm:inline">Fill in the sentence, then add it to the schedule · </span>
           {dayName(line.day)} {hhmm(line.start)} → {hhmm(line.end)}{' '}
@@ -120,8 +113,6 @@ export function LineEditor({
           <span className="mx-1 hidden h-5 w-px bg-separator-strong sm:block" />
           <DayPresets selected={lineDays} onSelect={onSetLineDays} />
           <DayPills selected={lineDays} onToggle={onToggleLineDay} />
-          {/* Its own full-width line on a phone — the sentence above already
-              fills several rows, and the buttons need a real tap target. */}
           <span className="ml-auto flex w-full gap-2 sm:w-auto">
             <Button
               variant="accent"

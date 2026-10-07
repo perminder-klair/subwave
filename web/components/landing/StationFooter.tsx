@@ -71,11 +71,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
 
       <div className="bs-rule" />
 
-      {/* Two rows at lg: Dispatches + Stations across the top, the four
-          community catalogs beneath. Six equal columns squeezed the titles to
-          two lines apiece. Rules are drawn per panel off the index rather than
-          with divide-*, which adds a left border to every child but the first —
-          in a wrapping grid that lands one against the grid edge on row two. */}
+      {/* Per-panel borders avoid a left border on the first cell of a wrapped row. */}
       <nav aria-label="Back pages" className="grid lg:grid-cols-4">
         {BACK_PAGES.map((page, i) => (
           <Link

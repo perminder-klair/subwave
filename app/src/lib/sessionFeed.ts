@@ -30,10 +30,8 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   return text;
 }
 
-// The one voice/dj turn to show as the DJ "thinking" line. A pick turn is
-// written at the previous track's start, so its meta.trackId is the NEXT
-// track and turns for other tracks are skipped (#546). Voice turns carry no
-// trackId, so an aired back-announce wins over this track's pick reason.
+// Pick meta.trackId refers to the next song; skip other track ids (#546).
+// Voice turns have no trackId and can override the pick reason.
 export function selectThinkingTurn(
   feed: SessionTurn[] | null | undefined,
   currentTrackId: string | null = null,

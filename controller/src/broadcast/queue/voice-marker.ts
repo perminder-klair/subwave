@@ -1,25 +1,6 @@
-// Air-time marker reader for spoken segments (#1382).
-//
-// Everything the controller knows about a segment is handoff-time: airVoice
-// resolves when the path has been written into say.txt/intro.txt, which is one
-// 0.5s Liquidsoap poll plus the request queue, the lead-in and the duck ramp
-// before a listener hears the first word. radio.liq writes voice-playing.json
-// the moment the clip actually starts feeding, carrying the `voiceId` the
-// controller stamped into the clip's annotate: URI — so a segment can be told
-// exactly when it went to air rather than when it was handed over.
-//
-// The STAMP is what matters, not the detection: `startedAt` comes from the
-// mixer's own clock, so a consumer gets the exact air time even though this
-// poller notices it up to POLL_MS later. That is why the cadence here is a
-// cheap 500ms rather than something tighter.
-//
-// Degrading is deliberate and silent. A mixer that predates this marker never
-// writes the file, so awaitVoiceAir() resolves null IMMEDIATELY (see
-// markerFilePresent) rather than making every station without it wait out the
-// timeout before its booth log and webhooks fire. Callers treat null as "air
-// time unknown" and fall back to today's handoff-time behaviour.
-//
-// Part of the queue/ split - see ../queue.ts, which owns the Queue class.
+// Match voice IDs against voice-playing.json for the mixer's actual startedAt, not handoff
+// time. Polling latency does not change that timestamp. A missing marker returns null
+// immediately for older mixers. #1382.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { config } from '../../config.js';

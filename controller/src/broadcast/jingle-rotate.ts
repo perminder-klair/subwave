@@ -1,74 +1,7 @@
-// WHO draws the automatic jingle, and when (#1619).
-//
-// Liquidsoap used to decide on its own: `rotate(weights=[1, jingle_ratio()])`
-// on the raw pre-cross music source, one stinger every N tracks, and the
-// controller found out afterwards through `jingle-playing.json`. The collision
-// guard built on that marker (#997, #1258, #1468) is a HOLD — spoken segments
-// wait for the jingle's window to pass — which stops the station ident talking
-// over the DJ but leaves the planner unable to plan around a jingle it never
-// scheduled: a link written for the next boundary lands right behind a stinger,
-// and a scheduled ident sits behind a jingle that took the same seam.
-//
-// So the count moves here. The controller already sees every track boundary
-// (`now-playing.json` → `queue.onTrackStarted`), so it can count them itself
-// and hand the jingle over through the existing single writer,
-// `queue.playJingle()` → `jingle-now.txt`. The rotate then becomes a ROW in the
-// talk table (`talk-scheduler.ts`), which is where every other claim on the
-// listener's ear is arbitrated.
-//
-// I/O-free, and every decision function is pure: the settings object, a counter
-// and a random source in, decisions out — the /debug reading of the handoff
-// file is done by its caller and passed in. The one piece of module state is
-// the owner-change subscriber list at the bottom, which exists for the same
-// reason (and in the same shape as) time.ts's timezone listeners: it lets the
-// queue learn about a switch without settings.ts importing the queue.
-// Both the mixer handoff writer (`settings/liquidsoap.ts`) and
-// the talk tick (`scheduler.talkTick`) resolve through the same functions, so
-// "the mixer is rotating" and "the controller is rotating" can never disagree —
-// they are two readings of one value.
-//
-// WHY THIS IS AN OPT-IN SETTING RATHER THAN THE ONLY MODE
-// ------------------------------------------------------
-// #1619 offered two upgrade shapes: opt in, or ship the controller rotate as
-// the only mode with the mixer ratio pinned to 0 on the same release. The
-// second is simpler to read but it cannot satisfy the rule it is written under
-// — an upgraded station must not lose its jingles OR get them twice — because
-// the controller and the broadcast image are separate containers that upgrade
-// independently, and `liquidsoap_jingle_ratio.txt` is READ ONCE at mixer
-// startup:
-//
-//   - Pinning the file to 0 for everyone means the mixer keeps rotating on the
-//     operator's old ratio until its next start, which on a `up -d --build`
-//     races the controller's own boot write. Every station that lost that race
-//     would hear jingles MORE OFTEN THAN CONFIGURED, by default, on the
-//     release, with both sides counting until the mixer next restarted.
-//
-//     "More often" rather than "twice": the magnitude is still unmeasured over
-//     a long run. An on-air check of that state saw 2 jingles against 2
-//     controller fires across three tracks — 1:1, not 2:1 — which radio.liq
-//     explains, since its own rotate carries `not jingle_now_on_air()` and
-//     `time() > voice_until()` and so stands down while a controller-handed
-//     stinger feeds. Three tracks settles nothing, and nothing here depends on
-//     the number: the objection to the only-mode shape is that its skew is
-//     INVOLUNTARY and lands on an upgrade, not that it is exactly double.
-//   - Pinning it in `radio.liq` instead (ignore the file, never build the
-//     rotate) loses every jingle on a station whose CONTROLLER is still the old
-//     image — the other skew direction, and the one the root CLAUDE.md's
-//     "degrading must be silent" rule is written about.
-//
-// Opt-in has neither moment. Absent the key nothing is written differently and
-// nothing new fires, which is the station's own rule (absent or malformed
-// settings coerce to the pre-existing behaviour, so an upgrade is byte-
-// identical). It also leaves `radio.liq` completely untouched: a new controller
-// switches an OLD mixer's rotate off through the ratio file #997 already
-// honours, and an old controller drives a NEW broadcast image exactly as today.
-//
-// The one cost is the read-once lifecycle itself: a station that flips the
-// toggle and does not restart the mixer has both rotates running until it does.
-// That is the existing contract for this exact file — the jingle-ratio control
-// already carries "restart required" and "Save · needs restart" — and it is
-// paid on an operator action rather than involuntarily on an upgrade, which is
-// the whole difference between the two shapes.
+// Controller rotation uses queue.playJingle and the talk table. settings/liquidsoap.ts and
+// scheduler.talkTick share this ownership policy. Opt-in is required because controller and
+// mixer images upgrade independently. The mixer reads its ratio at startup, so changes require
+// a restart. See docs/internals/broadcast.md. #1619, #997, #1258, #1468.
 
 import type { JingleRotateOwner } from '../schemas/settings.js';
 

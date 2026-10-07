@@ -1,9 +1,4 @@
-// Station theme application. NativeWind's `vars()` overrides the same 7 token
-// names on a root <View> so `className="bg-bg text-ink"` resolves to the live
-// palette; `colors` exposes raw values for Skia, gradients and icon props.
-//
-// Token source order: per-listener override (AsyncStorage) → station active
-// theme (/themes) → seeded defaults.
+// Theme precedence: listener override, station theme, seeded defaults.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { vars } from 'nativewind';
@@ -41,10 +36,8 @@ const DARK_DEFAULTS: ResolvedColors = {
   field: '#1b1815',
 };
 
-// Light-mode fallbacks. A light theme can ship a parseable dark `--ink` next
-// to an oklch()/color-mix() `--bg`/`--field` RN can't parse; falling those back
-// to the dark defaults gives dark text on a dark field. Values track the seeded
-// `classic-light` palette.
+// Unparseable light-mode backgrounds need light defaults to keep dark text legible.
+// These values match the seeded classic-light palette.
 const LIGHT_DEFAULTS: ResolvedColors = {
   bg: '#f3efe6',
   ink: '#161412',
@@ -55,9 +48,7 @@ const LIGHT_DEFAULTS: ResolvedColors = {
   field: '#e1ddd4',
 };
 
-// RN and Skia parse only hex / rgb(a) / hsl(a) / named colors, not the oklch()
-// and color-mix() the /themes registry uses. Anything unparseable falls back
-// to the token's default for the mode.
+// RN and Skia cannot parse oklch or color-mix; use the mode default for those tokens.
 const RN_COLOR_RE = /^(#([0-9a-f]{3,8})|rgba?\(|hsla?\(|transparent$)/i;
 function safeColor(value: string | undefined, fallback: string): string {
   if (value && RN_COLOR_RE.test(value.trim())) return value;
@@ -107,12 +98,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [override, setOverrideState] = useState<string | null>(null);
 
-  // Load the saved override once.
   useEffect(() => {
     AsyncStorage.getItem(OVERRIDE_KEY).then((v) => setOverrideState(v || null));
   }, []);
 
-  // Fetch the station's theme registry + active id when the station changes.
   useEffect(() => {
     if (!api) return;
     let alive = true;
@@ -146,8 +135,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const mode: ThemeMode = activeTheme?.mode ?? 'dark';
   const colors = useMemo(() => colorsFromTokens(tokens, mode), [tokens, mode]);
 
-  // vars() gets the sanitized colors, not the raw tokens, since className
-  // colors resolve through these and must be RN-parseable.
+  // NativeWind vars must use RN-parseable colors, not the raw registry tokens.
   const safeTokens = useMemo(
     () => ({
       '--bg': colors.bg,

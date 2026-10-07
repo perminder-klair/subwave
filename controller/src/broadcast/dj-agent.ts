@@ -1,26 +1,6 @@
 import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
-// Session DJ agent — the conversational brain that runs over a stream session.
-//
-// This module owns the pick and request runs; the pieces they're built from
-// live in ./dj-agent/ and are re-exported below, so `from './dj-agent.js'`
-// still reaches the whole surface:
-//
-//   runs.ts      DJ-mode mini-runs (a short arc of picks heading somewhere)
-//   schemas.ts   the pick/request output schemas and system prompts
-//   breaker.ts   the circuit breaker that drops to the pool picker
-//   agents.ts    the two tool-loop agent definitions
-//   enqueue.ts   turning a chosen song into a queued track
-//
-// The system posts events into the session ("a track started, pick the next
-// one"; "a listener requested X"); this module hands the session chat window
-// to a tool-loop agent that explores the library and decides. Its output (the
-// chosen track, an optional spoken link/intro) is enqueued and appended back
-// to the session as turns, so the next event sees what the DJ just did.
-//
-// The conversational path is gated on `settings.llm.pickerAgent`. When it is
-// off — or when the agent fails for any reason — this falls back to the
-// stateless pool picker (music/picker.js) and the stateless link generator
-// (llm/dj.js), so a pick is never missed. Either way the session is updated.
+// Run pick and request agents over the session. Disabled or failed agents fall back to the
+// stateless picker and link generator; both paths update the session.
 
 import { z } from 'zod';
 import * as settings from '../settings.js';

@@ -334,9 +334,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
-          {/* Provider/model/dim resolve to a working default even with both fields
-              blank, so say so rather than looking unconfigured. Hidden when the
-              effective provider can't embed — the warning below covers that. */}
           {canEmbed && effectiveModel && (
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
@@ -374,8 +371,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
             </div>
-            {/* The banner above already states the resolved provider/model/dim, so
-                only the already-embedded-with-a-different-model warning goes here. */}
             {embeddedMeta && embeddedMeta.model !== effectiveModel && (
               <div className="field-hint">
                 Your library is embedded with{' '}
@@ -570,9 +565,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
           )}
 
-          {/* embedKeyVar is undefined for ollama / openai-compatible / locca, which
-              need no conventional key. The override only matters when embeddings run
-              on a different provider than the DJ. */}
           {embedKeyVar && (
             <>
               <div className="field">
@@ -629,8 +621,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         </div>
       </Card>
 
-      {/* No run button: the bulk tagger is launched from the Library page's
-          "Start tagging" flow. */}
 
       <Advanced note="seed count, propagation thresholds and enrichment">
       <Card title="Seed phase" sub="how many tracks to LLM-tag">

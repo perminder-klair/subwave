@@ -21,10 +21,8 @@ function stationClockOptions(locale: StationLocale): Intl.DateTimeFormatOptions 
   return locale === 'en-US' ? { hour12: true } : { hour12: false };
 }
 
-// Time-of-day for an on-air event in the station's zone, so stamps agree with
-// what the DJ speaks (#418). `tz` is the IANA zone from /now-playing, falling
-// back to the device zone; `locale` picks 24h vs AM/PM (#475). '' when the
-// timestamp is missing.
+// Use station zone and locale for on-air stamps; fall back to device zone.
+// Return empty for missing timestamps.
 export function fmtClock(
   t: string | number | null | undefined,
   tz?: string | null,

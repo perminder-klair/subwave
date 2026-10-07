@@ -1,12 +1,6 @@
-// fetch() with a request deadline: the one place the AbortController +
-// setTimeout(abort) + clearTimeout dance lives. Never hand-roll another copy.
-//
-// The timeout bounds ESTABLISHING the response and the timer is always cleared,
-// including when fetch throws. The body drain is NOT bounded by default; pass
-// `bodyDeadline: true` to keep the (unref'd) timer armed past resolution so a
-// slow body aborts instead of hanging on undici's ~300s default. A timeout
-// rejects with an AbortError, so `err.name === 'AbortError'` call sites work.
-// `signal` composes an outer abort with the timeout: whichever fires first wins.
+// Bound response establishment by default; bodyDeadline keeps the unref'd timer
+// armed through body consumption. Timeout rejects as AbortError; an outer signal
+// can abort sooner. Clear timers on failures.
 
 export interface FetchTimeoutInit extends RequestInit {
   timeoutMs: number;

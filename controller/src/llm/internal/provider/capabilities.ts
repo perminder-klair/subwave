@@ -1,16 +1,7 @@
-// Per-provider capability descriptors: the single place per-provider quirks
-// live, so strategy code has no `provider ===` branches. Translates the
-// user-facing `llm.reasoning` toggle into each provider's thinking control and
-// declares the structural traits the strategy layer keys off.
-//
-// Pure — every function is a function of the passed `cfg` only, so the mappings
-// are unit-pinned (controller/scripts/llm-pure.test.ts).
-//
-// Thinking control rides AI SDK 7's top-level `reasoning` call option. Never mix
-// it with providerOptions: the SDK does not merge the two and reasoning-related
-// providerOptions silently win. Providers with no per-call channel (OpenRouter,
-// and the body-injection openai-compatible/locca path) return undefined here and
-// keep their construction-time wiring in registry.ts.
+// Keep provider quirks here; strategy code uses capabilities rather than provider branches.
+// AI SDK reasoning and reasoning-related providerOptions do not merge; the latter win.
+// OpenRouter/compat/locca use construction-time controls in registry.ts instead.
+// Pure cfg mappings are pinned by controller/scripts/llm-pure.test.ts.
 
 interface ThinkingArgs {
   modelId: string;

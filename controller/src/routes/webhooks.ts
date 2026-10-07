@@ -1,30 +1,7 @@
-// Admin-gated webhook CRUD. The fan-out lives in broadcast/webhooks.ts and reads
-// its config from settings on each fire.
-//
-// Payloads (all carry `event` and `t`, an ISO timestamp):
-//   track.play       { title, artist, album?, sourceTrackId?, source, requestedBy?,
-//                      listeners? }  sourceTrackId is the music backend's id (null
-//                      when unknown); source is auto | ai | request. With
-//                      webhooksPolicy.trackPlayListenerGated on it POSTs only when
-//                      the listener count is known to be > 0 (fail-closed).
-//   dj.say / dj.link { text, kind, voiceId, channel, durationMs, airedAt?, estimated }
-//   request.received { requestedBy, text }   // text is the listener's raw ask
-//   voice.queued     { voiceId, kind, channel, text, durationMs, estimatedAirInMs,
-//                      expectedAirAt, estimated (always true), streamBufferSeconds,
-//                      personaId?, personaName? }
-//   voice.start      { …, airedAt?, endsAt?, estimated, streamBufferSeconds, persona… }
-//   voice.end        { …, airedAt?, endedAt?, estimated }
-//
-// Timebase (#1382): voice events fire at the LIVE EDGE. Listeners sit
-// streamBufferSeconds behind it, so a consumer syncing to what people hear wants
-// `airedAt + streamBufferSeconds`; an operator display wants `airedAt` as-is.
-// [airedAt, airedAt + durationMs] is the speech window, and `airedAt` is the first
-// WORD — the duck starts ~0.8s earlier, behind the mixer's silent lead-in.
-// `estimated: true` means the air time could not be measured: airedAt/endsAt/endedAt
-// are then ABSENT, never zeroed. voice.queued is a forecast by nature (hence always
-// estimated, and no airedAt); it fires when the station commits to a clip so a
-// consumer can prepare, is never corrected afterwards, and its lead time varies from
-// ~1s to many seconds. voice.queued → voice.start → voice.end pair by `voiceId`.
+// Webhook payloads and policy live in broadcast/webhooks.ts; see docs/internals/broadcast.md.
+// Voice timestamps are live-edge (#1382); listener time adds streamBufferSeconds.
+// airedAt marks the first word. Estimated events omit measured timestamps, and
+// voice.queued remains an uncorrected forecast. Pair queue/start/end by voiceId.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';

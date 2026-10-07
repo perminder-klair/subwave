@@ -1,5 +1,3 @@
-// Shapes the shows panel and its editor share. Every cap re-exports the shared
-// show schema's own constant, so nothing here can drift from the controller.
 
 import {
   EXCLUDED_PLAYLISTS_PER_SHOW,

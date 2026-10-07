@@ -1,14 +1,7 @@
 import { prepareEpisodeContext, preparationSkillAt, showPreparation } from './show-preparation.js';
 import { skillEligible } from '../skills/eligibility.js';
-// Programme episode runner: turns a `programme: true` show into intro → music →
-// feature → music → outro. Structure is time-based, not an operator rundown;
-// the outro's placement is `handover.offsetMinutes` (handover-policy.ts).
-//
-// Episode state (plan + which beats aired) lives ON THE SESSION, and a beat is
-// marked aired BEFORE it generates so a mid-beat failure can't double-air.
-//
-// Never imports queue — callers pass it in, so queue.ts can import this module
-// without an eval-time cycle.
+// Keep episode plans and aired beats on the session. Mark beats before generation to avoid
+// duplicate playback after failure. Inject the queue to avoid an import cycle.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { config } from '../config.js';
@@ -116,13 +109,9 @@ export function featureKindMenu(host: { skills?: string[] } | null | undefined, 
   }
 }
 
-// Attach episode state to a freshly-rolled programme session and generate the
-// plan. Idempotent. A budget/voice gate leaves the plan `pending` (retried on a
-// later tick); a generation failure marks it `fallback` for the episode.
-//
-// `now` defaults to the moment the CONTEXT describes, not the wall clock:
-// onTrackStarted rolls on a look-ahead context, and a live `now` inside that
-// window would compare the incoming session key against the outgoing show.
+// Attach episode state and generate its plan idempotently. Voice/budget gates leave it
+// pending; generation failure selects fallback. Default now to the context time so look-ahead
+// does not compare against the outgoing show.
 interface PlanDeps {
   generateProgrammePlan?: typeof dj.generateProgrammePlan;
 }

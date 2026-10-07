@@ -1,24 +1,7 @@
 'use client';
 
-// Private-station gate (#478), mounted once in the shell so every skin gets it
-// for free (same deal as the toaster — skins never implement this).
-//
-// One prompt for both privacy locks, because they share one password:
-//
-//   privatePlayer  — the gate REPLACES the player. The shell doesn't mount the
-//                    skin or the <audio> element at all, so a private station's
-//                    public pages stop advertising it.
-//   listenerAuth   — the gate OVERLAYS the player. The audio is what's locked;
-//                    the stored token rides the stream URL as ?auth=.
-//   both           — one prompt; unlocking reveals the UI and supplies the
-//                    stream token in the same step.
-//
-// Validated against POST /station-auth, which fails closed. Do NOT point this
-// at /listener-auth: that one fails open when stream auth is off, which would
-// make a private player accept any password (see lib/stationAuth.ts).
-//
-// A stale token (operator rotated the password) fails the mount-time check and
-// re-prompts.
+// privatePlayer replaces the UI; listenerAuth overlays it and adds the stored token to the stream
+// URL. Validate with fail-closed /station-auth; /listener-auth can fail open.
 
 import { useEffect, useState, type FormEvent } from 'react';
 import { useStationOrigin } from '@/lib/stationOrigin';

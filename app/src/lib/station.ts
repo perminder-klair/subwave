@@ -1,7 +1,5 @@
-// Persisted multi-station config: `{ activeStation, recents[] }` in
-// AsyncStorage, with HTTP Basic Auth credentials in the platform keychain
-// instead. The featured station is seeded from app.json
-// `extra.featuredStation`, not stored here.
+// Station URLs and recents live in AsyncStorage; credentials live in the
+// platform keychain. app.json extra.featuredStation supplies the featured station.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';

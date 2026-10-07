@@ -1,9 +1,5 @@
-// Listener-selectable stream format. MP3 is the always-served floor; Opus /
-// FLAC / AAC are optional mounts the operator enables per station (the
-// `stream` flags on /now-playing). It is also a platform question: iOS
-// AVPlayer cannot demux Ogg, so Opus and FLAC are Android-only, while AAC and
-// MP3 decode everywhere. The preference is stored per station as one
-// AsyncStorage map keyed by base URL; failures are swallowed.
+// iOS AVPlayer cannot demux Ogg, so Opus and FLAC are Android-only.
+// MP3 is always served; other mounts require the station stream flags.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
@@ -17,7 +13,6 @@ export interface StreamFormatOption {
   detail: string;
 }
 
-// Display order: universal floor first, then rising fidelity/cost.
 const OPTION_META: readonly StreamFormatOption[] = [
   { format: 'mp3', label: 'MP3', detail: 'universal · most reliable' },
   { format: 'aac', label: 'AAC', detail: 'efficient · easy on data' },
