@@ -28,7 +28,10 @@ async function main() {
   const stemCache = await import('../src/music/stem-cache.js');
   const root = join(stateDir, 'stems');
   const marker = join(root, stemCache.STEMS_MARKER);
-  const reset = () => rmSync(root, { recursive: true, force: true });
+  const reset = () => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(join(stateDir, 'stem-cache-usage.json'), { force: true });
+  };
 
   console.log('stemsRootDecision');
   const d = stemCache.stemsRootDecision;
