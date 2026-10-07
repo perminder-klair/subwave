@@ -27,12 +27,16 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
+  // Mutable controller-owned resolution objects may be supplied here. The
+  // ring keeps their references, allowing a caller to settle a diagnostic
+  // after downstream guards/enqueue without trusting the model's response.
+  telemetry = {},
   // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,
 }: any): Promise<any> {
   return withFailover(
     kind,
-    (err) => ({ user: prompt, ...failureDiagnostics(err) }),
+    (err) => ({ user: prompt, ...failureDiagnostics(err), ...telemetry }),
     async (l) => {
       let lastErr;
       // Log the actual branch on failure so /stats identifies the broken output path.
@@ -101,7 +105,7 @@ export async function djObject({
             perf,
             warnings,
             // Keep /debug output complete; durable events still apply cap().
-            extra: { system, user: prompt, response: JSON.stringify(object) },
+            extra: { system, user: prompt, response: JSON.stringify(object), ...telemetry },
           };
         } catch (err) {
           if (isGenerationControlError(err)) {

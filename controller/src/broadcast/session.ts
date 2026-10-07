@@ -13,6 +13,7 @@ import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
 import { nextShowBoundaryMs, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
+import { leaningsBlindPickReason } from './dj-agent/leanings-review.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>> & { episodeOccurrenceId?: string | null };
@@ -867,7 +868,12 @@ export function windowMessages() {
       : null;
     // Model-only coaching clauses ride in meta.promptSuffix so the booth log's
     // verbatim turn text stays clean. Re-joined here for the model.
-    const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
+    // Keep the operator's original reason on disk, but remove preference prose
+    // from model history, including sessions written before this guard existed.
+    const promptText = m.role === 'dj' && m.kind === 'pick'
+      ? leaningsBlindPickReason(m.text, { title: m.meta?.title, artist: m.meta?.artist })
+      : m.text;
+    const text = m.meta?.promptSuffix ? `${promptText}${m.meta.promptSuffix}` : promptText;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${text}`
       : foreignSpeaker

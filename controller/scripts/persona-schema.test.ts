@@ -30,6 +30,7 @@ const {
   PERSONA_FREQUENCIES,
   PERSONA_ID_RE,
   PERSONA_LIMIT,
+  PERSONA_MUSIC_LEAN_MAX,
   PERSONA_NAME_MAX,
   PERSONA_SCRIPT_LENGTHS,
   PERSONA_SKILLS_LIMIT,
@@ -117,6 +118,7 @@ test('a minimal persona parses and fills every default', () => {
   const p = personaSchema.parse(base());
   assert.equal(p.name, 'Nova');
   assert.equal(p.tagline, '');
+  assert.equal(p.musicLean, '');
   assert.equal(p.language, '');
   assert.equal(p.scriptLength, 'concise');
   assert.equal(p.djMode, false);
@@ -136,7 +138,7 @@ test('name/soul/tagline COERCE rather than refuse a non-string (unchanged)', () 
   assert.equal(p.tagline, '7');
 });
 
-test('name/soul are trimmed and length-bounded', () => {
+test('name, soul, and Musical Leanings are trimmed and length-bounded', () => {
   assert.equal(personaSchema.parse({ ...base(), name: '  Nova  ' }).name, 'Nova');
   assert.equal(personaSchema.safeParse({ ...base(), name: '' }).success, false);
   assert.equal(personaSchema.safeParse({ ...base(), name: '   ' }).success, false);
@@ -147,6 +149,11 @@ test('name/soul are trimmed and length-bounded', () => {
   assert.equal(personaSchema.safeParse({ ...base(), soul: '' }).success, false);
   assert.equal(
     personaSchema.safeParse({ ...base(), soul: 'x'.repeat(PERSONA_SOUL_MAX + 1) }).success,
+    false,
+  );
+  assert.equal(personaSchema.parse({ ...base(), musicLean: '  deep cuts  ' }).musicLean, 'deep cuts');
+  assert.equal(
+    personaSchema.safeParse({ ...base(), musicLean: 'x'.repeat(PERSONA_MUSIC_LEAN_MAX + 1) }).success,
     false,
   );
 });
@@ -572,6 +579,7 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     localColour: 2,
     warmth: 7,
     soul: 'dry and specific',
+    musicLean: 'favour warm electronic edges',
     language: 'Turkish',
     voiceStyle: 'Warm and unhurried.',
     avatar: 'p_rich.webp',

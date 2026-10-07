@@ -29,6 +29,7 @@ export interface Persona {
   localColour: number;
   warmth: number;
   soul: string;
+  musicLean: string;
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;

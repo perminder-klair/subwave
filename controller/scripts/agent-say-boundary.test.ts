@@ -13,6 +13,8 @@ assert.equal('say' in PICK_SCHEMA.shape, false,
 const picked = PICK_SCHEMA.parse({
   id: 'selected-track',
   reason: 'fresh artist',
+  usedMusicalLeanings: false,
+  leaningsTieBreak: null,
   transition: null,
   say: 'this must be ignored as an unknown field',
 });

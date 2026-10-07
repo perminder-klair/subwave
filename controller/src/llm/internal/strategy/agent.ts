@@ -50,6 +50,7 @@ interface DjAgentOptions {
   kind?: string;
   timeoutMs?: number;
   validate?: (object: unknown) => boolean;
+  telemetry?: Record<string, unknown>;
   // Follow the leg's per-provider discovery budget instead of the pinned single
   // historical step. Opt-in per agent, OFF by default: a caller's step cap can
   // be load-bearing, so only pick/request ask for it.
@@ -169,6 +170,7 @@ export async function djAgent({
   kind = 'sdk.djAgent',
   timeoutMs,
   providerDiscoveryBudget = false,
+  telemetry = {},
   // Caller acceptance check on the NATIVE path's object only — that branch
   // validates schema shape, not content, so a fabricated-but-well-formed answer
   // would otherwise sail through. A miss falls through to the done-tool path.
@@ -205,7 +207,7 @@ export async function djAgent({
             usage,
             perf,
             warnings,
-            extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
+            extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2), ...telemetry },
           };
         }
 
@@ -267,7 +269,7 @@ export async function djAgent({
                 usage: usageOf(nr),
                 perf: perfOf(nr),
                 warnings: warningsOf(nr),
-                extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2) },
+                extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
@@ -445,6 +447,7 @@ export async function djAgent({
             system, messages, toolCalls, steps,
             ...(terminalPrompt ? { terminalPrompt } : {}),
             response: schema ? JSON.stringify(object, null, 2) : String(object ?? ''),
+            ...telemetry,
           },
         };
       } catch (err) {
