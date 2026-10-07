@@ -536,7 +536,10 @@ by other operators. It's fetched **live** from the
 repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
-ever shipped or written, so installing from it never runs third-party code.
+ever shipped or written, so installing from it never runs third-party code. A
+catalog skill may still declare a [`feed:`](#feeds-without-code), which is a URL
+rather than code: install writes it into the skill's own `SKILL.md`, the modal
+shows which site it reads, and you can change or clear it like any other feed.
 
 ### Sharing your own
 

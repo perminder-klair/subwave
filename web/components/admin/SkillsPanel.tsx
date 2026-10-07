@@ -4,6 +4,7 @@
 import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { feedHost } from '../../lib/feed-host';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
@@ -673,7 +674,9 @@ export default function SkillsPanel() {
         }
       >
         <div className="text-[12px] leading-[1.65] text-muted">
-          These prompt-only skills ship with SUB/WAVE and update when you do.
+          Community skills come from the live catalog, so new ones appear without an
+          upgrade. They carry no code: a skill marked <strong>reads</strong> fetches that public
+          feed before it speaks, and the rest work from the brief alone.
           <strong> Install</strong> copies one into <code>state/skills/</code> as your own
           editable skill — it arrives <strong>disabled</strong>, so review the brief, then
           enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
@@ -687,6 +690,7 @@ export default function SkillsPanel() {
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-extrabold">{c.label}</span>
                     {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
+                    {feedHost(c.feed) && <Pill className="text-[8px]">reads {feedHost(c.feed)}</Pill>}
                   </div>
                   <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
                   {(c.submittedBy || c.dateAdded) && (

@@ -120,6 +120,11 @@ cooldown: 2h                     # min gap between airings: "90m" | "6h" | "2d" 
 context: clock, time             # optional "right now" fields the segment may mention:
                                  #   date, clock, time, weather, festival, show, listeners
 window: any                      # "any" (default) or "commute"
+cron: 0 17 * * 5                 # optional fixed schedule, 5 fields (6 with seconds)
+cronOnly: true                   # optional: fire ONLY on the cron, never at random
+cohosts: true                    # optional: host + every guest speak (co-hosted shows)
+feed: https://…/rss              # optional: an https RSS/Atom feed to read before speaking
+feedMaxItems: 10                 # optional: how much of the feed to read (1-50)
 ---
 Say one short line acknowledging that some listeners are probably in transit
 right now. Keep it warm, keep it brief, and skip it when nothing fits.
@@ -131,6 +136,16 @@ The slug must not shadow a built-in or reserved kind: `link`, `dj-speak`,
 `web-search`. The `context:` allow-list is the same one documented in
 [`docs/custom-skills.md`](./custom-skills.md) — leave it off and the segment gets
 the default profile (everything except `weather`).
+
+A `feed:` is how a catalog skill gets real data without shipping code. The URL
+is data, not a fetcher: on install it becomes the skill's own `feed:` line, and
+the station's loader generates the same fetch tool a hand-set feed gets (see
+[Feeds without code](./custom-skills.md#feeds-without-code)). Write the brief to
+speak only from the fetched items, and to say nothing when none fit. A station
+running a controller older than this feature installs the brief without the
+feed, which is why that last instruction matters. The catalog accepts only
+`https:` feeds, and refuses an entry whose `cron`, `cronOnly`, `cohosts` or
+feed values it can't use rather than letting a station drop them silently.
 
 ### Personas — `personas/<slug>/PERSONA.md`
 
@@ -240,7 +255,10 @@ The catalog is content, not code. **Skills in the catalog are prompt-only and
 data-only** — a `SKILL.md` brief plus frontmatter, never a `tool.mjs` data
 fetcher. Installing from the Community catalog can never run third-party code on
 your box; the worst a bad brief can do is make the DJ say something you'd rather
-it didn't, and installs arrive disabled so you read them first. Personas and
+it didn't, and installs arrive disabled so you read them first. A skill that
+declares a `feed:` makes your station fetch that public URL and hand its items
+to the model as source data; the Community browser shows which site it reads
+before you install, and the URL is yours to change or clear in the edit sheet. Personas and
 shows are likewise prose plus knobs.
 
 The one path that *can* carry code is the **zip export/import** for skills, and
