@@ -1,10 +1,5 @@
-// Album cooldown policy on the agent path — pure, unit-pinned (#1485 FR 3).
-// Enforced at the point of choice over the run's own candidates, since the
-// discovery tools carry no album filter (#618).
-//
-// It is the SOFTEST guard in the sequence: no pool rescue ever, and a failed
-// re-pick keeps the original pick — a preference must never cost the station a
-// slot. Runs AFTER the artist guard, on whatever pick that left standing.
+// Apply album cooldown after the artist guard. A failed re-pick retains the original; this
+// preference never triggers pool rescue or loses a slot. #1485 FR 3, #618.
 
 import { artistRootKey, type CandidateLike } from '../../music/recency.js';
 
@@ -23,14 +18,8 @@ export interface AlbumAlternativePool<T> {
   starved: boolean;
 }
 
-// The candidate set for an album re-pick. `recentAlbums` already contains the
-// rejected pick's own album. An empty albumKey (untitled, untagged, exempt
-// compilation) is never dropped: absence of a name is not evidence of a repeat.
-//
-// `avoidArtistRoots` is the artist guard's window, so an album re-pick can't
-// hand back the artist that guard just stepped around. It is a preference: when
-// every fresh-album alternative is a neighbouring artist the unnarrowed set
-// comes back (`starved`) rather than emptying the pool.
+// Album re-picks preserve unknown/exempt album keys. Narrow by the artist guard's window, but
+// restore fresh-album alternatives when that preference would empty the pool.
 export function alternativeAlbumCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   recentAlbums: Set<string>,

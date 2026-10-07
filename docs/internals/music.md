@@ -13,6 +13,20 @@ track length, seed-vs-pick,
 dead-air trim, festivals, listener request hardening, likes, and the blocklist
 rules.
 
+**Agentic Musical Leanings.** Discovery and guard re-picks receive no persona
+preferences. A separate review can replace the discovered baseline only with a
+metadata-supported close or possible flow match. Short genres such as jazz,
+rock and soul are valid phrases. Parse each persona independently, including
+noun-phrase fallback, then merge with the host owning duplicate phrases.
+`dj-agent/leanings-review.ts` owns extraction, source priority, evidence
+validation and reason filtering. A viable host match, including the baseline,
+excludes guest evidence; a guest can nudge only when no viable host match exists.
+The displayed reason credits the actual preference owner. Operator history keeps
+that reason, while `session.windowMessages()` removes preference claims before
+selection or request speech reads it, including recovered legacy pick notes.
+Replay calls copy active settings into temporary state before importing config,
+so their telemetry cannot consume the station's token budget.
+
 **Automatic ID-rotation recovery (#1699).** Pruning walks request a complete
 Subsonic enumeration. A failed album fetch or malformed catalogue response
 aborts the walk before adoption or pruning; already-upserted metadata may

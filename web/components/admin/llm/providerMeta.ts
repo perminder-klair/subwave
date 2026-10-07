@@ -1,5 +1,3 @@
-// Single source of truth for the LLM provider picker, shared by the Settings LLM
-// tab and the onboarding wizard. No React, no DOM -- safe to unit-import.
 
 export type ProviderKind = 'local' | 'self-hosted' | 'cloud';
 

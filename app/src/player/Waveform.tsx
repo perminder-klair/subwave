@@ -1,8 +1,4 @@
-// 120-bar Skia spectrum: slot-filling rectangles centred vertically so they
-// grow symmetrically from the mid-line. Heights come from the synthesised
-// useSpectrum (native has no Web Audio stream tap). Bars left of `progress`
-// paint accent, the rest ink; `visible` pauses the simulation when the bars
-// are off screen.
+// The spectrum is simulated; native playback has no Web Audio stream tap.
 
 import { Canvas, Rect } from '@shopify/react-native-skia';
 import { memo, useMemo, useState } from 'react';
@@ -28,7 +24,6 @@ export default memo(function Waveform({ tunedIn, progress, visible = true }: Wav
 
   const onLayout = (e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width);
 
-  // Geometry only changes on layout, not per tick.
   const geom = useMemo(() => {
     if (width <= 0) return null;
     const slot = width / BARS;

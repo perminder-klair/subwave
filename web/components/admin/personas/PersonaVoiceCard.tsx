@@ -1,11 +1,5 @@
 'use client';
-// The engine picker and every engine's voice selector live in the shared
-// tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
-//
-// `tts` is bound as ONE useController over the whole slot, not a SelectField
-// per subfield: switching engine resets `voice` (cross-field work SelectField
-// can't express), and the controller's fieldErrors are block-level too — a bad
-// engine/voice combination comes back keyed at `personas.<i>.tts`.
+// Bind the whole TTS slot because changing engines resets the voice and server errors name the slot.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';
@@ -63,9 +57,7 @@ export function PersonaVoiceCard({
     <Card flat title="Voice" sub="text-to-speech engine">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
         <Field data-invalid={aria.invalid || undefined} {...aria.groupProps} className="min-w-0">
-          {/* No single labelable control across engine + voice, so this Field
-              names itself via aria-labelledby (fieldAria's group variant),
-              matching BlockRulesCard's "values" chip group. */}
+          {/* Use a labelled group because engine and voice are separate controls. */}
           <FieldLabel asChild className="caption" {...aria.labelledByProps}>
             <span>Engine &amp; voice</span>
           </FieldLabel>

@@ -190,22 +190,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
     >
       <head>
-        {/* Apply stored theme before paint to avoid a flash of the wrong
-            palette. Static constant from lib/theme, no untrusted input. */}
+        {/* Apply cached theme before paint. The script contains no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
-        {/* Resolve low-power "lite" mode before paint so a pinned kiosk never
-            flashes the heavy build. Static constant from lib/lite. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
 
-        {/* Hide the player shell before paint when this browser resolves to a
-            non-default skin. Static constant from lib/skin. */}
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         <JsonLd data={SITE_JSONLD} />
 
-        {/* Absolute share-card image tags -- see the metadata comment above for
-            why these bypass the Metadata API. */}
+        {/* Explicit image tags work around the Metadata API issue described above. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -219,8 +213,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <ThemeProvider>
             <ServiceWorkerRegister />
             {children}
-            {/* Mounted once at the root so every route has somewhere for
-                `notify()` to appear. Per-shell mounts duplicate the toaster. */}
+            {/* Keep one root toaster to avoid duplicate notifications. */}
             <Toaster />
           </ThemeProvider>
         </MotionProvider>

@@ -177,12 +177,7 @@ export function NavidromeStep({ w }: { w: WizardController }) {
   );
 }
 
-// Provider list, labels and blurbs come from admin/llm/providerMeta so
-// onboarding and the admin Settings tab never drift.
-// llmProbeSchema can't be handed to useZodForm directly: it's rooted at
-// `z.unknown()`, so there is no object shape for RHF to bind against. This
-// step's schema is a real z.object whose superRefine calls llmProbeSchema, so
-// formState.isValid is exactly that schema's verdict.
+// Wrap llmProbeSchema in a Zod object so RHF can bind fields; superRefine preserves the probe validation.
 const llmStepSchema = z.object({
   provider: z.string(),
   model: z.string(),
@@ -292,9 +287,7 @@ export function LlmStep({ w }: { w: WizardController }) {
             {isDjBrain ? '✓ Using DJ Brain' : 'Use DJ Brain'}
           </Button>
         </div>
-        {/* Bare span, not FieldLabel: ProviderSelector renders its own
-            role="radiogroup" aria-label, and a wrapping <label> hijacks clicks.
-            Raw useController because it is a radio-card composite. */}
+        {/* ProviderSelector labels its radiogroup. A wrapping label would hijack clicks. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Provider</span>
           <ProviderSelector
@@ -343,9 +336,6 @@ export function LlmStep({ w }: { w: WizardController }) {
                 : 'Stored in state/secrets.env (mode 0600), not in settings.json'}
           />
         )}
-        {/* Bare span, not FieldLabel: the combobox trigger is a <button>.
-            Raw useController because the control swaps between ModelCombobox
-            and a plain input depending on live discovery state. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Model</span>
           <div className="flex items-stretch gap-2">
@@ -394,8 +384,6 @@ export function LlmStep({ w }: { w: WizardController }) {
           <FieldError {...modelAria.errorProps} errors={modelField.fieldState.error ? [modelField.fieldState.error] : undefined} />
         </div>
         <div>
-          {/* The step's own resolver IS llmProbeSchema, so formState.isValid is
-              the one gate for both this button and Next. */}
           <Button variant="solid" type="button" onClick={onTest} disabled={busy || !form.formState.isValid}>
             {busy ? 'Asking…' : 'Send a test prompt'}
           </Button>
@@ -611,8 +599,7 @@ export function DjStep({ w }: { w: WizardController }) {
       />
       <div className="grid gap-3">
         <TextField control={form.control} name="stationName" label="Station name" />
-        {/* Bare span, not FieldLabel: the picker is a composite of three fields
-            with no single RHF field name to bind a Controller to. */}
+        {/* This picker has three fields and no single labelable control. */}
         <div className="flex flex-col gap-1">
           <span className={WIZARD_LABEL_CLASS}>Location</span>
           <LocationPicker
@@ -684,9 +671,7 @@ export function ReviewStep({
           </div>
         ))}
       </dl>
-      {/* POST /onboarding/save never emits fieldErrors -- it's a hand-rolled
-          try/catch, not validateBody(schema), so there is no field-addressable
-          channel to route through applyServerFieldErrors. */}
+      {/* The onboarding endpoint returns no fieldErrors to map onto inputs. */}
       {err && <p role="alert" className="mt-3 text-sm text-destructive">{err}</p>}
       <Button variant="solid" size="lg" className="mt-5" onClick={onSave} disabled={busy}>
         {busy ? 'Saving…' : 'Save and finish'}

@@ -1,14 +1,7 @@
 'use client';
 
-// The one place player code talks to a controller. Every fetch and every
-// controller-relative URL (covers, persona avatars) is built here from a
-// StationOrigin, so pointing the player at another station means swapping the
-// origin (stationOrigin.ts) — no call site hardcodes a path.
-//
-// Response handling is deliberately per-endpoint: feed endpoints parse JSON
-// without an ok-check, /schedule and /themes throw on non-OK, /request/:id maps
-// 404 to status 'unknown', the beacon is fire-and-forget. Keep it that way;
-// this module is plumbing, not policy.
+// Build controller URLs from StationOrigin. Preserve endpoint-specific error handling: feed JSON,
+// throwing schedule/themes reads, unknown request 404s, and best-effort beacons.
 
 import { useMemo } from 'react';
 import {

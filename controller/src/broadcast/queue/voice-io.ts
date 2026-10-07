@@ -1,14 +1,5 @@
-// The handoff-file write path and the spoken-segment serialiser.
-//
-// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt,
-// jingle-now.txt)
-// and deletes it after reading, so two writes inside one poll window silently
-// lose the first (issue #140). Every write goes through writeHandoff(), which
-// serialises per file and waits for the previous one to be consumed. On top of
-// that, airVoice() serialises the spoken segments themselves (issue #310) and
-// holds them past any jingle already on air (issue #997).
-//
-// Part of the queue/ split - see ../queue.ts, which owns the Queue class.
+// Serialize handoff writes per file until Liquidsoap consumes them. airVoice also serializes
+// playback across voice channels and waits for active jingles. #140, #310, #997.
 
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
@@ -65,30 +56,14 @@ export async function writeHandoff(path: string, contents: string | (() => strin
   return next;
 }
 
-// --- Spoken-segment serialiser (issue #310) -------------------------------
-//
-// writeHandoff above stops two writes to ONE file from clobbering each other,
-// but it releases the moment liquidsoap *reads* the path (~0.5s) — long before
-// the ~20s of speech has actually played. And say.txt and intro.txt are
-// separate chains, so nothing stopped a station ID / hourly check (say.txt)
-// from airing on top of a between-track link (intro.txt), or two scheduled
-// idents stacking when their cron handlers fired together.
-//
-// airVoice() chains EVERY spoken segment across BOTH channels through one lock
-// and holds it for the clip's actual playback duration, so the next voice waits
-// for silence instead of talking over the last one. The caller unblocks as soon
-// as its own clip is handed to liquidsoap (writeHandoff resolved); only the
-// *next* caller pays the duration wait.
+// Serialize spoken playback across both voice channels, holding for the clip duration. The
+// caller returns after its handoff; the next caller waits for playback to finish. #310.
 let _voiceChain: Promise<void> = Promise.resolve();
 
 export const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
 const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
-// Handoff → first word, for the voice.queued forecast only (#1382 follow-up).
-// The mixer polls say.txt/intro.txt every 0.5s (so 0-500ms, ~250 on average)
-// and then pushes the silent lead-in ahead of the clip; the marker stamps the
-// first WORD, i.e. after that head. Never used to decide anything — the real
-// air time comes from the marker, and this is the number the forecast admits
-// it is guessing.
+// Forecast-only delay covers mixer polling and the silent lead-in. Actual air time comes
+// from the marker. #1382.
 export const HANDOFF_TO_AIR_MS = 250 + VOICE_LEADIN_MS;
 // Cap a single hold so a wildly-wrong duration estimate (or a clip that never
 // really aired) can't wedge the voice channel for minutes.
@@ -121,15 +96,8 @@ export interface QueuedVoice {
   estimatedAirInMs: number;
 }
 
-// When the voice chain is expected to be free again, in epoch ms. Tracked here
-// rather than derived from _voiceChain because a promise can't be asked how
-// much longer it has — and the forecast has to be available synchronously, at
-// the moment the clip joins the queue.
-//
-// It is an ESTIMATE of an estimate: each clip's hold is its own measured length
-// plus fixed padding, and the handoff write itself can wait up to 1.5s on a
-// file the mixer hasn't polled yet. Nothing decides anything on this value; it
-// only tells a consumer roughly how long it has to get ready.
+// Track estimated voice-chain availability synchronously for forecasts. Clip duration, fixed
+// padding, and handoff latency make this unsuitable for scheduling decisions.
 let _chainFreeAt = 0;
 
 // Pure so the arithmetic is testable without a mixer. Two of the inputs are
@@ -217,33 +185,13 @@ function mintVoiceId(): string {
   return randomBytes(6).toString('hex');
 }
 
-// --- Jingle collision guard (issue #997) -----------------------------------
-//
-// Jingles rotate into the broadcast inside Liquidsoap (radio.liq's jingle
-// rotate), entirely outside the airVoice serialiser — and because music_meta
-// is captured ABOVE that rotate, the incoming track's on_metadata fires while
-// the stinger is still audible in the crossfade, so a boundary-aired link or
-// ident talked straight over it. radio.liq announces each jingle by writing
-// jingle-playing.json ({filename, startedAt}) the moment it starts feeding;
-// the clip stays audible for up to its own length plus the cross buffer.
-// Before any voice handoff, sleep out whatever remains of that window.
-//
-// The marker is never deleted — a stale one simply computes a window in the
-// past. Clip length comes from the marker's own `durationSec`, measured by
-// Liquidsoap (radio.liq's jingle_duration) which can read any container it can
-// decode; wavDurationMs is the fallback for a marker written by an older
-// broadcast image, and only parses RIFF. If neither can measure it, a fixed
-// fallback keeps the guard useful without wedging the chain.
+// Wait out the jingle marker's playback window before handing off speech. Keep the marker on
+// disk; stale timestamps require no wait. Prefer mixer-measured duration, then WAV duration,
+// then a bounded fallback. #997.
 
 const JINGLE_FALLBACK_MS = 15_000; // clip length when nothing can measure it
-const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
-// Absolute backstop. NOT a cap on how long a jingle may be — the on-demand path
-// exists precisely to air a sponsor spot or a two-minute announcement, and a
-// fixed 60s ceiling here silently let the DJ talk over everything past the first
-// minute of one. The real protection against a bad marker is clamping the sleep
-// to the window's OWN length below, which a future-dated startedAt cannot
-// inflate. This only catches a clip so long that holding every ident and time
-// check behind it is worse than the collision.
+const JINGLE_TAIL_MS = 1_000;      // Fade tail and polling slack.
+// Bound clock-skewed waits by the clip's own window; this ceiling catches implausibly long clips.
 const JINGLE_WAIT_CEILING_MS = 600_000;
 
 // How recent a bed-playing.json startedAt must be to count as a live edge in
@@ -291,13 +239,8 @@ export function jingleAiredAtMs(filename: string): number {
   }
 }
 
-// How long to hold a voice handoff behind a jingle. Three bounds, in order:
-// `clearAtMs - now` is the honest remaining wait; `windowMs` caps it at the
-// clip's OWN length, so a startedAt dated into the future (clock skew, a
-// corrupt marker) can never buy more than one clip's worth of silence; the
-// ceiling is the backstop for an implausibly long clip. Exported and pure
-// because it is the whole guard — airInEstimate's forecast and the sleep below
-// must not be able to drift apart.
+// Bound a jingle hold by remaining time, its own window, and the absolute ceiling. Forecasts
+// and delivery share this calculation.
 export function jingleWaitMs(now: number, clearAtMs: number, windowMs: number): number {
   return Math.max(0, Math.min(clearAtMs - now, windowMs, JINGLE_WAIT_CEILING_MS));
 }
@@ -308,20 +251,9 @@ async function waitForJingleClear() {
   if (waitMs > 0) await sleep(waitMs);
 }
 
-// Wrap a rendered voice-clip path in a Liquidsoap `annotate:` URI. Two keys ride
-// along: `liq_amplify` applies the per-engine/persona voice trim as the clip
-// plays (radio.liq wraps the voice queues in amplify(override="liq_amplify")),
-// mirroring subsonic.getAnnotatedUri's `liq_amplify="<n> dB"` form; and
-// `subwave_voice` is the id radio.liq echoes into voice-playing.json, which is
-// how an air-time marker is matched to the segment that produced it (#1382).
-//
-// Every clip is annotated now, where a 0 dB trim used to send the bare path —
-// the id has to reach the mixer somehow, and metadata is the channel this
-// codebase already uses for exactly that (subsonic_id, subwave_kind). The
-// annotate protocol is not new here: any station with a non-zero tts.gainDb has
-// been driving these same WAV paths through it all along. The silent lead-in is
-// deliberately NOT annotated: it is pushed as its own request, and the missing
-// id is what tells the mixer's hook to skip it and mark the real clip instead.
+// Annotate every voice clip with liq_amplify for gain and subwave_voice for marker matching.
+// Leave the separate silent lead-in unannotated so it cannot produce the clip's air marker.
+// #1382.
 export function voiceUri(
   wavPath: string,
   gainDb: number,

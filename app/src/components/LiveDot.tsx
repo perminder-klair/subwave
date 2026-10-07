@@ -1,6 +1,3 @@
-// The pulsing "on air" dot: a filled accent disc with a ring that breathes
-// outward. `off` renders a static muted dot.
-
 import { useEffect, useRef } from 'react';
 import { Animated, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';

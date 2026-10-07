@@ -1,8 +1,5 @@
-// 5s polling of /now-playing + /state + /session, plus a 1s elapsed tick.
-// Backgrounded: nothing when idle, a 30s /now-playing-only poll while tuned in
-// (enough for lock-screen metadata), and an immediate full tick on foreground.
-// Unchanged payloads keep their previous object identity so consumers' memos
-// hold between polls.
+// Poll all endpoints every 5s in the foreground; only /now-playing every
+// 30s during background playback. Preserve unchanged payload identities.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';

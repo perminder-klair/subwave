@@ -1,17 +1,7 @@
-// HTTP client for a user-configured remote TTS engine (settings.tts.remote.url).
-// Unlike the tts-heavy sidecar, which shares the /var/sub-wave volume and
-// returns a path, `remote` carries the audio BYTES in the response body, so the
-// endpoint can live on any reachable host with no shared filesystem. The
-// controller writes those bytes to a local file for Liquidsoap.
-//
-// Contract:
-//   GET  {url}/health  → 200 JSON { ok: true }
-//   POST {url}/speak   → 200, request JSON { text, voice }, response BODY is
-//                        the rendered audio (WAV, Content-Type audio/*). The
-//                        controller writes the body to its own voice dir.
-//                        Optional response headers make a silent voice
-//                        substitution visible (issue #238): X-TTS-Fell-Back,
-//                        X-TTS-Voice-Used, X-TTS-Fell-Back-Reason.
+// Remote TTS returns audio bytes for the controller to write locally; no shared volume.
+// GET {url}/health returns 200 JSON { ok: true }. POST {url}/speak accepts
+// { text, voice } and returns audio/* WAV bytes. Voice fallback headers are
+// X-TTS-Fell-Back, X-TTS-Voice-Used, X-TTS-Fell-Back-Reason (#238).
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';

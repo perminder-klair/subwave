@@ -469,15 +469,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         )}
         {!data && !err && <SkeletonForm fields={5} />}
 
-        {/* One save bar per section, sticky, and only while something is
-            unsaved. Each section's own SaveBar portals its note + button into
-            the slot below, so the wording, the patch and the error scoping
-            still belong to the section that knows them.
-
-            top-[3.25rem] clears AdminShell's own sticky header (top-0, ~49px
-            tall) rather than tucking under it like the section rail does — this
-            is the one strip that has to stay readable while the operator
-            scrolls a long section looking for what they changed. */}
         {sectionDirty && (
           <div className="sticky top-[3.25rem] z-30 grid gap-2.5 border border-vermilion bg-bg p-3 shadow-drawer">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -570,8 +561,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
           </>
           );
         })()}
-        {/* Self-contained panels — each re-calls useAdminAuth and owns its
-            own data fetch, so they render outside the data && form guard. */}
         {activeSection === 'archives' && (
           <>
             <ArchivesPanel />
@@ -717,8 +706,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <Card title="Idle pause" sub="silence the programme when nobody is listening">
                 <div className="field">
                   <Label>Pause when the room is empty</Label>
-                  {/* Seg + "after" + minutes + "min" + Save is wider than a
-                      phone card, so the row wraps below 640px. */}
                   <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                     <Seg
                       options={[
@@ -929,8 +916,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       />
                       <span className="text-sm opacity-70">
                         GB &middot; holds ~
-                        {/* /25 mirrors the controller's stem-cache APPROX_TRACK_BYTES
-                            ceiling, /13 the field-measured average (#1257). */}
+                        {/* Track counts use the controller's 25 MB ceiling and the measured 13 MB average. */}
                         {Math.floor(
                           ((Number(form.transitions.stemCacheGb) || 15) * 1024) / 25,
                         ).toLocaleString('en-GB')}

@@ -1,16 +1,5 @@
-// Station-wide clock switch (`settings.djSpeakClock`). Call sites ask; this
-// module answers, so the policy lives in one place.
-//
-// It is a predicate rather than a context-allowlist entry because the clock
-// reaches a model by four routes: the "Local time" context line, the station-ID
-// "nod to the clock" nudge, the pick agent's own clause (which never calls
-// buildContextLines), and the hourly time-check cron. A generator that grows
-// its own clock line asks here too.
-//
-// Daypart colour ("after dark", isDark) stays when the clock is off — it is
-// atmosphere, not a clock reading. Manual /dj/segment triggers stay exempt,
-// which is why the gate sits on the hourly CRON and never inside
-// generateHourlyTime. Read live, so the toggle applies on the next tick.
+// Gate all automatic clock references here, including prompt context and the hourly tick.
+// Daypart descriptions and manual segments remain eligible; read the switch live.
 
 import * as settings from '../settings.js';
 

@@ -1,6 +1,4 @@
-// Live booth transcript with All / DJ / Tracks filters. System turns are
-// operator-facing and never shown, except the show-boundary separator that
-// follows the previous show's dimmed tail after a hard roll (#1690).
+// System turns are operator-only, except listener show-boundary separators (#1690).
 
 import { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';

@@ -1,7 +1,3 @@
-// Per-listener theme picker: a "Follow station" row above a grid of theme
-// cards. Selecting overrides the palette locally; "Follow station" clears the
-// override. Reads the station's registry via ThemeContext.
-
 import { Check } from 'lucide-react-native';
 import { Pressable, Text, View } from 'react-native';
 import { useTheme } from '@/theme/ThemeContext';

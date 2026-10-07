@@ -14,12 +14,7 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 type Status = { needsSetup: boolean; setupCompletedAt: string | null };
 
-// `?rerun=1` re-opens the wizard on a station that is already set up — the
-// "already set up" card below links to it. Nothing is bypassed by the flag:
-// WizardShell still gates on ADMIN_USER/ADMIN_PASS exactly as it does on a
-// first run, and POST /onboarding/save is admin-gated on the controller. It
-// only decides which of the two views this page renders, so a re-run is worth
-// no more than reloading the page.
+// rerun=1 reopens the wizard; WizardShell and the save endpoint still require admin authentication.
 function SetupPageInner() {
   const rerun = useSearchParams().get('rerun') === '1';
   const [status, setStatus] = useState<Status | null>(null);

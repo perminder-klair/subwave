@@ -1,26 +1,6 @@
-// Web search helper — backs the `searchArtistNews` segment tool (llm/
-// segment-tools.js). There is no standalone "web-search skill" object — the
-// segment-director agent (skills/_agent.js) decides when artist news airs.
-//
-// Four backends, chosen via settings.search.provider:
-//   - duckduckgo (default) — DuckDuckGo's Instant Answer API. Free, no key,
-//     officially documented. Returns useful results only for entity / definition
-//     queries; for most artist queries it returns nothing, which the segment
-//     director already treats as a valid (silent) outcome.
-//   - tavily — paid API for richer web results. Reads its key from
-//     settings.search.apiKey, falling back to config.search.apiKey
-//     (SEARCH_API_KEY env var) for back-compat with earlier installs.
-//   - brave — Brave Search API. Real web results for artist-name queries
-//     (issue #623). Same key resolution as Tavily; metered billing with $5/mo
-//     of free credits (~1,000 queries), so the 30-min memo matters here too.
-//   - searxng — self-hosted meta-search, keyless, needs settings.search.baseUrl.
-//     settings.search.searxngEngines optionally pins the engine set for these
-//     calls only (#1353), leaving the instance's browser traffic on its defaults.
-//
-// All backends return the same shape — { answer, results: [{ title, content }] }
-// — so callers don't have to branch. searchWeb() wraps every call in a 30-min
-// memo to keep the homelab polite under DDG's unofficial fair-use limits and
-// to avoid burning Tavily/Brave credits on duplicate ticks.
+// All providers return { answer, results: [{ title, content }] } behind a 30-minute memo.
+// DDG instant answers may be empty; Tavily/Brave need keys; SearXNG needs a base URL.
+// Brave supports artist-name queries (#623); searxngEngines pins only these calls (#1353).
 
 import { config } from '../config.js';
 import * as settings from '../settings.js';

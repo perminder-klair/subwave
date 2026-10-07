@@ -1,7 +1,3 @@
-// The now-playing card: cover art (tap for timeline), track meta, elapsed /
-// duration, and the DJ thinking ticker. The cover glitches and shows corner
-// ticks during a ~3s burst opened by a track change or a new DJ turn.
-
 import * as Haptics from 'expo-haptics';
 import { Coins, Heart } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
@@ -14,8 +10,6 @@ import { isDjTurn } from '@/lib/sessionFeed';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
-/** Tokens under artist/album: genre · BPM · key. Each is omitted when absent,
- *  so an untagged track yields an empty array and the strip doesn't render. */
 function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   if (!t) return [];
   const tokens: string[] = [];
@@ -25,8 +19,6 @@ function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   return tokens;
 }
 
-/** Mood/energy phrase: up to two moods plus the energy level, '' when the
- *  track carries neither. */
 function buildMoodPhrase(t: NowPlayingTrack | null): string {
   if (!t) return '';
   const parts: string[] = [];
@@ -41,8 +33,6 @@ export interface CenterStageProps {
   elapsed: number;
   /** Cumulative since-boot LLM token total (#449); null hides the ticker. */
   llmTokens: number | null;
-  /** Like state for the on-air track (#991). The heart hides itself when likes
-   *  are off or nothing likeable is on air. */
   trackLike: TrackLike;
   feed: SessionTurn[];
   djLineOn: boolean;
@@ -71,9 +61,7 @@ export default function CenterStage({
   const moodPhrase = buildMoodPhrase(nowPlaying);
   const hasMeta = metaTokens.length > 0 || moodPhrase.length > 0;
 
-  // ~3s glitch burst on a track change (subsonic_id flip) or a new DJ turn.
-  // SessionTurn.t is only a change-detection key, so any stable identifier
-  // works and it falls back to the feed index.
+  // SessionTurn.t is a change key; the feed index suffices when it is absent.
   const latestDjTurnT = useMemo<string | number | null>(() => {
     if (!feed?.length) return null;
     for (let i = feed.length - 1; i >= 0; i--) {

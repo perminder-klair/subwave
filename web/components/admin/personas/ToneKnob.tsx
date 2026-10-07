@@ -1,8 +1,4 @@
 'use client';
-// Detented rotary knob (0–10). Pointer-draggable AND keyboard-operable
-// (role="slider" with arrow/Home/End/PageUp/Down), so it keeps the accessibility
-// the native range input had. The body is dark in both themes; the lit indicator
-// and rings track --accent/--ink so it reads under either palette.
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -59,9 +55,6 @@ export function ToneKnob({ label, value, band, low, high, onChange }: ToneKnobPr
 
   return (
     <div className="flex min-w-0 flex-col items-center gap-2.5">
-      {/* Stacked + centred on phones (the ~80px column can't fit label and
-          value side-by-side without truncating the label to one letter);
-          side-by-side from md up, where the column is wide enough. */}
       <div className="flex w-full flex-col items-center gap-0.5 text-center md:flex-row md:items-baseline md:justify-between md:gap-1 md:text-left">
         <span className="text-[12px] leading-tight font-bold md:truncate">{label}</span>
         <span className="flex-none text-[11px] leading-tight font-bold text-[var(--accent)] tabular-nums">{value}/10 · {band}</span>

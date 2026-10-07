@@ -1,9 +1,5 @@
 'use client';
 
-// Everything that moves is a co-located keyframe (Unit.module.css); the one
-// exception is the display's level meter, which follows the real stream spectrum
-// and writes each bar's scaleY straight to the DOM. Playback churn never
-// re-renders React.
 
 import {
   useEffect,

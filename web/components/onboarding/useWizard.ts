@@ -116,11 +116,8 @@ export function useWizard() {
     });
   }, []);
 
-  // Every wizard write goes through adminFetch for the shell's 401 handling.
-  // Both test helpers catch their own failures into the result pill rather than
-  // throwing, which would wedge the button on "Testing…" (#682). They take the
-  // config as an argument: each step's form only writes back into `data` on
-  // Next, so Test must probe the live values.
+  // Tests use live form values because wizard data updates only on Next. Catch failures into the
+  // result pill to clear the testing state.
   const testNavidrome = useCallback(async (creds: WizardData['navidrome']) => {
     // 15s: clears the 5s server-side Subsonic probe; the hop has no default.
     try {

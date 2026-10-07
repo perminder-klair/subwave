@@ -1,14 +1,5 @@
-// The country attached to a /beacon (#1485), resolved as a chain in descending
-// order of trust: `cf-ipcountry`, then the header named by
-// `settings.stream.countryHeader`, then an offline MMDB lookup over the IP.
-//
-// EVERY step FAILS OPEN: a malformed header, an unreadable database or a step
-// that throws is a MISS that falls through, and an exhausted chain returns
-// undefined, which record() doesn't count. This runs inside the listener's
-// first-load beacon, so it must never throw.
-//
-// Pure, taking its GeoIP step as an argument so the ordering is testable
-// without a database on disk.
+// Resolve beacon country through cf-ipcountry, the configured header, then GeoIP. Every
+// missing, malformed, or throwing step falls through; exhaustion returns undefined. #1485.
 
 import { STREAM_COUNTRY_HEADER_RE } from '../schemas/settings.js';
 
@@ -87,21 +78,8 @@ export function resolveListenerCountry(input: CountryResolveInput): string | und
   return undefined;
 }
 
-// ---------------------------------------------------------------------------
-// The country beside an Icecast connection (admin Dash → Listeners)
-// ---------------------------------------------------------------------------
-//
-// Icecast knows only the IP, so the header links above cannot run. Two sources
-// remain, in the SAME order of trust as the chain:
-//
-//  1. `beacon` — what that IP's own POST /beacon resolved through the full chain
-//     (Cloudflare, the operator's header, then the database). Remembered in
-//     memory by broadcast/beacon-countries.ts. Covers web-player listeners.
-//  2. `geoip` — the offline database over the Icecast IP. The only source for
-//     VLC, Sonos and hardware radios, which never load the page.
-//
-// Same failure posture: every link is a miss, never an error, and an exhausted
-// chain returns no country rather than a guess.
+// Icecast connections have no country headers. Try the IP's cached beacon country, then GeoIP
+// for clients without beacons. Each miss falls through; exhaustion returns no country.
 
 export type ConnectionCountrySource = 'beacon' | 'geoip';
 

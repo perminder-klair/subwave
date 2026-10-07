@@ -1,7 +1,4 @@
 'use client';
-// Radio-card grid for picking a Cloud TTS provider, shared by the Settings voice
-// tab and the per-persona voice slot. Same affordance as EngineSelector one
-// level up; the badge shows "this one has no key" before the click.
 import type { ReactNode } from 'react';
 import { cn } from '../../../lib/cn';
 import {
@@ -96,10 +93,7 @@ export function CloudProviderSelector({
         })}
       </div>
       {hint && <div className="field-hint max-w-[70ch]">{hint}</div>}
-      {/* Enable hint for the selected provider. The live region stays mounted
-          (content toggles) so screen readers reliably announce it — a region
-          inserted on demand can miss its first announcement. Same pattern as
-          EngineSelector. */}
+      {/* Keep the live region mounted so its first announcement is read. */}
       {enableHint && (
         <p
           role="status"

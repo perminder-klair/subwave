@@ -1,12 +1,5 @@
-// The seed-vs-pick rule, plus classification of an agent pick whose id no tool
-// surfaced (#1247). Every pick event hands the agent the ON-AIR track's id to
-// seed discovery, and the tools exclude it from their results, so it is the one
-// well-formed id in context that no tool returned — the most available wrong
-// answer when a model is cornered.
-//
-// Policy chokepoint: the clause below is the ONE wording, shared by the
-// pick/request schema field descriptions and the empty-tool-result rule the
-// model sees. Never inline a second copy.
+// The on-air seed is excluded from tool results and cannot be the next pick (#1247).
+// Share this wording across pick/request schemas and empty-result rules.
 export const SEED_NOT_A_PICK_CLAUSE =
   'The track already playing is only the SEED you pass to the discovery tools — its id is never a valid answer, even when a tool comes back empty.';
 

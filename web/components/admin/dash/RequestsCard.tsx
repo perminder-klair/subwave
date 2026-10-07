@@ -67,7 +67,6 @@ function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: 
 
   return (
     <details className="border border-separator-strong">
-      {/* Resolve time drops on a phone so requester + text keep a usable width. */}
       <summary className="grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-2.5 px-2.5 py-2 sm:grid-cols-[auto_1fr_auto_auto]">
         <span className={cn('font-bold', ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
           {ok ? '✓' : '✗'}

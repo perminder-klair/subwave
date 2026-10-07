@@ -1,7 +1,6 @@
 'use client';
 
-// Search across every setting, on the vendored cmdk primitives. The chord is
-// `/`, not ⌘K: AdminShell owns ⌘K for the admin-wide panel jump list.
+// Use / for settings search; AdminShell owns the Cmd+K shortcut.
 
 import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
@@ -99,12 +98,7 @@ export function SettingsSearch({ onJump, sections }: SettingsSearchProps) {
 
       <CommandDialog open={open} onOpenChange={setOpen} label="Search settings">
         <CommandInput placeholder="Search every setting…" />
-        {/* Deliberately FLAT — no CommandGroup per section. cmdk sorts within a
-            group and leaves group order as authored, so grouping buried the
-            best match: typing "bitrate" put Station's "Seconds between
-            requests" above every actual bitrate field, purely because Station
-            is the first section. Flat lets one ranking cover all 100 rows, and
-            each row carries its own section in the trail line anyway. */}
+        {/* cmdk ranks within groups, so use a flat list to rank all settings together. */}
         <CommandList>
           <CommandEmpty>No matching settings.</CommandEmpty>
           {SETTINGS_INDEX.map((entry, index) => {

@@ -482,11 +482,8 @@ export function sourceStyle(source: string | null): SourceStyle {
   }
 }
 
-// Synapse links -- one nearby shared-genre neighbour per node, via a uniform
-// spatial grid so the pass stays O(n) at any density. Returns index pairs.
-// LINK_SCAN_BUDGET caps per-track distance checks across the 9-cell probe: a
-// genre packing thousands of tracks into one cluster degenerates toward
-// O(n*clusterSize). Links are cosmetic, so past the budget keep the nearest seen.
+// Use a spatial grid for shared-genre neighbours. Cap distance checks to avoid quadratic work in
+// dense clusters; cosmetic links can use the nearest candidate found.
 const LINK_SCAN_BUDGET = 96;
 // 3x3 probe offsets, own cell first.
 const PROBE_ORDER: [number, number][] = [

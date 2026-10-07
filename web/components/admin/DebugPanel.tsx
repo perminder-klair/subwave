@@ -187,8 +187,6 @@ export default function DebugPanel() {
             </Terminal>
           </Card>
 
-          {/* One card, not two: voice/ is just a directory in the state dir, and
-              it is expanded by default so the DJ voice WAVs stay one glance away. */}
           <Card title="State dir" sub="read-only · lazy">
             <ScrollArea className="max-h-[480px]">
               <StateTree />

@@ -1,6 +1,4 @@
-// Persisted listener volume (#828). Stored as a clamped 0..1 float string;
-// mute (0) is persisted verbatim. AsyncStorage is async, so the knob renders
-// at the default on the first frame and snaps once the read resolves.
+// AsyncStorage hydration applies the saved volume after the first frame.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 

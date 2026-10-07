@@ -1,9 +1,5 @@
-// HTTP client for the optional subwave-tts-heavy sidecar (docker/tts-heavy/
-// server.py). With config.ttsHeavy.url set, chatterbox.ts and pocketTts.ts route
-// speak() here instead of spawning a local venv; the sidecar writes the WAV to
-// the shared /var/sub-wave volume and returns its absolute path. The two modes
-// are mutually exclusive per engine (TTS_HEAVY_URL set → sidecar wins), and this
-// module is a no-op when the url isn't configured.
+// The sidecar writes WAVs to shared /var/sub-wave and returns their absolute paths.
+// TTS_HEAVY_URL selects this path over local workers; unset means no sidecar calls.
 
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';

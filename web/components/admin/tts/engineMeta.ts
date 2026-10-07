@@ -1,5 +1,3 @@
-// Single source of truth for the TTS engine picker, shared by PersonaVoiceCard and
-// TtsSection. No React, no DOM — safe to unit-import.
 
 export interface EngineMeta {
   id: string;

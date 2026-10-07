@@ -1,5 +1,3 @@
-// Shared skill-catalogue vocabulary, so the card list (SkillsPanel) and the table
-// list (SkillsTable) agree without one importing the other.
 
 import type { LucideIcon } from 'lucide-react';
 import {

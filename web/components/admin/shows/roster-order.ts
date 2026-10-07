@@ -1,7 +1,4 @@
-// Display order and filtering for /admin/shows; twin of personas/roster-order.
-// Changes only what the operator LOOKS at: `index` (the react-hook-form array
-// position) is carried on every entry because RHF field paths, validation, Save
-// and delete all key off it. Never sort the form array itself.
+// Preserve each form-array index while sorting the display.
 
 import type { Persona, Show } from './types';
 

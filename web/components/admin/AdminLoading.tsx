@@ -19,7 +19,6 @@ export function AdminLoading({ href }: { href: string }) {
       <div data-admin-load-error hidden suppressHydrationWarning className="grid max-w-md gap-3">
         <p role="alert" className="text-destructive">The admin console could not start.</p>
         <p>Startup did not finish. Check your connection and reload this page.</p>
-        {/* A normal link works even when React never starts. */}
         <a href={href} className="underline">Reload page</a>
       </div>
       <noscript>This console needs JavaScript. Enable it and reload this page.</noscript>

@@ -1,12 +1,5 @@
-// Global never-play blocklist — entries plus attribute rules (#1300 FR 1),
-// persisted to <stateDir>/blocklist.json, deliberately NOT in library.db so
-// Library → Reset/Reconcile can't wipe it. Pure matching lives in
-// blocklist-rules.ts; this module owns state, persistence and the eval context.
-//
-// hitOf() is the one entries-then-rules answer; isBlocked() is a predicate over
-// it. Matching is id-first with a normalised-name fallback for album/artist
-// (library-db rows carry only names); track entries never name-match, since
-// covers share titles.
+// Keep blocklist.json outside library.db so library resets preserve bans. Match IDs first,
+// then album/artist names; track titles never name-match. #1300 FR 1.
 import { config } from '../config.js';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -260,23 +253,9 @@ export async function removeMany(
   return { removed, missing };
 }
 
-// Rewrite ids after a Navidrome ID rotation (music/id-rotation.ts).
-//
-// Entries: track entries move ONLY via the adoption-confirmed map — an
-// unmapped track id stays as-is (the track is genuinely gone; by-id semantics
-// unchanged). Album/artist ids can't be validated against song liveIds, so
-// they go through the raw shape transform — hash-family ids are fixed points,
-// and the normalised-name fallback still covers anything the transform misses.
-//
-// RULES carry ids too, and exactly one field does: `playlist`, whose `values`
-// are Navidrome playlist ids (every other field is free text and must be left
-// alone). A stale playlist id is INERT by design — it resolves to an empty
-// member set and the rule silently stops blocking — so a rotation would turn
-// "never play anything in the Christmas playlist" into a rule that matches
-// nothing, with no error and nothing in the Blocked tab to say so. They go
-// through the caller's playlist mapper, the same one the recipes and show pins
-// use. `showIds` are internal SUB/WAVE show ids and are NOT Navidrome ids —
-// never map them.
+// Rewrite track IDs only through the adoption-confirmed map. Album/artist IDs use the shape
+// transform and keep name fallback. Map playlist-rule values through the playlist mapper;
+// never map free text or internal showIds.
 export async function remapIds(
   trackMap: ReadonlyMap<string, string>,
   canonical: (id: string) => string,
@@ -317,15 +296,9 @@ export async function remapIds(
   return changed;
 }
 
-// Which entry blocks this row, or null. Accepts anything song-shaped — a raw
-// Subsonic song (id/albumId/artistId/artist/album) or a library-db row
-// (id/artist/album only). Synchronous and cheap; isEmpty() lets hot paths skip
-// mapping work.
-//
-// The order is part of the contract: the admin UI offers to remove exactly the
-// entry named, so a row must always resolve to the same one. Ids first, then
-// the name fallback for rows without Subsonic ids — album by (name, artist)
-// pair, so "Greatest Hits" can't cross-match another artist's album.
+// Return the blocking entry for raw songs or library rows. Resolve IDs before name fallback;
+// album names are paired with artist names. Stable precedence determines which entry the admin
+// action removes.
 export function matchOf(song: any): BlockEntry | null {
   if (!song || entries.length === 0) return null;
   return (

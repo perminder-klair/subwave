@@ -124,7 +124,6 @@ export function BrowseFilters(p: BrowseFiltersProps) {
       </div>
 
       <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
-        {/* w-full on phones: three fixed-width dropdowns can't share a 390px row. */}
         <div className="flex w-full flex-col gap-2 sm:w-auto">
           <Field>
             <FieldLabel htmlFor="genre">genre</FieldLabel>

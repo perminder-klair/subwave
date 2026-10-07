@@ -1,8 +1,5 @@
-// Live Activity control: the "on air" card on the Lock Screen, Dynamic Island
-// and (mirrored by iOS 18+) the Apple Watch Smart Stack. Its SwiftUI lives in
-// targets/live-activity/. iOS-only — Android's equivalent is the RNTP media
-// notification — so every export here is a no-op elsewhere and callers never
-// branch on platform.
+// The native card lives in targets/live-activity. These exports are no-ops
+// outside iOS so callers can use them without platform branches.
 
 import { requireNativeModule } from 'expo-modules-core';
 import { Platform } from 'react-native';
@@ -56,9 +53,8 @@ interface NativeLiveActivity {
   addListener(event: 'onLikePressed', fn: () => void): Subscription;
 }
 
-// requireNativeModule throws when the module is absent: every Android build,
-// and any iOS binary older than this target. An OTA ships JS only, so that
-// combination is normal and must not crash.
+// Android and older iOS binaries lack this module. JS-only OTA updates
+// must tolerate that without crashing.
 const native: NativeLiveActivity | null = (() => {
   if (Platform.OS !== 'ios') return null;
   try {
@@ -99,7 +95,6 @@ export async function updateLiveActivity(state: LiveActivityState): Promise<void
   }
 }
 
-/** Take the card down. */
 export async function stopLiveActivity(): Promise<void> {
   try {
     await native?.stop();

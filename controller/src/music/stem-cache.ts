@@ -1,12 +1,5 @@
-// Stem cache (feature: stem-blend transitions) — per-track Demucs stem
-// windows persisted by the analyzer worker (head 40s + tail 20s, 4 FLACs
-// each) under `<stateDir>/stems/<trackId>/` (or under the STEMS_DIR bind mount
-// when the operator relocated it — see resolveStemsRoot), so a render is a
-// fast mix of cached stems instead of a fresh separation inside the drain
-// deadline. The controller owns the LIFECYCLE (this module: paths, presence
-// checks, byte-budget sweep — evicting by music/stem-priority.ts, the same
-// ranking the backfill scans by); the analyzer owns the WRITES
-// (analyze_worker.py write_stems — the same shared volume).
+// The analyzer writes cached head/tail stems on the shared volume. The controller manages
+// paths and evicts by the same priority the backfill uses.
 
 import { readdir, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -187,14 +180,8 @@ export async function headroomTracks(budget = budgetBytes()): Promise<number> {
   return free <= 0 ? 0 : Math.floor(free / u.estTrackBytes);
 }
 
-// The like signals the ranking reads, resolved once per caller.
-//
-// Read SYNCHRONOUSLY off whatever broadcast/likes.ts has already loaded, and
-// deliberately without an `await likes.load()`: in the controller the store is
-// loaded at boot (server.ts), and in the standalone tagger CLI it never is —
-// where a load() would mint and persist a fresh dedup secret from a second
-// process. An empty answer just drops the curation term from the score, which
-// is the fail-open direction. `music/picker.ts` reads likes the same way.
+// Read already-loaded likes synchronously. Loading them in the tagger child could create a
+// second dedup secret; missing likes simply omit curation from the score.
 export function likeSignals(): StemScanOpts {
   try {
     const operatorLikedIds: string[] = [];
@@ -208,13 +195,8 @@ export function likeSignals(): StemScanOpts {
   }
 }
 
-// Priority per cached dir, for the eviction order. Fails OPEN in one step: any
-// throw (the library DB is not open in this process, the query fails) hands
-// back a null priority for EVERY dir, and stemEvictionOrder then degrades to
-// the plain mtime LRU this sweep used before #1622. A dir whose track is not
-// in the catalogue at all — pruned from Navidrome — resolves to
-// UNKNOWN_TRACK_PRIORITY and goes first, which is right: nothing can ever
-// blend it.
+// If priority lookup fails, return null for every dir and use mtime eviction. Dirs for tracks
+// absent from the catalogue evict first. #1622.
 function withPriorities(
   dirs: Array<{ dir: string; bytes: number; mtimeMs: number }>,
 ): Array<{ dir: string; bytes: number; mtimeMs: number; priority: number | null }> {
@@ -230,25 +212,9 @@ function withPriorities(
   }));
 }
 
-// Byte-budget sweep: track-dirs are evicted lowest-PRIORITY first (the same
-// music/stem-priority.ts ranking the backfill scans by, so the cache keeps the
-// tracks a rendered seam can actually use), oldest-mtime first inside every
-// tie, until the cache fits the operator's budget (settings.audio.stemCacheGb).
-// No existing LRU utility in the repo — byte accounting follows
-// archives.pruneOlderThan, the sweep shape follows piper.cleanupOldVoices.
-//
-// Priority-first is not a refinement of the old plain mtime LRU, it is the
-// correction the scan order forces. The backfill now writes the BEST tracks
-// first, so they carry the OLDEST mtimes; keeping oldest-out would delete
-// exactly what the ranking earned, and `stems_at` stamps the attempt, so those
-// tracks would never be separated again. mtime survives as the tiebreak, which
-// keeps "a re-analysis refreshes a dir's slot" true inside each tie — and is
-// the whole sort when priorities cannot be resolved.
-//
-// Failures ride the RESULT rather than vanishing (#1257). A per-dir rm error is
-// swallowed (retry next sweep), but `failedDirs` and `overBudgetBytes` are what
-// let the call sites say out loud that nothing could be deleted — e.g. a stems
-// mount the controller container cannot delete from.
+// Evict by ascending stem priority, then mtime, until the byte budget fits. Report failedDirs
+// and overBudgetBytes so callers can expose deletion failures; retry failed deletions next
+// sweep. #1257.
 export async function sweep(budget = budgetBytes()): Promise<{
   removed: number;
   freedBytes: number;

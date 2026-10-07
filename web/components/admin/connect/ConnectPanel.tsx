@@ -1,8 +1,5 @@
 'use client';
 
-/* Renders from GET /connect/catalog (controller/src/routes/connect.ts), which carries
-   the manifest plus the live station origin + per-mount enabled state, so every URL
-   shown here is a real, copy-ready absolute URL. */
 
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';

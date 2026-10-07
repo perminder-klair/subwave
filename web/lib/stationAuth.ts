@@ -1,15 +1,5 @@
-// Station password token for private stations (#478).
-//
-// One shared password backs both privacy locks (privatePlayer, listenerAuth).
-// Whichever gate the listener meets first, the password they type is stored
-// here and serves the other too.
-//
-// Browsers can't attach basic-auth credentials to an <audio> element, so the
-// stream side rides the token as an `auth=` query param: Icecast's URL auth
-// forwards the mount INCLUDING its query string to the controller, which
-// accepts either that or a real basic-auth `pass` field.
-//
-// Stored in localStorage; cleared when the controller rejects it.
+// Both privacy locks share the stored password token. Audio elements cannot send Basic auth, so
+// stream URLs include auth=; clear the token on rejection.
 const KEY = 'subwave-station-auth';
 
 export function getStationAuthToken(): string {
@@ -45,12 +35,8 @@ export function withStreamAuth(url: string): string {
   return `${url}${url.includes('?') ? '&' : '?'}auth=${encodeURIComponent(token)}`;
 }
 
-// Deliberately hits /station-auth, NOT the /listener-auth endpoint Icecast
-// calls. They share the password but not the failure mode: /listener-auth fails
-// OPEN when stream auth is off, covering the window where icecast.xml still
-// carries the auth blocks but the setting is already off. Asking it here would
-// mean a private player with stream auth off accepts any password.
-// /station-auth fails closed.
+// Use fail-closed /station-auth. /listener-auth fails open when stream auth is disabled and would
+// let a private player accept any password.
 export async function checkStationAuth(apiBase: string, password: string): Promise<boolean> {
   try {
     const res = await fetch(`${apiBase}/station-auth`, {
