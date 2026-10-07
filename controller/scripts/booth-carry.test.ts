@@ -346,3 +346,56 @@ test('GET /session serves carry, separator and live turns; the session header is
   assert.match(body.messages[1].text, /^\d{1,2}:\d{2}( [ap]m)? · Midnight Bob’s Minor Incidents$/);
   assert.equal(body.messages[1].meta.boundary.fromShow, BOB.name);
 });
+
+for (const handoff of ['persisted', 'legacy', 'absent', 'unrelated', 'stale'] as const) {
+  test(`23:20 recovery keeps the 23:00 boundary (${handoff} handoff)`, async (t) => {
+    const boundaryMs = Date.parse('2026-10-07T23:00:00Z');
+    const restartMs = boundaryMs + 20 * MIN;
+    t.mock.timers.enable({ apis: ['Date'], now: restartMs });
+    const prior = structuredClone({
+      timezone: settings.get().timezone, shows: settings.get().shows,
+      schedule: settings.get().schedule, scheduleOverride: settings.get().scheduleOverride,
+    });
+    t.after(() => settings.update(prior));
+    const week: Record<number, Array<string | null>> = {};
+    for (let day = 0; day < 7; day++) week[day] = Array(24).fill(null);
+    week[3][22] = BOB.id;
+    week[3][23] = MIDNIGHT.id;
+    const personaId = settings.get().personas[0].id;
+    await settings.update({
+      timezone: 'UTC', schedule: week, scheduleOverride: null,
+      shows: [{ ...BOB, topic: '', personaId }, { ...MIDNIGHT, topic: '', personaId }],
+    });
+    const stored = session.start({ ...context(BOB), at: '2026-10-07T22:00:00Z' });
+    stored.messages = [
+      { t: '2026-10-07T22:29:00Z', role: 'segment', kind: 'link', text: 'Outside lookback.', meta: {} },
+      { t: '2026-10-07T22:45:00Z', role: 'segment', kind: 'link', text: 'Eligible outgoing line.', meta: {} },
+      { t: '2026-10-07T22:58:00Z', role: 'segment', kind: 'link', text: 'Final outgoing line.', meta: {} },
+    ];
+    if (handoff !== 'absent') {
+      stored.boundaryHandoff = {
+        personaId, personaName: 'Bob', showName: BOB.name,
+        incomingPersonaId: personaId, incomingPersonaName: 'Mae', incomingShowName: MIDNIGHT.name,
+        targetKey: handoff === 'unrelated' ? 'show:s_other' : `show:${MIDNIGHT.id}`,
+        boundaryAt: handoff === 'legacy' ? null : handoff === 'stale' ? boundaryMs - 24 * 60 * MIN : boundaryMs,
+        contextAt: handoff === 'stale' ? '2026-10-06T23:00:00Z' : '2026-10-07T23:00:00Z',
+        takeoverStartedAt: null, aired: true,
+      };
+    }
+    writeFileSync(join(root, 'session.json'), JSON.stringify(stored));
+
+    const next = await session.recover({ ...context(MIDNIGHT), at: new Date(restartMs).toISOString() });
+    assert.notEqual(next.id, stored.id);
+    assert.equal(next.boothCarry?.boundaryAt, '2026-10-07T23:00:00.000Z');
+    assert.deepEqual(next.boothCarry?.turns.map(m => m.text), ['Eligible outgoing line.', 'Final outgoing line.']);
+    const feed = carry.composeBoothFeed(next, restartMs, () => '23:00');
+    assert.equal(feed.find(m => m.kind === 'show-boundary')?.text, `23:00 · ${MIDNIGHT.name}`);
+    assert.deepEqual(carry.composeBoothFeed(next, boundaryMs + 30 * MIN + 1, () => '23:00'), next.messages);
+    assert.deepEqual(session.promptMemory(), []);
+    assert.equal(queue.getDjRecap(), null);
+    assert.deepEqual(queue.getRecentOpeners(), []);
+    assert.doesNotMatch(session.windowMessages().map(m => m.content).join('\n'), /outgoing line/i);
+    const disk = JSON.parse(readFileSync(join(root, 'session.json'), 'utf8'));
+    assert.equal(disk.boothCarry.boundaryAt, next.boothCarry?.boundaryAt);
+  });
+}

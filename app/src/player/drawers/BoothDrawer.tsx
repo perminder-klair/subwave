@@ -133,6 +133,11 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
               <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: classColor(cls) }}>
                 {(turn.kind || '').toUpperCase()}
               </Text>
+              {isCarriedTurn(turn) && isVoice && typeof turn.meta?.personaName === 'string' && turn.meta.personaName ? (
+                <Text className="font-mono" style={{ fontSize: 9, letterSpacing: 2, color: colors.accent, flexShrink: 1 }}>
+                  {turn.meta.personaName}
+                </Text>
+              ) : null}
             </View>
             <Text
               className="text-ink"

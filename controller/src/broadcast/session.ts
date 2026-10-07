@@ -12,7 +12,7 @@ import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
 import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
-import { nextShowBoundaryMs, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
+import { BOUNDARY_MAX_HORIZON_SEC, nextShowBoundaryMs, showKeyAt, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
@@ -476,7 +476,7 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   await end();
   const next = start(ctx, buildHandoff(prev));
   // Display-only booth tail for GET /session (#1690); never prompt memory.
-  next.boothCarry = snapshotBoothCarry(prev, next, Date.now());
+  next.boothCarry = snapshotBoothCarry(prev, next, at.getTime());
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
   carryInterruptedProgramme(next, prev.programme, contextDate(ctx));
   // A continuous 4h cap is still the same episode: keep its plan and aired
@@ -909,6 +909,38 @@ function boundaryRunContinues(boundary: BoundaryHandoff, at: Date): boolean {
   });
 }
 
+function recoveredBoothCarry(previous: Session, next: Session): BoothCarry | null {
+  const at = new Date(next.ctxAt ?? next.startedAt);
+  const nowMs = at.getTime();
+  const previousAt = Date.parse(previous.ctxAt ?? previous.startedAt);
+  const boundary = previous.boundaryHandoff;
+  const persistedAt = boundary?.boundaryAt ?? Date.parse(boundary?.contextAt ?? '');
+  // A cap within one show keeps its ordinary roll semantics. An aired record
+  // targeting the outgoing session itself describes an earlier boundary.
+  if (previous.key === next.key) return snapshotBoothCarry(previous, next, nowMs);
+  if (boundary && boundary.targetKey === next.key
+      && Number.isFinite(persistedAt) && persistedAt >= previousAt && persistedAt <= nowMs
+      && boundaryRunContinues(boundary, at)) {
+    return snapshotBoothCarry(previous, next, persistedAt);
+  }
+  // Use the same station-clock scan as the real handoff path. Bound long
+  // outages to its horizon; anything older is already beyond the carry TTL.
+  const fromMs = Math.max(previousAt, nowMs - BOUNDARY_MAX_HORIZON_SEC * 1000);
+  const outgoingKey = previous.key.startsWith('show:') ? previous.key : 'default';
+  const incomingKey = next.key.startsWith('show:') ? next.key : 'default';
+  if (Number.isFinite(fromMs) && showKeyAt(fromMs) === outgoingKey) {
+    const scheduledAt = nextShowBoundaryMs(fromMs, (nowMs - fromMs) / 1000);
+    if (scheduledAt !== null) {
+      if (showKeyAt(scheduledAt) !== incomingKey || !showRunContinues({
+        key: next.key, fromMs: scheduledAt, toMs: nowMs,
+        takeoverStartedAt: next.takeoverStartedAt,
+      })) return null;
+      return snapshotBoothCarry(previous, next, scheduledAt);
+    }
+  }
+  return snapshotBoothCarry(previous, next, nowMs);
+}
+
 // Boot recovery: resume the persisted session if its show run still matches, else
 // archive it and start fresh.
 export async function recover(ctx: SessionContext): Promise<Session> {
@@ -944,7 +976,7 @@ export async function recover(ctx: SessionContext): Promise<Session> {
           && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
           && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
-        next.boothCarry = snapshotBoothCarry(stored as Session, next, Date.now());
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         if (boundary.programme) next.programme = boundary.programme;
@@ -967,7 +999,7 @@ export async function recover(ctx: SessionContext): Promise<Session> {
         await archive(stored);
         const next = start(ctx);
         // The lookback keeps a long outage from carrying stale turns (#1690).
-        next.boothCarry = snapshotBoothCarry(stored as Session, next, Date.now());
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
         await persist();
         return next;

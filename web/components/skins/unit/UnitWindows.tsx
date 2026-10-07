@@ -459,6 +459,9 @@ export function BoothWindow({ onClose }: { onClose: () => void }) {
                     {line.label}
                   </span>
                   <span className="line-clamp-3 font-mono text-[12px] leading-[1.45] text-[#e6e0d4]">
+                    {line.carried && line.kind === 'voice' && line.speaker ? (
+                      <span className="font-bold text-[var(--accent)]">{line.speaker}: </span>
+                    ) : null}
                     {line.text}
                   </span>
                 </div>

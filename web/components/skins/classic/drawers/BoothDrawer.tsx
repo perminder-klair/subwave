@@ -144,6 +144,11 @@ export default function BoothDrawer({ items, timezone, locale }: BoothDrawerProp
                 <span className={cn('text-[9px] font-semibold tracking-[0.3em] uppercase', color)}>
                   {turn.kind}
                 </span>
+                {carried && isVoice && typeof turn.meta?.personaName === 'string' && turn.meta.personaName ? (
+                  <span className="min-w-0 truncate text-[9px] font-semibold tracking-[0.2em] text-vermilion uppercase">
+                    {turn.meta.personaName}
+                  </span>
+                ) : null}
               </div>
               <div
                 className={cn(

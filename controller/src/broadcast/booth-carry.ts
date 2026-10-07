@@ -38,7 +38,7 @@ export interface BoothCarry {
   /** Outgoing show name; null for an autonomous block. */
   fromShow: string | null;
   fromPersona: string | null;
-  /** ISO moment of the boundary: the new session's ctxAt, else startedAt. */
+  /** ISO boundary used for selection and expiry, including recovered handoffs. */
   boundaryAt: string;
   /** A same-key roll (the 4h cap): the turns are plain copies and no
    *  separator is drawn, because no show boundary actually happened. */
@@ -77,16 +77,15 @@ function eligible(turn: BoothTurn | null | undefined, cutoffMs: number): boolean
 
 /** Snapshot the outgoing session's recent displayable turns for the incoming
  *  one. Reads `prev.messages` only, never a carry `prev` itself holds, so
- *  carries do not chain across consecutive boundaries. Returns copies; `prev`
- *  is not mutated. Null when nothing is eligible. */
+ *  carries do not chain across consecutive boundaries. The caller supplies
+ *  the actual boundary, including when recovery happens later. Returns copies;
+ *  `prev` is not mutated. Null when nothing is eligible. */
 export function snapshotBoothCarry(
   prev: BoothCarrySource,
   next: BoothCarryTarget,
-  nowMs: number,
+  boundaryMs: number,
 ): BoothCarry | null {
   if (!prev || !Array.isArray(prev.messages)) return null;
-  const parsed = Date.parse(next.ctxAt ?? next.startedAt);
-  const boundaryMs = Number.isFinite(parsed) ? parsed : nowMs;
   const cutoffMs = boundaryMs - BOOTH_CARRY_LOOKBACK_MS;
   const sameShow = prev.key === next.key;
   const fromPersona = prev.persona?.name || null;
