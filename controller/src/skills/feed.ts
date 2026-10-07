@@ -44,6 +44,12 @@ function textOf(node: unknown): string {
   return String(node);
 }
 
+// A reference outside Unicode's range is left as the text it was rather than
+// throwing out of the parse.
+function fromCodePoint(code: number, ref: string): string {
+  try { return String.fromCodePoint(code); } catch { return ref; }
+}
+
 function stripHtml(s: string): string {
   return (s || '')
     // Entities are decoded by the parser; these handle a doubly-encoded feed,
@@ -55,6 +61,11 @@ function stripHtml(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    // Numeric character references. The parser decodes only the five named XML
+    // entities, so WordPress punctuation (&#8217;, &#038;) reached the model as
+    // literal text. Runs after &amp; so a doubly-encoded &amp;#8217; decodes too.
+    .replace(/&#(\d+);/g, (ref, dec) => fromCodePoint(Number(dec), ref))
+    .replace(/&#x([0-9a-f]+);/gi, (ref, hex) => fromCodePoint(parseInt(hex, 16), ref))
     .replace(/\s+/g, ' ')
     .trim();
 }
