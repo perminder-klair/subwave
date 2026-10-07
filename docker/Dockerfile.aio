@@ -188,8 +188,7 @@ ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app
-# .npmrc carries `legacy-peer-deps=true` (OpenRouter provider still declares a
-# stale `peer ai@^6`); it must land before install or npm hits ERESOLVE.
+# Use the same strict peer-dependency resolution as local controller installs.
 COPY controller/package*.json controller/.npmrc ./
 RUN npm ci --omit=dev
 COPY controller/src ./src

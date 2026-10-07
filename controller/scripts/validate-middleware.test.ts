@@ -124,13 +124,11 @@ test('flattenIssues surfaces an error on a field named like an Object.prototype 
 });
 
 test('flattenIssues surfaces an error on a field literally named __proto__', () => {
-  // An object literal can't carry a real own '__proto__' key, so both the
-  // schema shape and the input are built null-prototype.
-  const shape: Record<string, z.ZodTypeAny> = Object.create(null);
-  shape['__proto__'] = z.string({ error: 'proto must be a string' });
-  const input: Record<string, unknown> = Object.create(null);
-  input['__proto__'] = 1;
-  const r = z.object(shape).safeParse(input);
+  // Zod drops __proto__ object keys. A custom refinement can still produce
+  // that field path, which the formatter must preserve without prototype mutation.
+  const r = z.unknown().superRefine((_input, ctx) => {
+    ctx.addIssue({ code: 'custom', path: ['__proto__'], message: 'proto must be a string' });
+  }).safeParse({});
   assert.equal(r.success, false);
   const out = flattenIssues(r.error);
   assert.equal(out['__proto__'], 'proto must be a string');

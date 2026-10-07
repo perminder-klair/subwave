@@ -7,7 +7,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
 import { jingleCreateSchema, jingleImportSchema } from '../schemas/imaging.js';
-import { audioContentType } from '../audio/audio-import.js';
+import { sendAudioFile } from '../util/audio-response.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
 export const router = express.Router();
@@ -62,7 +62,7 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await jingles.getPath(req.params.filename);
     if (!filePath) return res.status(404).json({ error: 'unknown jingle' });
-    res.type(audioContentType(filePath)).sendFile(filePath);
+    sendAudioFile(res, filePath);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

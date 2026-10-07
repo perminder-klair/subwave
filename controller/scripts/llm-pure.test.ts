@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { z } from 'zod';
-import { generateText, APICallError } from 'ai';
+import { generateText, APICallError, ToolChoiceViolationError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
@@ -777,7 +777,7 @@ async function main() {
   }
   await test('the emit instruction reaches the model alongside the caller system prompt', async () => {
     const { seen, err } = await forcedToolCall('CALLER SYSTEM PROMPT');
-    assert.match(String(err?.message), /never called the emit tool/);
+    assert.ok(ToolChoiceViolationError.isInstance(err));
     // Serialised, so the assertion does not depend on how the SDK shapes the
     // system turn — only on the text having been sent.
     const wire = JSON.stringify(seen.prompt);
@@ -1606,7 +1606,7 @@ async function main() {
     const rendered: any = z.toJSONSchema(pickLike(), { target: 'draft-7', io: 'input' });
     assert.deepEqual(rendered.required.sort(), ['id', 'reason', 'say', 'transition']);
     // Nullable-ness and enum values survive too — the model still sees the contract.
-    assert.deepEqual(rendered.properties.say.anyOf.map((b: any) => b.type).sort(), ['null', 'string']);
+    assert.deepEqual([...rendered.properties.say.type].sort(), ['null', 'string']);
     assert.deepEqual(rendered.properties.transition.anyOf[0].enum, ['normal', 'blend']);
     // Field descriptions still travel (they are the model's primary coaching channel).
     assert.equal(rendered.properties.id.description, 'the exact id');

@@ -2,7 +2,6 @@ import { showPreparation } from './broadcast/show-preparation.js';
 // Controller HTTP API — thin entry point: wires middleware, mounts routes/ and
 // starts the background services.
 import express from 'express';
-import helmet from 'helmet';
 import { config } from './config.js';
 import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
@@ -25,7 +24,7 @@ import { startListenerMonitor } from './broadcast/listeners.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import * as likes from './broadcast/likes.js';
-import { cors } from './middleware/cors.js';
+import { configureHttp, httpErrorHandler } from './middleware/http.js';
 import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
@@ -102,28 +101,7 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 
 const app = express();
 
-// Security headers. This serves JSON/images/audio, never HTML, so three
-// overrides matter:
-//   - crossOriginResourcePolicy MUST stay 'cross-origin'; helmet's 'same-origin'
-//     default blanks /cover/:id artwork, avatars and previews wherever the player
-//     is not same-origin with the controller.
-//   - contentSecurityPolicy off: inert on a non-document response; the web app
-//     ships its own.
-//   - strictTransportSecurity off: Cloudflare/Caddy terminate TLS, and helmet's
-//     default carries includeSubDomains.
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' },
-    crossOriginOpenerPolicy: false,
-    contentSecurityPolicy: false,
-    strictTransportSecurity: false,
-  }),
-);
-
-// Global cap for small JSON payloads; the persona-avatar route re-applies its own
-// larger cap. The 100 KB default was below the data URLs the avatar picker posts.
-app.use(express.json({ limit: '600kb' }));
-app.use(cors);
+configureHttp(app);
 
 // Keep health checks and every state consumer behind the same startup barrier.
 // CORS preflight stays available while the controller initializes.
@@ -161,10 +139,16 @@ app.use(generateRoutes);
 app.use(doctorRoutes);
 app.use(connectRoutes);
 app.use(mcpRoutes);
+app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
+app.use(httpErrorHandler);
 
 // There is no manual skip — Liquidsoap controls pacing.
 
-app.listen(config.server.port, async () => {
+app.listen(config.server.port, async (err?: Error) => {
+  if (err) {
+    console.error('[startup] HTTP listen failed:', err.message);
+    process.exit(1);
+  }
   console.log(`SUB/WAVE controller on :${config.server.port}`);
 
   // Malformed env vars already fell back and warned on stdout; repeat them into

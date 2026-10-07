@@ -3,8 +3,8 @@
 // Recovery proceeds through done-only, terminal collapse (#1157), then text salvage.
 // All attempts share one deadline; throw so callers can use their stateless fallback.
 
-import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
-import type { ModelMessage, ToolSet } from 'ai';
+import { Output, isStepCount, hasToolCall, ToolLoopAgent, ToolChoiceViolationError, tool } from 'ai';
+import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
@@ -31,6 +31,41 @@ interface AgentGenerateResult {
 }
 interface AgentLike {
   generate(options: { messages: ModelMessage[]; abortSignal?: AbortSignal }): Promise<AgentGenerateResult>;
+}
+
+// The SDK throws before completing a step when a model declines a required
+// tool. Preserve completed discovery, the declining text and all billed usage
+// so the existing done-only/terminal recovery gets the same evidence as before.
+function createAgentAttempt() {
+  const steps: StepLike[] = [];
+  let responseMessages: ModelMessage[] = [];
+  const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const callbacks = {
+    onStepEnd: event => {
+      steps.push(event);
+      responseMessages = event.response.messages;
+    },
+    onLanguageModelCallEnd: event => {
+      const usage = usageOf({ usage: event.usage });
+      totalUsage.inputTokens += usage.input;
+      totalUsage.outputTokens += usage.output;
+      totalUsage.totalTokens += usage.total;
+    },
+  } satisfies Pick<ToolLoopAgentSettings<never, ToolSet>, 'onStepEnd' | 'onLanguageModelCallEnd'>;
+  return {
+    callbacks,
+    declined(err: ToolChoiceViolationError): AgentGenerateResult {
+      const text = err.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+      return {
+        text,
+        finishReason: err.finishReason,
+        totalUsage,
+        steps: [...steps, { toolCalls: [] }],
+        staticToolCalls: [],
+        response: { messages: [...responseMessages, { role: 'assistant', content: text }] },
+      };
+    },
+  };
 }
 
 interface AgentFailureError extends Error {
@@ -106,8 +141,9 @@ function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 're
 // The done-only recovery agent: one re-run of the loop with `done` as the only
 // legal move, fed the failed run's discovery trail. The attempt after this one
 // leaves the loop behind entirely (renderTerminalPrompt + objectViaToolCall).
-function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
+function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto', attempt: ReturnType<typeof createAgentAttempt>) {
   return new ToolLoopAgent({
+    ...attempt.callbacks,
     // Recovery forces done-only every step → no-think model (see above).
     model: leg.noThinkModel ?? leg.model,
     // An explicit terminal instruction for gemma-class models that emit prose
@@ -152,11 +188,16 @@ function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label
     withTransientRetry(kind, () => fn(signal), signal));
 }
 
-function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[]): Promise<AgentGenerateResult> {
-  return runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
-    messages,
-    ...(signal ? { abortSignal: signal } : {}),
-  }));
+async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>): Promise<AgentGenerateResult> {
+  try {
+    return await runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
+      messages,
+      ...(signal ? { abortSignal: signal } : {}),
+    }));
+  } catch (err) {
+    if (attempt && ToolChoiceViolationError.isInstance(err)) return attempt.declined(err);
+    throw err;
+  }
 }
 
 export async function djAgent({
@@ -297,7 +338,9 @@ export async function djAgent({
         // Ungated runs keep the caller's value.
         const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
 
+        const mainAttempt = createAgentAttempt();
         const agent = new ToolLoopAgent({
+          ...mainAttempt.callbacks,
           // useDoneTool legs force tool calls → no-think model; the schema-only
           // and free-text legs keep the operator's reasoning choice.
           model: useDoneTool ? (leg.noThinkModel ?? leg.model) : leg.model,
@@ -315,7 +358,7 @@ export async function djAgent({
           // On the done-tool path the schema lives on `done`, so no agent output.
           ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
         } as any);
-        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages, mainAttempt);
         let steps = result.steps?.length ?? 0;
         addUsage(usageOf(result));
 
@@ -358,8 +401,9 @@ export async function djAgent({
           lastVia = 'ai-sdk:agent:recovery';
           const priorMessages = result.response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
+          const recoveryAttempt = createAgentAttempt();
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
-            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), recoveryMessages);
+            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
           steps = result.steps?.length ?? 0;
           addUsage(usageOf(result));
           captureTrail(result);
