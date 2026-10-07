@@ -1,14 +1,5 @@
-// Offline GeoIP country lookup, the last link in the listener-country chain and
-// the only one needing a file on disk. Reads the MaxMind MMDB format via
-// mmdb-lib, so GeoLite2-Country, DB-IP Lite and IP2Location LITE all work.
-//
-// NOTHING IS BUNDLED — every such database is a licensed download, so the
-// feature is inert until an operator points GEOIP_DB_PATH or
-// settings.stream.geoipDbPath at a file they fetched themselves.
-//
-// Fails open throughout: a missing, truncated or wrong-flavour database and an
-// uncovered address all return undefined and none of them throw, because this
-// runs on the listener's first page load.
+// Use an operator-supplied MMDB file; no licensed database is bundled. Missing, invalid, or
+// uncovered data returns undefined without throwing on the listener's first load.
 
 import { readFileSync } from 'node:fs';
 import { Reader } from 'mmdb-lib';

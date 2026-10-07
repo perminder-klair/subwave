@@ -1,11 +1,5 @@
 'use client';
 
-// 7-column × 24-hour week board. Cards are shows, hatched slots are silent
-// runs; every write is local until Save the week.
-//
-// Geometry (#1204): columns divide the board's width from `sm` up (`sm:w-full`
-// + `sm:min-w-0`), no px floor. The hour unit is the `--hour-px` CSS variable
-// so the gutter's static height and each card's `calc()` cannot drift apart.
 
 import type {
   ComponentPropsWithoutRef, DragEvent, KeyboardEvent, PointerEvent,
@@ -261,7 +255,6 @@ export default function Board({
     >
       <section>
       <div className="mb-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 px-5 sm:px-[30px]">
-        {/* Two lengths: resize handles stay mouse-only; run dragging has a touch grip. */}
         <Mu className="min-w-0 flex-1 tracking-[0.08em] sm:hidden">
           {armedName
             ? `${armedName} is armed — tap an hour to book it, or a day header for the whole day`
@@ -304,8 +297,6 @@ export default function Board({
         </span>
       </div>
 
-      {/* The shelf wraps rather than scrolling: a chip must be on screen to be
-          dragged or armed. A chip is also a brush — arm it, then fill from the board. */}
       <div className="mx-5 mb-3.5 border border-ink bg-[var(--page-bg)] sm:mx-[30px]">
         <div className="flex flex-wrap items-center gap-2 px-3 py-2.5">
           <span className="eyebrow mr-1 flex-none text-ink">The shelf</span>
@@ -351,7 +342,6 @@ export default function Board({
         </div>
       </div>
 
-      {/* Radix reveals its scrollbar only on hover, so name the swipe outright. */}
       <Mu className="mb-1.5 flex items-center gap-1.5 px-5 tracking-[0.08em] sm:hidden">
         <span aria-hidden="true">◂</span>
         Swipe the board — Mon through Sun
@@ -360,8 +350,6 @@ export default function Board({
 
       <ScrollArea>
         <div ref={gridRef} className="flex w-max min-w-full items-start gap-2.5 pb-1.5 sm:w-full">
-          {/* Hour gutter — pt clears the 38px column headers (+border+padding).
-              Pinned at every width so the hour stays readable when the board scrolls. */}
           <div className="sticky left-0 z-10 w-[42px] flex-none bg-[var(--card-bg)] pt-[43px]">
             {HOURS.map(h => (
               // aria-disabled, not disabled: Firefox drops the tooltip and focus
@@ -484,9 +472,6 @@ function DayColumn({
     // Phone: fixed-width strip so the next day peeks past the edge. From sm up
     // `min-w-0` lets the seven columns divide the board's width.
     <div className="flex min-w-[164px] flex-1 flex-col border border-ink bg-[var(--page-bg)] sm:min-w-0">
-      {/* The header body folds the column, or fills the whole day while a brush
-          is armed. The chevron folds in either mode, so an armed brush always
-          leaves a collapse control; the footer keeps one too (24 hours tall). */}
       <div className="flex h-[38px] items-stretch border-b border-solid border-b-ink">
         <button
           type="button"
@@ -515,8 +500,7 @@ function DayColumn({
           <FoldHorizontal size={13} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
-      {/* The padding sits outside the ladder so the inner box starts exactly at
-          hour 0 — `landing` and the ghost both measure off it. */}
+      {/* Measure landing positions and the ghost from the inner box at hour zero. */}
       <div className="p-[5px]">
         <div
           ref={hoursRef}
@@ -560,7 +544,6 @@ function DayColumn({
       </div>
       <div className="flex items-center gap-2 border-t border-separator-strong px-2.5 py-2">
         <Mu className="text-[8px]">{booked} h booked</Mu>
-        {/* min-h-9 on a phone: an 8px text label alone is no tap target. */}
         <button
           type="button"
           onClick={onToggleFold}
@@ -752,10 +735,6 @@ function BoardCard({
           </span>
         )}
       </button>
-      {/* Match the playlist builder's input split: only this 28px grip owns
-          touch movement, so a swipe beginning on the card body still scrolls.
-          Its hit area is 32px high even on a one-hour compact card; the outer
-          card deliberately does not clip it. The resize edges sit above it. */}
       <button
         type="button"
         ref={setActivatorNodeRef}
@@ -768,7 +747,6 @@ function BoardCard({
       >
         <GripVertical size={12} strokeWidth={2} aria-hidden />
       </button>
-      {/* While drafting, print the range even on short cards. */}
       {draft && !showRange && (
         <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-[rgba(0,0,0,0.45)] px-1 text-center font-mono text-[8.5px] tracking-[0.06em] whitespace-nowrap">
           {range}

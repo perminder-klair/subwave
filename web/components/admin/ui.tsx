@@ -1,9 +1,5 @@
 'use client';
 
-/* Shared admin primitives. Every panel renders inside AdminShell's
-   `.admin-root` wrapper, so the unprefixed class names (.card / .tag …)
-   resolve to the admin-scoped rules in globals.css. Btn / Seg / Toggle wrap
-   shadcn primitives while keeping the original prop API. */
 
 import type { ReactNode, MouseEvent, Ref, AriaAttributes } from 'react';
 import { cn } from '../../lib/cn';

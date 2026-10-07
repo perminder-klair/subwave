@@ -1,11 +1,6 @@
 'use client';
 
-// Bound field components: the react-hook-form half of lib/form.ts.
-// Each takes `control` + `name`, subscribes with useController, and renders the
-// whole Field composition with the ARIA already wired through fieldAria.
-// Deliberately only five, chosen from what the converted forms actually use.
-// Anything else (chip inputs, month/day pickers, sliders, the avatar picker)
-// drops to a raw <Controller>.
+// Bound RHF fields include fieldAria wiring. Use a raw Controller for controls these five components do not cover.
 import { useId } from 'react';
 import type {
   ComponentPropsWithoutRef,
@@ -191,7 +186,6 @@ export function SelectField<T extends FieldValues>({
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
-          {/* SelectItem always inside a SelectGroup — shadcn composition rule. */}
           <SelectGroup>
             {options.map(o => (
               <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
@@ -290,9 +284,8 @@ export function ToggleGroupField<T extends FieldValues>({
   // branches read/write the same `field`, coerced to the shape Radix expects.
   return (
     <Field data-invalid={aria.invalid || undefined} className={className}>
-      {/* A ToggleGroup is a group of buttons with no single labelable control,
-          so it names itself via aria-labelledby. FieldTitle, not FieldLabel:
-          FieldLabel renders a <label> whose htmlFor would point at a <div>. */}
+      {/* ToggleGroup has no single labelable control. Use FieldTitle and aria-labelledby rather
+          than a label pointing at a div. */}
       <FieldTitle {...aria.labelledByProps}>{label}</FieldTitle>
       {multiple ? (
         <ToggleGroup

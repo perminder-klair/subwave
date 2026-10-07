@@ -34,8 +34,6 @@ export function PersonaHero({
         </div>
       </div>
 
-      {/* Describes the persona actually broadcasting now, which
-          a scheduled show can make different from the default selection. */}
       <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
         <span className="caption text-vermilion">● on air</span>
         <span className="text-[13px] font-bold">
@@ -44,9 +42,6 @@ export function PersonaHero({
         {onAirPersona?.tagline.trim() && (
           <span className="text-[11px] text-muted">— {onAirPersona.tagline.trim()}</span>
         )}
-        {/* The extra gap is a desktop separator between the name block and the
-            settings block; on a phone this chip starts a wrapped line, where a
-            leading indent just reads as a misalignment. */}
         <span className="caption sm:ml-4">
           frequency · {onAirPersona ? onAirPersona.frequency : '—'}
         </span>

@@ -1,7 +1,4 @@
 'use client';
-// How this persona talks: talk frequency, script length, DJ mode and the tone
-// dials. Every control is a custom rotary/fader/toggle the five shared bound
-// components don't cover, so each is wired through its own `useController`.
 import { useController, type Control } from 'react-hook-form';
 import type { PersonasFormValues } from './types';
 import { FREQUENCIES, LINK_STYLES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';

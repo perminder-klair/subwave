@@ -1,5 +1,4 @@
-/* Wash colours ride a registered custom property so a track change crossfades
-   over 20s. Browsers without @property support switch instantly. */
+/* Register --sw-drift-c for colour transitions. Unsupported browsers switch instantly. */
 
 @property --sw-drift-c {
   syntax: '<color>';
@@ -16,10 +15,7 @@
   will-change: transform;
 }
 
-/* Dark themes need a static saturation/brightness lift (the 20s --sw-drift-c
-   transition is untouched). Both routes to dark need it: the explicit pin, and
-   a dark OS with no pin at all (no [data-theme], so the attribute selector
-   alone would miss that listener). */
+/* Support explicit dark themes and dark OS preferences without a theme override. */
 :global([data-theme='dark']) .wash {
   filter: saturate(1.35) brightness(1.2);
 }
@@ -29,9 +25,7 @@
   }
 }
 
-/* html.lite (globals.css) kills looping keyframes but exempts transitions;
-   this one is a 20s full-viewport gradient repaint per track change, exactly
-   the cost lite exists to avoid. Colors switch instantly instead. */
+/* Disable this full-screen gradient transition explicitly; global lite rules disable only keyframes. */
 :global(html.lite) .wash {
   transition: none;
 }

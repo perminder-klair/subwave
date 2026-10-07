@@ -458,6 +458,10 @@ export const DEFAULTS = {
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.
     pickerAgent: true,
+    // Guest preferences are a deliberately optional, secondary programming
+    // input. Keep them off for upgrades and new stations: a blank host field
+    // must mean no Musical Leanings are sent to the picker.
+    guestMusicalLeanings: false,
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.

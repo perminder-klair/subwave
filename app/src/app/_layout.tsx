@@ -19,9 +19,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import { View } from 'react-native';
-// No GestureHandlerRootView / BottomSheetModalProvider: that stack installs a
-// root touch interceptor that swallows every tap on the New Architecture on
-// some Android devices (#458). Sheets are core <Modal>s instead.
+// Gesture-handler root interceptors block Android taps under New Architecture (#458).
+// Use core Modal sheets.
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import ErrorScreen from '@/components/ErrorScreen';
 import { StationProvider, useStation } from '@/config/StationContext';
@@ -29,10 +28,8 @@ import { ThemeProvider } from '@/theme/ThemeContext';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-// expo-router renders this in place of the route tree when a descendant throws
-// during render. It hides the splash too: a crash inside SplashGate (before
-// `ready`) would otherwise strand the native splash over a frozen app. A throw
-// from RootLayout itself falls through to expo-router's default handler.
+// Hide the splash here too: a SplashGate render failure would otherwise
+// leave it covering the error screen. RootLayout errors use Expo Router's default boundary.
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   useEffect(() => {
     SplashScreen.hideAsync().catch(() => {});

@@ -154,14 +154,10 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null }: UsePlayerOp
     return () => clearTimeout(id);
   }, [volume]);
 
-  // Four gates guard the Opus upgrade; MP3 is the universal floor. Require
-  // canPlayType 'probably', skip the iOS family and skip Firefox by UA (both
-  // choke on Icecast's chained Ogg at a crossfade, #212), and require the
-  // station's own `opusEnabled` to be explicitly true (null = not polled yet).
-  // That is the SETTING and the mixer reads it at startup, so a saved-but-not-
-  // restarted station can still 404 -- hence the onError self-heal below. No
-  // live retarget: setStreamUrl reaches the element only on the next
-  // tune()/reconnect() (#1232, #1234).
+  // Upgrade only when Opus is enabled and canPlayType returns probably. Exclude iOS and Firefox
+  // because chained Ogg fails at crossfades (#212). The setting needs a mixer restart, so errors
+  // fall back to MP3. Apply upgrades on the next tune/reconnect, never to playing audio (#1232,
+  // #1234).
   useEffect(() => {
     if (opusEnabled !== true) return;
     if (!streams.opus || opusFailedRef.current) return;

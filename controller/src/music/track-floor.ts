@@ -1,20 +1,6 @@
-// Minimum-track-length policy (#1573): the one answer to "is this track too
-// short to pick?". The floor itself is resolved by
-// settings.effectiveMinTrackSec (show override → station default); this module
-// only applies it.
-//
-// Not part of show-filter.ts's strict locks: it applies whether or not a show
-// is strict, like the track-length CAP. It is the mirror image of that cap —
-// the default maximum cuts on air (liq_cue_out); exclusion instead filters
-// known long tracks. A
-// 40-second skit cannot be lengthened and has to leave the pool.
-//
-// Pure and import-free, so it unit-tests without a library, settings cache or
-// mixer (scripts/track-floor.test.ts).
-
-// Subsonic children carry `duration`, library rows `durationSec`; neither means
-// unknown length. Structurally satisfied by both, so callers pass their own
-// element type through unchanged.
+// Apply the effective minimum track length independently of strict show filters. Accept
+// Subsonic duration or library durationSec; missing values mean unknown. #1573,
+// scripts/track-floor.test.ts.
 export interface LengthTrack {
   duration?: number | null;
   durationSec?: number | null;

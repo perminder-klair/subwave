@@ -1,19 +1,6 @@
 import type { FormState } from './shared';
 
-/**
- * Collector for the number boxes in a whole-block save.
- *
- * Archives and the danger zone post EVERY field on every click, so a box the
- * operator cleared and has not refilled rides along with whatever they actually
- * edited — and neither JS coercion fails safely there. `Number('')` is 0, which
- * is a VALID listener buffer and a valid retention window, so saving an AAC
- * toggle would quietly set the buffer to 0s and flag a mixer restart.
- * `parseInt('')` is NaN, which JSON.stringify posts as `null` and fails the
- * whole block with a message pointing at a field nobody touched.
- *
- * So a blank box refuses the save and names itself instead. An explicitly typed
- * `0` still parses, which is what keeps "0 = no limit" on max track length.
- */
+// Reject blank numeric fields before saving: Number('') is zero, and JSON.stringify serializes NaN as null.
 function numberFields() {
   const bad: Record<string, string> = {};
   const read = (path: string, raw: string, parse: (s: string) => number) => {

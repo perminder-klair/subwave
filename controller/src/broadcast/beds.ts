@@ -1,10 +1,6 @@
-// Bed library — instrumental beds the DJ talks over between songs. Mirrors
-// broadcast/sfx.ts: files at <stateDir>/beds/<name>.mp3 (on the shared
-// /var/sub-wave mount, so the broadcast container can open what we write into
-// next.txt) plus the <stateDir>/beds.json sidecar. The bundled default is a
-// protected built-in; settings.beds.enabled is the way to silence beds, not
-// deletion. Generation uses the ElevenLabs Music API, not the sfx sound path,
-// because a bed needs >=30s of instrumental music.
+// Beds and their sidecar share the broadcast volume. The built-in bed is protected; disable
+// beds through settings. Generate instrumental music with the Music API because beds need at
+// least 30 seconds.
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';

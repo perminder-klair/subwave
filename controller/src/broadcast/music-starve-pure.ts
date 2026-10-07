@@ -1,13 +1,5 @@
-// The music-chain starve signal (#1300 bug 7) — pure decision logic, split from
-// the reader so it can be unit-pinned.
-//
-// The jingle rotate skips unavailable sources, so a starved music chain serves
-// stingers forever and the emergency fallback below it can't see that (`radio`
-// IS available). radio.liq samples the pre-rotate chain itself and reports the
-// verdict in music-starved.json.
-//
-// Every ambiguous input resolves toward NOT starved: a false "your station is
-// broken" banner that never clears is worse than a missed one.
+// The mixer measures pre-rotate music starvation because available jingles can hide it from
+// emergency fallback. Ambiguous marker data means not starved. #1300.
 
 /** How stale the heartbeat may get before the marker stops counting as live. */
 export const STARVE_MARKER_STALE_MS = 60_000;

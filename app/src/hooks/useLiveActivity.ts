@@ -1,10 +1,5 @@
-// Drives the on-air Live Activity (Lock Screen, Dynamic Island, watch Smart
-// Stack). It shows what the lock screen shows, via lib/air-card.ts, plus the
-// show/station identity and a heart.
-//
-// The card's clock ticks natively from `startedAt`, so this pushes an update
-// only when a displayed value changes, never on a timer: ActivityKit
-// rate-limits updates and a per-second push would be throttled away mid-song.
+// ActivityKit rate-limits updates. The card ticks its clock natively, so push
+// only when displayed values change.
 
 import { useEffect, useMemo, useRef } from 'react';
 import {
@@ -51,14 +46,12 @@ export function useLiveActivity({
   accent,
   like,
 }: UseLiveActivityParams): void {
-  // None of what this gates on changes while the app runs, so read it once.
   const supported = useMemo(() => isLiveActivitySupported(), []);
 
   const talking = useTalking(boothFeed);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  // The native fetch that downloads the cover ignores URL userinfo, so a
-  // credentialed station needs the same Basic header the stream carries.
+  // Native artwork fetch ignores URL userinfo; pass the Basic header.
   const artworkHeaders = useMemo(() => api?.streamHeaders() ?? {}, [api]);
 
   const state: LiveActivityState = useMemo(
@@ -92,8 +85,7 @@ export function useLiveActivity({
     ],
   );
 
-  // Must stay before the lifecycle effect: effects run in order, and this
-  // seeds the ref `start` reads on first mount.
+  // Seed the ref before the lifecycle effect reads it on first mount.
   const stateRef = useRef(state);
   const startedRef = useRef(false);
   useEffect(() => {
@@ -102,8 +94,7 @@ export function useLiveActivity({
     void updateLiveActivity(state);
   }, [state]);
 
-  // The accent is baked into the activity's immutable attributes, so a theme
-  // change restarts the card rather than updating it.
+  // Accent is immutable in ActivityKit attributes; a theme change restarts the card.
   useEffect(() => {
     if (!supported || !api || !tunedIn) return;
     let cancelled = false;
@@ -118,9 +109,7 @@ export function useLiveActivity({
     };
   }, [supported, api, tunedIn, station, accent]);
 
-  // Held in a ref so the once-registered listener always calls the current
-  // like closure: `like.like` is rebuilt every track change, and a stale one
-  // would like the previous song and be rejected as a stale tap.
+  // The persistent listener must call the current track's like closure.
   const likeRef = useRef(like);
   useEffect(() => {
     likeRef.current = like;

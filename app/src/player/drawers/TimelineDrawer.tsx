@@ -1,5 +1,3 @@
-// Up-next queue + recently played. Ported from web TimelineDrawer.
-
 import { Text, View } from 'react-native';
 import { relTime } from '@/lib/format';
 import type { QueueEntry } from '@/lib/types';

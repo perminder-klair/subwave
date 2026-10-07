@@ -1,10 +1,6 @@
 'use client';
 
-// Stations rack (API: controller/src/routes/stations.ts). Capped at
-// MAX_STATIONS=8 server-side. Activating a station, or creating the second one
-// (which converts a single-station install), restarts the controller, so both
-// flows enter the full-screen re-tuning state and hard-reload once /state
-// reports the new boot-frozen station.id.
+// Activation and creating a second station restart the controller. Wait for /state to report the new station ID before reloading.
 
 import { useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -586,10 +582,6 @@ export default function StationsPanel() {
                 if (e.key === 'Enter' && !busy && !atCap) void create();
               }}
             />
-            {/* The exact function the server slugifies with, out of the shared
-                schema — this used to be a hand-copied reimplementation that had
-                already dropped the "nothing usable" fallback, so a name like
-                "!!!" previewed blank and then arrived as /station. */}
             <FieldDescription
               {...createNameAria.descriptionProps}
               className="font-mono text-[10px] tracking-[0.1em] text-muted lowercase"
@@ -602,10 +594,7 @@ export default function StationsPanel() {
             />
           </Field>
 
-          {/* No single labelable control, so the Field names the group itself
-              rather than pointing htmlFor at a <div>. The buttons are real
-              radios, so the group they belong to has to say so — role="radio"
-              outside a radiogroup is an orphan to a screen reader. */}
+          {/* The radio buttons need a named radiogroup. */}
           <Field data-invalid={createModeAria.invalid}>
             <FieldLabel asChild {...createModeAria.labelledByProps}>
               <span>Starting point</span>

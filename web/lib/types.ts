@@ -212,6 +212,11 @@ export interface StationState {
  *  by `turnClass()`. */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
+/** After a hard roll, GET /session briefly leads with the previous show's
+ *  tail (`meta.carried: true`, `meta.carriedFrom`, `meta.personaName`) and
+ *  one `role: 'event'`, `kind: 'show-boundary'` separator whose
+ *  `meta.boundary` is `{ at, show, persona, fromShow, fromSessionId }` (#1690).
+ *  See isCarriedTurn / isShowBoundary in lib/sessionFeed. */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;

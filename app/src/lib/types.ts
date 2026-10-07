@@ -228,7 +228,11 @@ export interface StationState {
   ui?: { boothBuddy?: boolean };
 }
 
-/** A single turn in the live DJ session. */
+/** A single turn in the live DJ session. After a hard roll, GET /session
+ *  briefly leads with the previous show's tail (`meta.carried: true`,
+ *  `meta.carriedFrom`, `meta.personaName`) and one `role: 'event'`,
+ *  `kind: 'show-boundary'` separator with `meta.boundary`
+ *  `{ at, show, persona, fromShow, fromSessionId }` (#1690). */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
 export interface SessionTurn {

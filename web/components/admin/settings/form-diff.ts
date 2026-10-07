@@ -1,10 +1,6 @@
 import type { FormState } from './shared';
 
-/**
- * Read one dotted path out of the form. Returns undefined for a missing branch
- * rather than throwing, so a path that names a key a given settings.json has
- * never carried compares equal on both sides and reads as clean.
- */
+// Return undefined for missing form paths so absent settings compare as clean.
 export function atPath(form: FormState | null, path: string): unknown {
   let node: unknown = form;
   for (const key of path.split('.')) {

@@ -1,10 +1,6 @@
-// Controller side of the pre-rendered seam (docs/stem-transitions-research.md).
-// Decides whether an X→Y seam earns a rendered blend, asks the analyzer to mix one
-// from cached stems (cache-hit-only), and returns the cue points the drain stamps:
-// X cuts at outCueSec, the clip airs annotated as Y, Y enters at inCueSec —
-// both cues one seam overlap outside the clip's own edges (stem-seam.ts).
-// Any miss or failure returns null and the seam falls back to the plain pair-aware
-// crossfade — this may only upgrade a transition, never break one.
+// Render cache-hit stem transitions and return outgoing/incoming cue points shifted by the
+// seam overlap. Any miss or failure returns null for the normal pair-aware crossfade.
+// docs/stem-transitions-research.md.
 
 import path from 'node:path';
 import { readdir, stat, unlink } from 'node:fs/promises';

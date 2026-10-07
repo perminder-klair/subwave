@@ -1,24 +1,6 @@
-// Pure decision for an opt-in analysis dimension's coverage status (CLAP
-// "sounds-like" audio, Demucs vocal activity): four nullable signals — enabled,
-// backend reachable, backend capable, how much is covered — collapsed into one
-// status the UI renders without re-deriving. Unit-pinned by
-// scripts/coverage-status.test.ts.
-//
-//   off            disabled with nothing else to report.
-//   pending-engine enabled but no analysis backend reachable.
-//   pending-heavy  backend up but can't do this dimension (lean image).
-//   load-failed    backend HAS the model and it failed to load; carries the
-//                  reason, since the fix is the opposite of pending-heavy's.
-//   incapable      backend up, capability unknown (older sidecar), bpm/key pass
-//                  has run yet produced zero here.
-//   ready          enabled + able, nothing covered yet.
-//   partial        some coverage, < 100%.
-//   complete       100%.
-//
-// Precedence: the capability facts and existing coverage are checked BEFORE the
-// enable gate, so a disabled row on a lean engine can read "off · needs the
-// heavy analyzer" and a paused-but-populated dimension keeps showing numbers.
-// `off` is therefore the fallback, not an early short-circuit.
+// Coverage status combines enablement, backend capability, and existing coverage. Check
+// capability and coverage before the enable gate so disabled dimensions still show existing
+// data and engine requirements. scripts/coverage-status.test.ts..
 export type DimensionStatus =
   | 'off'
   | 'pending-engine'

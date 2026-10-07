@@ -1,10 +1,5 @@
-// In-memory job store for the playlist builder's async generation flow: POST
-// /playlists/generate/jobs starts a run and returns immediately, GET
-// /playlists/generate/jobs/:id polls. A generation runs for minutes, which
-// outlives Cloudflare's ~100s proxy timeout, so it cannot be synchronous.
-//
-// Jobs are process-local; a restart forgets them and the poller reports the
-// vanished job as "start again". Sweeping is lazy, so no timer is held open.
+// Poll process-local generation jobs to avoid Cloudflare's roughly 100-second timeout.
+// Controller restarts lose jobs; expiration is lazy.
 
 import { randomUUID } from 'node:crypto';
 import type { GenerateResult } from './playlist-gen.js';

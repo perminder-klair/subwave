@@ -62,8 +62,6 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
       onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
       className="border border-separator-strong bg-bg"
     >
-      {/* Phone: the summary drops below the header line (order-last + w-full) so the
-          path doesn't break mid-word. Single flex row again from sm: up. */}
       <summary className="flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2 sm:flex-nowrap">
         <span className={`shrink-0 border px-1.5 py-[2px] text-[10px] font-bold tracking-[0.1em] ${METHOD_CLASS[endpoint.method] || ''}`}>
           {endpoint.method}

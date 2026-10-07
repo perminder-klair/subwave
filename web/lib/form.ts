@@ -1,14 +1,5 @@
-// react-hook-form + zod wiring for the admin entity editors: `useZodForm` and
-// `fieldAria` here, the five bound field components in lib/form-fields.tsx.
-// Schemas come from lib/schemas.generated.ts, the CI-drift-checked mirror of
-// controller/src/schemas/**, so this resolver enforces the controller's rules.
-//
-// PITFALL — a registered field that ISN'T a key of the bound schema is SILENTLY
-// DROPPED, not a type error: handleSubmit's callback receives the resolver's
-// PARSED OUTPUT and z.object() strips undeclared keys. Two safe patterns:
-// (1) every registered field is a real key of the bound schema, or (2) a UI-only
-// field is read via form.getValues(name) / useWatch(), which bypass the resolver.
-// The dev-only probe below catches violations of (1).
+// Zod strips undeclared fields from resolver output. Bind schema keys, or read UI-only fields
+// through getValues/useWatch. The dev probe warns about undeclared reads.
 
 
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -46,12 +37,8 @@ export function useZodForm<S extends z.ZodType<FieldValues, FieldValues>>(
   return form;
 }
 
-// Dev-only phantom-field probe (see the PITFALL above). A lint rule can't do
-// this: several bound schemas have no statically visible shape. At mount it
-// diffs the outermost ZodObject's `.shape` against defaultValues; at submit it
-// wraps `values` in a Proxy that warns on the first read BY NAME, so only a
-// literal `values.key` trips it. console.error rather than throw, since the trap
-// fires inside arbitrary onValid code.
+// Check defaultValues against the schema at mount. A submit-time Proxy warns on undeclared property
+// reads without interrupting onValid.
 
 function resolveTopLevelObjectSchema(schema: z.ZodType, depth = 0): z.ZodObject | null {
   if (depth > 12) return null; // defensive only — nothing here nests this deep

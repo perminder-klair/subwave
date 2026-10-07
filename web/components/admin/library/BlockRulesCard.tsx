@@ -1,8 +1,5 @@
 'use client';
 
-// Attribute/tag "never air" predicates on the Blocked tab (#1300), with an
-// optional seasonal allow-window and show scope. Self-contained: owns its
-// fetching and CRUD against /library/blocklist/rules.
 
 import { useId, useState } from 'react';
 import { CalendarRange, Plus, ShieldBan, Snowflake } from 'lucide-react';
@@ -394,8 +391,7 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
           <div className="grid gap-4">
             <TextField control={control} name="label" label="Name" placeholder="e.g. Christmas songs" maxLength={RULE_TEXT_MAX} />
 
-            {/* Raw Controller, not SelectField: switching "Match on" must also
-                clear `values`, or chips from the old field type ride along. */}
+            {/* Changing the match field must clear values from the previous field. */}
             <Controller
               control={control}
               name="field"
@@ -429,9 +425,7 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
               }}
             />
 
-            {/* Raw Controller: chip input and checkbox list are group controls
-                with no labelable element, so they use aria-labelledby/groupProps
-                rather than htmlFor. */}
+            {/* Label the group because its chips and checkboxes have no single labelable element. */}
             <Controller
               control={control}
               name="values"
@@ -463,9 +457,6 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
                           ))}
                         </div>
                       )}
-                      {/* `values` resets to [] on every switch into playlist
-                          mode, so an empty list is the normal state; render the
-                          error or aria-invalid has no explanation. */}
                       {fieldState.error && <FieldError {...aria.errorProps} errors={[fieldState.error]} />}
                     </div>
                   );

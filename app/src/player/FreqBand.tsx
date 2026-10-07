@@ -1,7 +1,4 @@
-// The FM-dial navigation band above the swipe pager: a frequency scale with a
-// needle tracking the pager's scroll and a labelled stop per section. The
-// needle interpolates the pager's native-driver scrollX, so sweeping costs no
-// React renders; the band re-renders only when `active` changes.
+// The needle uses native-driver scrollX to avoid React renders during swipes.
 
 import { memo, useMemo, useState } from 'react';
 import { Animated, type LayoutChangeEvent, Pressable, Text, View } from 'react-native';
@@ -48,7 +45,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
   return (
     <View
       style={{
-        // Transparent so the frosted header glass shows through.
         backgroundColor: 'transparent',
         borderBottomWidth: 1,
         borderBottomColor: `${colors.ink}59`,
@@ -59,7 +55,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
       }}
     >
       <View style={{ position: 'relative', height: 30 }} onLayout={onLayout}>
-        {/* Tick scale — majors every fifth tick */}
         <View
           pointerEvents="none"
           style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 13, flexDirection: 'row', justifyContent: 'space-between' }}
@@ -80,7 +75,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
           })}
         </View>
 
-        {/* Needle — sweeps with the pager, off the React render path */}
         {needleX ? (
           <Animated.View
             pointerEvents="none"
@@ -101,7 +95,6 @@ function FreqBand({ pages, active, scrollX, maxScroll, onPick }: FreqBandProps) 
           </Animated.View>
         ) : null}
 
-        {/* Station stops */}
         {pages.map((p, i) => {
           const on = i === active;
           return (

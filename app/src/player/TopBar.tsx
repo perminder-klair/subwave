@@ -1,7 +1,3 @@
-// Masthead: one marks row (spinning disc, station name, caret, on-air show and
-// host, tap to switch station) with the back-panel button on the right and the
-// context tagline beneath.
-
 import { router } from 'expo-router';
 import { SlidersHorizontal } from 'lucide-react-native';
 import { useMemo } from 'react';
@@ -18,10 +14,8 @@ export interface TopBarProps {
   stationName?: string;
   djName?: string;
   activeShow: ActiveShow | null;
-  /** Open the back-panel sheet (outputs, sleep timer, theme). */
   onOpenPanel: () => void;
-  /** Something is live behind the panel (sleep armed, casting): shows the
-   *  accent dot so that state never hides inside the sheet. */
+  /** Show an accent dot when sleep or casting is active. */
   panelActive: boolean;
 }
 
@@ -36,8 +30,6 @@ export default function TopBar({
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  // `context` is reference-stable between polls, so this recomputes only when
-  // the tagline inputs change.
   const tagline = useMemo(() => buildTagline(context), [context]);
   const showName = activeShow?.name || null;
   const onAirName = activeShow?.persona?.name || djName;
@@ -72,9 +64,6 @@ export default function TopBar({
           ) : null}
         </Pressable>
         <View className="flex-row items-center" style={{ paddingLeft: 12 }}>
-          {/* One button for everything off-fascia — outputs (AirPlay/Cast),
-              sleep timer, theme all live on the "back panel" sheet. The dot
-              surfaces live state (timer armed / casting) at a glance. */}
           <Pressable
             onPress={onOpenPanel}
             hitSlop={10}

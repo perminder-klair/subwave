@@ -1,19 +1,6 @@
-/* Library Observatory — the galaxy (WebGL renderer).
-   Track = GPU point sprite (three.js) over an additive nebula, synapse
-   filaments and an UnrealBloom pass. The stage is always night: bloom needs a
-   dark ground truth in both site themes, so `.cmap-galaxy` re-declares the
-   theme vars locally and node colours get a legibility lift (liftNight).
-   Labels live in one CSS-transformed HTML layer so pan/zoom never re-lays-out
-   the DOM; each counter-scales via a single --inv.
-
-   Rendering is on-demand: a frame draws only when view/data/selection change
-   (plus a ~1.1s GPU-side entrance), and an IntersectionObserver skips draws
-   while offscreen, so an idle embed costs no GPU. DPR is capped at 2.
-
-   Coordinate model: a 1000x1000 user space fit with `meet` letterboxing
-   (S = min(W,H), centred), then the pan/zoom view {tx,ty,k} inside it.
-   Screen px = origin + (t + user*k)*f, where f = S/1000. The thin SVG
-   highlight overlay depends on this exactly. */
+/* Render on demand and skip offscreen frames. Coordinates use a centred 1000x1000 space with meet
+   scaling: screen = origin + (translation + user * zoom) * min(width, height) / 1000. Keep the SVG
+   overlay aligned with this transform. */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -978,8 +965,6 @@ export default function ConstellationGalaxy({
         </button>
       </div>
 
-      {/* Swatches pass through the same night-lift as the stars, so the key
-          matches what nodeColor/nodeFilled actually draw. */}
       <div className="cmap-legend">
         <span className="t-caption ad-muted">{legendLabel(colorBy)}</span>
         {colorBy === 'energy' || colorBy === 'confidence' || colorBy === 'loudness' || colorBy === 'pace' ? (

@@ -31,8 +31,6 @@ export function PersonaAvatarPicker({ persona, tick, uploading, onPick, onGenera
         className="relative grid h-[96px] w-[96px] place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]"
         aria-label={hasAvatar ? `${persona.name} avatar` : 'No avatar set'}
       >
-        {/* Initials behind the image so a transparent or broken avatar
-            still shows a readable placeholder. */}
         <span className="text-[22px] font-extrabold tracking-[-0.02em] text-muted">
           {initialsFor(persona.name)}
         </span>

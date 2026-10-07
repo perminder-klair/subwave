@@ -52,13 +52,7 @@ export function useThemeSwitcher(): ThemeContextValue | null {
   return useContext(ThemeContext);
 }
 
-// App-wide theme syncer, mounted from the root layout. The pre-paint <script> in
-// layout.tsx already applied the cached appearance, so this covers a first visit,
-// an operator switch since last visit, and the listener override (a stale id
-// silently falls back to the station active).
-// Light vs dark is a property of the palette, not a listener control: each theme
-// declares its own mode. The 30s poll is the upper bound on how long a listener
-// sees the old theme after an operator switch.
+// The pre-paint script applies cached appearance. Polling updates the station theme and resolves listener overrides.
 export default function ThemeProvider({ children }: { children?: ReactNode }) {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [stationActiveId, setStationActiveId] = useState<string | null>(null);

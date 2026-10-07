@@ -1,12 +1,7 @@
 'use client';
 
-// Player chrome every skin gets for free: the headless core provider, the
-// <audio> element skins tap for the visualiser, contained-embed portal
-// plumbing, and skin resolution.
-//
-// Skin precedence mirrors themes: listener override (localStorage) > station
-// default (ui.skin on GET /state) > built-in fallback. The last-seen station
-// skin is cached; contained showcases follow the remote station strictly.
+// Skin precedence: listener override, station default, built-in fallback. Contained showcases
+// follow the remote station.
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -58,11 +53,8 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   const { state } = usePlayerFeed();
   const stationSkinRaw = typeof state.ui?.skin === 'string' && state.ui.skin ? state.ui.skin : null;
 
-  // localStorage is effect-only (SSR renders the default), so an override or
-  // cached non-default station skin swaps one tick after hydration.
-  // SKIN_INIT_SCRIPT hides the shell pre-paint (data-skin-pending on <html>)
-  // so that swap is a blank, not a flash of the default face; `hydrated`
-  // lifts the curtain once the resolved skin is in the tree.
+  // Hide the shell with SKIN_INIT_SCRIPT until hydration resolves browser skin preferences,
+  // avoiding a flash of the default skin.
   const [overrideId, setOverrideId] = useState<string | null>(null);
   const [cachedStation, setCachedStation] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
@@ -102,12 +94,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     [stationSkinId, overrideId, effectiveId, setOverride],
   );
 
-  // Shell-level cycling shortcuts, live in every skin: `s` cycles the skin
-  // override, `t` the theme override. Both stand down while a skin-owned
-  // modal has focus (swapping would tear it down mid-use); Radix traps focus
-  // inside role="dialog", so the event target is the tell. Skins' own
-  // shortcut maps still work inside drawers, hence the check lives here and
-  // not in useKeyboardShortcuts.
+  // Skip skin/theme cycling inside dialogs so shortcuts do not unmount an active modal.
   const themeCtx = useThemeSwitcher();
   const cycleSkin = useCallback((e?: KeyboardEvent) => {
     if (contained || targetInsideDialog(e)) return;
@@ -160,19 +147,13 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
         ) : (
           <>
             <audio ref={attachAudio} crossOrigin="anonymous" preload="auto" />
-            {/* Skins are next/dynamic chunks, so an unfetched face suspends on
-                first render. This boundary is required: without it the
-                suspension escapes to the landing page's own boundary, which
-                re-reveals every motion element without re-running its mount
-                animation and leaves the page stuck at opacity 0. */}
+            {/* Contain skin suspension here so the landing page does not replay its reveal and remain at opacity 0. */}
             <Suspense fallback={null}>
               <Skin contained={contained} portalNode={portalNode} />
             </Suspense>
-            {/* Same prompt, overlaid, when only the stream is locked. */}
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
           </>
         )}
-        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
       </div>
     </SkinSelectionProvider>
   );

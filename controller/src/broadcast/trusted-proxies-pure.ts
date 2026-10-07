@@ -1,13 +1,5 @@
-// What the icecast render decided about trusted reverse proxies (#1613), as
-// pure decision logic. Split from the reader so it can be tested without
-// config.js / node:fs.
-//
-// Icecast's only peer is the edge, so admin -> Listeners shows the proxy's
-// container address unless <x-forwarded-for> names that proxy. The marker
-// (state/trusted-proxies.json, written by docker/broadcast-entrypoint.sh and
-// the AIO supervisor's render_icecast) is how that decision reaches the admin
-// console. Every ambiguous input resolves to UNKNOWN, which renders nothing —
-// degrading to the unexplained peer address beats a hint that guesses.
+// Read the Icecast renderer's trusted-proxies.json marker. Ambiguous input is unknown and
+// produces no hint rather than guessing why an IP is shown. #1613.
 
 export interface TrustedProxyState {
   /** False when no usable marker exists: an older broadcast image, a state dir

@@ -1,12 +1,5 @@
-// The picker's per-pick scope + the context every discovery tool runs against.
-//
-// Scope is ONE value on purpose: every constraint a pick runs under travels from
-// pickViaAgent (broadcast/dj-agent.ts) to the tools as a single `PickerScope`
-// that is never destructured into per-field lists along the way. A lock named in
-// one list and forgotten in another is neither a type error nor a crash — it
-// falls through to a null default and stops being enforced on the agent path
-// while the pool picker still honours it (#1300 FR 13, vocalLock). Adding a lock
-// means adding a field here; do not reintroduce a per-field hand-off.
+// Pass one PickerScope from pickViaAgent to every tool. Field-by-field handoffs
+// previously dropped vocalLock silently (#1300 FR 13); add constraints to this shape.
 
 import * as library from '../../../../music/library.js';
 import * as embeddings from '../../../../music/embeddings.js';

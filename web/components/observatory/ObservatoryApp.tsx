@@ -430,8 +430,6 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         </div>
       </header>
 
-      {/* A load failure never blanks the view, but must not read as a fresh
-          install either. */}
       {error && (
         <div className="obs-error" role="alert">
           <span>

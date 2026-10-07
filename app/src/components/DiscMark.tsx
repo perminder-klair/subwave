@@ -1,6 +1,3 @@
-// The SUB/WAVE disc-mark: a vinyl record of 20 radial spokes with an accent
-// label, spinning on a 6s linear loop while the station is on air.
-
 import { useEffect, useRef } from 'react';
 import { Animated, Easing } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';

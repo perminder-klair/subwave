@@ -1,7 +1,4 @@
 'use client';
-// The global system-prompt library: templates shared by every persona, one
-// active at a time ('' = the built-in default). Form data lives in the
-// container; this holds only which of the two views is showing.
 import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { useFormState, useWatch, type Control, type UseFormSetValue } from 'react-hook-form';
@@ -240,9 +237,6 @@ export function SystemPromptModal({
               </Btn>
             </div>
 
-            {/* The one operator block that reaches EVERY spoken line: the scripted
-                talk the template wraps, the tool-using agents it never touches
-                (issue #1182), and the multi-voice cast exchanges (issue #1420). */}
             <div className="mt-5 border-t border-ink/40 pt-4">
               <div className="caption mb-1.5">station house rules</div>
               <p className="mb-2 max-w-[70ch] text-[12px] leading-[1.6] text-muted">

@@ -54,9 +54,6 @@ export default function BlockedTabContainer() {
 
   return (
     <>
-      {/* Attribute rules above the id entries — one "why won't this air"
-          surface, two kinds of block. Self-contained; after a rule change only
-          the row marks on the other tabs need re-stamping. */}
       <BlockRulesCard onChanged={() => { void restampBlockMarks(); }} />
       <BlockedTab
         entries={blocked.data ?? null}

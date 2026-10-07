@@ -1,12 +1,6 @@
 'use client';
 
-/* The tag editor, shared by the show and persona editors. The skills modal has
- * its own copy of this markup, styled with the modal's inline style objects.
- *
- * The rules are PASSED IN, not imported: SKILL_TAG_RE, SHOW_TAG_RE and
- * PERSONA_TAG_RE are three separate declarations of one pattern (a mirrored
- * schema module may import only zod), so hard-coding one would enforce the
- * wrong cap for the other callers the moment they diverge. */
+// Tag rules come from each caller because show, persona, and skill limits can differ.
 
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';

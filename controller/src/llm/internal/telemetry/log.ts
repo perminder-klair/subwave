@@ -1,9 +1,4 @@
-// Ring buffer of recent LLM calls — feeds the admin /debug surface so the
-// last MAX_CALLS model calls (prompt, response, latency, provider) are
-// inspectable without log diving.
-//
-// Lives low in the dependency graph so both the failover harness (core) and the
-// prompt layer (prompts) can record without an import cycle.
+// Keep telemetry below core and prompts in the dependency graph to avoid import cycles.
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync } from 'node:fs';

@@ -2,12 +2,7 @@ import Image from 'next/image';
 import CatalogBrief from '@/components/ui/catalog-brief';
 import { APP_TYPE_LABELS, type CommunityApp } from '@/lib/apps';
 
-// One app in the /apps directory. Images are submitter-hosted and
-// host-allowlisted upstream (community repo builder → lib/apps.ts →
-// next.config.js remotePatterns), and both are optional.
-//
-// data-type carries the bucket so AppTypeFilter can filter with CSS alone,
-// keeping this a server component.
+// Images are optional and host-allowlisted. AppTypeFilter uses data-type for CSS filtering without client rendering.
 
 // Screenshots are decorative — the name and description carry the meaning, and
 // a submitter-written alt would be another untrusted string on the page.
@@ -41,9 +36,6 @@ export default function AppCard({ app }: { app: CommunityApp }) {
           />
         )}
         <div className="bs-app-headtext">
-          {/* Same destination as "Get it" below; both stay, and they read as two
-              distinct accessible names ("Night Owl" / "Get it — Night Owl")
-              rather than a repeated one. */}
           <h3 className="bs-app-name">
             <a
               href={app.url}
@@ -72,8 +64,6 @@ export default function AppCard({ app }: { app: CommunityApp }) {
 
       <p className="bs-app-links">
         <a href={app.url} target="_blank" rel="noreferrer noopener" className="bs-app-get">
-          {/* Named so a screen reader on a run of cards doesn't hear "Get it"
-              six times with no idea which app each belongs to. */}
           Get it<span className="sr-only"> — {app.name}</span>
         </a>
         {app.repo && (

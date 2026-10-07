@@ -1,10 +1,5 @@
 import { toast } from 'sonner';
 
-// Thin wrapper around Sonner so every transient notification goes through one
-// call site. `busy` stays up until the caller dismisses it by the returned id;
-// `undo` is `ok` plus an Undo button and a longer dwell, preferred over a
-// confirm dialog. Not for persistent offline/load-failure states (inline
-// V3Alert cards) or field-level validation errors (inline by the field).
 
 export const notify = {
   ok: (message: string) => toast.success(message),

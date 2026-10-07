@@ -1,12 +1,6 @@
-// Pair-aware drain policy (#749): WHEN a queued track is handed to Liquidsoap.
-// A track's annotate stamps control the transition at its own end, so they can
-// only be pair-sized if its SUCCESSOR is known when written — hence the tail of
-// `upcoming` is held unsent until a successor is queued behind it, or the
-// on-air track is close enough to its end that it must send regardless. Pure
-// and I/O-free for scripts/drain-policy.test.ts.
-
-// Remaining time at which the deadline routine picks the held item's successor
-// so it can drain pair-aware. Longer than a pick + a cache-hit stem render.
+// Hold the unsent tail until its successor is known or the hard deadline requires intrinsic
+// stamps. Pick the successor early enough for selection and a cached stem render. #749,
+// scripts/drain-policy.test.ts..
 export const DRAIN_DEADLINE_SEC = 120;
 
 // Past this the held item is sent with track-intrinsic stamps only: Liquidsoap
@@ -60,13 +54,9 @@ export const DRAIN_COMMIT_RESERVE_SEC = 12;
 // cannot finish only delays the music commit for a WAV nobody will use.
 export const MIN_PRERENDER_BUDGET_SEC = 5;
 
-// How long the drain may pre-render an intro/link WAV before it MUST commit the
-// music (#1409). On a slow TTS engine the render alone can outlast the runway
-// and the pick then airs one track late.
-//   null — unbounded; the clock is unknowable, so there is no seam to miss.
-//   0    — skip the pre-render; airIntro re-renders from introScript at air
-//          time, so skipping is cheap and a missed seam is not.
-//   >0   — seconds the render may take before the drain moves on without it.
+// Intro pre-render budget: null is unbounded when air time is unknown; zero skips pre-render;
+// positive values bound the wait. airIntro can render the script later without delaying music.
+// #1409.
 export function introRenderBudgetSec(remaining: number | null): number | null {
   if (remaining == null) return null;
   const budget = remaining - DRAIN_COMMIT_RESERVE_SEC;
@@ -75,16 +65,9 @@ export function introRenderBudgetSec(remaining: number | null): number | null {
 
 type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
 
-// Decide what the drain loop does with the FIRST unsent item:
-//  - 'send-pair'      — successor already queued; stamp pair-aware and send.
-//                       A listener request landing behind a held pick releases
-//                       it the same way, so FIFO is never inverted.
-//  - 'hold'           — no successor yet, but there's still time for the
-//                       deadline pick to provide one. The item stays unsent.
-//  - 'send-intrinsic' — send now with track-intrinsic stamps only: the
-//                       feature is off, the clock is unknowable (boot,
-//                       recover, untracked auto play), or the hard deadline
-//                       passed without a successor.
+// A successor releases the held item with pair stamps, including a listener request; preserve
+// FIFO. Without a successor, hold until the deadline or send intrinsic stamps when timing is
+// unavailable.
 export function drainAction(opts: {
   pairDrain: boolean;
   hasSuccessor: boolean;

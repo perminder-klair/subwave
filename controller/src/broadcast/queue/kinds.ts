@@ -1,17 +1,5 @@
-// The voice-kind registry the DJ recap reads through. The fixed channels are
-// declared here; skills/loader.ts registers every loaded skill kind at load
-// time via registerSkillKinds(), so a new skill is recapped without editing
-// this file.
-//
-// Part of the queue/ split - see ../queue.ts, which owns the Queue class.
-
-
-
-// Voice kinds the DJ recap remembers. The fixed channels are always present;
-// every skill kind (built-in + custom) is registered at skill-load time via
-// registerSkillKinds() — so a new skill is recapped without editing this list.
-// 'handoff' (the two-voice persona mic-pass) counts too, so the incoming DJ's
-// next segments don't echo the greeting's opener.
+// Recap fixed voice kinds plus skills registered at load. Include handoffs so the next segment
+// does not repeat its greeting.
 export const VOICE_KINDS = new Set(['dj-speak', 'link', 'station-id', 'hourly-check', 'handoff', 'banter']);
 // The intro channels tied to a track start rather than the wall clock — the
 // standalone-talk-break clock (getLastTalkBreakAt) skips them.
@@ -26,14 +14,8 @@ export const PENDING_VOICE_MAX_AGE_MS = 20 * 60_000;
 // broadcast/talk-scheduler.ts consumes it, and a second spelling of the shape
 // would drift from the constant that gives `queuedAt` its meaning.
 export type PendingTalk = { kind: string; queuedAt: number };
-// The two questions asked about that clip's finite life, named once so neither
-// caller re-spells the arithmetic. Queue asks the first at a track start, to
-// drop a clip that waited too long; the talk scheduler asks the second to
-// decide how long a pending clip may hold a gap-gated row (#1539).
-//
-// Two functions rather than one, deliberately: the drop is strictly PAST the
-// limit while the scheduler needs the remaining duration, and deriving either
-// from the other would move the drop boundary by a millisecond.
+// Queue expiry is strictly past the limit; scheduler holds use the remaining lifetime. Keep
+// these boundaries distinct. #1539.
 export function pendingVoiceStale(queuedAt: number, nowMs: number): boolean {
   return nowMs - queuedAt > PENDING_VOICE_MAX_AGE_MS;
 }
