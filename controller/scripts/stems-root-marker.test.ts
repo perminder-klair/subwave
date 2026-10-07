@@ -63,10 +63,10 @@ async function main() {
     assert.equal(st.message, undefined);
     assert.ok(!existsSync(root));
   });
-  await test('existing cache without a marker is adopted', async () => {
+  await test('analysis preparation adopts an existing cache without a marker', async () => {
     reset();
     mkdirSync(join(root, 'track-1'), { recursive: true });
-    const st = await stemCache.stemsRootStatus();
+    const st = await stemCache.stemsRootStatus({ prepare: true });
     assert.equal(st.online, true);
     assert.equal(st.action, 'adopt');
     assert.ok(existsSync(marker));
@@ -126,12 +126,32 @@ async function main() {
     assert.equal(r.removed, 1);
     assert.ok(existsSync(marker), 'the sweep never removes the marker');
   });
+  await test('legacy cache sweep evicts without creating a marker', async () => {
+    reset();
+    mkdirSync(join(root, 'track-1'), { recursive: true });
+    writeFileSync(join(root, 'track-1', 'head-drums.flac'), Buffer.alloc(4096));
+    const r = await stemCache.sweep(1);
+    assert.equal(r.removed, 1);
+    assert.equal(r.freedBytes, 4096);
+    assert.equal(r.overBudgetBytes, 0);
+    assert.ok(!existsSync(marker), 'hourly maintenance must not authorize stem writes');
+  });
 
   console.log('unmounted share (library DB open, stems stamped)');
   const db = await import('../src/music/library-db.js');
   await db.open({ embeddingDim: 768, adoptStoredDim: true });
   db.upsertTrackMeta('t1', { title: 'Song', artist: 'A', album: 'B', duration: 200 });
   db.upsertTrackAnalysis('t1', { bpm: 120, stemsAttempted: true });
+  await test('a README does not turn an offline root into an existing cache', async () => {
+    reset();
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, 'README'), 'Stem mountpoint\n');
+    assert.equal((await stemCache.stemsRootStatus({ readOnly: true })).action, 'offline');
+    const st = await stemCache.stemsRootStatus({ prepare: true });
+    assert.equal(st.online, false);
+    assert.equal(st.action, 'offline');
+    assert.ok(!existsSync(marker));
+  });
   await test('empty root with stamped stems: offline, nothing written', async () => {
     reset();
     mkdirSync(root, { recursive: true }); // the bare mount point

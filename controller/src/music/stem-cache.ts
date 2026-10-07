@@ -8,7 +8,7 @@
 // ranking the backfill scans by); the analyzer owns the WRITES
 // (analyze_worker.py write_stems — the same shared volume).
 
-import { readdir, stat, rm, mkdir, writeFile } from 'node:fs/promises';
+import { readdir, stat, rm, mkdir, chmod, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
@@ -125,24 +125,45 @@ function stampedStemCount(): number {
   }
 }
 
-async function writeMarker(root: string): Promise<void> {
-  await mkdir(root, { recursive: true });
+async function writeMarker(root: string): Promise<string | undefined> {
+  const resolvedRoot = path.resolve(root);
+  const firstCreated = await mkdir(resolvedRoot, { recursive: true, mode: 0o777 });
+  const warnings: string[] = [];
+  // mkdir's mode is masked by umask. Share every new ancestor with the analyzer,
+  // but leave existing mounts alone, including read-only legacy caches.
+  if (firstCreated) {
+    let dir = resolvedRoot;
+    while (true) {
+      try {
+        await chmod(dir, 0o777);
+      } catch (err) {
+        const shared = await stat(dir).then(st => (st.mode & 0o003) === 0o003, () => false);
+        if (!shared) {
+          warnings.push(`Stem cache: could not share ${dir} with the analyzer (${err instanceof Error ? err.message : String(err)}); check its permissions on the host`);
+        }
+      }
+      if (dir === firstCreated) break;
+      dir = path.dirname(dir);
+    }
+  }
   await writeFile(
     path.join(root, STEMS_MARKER),
     JSON.stringify({ createdAt: new Date().toISOString(), note: 'SUB/WAVE stem cache root; stems are only written, backfilled and swept while this file is present' }) + '\n',
   );
+  return warnings.length > 0 ? warnings.join('\n') : undefined;
 }
 
 // Checks (and when allowed, establishes) the marker. One stat when the marker
 // is there; one readdir of the root only when it is missing.
-// `readOnly` (the doctor) reports the decision without writing the marker.
+// `readOnly` (the doctor and sweep) reports the decision without writing the marker.
 export async function stemsRootStatus(opts: { prepare?: boolean; readOnly?: boolean } = {}): Promise<StemsRootStatus> {
   const root = stemsRoot();
   const markerPresent = await stat(path.join(root, STEMS_MARKER)).then(() => true, () => false);
   let stemDirs = 0;
   if (!markerPresent) {
     try {
-      stemDirs = (await readdir(root)).filter(n => !n.startsWith('.')).length;
+      stemDirs = (await readdir(root, { withFileTypes: true }))
+        .filter(entry => entry.isDirectory() && !entry.name.startsWith('.')).length;
     } catch { /* no root yet */ }
   }
   const action = stemsRootDecision({
@@ -151,9 +172,10 @@ export async function stemsRootStatus(opts: { prepare?: boolean; readOnly?: bool
     stampedTracks: markerPresent || stemDirs > 0 ? 0 : stampedStemCount(),
     prepare: opts.prepare === true,
   });
+  let message: string | undefined;
   if ((action === 'adopt' || action === 'create') && !opts.readOnly) {
     try {
-      await writeMarker(root);
+      message = await writeMarker(root);
     } catch (err) {
       // Stem dirs on disk prove the share is mounted: a root that refuses the
       // marker stays online, so the sweep still reports deletes it cannot do
@@ -184,7 +206,7 @@ export async function stemsRootStatus(opts: { prepare?: boolean; readOnly?: bool
         `To start an empty cache on purpose, create the file ${path.join(root, STEMS_MARKER)}.`,
     };
   }
-  return { online: action !== 'none', action };
+  return { online: action !== 'none', action, ...(message ? { message } : {}) };
 }
 
 // The operator's byte budget (settings.audio.stemCacheGb), floored at 1 GB so
@@ -369,7 +391,7 @@ export async function sweep(budget = budgetBytes()): Promise<{
   // unmounted share): the message says why.
   offline?: string;
 }> {
-  const root = await stemsRootStatus();
+  const root = await stemsRootStatus({ readOnly: true });
   if (!root.online) {
     return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, offline: root.message };
   }

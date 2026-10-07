@@ -1999,6 +1999,7 @@ def analyze(
                 if ys is not None and np.size(ys) > 0:
                     head_stems = detector.separate(ys)
                     vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+                    stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
                     if stems_dir:
                         try:
                             write_stems(head_stems, "head", stems_dir)
@@ -2030,12 +2031,17 @@ def analyze(
                     tail_vocals = detector.detect(
                         y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
                     )
+                    stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
                     if stems_dir:
                         try:
                             write_stems(tail_stems, "tail", stems_dir)
-                            write_tail_meta(stems_dir, tail_offset, duration_s)
+                            stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
+                            if stems_dir:
+                                write_tail_meta(stems_dir, tail_offset, duration_s)
                         except Exception as e:  # noqa: BLE001 — cache is best-effort
                             log(f"stem cache write (tail) failed: {e}")
+                    if not stems_dir:
+                        stems_cached = None
                     shift_ms = tail_offset * 1000.0
                     outro["vocalRanges"] = [
                         {

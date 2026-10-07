@@ -71,7 +71,7 @@ bootstrap_state_dirs() {
     done
     # A RELOCATED stem cache (STEMS_DIR in .env, container path
     # SUBWAVE_STEMS_DIR) sits outside $dir, so the loop above never reaches it.
-    # Per-station subdirs under it are created by the analyzer, inheriting 777.
+    # Marker initialization shares any per-station directories it creates too.
     if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
         state_prepare_dir "$SUBWAVE_STEMS_DIR"
     fi
