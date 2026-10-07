@@ -72,10 +72,24 @@ export function logger(scope: string): SourceLogger {
 }
 
 // fetch with a default timeout for plugin API calls. A caller-supplied signal
-// wins, which is how a plugin opts a long download out of it.
-function pluginFetch(): typeof fetch {
-  return (input, init = {}) =>
-    fetch(input, init.signal ? init : { ...init, signal: AbortSignal.timeout(PLUGIN_FETCH_TIMEOUT_MS) });
+// wins. The timeout covers reaching the server and receiving its headers, not
+// the body: stream() may hand back the Response itself ({ response }), and a
+// track can take longer than the timeout to arrive over a slow link. An API
+// call's body read is still bounded by the op timeout (wrap.ts).
+export function pluginFetch(timeoutMs = PLUGIN_FETCH_TIMEOUT_MS): typeof fetch {
+  return async (input, init = {}) => {
+    if (init.signal) return fetch(input, init);
+    const ctrl = new AbortController();
+    const timer = setTimeout(
+      () => ctrl.abort(new DOMException(`no response within ${timeoutMs}ms`, 'TimeoutError')),
+      timeoutMs,
+    );
+    try {
+      return await fetch(input, { ...init, signal: ctrl.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {

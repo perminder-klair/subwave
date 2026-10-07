@@ -25,6 +25,7 @@ import {
   changesTrackIds,
   draftDirty,
   missingFields,
+  seedableSources,
   selectablePlugins,
   selectionPayload,
   type DraftSource,
@@ -74,17 +75,25 @@ export function MusicSourceSection({ data, adminFetch, refresh }: MusicSourceSec
   });
   const view = q.data;
 
-  // Draft, seeded once from the first answer; later refetches (health) must
-  // not clobber what the operator is typing.
+  // Draft, seeded once; later refetches (health) must not clobber what the
+  // operator is typing. The sources wait for an answer that has the router's
+  // manifests (seedableSources).
   const [mode, setMode] = useState<MusicMode | null>(null);
   const [merge, setMerge] = useState(false);
   const [sources, setSources] = useState<DraftSource[]>([]);
+  const [sourcesSeeded, setSourcesSeeded] = useState(false);
   useEffect(() => {
-    if (!view || mode !== null) return;
-    setMode(view.mode);
-    setMerge(view.merge);
-    setSources(view.sources);
-  }, [view, mode]);
+    if (!view) return;
+    if (mode === null) {
+      setMode(view.mode);
+      setMerge(view.merge);
+    }
+    const seed = sourcesSeeded ? null : seedableSources(view);
+    if (seed) {
+      setSources(seed);
+      setSourcesSeeded(true);
+    }
+  }, [view, mode, sourcesSeeded]);
 
   const reload = async () => {
     await queryClient.invalidateQueries({ queryKey: MUSIC_SOURCE_KEY });

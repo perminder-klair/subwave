@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MusicPluginInfo } from '../../../lib/schemas.generated';
-import { blankSource, changesTrackIds, draftDirty, missingFields, selectionPayload, type SavedSelectionView } from './sourceDraft';
+import { blankSource, changesTrackIds, draftDirty, missingFields, seedableSources, selectionPayload, type SavedSelectionView } from './sourceDraft';
 
 const jellyfin: MusicPluginInfo = {
   name: 'jellyfin',
@@ -63,4 +63,29 @@ test('the payload carries only what the controller reads', () => {
     merge: false,
     sources: [{ plugin: 'jellyfin', config: { url: 'http://jf' } }],
   });
+});
+
+// #1827 review: with the router down, the controller hides every setting of a
+// saved source (it cannot tell a URL from a secret without the manifest). A
+// draft seeded from that answer, saved once the router was back, dropped every
+// optional setting.
+test('the draft waits for an answer that carries the router manifests', () => {
+  const masked = { mode: 'router' as const, merge: false, sources: [{ plugin: 'plex', config: {}, secretsSet: ['url', 'section'] }] };
+  assert.equal(seedableSources({ ...masked, router: null }), null);
+  const full = { ...masked, sources: [{ plugin: 'plex', config: { url: 'http://px', section: '3' }, secretsSet: ['token'] }] };
+  assert.deepEqual(seedableSources({ ...full, router: { plugins: [] } }), full.sources);
+  assert.deepEqual(seedableSources({ mode: 'navidrome', merge: false, sources: [], router: null }), [], 'nothing saved, nothing to wait for');
+});
+
+// The warning is the controller's own rule (musicSelectionIdentity), so a
+// manifest's affectsIds marks decide it on both sides.
+test('the id-change warning follows the manifest marks', () => {
+  const plex = { ...jellyfin, name: 'plex', config: [
+    { key: 'url', label: 'URL', type: 'url' as const, affectsIds: true },
+    { key: 'token', label: 'Token', type: 'secret' as const },
+    { key: 'sonicSimilarity', label: 'Sonic', type: 'boolean' as const, affectsIds: false },
+  ] };
+  const view = { mode: 'router' as const, merge: false, sources: [{ plugin: 'plex', config: { url: 'http://px', sonicSimilarity: true }, secretsSet: ['token'] }] };
+  assert.equal(changesTrackIds(view, 'router', [{ ...view.sources[0]!, config: { url: 'http://px', sonicSimilarity: false } }], [plex]), false, 'a toggle');
+  assert.equal(changesTrackIds(view, 'router', [{ ...view.sources[0]!, config: { url: 'http://px2', sonicSimilarity: true } }], [plex]), true, 'a new server');
 });

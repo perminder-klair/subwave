@@ -75,11 +75,11 @@ A plugin is code with the same trust as a skill's `tool.mjs`. The compose servic
 - `routes/settings/core.ts` — the direct-Navidrome section reads and writes the *stored* connection; in router mode its save does not touch the live one.
 - `doctor/checks-services.ts` — router mode reports the router, each source's health and any plugin load errors.
 
-Secrets never reach the browser: `GET` returns `secretsSet` (keys with a stored value), and a blank secret in a save keeps the stored one for the same plugin.
+Secrets never reach the browser: `GET` returns `secretsSet` (keys with a stored value), and a blank secret in a save (or a Test) keeps the stored one for the same plugin — only while every `url` field still matches what was stored, so a stored key is never sent to a server it was not stored for. Without the plugin's manifest (the router down, or a manifest that failed to load) the controller cannot tell a URL from a secret and shows none of a source's settings; the admin form therefore waits for an answer with the manifests before seeding its draft (`web/.../sourceDraft.ts seedableSources`), or a later save would drop every optional setting.
 
 ## Surviving a switch
 
-Every track id changes when the backend does. Saving a selection whose identity changes (mode, plugins, raw-id choice, or non-secret config such as a server URL — not a password) writes `music-source-switch.json`, starts a reconcile walk if the tagger slot is free, and otherwise answers `pending`.
+Every track id changes when the backend does. Saving a selection whose identity changes (mode, plugins, raw-id choice, or a setting the manifest marks `affectsIds: true` such as a server URL — never a secret, never a display toggle; a manifest with no marks counts every non-secret field) — one rule, `schemas/music-source.ts musicSelectionIdentity`, shared with the admin form's id-change warning — writes `music-source-switch.json`, starts a reconcile walk if the tagger slot is free, and otherwise answers `pending`.
 
 A walk spends the marker only if its process loaded its connection AFTER the marker was written (`setup/music-source.ts currentSelectionSince`, `music/source-switch.ts switchedAfter`). A maintenance run that was already going walked the OLD library: adopting from it re-links nothing, and spending the marker there left the first walk of the new library with every row orphaned and no marker. So that run leaves the marker, and when it exits the controller starts the reconcile itself (`broadcast/tagger.ts resumeSourceSwitch`, decided by `afterMaintenanceRun`) — unless the operator stopped it, which logs a hint to run Reconcile instead. A run that began after the switch is never followed up, so a walk that fails cannot loop.
 

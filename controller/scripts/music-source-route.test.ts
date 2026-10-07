@@ -168,12 +168,22 @@ test('secrets stay in the process; a blank secret keeps the stored one', async (
 
   res = await call('POST', '/settings/music-source', {
     mode: 'router',
-    sources: [{ plugin: 'jellyfin', config: { url: 'http://127.0.0.1:10', apiKey: '' } }],
+    sources: [{ plugin: 'jellyfin', config: { url: 'http://127.0.0.1:9', apiKey: '', user: 'someone' } }],
   });
   assert.equal(res.status, 200);
-  const stored = ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!;
-  assert.equal(stored.config.apiKey, 'TOP-SECRET-KEY', 'kept');
-  assert.equal(stored.config.url, 'http://127.0.0.1:10');
+  let stored = ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!;
+  assert.equal(stored.config.apiKey, 'TOP-SECRET-KEY', 'kept: same server');
+  assert.equal(stored.config.user, 'someone');
+
+  // A new server needs its key typed again: the stored one is not sent there.
+  res = await call('POST', '/settings/music-source', {
+    mode: 'router',
+    sources: [{ plugin: 'jellyfin', config: { url: 'http://127.0.0.1:10', apiKey: '' } }],
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /Jellyfin needs: API key/);
+  stored = ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!;
+  assert.equal(stored.config.url, 'http://127.0.0.1:9', 'nothing saved');
 });
 
 test('a draft test reports health without saving it', async () => {
@@ -182,9 +192,11 @@ test('a draft test reports health without saving it', async () => {
   assert.equal(res.body.ok, true);
   assert.equal(res.body.stats.songs, 261);
   assert.equal(res.body.capabilities.playlists, true);
-  // Uses the stored secret when the draft leaves it blank.
+  // Uses the stored secret when the draft leaves it blank — for the stored server only.
   const jf = await call('POST', '/settings/music-source/test', { plugin: 'jellyfin', config: { url: 'http://127.0.0.1:9' } });
   assert.equal(jf.body.state, 'unreachable');
+  const elsewhere = await call('POST', '/settings/music-source/test', { plugin: 'jellyfin', config: { url: 'http://127.0.0.1:11' } });
+  assert.equal(elsewhere.body.state, 'not-configured', 'no stored key travels to another server');
   assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!.plugin, 'jellyfin', 'nothing was saved');
 });
 

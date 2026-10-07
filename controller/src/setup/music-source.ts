@@ -22,6 +22,7 @@ import { envUrl } from '../util/env.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   DEFAULT_MUSIC_SELECTION,
+  musicSecretKeys,
   musicSelectionSchema,
   routerStatusSchema,
   routerTestResultSchema,
@@ -140,9 +141,7 @@ export function routerConnection(auth: RouterAuth | null): { url: string; user: 
 
 // --- secrets in the browser ---------------------------------------------------
 
-function secretKeys(plugin: Pick<MusicPluginInfo, 'config'> | undefined): string[] {
-  return (plugin?.config ?? []).filter((f) => f.type === 'secret').map((f) => f.key);
-}
+const secretKeys = musicSecretKeys;
 
 export interface MaskedSourceEntry extends MusicSourceEntry {
   /** Secret keys that have a stored value; the values themselves never leave the process. */
@@ -154,8 +153,11 @@ export function maskSelection(sel: MusicSelection, plugins: readonly MusicPlugin
     mode: sel.mode,
     merge: sel.merge,
     sources: sel.sources.map((entry) => {
-      const plugin = plugins.find((p) => p.name === entry.plugin);
-      // Without the manifest we cannot tell a secret from a URL, so nothing is shown.
+      // Without the manifest we cannot tell a secret from a URL, so nothing is
+      // shown. A plugin whose manifest failed to load is listed with no config
+      // fields, which would otherwise read as "no secrets" and show them all.
+      const listed = plugins.find((p) => p.name === entry.plugin);
+      const plugin = listed && !(listed.error && listed.config.length === 0) ? listed : undefined;
       const secrets = plugin ? secretKeys(plugin) : Object.keys(entry.config);
       const config: MusicSourceEntry['config'] = {};
       const secretsSet: string[] = [];
@@ -169,19 +171,34 @@ export function maskSelection(sel: MusicSelection, plugins: readonly MusicPlugin
   };
 }
 
-/** A blank secret in a draft keeps the stored one for the same plugin. */
+// A stored secret is only safe to reuse where it was meant to go. A blank
+// secret in a draft falls back to the stored one only while every `url` field
+// still says what was stored — otherwise Test (or Save) would send the stored
+// API key, token or password-derived token to whatever host the draft names.
+// Changing the server means typing its secret again.
+function storedSecretsFor(entry: MusicSourceEntry, prev: MusicSourceEntry[], plugin: MusicPluginInfo | undefined): MusicSourceEntry | undefined {
+  const old = prev.find((p) => p.plugin === entry.plugin);
+  if (!old) return undefined;
+  const same = (a: unknown, b: unknown) => String(a ?? '').trim() === String(b ?? '').trim();
+  const urls = (plugin?.config ?? []).filter((f) => f.type === 'url');
+  return urls.every((f) => same(entry.config[f.key], old.config[f.key])) ? old : undefined;
+}
+
+const blank = (v: unknown) => v === undefined || v === null || v === '';
+
+/** A blank secret in a draft keeps the stored one for the same plugin and server. */
 export function keepStoredSecrets(
   next: MusicSourceEntry[],
   prev: MusicSourceEntry[],
   plugins: readonly MusicPluginInfo[],
 ): MusicSourceEntry[] {
   return next.map((entry) => {
-    const old = prev.find((p) => p.plugin === entry.plugin);
+    const plugin = plugins.find((p) => p.name === entry.plugin);
+    const old = storedSecretsFor(entry, prev, plugin);
     if (!old) return entry;
     const config = { ...entry.config };
-    for (const key of secretKeys(plugins.find((p) => p.name === entry.plugin))) {
-      const v = config[key];
-      if ((v === undefined || v === null || v === '') && old.config[key] !== undefined) config[key] = old.config[key];
+    for (const key of secretKeys(plugin)) {
+      if (blank(config[key]) && old.config[key] !== undefined) config[key] = old.config[key];
     }
     return { ...entry, config };
   });
@@ -189,31 +206,15 @@ export function keepStoredSecrets(
 
 /** Secret keys a draft left blank that will fall back to a stored value. */
 export function keptSecretKeys(entry: MusicSourceEntry, prev: MusicSourceEntry[], plugin: MusicPluginInfo | undefined): string[] {
-  const old = prev.find((p) => p.plugin === entry.plugin);
+  const old = storedSecretsFor(entry, prev, plugin);
   if (!old) return [];
-  return secretKeys(plugin).filter((k) => {
-    const v = entry.config[k];
-    return (v === undefined || v === null || v === '') && old.config[k] !== undefined && old.config[k] !== '';
-  });
+  return secretKeys(plugin).filter((k) => blank(entry.config[k]) && !blank(old.config[k]));
 }
 
 // --- source switches ------------------------------------------------------------
 
-/**
- * What decides the station's track ids: the mode and, in router mode, which
- * sources answer, how their ids are published, and where they point. Secrets
- * are excluded — a new password reaches the same library.
- */
-export function selectionIdentity(sel: MusicSelection, plugins: readonly MusicPluginInfo[] = []): string {
-  if (sel.mode !== 'router') return 'navidrome';
-  return JSON.stringify(
-    sel.sources.map((s) => {
-      const secrets = secretKeys(plugins.find((p) => p.name === s.plugin));
-      const visible = Object.fromEntries(Object.entries(s.config).filter(([k]) => !secrets.includes(k)).sort(([a], [b]) => a.localeCompare(b)));
-      return { plugin: s.plugin, rawIds: s.rawIds === true, config: visible };
-    }),
-  );
-}
+/** Shared with the admin form's id-change warning (schemas/music-source.ts). */
+export { musicSelectionIdentity as selectionIdentity } from '../schemas/music-source.js';
 
 /**
  * Record that track ids are about to change. The next complete library walk

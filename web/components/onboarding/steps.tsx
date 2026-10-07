@@ -96,10 +96,13 @@ const navidromeStepSchema = z.object({
 // form below), or the SUB/WAVE music router serving Jellyfin, Plex, an
 // installed plugin or the demo library (#692).
 export function NavidromeStep({ w }: { w: WizardController }) {
-  const [mode, setMode] = useState(w.data.music.mode);
+  // Follows the wizard's music mode — which opens on what the station plays
+  // from once that loads — until the operator picks a side here.
+  const [chosen, setChosen] = useState<'navidrome' | 'router' | null>(null);
+  const mode = chosen ?? w.data.music.mode;
   return mode === 'router'
-    ? <RouterSourceStep w={w} onMode={setMode} />
-    : <NavidromeForm w={w} onMode={setMode} />;
+    ? <RouterSourceStep w={w} onMode={setChosen} />
+    : <NavidromeForm w={w} onMode={setChosen} />;
 }
 
 function ModeSwitch({ mode, onMode }: { mode: 'navidrome' | 'router'; onMode: (m: 'navidrome' | 'router') => void }) {
@@ -185,7 +188,7 @@ function RouterSourceStep({ w, onMode }: { w: WizardController; onMode: (m: 'nav
   const onNext = (ev: React.FormEvent) => {
     ev.preventDefault();
     if (!plugin || missing.length) return;
-    w.patch({ music: { mode: 'router', sources: [source], label: plugin.label } });
+    w.patch({ music: { ...w.data.music, mode: 'router', sources: [source], label: plugin.label } });
     w.next();
   };
 
@@ -273,7 +276,7 @@ function NavidromeForm({ w, onMode }: { w: WizardController; onMode: (m: 'navidr
     // to overwrite, never the whole object.
     w.patch({
       navidrome: vals,
-      music: { mode: 'navidrome', sources: w.data.music.sources, label: '' },
+      music: { ...w.data.music, mode: 'navidrome', label: '' },
       // Commit clears the pill only when the committed values differ from what
       // was last tested.
       ...(testedRef.current !== JSON.stringify(vals) ? { navidromeTest: { ok: null } } : {}),

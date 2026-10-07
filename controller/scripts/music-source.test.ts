@@ -78,16 +78,33 @@ test('secrets never leave the process, and a blank secret keeps the stored one',
   assert.deepEqual(masked.sources[0]!.config, { url: 'http://jf', user: 'me' });
   assert.deepEqual(masked.sources[0]!.secretsSet, ['apiKey']);
   assert.ok(!JSON.stringify(masked).includes('SECRET'));
-  // A plugin whose manifest is unknown shows nothing at all.
+  // A plugin whose manifest is unknown shows nothing at all — nor one whose
+  // manifest failed to load, which is listed with no config fields.
   assert.deepEqual(ms.maskSelection(saved, []).sources[0]!.config, {});
+  const broken = { ...jellyfin, config: [], error: 'invalid subwave-source.json' };
+  assert.deepEqual(ms.maskSelection(saved, [broken]).sources[0]!.config, {});
+  assert.ok(!JSON.stringify(ms.maskSelection(saved, [broken])).includes('SECRET'));
 
-  const draft = [{ plugin: 'jellyfin', config: { url: 'http://jf2', apiKey: '' } }];
+  const draft = [{ plugin: 'jellyfin', config: { url: 'http://jf', apiKey: '', user: 'someone-else' } }];
   const kept = ms.keepStoredSecrets(draft, saved.sources, [jellyfin]);
-  assert.equal(kept[0]!.config.apiKey, 'SECRET');
-  assert.equal(kept[0]!.config.url, 'http://jf2');
+  assert.equal(kept[0]!.config.apiKey, 'SECRET', 'same server, so the stored key is kept');
+  assert.equal(kept[0]!.config.user, 'someone-else');
   assert.deepEqual(ms.keptSecretKeys(draft[0]!, saved.sources, jellyfin), ['apiKey']);
-  const replaced = ms.keepStoredSecrets([{ plugin: 'jellyfin', config: { apiKey: 'NEW' } }], saved.sources, [jellyfin]);
+  const replaced = ms.keepStoredSecrets([{ plugin: 'jellyfin', config: { url: 'http://jf', apiKey: 'NEW' } }], saved.sources, [jellyfin]);
   assert.equal(replaced[0]!.config.apiKey, 'NEW');
+});
+
+// #1827 review: a blank secret used to fall back to the stored one whatever the
+// draft pointed at, so Test (or Save) sent the stored key to any host typed in.
+test('a stored secret is not sent to a server it was not stored for', () => {
+  const saved = [{ plugin: 'jellyfin', config: { url: 'http://jf', apiKey: 'SECRET' } }];
+  const moved = { plugin: 'jellyfin', config: { url: 'http://attacker.example', apiKey: '' } };
+  assert.equal(ms.keepStoredSecrets([moved], saved, [jellyfin])[0]!.config.apiKey, '');
+  assert.deepEqual(ms.keptSecretKeys(moved, saved, jellyfin), [], 'so a save asks for the key again');
+  assert.deepEqual(schema.missingMusicFields(moved, jellyfin, ms.keptSecretKeys(moved, saved, jellyfin)), ['apiKey']);
+  // Whitespace is not a different server.
+  const padded = { plugin: 'jellyfin', config: { url: ' http://jf ', apiKey: '' } };
+  assert.equal(ms.keepStoredSecrets([padded], saved, [jellyfin])[0]!.config.apiKey, 'SECRET');
 });
 
 test('selection identity: a new password is the same library, a new server is not', () => {
@@ -97,6 +114,45 @@ test('selection identity: a new password is the same library, a new server is no
   assert.equal(ms.selectionIdentity(a, [jellyfin]), ms.selectionIdentity(samePlace, [jellyfin]));
   assert.notEqual(ms.selectionIdentity(a, [jellyfin]), ms.selectionIdentity(elsewhere, [jellyfin]));
   assert.equal(ms.selectionIdentity({ mode: 'navidrome', merge: false, sources: a.sources }), 'navidrome');
+});
+
+// #1827 review: every non-secret field counted, so flipping a display toggle
+// wrote a switch marker and started a full re-link walk. A manifest now marks
+// the fields that change ids; one that marks none keeps the old reading.
+test('selection identity follows the manifest\'s affectsIds marks', () => {
+  const plex = {
+    ...jellyfin,
+    name: 'plex',
+    config: [
+      { key: 'url', label: 'URL', type: 'url' as const, affectsIds: true },
+      { key: 'token', label: 'Token', type: 'secret' as const },
+      { key: 'section', label: 'Section', type: 'string' as const, affectsIds: true },
+      { key: 'sonicSimilarity', label: 'Sonic', type: 'boolean' as const, affectsIds: false },
+    ],
+  };
+  const sel = (config: Record<string, string | boolean>) => ({ mode: 'router' as const, merge: false, sources: [{ plugin: 'plex', config }] });
+  const base = ms.selectionIdentity(sel({ url: 'http://px', token: 't', section: '1', sonicSimilarity: true }), [plex]);
+  assert.equal(ms.selectionIdentity(sel({ url: 'http://px', token: 't', section: '1', sonicSimilarity: false }), [plex]), base, 'a toggle is not a switch');
+  assert.notEqual(ms.selectionIdentity(sel({ url: 'http://px', token: 't', section: '2', sonicSimilarity: true }), [plex]), base, 'another library section is');
+  assert.notEqual(ms.selectionIdentity(sel({ url: 'http://px2', token: 't', section: '1', sonicSimilarity: true }), [plex]), base);
+  assert.equal(ms.selectionIdentity(sel({ url: 'http://px', token: 't', section: '1', sonicSimilarity: true, extra: 'x' }), [plex]), base, 'an unmarked key does not count once any field is marked');
+  // Unmarked manifest (jellyfin above): every non-secret field still counts.
+  const jf = (user: string) => ({ mode: 'router' as const, merge: false, sources: [{ plugin: 'jellyfin', config: { url: 'http://jf', user } }] });
+  assert.notEqual(ms.selectionIdentity(jf('a'), [jellyfin]), ms.selectionIdentity(jf('b'), [jellyfin]));
+  // A blank value is an absent one.
+  assert.equal(ms.selectionIdentity(sel({ url: 'http://px', section: '' }), [plex]), ms.selectionIdentity(sel({ url: 'http://px' }), [plex]));
+});
+
+test('the built-in manifests mark which settings change ids', async () => {
+  const { readFileSync: read } = await import('node:fs');
+  const marks = (name: string) => Object.fromEntries(
+    JSON.parse(read(new URL(`../../router/src/sources/${name}/subwave-source.json`, import.meta.url), 'utf8')).config
+      .filter((f: any) => f.type !== 'secret').map((f: any) => [f.key, f.affectsIds]),
+  );
+  assert.deepEqual(marks('jellyfin'), { url: true, user: false });
+  assert.deepEqual(marks('navidrome'), { url: true, user: false });
+  assert.deepEqual(marks('plex'), { url: true, section: true, sonicSimilarity: false });
+  assert.deepEqual(marks('mock'), { songMinSec: false, songMaxSec: false, sonicSimilarity: false });
 });
 
 test('router config.json: generated credentials, 0600, kept across writes, idle in navidrome mode', async () => {

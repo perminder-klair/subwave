@@ -16,6 +16,19 @@ export type Handler = (req: Request, res: Response, src: HostSource) => void | P
 
 type Query = Record<string, unknown>;
 
+/** Resolves when a backpressured response can take more, or is gone. */
+function drainOrClose(res: Response): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => {
+      res.off('drain', done);
+      res.off('close', done);
+      resolve();
+    };
+    res.on('drain', done);
+    res.on('close', done);
+  });
+}
+
 function qs(req: Request, key: string): string | undefined {
   const v = (req.query as Query)[key];
   if (typeof v === 'string') return v;
@@ -369,18 +382,24 @@ export const handlers: Record<string, Handler> = {
     for (const [k, v] of Object.entries(stream.headers)) res.setHeader(k, v);
     if (!stream.body) return void res.end();
     // The client going away (Liquidsoap timeout, analyzer cap reached) must
-    // stop the upstream download too.
+    // stop the upstream download too. It may already be gone: 'close' fires
+    // only once, and a client can give up while stream() is still waiting on
+    // the backend. A write to a closed response never drains, so the wait
+    // ends on 'close' as well, or the upstream is held until it times out.
     const iterator = stream.body[Symbol.asyncIterator]();
     let closed = false;
-    res.on('close', () => {
+    const stop = () => {
+      if (closed) return;
       closed = true;
       void iterator.return?.();
-    });
+    };
+    res.on('close', stop);
+    if (res.destroyed) stop();
     try {
-      for (;;) {
+      while (!closed) {
         const { done, value } = await iterator.next();
         if (done || closed) break;
-        if (!res.write(value)) await new Promise<void>((resolve) => res.once('drain', resolve));
+        if (!res.write(value)) await drainOrClose(res);
       }
       res.end();
     } catch (err) {

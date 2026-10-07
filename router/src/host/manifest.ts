@@ -18,6 +18,7 @@ const configFieldSchema = z
     help: z.string().max(400).optional(),
     placeholder: z.string().max(200).optional(),
     env: z.string().regex(/^[A-Z][A-Z0-9_]{1,63}$/, 'env names are UPPER_SNAKE_CASE').optional(),
+    affectsIds: z.boolean().optional(),
   })
   .refine((f) => f.type !== 'select' || (f.options?.length ?? 0) > 0, { message: 'a select field needs options' });
 

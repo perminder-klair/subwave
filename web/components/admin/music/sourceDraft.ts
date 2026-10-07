@@ -7,7 +7,7 @@
 // secret keys are on file (`secretsSet`), and a blank secret in the draft
 // means "keep the stored one".
 
-import type { MusicConfigField, MusicMode, MusicPluginInfo } from '../../../lib/schemas.generated';
+import { musicSelectionIdentity, type MusicConfigField, type MusicMode, type MusicPluginInfo } from '../../../lib/schemas.generated';
 
 export type ConfigValue = string | number | boolean | null;
 
@@ -31,6 +31,17 @@ export function blankSource(plugin: MusicPluginInfo | undefined): DraftSource {
     if (f.default !== undefined) config[f.key] = f.default;
   }
   return { plugin: plugin?.name ?? '', config, secretsSet: [] };
+}
+
+/**
+ * The saved sources to seed a draft with, or null to wait for a better answer.
+ * They are only readable against the router's manifests: without them the
+ * controller cannot tell a URL from a secret and shows no settings at all. A
+ * draft seeded from that answer, saved once the router was back, dropped every
+ * optional setting (a Plex section, a Jellyfin user).
+ */
+export function seedableSources(view: SavedSelectionView & { router: unknown }): DraftSource[] | null {
+  return view.router || view.sources.length === 0 ? view.sources : null;
 }
 
 /** Plugins an operator can pick: loaded without errors. */
@@ -77,20 +88,12 @@ export function draftDirty(saved: SavedSelectionView, mode: MusicMode, merge: bo
 }
 
 /**
- * Will saving this draft change the station's track ids? Mirrors the
- * controller's selectionIdentity: mode, sources and their non-secret config.
+ * Will saving this draft change the station's track ids? The controller's own
+ * rule (musicSelectionIdentity, shared through the schema mirror), so the
+ * warning appears exactly when the save will re-link the library.
  */
 export function changesTrackIds(saved: SavedSelectionView, mode: MusicMode, sources: DraftSource[], plugins: readonly MusicPluginInfo[]): boolean {
-  if (saved.mode !== mode) return true;
-  if (mode !== 'router') return false;
-  const visible = (list: DraftSource[]) =>
-    comparable(
-      list.map((s) => {
-        const secrets = new Set((plugins.find((p) => p.name === s.plugin)?.config ?? []).filter((f) => f.type === 'secret').map((f) => f.key));
-        return { ...s, config: Object.fromEntries(Object.entries(s.config).filter(([k]) => !secrets.has(k))) };
-      }),
-    );
-  return visible(saved.sources) !== visible(sources);
+  return musicSelectionIdentity(saved, plugins) !== musicSelectionIdentity({ mode, sources }, plugins);
 }
 
 /** The body for POST /settings/music-source (and the wizard's `music` block). */

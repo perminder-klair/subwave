@@ -29,9 +29,9 @@ Install it by copying the folder to `state/router/plugins/my-source/` and pressi
   "entry": "index.mjs",
   "homepage": "https://emby.media",
   "config": [
-    { "key": "url", "label": "Server URL", "type": "url", "required": true, "env": "EMBY_URL", "placeholder": "http://emby:8096" },
+    { "key": "url", "label": "Server URL", "type": "url", "required": true, "env": "EMBY_URL", "placeholder": "http://emby:8096", "affectsIds": true },
     { "key": "apiKey", "label": "API key", "type": "secret", "required": true, "env": "EMBY_API_KEY" },
-    { "key": "user", "label": "User", "type": "string", "help": "Whose favourites to use." }
+    { "key": "user", "label": "User", "type": "string", "help": "Whose favourites to use.", "affectsIds": false }
   ]
 }
 ```
@@ -42,7 +42,7 @@ Install it by copying the folder to `state/router/plugins/my-source/` and pressi
 | `apiVersion` | `1`. The router refuses a plugin written for an API version it does not implement, and says so in the admin UI. |
 | `idPrefix` | `^[a-z][a-z0-9]{1,5}$`. Unique. Your ids are published as `<idPrefix>-<native id>`. |
 | `entry` | Relative path inside the folder. Defaults to `index.mjs`. |
-| `config[]` | The settings form. `type` is `url`, `string`, `secret`, `number`, `boolean` or `select` (`select` needs `options: [{ value, label }]`). `secret` values are write-only in the UI. `env` names a variable that overrides the field and locks it in the form. |
+| `config[]` | The settings form. `type` is `url`, `string`, `secret`, `number`, `boolean` or `select` (`select` needs `options: [{ value, label }]`). `secret` values are write-only in the UI. `env` names a variable that overrides the field and locks it in the form. Give the server address the `url` type: a stored secret is reused only while every `url` field is unchanged, so it is never sent to a new host. `affectsIds: true` marks a setting that changes the ids you publish (a server address, a library section); `affectsIds: false` one that does not (a display toggle). Changing a marked setting makes the station re-link its library (tags, likes, the blocklist) by metadata; mark at least one field either way, or every non-secret field counts. |
 
 ## The module
 
@@ -60,7 +60,7 @@ The default export is a factory the router calls with a context whenever the ope
 | `ctx.` | |
 | --- | --- |
 | `config` | The form's values: environment overrides applied, manifest defaults filled, required fields guaranteed present. |
-| `fetch` | `fetch` with a 20s default timeout. Pass your own `signal` to change it. |
+| `fetch` | `fetch` with a 20s default timeout for the server to start answering (the headers). The body is not on that clock, so a `{ response }` you return from `stream()` can take as long as the track does. Pass your own `signal` to change it. |
 | `log` | `info` / `warn` / `error`, prefixed with your plugin name in the router log. |
 | `dataDir` | A writable folder only you use (`state/router/data/<name>`). |
 
@@ -98,7 +98,7 @@ return { response };                                                         // 
 return { body, status: 206, headers: { 'content-type': 'audio/flac', 'content-length': '…', 'content-range': '…' } };
 ```
 
-`body` may be a web `ReadableStream`, any async iterable of bytes (a Node file stream works), or a `Uint8Array`. Send the file's real content type: the router **refuses** JSON, XML, HTML and text bodies, because the station's downloaders write whatever arrives to disk. Honour `range` when you can; Liquidsoap downloads whole files, but other clients seek.
+`body` may be a web `ReadableStream`, any async iterable of bytes (a Node file stream works), or a `Uint8Array`. When a client hangs up — including before the first byte — the router cancels a `ReadableStream` and destroys a Node stream. A bare async generator that has not started never runs its `finally`, so open files and connections inside the generator body, or hand over a stream. Send the file's real content type: the router **refuses** JSON, XML, HTML and text bodies, because the station's downloaders write whatever arrives to disk. Honour `range` when you can; Liquidsoap downloads whole files, but other clients seek.
 
 ### Optional ops
 

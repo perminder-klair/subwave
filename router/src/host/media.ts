@@ -44,24 +44,78 @@ async function fetchHeadersOnly(url: string, headers: Record<string, string>): P
   }
 }
 
-async function* fromWeb(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
-  const reader = stream.getReader();
-  let finished = false;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        finished = true;
-        return;
-      }
-      if (value) yield value;
-    }
-  } finally {
-    // An early exit (the client hung up) must cancel the upstream fetch, not
-    // just release the lock, or the backend keeps sending a file nobody reads.
-    if (!finished) await reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
+// A body must release what it holds when its reader stops early — including
+// before the first read: a client can leave while stream() is still waiting on
+// the backend, and the media guard discards a refused body unread. An async
+// generator that has not started skips its own `finally` on return(), so a
+// fetch body or a file stream handed over unread stayed open until the backend
+// or the OS gave up on it. These iterators take hold of the body when they are
+// created, and return() releases it whether or not anything was read.
+const DONE: IteratorReturnResult<undefined> = { done: true, value: undefined };
+
+function fromWeb(stream: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+      const reader = stream.getReader();
+      let open = true;
+      const unlock = () => {
+        try {
+          reader.releaseLock();
+        } catch {
+          /* already released */
+        }
+      };
+      // Cancel, not just release the lock, or the backend keeps sending a
+      // file nobody reads.
+      const release = async () => {
+        if (!open) return;
+        open = false;
+        await reader.cancel().catch(() => {});
+        unlock();
+      };
+      return {
+        async next() {
+          while (open) {
+            let chunk: ReadableStreamReadResult<Uint8Array>;
+            try {
+              chunk = await reader.read();
+            } catch (err) {
+              await release();
+              throw err;
+            }
+            if (chunk.done) {
+              open = false;
+              unlock();
+              break;
+            }
+            if (chunk.value) return { done: false, value: chunk.value };
+          }
+          return DONE;
+        },
+        async return() {
+          await release();
+          return DONE;
+        },
+      };
+    },
+  };
+}
+
+/** A Node Readable (e.g. a file stream): its own iterator does not destroy it if it was never read. */
+function fromNode(stream: AsyncIterable<Uint8Array> & { destroy(): unknown }): AsyncIterable<Uint8Array> {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+      const it = stream[Symbol.asyncIterator]();
+      return {
+        next: () => it.next(),
+        async return() {
+          stream.destroy();
+          await it.return?.().catch(() => {});
+          return DONE;
+        },
+      };
+    },
+  };
 }
 
 function toIterable(body: ByteBody): AsyncIterable<Uint8Array> {
@@ -72,6 +126,9 @@ function toIterable(body: ByteBody): AsyncIterable<Uint8Array> {
   }
   if (typeof (body as ReadableStream<Uint8Array>).getReader === 'function') {
     return fromWeb(body as ReadableStream<Uint8Array>);
+  }
+  if (typeof (body as { destroy?: unknown }).destroy === 'function') {
+    return fromNode(body as AsyncIterable<Uint8Array> & { destroy(): unknown });
   }
   return body as AsyncIterable<Uint8Array>;
 }

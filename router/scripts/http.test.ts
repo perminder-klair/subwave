@@ -193,6 +193,41 @@ test('the media guard refuses a text body where audio was expected', async () =>
   assert.match(body.error.message, /refused a application\/json body/);
 });
 
+// #1827 review: a client that gave up while stream() was still waiting on the
+// backend left the handler writing into a closed response forever, and its
+// body — a fetch body or a file stream — open with it. Liquidsoap and the
+// analyzer abandon streams routinely.
+test('a client that leaves early releases the body, before or after the first byte', async () => {
+  const counts = ((globalThis as any).__slowStream ??= { opened: 0, closed: 0 });
+  const settle = async () => {
+    for (let i = 0; i < 40 && counts.closed < counts.opened; i++) await new Promise((ok) => setTimeout(ok, 50));
+  };
+  for (const kind of ['web', 'node']) {
+    r.writeConfig(configWith([{ plugin: 'slow-stream', config: { delayMs: 300, kind } }]));
+    await reload();
+    const url = `${r.base}/rest/stream?${r.auth()}&id=slow-s1`;
+
+    // Gone before stream() resolved: 'close' had already fired.
+    const early = new AbortController();
+    const pending = fetch(url, { signal: early.signal }).catch(() => undefined);
+    setTimeout(() => early.abort(), 100);
+    await pending;
+    await new Promise((ok) => setTimeout(ok, 400));
+    await settle();
+    assert.equal(counts.closed, counts.opened, `${kind}: a body opened after the client left is released`);
+
+    // Gone mid-body, while the response is backpressured.
+    const mid = new AbortController();
+    const resp = await fetch(url, { signal: mid.signal });
+    assert.equal(resp.status, 200);
+    await resp.body!.getReader().read();
+    mid.abort();
+    await settle();
+    assert.equal(counts.closed, counts.opened, `${kind}: the body is released when the client hangs up`);
+  }
+  assert.equal(counts.opened, 4);
+});
+
 test('ids that cannot be published are dropped; packed ids round-trip', async () => {
   r.writeConfig(configWith([{ plugin: 'odd-ids' }]));
   await reload();

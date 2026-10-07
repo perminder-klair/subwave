@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
-import { fishAudioIssue, type MusicMode } from '@/lib/schemas.generated';
-import { selectionPayload, type DraftSource } from '../admin/music/sourceDraft';
+import { fishAudioIssue, type MusicPluginInfo } from '@/lib/schemas.generated';
+import type { SavedSelectionView } from '../admin/music/sourceDraft';
+import { musicFromSaved, musicSaveBody, type WizardMusic } from './wizardMusic';
 
 // Every step reads and writes through the `set` updater rather than its own
 // state, so the Review step can show the whole picture without prop-drilling.
@@ -11,7 +12,7 @@ export interface WizardData {
   // Where the music comes from (#692): Navidrome directly, or a source served
   // by the SUB/WAVE music router (Jellyfin, Plex, an installed plugin, or the
   // demo library).
-  music: { mode: MusicMode; sources: DraftSource[]; label: string };
+  music: WizardMusic;
   navidrome: { url: string; user: string; pass: string };
   navidromeTest: { ok: boolean | null; msg?: string };
 
@@ -50,7 +51,7 @@ export interface WizardData {
 }
 
 export const DEFAULT_DATA: WizardData = {
-  music: { mode: 'navidrome', sources: [], label: '' },
+  music: { mode: 'navidrome', sources: [], label: '', saved: null },
   navidrome: { url: '', user: '', pass: '' },
   navidromeTest: { ok: null },
   llm: {
@@ -106,6 +107,28 @@ export function useWizard() {
   const auth = useAdminAuth();
   const [data, setData] = useState<WizardData>(DEFAULT_DATA);
   const [stepIdx, setStepIdx] = useState(0);
+
+  // What the station plays from now, so the music step opens on it and a
+  // Navidrome choice on a router station actually switches it back.
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const r = await auth.adminFetch('/settings/music-source', { signal: AbortSignal.timeout(20000) });
+        if (!r.ok) return;
+        const saved = (await r.json()) as SavedSelectionView & { router?: { plugins: MusicPluginInfo[] } | null };
+        if (!live) return;
+        const first = saved.sources[0]?.plugin ?? '';
+        const label = saved.router?.plugins.find((p) => p.name === first)?.label ?? first;
+        setData((d) => ({ ...d, music: musicFromSaved(d.music, saved, label) }));
+      } catch {
+        // The wizard still works; it just cannot tell what the station plays from.
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [auth]);
 
   const step = STEP_ORDER[stepIdx];
   const next = useCallback(() => setStepIdx(i => Math.min(i + 1, STEP_ORDER.length - 1)), []);
@@ -203,13 +226,10 @@ export function useWizard() {
     const fishIssue = fishAudioIssue(data.tts.cloud);
     if (fishIssue) return { ok: false, error: fishIssue };
 
-    const router = data.music.mode === 'router';
     const body = {
       // One music source or the other: a router station sends its selection and
       // leaves any stored Navidrome connection alone for switching back.
-      ...(router
-        ? { music: selectionPayload('router', false, data.music.sources) }
-        : { navidrome: data.navidrome }),
+      ...musicSaveBody(data.music, data.navidrome),
       llm: {
         provider: data.llm.provider,
         model: data.llm.model,

@@ -8,8 +8,8 @@
   "entry": "index.ts",
   "homepage": "https://www.navidrome.org",
   "config": [
-    { "key": "url", "label": "Server URL", "type": "url", "required": true, "placeholder": "http://navidrome:4533" },
-    { "key": "user", "label": "Username", "type": "string", "required": true },
+    { "key": "url", "label": "Server URL", "type": "url", "required": true, "placeholder": "http://navidrome:4533", "affectsIds": true },
+    { "key": "user", "label": "Username", "type": "string", "required": true, "affectsIds": false },
     { "key": "password", "label": "Password", "type": "secret", "required": true, "help": "Subsonic authenticates with the account password, not an API key." }
   ]
 }

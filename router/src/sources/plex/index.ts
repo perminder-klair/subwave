@@ -83,11 +83,20 @@ export default defineSource((ctx) => {
     return u.toString();
   }
 
-  async function px(path: string, params: Params = {}, init: RequestInit = {}): Promise<PxMC> {
+  // Writes may answer with XML or nothing at all. A read must answer JSON:
+  // anything else is not Plex talking (an SSO or proxy login page, which fetch
+  // reached by following a redirect), and reading it as an empty container
+  // made a misconfigured server look like a healthy, empty library and let a
+  // library walk end early — the controller prunes whatever a walk missed.
+  async function px(path: string, params: Params = {}, init: RequestInit = {}, { write = (init.method ?? 'GET') !== 'GET' } = {}): Promise<PxMC> {
     const resp = await ctx.fetch(url(path, params), { ...init, headers: { ...headers, ...(init.headers as Record<string, string>) } });
     if (!resp.ok) throw new Error(`Plex ${init.method || 'GET'} ${path} → HTTP ${resp.status}`);
     const text = await resp.text();
-    if (!text.trimStart().startsWith('{')) return {}; // mutations may answer with XML or nothing
+    if (!text.trimStart().startsWith('{')) {
+      if (write) return {};
+      const type = resp.headers.get('content-type') || 'no content type';
+      throw new Error(`Plex ${path} did not answer JSON (${type}) — is the URL the Plex server itself?`);
+    }
     return (JSON.parse(text) as { MediaContainer?: PxMC }).MediaContainer ?? {};
   }
 
@@ -430,7 +439,7 @@ export default defineSource((ctx) => {
 
     async scrobble(id, opts) {
       if (!opts.submission) return;
-      await px('/:/scrobble', { key: id, identifier: 'com.plexapp.plugins.library' });
+      await px('/:/scrobble', { key: id, identifier: 'com.plexapp.plugins.library' }, {}, { write: true });
     },
 
     async scanStatus() {

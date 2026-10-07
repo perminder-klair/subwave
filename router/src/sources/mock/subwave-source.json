@@ -7,8 +7,8 @@
   "idPrefix": "mock",
   "entry": "index.ts",
   "config": [
-    { "key": "songMinSec", "label": "Shortest track (seconds)", "type": "number", "default": 20, "env": "SONG_MIN_SEC", "help": "Generated tracks are short by default so the station cycles quickly in development." },
-    { "key": "songMaxSec", "label": "Longest track (seconds)", "type": "number", "default": 45, "env": "SONG_MAX_SEC" },
-    { "key": "sonicSimilarity", "label": "Advertise sonic similarity", "type": "boolean", "default": true }
+    { "key": "songMinSec", "label": "Shortest track (seconds)", "type": "number", "default": 20, "env": "SONG_MIN_SEC", "help": "Generated tracks are short by default so the station cycles quickly in development.", "affectsIds": false },
+    { "key": "songMaxSec", "label": "Longest track (seconds)", "type": "number", "default": 45, "env": "SONG_MAX_SEC", "affectsIds": false },
+    { "key": "sonicSimilarity", "label": "Advertise sonic similarity", "type": "boolean", "default": true, "affectsIds": false }
   ]
 }

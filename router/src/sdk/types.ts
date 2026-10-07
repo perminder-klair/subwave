@@ -32,6 +32,14 @@ export interface ConfigField {
   placeholder?: string;
   /** Environment variable that overrides the stored value (and locks the field in the UI). */
   env?: string;
+  /**
+   * Whether changing this value changes the ids the source publishes — a
+   * server address or a library section does, a display toggle does not. The
+   * station re-links its library (tags, likes, the blocklist) only when such a
+   * value changes. Mark at least one field either way to opt in; a plugin that
+   * marks none is treated as if every non-secret field changes ids.
+   */
+  affectsIds?: boolean;
 }
 
 /** Contents of `subwave-source.json`. */

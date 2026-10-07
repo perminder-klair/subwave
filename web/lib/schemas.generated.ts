@@ -691,6 +691,8 @@ export const musicConfigFieldSchema = z.object({
   help: z.string().optional(),
   placeholder: z.string().optional(),
   env: z.string().optional(),
+  // Whether a change re-keys the source's track ids (router sdk/types.ts ConfigField).
+  affectsIds: z.boolean().optional(),
 });
 
 export type MusicConfigField = z.infer<typeof musicConfigFieldSchema>;
@@ -785,6 +787,55 @@ export function missingMusicFields(
       return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
     })
     .map((f) => f.key);
+}
+
+// --- what decides a station's track ids ------------------------------------------
+// Shared by the controller's save (a changed identity writes the switch marker
+// and starts the re-link walk) and the admin form's "this changes every track
+// id" warning, so the two cannot disagree.
+
+export interface MusicIdentitySource {
+  plugin: string;
+  config: Record<string, unknown>;
+  rawIds?: boolean;
+}
+
+/** Keys a plugin's manifest marks as secret. */
+export function musicSecretKeys(plugin: Pick<MusicPluginInfo, 'config'> | undefined): string[] {
+  return (plugin?.config ?? []).filter((f) => f.type === 'secret').map((f) => f.key);
+}
+
+// The settings that decide a source's ids. A manifest marks them with
+// `affectsIds` (a server address or library section does; a display toggle
+// does not); one that marks no field either way is read as "every non-secret
+// field", which is what any plugin got before the mark existed. Without the
+// manifest every key counts, so an unknown plugin errs towards re-linking.
+function musicIdentityKeys(source: MusicIdentitySource, plugin: Pick<MusicPluginInfo, 'config'> | undefined): string[] {
+  if (!plugin) return Object.keys(source.config);
+  const secrets = musicSecretKeys(plugin);
+  if (!plugin.config.some((f) => f.affectsIds !== undefined)) return Object.keys(source.config).filter((k) => !secrets.includes(k));
+  return plugin.config.filter((f) => f.affectsIds === true && !secrets.includes(f.key)).map((f) => f.key);
+}
+
+/**
+ * What decides the station's track ids: the mode and, in router mode, which
+ * sources answer, how their ids are published, and the settings that say
+ * where they point. Secrets never count — a new password reaches the same
+ * library — and a blank value is the same as an absent one.
+ */
+export function musicSelectionIdentity(
+  sel: { mode: MusicMode; merge?: boolean; sources: readonly MusicIdentitySource[] },
+  plugins: readonly Pick<MusicPluginInfo, 'name' | 'config'>[] = [],
+): string {
+  if (sel.mode !== 'router') return 'navidrome';
+  return JSON.stringify(
+    sel.sources.map((s) => {
+      const keys = musicIdentityKeys(s, plugins.find((p) => p.name === s.plugin))
+        .filter((k) => s.config[k] !== undefined && s.config[k] !== null && s.config[k] !== '')
+        .sort((a, b) => a.localeCompare(b));
+      return { plugin: s.plugin, rawIds: s.rawIds === true, config: Object.fromEntries(keys.map((k) => [k, s.config[k]])) };
+    }),
+  );
 }
 
 // ─── from controller/src/schemas/onboarding.ts ───────────────────────────

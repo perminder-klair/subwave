@@ -13,13 +13,15 @@
       "type": "string",
       "required": true,
       "placeholder": "/music",
-      "help": "A path inside the router container. Mount your music there read-only (see the plugin's README)."
+      "help": "A path inside the router container. Mount your music there read-only (see the plugin's README).",
+      "affectsIds": true
     },
     {
       "key": "rescanMinutes",
       "label": "Rescan every (minutes)",
       "type": "number",
-      "default": 30
+      "default": 30,
+      "affectsIds": false
     }
   ]
 }
