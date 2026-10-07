@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, View } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
 import { useTheme } from '@/theme/ThemeContext';
@@ -15,10 +15,16 @@ export interface RotaryKnobProps {
 export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobProps) {
   const { colors } = useTheme();
   const valueRef = useRef(value);
-  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    valueRef.current = value;
+    onChangeRef.current = onChange;
+  }, [value, onChange]);
   const startRef = useRef(value);
 
-  const pan = useRef(
+  // PanResponder stores these callbacks; refs are read only during gestures.
+  // eslint-disable-next-line react-hooks/refs
+  const [pan] = useState(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 1 || Math.abs(g.dy) > 1,
@@ -27,10 +33,10 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
       },
       onPanResponderMove: (_, g) => {
         const delta = (-g.dy + g.dx) / 200;
-        onChange(clamp(startRef.current + delta));
+        onChangeRef.current(clamp(startRef.current + delta));
       },
     }),
-  ).current;
+  );
 
   const angle = -135 + value * 270;
   const c = size / 2;

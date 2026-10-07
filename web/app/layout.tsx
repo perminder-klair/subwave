@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil_One, Courier_Prime, Overpass_Mono } from 'next/font/google';
+import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil, Courier_Prime, Overpass_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
@@ -62,10 +62,11 @@ const chakraPetch = Chakra_Petch({
   variable: '--font-chakra-petch',
 });
 
-const sairaStencilOne = Saira_Stencil_One({
+const sairaStencilOne = Saira_Stencil({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
+  adjustFontFallback: false,
   variable: '--font-saira-stencil-one',
 });
 

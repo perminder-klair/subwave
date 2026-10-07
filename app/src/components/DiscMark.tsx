@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, Easing } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useAppActive } from '@/hooks/useAppActive';
@@ -22,7 +22,7 @@ export interface DiscMarkProps {
 export default function DiscMark({ size = 18, spinning = false }: DiscMarkProps) {
   const { colors } = useTheme();
   const appActive = useAppActive();
-  const spin = useRef(new Animated.Value(0)).current;
+  const [spin] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (!spinning || !appActive) {

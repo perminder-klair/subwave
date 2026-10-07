@@ -19,6 +19,37 @@
 // generate from.
 import { z } from 'zod';
 
+export const playlistGenerationResultSchema = z.object({
+  tracks: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    artist: z.string(),
+    album: z.string(),
+    durationSec: z.number(),
+    year: z.number().nullable(),
+    genre: z.string().nullable(),
+    energy: z.string().nullable(),
+    moods: z.array(z.string()),
+    instrumental: z.boolean().nullable(),
+  })),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  degraded: z.boolean(),
+  reasons: z.array(z.string()),
+  poolSize: z.number(),
+  usedFallback: z.boolean(),
+});
+
+export const playlistGenerationStartSchema = z.object({ jobId: z.string().min(1) });
+
+export const playlistGenerationPollSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('running') }),
+  z.object({ status: z.literal('error'), error: z.string().optional() }),
+  z.object({ status: z.literal('done'), result: playlistGenerationResultSchema }),
+]);
+
+export type PlaylistGenerationResult = z.infer<typeof playlistGenerationResultSchema>;
+
 // The one cap a playlist name gets. It exists so an API caller can't store a
 // name the library list then has to render; the save modal's input runs the
 // same rule as an inline error rather than a silent maxLength truncation.

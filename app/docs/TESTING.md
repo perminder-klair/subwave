@@ -8,10 +8,10 @@ section first — one wrong toggle and playback crashes on launch.
 
 ## Architecture-critical facts (read before changing native config)
 
-### Both platforms run the New Architecture — it's mandatory in RN 0.85
+### Both platforms run the New Architecture — it's mandatory in RN 0.86
 
 RN 0.82+ **removed the ability to opt out** of the New Architecture. Both
-platforms run it ON, and this is required (Reanimated 4.3.1 only works under new
+platforms run it ON, and this is required (Reanimated 4.5.1 only works under new
 arch):
 
 - **iOS** — `Info.plist RCTNewArchEnabled = true`, Pods built `-DRCT_NEW_ARCH_ENABLED=1`.
@@ -46,8 +46,9 @@ which makes two source edits:
 
 - **Expo Go does not work** — native modules (RNTP, Skia, Reanimated worklets)
   ship compiled code. You must build a **dev client**.
-- **Stream is MP3 only** (`{base}/stream.mp3`), same universal-floor choice as
-  the web player. No Opus/Ogg.
+- **MP3 is the default** (`{base}/stream.mp3`). The SIGNAL picker offers AAC on
+  both platforms and Opus/FLAC on Android when the station advertises the mount.
+  iOS cannot demux Ogg. Cast always uses MP3.
 - **No backend needed for testing** — the app defaults to the public
   `getsubwave.com` station, which is live. Onboarding pre-fills it.
 - **Base URL is fully runtime** — there are no hardcoded station URLs in source.

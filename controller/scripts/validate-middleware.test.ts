@@ -124,9 +124,9 @@ test('flattenIssues surfaces an error on a field named like an Object.prototype 
 });
 
 test('flattenIssues surfaces an error on a field literally named __proto__', () => {
-  // Zod drops __proto__ object keys. A custom refinement can still produce
-  // that field path, which the formatter must preserve without prototype mutation.
-  const r = z.unknown().superRefine((_input, ctx) => {
+  // Zod ignores __proto__ in object shapes. A refinement can still report
+  // that path, and flattenIssues must preserve it without prototype mutation.
+  const r = z.unknown().superRefine((_value, ctx) => {
     ctx.addIssue({ code: 'custom', path: ['__proto__'], message: 'proto must be a string' });
   }).safeParse({});
   assert.equal(r.success, false);

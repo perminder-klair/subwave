@@ -1,8 +1,8 @@
-import { createMap } from 'svg-dotted-map';
+import { createMap } from 'piri';
 import type { Station } from '@/lib/stations';
 
 // A world chart for the stations directory. Renders an actual dotted continent
-// silhouette (via svg-dotted-map's `createMap`) rather than a bare graticule, so
+// silhouette (via piri's `createMap`) rather than a bare graticule, so
 // it reads as a real coverage map — land stippled in a muted ink, each station
 // plotted as a pulsing vermilion marker with a mono label.
 //
@@ -16,12 +16,12 @@ const H = 180; // viewBox height
 const SAMPLES = 10000; // sample density for the land dot field
 
 // Marker payload threaded through addMarkers (lat/lng are stripped on the way out).
-interface StationMarker {
+type StationMarker = {
   size?: number;
   slug: string;
   name: string;
   label: string;
-}
+};
 
 export default function StationMap({ stations }: { stations: Station[] }) {
   const plotted = stations.filter((s) => s.lat != null && s.lon != null);

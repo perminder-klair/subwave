@@ -1,12 +1,10 @@
 name: Lint
 
 # Runs ESLint + tsc --noEmit on every PR and on pushes to main/develop.
-# controller/ and web/ expose `npm run lint` (`eslint . && tsc --noEmit`);
+# controller/, web/ and app/ expose `npm run lint` (`eslint . && tsc --noEmit`);
 # mcp-subwave/ exposes `npm run lint` (`tsc --noEmit`). This just enforces them.
 #
-# The two packages run in a matrix so a controller failure doesn't mask a
-# web failure (and vice versa). Branch protection on main/develop should
-# require both jobs.
+# Packages run in a matrix so one failure doesn't mask another.
 #
 # Security note: no untrusted user input (PR title/body/commit message)
 # flows into any `run:` step. Only workflow-defined matrix values and
@@ -33,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [controller, web, mcp-subwave]
+        package: [controller, web, mcp-subwave, app]
     defaults:
       run:
         working-directory: ${{ matrix.package }}

@@ -4,7 +4,7 @@ Native iOS + Android player for [SUB/WAVE](../README.md) — built with Expo + r
 
 ## Stack
 
-- **Expo SDK 56** (RN 0.85, React 19, New Architecture) · **expo-router** (file-based)
+- **Expo SDK 57** (RN 0.86, React 19, New Architecture) · **expo-router** (file-based)
 - **react-native-track-player** — background audio + lock-screen / CarPlay controls (Android Auto is intentionally not declared — Google Play rejected it under the Auto content policy, #477)
 - **react-native-google-cast** — Google Cast sender (Chromecast / Nest / Android TV). The Cast device fetches the stream itself; the phone becomes a remote (`src/hooks/useCast.ts` merges cast state over the local player). Uses the Default Media Receiver, so no receiver registration. Basic-auth stations can't cast (the `Authorization` header can't ride along) — the button hides for them.
 - **AirPlay** (iOS) — a local Expo module (`modules/airplay-route-picker`) wraps `AVRoutePickerView`; routing itself is system-level, the button just makes it discoverable in-app.
@@ -18,7 +18,7 @@ Native modules (track-player, google-cast, skia, image-colors) ship native code,
 
 ```bash
 cd app
-npm install                      # .npmrc pins legacy-peer-deps (SDK 56 react/react-dom quirk)
+npm install                      # .npmrc pins legacy-peer-deps (native peer compatibility)
 
 # One-time: build a dev client (needs EAS account; Apple Developer for iOS device)
 npm i -g eas-cli && eas login
@@ -28,7 +28,7 @@ eas build --profile development --platform ios      # or android (--profile deve
 npm start                        # expo start --dev-client
 ```
 
-`npm run typecheck` mirrors the repo lint gate (`tsc --noEmit`). `npx expo-doctor` runs 21 project-health checks.
+`npm run lint` runs ESLint and TypeScript, matching the repository merge gate. `npm test` runs the app tests. `npm run doctor` checks Expo compatibility. See [dependency maintenance](docs/DEPENDENCIES.md) for SDK version constraints.
 
 ## Release & updates
 
@@ -49,7 +49,7 @@ The default/featured station is one line in `app.json`:
 "extra": { "featuredStation": { "url": "https://radio.getsubwave.com", "name": "SUB/WAVE" } }
 ```
 
-Listeners can still enter any station URL on first launch and switch between them (stored locally in AsyncStorage). The app talks to `{stationURL}/api/*` and streams `{stationURL}/stream.mp3` (MP3 only — same universal-floor reasoning as the web player; Opus/Ogg is skipped).
+Listeners can still enter any station URL on first launch and switch between them (stored locally in AsyncStorage). The app talks to `{stationURL}/api/*` and streams `{stationURL}/stream.mp3` (MP3 by default; the SIGNAL picker offers optional formats when the station and platform support them).
 
 ## Architecture
 
@@ -64,7 +64,7 @@ The structural difference from the web player: the web bakes its base URL in at 
 
 ## Known risks (validate in the device spike — M0)
 
-- **react-native-track-player + New Architecture.** RN 0.85 mandates the New Architecture on **both** platforms (`app.json` no longer carries a `newArchEnabled` flag; a leftover `newArchEnabled=false` in a generated `gradle.properties` is an ignored no-op since RN 0.82). Reanimated 4.3.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
+- **react-native-track-player + New Architecture.** RN 0.86 mandates the New Architecture on **both** platforms (`app.json` no longer carries a `newArchEnabled` flag; a leftover `newArchEnabled=false` in a generated `gradle.properties` is an ignored no-op since RN 0.82). Reanimated 4.5.1 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files: a Unit-returning `launch` helper in `MusicModule.kt`, and `currentReactContextCompat()` in `MusicService.kt` — without it Android crashes on the first playback event). Validated: iOS live playback on the simulator + Android `BUILD SUCCESSFUL`. See `docs/TESTING.md` → "Architecture-critical facts". The audio layer is still isolated behind `src/audio/player.ts` + `usePlayer` + `service.ts` should a swap to `expo-audio` ever be needed. (The doctor warning for this package is intentionally excluded in `package.json`.)
 - **HTTP-only stations.** iOS App Transport Security blocks plain HTTP. Stations should be HTTPS; `NSAllowsLocalNetworking` is on for LAN dev against a local controller. For a non-HTTPS dev controller over Wi-Fi, add a temporary ATS exception in `app.json` → `ios.infoPlist`.
 - **Background-audio review.** iOS declares `UIBackgroundModes: ["audio"]` (legitimate — live radio). Android uses RNTP's foreground service (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`).
 
@@ -72,6 +72,6 @@ The structural difference from the web player: the web bakes its base URL in at 
 
 - `tsc --noEmit` clean · `expo-doctor` 21/21 · `expo export` bundles cleanly for both iOS and Android.
 - **iOS simulator (2026-06):** `expo run:ios` builds clean (new arch ON), installs, bundles 4075 modules, and runs the full flow — onboarding → health check (all 4 probes OK vs live getsubwave.com) → player with **live audio** (NOW PLAYING timer advances), runtime theming, cover art, Skia spectrum. RNTP works under new arch on iOS.
-- **Android emulator (2026-06):** `expo run:android` (JDK 17, new arch OFF) `BUILD SUCCESSFUL`, debug APK installs. Physical-device run is proven via the `subwave-app-android` skill.
+- **Android emulator (2026-06):** `expo run:android` (JDK 17, new arch ON) `BUILD SUCCESSFUL`, debug APK installs. Physical-device run is proven via the `subwave-app-android` skill.
 - Still device-only / not yet validated: background audio + lock-screen metadata + persona-avatar swap (needs a physical device).
 - **How to run/test it all:** see [`docs/TESTING.md`](docs/TESTING.md) (local sim/emulator, physical devices, EAS cloud builds, known gotchas).
