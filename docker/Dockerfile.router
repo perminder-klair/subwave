@@ -17,8 +17,12 @@ ENV NODE_ENV=production \
 
 # The only state the router sees: its config.json (written by the controller),
 # installed plugins, and per-plugin data. Compose mounts state/router here and
-# nothing else, because plugins are third-party code.
-RUN mkdir -p /var/sub-wave-router/plugins /var/sub-wave-router/data
+# nothing else, because plugins are third-party code — and they run as an
+# unprivileged user (`node`, uid 1000). The controller hands config.json and
+# data/ to that uid (ROUTER_UID) on the mounted directory.
+RUN mkdir -p /var/sub-wave-router/plugins /var/sub-wave-router/data \
+ && chown -R node:node /var/sub-wave-router/data
+USER node
 
 EXPOSE 4534
 HEALTHCHECK --interval=15s --timeout=3s --retries=4 --start-period=10s \

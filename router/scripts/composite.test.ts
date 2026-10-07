@@ -104,6 +104,22 @@ test('an enumeration fails when a source is down; discovery lists still shrink',
   assert.equal((await c.albumList('alphabeticalByName', 500, 0)).length, 29 + 1);
 });
 
+// #1827 review: the first song's owner took the playlist even when it could
+// not hold one, so a list led by a music-folder track was refused outright.
+test('a playlist goes to the first owner that can hold one', async () => {
+  const m = await mock();
+  const g = await good();
+  assert.equal(g.capabilities.playlists, false);
+  const c = createComposite([g, m]);
+  const song = (await m.randomSongs(1, {}))[0]!;
+  const pl = await c.createPlaylist('folder first', ['good-s1', song.id]);
+  assert.match(pl.id, /^mock-pl-/);
+  assert.deepEqual(pl.songs.map((s) => s.id), [song.id]);
+  await c.deletePlaylist(pl.id);
+  const g2 = { ...(await good()), name: 'good2' };
+  await assert.rejects(createComposite([await good(), g2]).createPlaylist('none', ['good-s1']), /createPlaylist/);
+});
+
 test('stars and playlists go to the owner; ids a backend cannot hold are dropped', async () => {
   const m = await mock();
   const c = createComposite([m, await good()]);

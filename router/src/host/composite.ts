@@ -13,7 +13,8 @@
 //            interleaved (not concatenated: handlers slice, and concatenation
 //            would hide every source after the first until it ran out).
 //   writes — stars go to each id's owner; a new playlist goes to the owner of
-//            its first song, and ids that backend cannot hold are dropped.
+//            the first song whose source can hold playlists, and ids that
+//            backend cannot hold are dropped.
 //
 // A child that throws during a merge is logged and left out of that answer:
 // one dead backend shrinks the library instead of failing the request.
@@ -247,7 +248,11 @@ export function createComposite(children: HostSource[]): HostSource {
     unstar: (ids) => fanStars('unstar', ids),
 
     async createPlaylist(name_, songIds) {
-      const target = (songIds[0] ? owner(songIds[0]) : undefined) ?? children.find((c) => c.capabilities.playlists) ?? children[0]!;
+      // The first song whose source can hold playlists decides; a source
+      // without them (a music folder) must not refuse a playlist another
+      // source in the set could take.
+      const target = songIds.map(owner).find((o) => o?.capabilities.playlists) ?? children.find((c) => c.capabilities.playlists);
+      if (!target) throw new UnsupportedError(name, 'createPlaylist');
       return target.createPlaylist(name_, ownedBy(target, songIds, 'createPlaylist'));
     },
 

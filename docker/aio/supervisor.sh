@@ -729,15 +729,21 @@ run_controller() {
 # Music router (#692) — music sources beyond Navidrome. Idle until Settings →
 # Music source selects it. Loopback only: the controller, Liquidsoap and the
 # local analyzer are all in this container. Unlike the compose service it
-# shares the container's whole filesystem; the state/router-only mount that
-# keeps plugins away from other secrets is a property of the split images.
+# shares the container's whole filesystem, so plugin code (third-party) must
+# not run as root beside secrets.env: it runs as ROUTER_UID:ROUTER_GID with no
+# groups, no capabilities and no way to regain them — the compose service's
+# `user:` + cap_drop + no-new-privileges. The controller (root) hands that uid
+# config.json and data/ (setup/music-source.ts handRouterState).
 run_router() {
 	cd /router || return 1
 	export NODE_ENV=production \
 	       PORT=4534 \
 	       ROUTER_HOST=127.0.0.1 \
-	       ROUTER_DIR=/var/sub-wave/router
-	node_modules/.bin/tsx src/server.ts
+	       ROUTER_DIR=/var/sub-wave/router \
+	       HOME=/tmp
+	setpriv --reuid="${ROUTER_UID:-1000}" --regid="${ROUTER_GID:-1000}" --clear-groups \
+	        --inh-caps=-all --bounding-set=-all --no-new-privs \
+	        node_modules/.bin/tsx src/server.ts
 }
 
 # Web — Next.js listener UI (standalone build).

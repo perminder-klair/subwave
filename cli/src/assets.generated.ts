@@ -150,6 +150,9 @@ services:
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
       # The music router (below). Only used when Settings → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
+      # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
+      - ROUTER_UID=\${ROUTER_UID:-1000}
+      - ROUTER_GID=\${ROUTER_GID:-1000}
       # Per-container stats for the admin Stats panel, via the socket-proxy —
       # the controller never touches the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -189,6 +192,11 @@ services:
     container_name: sub-wave-router
     restart: unless-stopped
     logging: *default-logging
+    # Plugins are third-party code: unprivileged, no capabilities, no way to
+    # regain them. The controller hands config.json and data/ to this uid.
+    user: "\${ROUTER_UID:-1000}:\${ROUTER_GID:-1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     mem_limit: \${ROUTER_MEM_LIMIT:-512m}
     environment:
       - TZ=\${TZ:-Europe/London}
@@ -536,6 +544,9 @@ services:
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
       # The music router (below). Only used when Settings → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
+      # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
+      - ROUTER_UID=\${ROUTER_UID:-1000}
+      - ROUTER_GID=\${ROUTER_GID:-1000}
       # Admin Stats panel via the socket-proxy — the controller never touches
       # the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -576,6 +587,11 @@ services:
     container_name: sub-wave-router
     restart: unless-stopped
     logging: *default-logging
+    # Plugins are third-party code: unprivileged, no capabilities, no way to
+    # regain them. The controller hands config.json and data/ to this uid.
+    user: "\${ROUTER_UID:-1000}:\${ROUTER_GID:-1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     mem_limit: \${ROUTER_MEM_LIMIT:-512m}
     environment:
       - TZ=\${TZ:-Europe/London}
@@ -887,6 +903,9 @@ services:
       - ANALYZE_URL=\${ANALYZE_URL:-http://analyzer:8080}
       # The music router (below). Only used when Settings → Music source selects it.
       - MUSIC_ROUTER_URL=\${MUSIC_ROUTER_URL:-http://router:4534}
+      # The router's uid (see the router service's \`user:\`); the controller hands it state/router/config.json and data/.
+      - ROUTER_UID=\${ROUTER_UID:-1000}
+      - ROUTER_GID=\${ROUTER_GID:-1000}
       # Admin Stats panel via the socket-proxy — the controller never touches
       # the raw Docker socket. Unset to disable.
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
@@ -933,6 +952,11 @@ services:
     container_name: sub-wave-router
     restart: unless-stopped
     logging: *default-logging
+    # Plugins are third-party code: unprivileged, no capabilities, no way to
+    # regain them. The controller hands config.json and data/ to this uid.
+    user: "\${ROUTER_UID:-1000}:\${ROUTER_GID:-1000}"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     environment:
       - TZ=\${TZ:-Europe/London}
       - ROUTER_LOG_REQUESTS=\${ROUTER_LOG_REQUESTS:-}
@@ -1339,6 +1363,10 @@ SITE_URL=
 # PLEX_SECTION=
 # Where the controller reaches the router. Only for a router you run yourself.
 # MUSIC_ROUTER_URL=http://router:4534
+# The unprivileged uid:gid the router (and its plugins) run as. The controller
+# hands it state/router/config.json and state/router/data; change both together.
+# ROUTER_UID=1000
+# ROUTER_GID=1000
 # TTS_SPEED=0.85
 # Routine fallback refresh uses hourly minute-step cadence, rotated off :00/:02:
 # default 60 (and values >=60) runs hourly at :07, not every N elapsed minutes.

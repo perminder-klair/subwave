@@ -7,7 +7,7 @@
 // secret keys are on file (`secretsSet`), and a blank secret in the draft
 // means "keep the stored one".
 
-import { musicSelectionIdentity, type MusicConfigField, type MusicMode, type MusicPluginInfo } from '../../../lib/schemas.generated';
+import { missingMusicFields, musicSelectionIdentity, type MusicConfigField, type MusicMode, type MusicPluginInfo } from '../../../lib/schemas.generated';
 
 export type ConfigValue = string | number | boolean | null;
 
@@ -53,16 +53,16 @@ function isBlank(v: ConfigValue | undefined): boolean {
   return v === undefined || v === null || (typeof v === 'string' && v.trim() === '');
 }
 
-/** Required fields the draft still lacks (env-locked and stored secrets count as set). */
+/**
+ * Required fields the draft still lacks (env-locked and stored secrets count
+ * as set). The controller's own rule (missingMusicFields, shared through the
+ * schema mirror), returned as fields so the form can name them.
+ */
 export function missingFields(source: DraftSource, plugin: MusicPluginInfo | undefined): MusicConfigField[] {
   if (!plugin) return [];
-  return plugin.config.filter(
-    (f) =>
-      f.required &&
-      !plugin.envLocked.includes(f.key) &&
-      !(f.type === 'secret' && source.secretsSet.includes(f.key)) &&
-      isBlank(source.config[f.key]),
-  );
+  const stored = source.secretsSet.filter((k) => plugin.config.some((f) => f.key === k && f.type === 'secret'));
+  const missing = missingMusicFields(source, plugin, stored);
+  return plugin.config.filter((f) => missing.includes(f.key));
 }
 
 function comparable(sources: DraftSource[]): string {

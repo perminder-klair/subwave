@@ -141,3 +141,32 @@ export function matchByMetadata(
   }
   return pairs;
 }
+
+export interface BlockedTrack {
+  id: string;
+  name: string | null;
+  artist: string | null;
+  album: string | null;
+}
+
+/**
+ * Track blocks a switch left with nothing to hold on to: no live track has
+ * their id (after this walk re-linked it), and none matches them by artist,
+ * title and album. If the song IS on the new source under other metadata, it
+ * now plays — the blocklist is absolute, so the operator has to be told.
+ * `nameKeyOf` is the blocklist's own track key, injected so this stays pure.
+ */
+export function strandedTrackBlocks(
+  blocks: readonly BlockedTrack[],
+  live: readonly { id: string; title: string | null; artist: string | null; album: string | null }[],
+  moved: ReadonlyMap<string, string>,
+  nameKeyOf: (title: unknown, artist: unknown, album: unknown) => string | null,
+): BlockedTrack[] {
+  const liveIds = new Set(live.map((r) => r.id));
+  const liveKeys = new Set(live.map((r) => nameKeyOf(r.title, r.artist, r.album)).filter((k): k is string => k !== null));
+  return blocks.filter((b) => {
+    if (liveIds.has(moved.get(b.id) ?? b.id)) return false;
+    const key = nameKeyOf(b.name, b.artist, b.album);
+    return !(key && liveKeys.has(key));
+  });
+}

@@ -1,0 +1,1 @@
+{ "name": "slow-factory", "label": "Slow factory", "version": "1", "apiVersion": 1, "idPrefix": "sf", "config": [ { "key": "delayMs", "label": "Start-up delay", "type": "number", "default": 0 } ] }

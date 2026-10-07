@@ -15,7 +15,7 @@ import test, { after } from 'node:test';
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-source-switch-'));
 process.env.STATE_DIR = stateDir;
 
-const { matchByMetadata, identityText, pendingSourceSwitch, afterMaintenanceRun, switchedAfter } = await import('../src/music/source-switch.js');
+const { matchByMetadata, identityText, pendingSourceSwitch, afterMaintenanceRun, switchedAfter, strandedTrackBlocks } = await import('../src/music/source-switch.js');
 const db = await import('../src/music/library-db.js');
 const rotation = await import('../src/music/id-rotation.js');
 const ms = await import('../src/setup/music-source.js');
@@ -121,4 +121,48 @@ test('a run that predates the switch is followed by a reconcile; a later one is 
   assert.equal(afterMaintenanceRun(marker, { startedAt: after, outcome: 'failed' }), null, 'it had its chance; retrying could loop');
   assert.equal(switchedAfter(marker, null), false, 'an unknown start keeps the original behaviour');
   assert.equal(switchedAfter(marker, Date.parse(marker.at)), false, 'a connection loaded at the same moment is the new one');
+});
+
+// #1827 review: a track block the switch could not place stopped being enforced
+// silently. Name matching now covers most of those; what is left is reported.
+test('track blocks with nothing to hold on the new library are reported', () => {
+  const key = (t: unknown, a: unknown, al: unknown) => [t, a, al].every(Boolean) ? `${t}|${a}|${al}`.toLowerCase() : null;
+  const blocks = [
+    { id: 'old-a', name: 'Moved', artist: 'A', album: 'X' },        // re-linked by this walk
+    { id: 'old-b', name: 'Renamed', artist: 'B', album: 'Y' },      // matches a live row by name
+    { id: 'old-c', name: 'Gone', artist: 'C', album: 'Z' },         // nothing on the new source
+    { id: 'jf-live', name: 'Same id', artist: 'D', album: 'W' },    // its id is live already
+  ];
+  const live = [
+    { id: 'jf-a', title: 'Moved', artist: 'A', album: 'X' },
+    { id: 'jf-b', title: 'renamed', artist: 'b', album: 'y' },
+    { id: 'jf-live', title: 'Same id', artist: 'D', album: 'W' },
+  ];
+  const stranded = strandedTrackBlocks(blocks, live, new Map([['old-a', 'jf-a']]), key);
+  assert.deepEqual(stranded.map((b) => b.id), ['old-c']);
+});
+
+test('the switch walk tells the controller about stranded track blocks', async () => {
+  const blocklist = await import('../src/music/blocklist.js');
+  const { SWITCH_BLOCKS_PREFIX } = await import('../src/music/tagger-progress.js');
+  await blocklist.load();
+  await blocklist.add({ type: 'track', id: 'nd0000000000000000000009', name: 'Lost Song', artist: 'Nobody', album: 'Nowhere' });
+  db.upsertTrackMeta('jf-zzz', { title: 'Another', artist: 'Someone', album: 'Else', year: 2000, duration: 100 });
+  ms.setCurrentSelection(ms.readSelection({}));
+  await new Promise((r) => setTimeout(r, 5));
+  await ms.markSourceSwitch('router', 'router2');
+  ms.setCurrentSelection(ms.readSelection({ music: { mode: 'router', sources: [{ plugin: 'mock', config: {} }] } }));
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    await rotation.adoptAndPrune(new Set(['jf-aaa', 'jf-bbb', 'jf-zzz']), { confirmMassPrune: true });
+  } finally {
+    console.log = log;
+  }
+  const sentinel = lines.find((l) => l.startsWith(SWITCH_BLOCKS_PREFIX));
+  assert.ok(sentinel, 'reported');
+  const report = JSON.parse(sentinel!.slice(SWITCH_BLOCKS_PREFIX.length));
+  assert.equal(report.count, 1);
+  assert.deepEqual(report.tracks, [{ name: 'Lost Song', artist: 'Nobody' }]);
 });

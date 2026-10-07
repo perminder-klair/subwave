@@ -3,6 +3,7 @@
 // saved one the same way.
 
 import { config, NAVIDROME_ENV_ENABLED } from '../config.js';
+import { firstMessage } from '../util/zod-error.js';
 import { clearNavidromeCache } from '../doctor.js';
 import { clearPoolCache } from '../music/picker.js';
 import { clearServerCaches } from '../music/subsonic.js';
@@ -30,11 +31,6 @@ import {
   type RouterStatus,
 } from '../schemas/music-source.js';
 
-export function firstIssue(error: { issues: { path: PropertyKey[]; message: string }[] }): string {
-  const issue = error.issues[0];
-  return issue ? `${issue.path.map(String).join('.') || 'body'}: ${issue.message}` : 'invalid body';
-}
-
 /**
  * Validate a draft selection against the router's plugin manifests. Shared by
  * save (and the onboarding save) so both refuse the same things.
@@ -44,7 +40,7 @@ export async function prepareSelection(
   prev: MusicSelection,
 ): Promise<{ ok: true; selection: MusicSelection; status: RouterStatus | null } | { ok: false; code: number; error: string }> {
   const parsed = musicSelectionPatchSchema.safeParse(body);
-  if (!parsed.success) return { ok: false, code: 400, error: firstIssue(parsed.error) };
+  if (!parsed.success) return { ok: false, code: 400, error: firstMessage(parsed.error) };
   const draft = parsed.data;
   if (draft.mode === 'navidrome') {
     // Switching back keeps the router sources on file for next time.

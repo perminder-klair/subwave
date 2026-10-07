@@ -19,7 +19,8 @@ import {
   routerStatus,
   routerTest,
 } from '../../setup/music-source.js';
-import { applySelection, firstIssue, prepareSelection } from '../../setup/music-source-save.js';
+import { applySelection, prepareSelection } from '../../setup/music-source-save.js';
+import { firstMessage } from '../../util/zod-error.js';
 import { musicSourceTestSchema, type RouterStatus } from '../../schemas/music-source.js';
 
 export const router = express.Router();
@@ -66,11 +67,12 @@ router.post('/settings/music-source', requireAdmin, async (req, res) => {
   }
 });
 
-// Test a draft without saving it. Blank secrets fall back to the stored ones,
-// so Test works on a saved source without re-typing its API key.
+// Test a draft without saving it. Blank secrets fall back to the stored ones
+// for the same server, so Test works on a saved source without re-typing its
+// API key — and never sends that key to a server it was not stored for.
 router.post('/settings/music-source/test', requireAdmin, async (req, res) => {
   const parsed = musicSourceTestSchema.safeParse(req.body);
-  if (!parsed.success) return res.status(400).json({ ok: false, state: 'error', error: firstIssue(parsed.error) });
+  if (!parsed.success) return res.status(400).json({ ok: false, state: 'error', error: firstMessage(parsed.error) });
   try {
     const prev = readSelection(await loadSetupConfig());
     const status = await routerStatus();

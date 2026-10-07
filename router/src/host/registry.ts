@@ -201,8 +201,25 @@ async function apply(config: RouterConfig, force = false): Promise<void> {
   if (previous && previous !== next) void previous.close();
 }
 
+// Reloads run one at a time. The poll, POST /internal/reload and a failed
+// login's refresh can all ask at once, and run concurrently an older build
+// that finished last (an async factory can take seconds) swapped in a
+// selection config.json no longer named — with the stamp already read, so
+// nothing re-read it. A queued reload reads the file when its turn comes, so
+// the last one always applies what the file says now.
+let reloads: Promise<unknown> = Promise.resolve();
+function oneAtATime<T>(job: () => Promise<T>): Promise<T> {
+  const run = reloads.then(job, job);
+  reloads = run.catch(() => {});
+  return run;
+}
+
 /** Re-read config.json; rebuild the active source when the selection changed. */
-export async function reloadConfig(force = false): Promise<void> {
+export function reloadConfig(force = false): Promise<void> {
+  return oneAtATime(() => reloadNow(force));
+}
+
+async function reloadNow(force: boolean): Promise<void> {
   const read = readConfig();
   state.configStamp = read.stamp;
   if (read.error) {
@@ -215,12 +232,14 @@ export async function reloadConfig(force = false): Promise<void> {
 }
 
 /** Rescan plugin folders, then rebuild from the current config. */
-export async function rescan(): Promise<void> {
-  state.plugins = await scanPlugins(BUILTIN_DIR, PLUGINS_DIR);
-  for (const p of state.plugins) {
-    if (p.error) console.warn(`[router] plugin ${p.name} (${p.builtin ? 'built-in' : p.dir}): ${p.error}`);
-  }
-  await reloadConfig(true);
+export function rescan(): Promise<void> {
+  return oneAtATime(async () => {
+    state.plugins = await scanPlugins(BUILTIN_DIR, PLUGINS_DIR);
+    for (const p of state.plugins) {
+      if (p.error) console.warn(`[router] plugin ${p.name} (${p.builtin ? 'built-in' : p.dir}): ${p.error}`);
+    }
+    await reloadNow(true);
+  });
 }
 
 export function getSource(): HostSource | null {

@@ -58,14 +58,16 @@ export interface ConfigRead {
   config: RouterConfig;
   /** Set when the file exists but could not be used; the caller keeps its last good config. */
   error?: string;
-  /** mtime+size, to notice changes cheaply. */
+  /** mtime+ctime+size, to notice changes cheaply. */
   stamp: string;
 }
 
 export function configStamp(): string {
   try {
     const st = statSync(CONFIG_PATH);
-    return `${st.mtimeMs}:${st.size}`;
+    // ctime too: the controller hands the file to the router's user after
+    // writing it, and a chown changes neither the mtime nor the size.
+    return `${st.mtimeMs}:${st.ctimeMs}:${st.size}`;
   } catch {
     return 'absent';
   }
@@ -74,9 +76,17 @@ export function configStamp(): string {
 export function readConfig(): ConfigRead {
   const stamp = configStamp();
   if (stamp === 'absent') return { config: EMPTY_CONFIG, stamp };
+  let text: string;
+  try {
+    text = readFileSync(CONFIG_PATH, 'utf8');
+  } catch (err) {
+    // The router runs unprivileged; the controller hands it config.json.
+    const code = (err as NodeJS.ErrnoException).code ?? (err as Error).message;
+    return { config: EMPTY_CONFIG, stamp, error: `config.json cannot be read (${code}) — the controller hands it to the router's user; check ROUTER_UID matches` };
+  }
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf8'));
+    raw = JSON.parse(text);
   } catch (err) {
     return { config: EMPTY_CONFIG, stamp, error: `config.json is not valid JSON: ${(err as Error).message}` };
   }

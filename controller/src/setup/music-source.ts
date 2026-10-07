@@ -15,10 +15,10 @@
 
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { chmod, lchown, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { STATE_DIR, STATE_ROOT } from '../config.js';
-import { envUrl } from '../util/env.js';
+import { envInt, envUrl } from '../util/env.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   DEFAULT_MUSIC_SELECTION,
@@ -40,6 +40,13 @@ export const ROUTER_CONFIG_PATH = path.join(ROUTER_DIR, 'config.json');
 export const SOURCE_SWITCH_PATH = path.join(STATE_DIR, 'music-source-switch.json');
 
 const ROUTER_USER = 'subwave';
+
+// The router runs as an unprivileged user, since plugins are third-party code
+// (#1827 review). Compose (`user:`) and the AIO supervisor (setpriv) run it as
+// ROUTER_UID:ROUTER_GID — 1000 by default, the router image's `node` — and the
+// controller hands it the files it needs. Keep all three in step.
+export const ROUTER_UID = envInt('ROUTER_UID', 1000, { min: 1 });
+export const ROUTER_GID = envInt('ROUTER_GID', 1000, { min: 1 });
 const ROUTER_TIMEOUT_MS = 15_000;
 
 export interface RouterAuth {
@@ -74,10 +81,6 @@ export function currentSelectionSince(): number | null {
 export function setCurrentSelection(sel: MusicSelection): void {
   current = sel;
   currentSince = Date.now();
-}
-
-export function isRouterMode(sel: MusicSelection = current): boolean {
-  return sel.mode === 'router';
 }
 
 /** A router-mode station is set up once it has a source to play from. */
@@ -131,7 +134,41 @@ export async function writeRouterConfig(sel: MusicSelection): Promise<RouterAuth
     await mkdir(path.join(ROUTER_DIR, 'plugins'), { recursive: true }).catch(() => {});
     await writeFileAtomic(ROUTER_CONFIG_PATH, next, { mode: 0o600 });
   }
+  await handRouterState();
   return auth;
+}
+
+let handOverWarned = false;
+
+/**
+ * Give the router's user what it reads and writes: config.json (0600, written
+ * by root here) and the data folder its plugins keep state in. state/router
+ * itself and the plugins folder stay root's, so plugin code cannot swap
+ * config.json, the data folder or a plugin for something else. Nothing INSIDE
+ * data/ is touched: the router creates it as its own user, and plugin code
+ * controls it, so a root walk there could be steered (a directory swapped for
+ * a link mid-walk) into handing over anything. Only root can hand files over,
+ * and only root needs to — a controller running as an ordinary user (local
+ * dev) shares its uid with the router it started.
+ *
+ * Never fatal: a filesystem that refuses chown is a degraded mount, not a
+ * reason to stop, so config.json falls back to 0644 (the router can still read
+ * its credentials) and the refusal is logged once.
+ */
+export async function handRouterState(): Promise<void> {
+  if (process.getuid?.() !== 0) return;
+  try {
+    const data = path.join(ROUTER_DIR, 'data');
+    await mkdir(data, { recursive: true });
+    if (existsSync(ROUTER_CONFIG_PATH)) await lchown(ROUTER_CONFIG_PATH, ROUTER_UID, ROUTER_GID);
+    await lchown(data, ROUTER_UID, ROUTER_GID);
+  } catch (err: any) {
+    await chmod(ROUTER_CONFIG_PATH, 0o644).catch(() => {});
+    if (!handOverWarned) {
+      handOverWarned = true;
+      console.warn(`[music-source] could not hand state/router to uid ${ROUTER_UID} (${err?.code || err?.message}); config.json is world-readable instead`);
+    }
+  }
 }
 
 /** The connection music/subsonic.ts uses in router mode. */
@@ -269,19 +306,4 @@ export async function routerReload(): Promise<RouterStatus> {
 
 export async function routerTest(entry: MusicSourceEntry): Promise<RouterTestResult> {
   return routerTestResultSchema.parse(await routerFetch('/test', { method: 'POST', body: JSON.stringify(entry) }));
-}
-
-/** Whether the router answers at all — for the wizard's "can I offer other sources?" */
-export async function routerReachable(): Promise<boolean> {
-  try {
-    await routerStatus();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** True when the config the router serves is the one on disk (it polls, so it may lag a moment). */
-export function routerConfigExists(): boolean {
-  return existsSync(ROUTER_CONFIG_PATH);
 }

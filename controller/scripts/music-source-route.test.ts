@@ -29,7 +29,7 @@ const express = (await import('express')).default;
 const ms = await import('../src/setup/music-source.js');
 const setupConfig = await import('../src/setup/config.js');
 const { config } = await import('../src/config.js');
-const { tagger } = await import('../src/broadcast/tagger.js');
+const { tagger, switchBlocksMessage } = await import('../src/broadcast/tagger.js');
 const { router: musicRoutes } = await import('../src/routes/settings/music-source.js');
 const { router: coreRoutes } = await import('../src/routes/settings/core.js');
 
@@ -227,4 +227,12 @@ test('switching back to Navidrome restores the stored connection and idles the r
   assert.deepEqual(routerConfig.sources, []);
   // The router sources are kept on file for next time.
   assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!.plugin, 'jellyfin');
+});
+
+test('the booth line names the track blocks a switch could not place', () => {
+  assert.equal(
+    switchBlocksMessage({ count: 3, tracks: [{ name: 'Lost Song', artist: 'Nobody' }, { name: 'Other', artist: null }] }),
+    'Music source switch: 3 blocked tracks were not found on the new source (Lost Song — Nobody; Other and 1 more) — if they are there under different names, block them again',
+  );
+  assert.match(switchBlocksMessage({ count: 1, tracks: [] }), /^Music source switch: 1 blocked track was not found/);
 });

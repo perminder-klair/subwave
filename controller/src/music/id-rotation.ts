@@ -15,9 +15,9 @@ import * as playlistRecipes from './playlist-recipes.js';
 import * as likes from '../broadcast/likes.js';
 import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
-import { reportRotation } from './tagger-progress.js';
+import { reportRotation, reportSwitchBlocks } from './tagger-progress.js';
 import { decidePrune, type PruneDecision } from './prune-policy.js';
-import { clearSourceSwitch, pendingSourceSwitch, switchedAfter } from './source-switch.js';
+import { clearSourceSwitch, pendingSourceSwitch, strandedTrackBlocks, switchedAfter } from './source-switch.js';
 import { currentSelectionSince } from '../setup/music-source.js';
 
 export interface RotationManifest {
@@ -79,6 +79,7 @@ export async function adoptAndPrune(
   if (switched) {
     clearSourceSwitch();
     console.log(`[id-rotation] music-source switch: carried ${adopted} track(s) across by id or metadata`);
+    await reportStrandedBlocks(liveIds);
   }
   const pending = db.pendingIdRotations();
   if (pending.size) {
@@ -98,6 +99,24 @@ export async function adoptAndPrune(
   if (!decision.prune) return { adopted, pruned: 0, held: decision };
   const pruned = db.pruneMissingTracks(liveIds);
   return { adopted, pruned };
+}
+
+// Track blocks the switch could not place. Never fails the walk: the report is
+// advice, and the adoption it describes is already committed.
+async function reportStrandedBlocks(liveIds: ReadonlySet<string>): Promise<void> {
+  try {
+    await blocklist.load();
+    const blocks = blocklist.list().filter((e) => e.type === 'track');
+    if (!blocks.length) return;
+    const rows = db.requireDb().prepare('SELECT id, title, artist, album FROM tracks').all() as Array<{ id: string; title: string | null; artist: string | null; album: string | null }>;
+    const live = rows.filter((r) => liveIds.has(r.id));
+    const stranded = strandedTrackBlocks(blocks, live, db.pendingIdRotations(), blocklist.trackNameKey);
+    if (!stranded.length) return;
+    console.warn(`[id-rotation] ${stranded.length} blocked track(s) not found on the new source`);
+    reportSwitchBlocks({ count: stranded.length, tracks: stranded.slice(0, 5).map((b) => ({ name: b.name, artist: b.artist })) });
+  } catch (err: any) {
+    console.warn(`[id-rotation] could not check the blocklist after the switch: ${err?.message || err}`);
+  }
 }
 
 export interface RotationApplyResult {

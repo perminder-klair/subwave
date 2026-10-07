@@ -228,6 +228,21 @@ test('a client that leaves early releases the body, before or after the first by
   assert.equal(counts.opened, 4);
 });
 
+// #1827 review: reloads ran concurrently. A slow build of an older selection
+// that finished last swapped it in after the newer one, and nothing re-read
+// config.json to put it right.
+test('reloads apply in order: the newest config.json wins', async () => {
+  // Imported here, after startRouter set ROUTER_DIR: config.ts reads it at import.
+  const { activeEntries, reloadConfig } = await import('../src/host/registry.js');
+  r.writeConfig(configWith([{ plugin: 'slow-factory', config: { delayMs: 400 } }]));
+  const first = reloadConfig();
+  await new Promise((ok) => setTimeout(ok, 20));
+  r.writeConfig(configWith([{ plugin: 'mock' }]));
+  await Promise.all([first, reloadConfig()]);
+  assert.deepEqual(activeEntries().map((e) => e.plugin), ['mock']);
+  assert.match((await r.rest('ping')).serverVersion, /\(mock\)/);
+});
+
 test('ids that cannot be published are dropped; packed ids round-trip', async () => {
   r.writeConfig(configWith([{ plugin: 'odd-ids' }]));
   await reload();
