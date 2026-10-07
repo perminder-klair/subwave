@@ -445,7 +445,6 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   const runTrack = async (
     id: string,
-    index: number,
     downloadPromise?: Prefetch,
     admittedStems?: { dir: string | undefined },
   ): Promise<TrackWorkResult> => {
@@ -622,7 +621,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
       let outcome: DispatchOutcome<TrackWorkResult>;
       try {
-        outcome = { status: 'fulfilled', value: await runTrack(ids[i], i, current ?? undefined) };
+        outcome = { status: 'fulfilled', value: await runTrack(ids[i], current ?? undefined) };
       } catch (reason) {
         outcome = { status: 'rejected', reason };
       }
@@ -638,7 +637,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         // Reserve the pass-wide stem budget in source order, before the race.
         admittedStems.set(index, { dir: allocateStems(ids[index]) });
       },
-      run: (id, index) => runTrack(id, index, undefined, admittedStems.get(index)),
+      run: (id, index) => runTrack(id, undefined, admittedStems.get(index)),
       onOutcome: (outcome, id, index) => {
         admittedStems.delete(index);
         return commitOutcome(outcome, id, index);

@@ -841,20 +841,6 @@ class Queue {
     return out;
   }
 
-  // Deduped recent artist names, newest first.
-  getRecentArtists(n = 6) {
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const h of this.history) {
-      const a = h.track?.artist;
-      if (!a || seen.has(a)) continue;
-      seen.add(a);
-      out.push(a);
-      if (out.length >= n) break;
-    }
-    return out;
-  }
-
   // First ~5 words of recent DJ utterances — fed to the prompt as an
   // explicit "don't open with any of these" list. Catches repeated openers
   // that the recap text alone glosses over.
@@ -4227,23 +4213,8 @@ class Queue {
       : `"${title}" just spun — give it a rest for a bit.`;
   }
 
-  // The LEAD-artist keys (artistRootKey — collaborations collapse onto the
-  // artist fronting them) of the slots AROUND the next pick: everything queued
-  // and still unaired, the track on air, and the last `n` DISTINCT tracks
-  // played. Count-based and clock-independent, exactly like
-  // recentlyPlayedByCount above and for the same reason: this answers "who has
-  // been in the last few slots", which is a question about slots, not hours.
-  //
-  // The queued side matters because a pick is not always adjacent to the track
-  // on air — with pair-aware drains (and with any request stacked ahead) it
-  // lands behind one or more queued tracks, which have no play row yet. It
-  // takes the TAIL of the queue: a pick appends to the end, so its nearest
-  // neighbours are the last `n` queued, not the first.
-  //
-  // Sole consumer is the agent path's pick-anchor/spacing artist guard (#1251), whose
-  // re-pick steps around these artists — hence root keys rather than the raw
-  // keys recentArtistsSince returns; that one feeds the pool picker's relaxable
-  // recentArtists filter, which matches raw against raw. Empty set when n <= 0.
+  // Both pickers use lead-artist keys from the queue tail, current track, and last
+  // n distinct plays. New picks append at the tail, including behind unaired requests.
   neighbourArtistRoots(n = 0): Set<string> {
     const out = new Set<string>();
     if (!Number.isFinite(n) || n <= 0) return out;
@@ -4270,44 +4241,8 @@ class Queue {
     return out;
   }
 
-  // Lowercased artist names heard in the last `hours` hours — used by the
-  // picker to block recently-heard artists. 2h is a sane default; raising it
-  // narrows the pool fast on a small library.
-  recentArtistsSince(hours = 2) {
-    const cutoff = Date.now() - hours * 3_600_000;
-    const out = new Set<string>();
-    if (this.current?.track?.artist) {
-      out.add(this.current.track.artist.toLowerCase().trim());
-    }
-    for (const p of this._recentPlays) {
-      if (new Date(p.endedAt).getTime() < cutoff) break;
-      const k = (p.artist || '').toLowerCase().trim();
-      if (k) out.add(k);
-    }
-    return out;
-  }
-
-  // The ALBUM keys (music/recency.albumKey — album + lead album artist, with
-  // compilations keyed as '' and therefore exempt) heard inside `hours`, plus
-  // every album already queued and unaired, plus the one on air.
-  //
-  // ONE method for BOTH pick paths (#1485 FR 3): the pool picker passes it to
-  // filterPickerCandidates and the agent path's album guard tests its pick
-  // against it, so "which albums are too recent" cannot mean two things. That
-  // is the property the artist guard does NOT have — recentArtistsSince (hours,
-  // pool) and neighbourArtistRoots (slots, agent) answer deliberately different
-  // questions — and it is why this one is in hours: an hours window is the
-  // shape both paths can read without either of them re-deriving it.
-  //
-  // The QUEUED side is included for the reason neighbourArtistRoots documents:
-  // a pick is not always adjacent to the track on air, so with a pair-aware
-  // drain (or a request stacked ahead) an album queued two slots out is exactly
-  // the repeat this guard exists to catch, and it has no play row yet. Unlike
-  // that method this takes the WHOLE queue rather than a tail — everything in
-  // it will air inside any window worth setting.
-  //
-  // Empty set when hours <= 0, which is the shipped default: the cooldown is
-  // off until an operator asks for it, so an upgrade changes nothing.
+  // Both pickers share this album window, including every unaired queue item.
+  // Compilations are exempt. A zero window disables the cooldown.
   recentAlbumKeys(hours = 0): Set<string> {
     const out = new Set<string>();
     if (!Number.isFinite(hours) || hours <= 0) return out;
@@ -4320,8 +4255,7 @@ class Queue {
     };
     for (const item of this.upcoming) add(item?.track);
     add(this.current?.track);
-    // _recentPlays is newest-first, so the first row past the cutoff ends the
-    // walk — same shape as recentArtistsSince.
+    // Plays are newest first, so the first expired row ends the walk.
     const cutoff = Date.now() - hours * 3_600_000;
     for (const p of this._recentPlays) {
       if (new Date(p.endedAt).getTime() < cutoff) break;

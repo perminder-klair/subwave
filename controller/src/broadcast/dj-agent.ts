@@ -1040,7 +1040,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
-export async function runRequest(queue: any, ctx: any, { requester, text }: { requester: string; text: string }) {
+export async function runRequest(queue: any, { requester, text }: { requester: string; text: string }) {
   if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let

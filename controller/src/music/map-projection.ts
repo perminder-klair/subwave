@@ -82,23 +82,23 @@ let child: ChildProcess | null = null;
 let startedAt: string | null = null;
 let lastLog: string[] = [];
 
-export function isStale(): boolean {
-  const vectors = db.audioVectorCount();
+function isStale(vectors: number, meta: ProjectionStatus['meta']): boolean {
   if (vectors < MIN_VECTORS) return false; // nothing worth projecting
-  const meta = db.getMapProjectionMeta();
   if (!meta || meta.algo !== ALGO || meta.space !== SPACE) return true;
   const drift = Math.abs(vectors - meta.count);
   return drift >= STALE_ABS && drift / Math.max(1, vectors) >= STALE_FRACTION;
 }
 
 export function projectionStatus(): ProjectionStatus {
+  const meta = db.getMapProjectionMeta();
+  const audioVectors = db.audioVectorCount();
   return {
     running: child != null,
     startedAt,
     lastLog: lastLog.slice(-12),
-    meta: db.getMapProjectionMeta(),
-    audioVectors: db.audioVectorCount(),
-    stale: isStale(),
+    meta,
+    audioVectors,
+    stale: isStale(audioVectors, meta),
   };
 }
 
@@ -139,7 +139,8 @@ export function startProjection(): boolean {
 export function maybeProjectOnBoot(delayMs = 30_000): void {
   setTimeout(() => {
     try {
-      if (!isStale()) return;
+      const vectors = db.audioVectorCount();
+      if (vectors < MIN_VECTORS || !isStale(vectors, db.getMapProjectionMeta())) return;
       console.log('[map-projection] sound map stale — starting background projection');
       startProjection();
     } catch (err: any) {

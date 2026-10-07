@@ -321,7 +321,6 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       promptHash: promptVocabHash(TAGGER_CONTRACT_VERSION),
       model: activeModelLabel(),
     });
-    await library.save();
     const tagged = library.get(id);
     res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });
   } catch (err) {
@@ -385,7 +384,6 @@ router.post(
           });
         }
       }
-      await library.save();
 
       const scope = applyToAlbum ? `album "${song.album}" (${targets.length} tracks)` : `"${song.title}"`;
       queue.log('info', clearing
