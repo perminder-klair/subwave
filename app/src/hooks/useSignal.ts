@@ -50,12 +50,15 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
 
     let cancelled = false;
     let next: ReturnType<typeof setTimeout> | undefined;
+    let activeProbe: AbortController | null = null;
     const probe = async () => {
       const ctrl = new AbortController();
+      activeProbe = ctrl;
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       const t0 = Date.now();
       try {
-        await api.health(ctrl.signal);
+        const healthy = await api.health(ctrl.signal);
+        if (!healthy) throw new Error('Station health check failed');
         if (cancelled) return;
         failsRef.current = 0;
         setLatencyMs(Math.round(Date.now() - t0));
@@ -68,6 +71,7 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
         }
       } finally {
         clearTimeout(timer);
+        activeProbe = null;
       }
       if (cancelled) return;
       const delay = failsRef.current >= PROBE_BACKOFF_AFTER ? PROBE_BACKOFF_MS : PROBE_INTERVAL_MS;
@@ -77,6 +81,7 @@ export function useSignal({ api, tunedIn, status, offline }: UseSignalOptions): 
     probe();
     return () => {
       cancelled = true;
+      activeProbe?.abort();
       if (next) clearTimeout(next);
     };
   }, [api, tunedIn, offline, appActive]);

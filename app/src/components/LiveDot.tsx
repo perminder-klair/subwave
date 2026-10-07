@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';
 import { useTheme } from '@/theme/ThemeContext';
@@ -11,7 +11,7 @@ export interface LiveDotProps {
 export default function LiveDot({ size = 7, off = false }: LiveDotProps) {
   const { colors } = useTheme();
   const appActive = useAppActive();
-  const pulse = useRef(new Animated.Value(0)).current;
+  const [pulse] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (off || !appActive) return;

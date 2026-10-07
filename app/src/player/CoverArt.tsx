@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, Easing, Pressable, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';
 import { useTheme } from '@/theme/ThemeContext';
@@ -70,9 +70,9 @@ function Tick({ corner, color, opacity }: { corner: 'tl' | 'tr' | 'bl' | 'br'; c
 export default function CoverArt({ uri, live, burst = false, size = 160, onPress }: CoverArtProps) {
   const { colors } = useTheme();
   const appActive = useAppActive();
-  const scan = useRef(new Animated.Value(0)).current;
-  const ripples = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
-  const tick = useRef(new Animated.Value(0)).current;
+  const [scan] = useState(() => new Animated.Value(0));
+  const [ripples] = useState(() => Array.from({ length: 3 }, () => new Animated.Value(0)));
+  const [tick] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     if (!live || !appActive) return;
@@ -93,13 +93,11 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
       loops.forEach((l) => l.stop());
       ripples.forEach((r) => r.setValue(0));
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, appActive]);
+  }, [live, appActive, scan, ripples]);
 
   useEffect(() => {
     Animated.timing(tick, { toValue: burst ? 1 : 0, duration: 200, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [burst]);
+  }, [burst, tick]);
 
   const ringBase = size * 0.6;
 

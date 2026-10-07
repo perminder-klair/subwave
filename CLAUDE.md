@@ -55,7 +55,7 @@ docker compose up -d --build broadcast      # after radio.liq / icecast.xml.temp
 
 ### Lint is the merge gate; tests are not
 
-`controller/`, `web/` and `mcp-subwave/` each expose `npm run lint` (`eslint . && tsc --noEmit`; mcp-subwave is `tsc` only). CI runs all three on every PR (`.github/workflows/lint.yml`, plus theme-token and schema-mirror drift checks on `controller`) and those jobs are what block a merge.
+`controller/`, `web/`, `app/` and `mcp-subwave/` each expose `npm run lint` (`eslint . && tsc --noEmit`; mcp-subwave is `tsc` only). CI runs all four on every PR (`.github/workflows/lint.yml`, plus theme-token and schema-mirror drift checks on `controller`) and those jobs are what block a merge.
 
 `controller/` also has `npm test` — `scripts/run-tests.ts` auto-discovers every `scripts/*.test.ts` and hands it to Node's built-in runner. **Dropping a `*.test.ts` file into `controller/scripts/` is the whole registration step**; `npm test -- <substring>` filters. Prefer `node:test`'s `test()` for new files (per-assertion reporting) over the older plain-script shape (one pass/fail on exit code); both are supported deliberately. Concurrency is pinned to `--test-concurrency=1` — these files reach for shared ground (temp state dir, library DB, env vars). `mcp-subwave/` has no tests. `web/` now has `npm test` too — `web/scripts/run-tests.mjs` auto-discovers `*.test.{ts,tsx,mjs}` under `tests/`, `components/`, `hooks/`, `lib/` and `scripts/`, and hands them to Node's built-in runner via `tsx`; `npm test -- <substring>` filters. Dropping a matching file into any of those roots is the whole registration step. Concurrency is pinned to `--test-concurrency=1` there too, though for a weaker reason: node gives each test FILE its own process, so `process.env` and module state are NOT shared the way they are in the controller's files. It is the shared FILESYSTEM that could collide, and serial execution keeps output deterministic. No web test needs it today. Note the roots are LISTED in that script, not globbed, so a new test directory is a deliberate addition rather than an accidental omission.
 
@@ -106,7 +106,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 - **Controller** (`controller/src/`, Express + ESM Node) — `server.js`, `config.js`, `settings.js`, `context.js` at the root; everything else under `routes/`, `middleware/`, `music/`, `broadcast/`, `audio/`, `llm/`, `skills/`.
 - **Liquidsoap** (`liquidsoap/radio.liq`) — request queue → auto playlist → jingle rotate → cross → dead-air guard → ducking layers → limiter → parallel Icecast mounts.
 - **Web** (`web/`) — Next.js 15 App Router + Tailwind; headless player core plus swappable **skins**.
-- **Native app** (`app/`) — a separate Expo SDK 56 / React Native project (own `package.json`, `node_modules`, `eas.json`). Architecture-critical and easy to break.
+- **Native app** (`app/`) — a separate Expo SDK 57 / React Native project (own `package.json`, `node_modules`, `eas.json`). Architecture-critical and easy to break.
 
 ### Docker layout
 

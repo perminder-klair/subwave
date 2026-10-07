@@ -8,7 +8,7 @@ async function settle() {
 
 test('slow requests cannot overlap, and polling resumes after they settle', async t => {
   t.mock.timers.enable({ apis: ['setInterval'] });
-  const requests: Array<{ signal: AbortSignal; resolve: () => void }> = [];
+  const requests: { signal: AbortSignal; resolve: () => void }[] = [];
   const stop = pollAsync(signal => new Promise<void>(resolve => {
     requests.push({ signal, resolve });
   }), 5000);

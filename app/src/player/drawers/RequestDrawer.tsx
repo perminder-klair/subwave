@@ -77,7 +77,7 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
 
   const chips = useMemo(
     () => buildSuggestions(nowPlaying, context),
-    [nowPlaying?.artist, context?.festival?.name, context?.time?.vibe, context?.time?.show, context?.weather?.condition],
+    [nowPlaying, context],
   );
 
   const scheduleClose = () => {

@@ -63,7 +63,7 @@ interface Slot {
 }
 
 function collapseSlots(
-  dayGrid: Array<string | null>,
+  dayGrid: (string | null)[],
   shows: ScheduleShow[],
   personas: SchedulePersona[],
 ): Slot[] {
