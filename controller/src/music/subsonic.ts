@@ -532,6 +532,17 @@ export async function getAlbumList(offset = 0, size = 500, { requireComplete = f
   return r.albumList2?.album || [];
 }
 
+// Whether Navidrome is scanning its library right now (Subsonic getScanStatus).
+// null = unknown: the call failed or the server did not say.
+export async function getScanStatus(): Promise<boolean | null> {
+  try {
+    const r = await call('getScanStatus', {}, RETRY_FAST_TRANSPORT);
+    return typeof r.scanStatus?.scanning === 'boolean' ? r.scanStatus.scanning : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
   const r = await call('getAlbumList2', { type: 'newest', size }, RETRY_FAST_TRANSPORT);
   return r.albumList2?.album || [];

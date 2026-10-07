@@ -1048,7 +1048,8 @@ async function cleanup() {
   // walks nothing (stem-cache.ts); a full walk runs at least once a day, which
   // is what catches dirs added or removed by hand.
   try {
-    const { removed, freedBytes, failedDirs, overBudgetBytes } = await stemCacheStore.sweep();
+    const { removed, freedBytes, failedDirs, overBudgetBytes, offline } = await stemCacheStore.sweep();
+    if (offline) queue.log('error', offline);
     if (removed) {
       queue.log('scheduler',
         `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);

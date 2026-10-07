@@ -302,6 +302,16 @@ async def test_path_contract():
     assert result["ok"] is True, result
     assert worker_calls == [{"id": "1", "path": audio.name}], worker_calls
 
+    # The stems marker flag reaches the worker with the stems dir it guards.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, stems_dir="/stems/t1", stems_require_marker=True,
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "stems_dir": "/stems/t1", "stems_require_marker": True,
+    }], worker_calls
+
 
 def test_concurrency_env_validation():
     old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")

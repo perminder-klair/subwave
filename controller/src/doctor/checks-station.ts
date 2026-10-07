@@ -289,7 +289,23 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     // the doctor is exactly the tool an operator reaches for when the picker
     // ISN'T running — without the guard, requireDb() would throw and safe()
     // would replace this whole section with a spurious "check failed".
-    if (wantStems && analyzer.vocalActivityAvailable() !== false && db.isOpen()) {
+    // An unmounted stems share reads as an empty cache; the marker check
+    // (stem-cache.ts stemsRootStatus) is what tells the two apart. Read-only
+    // here: the doctor never creates or adopts the marker.
+    let stemsOffline = false;
+    if (wantStems) {
+      const root = await stemCache.stemsRootStatus({ readOnly: true });
+      if (root.action === 'offline') {
+        stemsOffline = true;
+        out.push({
+          label: 'stem transitions',
+          status: 'warn',
+          detail: 'the stem cache looks unmounted (no marker file, no stems on disk)',
+          hint: root.message ?? '',
+        });
+      }
+    }
+    if (wantStems && !stemsOffline && analyzer.vocalActivityAvailable() !== false && db.isOpen()) {
       const use = await stemCache.usage();
       const cached = use.dirs;
       const attempted = db.stemsCachedCount();

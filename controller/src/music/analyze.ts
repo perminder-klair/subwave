@@ -211,7 +211,22 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     error: analyzer.vocalActivityError(),
     backend,
   });
-  const stemCache = stemDecision.widen;
+  let stemCache = stemDecision.widen;
+  // No stem write, backfill or sweep without the cache root's marker: an
+  // unmounted stems share must not read as an empty cache (stem-cache.ts).
+  // Checked before --re-analyze clears the stems stamps, so an offline cache
+  // keeps them.
+  if (stemCache) {
+    const root = await stemCacheStore.stemsRootStatus({ prepare: true });
+    if (!root.online) {
+      stemCache = false;
+      logEvent('warning', root.message ?? 'Stem cache offline: stems skipped this pass');
+    } else if (root.message) {
+      logEvent('warning', root.message);
+    } else if (root.action === 'create' || root.action === 'adopt') {
+      console.log(`[analyze] stem cache: ${root.action === 'create' ? 'created' : 'marked existing cache at'} ${stemCacheStore.stemsRoot()} (${stemCacheStore.STEMS_MARKER})`);
+    }
+  }
 
   // Snapshot the already-analysed ids BEFORE the clear wipes the bpm marker.
   // A raw --re-analyze leaves the scope null and redoes the whole library.
@@ -472,12 +487,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
             vocal,
             complete: localComplete,
             stems_dir,
+            stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
           })
         : await analyzer.analyze(id, {
             embed,
             vocal,
             stems_dir,
+            stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
           });
       let storedVocal = false;
