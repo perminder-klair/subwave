@@ -18,7 +18,7 @@ import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
-import { loadNavidromeConfig } from '../setup/config.js';
+import { loadMaintenanceConnection } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
@@ -48,7 +48,7 @@ async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    await loadNavidromeConfig();
+    await loadMaintenanceConnection();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

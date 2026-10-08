@@ -39,6 +39,20 @@ test('ids route to their owner; unknown prefixes resolve to nothing', async () =
   assert.equal(c.owns('px-123'), false);
 });
 
+test('sonic similarity routes to the id\'s owner, like similarSongs', async () => {
+  const m = await mock();
+  const g = await good();
+  const c = createComposite([m, g]);
+  assert.equal(c.capabilities.sonicSimilarity, true, 'the union: the mock has it');
+  const seed = (await m.randomSongs(1, {}))[0]!;
+  const viaSet = await c.sonicSimilar(seed.id, 4);
+  assert.equal(viaSet.length, 4);
+  assert.deepEqual(viaSet.map((s) => s.id), (await m.sonicSimilar(seed.id, 4)).map((s) => s.id));
+  // The fixture's track belongs to a source without it: empty, not someone else's answer.
+  assert.deepEqual(await c.sonicSimilar('good-s1', 4), []);
+  assert.deepEqual(await c.sonicSimilar('px-123', 4), []);
+});
+
 test('a raw-id source owns whatever no prefixed source claims, and is asked last', async () => {
   const m = await mock();
   const c = createComposite([await good(true), m]);

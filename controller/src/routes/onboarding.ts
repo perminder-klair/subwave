@@ -24,9 +24,9 @@ import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { applyNavidromeToLiveConfig, loadSetupConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
-import { currentSelection, readSelection } from '../setup/music-source.js';
-import { applySelection, prepareSelection } from '../setup/music-source-save.js';
+import { loadSetupConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
+import { readSelection } from '../setup/music-source.js';
+import { applyNavidromeConnection, applySelection, prepareSelection } from '../setup/music-source-save.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import { pingWith } from '../music/subsonic.js';
@@ -138,7 +138,8 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     // A music-source choice (#692) is validated against the router's plugin
     // manifests up front for the same reason: nothing is written if it fails.
     const prevSelection = readSelection(await loadSetupConfig());
-    const music = b.music && typeof b.music === 'object' ? await prepareSelection(b.music, prevSelection) : null;
+    const pendingNavidrome = b.navidrome && typeof b.navidrome === 'object' ? b.navidrome : undefined;
+    const music = b.music && typeof b.music === 'object' ? await prepareSelection(b.music, prevSelection, pendingNavidrome) : null;
     if (music && !music.ok) throw new Error(music.error);
 
     // Wizard-managed overlay only; never mutates the live env. Unlike the probe,
@@ -147,8 +148,9 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
       await saveSetupConfig({
         navidrome: normalizeNavidromeCredentials(b.navidrome),
       });
-      // Router mode keeps these on file; the router stays the live connection.
-      if (currentSelection().mode !== 'router' && music?.ok !== true) applyNavidromeToLiveConfig(b.navidrome);
+      // Live wherever the station plays them — directly, or as the router's
+      // navidrome source. A music choice below applies its own connection.
+      if (music?.ok !== true) await applyNavidromeConnection(b.navidrome);
       clearSetupConfigCache();
     }
 

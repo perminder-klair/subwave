@@ -197,8 +197,8 @@ RUN /opt/kokoro/venv/bin/python -c \
       "from scripts.kokoro_worker import build_g2p; from misaki import espeak, ja, zh; raw, _ = ja.JAG2P(version='pyopenjtalk')('生ビール'); phonemes, _ = build_g2p('ja', espeak, ja, zh)('生ビール'); assert phonemes == raw[:len(raw) // 2]"
 
 # --- Music router (#692) -----------------------------------------------------
-# Idle until Settings → Music source selects it; the supervisor runs it on
-# loopback. Installed apart from the controller so its dependency tree stays
+# Every station plays through it by default (Admin → Music sources); the
+# supervisor runs it on loopback. Installed apart from the controller so its dependency tree stays
 # its own, as in the separate subwave-router image.
 WORKDIR /router
 COPY router/package*.json ./

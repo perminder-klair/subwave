@@ -13,15 +13,28 @@ const b = { url: 'http://music-b:4533', user: 'station-b', pass: 'password-b' };
 // decisions. Exercise the real boot loader and both setup-status readers.
 function boot(root: string, action = '') {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+    const { readFileSync } = await import('node:fs');
     const { config } = await import('./src/config.ts');
-    const { loadNavidromeConfig, saveSetupConfig, applyNavidromeToLiveConfig } = await import('./src/setup/config.ts');
+    const { loadNavidromeConfig, saveSetupConfig, applyNavidromeToLiveConfig, storedNavidrome, syncRouterConfig } = await import('./src/setup/config.ts');
+    const { ROUTER_CONFIG_PATH } = await import('./src/setup/music-source.ts');
     const { getSetupStatus, getSetupStatusSync } = await import('./src/setup/firstRun.ts');
     const { navidromeEnvLocks } = await import('./src/setup/navidrome-policy.ts');
     const { NAVIDROME_ENV_ENABLED } = await import('./src/config.ts');
+    // Boot order: the router's config.json, then the live connection.
+    await syncRouterConfig();
     await loadNavidromeConfig();
     ${action}
+    await syncRouterConfig();
+    // The station's connection — what its navidrome source plays behind the
+    // router (the default), what direct mode and the failover use — and the
+    // router must be handed exactly that.
+    const connection = await storedNavidrome();
+    const routed = JSON.parse(readFileSync(ROUTER_CONFIG_PATH, 'utf8')).sources.find((s) => s.plugin === 'navidrome');
+    if (routed && JSON.stringify(routed.config) !== JSON.stringify({ url: connection.url, user: connection.user, password: connection.password })) {
+      throw new Error('the router was handed a different Navidrome connection than the station stores');
+    }
     console.log(JSON.stringify({
-      connection: config.navidrome,
+      connection,
       status: await getSetupStatus(), sync: getSetupStatusSync(),
       locks: navidromeEnvLocks(NAVIDROME_ENV_ENABLED),
     }));

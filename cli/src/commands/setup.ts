@@ -195,7 +195,7 @@ async function collectNavidrome(): Promise<NavidromeCreds> {
     muted('tip: a dedicated Navidrome user that can only access the libraries you');
     muted('want on air keeps audiobooks and seasonal collections off the stream');
     muted('on Jellyfin, Plex or a source plugin instead? choose it in the web wizard');
-    muted('(/onboarding) or Admin → Settings → Music source after this step');
+    muted('(/onboarding) or Admin → Music sources after this step');
     url = exitIfCancelled(await p.text({
       message: 'Navidrome URL',
       initialValue: url,

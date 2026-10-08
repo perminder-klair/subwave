@@ -1,14 +1,15 @@
 # Music sources and the router
 
-How SUB/WAVE plays from something other than Navidrome (#692): the music router, its plugin contract, how the controller selects it, and how a library survives a switch. Plugin authors want [`docs/music-source-plugins.md`](../music-source-plugins.md); the design history is [`docs/plans/692-music-source-router.md`](../plans/692-music-source-router.md).
+How SUB/WAVE plays its music through the SUB/WAVE music router (#692): the router, its plugin contract, how the controller selects sources, the failover that keeps a station on air when the router is down, and how a library survives a switch. Plugin authors want [`docs/music-source-plugins.md`](../music-source-plugins.md); the design history is [`docs/plans/692-music-source-router.md`](../plans/692-music-source-router.md).
 
 ## The shape
 
 ```
-navidrome mode (default):  controller ──Subsonic──► Navidrome
-router mode:               controller ──Subsonic──► router ──► plugin (jellyfin | plex | navidrome | mock | installed)
-                                                       ▲   ▲
-                              Liquidsoap subhttp ──────┘   └────── analyzer URL fallback
+router mode (default):  controller ──Subsonic──► router ──► plugin (navidrome | jellyfin | plex | installed | mock*)
+                                                    ▲   ▲
+                           Liquidsoap subhttp ──────┘   └────── analyzer URL fallback
+direct mode:            controller ──Subsonic──► Navidrome      (escape hatch, and the failover's stand-in)
+                                                               * dev-only, hidden from operators
 ```
 
 The router (`router/`) speaks exactly the Subsonic dialect `controller/src/music/subsonic.ts` uses. In router mode the controller's `config.navidrome` connection simply points at the router with credentials the controller generated, so **nothing downstream of `subsonic.ts` knows which mode is live**: the picker, the agent's tools, the library walk, `getAnnotatedUri`, Liquidsoap's `subhttp` protocol and its #1405 probe, the analyzer's download, `/cover/:id`. That is the whole reason it is a sidecar and not a facade inside the controller (the approach PR #843 took): the Subsonic wire was already the contract, and every path that would have needed a source branch already went through it.
@@ -19,17 +20,28 @@ The router (`router/`) speaks exactly the Subsonic dialect `controller/src/music
 
 | File | Writer | Readers | Holds |
 | --- | --- | --- | --- |
-| `<station>/setup-config.json` → `music` | controller (settings + onboarding saves) | controller | `{ mode, merge, sources[] }`; absent = direct Navidrome |
-| `state/router/config.json` (install-level, 0600, owned by the router's uid) | controller main process only | router (polls every 2s), maintenance children | router credentials + the ACTIVE station's selection |
+| `<station>/setup-config.json` → `music` | controller (Music sources + onboarding saves) | controller | `{ mode, merge, sources[] }`; absent = the router serving the station's Navidrome |
+| `<station>/setup-config.json` → `navidrome` | controller (the Navidrome connection saves, wizard, CLI) | controller | the station's Navidrome connection: what the navidrome source plays, what direct mode and the failover use |
+| `state/router/config.json` (install-level, 0600, owned by the router's uid) | controller main process only | router (polls every 2s), maintenance children | router credentials + the ACTIVE station's selection, with the navidrome source's connection injected |
 | `<station>/music-source-switch.json` | controller (on a save that changes track ids) | next complete library walk | the switch marker |
 
-- **Absent → Navidrome.** `schemas/music-source.ts` reads a missing or damaged `music` block as `mode: 'navidrome'`, so an upgrade is byte-identical. The router still runs and still gets credentials, but serves nothing.
+- **Absent → the router serving the station's Navidrome** (`DEFAULT_MUSIC_SELECTION`: one `navidrome` source, `rawIds: true`). This was a deliberate behaviour change (2026-10-08; before it, absent meant direct Navidrome): every upgrading station moves behind the router at its next boot, with no file rewritten. `rawIds` is what makes that safe — the router publishes exactly the ids a direct connection did, so `musicSelectionIdentity` treats the station's Navidrome alone behind the router as the same library as direct mode (`isStationNavidromeOnly` → `'navidrome'`), and moving between the two is never a switch. A router selection with no sources reads as the default too.
+- **The navidrome source has no settings of its own.** It always plays the station's Navidrome connection (`setup-config.json`'s `navidrome` block, env applied per `navidrome-policy.ts`), injected when `config.json` is written (`setup/music-source.ts stationSources`, `setup/config.ts syncRouterConfig`). `readSelection` strips any it carried and `prepareSelection` refuses a selection naming it while that connection is incomplete. One place for those credentials, so direct mode, the failover and the router can never disagree about which Navidrome or which login — and a multi-station profile's isolation from the shared env carries over to the router path unchanged. Every writer of the connection goes through `setup/music-source-save.ts applyNavidromeConnection`, which rewrites `config.json` and nudges the router, so a new password is live at once.
 - **Credentials** are generated by the controller on first boot (`setup/music-source.ts writeRouterConfig`) and never change after. They are the only thing that crosses the network; an operator's backend password stays in the plugin config inside `config.json`.
-- **Boot order matters**: `server.ts` writes `config.json` before `loadNavidromeConfig()`, which reads the credentials back in router mode. The maintenance children (tagger, analyzer) only read.
+- **Boot order matters**: `server.ts` writes `config.json` (`syncRouterConfig`) before `loadNavidromeConfig()`, which reads the credentials back in router mode. The maintenance children (tagger, analyzer) only read.
 - **The router polls, and also takes a nudge**: every save calls `POST /internal/reload`. A login that fails right after a write re-reads the file before refusing (`registry.refreshIfChanged`), because the controller writes new credentials and uses them immediately.
 - **The router runs unprivileged**, since plugins are third-party code: compose runs it as `ROUTER_UID:ROUTER_GID` (default 1000, the image's `node`) with every capability dropped and `no-new-privileges`, and the all-in-one supervisor does the same with `setpriv` (it shares that container's whole filesystem, `secrets.env` included). The controller is root and hands that uid `config.json` and `data/` after each write (`setup/music-source.ts handRouterState`); `state/router` itself and `plugins/` stay root's, so plugin code cannot swap the config or a plugin. The hand-over touches only those two paths, with `lchown`, and never anything inside `data/`: the router creates that as its own user, and plugin code controls it, so a root walk there could be steered (a directory swapped for a link mid-walk) into handing over anything — `secrets.env` included in the all-in-one image. It is never fatal: a filesystem that refuses `chown` leaves `config.json` world-readable instead, and the router's poll stamp includes the ctime, so a hand-over counts as a change. `ROUTER_UID` must match on the controller, the router service and the supervisor.
 - **Multi-station**: `state/router/` is install-level. Station switches restart the controller, which rewrites `config.json` for the new active station at boot.
 - **Env always wins**, per field: a manifest field with `env` (`JELLYFIN_URL`, `PLEX_TOKEN`, …) is overridden by that variable in the router container and shown locked in the admin form. `ROUTER_SOURCE` / `ROUTER_USER` / `ROUTER_PASS` only fill gaps (dev and tests).
+
+## Failover: a router outage must not silence a station
+
+The router is now on every station's audio path, so its outage — a crashed container, a third-party plugin that wedged the process every plugin shares — would otherwise take down a station that a direct Navidrome connection would have kept playing. `music/source-failover.ts` (policy in its own module, started by `server.ts` in the main process only) checks the router's unauthenticated `/health` every 10s. When the selection is the station's Navidrome alone (`failoverEligible` = `isStationNavidromeOnly`), the router has failed **two checks in a row**, and a direct ping of the stored connection answers, it points `config.navidrome` at that connection; two healthy checks in a row move it back. The streaks matter in both directions: a router still starting at boot must not trip a switch, and a flapping one must not rebuild `auto.m3u` every tick. Each switch clears the server caches and the pick pool and rebuilds `auto.m3u`, whose URLs point at the connection being left.
+
+- **Only the same library fails over.** The ids are identical only for the station's Navidrome with raw ids; a Jellyfin, merged or namespaced selection has no stand-in and the monitor does not even probe.
+- **A save ends a failover** (`resetFailover` in `applySelection`): the save applies its own connection, and the monitor re-decides from there. A selection that changed while failed over restores its own connection on the next tick.
+- **Maintenance runs take the decision once, at start** (`setup/config.ts loadMaintenanceConnection`, used by `analyze-library` and the tagger): when the station plays its Navidrome alone and the router is not serving, the run pings the stored connection and reads it directly. Without that, a walk started during an outage would fail outright though the station plays on; with it, the ids it walks are the same ones.
+- **Surfaced** in `GET /settings/music-source` (`failover`), the doctor's music check (a `failover` warning; the connectivity line names Navidrome, not the router), and the Music sources page.
 
 ## The router
 
@@ -75,10 +87,11 @@ A plugin is code with the same trust as a skill's `tool.mjs`. The compose servic
 - `schemas/music-source.ts` — the selection, the save/test bodies and the router-status shapes (lenient: the router may be another version). Mirrored to the web.
 - `setup/music-source.ts` — the selection, `config.json`, the router client, secret masking, selection identity, the switch marker.
 - `setup/music-source-save.ts` — validate-then-apply, shared by `POST /settings/music-source` and `/onboarding/save` so both refuse the same drafts. A draft is checked against the router's manifests (required fields, plugin load errors) before anything is written.
-- `routes/settings/music-source.ts` — `GET`/`POST /settings/music-source`, `/test`, `/rescan`, `/activity`.
-- `web/components/admin/router/` — Admin → Music router (`/admin/router`): one channel strip per plugin (health, counts, latency, capabilities, settings), the Signal path monitor over `/activity` (polled every 1.5s only while open), and the service matrix (`/internal/status`'s `endpoints` crossed with each plugin's capabilities). Read-only: choosing what serves stays in Settings → Music source, whose save validates, writes `config.json` and re-links the library. A standby plugin's capabilities are the ones it had when last built (selected or Tested) since the router started, and `unknown` until then — never guessed.
-- `setup/firstRun.ts` — router mode needs a source, not Navidrome credentials.
-- `routes/settings/core.ts` — the direct-Navidrome section reads and writes the *stored* connection; in router mode its save does not touch the live one.
+- `routes/settings/music-source.ts` — `GET`/`POST /settings/music-source`, `/test`, `/rescan`, `/activity`. The GET also carries the station's Navidrome connection (password as `passSet` only) and the failover state, and hides `devOnly` plugins (the demo library) unless one is selected or `SUBWAVE_DEV_PLUGINS=1` — presentation only, a save may still name one.
+- `music/source-failover.ts` — the failover above.
+- `web/components/admin/sources/` — **Admin → Music sources** (`/admin/sources`; `/admin/router` and Settings' old `?section=music` redirect there), three tabs over that one GET. **Sources**: the station's sources — Navidrome is a card editing the station connection (saved on its own, applied live); other sources are drafts saved together, because a change can re-link the library; a second source is a merged library; Advanced → *Play Navidrome directly* is the escape hatch. **Plugins**: the inventory, Rescan, and how to install. **Monitor** (`web/components/admin/router/`): one channel strip per plugin (health, counts, latency, capabilities, settings), the Signal path monitor over `/activity` (polled every 1.5s only while open), and the service matrix (`/internal/status`'s `endpoints` crossed with each plugin's capabilities). A standby plugin's capabilities are the ones it had when last built (selected or Tested) since the router started, and `unknown` until then — never guessed.
+- `setup/firstRun.ts` — router mode needs a source; when that source is the station's Navidrome (the default) it needs that connection too (`routerSelectionComplete`).
+- `routes/settings/core.ts` — `/settings/navidrome` reads and writes the station's stored connection and makes it live through `applyNavidromeConnection`; a station playing other sources keeps it on file (`live: false`).
 - `doctor/checks-services.ts` — router mode reports the router, each source's health and any plugin load errors.
 
 Secrets never reach the browser: `GET` returns `secretsSet` (keys with a stored value), and a blank secret in a save (or a Test) keeps the stored one for the same plugin — only while every `url` field still matches what was stored, so a stored key is never sent to a server it was not stored for. Without the plugin's manifest (the router down, or a manifest that failed to load) the controller cannot tell a URL from a secret and shows none of a source's settings; the admin form therefore waits for an answer with the manifests before seeding its draft (`web/.../sourceDraft.ts seedableSources`), or a later save would drop every optional setting.
@@ -100,6 +113,8 @@ That walk's `adoptAndPrune` runs adoption with `matchByMetadata`: orphaned rows 
 | `controller/scripts/music-source*.test.ts`, `source-switch.test.ts` | selection, routes, secrets, first-run, adoption |
 | `web/components/admin/music/sourceDraft.test.ts` | the form's dirty/identity/payload rules |
 | `router/scripts/activity.test.ts`, `coverage.test.ts` | the feed's attribution and privacy; the coverage table against the handlers |
-| `web/components/admin/router/model.test.ts` | the Music router page's channels, matrix and monitor readouts |
+| `web/components/admin/router/model.test.ts` | the Monitor tab's channels, matrix and monitor readouts |
+| `controller/scripts/source-failover.test.ts` | the failover decision table and runner |
+| `controller/scripts/stations-navidrome*.test.ts` | each station's own connection reaches the router (and never the shared env) |
 
 The controller's router tests spawn the real router, so they need `npm --prefix router install`.

@@ -45,7 +45,7 @@ export default function NavidromeBanner({
         Music source and that {status.mode === 'router' ? 'the router service' : 'Navidrome'} is running.
       </span>
       <Link
-        href="/admin/settings?section=music"
+        href="/admin/sources"
         className="ml-auto inline-flex min-h-9 items-center font-bold text-[var(--danger)] underline-offset-2 hover:underline sm:min-h-0"
       >
         Music source &rarr;

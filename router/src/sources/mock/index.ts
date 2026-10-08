@@ -1,9 +1,12 @@
 // The deterministic demo library: generated tones, gradient covers and fake
-// lyrics, with no server and no music files. For development, tests and
-// trying SUB/WAVE before connecting a real library — not for broadcasting.
+// lyrics, with no server and no music files. For development and tests only
+// (`devOnly` in its manifest) — not for broadcasting.
 //
 // It is also the reference implementation of the plugin contract: it covers
 // every optional op, so the conformance kit exercises the whole surface on it.
+// Sonic similarity is the one exception, kept on the older
+// `capabilities.sonicSimilarity` flag (served by similarSongs) so that path
+// stays exercised; a new plugin implements `sonicSimilar`.
 
 import { defineSource, type Playlist } from '../../sdk/index.js';
 import { md5 } from '../../util.js';

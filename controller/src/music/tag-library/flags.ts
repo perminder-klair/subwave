@@ -7,7 +7,7 @@ import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
-import { loadNavidromeConfig } from '../../setup/config.js';
+import { loadMaintenanceConnection } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
@@ -218,7 +218,7 @@ export async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    await loadNavidromeConfig();
+    await loadMaintenanceConnection();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

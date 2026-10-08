@@ -35,6 +35,7 @@ const plugin = (name: string, over: Partial<MusicPluginInfo> = {}): MusicPluginI
   envLocked: [],
   error: null,
   capabilities: null,
+  devOnly: false,
   ...over,
 });
 
@@ -189,4 +190,14 @@ test('durations read in ms, and in seconds once they are long', () => {
   assert.equal(formatMs(null), 'in flight');
   assert.equal(formatMs(1234), '1,234 ms');
   assert.equal(formatMs(65_000), '65.0 s');
+});
+
+test('the Navidrome strip shows the station connection it plays, never a password', () => {
+  const s = status({ active: [active('navidrome', 10)], plugins: [plugin('navidrome', { config: [{ key: 'url', label: 'Server URL', type: 'url', required: true }] })] });
+  const [c] = buildChannels(view(s, { navidrome: { url: 'http://nd:4533', user: 'radio', passSet: true, env: { url: false, user: true, pass: false } } }));
+  assert.deepEqual(c!.settings.map((f) => [f.label, f.value]), [
+    ['Server URL', 'http://nd:4533'],
+    ['Username', 'from env'],
+    ['Password', '•••••• set'],
+  ]);
 });

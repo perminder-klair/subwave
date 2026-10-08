@@ -1,11 +1,11 @@
 'use client';
 
-// Admin → Music router: the SUB/WAVE music router's control center. Source
+// Admin → Music sources → Monitor: the SUB/WAVE music router's control center. Source
 // channels (every plugin, its health, counts, latency and capabilities), the
 // Signal path monitor (the station's live Subsonic traffic and which source
 // answered it), and the service matrix (which endpoints each source backs).
 //
-// Read-only on purpose. Choosing what serves is Settings → Music source, whose
+// Read-only on purpose. Choosing what serves is the Sources tab, whose
 // save validates the draft, writes the router's config and re-links the
 // library when track ids change — a second switch here would skip all three.
 
@@ -20,15 +20,12 @@ import { buttonVariants } from '../../ui/button';
 import { V3Alert } from '../../ui/alert';
 import { Btn } from '../ui';
 import type { RouterActivity } from '../../../lib/schemas.generated';
-import { MUSIC_SOURCE_KEY } from '../settings/MusicSourceSection';
+import { MUSIC_SOURCE_KEY, ROUTER_ACTIVITY_KEY } from '../sources/queries';
 import { buildChannels, type RouterView } from './model';
 import { ServiceMatrix } from './ServiceMatrix';
 import { SignalPath } from './SignalPath';
 import { SourceChannels } from './SourceChannels';
 import s from './router.module.css';
-
-/** The live feed, polled only while this page is open. Nests under the music-source family. */
-export const ROUTER_ACTIVITY_KEY = [...MUSIC_SOURCE_KEY, 'activity'] as const;
 
 const ACTIVITY_POLL_MS = 1_500;
 // Health asks every serving backend for its library counts, so it is not polled hard.
@@ -75,9 +72,11 @@ function summaryLine(view: RouterView): string {
   const r = view.router;
   if (!r) return 'ESTABLISHING LINK…';
   const parts =
-    view.mode === 'router'
-      ? ['MODE ROUTER', `SERVING ${r.serving ? r.serving.name.toUpperCase() : 'NOTHING'}`]
-      : ['MODE DIRECT NAVIDROME', 'ROUTER IDLE'];
+    view.mode !== 'router'
+      ? ['MODE DIRECT NAVIDROME', 'ROUTER BYPASSED']
+      : view.failover?.active
+        ? ['FAILOVER', 'NAVIDROME DIRECT']
+        : ['MODE ROUTER', `SERVING ${r.serving ? r.serving.name.toUpperCase() : 'NOTHING'}`];
   parts.push(`ROUTER v${r.router.version}`, `PLUGIN API v${r.router.apiVersion}`, `${r.plugins.length} PLUGINS`, `${r.endpoints.length} ENDPOINTS`);
   return parts.join(' / ');
 }
@@ -118,7 +117,8 @@ export default function RouterPanel() {
   const channels = useMemo(() => (view ? buildChannels(view) : []), [view]);
   const backends = channels.filter((c) => c.kind === 'source');
 
-  const lamp = statusQuery.isError || view?.routerError || view?.router?.configError ? 'error' : view?.mode === 'navidrome' ? 'idle' : 'ok';
+  const lamp =
+    statusQuery.isError || view?.routerError || view?.router?.configError || view?.failover?.active ? 'error' : view?.mode === 'navidrome' ? 'idle' : 'ok';
   const statusError = statusQuery.isError ? errorMessage(statusQuery.error) : null;
 
   return (
@@ -141,7 +141,14 @@ export default function RouterPanel() {
           <p className={s.runtimeNote}>
             Station plays Navidrome directly
             <br />
-            router idles until selected
+            router bypassed
+          </p>
+        )}
+        {view?.mode === 'router' && view.failover?.active && (
+          <p className={s.runtimeNote}>
+            Router down — station fell back
+            <br />
+            to Navidrome directly
           </p>
         )}
         <div className={s.faceplateActions}>
@@ -152,8 +159,8 @@ export default function RouterPanel() {
           <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
             {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
           </Btn>
-          <Link href="/admin/settings?section=music" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
-            Change source
+          <Link href="/admin/sources?tab=sources" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
+            Configure sources
           </Link>
         </div>
       </header>

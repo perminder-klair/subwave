@@ -5,10 +5,9 @@ import express from 'express';
 import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
-import { clearPoolCache } from '../../music/picker.js';
-import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
-import { applyNavidromeToLiveConfig, saveSetupConfig, storedNavidrome } from '../../setup/config.js';
+import { saveSetupConfig, storedNavidrome, storedNavidromeView } from '../../setup/config.js';
+import { applyNavidromeConnection } from '../../setup/music-source-save.js';
 import { currentSelection } from '../../setup/music-source.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
@@ -31,11 +30,6 @@ import { skillCatalog } from '../../skills/_agent.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
-
-async function storedNavidromeView() {
-  const nv = await storedNavidrome();
-  return { url: nv.url, user: nv.user, passSet: !!nv.password };
-}
 
 // Everything the /settings UI needs, in one response.
 router.get('/settings', requireAdmin, async (req, res) => {
@@ -76,10 +70,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       // per-field because server.ts applies setup-config per-field. This is
       // the DIRECT Navidrome connection: in music-router mode the live
       // connection points at the router, and these stay on file (#692).
-      navidrome: {
-        ...(await storedNavidromeView()),
-        env: navidromeEnvLocks(NAVIDROME_ENV_ENABLED),
-      },
+      navidrome: await storedNavidromeView(),
       musicMode: currentSelection().mode,
       // What timezone '' (Auto) resolves to, for the UI's Auto label.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -310,16 +301,11 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
     }
 
     await saveSetupConfig({ navidrome: submitted });
-    // In music-router mode the router is the live connection; the Navidrome
-    // credentials are kept for switching back and must not hijack it.
-    if (currentSelection().mode === 'router') {
-      return res.json({ ok: true, live: false });
-    }
-    applyNavidromeToLiveConfig(submitted);
-    // Both caches describe the OLD server; drop them so the picker can't draw
-    // song ids that no longer resolve.
-    clearNavidromeCache();
-    clearPoolCache();
+    // Live wherever the station plays it: directly, or as the router's
+    // navidrome source (the default). A station playing other sources keeps it
+    // on file for the direct escape hatch and the failover.
+    const live = await applyNavidromeConnection(submitted);
+    if (!live) return res.json({ ok: true, live: false });
     queue.log('scheduler', `Navidrome connection updated → ${merged.url} (user ${merged.user})`);
     // auto.m3u URIs carry auth tokens derived from the old password; rebuild.
     // Fire-and-forget so the save isn't held up by Navidrome round-trips.

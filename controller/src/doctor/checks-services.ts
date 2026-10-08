@@ -8,6 +8,7 @@ import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { currentSelection, routerStatus } from '../setup/music-source.js';
+import { failoverState } from '../music/source-failover.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
@@ -173,7 +174,18 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
 
 export async function checkNavidrome(): Promise<Finding[]> {
   const out: Finding[] = [];
-  const routerMode = currentSelection().mode === 'router';
+  const failover = failoverState();
+  // While failed over, the live connection is the station's Navidrome directly.
+  const routerMode = currentSelection().mode === 'router' && !failover.active;
+
+  if (failover.active) {
+    out.push({
+      label: 'failover',
+      status: 'warn',
+      detail: `music router down since ${failover.since} (${failover.reason}) — playing Navidrome directly`,
+      hint: 'The station keeps playing, with the same track ids. Check the router service (docker compose ps router) and its logs; it moves back on its own once the router answers.',
+    });
+  }
 
   const p = await subsonic.ping();
   out.push({

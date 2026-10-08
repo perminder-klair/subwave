@@ -102,6 +102,10 @@ test('navidrome passes against a live Subsonic server, writes included', async (
     config: { url: upstream.base, user: USER, password: PASS },
   });
   assertPasses(report);
+  // The upstream serves the mock, which advertises sonicSimilarity, so the
+  // plugin's construction-time probe said yes and the sonic op round-trips the
+  // router's own getSonicSimilarTracks payload.
+  assert.equal(report.checks.find((c) => c.name.startsWith('sonicSimilar'))?.outcome, 'pass');
 });
 
 test('navidrome with a wrong password is unhealthy, not empty', async () => {

@@ -24,6 +24,10 @@ export interface RouterView {
   sources: SavedSource[];
   router: RouterStatus | null;
   routerError: string | null;
+  /** The router is down and the station plays its Navidrome directly. */
+  failover?: { active: boolean };
+  /** The station's Navidrome connection: what the navidrome source plays (it has no settings of its own). */
+  navidrome?: { url: string; user: string; passSet: boolean; env: { url: boolean; user: boolean; pass: boolean } };
 }
 
 export interface Stats {
@@ -86,8 +90,18 @@ export interface Channel {
 
 const SEGMENTS = 12;
 
-function settingsOf(plugin: MusicPluginInfo | undefined, saved: SavedSource | undefined): ChannelSetting[] {
+function stationNavidromeSettings(nv: NonNullable<RouterView['navidrome']>): ChannelSetting[] {
+  const show = (env: boolean, value: string) => (env ? 'from env' : value || 'unset');
+  return [
+    { key: 'url', label: 'Server URL', value: show(nv.env.url, nv.url) },
+    { key: 'user', label: 'Username', value: show(nv.env.user, nv.user) },
+    { key: 'password', label: 'Password', value: show(nv.env.pass, nv.passSet ? '•••••• set' : '') },
+  ];
+}
+
+function settingsOf(plugin: MusicPluginInfo | undefined, saved: SavedSource | undefined, view?: RouterView): ChannelSetting[] {
   if (!plugin) return [];
+  if (plugin.name === 'navidrome' && view?.navidrome) return stationNavidromeSettings(view.navidrome);
   return plugin.config.map((field) => {
     let value: string;
     if (plugin.envLocked.includes(field.key)) value = 'from env';
@@ -151,7 +165,7 @@ export function buildChannels(view: RouterView): Channel[] {
       capabilities: a.capabilities,
       detail: a.health.error || (a.health.state === 'healthy' ? 'connected' : a.health.state),
       alert: a.health.state !== 'healthy',
-      settings: settingsOf(plugin, saved),
+      settings: settingsOf(plugin, saved, view),
     };
   });
 
@@ -178,7 +192,7 @@ export function buildChannels(view: RouterView): Channel[] {
       capabilities: p.capabilities,
       detail: p.error || p.description || 'standing by',
       alert: Boolean(p.error),
-      settings: settingsOf(p, view.sources.find((s) => s.plugin === p.name)),
+      settings: settingsOf(p, view.sources.find((s) => s.plugin === p.name), view),
     }));
 
   if (!merged || !status.serving) return [...onAir, ...standby];
