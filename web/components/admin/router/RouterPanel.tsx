@@ -25,48 +25,12 @@ import { buildChannels, type RouterView } from './model';
 import { ServiceMatrix } from './ServiceMatrix';
 import { SignalPath } from './SignalPath';
 import { SourceChannels } from './SourceChannels';
+import { RackPanel, Screws } from './Rack';
 import s from './router.module.css';
 
 const ACTIVITY_POLL_MS = 1_500;
 // Health asks every serving backend for its library counts, so it is not polled hard.
 const HEALTH_POLL_MS = 30_000;
-
-function Screws() {
-  return (
-    <>
-      <span className={s.screw} data-at="tl" aria-hidden="true" />
-      <span className={s.screw} data-at="tr" aria-hidden="true" />
-    </>
-  );
-}
-
-function RackPanel({
-  title,
-  description,
-  action,
-  flush,
-  children,
-}: {
-  title: string;
-  description?: string;
-  action?: React.ReactNode;
-  flush?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={s.rack} aria-label={title}>
-      <Screws />
-      <div className={s.rackHeader}>
-        <div className="min-w-0">
-          <h2>{title}</h2>
-          {description && <p>{description}</p>}
-        </div>
-        {action && <div className={s.rackActions}>{action}</div>}
-      </div>
-      <div className={flush ? s.rackBodyFlush : s.rackBody}>{children}</div>
-    </section>
-  );
-}
 
 function summaryLine(view: RouterView): string {
   const r = view.router;

@@ -3,10 +3,11 @@
 // Admin → Music sources (#692): where the station's music comes from. Three
 // tabs over one resource (GET /settings/music-source):
 //
+//   Monitor — the router console: channels, live signal path, service matrix
+//             (first, and where the page opens: what is playing, and how)
 //   Sources — what the station plays: its Navidrome by default, plus any other
 //             source served beside it through the SUB/WAVE music router
-//   Plugins — what the router can serve from, and how to install more
-//   Monitor — the router console: channels, live signal path, service matrix
+//   Plugins — the plugin bay: every module the router can serve from
 //
 // Moved here from Settings → Music source, whose ?section=music links redirect.
 
@@ -27,11 +28,11 @@ import { SourcesTab } from './SourcesTab';
 import { MUSIC_SOURCE_KEY, type MusicSourceView } from './queries';
 
 type TabId = 'sources' | 'plugins' | 'monitor';
-const TAB_IDS = ['sources', 'plugins', 'monitor'] as const;
+const TAB_IDS = ['monitor', 'sources', 'plugins'] as const;
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: 'monitor', label: 'Monitor', icon: Activity },
   { id: 'sources', label: 'Sources', icon: Music2 },
   { id: 'plugins', label: 'Plugins', icon: Puzzle },
-  { id: 'monitor', label: 'Monitor', icon: Activity },
 ];
 
 function servingLine(view: MusicSourceView): string {
@@ -62,7 +63,7 @@ export default function MusicSourcesPanel() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get('tab');
-  const tab: TabId = (TAB_IDS as readonly string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'sources';
+  const tab: TabId = (TAB_IDS as readonly string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'monitor';
   const selectTab = useCallback(
     (id: string) => {
       const params = new URLSearchParams(Array.from(searchParams.entries()));

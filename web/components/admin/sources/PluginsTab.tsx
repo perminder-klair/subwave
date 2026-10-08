@@ -1,44 +1,41 @@
 'use client';
 
-// Admin → Music sources → Plugins (#692): every music-source plugin the router
-// has loaded — the built-ins and any installed into state/router/plugins/ —
-// with what each needs, what it supported when last built, and why one failed
-// to load. Installing is still "copy the folder, press Rescan": a plugin is
-// code that runs inside the router, so it arrives by the operator's hand.
+// Admin → Music sources → Plugins: the plugin bay (#692). Every music-source
+// plugin the router has loaded is a module in a rack — slot number, status
+// lamp, a patch field of capability jacks, a strip of the Subsonic endpoints it
+// backs, its settings as knobs — and the selected one prints its manifest on
+// the same phosphor scope as the Monitor's routing display. The rack ends in an
+// empty slot, because installing is still "copy the folder, press Rescan": a
+// plugin is code that runs inside the router, so it arrives by the operator's
+// hand. Built on the router console's rack (router/router.module.css).
 
-import { useMemo } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
+import Link from 'next/link';
+import { AlertTriangle, ExternalLink, Lock, Puzzle, RefreshCw } from 'lucide-react';
 import { adminJson, useAdminMutation, type AdminFetch } from '../../../lib/admin-query';
 import { notify } from '../../../lib/notify';
+import { cn } from '../../../lib/cn';
+import { buttonVariants } from '../../ui/button';
 import { V3Alert } from '../../ui/alert';
-import { Btn, Card, MetaChip, Pill } from '../ui';
-import type { MusicCapabilities, MusicPluginInfo } from '../../../lib/schemas.generated';
+import { Btn } from '../ui';
+import { RackPanel, Screws } from '../router/Rack';
+import { CAPABILITY_BANK, formatMs } from '../router/model';
+import rs from '../router/router.module.css';
+import { bayReadout, buildBay, slotLabel, type BayModule, type CellState } from './pluginBay';
+import ps from './plugins.module.css';
 import { MUSIC_SOURCE_KEY, type MusicSourceView } from './queries';
 
 const PLUGIN_GUIDE = 'https://github.com/perminder-klair/subwave/blob/main/docs/music-source-plugins.md';
+const NAVIDROME = 'navidrome';
 
-const CAPABILITY_LABELS: Array<[keyof MusicCapabilities, string]> = [
-  ['similarSongs', 'similar tracks'],
-  ['sonicSimilarity', 'sonic similarity'],
-  ['topSongs', 'top tracks'],
-  ['artistInfo', 'artist info'],
-  ['artists', 'artist index'],
-  ['lyrics', 'lyrics'],
-  ['stars', 'stars'],
-  ['playlists', 'playlists'],
-  ['scrobble', 'play counts'],
-  ['scanStatus', 'scan status'],
-];
+const STATE_TEXT: Record<BayModule['state'], string> = { onair: 'on air', standby: 'standby', fault: 'fault' };
+const GLYPH: Record<CellState, string> = { full: '●', degraded: '◐', unsupported: '×', unknown: '·' };
 
 export function PluginsTab({ view, adminFetch }: { view: MusicSourceView; adminFetch: AdminFetch }) {
   const status = view.router;
-  const inUse = useMemo(() => new Set(view.mode === 'router' ? view.sources.map((s) => s.plugin) : []), [view]);
-  const sorted = useMemo(
-    () =>
-      [...(status?.plugins ?? [])].sort(
-        (a, b) => Number(inUse.has(b.name)) - Number(inUse.has(a.name)) || Number(b.builtin) - Number(a.builtin) || a.label.localeCompare(b.label),
-      ),
-    [status, inUse],
-  );
+  const modules = useMemo(() => (status ? buildBay(status, view.mode === 'router') : []), [status, view.mode]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const current = modules.find((m) => m.plugin.name === selected) ?? modules[0];
   const rescan = useAdminMutation<unknown, void>({
     adminFetch,
     request: (_vars, fetcher) => adminJson(fetcher, '/settings/music-source/rescan', { method: 'POST' }),
@@ -51,91 +48,318 @@ export function PluginsTab({ view, adminFetch }: { view: MusicSourceView; adminF
   if (!status) {
     return (
       <V3Alert tone="error" title="music router unreachable">
-        {view.routerError} — the plugin list comes from the router. Start the <code>router</code> service and reload.
+        {view.routerError} — the plugin bay reads the router. Start the <code>router</code> service and reload.
       </V3Alert>
     );
   }
 
-  return (
-    <div className="grid gap-4">
-      <Card
-        title="Installed plugins"
-        sub={`router ${status.router.version} · plugin API v${status.router.apiVersion} · ${sorted.length} loaded`}
-        right={<Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending}>{rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}</Btn>}
-      >
-        <div className="grid gap-0">
-          {sorted.map((p) => (
-            <PluginRow
-              key={`${p.builtin ? 'b' : 'i'}-${p.name}`}
-              plugin={p}
-              inUse={inUse.has(p.name)}
-              rawIds={Boolean(status.active.find((a) => a.plugin === p.name)?.rawIds)}
-            />
-          ))}
-        </div>
-      </Card>
+  const r = bayReadout(modules);
+  const lamp = r.faults ? 'error' : view.mode === 'navidrome' ? 'idle' : 'ok';
+  const readout = [
+    `${r.slots} SLOTS`,
+    `${r.onAir} ON AIR`,
+    `${r.installed} INSTALLED`,
+    `${r.faults} ${r.faults === 1 ? 'FAULT' : 'FAULTS'}`,
+    `PLUGIN API v${status.router.apiVersion}`,
+  ].join(' / ');
 
-      <Card title="Install a plugin" sub="a folder and a Rescan">
-        <ol className="grid list-decimal gap-2 pl-5 text-[13px] leading-[1.55]">
-          <li>
-            Copy the plugin&apos;s folder — a <code>subwave-source.json</code> manifest and one ES module — into{' '}
-            <code>state/router/plugins/&lt;name&gt;/</code> on the host.
-          </li>
-          <li>Press <strong>Rescan plugins</strong> above. A manifest that does not load is listed here with the reason.</li>
-          <li>Add it on the <strong>Sources</strong> tab, fill in its settings, and Test it before saving.</li>
-        </ol>
-        <div className="field-hint mt-3">
-          A plugin is code that runs inside the router, with the router&apos;s access to your music servers. Install only
-          plugins you have read and trust. Writing one?{' '}
-          <a href={PLUGIN_GUIDE} target="_blank" rel="noopener noreferrer" className="underline">The plugin author guide</a>{' '}
-          covers the contract and the conformance kit.
+  return (
+    <div className={rs.console}>
+      <header className={rs.faceplate}>
+        <Screws />
+        <span className={rs.screw} data-at="bl" aria-hidden="true" />
+        <span className={rs.screw} data-at="br" aria-hidden="true" />
+        <div className={rs.brand}>
+          <span className={rs.powerLamp} data-state={lamp} aria-hidden="true" />
+          <div>
+            <h1>PLUGIN BAY</h1>
+            <p>Source modules / router v{status.router.version}</p>
+          </div>
         </div>
-      </Card>
+        <div className={rs.readout} title={readout} aria-live="polite">{readout}</div>
+        <div className={rs.faceplateActions}>
+          <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending}>
+            <RefreshCw aria-hidden="true" className={cn(rescan.isPending && 'animate-spin')} />
+            {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
+          </Btn>
+          <Link href="/admin/sources?tab=sources" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
+            Configure sources
+          </Link>
+        </div>
+      </header>
+
+      <RackPanel
+        title="Module rack"
+        description="Every music-source plugin the router has loaded, one per slot. Built-ins ship with SUB/WAVE; installed modules came from state/router/plugins/. Select one to inspect it."
+      >
+        <div className={ps.bay}>
+          {modules.map((m) => (
+            <Module key={m.plugin.name} module={m} selected={m === current} onSelect={() => setSelected(m.plugin.name)} />
+          ))}
+          <div className={ps.empty}>
+            <b aria-hidden="true">+</b>
+            <strong>{slotLabel(modules.length + 1)} · EMPTY</strong>
+            <span>Drop a plugin folder into state/router/plugins/ and press Rescan.</span>
+          </div>
+        </div>
+      </RackPanel>
+
+      {current && (
+        <RackPanel
+          title="Module inspector"
+          description="The selected module's manifest, the settings it asks for, and every Subsonic endpoint it backs — the same table the router answers from."
+        >
+          <Inspector module={current} />
+        </RackPanel>
+      )}
+
+      <RackPanel title="Install a module" description="A folder and a Rescan — no restart, no rebuild.">
+        <Install />
+      </RackPanel>
+
+      <footer className={rs.footer}>
+        <Puzzle aria-hidden="true" />
+        SUB/WAVE / MUSIC ROUTER / PLUGIN BAY / {r.slots} SLOTS
+      </footer>
     </div>
   );
 }
 
-function PluginRow({ plugin: p, inUse, rawIds }: { plugin: MusicPluginInfo; inUse: boolean; rawIds: boolean }) {
-  const required = p.config.filter((f) => f.required).map((f) => f.label);
-  const optional = p.config.filter((f) => !f.required).map((f) => f.label);
+function Module({ module: m, selected, onSelect }: { module: BayModule; selected: boolean; onSelect: () => void }) {
+  const p = m.plugin;
+  const fault = m.state === 'fault';
+  const c = m.coverage;
+  const backs = [
+    `BACKS ${c.full}/${c.total}`,
+    c.degraded ? `${c.degraded} LESS` : '',
+    c.unsupported ? `${c.unsupported} NONE` : '',
+    c.unknown ? `${c.unknown} UNKNOWN` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <div className="grid gap-2 border-b border-[var(--separator-soft)] py-3.5 first:pt-0 last:border-0 last:pb-0">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <strong className="text-[14px]">{p.label}</strong>
-        <code className="text-[11px] text-muted">{p.name}{p.version ? ` v${p.version}` : ''}</code>
-        {inUse && <Pill tone="accent" dot>in use</Pill>}
-        {p.error && <Pill tone="solid">load error</Pill>}
-        <MetaChip>{p.builtin ? 'built-in' : 'installed'}</MetaChip>
-        {p.devOnly && <MetaChip>development only</MetaChip>}
-        <MetaChip>API v{p.apiVersion}</MetaChip>
-        {rawIds ? <MetaChip>ids raw — the server&apos;s own</MetaChip> : p.idPrefix && <MetaChip>ids {p.idPrefix}-</MetaChip>}
-      </div>
-      {p.description && <div className="text-[13px] leading-[1.5] text-muted">{p.description}</div>}
-      {p.error && <div className="text-[12px] text-[var(--danger)]">✗ {p.error}</div>}
-      {p.name === 'navidrome' ? (
-        <div className="text-[12px] text-muted">Plays the station&apos;s Navidrome connection, set on the Sources tab.</div>
-      ) : p.config.length > 0 && (
-        <div className="text-[12px] text-muted">
-          {required.length > 0 && <>Needs {required.join(', ')}</>}
-          {required.length > 0 && optional.length > 0 && ' · '}
-          {optional.length > 0 && <>optional {optional.join(', ')}</>}
-          {p.envLocked.length > 0 && ` · set by env: ${p.envLocked.join(', ')}`}
+    <button
+      type="button"
+      className={ps.module}
+      data-state={m.state}
+      aria-pressed={selected}
+      aria-label={`${slotLabel(m.slot)}: ${p.label}, ${STATE_TEXT[m.state]}. Inspect.`}
+      onClick={onSelect}
+    >
+      <span className={ps.ears}>
+        <span className={ps.hole} aria-hidden="true" />
+        <span className={ps.slot}>{slotLabel(m.slot)}</span>
+        <span className={ps.led} title={STATE_TEXT[m.state]} aria-hidden="true" />
+        <span className={ps.hole} aria-hidden="true" />
+      </span>
+      <span className={ps.title}>
+        <strong>{p.label}</strong>
+        <code>{p.name} · v{p.version || '—'} · API v{p.apiVersion}</code>
+      </span>
+      <span className={ps.tags}>
+        {m.state === 'onair' && <b>on air</b>}
+        {fault && <span className={ps.warn}>fault</span>}
+        {m.state === 'standby' && <span>standby</span>}
+        <span>{p.builtin ? 'built-in' : 'installed'}</span>
+        {m.rawIds ? <span>raw ids</span> : p.idPrefix && <span>ids {p.idPrefix}-</span>}
+        {p.devOnly && <span>dev only</span>}
+      </span>
+
+      {fault ? (
+        <span className={ps.faultText}>✗ {p.error}</span>
+      ) : (
+        <>
+          <span className={ps.jacks} aria-hidden="true">
+            {CAPABILITY_BANK.map(({ key, short, label }) => {
+              const on = m.capabilities ? (m.capabilities[key] ? 'true' : 'false') : 'unknown';
+              const said = on === 'unknown' ? 'unknown until built' : on === 'true' ? 'supported' : 'not supported';
+              return (
+                <span key={key} className={ps.jack} data-on={on} title={`${label}: ${said}`}>
+                  <span className={ps.socket} />
+                  <small>{short}</small>
+                </span>
+              );
+            })}
+          </span>
+          <span className={ps.strip}>
+            <span aria-hidden="true">
+              {c.cells.map((cell) => <span key={cell.endpoint} className={ps.cell} data-cell={cell.state} />)}
+            </span>
+            <small>{backs}</small>
+          </span>
+          {p.name === NAVIDROME ? (
+            <span className={ps.knobNote}>Plays the station&apos;s Navidrome connection — set on the Sources tab.</span>
+          ) : p.config.length ? (
+            <span className={ps.knobs}>
+              {p.config.map((f) => (
+                <span key={f.key} className={ps.knob} data-required={Boolean(f.required)}>
+                  {f.label}
+                  {f.type === 'secret' && <Lock aria-label="secret" />}
+                  {p.envLocked.includes(f.key) && ' · env'}
+                </span>
+              ))}
+            </span>
+          ) : (
+            <span className={ps.knobNote}>No settings.</span>
+          )}
+        </>
+      )}
+    </button>
+  );
+}
+
+function Line({ k, children, className }: { k: string; children: ReactNode; className?: string }) {
+  return (
+    <div className={ps.line}>
+      <span>{k}</span>
+      <span className={className}>{children}</span>
+    </div>
+  );
+}
+
+function Inspector({ module: m }: { module: BayModule }) {
+  const p = m.plugin;
+  const c = m.coverage;
+  const short = c.cells.filter((x) => x.state !== 'full');
+  const health = m.health;
+  const unhealthy = m.state === 'fault' || Boolean(health && health.state !== 'healthy');
+  const stateLine =
+    m.state === 'onair'
+      ? `on air · ${health?.state ?? 'unknown'}${health?.ms !== undefined ? ` · ${formatMs(health.ms)}` : ''}${health?.stats ? ` · ${health.stats.songs.toLocaleString()} songs` : ''}`
+      : STATE_TEXT[m.state];
+  return (
+    <div className={ps.inspector}>
+      <div className={ps.scope} role="region" aria-label={`${p.label} manifest`} aria-live="polite">
+        <div className={ps.scopeHead}>
+          <span>MODULE INSPECTOR</span>
+          <span>{slotLabel(m.slot)} · {STATE_TEXT[m.state].toUpperCase()}</span>
         </div>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        {p.capabilities ? (
-          CAPABILITY_LABELS.map(([key, label]) => (
-            <MetaChip key={key} accent={p.capabilities![key]}>{p.capabilities![key] ? label : `no ${label}`}</MetaChip>
-          ))
+        <Line k="MODULE">{p.name}</Line>
+        <Line k="LABEL">{p.label}</Line>
+        <Line k="VERSION">{p.version || '—'} · plugin API v{p.apiVersion}</Line>
+        <Line k="IDS">{m.rawIds ? 'raw — the server’s own' : p.idPrefix ? `${p.idPrefix}-<native id>` : '—'}</Line>
+        <Line k="ORIGIN">{p.builtin ? 'built-in' : `installed · state/router/plugins/${p.name}/`}</Line>
+        <Line k="STATE" className={unhealthy ? ps.err : undefined}>{stateLine}</Line>
+        {health?.error && <Line k="ERROR" className={ps.err}>{health.error}</Line>}
+        {p.description && <Line k="ABOUT" className={ps.dim}>{p.description}</Line>}
+        <div className={ps.rule} />
+
+        {m.state === 'fault' ? (
+          <>
+            <div className={ps.sub}>FAULT</div>
+            <div className={ps.err}>✗ {p.error}</div>
+            <div className={ps.dim}>Fix the module&apos;s folder, then press Rescan plugins.</div>
+          </>
         ) : (
-          <span className="text-[12px] text-muted">Capabilities show once it is selected or tested.</span>
+          <>
+            <div className={ps.sub}>SETTINGS</div>
+            {p.name === NAVIDROME ? (
+              <div className={ps.dim}>none of its own — plays the station&apos;s Navidrome connection (Sources tab)</div>
+            ) : p.config.length ? (
+              p.config.map((f) => (
+                <div key={f.key} className={ps.row}>
+                  <span>{f.required ? '*' : ' '}</span>
+                  <span>{f.key}</span>
+                  <span className={ps.dim}>
+                    {f.label} · {f.type}
+                    {f.type === 'secret' ? ' · write-only' : ''}
+                    {p.envLocked.includes(f.key) ? ' · from env' : f.env ? ` · env ${f.env}` : ''}
+                    {f.affectsIds ? ' · re-keys ids' : ''}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className={ps.dim}>none</div>
+            )}
+            <div className={ps.rule} />
+            <div className={ps.sub}>BACKS</div>
+            {m.capabilities === null ? (
+              <div className={ps.dim}>unknown until it is selected or tested — capabilities are read off a running module</div>
+            ) : (
+              <>
+                <div>{c.full}/{c.total} Subsonic endpoints in full</div>
+                {short.length === 0 && <div className={ps.dim}>every endpoint the station calls</div>}
+                {short.map((x) => (
+                  <div key={x.endpoint} className={ps.row} data-cell={x.state}>
+                    <span>{GLYPH[x.state]}</span>
+                    <span>{x.endpoint}</span>
+                    <span className={ps.dim}>
+                      {x.state === 'degraded' ? 'answers with less' : 'answers an error'}
+                      {x.feature ? ` — ${x.feature}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+          </>
         )}
+        <div className={ps.rule} />
+        <div>
+          <span className={ps.dim}>&gt;</span> <span className={ps.cursor} aria-hidden="true" />
+        </div>
       </div>
-      {p.homepage && (
-        <a href={p.homepage} target="_blank" rel="noopener noreferrer" className="w-fit text-[12px] text-muted underline">
-          {p.homepage}
-        </a>
-      )}
+
+      <div className={ps.plate}>
+        <div className={ps.meterBig}>
+          <div><span>FULL</span><strong data-tone="ok">{m.capabilities ? c.full : '—'}</strong></div>
+          <div><span>LESS</span><strong data-tone={c.degraded ? 'warn' : undefined}>{m.capabilities ? c.degraded : '—'}</strong></div>
+          <div><span>NONE</span><strong data-tone={c.unsupported ? 'bad' : undefined}>{m.capabilities ? c.unsupported : '—'}</strong></div>
+        </div>
+        <dl className={ps.spec}>
+          <div><dt>Model</dt><dd>{p.label}</dd></div>
+          <div><dt>Code</dt><dd>{p.name}</dd></div>
+          <div><dt>Firmware</dt><dd>v{p.version || '—'}</dd></div>
+          <div><dt>Plugin API</dt><dd>v{p.apiVersion}</dd></div>
+          <div><dt>Ids</dt><dd>{m.rawIds ? 'raw' : p.idPrefix ? `${p.idPrefix}-` : '—'}</dd></div>
+          <div><dt>Origin</dt><dd>{p.builtin ? 'built-in' : 'installed'}</dd></div>
+          <div><dt>Latency</dt><dd>{health?.ms !== undefined ? formatMs(health.ms) : '—'}</dd></div>
+        </dl>
+        <div className={ps.plateActions}>
+          {m.state !== 'fault' && (
+            <Link
+              href="/admin/sources?tab=sources"
+              className={buttonVariants({ variant: m.state === 'onair' ? 'outline' : 'solid', size: 'sm' })}
+            >
+              {m.state === 'onair' ? 'Configure on Sources' : 'Add on Sources'}
+            </Link>
+          )}
+          {p.homepage && (
+            <a href={p.homepage} target="_blank" rel="noopener noreferrer" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              Homepage <ExternalLink aria-hidden="true" />
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Install() {
+  return (
+    <div className={ps.install}>
+      <div className={ps.tapes}>
+        <span className={ps.tape}><b>1</b><span>Copy the folder to <code>state/router/plugins/</code></span></span>
+        <span className={ps.tape}><b>2</b><span>Press Rescan plugins</span></span>
+        <span className={ps.tape}><b>3</b><span>Add it on Sources · Test · Save</span></span>
+      </div>
+      <pre className={ps.term}>
+        <span className={ps.dim}>$ tree state/router/plugins</span>
+        {'\nstate/router/plugins/\n└── my-source/\n    ├── subwave-source.json  '}
+        <span className={ps.dim}># name, label, idPrefix, config[]</span>
+        {'\n    └── index.mjs            '}
+        <span className={ps.dim}># export default (ctx) =&gt; source</span>
+      </pre>
+      <div className={ps.hazard}>
+        <div>
+          <AlertTriangle aria-hidden="true" />
+          <span>
+            <strong>Plugins are code.</strong> They run inside the router, with its access to your music servers — install
+            only what you have read and trust. Writing one?{' '}
+            <a href={PLUGIN_GUIDE} target="_blank" rel="noopener noreferrer">The plugin author guide</a> covers the
+            contract and the conformance kit.
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -171,7 +171,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     }
     // Music source moved to its own page (#692).
     if (s === 'music') {
-      router.replace('/admin/sources');
+      router.replace('/admin/sources?tab=sources');
       return;
     }
     if (s === 'brain' && !djBrainEnabled) {

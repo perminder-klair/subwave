@@ -26,7 +26,7 @@ export default function MusicSources() {
           <li><strong>Plex</strong> — a 10-star rating is a star; Plex&rsquo;s sonic analysis drives similar tracks when the server has it.</li>
         </ul>
         <p>
-          Choose them in <Link href="/admin/sources">Admin → Music sources</Link> (or the first step of
+          Choose them in <Link href="/admin/sources?tab=sources">Admin → Music sources</Link> (or the first step of
           the setup wizard): pick a source, fill in its form, press <strong>Test connection</strong>,
           and save. Add a second source to play both as one library — that is experimental, and
           nothing is de-duplicated. Changes apply immediately; the auto playlist is rebuilt against

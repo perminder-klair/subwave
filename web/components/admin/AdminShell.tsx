@@ -224,9 +224,9 @@ const NAV_SECTIONS: NavSection[] = [
         label: 'Music sources',
         icon: Cable,
         children: [
-          { href: '/admin/sources?tab=sources', id: 'sources-sources', label: 'Sources', icon: Music2, tab: 'sources', defaultTab: true },
+          { href: '/admin/sources?tab=monitor', id: 'sources-monitor', label: 'Monitor', icon: Activity, tab: 'monitor', defaultTab: true },
+          { href: '/admin/sources?tab=sources', id: 'sources-sources', label: 'Sources', icon: Music2, tab: 'sources' },
           { href: '/admin/sources?tab=plugins', id: 'sources-plugins', label: 'Plugins', icon: Puzzle, tab: 'plugins' },
-          { href: '/admin/sources?tab=monitor', id: 'sources-monitor', label: 'Monitor', icon: Activity, tab: 'monitor' },
         ],
       },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
