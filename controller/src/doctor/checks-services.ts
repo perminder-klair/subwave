@@ -7,6 +7,7 @@
 import { config } from '../config.js';
 import * as subsonic from '../music/subsonic.js';
 import * as subsonicLog from '../music/subsonic-log.js';
+import { currentSelection, routerStatus } from '../setup/music-source.js';
 import * as library from '../music/library.js';
 import * as embeddings from '../music/embeddings.js';
 import * as tts from '../audio/tts.js';
@@ -172,16 +173,23 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
 
 export async function checkNavidrome(): Promise<Finding[]> {
   const out: Finding[] = [];
+  const routerMode = currentSelection().mode === 'router';
 
   const p = await subsonic.ping();
   out.push({
     label: 'connectivity',
     status: p.ok ? 'ok' : 'fail',
-    detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
+    detail: p.ok ? `${routerMode ? 'music router' : 'Navidrome'} at ${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
     hint: p.ok
       ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+      : routerMode
+        ? 'The picker has no music without the music router. Check the router service is running (docker compose ps router) and its logs.'
+        : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
   });
+
+  // Router mode: the router answering says nothing about the library behind
+  // it, so each source reports its own health (#692).
+  if (routerMode) out.push(...(await checkMusicRouter()));
 
   // Recent call error rate across all endpoints.
   try {
@@ -241,6 +249,47 @@ export async function checkNavidrome(): Promise<Finding[]> {
   return out;
 }
 
+async function checkMusicRouter(): Promise<Finding[]> {
+  const out: Finding[] = [];
+  try {
+    const status = await routerStatus();
+    if (status.configError) {
+      out.push({
+        label: 'router selection',
+        status: 'fail',
+        detail: status.configError,
+        hint: 'The router refused the saved selection and kept serving the previous one. Fix it in Settings → Music source.',
+      });
+    }
+    if (!status.active.length) {
+      out.push({ label: 'music source', status: 'fail', detail: 'no source selected', hint: 'Choose one in Settings → Music source.' });
+    }
+    for (const a of status.active) {
+      const st = a.health.stats;
+      out.push({
+        label: `source: ${a.label}`,
+        status: a.health.state === 'healthy' ? 'ok' : 'fail',
+        detail: a.health.state === 'healthy'
+          ? (st ? `${st.songs.toLocaleString('en-GB')} songs · ${st.albums.toLocaleString('en-GB')} albums · ${st.artists.toLocaleString('en-GB')} artists` : 'answering')
+          : a.health.error || a.health.state,
+        hint: a.health.state === 'healthy' ? undefined : `The router cannot reach ${a.label}. Check its URL and credentials in Settings → Music source, and that the server is up.`,
+      });
+    }
+    const broken = status.plugins.filter((pl) => pl.error);
+    if (broken.length) {
+      out.push({
+        label: 'plugins',
+        status: 'warn',
+        detail: broken.map((pl) => `${pl.name}: ${pl.error}`).join('; '),
+        hint: 'These installed plugins failed to load and cannot be selected. See Settings → Music source.',
+      });
+    }
+  } catch (err: any) {
+    out.push({ label: 'music router', status: 'fail', detail: err?.message || 'unreachable' });
+  }
+  return out;
+}
+
 // Cached live-config Navidrome connectivity for the always-on admin banner.
 // The banner polls this from every admin page every ~30s; a short cache keeps
 // that from becoming a steady drip of Subsonic `ping` calls (and shields a
@@ -254,12 +303,14 @@ export async function navidromeConnectivity(): Promise<{
   ok: boolean;
   reason?: string;
   url: string;
+  mode: 'navidrome' | 'router';
 }> {
   const now = Date.now();
   if (!navidromeCache || now - navidromeCache.at > NAVIDROME_TTL_MS) {
     navidromeCache = { at: now, result: await subsonic.ping() };
   }
-  return { ...navidromeCache.result, url: config.navidrome.url };
+  // The banner names what is down: the router in music-router mode (#692).
+  return { ...navidromeCache.result, url: config.navidrome.url, mode: currentSelection().mode };
 }
 
 // Drop the cached ping so the banner/Doctor re-probe immediately — called when

@@ -4,6 +4,7 @@
 
 import { requireDb } from './handle.js';
 import { canonicalId } from '../id-canonical.js';
+import { matchByMetadata as matchByMetadata_, type TrackIdentityRow } from '../source-switch.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -143,7 +144,14 @@ export interface AdoptionResult {
   map: Map<string, string>;
 }
 
-export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
+// `matchByMetadata` is set only for the first complete walk after a music-source
+// switch (#692, music/source-switch.ts): orphans the canonical-id rule cannot
+// place are then matched to live rows by artist/title/album/duration. Off, the
+// adoption is exactly the Navidrome id-rotation path it always was.
+export function adoptRotatedIds(
+  liveIds: ReadonlySet<string>,
+  { matchByMetadata = false }: { matchByMetadata?: boolean } = {},
+): AdoptionResult {
   const d = requireDb();
   const all = (d.prepare('SELECT id FROM tracks').all() as Array<{ id: string }>).map((r) => r.id);
   const pairs: Array<[string, string]> = [];
@@ -156,6 +164,14 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
     if (neu === old || !liveIds.has(neu) || claimed.has(neu)) continue;
     claimed.add(neu);
     pairs.push([old, neu]);
+  }
+  if (matchByMetadata) {
+    const paired = new Set(pairs.map(([old]) => old));
+    const rows = d.prepare('SELECT id, title, artist, album, duration_sec FROM tracks').all() as TrackIdentityRow[];
+    const orphans = rows.filter((r) => !liveIds.has(r.id) && !paired.has(r.id));
+    // Only rows the walk just confirmed can receive data.
+    const live = rows.filter((r) => liveIds.has(r.id));
+    pairs.push(...matchByMetadata_(orphans, live, claimed));
   }
   if (pairs.length === 0) return { adopted: 0, map: new Map() };
 

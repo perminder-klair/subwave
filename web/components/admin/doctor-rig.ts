@@ -10,7 +10,7 @@ import type { DoctorReport, DoctorReview, DoctorStatus } from './doctor-queries'
 // from whatever actually arrived.
 export const EXPECTED_SECTIONS = [
   'LLM',
-  'Navidrome & library',
+  'Music library',
   'Broadcast',
   'Voice (TTS)',
   'Capabilities',
@@ -26,7 +26,7 @@ export type RigPartId = 'brain' | 'crate' | 'mix' | 'voice' | 'extras';
 /** The five parts DJ Doc's intro names, in its order. */
 export const RIG_PARTS: ReadonlyArray<{ id: RigPartId; name: string; sections: readonly string[] }> = [
   { id: 'brain', name: 'The brain', sections: ['LLM', 'Tuning'] },
-  { id: 'crate', name: 'The crate', sections: ['Navidrome & library', 'Content'] },
+  { id: 'crate', name: 'The crate', sections: ['Music library', 'Content'] },
   { id: 'mix', name: 'The mix', sections: ['Broadcast'] },
   { id: 'voice', name: 'The voice', sections: ['Voice (TTS)'] },
   { id: 'extras', name: 'The extras', sections: ['Capabilities', 'Resources', 'Storage', 'Setup'] },

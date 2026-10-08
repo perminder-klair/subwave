@@ -58,7 +58,8 @@ import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
-import { loadNavidromeConfig } from './setup/config.js';
+import { loadNavidromeConfig, loadSetupConfig } from './setup/config.js';
+import { readSelection, writeRouterConfig } from './setup/music-source.js';
 import { getSetupStatus } from './setup/firstRun.js';
 import * as library from './music/library.js';
 
@@ -174,6 +175,16 @@ app.listen(config.server.port, async (err?: Error) => {
     }
   } catch (err: any) {
     console.error('[secrets] load failed:', err.message);
+  }
+
+  // The music router's config.json — its credentials and this station's
+  // source selection (#692). Written before the connection load below, which
+  // reads the credentials back in router mode. The router idles in navidrome
+  // mode, so on a default install this only provisions its credentials.
+  try {
+    await writeRouterConfig(readSelection(await loadSetupConfig()));
+  } catch (err: any) {
+    console.error('[music-source] router config write failed:', err.message);
   }
 
   // Load the active station connection using the shared precedence policy.

@@ -14,6 +14,7 @@ import {
 import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js';
 import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
 import { hasNavidrome, NAVIDROME_PROFILE_POLICY, type NavidromeCredentials } from '../setup/navidrome-policy.js';
+import { readSelection, routerSelectionComplete } from '../setup/music-source.js';
 import { writeFileAtomicSync } from '../util/atomic-file.js';
 import { firstMessage } from '../util/zod-error.js';
 
@@ -94,9 +95,13 @@ function patchSettingsStation(dir: string, name: string): void {
   writeFileSync(p, JSON.stringify(s, null, 2));
 }
 
+// A station is configured once it has music to play: a complete Navidrome
+// connection, or a music-router selection with a source (#692).
 function stationHasNavidrome(dir: string): boolean {
   try {
-    return hasNavidrome(JSON.parse(readFileSync(join(dir, 'setup-config.json'), 'utf8'))?.navidrome);
+    const sc = JSON.parse(readFileSync(join(dir, 'setup-config.json'), 'utf8'));
+    const selection = readSelection(sc);
+    return selection.mode === 'router' ? routerSelectionComplete(selection) : hasNavidrome(sc?.navidrome);
   } catch {
     return false;
   }

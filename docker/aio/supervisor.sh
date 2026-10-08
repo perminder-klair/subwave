@@ -721,8 +721,29 @@ run_controller() {
 	       SOUNDS_DIR=/sounds \
 	       LIQUIDSOAP_HOST=127.0.0.1 \
 	       ICECAST_STATUS_URL=http://127.0.0.1:7702/status-json.xsl \
-	       ICECAST_ADMIN_URL=http://127.0.0.1:7702/admin/listclients
+	       ICECAST_ADMIN_URL=http://127.0.0.1:7702/admin/listclients \
+	       MUSIC_ROUTER_URL="${MUSIC_ROUTER_URL:-http://127.0.0.1:4534}"
 	node_modules/.bin/tsx src/server.ts
+}
+
+# Music router (#692) — music sources beyond Navidrome. Idle until Settings →
+# Music source selects it. Loopback only: the controller, Liquidsoap and the
+# local analyzer are all in this container. Unlike the compose service it
+# shares the container's whole filesystem, so plugin code (third-party) must
+# not run as root beside secrets.env: it runs as ROUTER_UID:ROUTER_GID with no
+# groups, no capabilities and no way to regain them — the compose service's
+# `user:` + cap_drop + no-new-privileges. The controller (root) hands that uid
+# config.json and data/ (setup/music-source.ts handRouterState).
+run_router() {
+	cd /router || return 1
+	export NODE_ENV=production \
+	       PORT=4534 \
+	       ROUTER_HOST=127.0.0.1 \
+	       ROUTER_DIR=/var/sub-wave/router \
+	       HOME=/tmp
+	setpriv --reuid="${ROUTER_UID:-1000}" --regid="${ROUTER_GID:-1000}" --clear-groups \
+	        --inh-caps=-all --bounding-set=-all --no-new-privs \
+	        node_modules/.bin/tsx src/server.ts
 }
 
 # Web — Next.js listener UI (standalone build).
@@ -780,6 +801,7 @@ init_secrets
 trap 'trap "" TERM INT; log "shutting down"; kill -TERM 0 2>/dev/null; wait; sleep 2; exit 0' TERM INT
 
 supervise broadcast  run_broadcast  &
+supervise router     run_router     &
 supervise controller run_controller &
 supervise web        run_web        &
 supervise caddy      run_caddy      &

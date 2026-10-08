@@ -21,6 +21,7 @@ export const MANUAL_PAGES: ManualPageEntry[] = [
   { href: '/manual/llm', label: 'Models & Tokens' },
   { href: '/manual/voices', label: 'Voices & TTS' },
   { href: '/manual/analysis', label: 'Acoustic Analysis' },
+  { href: '/manual/music-sources', label: 'Music Sources' },
   { href: '/manual/mcp', label: 'Agent Access' },
   { href: '/manual/concepts', label: 'Concepts' },
   { href: '/manual/faq', label: 'FAQ' },

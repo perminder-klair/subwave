@@ -51,7 +51,7 @@ test('no report: every part is idle', () => {
 test('a live run: arrived parts get verdicts, the next one is on the meter', () => {
   // LLM and Navidrome are back; Broadcast is next, so the mix is measuring.
   // The brain still waits on Tuning, which comes later.
-  const s = rigStates(rep(sec('LLM', 'ok'), sec('Navidrome & library', 'warn')), true);
+  const s = rigStates(rep(sec('LLM', 'ok'), sec('Music library', 'warn')), true);
   assert.equal(s.mix, 'measuring');
   assert.equal(s.brain, 'pending');
   assert.equal(s.crate, 'pending');
@@ -91,6 +91,11 @@ test('nothing is circled while a run is still coming in, or when all is clean', 
 });
 
 test('section anchors are stable slugs', () => {
-  assert.equal(sectionAnchor('Navidrome & library'), 'doctor-navidrome-library');
+  assert.equal(sectionAnchor('Music library'), 'doctor-music-library');
   assert.equal(sectionAnchor('Voice (TTS)'), 'doctor-voice-tts');
+});
+
+test('the library section files under the crate by its #692 name', () => {
+  assert.equal(partOfSection('Music library'), 'crate');
+  assert.ok(EXPECTED_SECTIONS.includes('Music library'));
 });

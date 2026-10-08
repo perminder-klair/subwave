@@ -1,0 +1,31 @@
+# SUB/WAVE music router (#692): serves the Subsonic API the controller already
+# speaks and answers it from music-source plugins (Jellyfin, Plex, Navidrome,
+# the demo library, and anything dropped into state/router/plugins/).
+#
+# Node + tsx with no build step, the same shape as the controller. Plugins are
+# plain ES modules, so the image carries no compiler and no other runtime.
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+COPY router/package*.json ./
+RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+COPY router/src ./src
+
+ENV NODE_ENV=production \
+    PORT=4534 \
+    ROUTER_DIR=/var/sub-wave-router
+
+# The only state the router sees: its config.json (written by the controller),
+# installed plugins, and per-plugin data. Compose mounts state/router here and
+# nothing else, because plugins are third-party code — and they run as an
+# unprivileged user (`node`, uid 1000). The controller hands config.json and
+# data/ to that uid (ROUTER_UID) on the mounted directory.
+RUN mkdir -p /var/sub-wave-router/plugins /var/sub-wave-router/data \
+ && chown -R node:node /var/sub-wave-router/data
+USER node
+
+EXPOSE 4534
+HEALTHCHECK --interval=15s --timeout=3s --retries=4 --start-period=10s \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:4534/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+# tsx is in `dependencies` so it survives --omit=dev.
+CMD ["node_modules/.bin/tsx", "src/server.ts"]

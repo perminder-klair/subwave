@@ -1,0 +1,16 @@
+{
+  "name": "plex",
+  "label": "Plex",
+  "description": "Stream a Plex Media Server music library. A 10-star rating is a star; Plex's sonic analysis drives similar tracks when the server has it.",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "idPrefix": "px",
+  "entry": "index.ts",
+  "homepage": "https://www.plex.tv",
+  "config": [
+    { "key": "url", "label": "Server URL", "type": "url", "required": true, "env": "PLEX_URL", "placeholder": "http://plex:32400", "affectsIds": true },
+    { "key": "token", "label": "Plex token", "type": "secret", "required": true, "env": "PLEX_TOKEN", "help": "Your X-Plex-Token." },
+    { "key": "section", "label": "Library section key", "type": "string", "env": "PLEX_SECTION", "help": "Leave blank to use the first music library.", "affectsIds": true },
+    { "key": "sonicSimilarity", "label": "Advertise sonic similarity", "type": "boolean", "default": true, "help": "Turn off if the server has no sonic analysis.", "affectsIds": false }
+  ]
+}

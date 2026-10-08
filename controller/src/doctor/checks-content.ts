@@ -81,7 +81,7 @@ export async function checkSetup(): Promise<Finding[]> {
     out.push({
       label: 'configuration',
       status: st.needsSetup ? 'fail' : 'ok',
-      detail: st.needsSetup ? 'incomplete — Navidrome not configured' : `complete (${st.navidromeSource})`,
+      detail: st.needsSetup ? 'incomplete — no music source configured' : `complete (${st.musicMode === 'router' ? 'music router' : st.navidromeSource})`,
       hint: st.needsSetup ? 'Finish the wizard at /onboarding (or run `subwave setup`).' : undefined,
     });
   } catch (err) {
