@@ -7,6 +7,7 @@
 // query, so SSR paints the right one first; the hidden scene's loop idles.
 
 import { useEffect, useRef, useState } from 'react';
+import { Play, X } from 'lucide-react';
 import styles from './Axo.module.css';
 import AxoScene, { type AxoSceneProps } from './AxoScene';
 import {
@@ -177,12 +178,6 @@ export default function AxoSkin(_props: SkinProps) {
     <span className="font-mono text-[10px] font-bold tracking-[0.24em] text-[var(--accent)] uppercase">{eyebrow}</span>
   );
 
-  const showLine = (className: string) => (
-    <span className={cn('truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase', className)}>
-      {showName && <>▸ {showName} · </>}
-      <span className="text-[var(--accent)]">with {djName}</span>
-    </span>
-  );
 
   const onAirTag = (
     <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
@@ -224,14 +219,19 @@ export default function AxoSkin(_props: SkinProps) {
     <div ref={rootRef} className="absolute inset-0 overflow-hidden bg-bg font-sans text-ink">
       {/* ── Desktop ─────────────────────────────────────────────── */}
       <div className="absolute inset-0 hidden flex-col lg:flex">
-        <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-3.5">
+        <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-1.5">
           <div className="flex min-w-0 items-baseline gap-3.5">
             <span className="font-display text-[22px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
             <span className="font-mono text-[10px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">axo-1 · hi-fi stack</span>
           </div>
           <div className="flex shrink-0 items-center gap-3">
             <div className="flex items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase">
-              {showName && <span className="max-w-[18vw] truncate">▸ {showName}</span>}
+              {showName && (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <Play className="size-2.5 flex-none fill-current" />
+                  <span className="max-w-[18vw] truncate">{showName}</span>
+                </span>
+              )}
               <span className="whitespace-nowrap text-[var(--accent)]">with {djName}</span>
               {contextLine(context) && (
                 <span className="max-w-[22vw] truncate border-l border-soft-border pl-3 text-muted">{contextLine(context)}</span>
@@ -362,30 +362,30 @@ export default function AxoSkin(_props: SkinProps) {
 
       {/* ── Mobile ──────────────────────────────────────────────── */}
       <div className="absolute inset-0 flex flex-col lg:hidden">
-        <div className="flex flex-none flex-col gap-1 border-b border-ink px-4 pt-3 pb-2.5 landscape:py-1.5">
-          <div className="flex items-center justify-between">
-            <span className="font-display text-[19px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
-            <ThemeSwitcher />
-          </div>
-          {showLine('landscape:hidden')}
+        <div className="flex flex-none items-center gap-3 border-b border-ink py-1 pr-2 pl-4">
+          <span className="max-w-[60%] flex-none truncate font-display text-[18px] font-extrabold tracking-[0.02em]">
+            {stationName.toUpperCase()}
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
+            {showName && <><Play className="inline size-2 fill-current" /> {showName} · </>}
+            <span className="text-[var(--accent)]">with {djName}</span>
+          </span>
+          <ThemeSwitcher />
         </div>
 
-        {/* Phones get the design's crop (receiver + tape, controls ~1.3×
-            larger). A portrait tablet has the room for the whole stack, so
-            the drawing takes the free height and the facts sit under it. A
-            phone turned sideways puts the crop beside the facts instead,
-            where stacking would shrink the drawing to a few pixels. */}
+        {/* The drawing takes every pixel the facts don't need, and frames
+            the whole stack. A portrait tablet draws the desk scene, with its
+            notes. A phone turned sideways puts the drawing beside the facts
+            instead, where stacking would shrink it to a few pixels. */}
         <div className="flex min-h-0 flex-1 flex-col landscape:flex-row">
           <div
             className={cn(
-              // A short phone (SE-class) trades a little drawing for the facts.
-              'relative aspect-[290/372] max-h-[56dvh] w-full flex-none border-b border-ink [@media(orientation:portrait)_and_(max-height:700px)]:max-h-[48dvh]',
-              'sm:portrait:aspect-auto sm:portrait:max-h-none sm:portrait:min-h-0 sm:portrait:flex-1',
-              'landscape:aspect-auto landscape:max-h-none landscape:w-[52%] landscape:border-r landscape:border-b-0',
+              'relative min-h-0 w-full flex-1 border-b border-ink',
+              'landscape:w-[52%] landscape:flex-none landscape:border-r landscape:border-b-0',
               styles.gridMob,
             )}
           >
-            <div className="absolute inset-0 sm:portrait:hidden">
+            <div className="absolute inset-x-0 inset-y-1.5 sm:portrait:hidden">
               <AxoScene variant="mobile" {...scene} />
             </div>
             <div className="absolute inset-x-4 inset-y-3 hidden sm:portrait:block">
@@ -395,19 +395,17 @@ export default function AxoSkin(_props: SkinProps) {
 
           {/* Rows never shrink: squeezed, a clamped title collapses to
               nothing. The column clips at the bottom instead. */}
-          <div className="flex min-h-0 flex-1 flex-col gap-[7px] overflow-hidden px-4 py-3 *:shrink-0 sm:portrait:flex-none sm:portrait:px-6 sm:portrait:pb-4 landscape:justify-center">
-            {/* Sideways, the header drops this line to give the drawing height. */}
-            {showLine('hidden landscape:block')}
+          <div className="flex flex-none flex-col gap-1.5 overflow-hidden px-4 py-2.5 *:shrink-0 sm:portrait:px-6 sm:portrait:pb-4 landscape:min-w-0 landscape:flex-1 landscape:justify-center">
             {eyebrowEl}
-            <div className="line-clamp-2 font-display text-[30px] leading-[0.95] font-extrabold tracking-[-0.01em] italic [@media(orientation:portrait)_and_(max-height:700px)]:line-clamp-1">
+            <div className="line-clamp-1 font-display text-[24px] leading-[1.1] font-extrabold tracking-[-0.01em] italic landscape:line-clamp-2">
               {title}
             </div>
             {offline ? (
-              <span className="text-[14px] leading-normal text-muted">{OFFLINE_COPY}</span>
+              <span className="line-clamp-2 text-[13px] leading-snug text-muted">{OFFLINE_COPY}</span>
             ) : (
               <>
                 {artist && (
-                  <span className="truncate font-mono text-[12px] tracking-[0.14em] uppercase">
+                  <span className="truncate font-mono text-[11px] tracking-[0.14em] uppercase">
                     {artist}
                     {nowPlaying?.year && <span className="text-muted"> · {nowPlaying.year}</span>}
                   </span>
@@ -418,13 +416,13 @@ export default function AxoSkin(_props: SkinProps) {
             {talk && voice && (
               <div className="flex flex-col gap-1 border-t border-soft-border pt-1.5">
                 {onAirTag}
-                <span className="line-clamp-3 font-display text-[15px] leading-[1.35] font-medium italic [@media(orientation:portrait)_and_(max-height:700px)]:line-clamp-2">
+                <span className="line-clamp-2 font-display text-[14px] leading-[1.35] font-medium italic">
                   “{voice.text}”
                 </span>
               </div>
             )}
             {!talk && !offline && upNext[0] && (
-              <div className="flex items-center gap-3 border-t border-soft-border pt-2">
+              <div className="flex items-center gap-3 border-t border-soft-border pt-1.5">
                 <span className="font-mono text-[9px] tracking-[0.18em] text-[var(--accent)]">CUED</span>
                 <div className="min-w-0 flex-1 truncate text-[13px]">
                   <b>{upNext[0].title ?? '—'}</b>
@@ -435,7 +433,7 @@ export default function AxoSkin(_props: SkinProps) {
           </div>
         </div>
 
-        {statusBar('px-4 py-3 landscape:py-2')}
+        {statusBar('px-4 py-2')}
 
         {reqOpen && (
           <div className="absolute inset-x-0 bottom-0 z-10 flex flex-col border-t border-ink bg-bg shadow-drawer">
@@ -478,10 +476,10 @@ function RequestCard({
           onClick={onClose}
           className={cn(
             'v3-focus cursor-pointer border-0 bg-transparent p-0 leading-none text-muted hover:text-ink',
-            mob ? 'h-9 w-11 text-[20px]' : 'text-[18px]',
+            mob && 'flex h-9 w-11 items-center justify-center',
           )}
         >
-          ×
+          <X className={mob ? 'size-5' : 'size-4'} />
         </button>
       </div>
       {slip.ack ? (

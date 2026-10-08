@@ -63,11 +63,12 @@ export const AXO = {
   crossLcd: `M${lcdA.join(' ')}L${lcdB.join(' ')}M${project(22, 142, 30).join(' ')}L${project(124, 142, 44).join(' ')}`,
 } as const;
 
-/** Desktop frames the whole stack; mobile crops to the receiver and tape deck,
- *  so every control reads about 1.3× larger. */
+/** Both frame the whole stack. Desktop leaves room for the inked notes beside
+ *  it; mobile, which draws no notes, hugs the speakers, the open lid and the
+ *  sound lines, so the drawing fills as much of a phone as it can. */
 export const VIEWBOX = {
   desk: '-250 -410 590 680',
-  mobile: '-160 -178 290 372',
+  mobile: '-254 -404 570 672',
 } as const;
 
 /** Volume knob pointer angle in degrees: −135 at 0, +135 at full. */

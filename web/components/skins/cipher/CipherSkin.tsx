@@ -11,6 +11,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
+import { ArrowUpRight, CornerDownLeft, Delete, Heart, Play } from 'lucide-react';
 import styles from './Cipher.module.css';
 import { BlockKey, KeyRows, Lampboard, Panel, PowerKey, Rotor, Screws, TapeChars, type KeyHandlers } from './CipherParts';
 import {
@@ -335,7 +336,6 @@ export default function CipherSkin({ contained }: SkinProps) {
   const statusText = tuningStatus(phase, muted);
   const powerLabel = offline ? 'locked · off air' : phase === 'connecting' ? 'on · searching' : live ? 'on · locked' : 'off';
   const powerShort = offline ? 'locked' : phase === 'connecting' ? 'search' : live ? 'on' : 'off';
-  const volLabel = muted ? 'muted' : `vol ${volGlyph(vol)} / ${VOL_STOPS}`;
   const sub = [nowPlaying?.album, nowPlaying?.year].filter(Boolean).join(' · ');
   const nowLine = [nowPlaying?.title, nowPlaying?.artist].filter(Boolean).join(' — ');
   const sentLine = slip.sending ? `On the wire to ${djName}…` : (slip.ack ?? `${djName} has your note.`);
@@ -403,14 +403,21 @@ export default function CipherSkin({ contained }: SkinProps) {
 
       {/* ── Desktop ─────────────────────────────────────────────── */}
       <div className="absolute inset-0 hidden flex-col lg:flex">
-        <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-3.5">
+        <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-1.5">
           <div className="flex min-w-0 items-baseline gap-3.5">
-            <span className="truncate font-display text-[22px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
-            <span className="font-mono text-[10px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">cipher-3 · rotor machine</span>
+            <span className="flex-none font-display text-[22px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
+            <span className="min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+              cipher-3 · type a request · rotor I sets volume
+            </span>
           </div>
           <div className="flex min-w-0 shrink items-center gap-3">
             <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase">
-              {showName && <span className="max-w-[18vw] truncate">▸ {showName}</span>}
+              {showName && (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <Play className="size-2.5 flex-none fill-current" />
+                  <span className="max-w-[18vw] truncate">{showName}</span>
+                </span>
+              )}
               <span className="whitespace-nowrap text-vermilion">with {djName}</span>
               {contextLine(context) && (
                 <span className="max-w-[22vw] truncate border-l border-soft-border pl-3 text-muted">{contextLine(context)}</span>
@@ -421,13 +428,7 @@ export default function CipherSkin({ contained }: SkinProps) {
         </div>
 
         <div className={cn('relative min-h-0 flex-1', styles.gridDesk)}>
-          <span className="absolute top-4 left-6 font-mono text-[9px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">
-            sheet 03 · cipher-3 · top deck 1:1
-          </span>
-          <span className="absolute top-4 right-6 font-mono text-[9px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">
-            type to write a request · drag rotor I for volume
-          </span>
-          <div className="absolute inset-x-6 top-[38px] bottom-4">
+          <div className="absolute inset-x-6 inset-y-4">
             <div ref={deskFit} className={cn(styles.fit, styles.desk, 'w-[1360px]')}>
               <div
                 className={cn(
@@ -503,7 +504,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                     className="h-[92px] w-[112px] [--drop:8px]"
                   >
                     <span className="flex flex-col items-center gap-1.5">
-                      <span className="font-sans text-[28px] leading-none">♥</span>
+                      <Heart className={cn('size-7', like.liked && 'fill-current')} />
                       <span className="font-mono text-[13px] leading-none font-bold tracking-[0.14em]">{likeFace}</span>
                     </span>
                   </BlockKey>
@@ -517,7 +518,10 @@ export default function CipherSkin({ contained }: SkinProps) {
                     onClick={machine.del}
                     className="h-[63px] w-[112px] [--drop:7px]"
                   >
-                    <span className="font-mono text-[13px] leading-none font-bold tracking-[0.16em]">⌫ DEL</span>
+                    <span className="flex items-center gap-2 font-mono text-[13px] leading-none font-bold tracking-[0.16em]">
+                      <Delete className="size-4" />
+                      DEL
+                    </span>
                   </BlockKey>
                   <BlockKey
                     aria-label="Clear message"
@@ -555,7 +559,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                     {hasMsg ? (
                       <span className="flex flex-col items-center gap-2.5">
                         <span className="font-mono text-[20px] leading-none font-bold tracking-[0.16em]">SEND</span>
-                        <span className="font-sans text-[24px] leading-none">↗</span>
+                        <ArrowUpRight className="size-6" />
                         <span className="max-w-[104px] truncate font-mono text-[10px] leading-none font-semibold tracking-[0.16em] uppercase">
                           to {djName}
                         </span>
@@ -567,7 +571,10 @@ export default function CipherSkin({ contained }: SkinProps) {
                       </span>
                     )}
                   </BlockKey>
-                  <span className="font-mono text-[9px] tracking-[0.2em] whitespace-nowrap text-muted uppercase">enter ↵</span>
+                  <span className="flex items-center gap-1.5 font-mono text-[9px] tracking-[0.2em] whitespace-nowrap text-muted uppercase">
+                    enter
+                    <CornerDownLeft className="size-3" />
+                  </span>
                 </Panel>
               </div>
               <div className={cn(styles.plinth, 'h-3 w-[1360px]')} />
@@ -582,29 +589,28 @@ export default function CipherSkin({ contained }: SkinProps) {
           {live && signal.latencyMs != null && (
             <span className="whitespace-nowrap text-muted">sig {signal.latencyMs} ms · {signal.quality}</span>
           )}
-          <span className="border-l border-soft-border pl-4 whitespace-nowrap text-muted">{keyText}</span>
-          <span className="ml-auto whitespace-nowrap text-muted">{volLabel}</span>
+          <span className="ml-auto whitespace-nowrap text-muted">{keyText}</span>
         </div>
       </div>
 
       {/* ── Phone and tablet ────────────────────────────────────── */}
       <div className="absolute inset-0 flex flex-col lg:hidden">
-        <div className="flex flex-none flex-col gap-1 border-b border-ink px-4 pt-3 pb-2.5 landscape:py-1">
-          <div className="flex items-center justify-between gap-3">
-            <span className="truncate font-display text-[19px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
-            <ThemeSwitcher />
-          </div>
-          <span className="truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase landscape:hidden">
-            {showName && <>▸ {showName} · </>}
+        <div className="flex flex-none items-center gap-3 border-b border-ink py-1 pr-2 pl-4">
+          <span className="max-w-[60%] flex-none truncate font-display text-[18px] font-extrabold tracking-[0.02em]">
+            {stationName.toUpperCase()}
+          </span>
+          <span className="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
+            {showName && <><Play className="inline size-2 fill-current" /> {showName} · </>}
             <span className="text-vermilion">with {djName}</span>
           </span>
+          <ThemeSwitcher />
         </div>
 
         {/* Upright, the tape sits over the machine. A phone turned sideways
             puts it beside the machine instead, where stacking would shrink
             the keys to nothing. */}
         <div className="relative flex min-h-0 flex-1 flex-col landscape:flex-row">
-          <div className="flex h-[160px] flex-none flex-col gap-1.5 overflow-hidden border-b border-ink px-4 pt-2 pb-3 landscape:h-auto landscape:w-[40%] landscape:border-r landscape:border-b-0">
+          <div className="flex h-[124px] flex-none flex-col gap-1.5 overflow-hidden border-b border-ink px-4 pt-1.5 pb-2 landscape:h-auto landscape:w-[40%] landscape:border-r landscape:border-b-0">
             <div className="flex items-center gap-2">
               <span className={cn('min-w-0 flex-1 truncate font-mono text-[10px] font-bold tracking-[0.2em] uppercase', offline ? 'text-muted' : 'text-vermilion')}>
                 {eyebrow}
@@ -614,7 +620,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                 aria-pressed={muted}
                 lit={muted}
                 onClick={toggleMute}
-                className="h-10 w-[60px] flex-none [--drop:0px]"
+                className="h-9 w-[60px] flex-none [--drop:0px]"
               >
                 <span className="font-mono text-[10px] leading-none font-bold tracking-[0.12em]">{muted ? 'MUTED' : 'MUTE'}</span>
               </BlockKey>
@@ -625,9 +631,12 @@ export default function CipherSkin({ contained }: SkinProps) {
                 dead={!like.available}
                 disabled={!canLike}
                 onClick={() => void like.like()}
-                className="h-10 w-[60px] flex-none [--drop:0px]"
+                className="h-9 w-[60px] flex-none [--drop:0px]"
               >
-                <span className="font-mono text-[11px] leading-none font-bold tracking-[0.08em]">♥ {likeFace}</span>
+                <span className="flex items-center gap-1.5 font-mono text-[11px] leading-none font-bold tracking-[0.08em]">
+                  <Heart className={cn('size-3.5', like.liked && 'fill-current')} />
+                  {likeFace}
+                </span>
               </BlockKey>
             </div>
             <Tape {...tape} variant="strip" />
@@ -680,7 +689,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                         onClick={machine.del}
                         className="h-[42px] w-[52px] flex-none [--drop:4px]"
                       >
-                        <span className="font-mono text-[11px] leading-none font-bold">⌫</span>
+                        <Delete className="size-4" />
                       </BlockKey>
                       <BlockKey
                         aria-label="Clear message"
@@ -707,7 +716,10 @@ export default function CipherSkin({ contained }: SkinProps) {
                         onClick={send}
                         className="h-[42px] w-[88px] flex-none [--drop:4px]"
                       >
-                        <span className="font-mono text-[11px] leading-none font-bold tracking-[0.14em]">{hasMsg ? 'SEND ↗' : 'SEND'}</span>
+                        <span className="flex items-center gap-1 font-mono text-[11px] leading-none font-bold tracking-[0.14em]">
+                          SEND
+                          {hasMsg && <ArrowUpRight className="size-3.5" />}
+                        </span>
                       </BlockKey>
                     </div>
                   </Panel>
@@ -720,10 +732,10 @@ export default function CipherSkin({ contained }: SkinProps) {
 
         {/* A phone on its side under 360px tall gives the status bar's
             height to the machine; the tape's eyebrow still says the state. */}
-        <div className="flex flex-none items-center gap-3.5 border-t border-ink bg-field px-4 py-3 font-mono text-[10px] tracking-[0.16em] uppercase landscape:py-2 [@media(orientation:landscape)_and_(max-height:359px)]:hidden">
+        <div className="flex flex-none items-center gap-3.5 border-t border-ink bg-field px-4 py-2 font-mono text-[10px] tracking-[0.16em] uppercase [@media(orientation:landscape)_and_(max-height:359px)]:hidden">
           {statusDot}
           {listenerTag}
-          <span className="ml-auto whitespace-nowrap text-muted">{volLabel}</span>
+          <span className="ml-auto whitespace-nowrap text-muted">{keyText}</span>
         </div>
       </div>
     </div>
@@ -806,9 +818,10 @@ function titleFit(len: number, variant: TapeProps['variant']): string {
     if (len <= 26) return 'text-[42px] line-clamp-1';
     return 'text-[32px] line-clamp-2';
   }
-  // Sideways, the tape is a tall column with lines to spare.
-  if (len <= 18) return 'text-[30px] line-clamp-1 landscape:line-clamp-3';
-  return 'text-[22px] line-clamp-2 landscape:line-clamp-4';
+  // Upright, the strip is one line high; sideways, the tape is a tall
+  // column with lines to spare.
+  if (len <= 18) return 'text-[24px] line-clamp-1 landscape:line-clamp-3';
+  return 'text-[19px] line-clamp-1 landscape:line-clamp-4';
 }
 
 /** The paper tape: what the machine is receiving, typing or sending. */
@@ -884,20 +897,24 @@ function Tape({ variant, mode, eyebrow, eyebrowR, keyText, song, spelling, talk,
             </p>
           </div>
           <span className={cn('flex-none truncate font-mono tracking-[0.14em] text-muted uppercase', desk ? 'text-[11px]' : 'text-[10px]')}>
-            ▸ {song.nowLine}
+            <Play className="inline size-2 fill-current" /> {song.nowLine}
           </span>
         </>
       )}
 
       {mode === 'compose' && (
         <>
-          <div
-            className={cn(
-              'min-h-0 overflow-hidden font-mono font-bold break-words whitespace-pre-wrap',
-              desk ? 'text-[28px] leading-[1.2] tracking-[0.06em]' : 'text-[18px] leading-tight tracking-[0.05em]',
-            )}
-          >
-            {compose.plain}{caret}
+          {/* The strip is short, so it keeps the newest line (and the caret)
+              in view as the note wraps. */}
+          <div className={cn('min-h-0 overflow-hidden', !desk && 'flex flex-1 flex-col justify-end')}>
+            <div
+              className={cn(
+                'font-mono font-bold break-words whitespace-pre-wrap',
+                desk ? 'text-[28px] leading-[1.2] tracking-[0.06em]' : 'text-[16px] leading-tight tracking-[0.05em]',
+              )}
+            >
+              {compose.plain}{caret}
+            </div>
           </div>
           <div className="flex min-w-0 items-baseline gap-3">
             {desk && <span className="flex-none font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">Cipher</span>}
@@ -914,10 +931,10 @@ function Tape({ variant, mode, eyebrow, eyebrowR, keyText, song, spelling, talk,
 
       {mode === 'sent' && (
         <>
-          <div className={cn('line-clamp-2 font-display leading-[1.15] font-semibold italic', desk ? 'text-[30px]' : 'text-[20px]')}>
+          <div className={cn('line-clamp-2 font-display leading-[1.15] font-semibold italic', desk ? 'text-[30px]' : 'text-[16px]')}>
             {sent.line}
           </div>
-          <div className={cn('font-mono break-words text-vermilion', desk ? 'text-[14px] tracking-[0.12em]' : 'text-[11px] tracking-[0.1em]')}>
+          <div className={cn('font-mono text-vermilion', desk ? 'text-[14px] tracking-[0.12em] break-words' : 'truncate text-[11px] tracking-[0.1em]')}>
             {sent.cipher}
           </div>
           {desk && (
@@ -932,8 +949,8 @@ function Tape({ variant, mode, eyebrow, eyebrowR, keyText, song, spelling, talk,
 
       {mode === 'offline' && (
         <>
-          <div className={cn('font-display leading-[1.05] font-bold text-muted', desk ? 'text-[54px]' : 'text-[30px]')}>— off air —</div>
-          <span className={cn('leading-normal text-pretty text-muted', desk ? 'text-[15px]' : 'text-[14px]')}>{OFFLINE_COPY}</span>
+          <div className={cn('font-display leading-[1.05] font-bold text-muted', desk ? 'text-[54px]' : 'text-[22px]')}>— off air —</div>
+          <span className={cn('text-pretty text-muted', desk ? 'text-[15px] leading-normal' : 'line-clamp-2 text-[12px] leading-snug')}>{OFFLINE_COPY}</span>
         </>
       )}
     </div>

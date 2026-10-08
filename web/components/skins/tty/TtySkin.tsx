@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { m, steps } from 'motion/react';
+import { Heart, Play } from 'lucide-react';
 import styles from './Tty.module.css';
 import {
   usePlayerActions,
@@ -381,7 +382,11 @@ export default function TtySkin(_props: SkinProps) {
                 offline ? 'text-muted' : tunedIn ? 'text-[var(--accent)]' : 'text-ink hover:text-[var(--accent)]',
               )}
             >
-              {offline ? 'OFF AIR' : tunedIn ? (status === 'playing' ? 'TUNED ●' : 'TUNING…') : '▶ TUNE IN'}
+              {offline
+                ? 'OFF AIR'
+                : tunedIn
+                  ? (status === 'playing' ? 'TUNED ●' : 'TUNING…')
+                  : <span className="inline-flex items-center gap-1.5"><Play className="size-2.5 fill-current" strokeWidth={0} />TUNE IN</span>}
             </button>
             <button
               type="button"
@@ -407,7 +412,10 @@ export default function TtySkin(_props: SkinProps) {
                   like.pending && 'opacity-60',
                 )}
               >
-                {like.liked ? '[♥ LIKED]' : '[♥ LIKE]'}{like.count > 0 ? ` ${like.count}` : ''}
+                <span className="inline-flex items-center gap-1">
+                  [<Heart className={cn('size-3', like.liked && 'fill-current')} /> {like.liked ? 'LIKED' : 'LIKE'}]
+                  {like.count > 0 ? ` ${like.count}` : ''}
+                </span>
               </button>
             )}
             {signal.latencyMs != null && tunedIn && (

@@ -57,6 +57,13 @@
 .txAcc { fill: var(--accent); stroke: none; }
 /* A lit key's legend: the same foreground the theme puts on an accent fill. */
 .txOn { fill: var(--primary-foreground); stroke: none; }
+/* An icon printed on a key: lucide strokes in currentColor, so these set the
+   colour. Solid even in standby — a legend, not a construction line. */
+.icon { stroke-dasharray: none; }
+.icTx { color: var(--txt); }
+.icMuted { color: var(--muted); }
+.icOn { color: var(--primary-foreground); }
+.icFill { fill: currentColor; }
 .mono { font-family: var(--mono-font), ui-monospace, monospace; }
 .display { font-family: var(--display-font), Georgia, serif; font-style: italic; }
 

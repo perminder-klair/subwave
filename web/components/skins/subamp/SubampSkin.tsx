@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
+import { ArrowUpRight, ChevronDown, ChevronUp, Heart, Play, Square, X } from 'lucide-react';
 import styles from './Subamp.module.css';
 import Analyzer from './Analyzer';
 import {
@@ -84,11 +85,13 @@ function Window({ title, children, className }: { title: ReactNode; children: Re
           type="button"
           onClick={() => setOpen(o => !o)}
           aria-label={open ? 'Roll window up' : 'Roll window down'}
-          className="v3-focus cursor-pointer border border-[var(--line)] bg-transparent px-1 text-[9px] leading-tight text-muted hover:text-ink"
+          className="v3-focus cursor-pointer border border-[var(--line)] bg-transparent px-0.5 py-px text-muted hover:text-ink"
         >
-          {open ? '▁' : '▆'}
+          {open ? <ChevronUp className="size-2.5" strokeWidth={3} /> : <ChevronDown className="size-2.5" strokeWidth={3} />}
         </button>
-        <span className="border border-[var(--line)] px-1 text-[9px] leading-tight text-muted opacity-60" aria-hidden="true">✕</span>
+        <span className="border border-[var(--line)] px-0.5 py-px text-muted opacity-60" aria-hidden="true">
+          <X className="size-2.5" strokeWidth={3} />
+        </span>
       </div>
       {open && children}
     </div>
@@ -146,7 +149,7 @@ export default function SubampSkin(_props: SkinProps) {
   const marqueeText = offline
     ? `OFF AIR ▪ ${stationName} ▪ THE STREAM WILL BE BACK ▪▸ `
     : showTuneIn
-      ? `PRESS ▶ TO TUNE IN ▪ ${stationName} ▪ ONE LIVE STREAM ▪▸ `
+      ? `PRESS PLAY TO TUNE IN ▪ ${stationName} ▪ ONE LIVE STREAM ▪▸ `
       : [
           [nowPlaying?.title, nowPlaying?.artist].filter(Boolean).join(' — '),
           [nowPlaying?.album, nowPlaying?.year].filter(Boolean).join(' · '),
@@ -262,7 +265,7 @@ export default function SubampSkin(_props: SkinProps) {
                     : 'border-[var(--accent)] bg-[var(--accent)] text-bg',
                 )}
               >
-                ▶
+                <Play className="size-3.5 fill-current" strokeWidth={0} />
               </button>
               <button
                 type="button"
@@ -273,7 +276,7 @@ export default function SubampSkin(_props: SkinProps) {
                   tunedIn ? 'cursor-pointer text-ink hover:bg-[var(--overlay)]' : 'cursor-default text-muted',
                 )}
               >
-                ■
+                <Square className="size-3 fill-current" strokeWidth={0} />
               </button>
               <button
                 type="button"
@@ -301,7 +304,7 @@ export default function SubampSkin(_props: SkinProps) {
                     like.pending && 'opacity-60',
                   )}
                 >
-                  {like.liked ? '♥' : '♡'}
+                  <Heart className={cn('size-3.5', like.liked && 'fill-current')} />
                 </button>
               )}
               <button
@@ -380,7 +383,7 @@ export default function SubampSkin(_props: SkinProps) {
               <div className="-ml-4 flex gap-2.5 bg-[var(--field)] py-0.5 pl-4 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">
                 <span>{history.length + 1}.</span>
                 <span className="min-w-0 flex-1 truncate">
-                  ▶ {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}
+                  <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}
                   {!offline && nowPlaying?.artist ? ` — ${nowPlaying.artist}` : ''}
                 </span>
                 <span>{fmtTime(elapsed)}</span>
@@ -434,7 +437,7 @@ export default function SubampSkin(_props: SkinProps) {
                           : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
                       )}
                     >
-                      {slip.sending ? '…' : 'SEND ↗'}
+                      {slip.sending ? '…' : <span className="flex items-center gap-1">SEND <ArrowUpRight className="size-3" /></span>}
                     </button>
                   </>
                 )}

@@ -10,6 +10,7 @@
 
 import { useEffect, useId, useRef } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
+import { Heart } from 'lucide-react';
 import styles from './Axo.module.css';
 import { cn } from '@/lib/cn';
 import { useAnalyser } from '@/lib/hooks';
@@ -248,7 +249,10 @@ export default function AxoScene(props: AxoSceneProps) {
     else if (e.key === 'End') { e.preventDefault(); setVol(1); }
   };
 
-  const likeLabel = like.available ? `♥ ${like.count}` : '♥';
+  // The KEEP legend: a heart and the count, centred as a pair on the key.
+  const likeCount = like.available ? String(like.count) : '';
+  const likeX = 198 - (6 + (likeCount ? 1.5 + likeCount.length * 3.9 : 0)) / 2;
+  const likeInk = like.liked ? styles.icOn : like.available ? styles.icTx : styles.icMuted;
   const canLike = like.available && !like.liked && !like.pending;
 
   return (
@@ -406,16 +410,25 @@ export default function AxoScene(props: AxoSceneProps) {
               REQUEST
             </text>
             <rect x="184" y="30" width="28" height="16" className={like.liked ? styles.fAcc : styles.fBg} />
-            <text
-              x="198"
-              y="40.6"
-              fontSize={6.5}
-              fontWeight={700}
-              textAnchor="middle"
-              className={cn(like.liked ? styles.txOn : like.available ? styles.tx : styles.txMuted, styles.mono)}
-            >
-              {likeLabel}
-            </text>
+            <Heart
+              x={likeX}
+              y={35}
+              width={6}
+              height={6}
+              strokeWidth={3.5}
+              className={cn(styles.icon, likeInk, like.liked && styles.icFill)}
+            />
+            {likeCount && (
+              <text
+                x={likeX + 7.5}
+                y="40.6"
+                fontSize={6.5}
+                fontWeight={700}
+                className={cn(like.liked ? styles.txOn : styles.tx, styles.mono)}
+              >
+                {likeCount}
+              </text>
+            )}
             <text
               x="198"
               y="55"
@@ -515,7 +528,7 @@ export default function AxoScene(props: AxoSceneProps) {
           )}
           {phase === 'offline' && <path d={AXO.crossLcd} />}
           {live && talk && (
-            <g transform={mob ? 'translate(62 -150) rotate(-8) scale(0.9)' : 'translate(258 -322) rotate(-8)'}>
+            <g transform={mob ? 'translate(250 -330) rotate(-8) scale(0.9)' : 'translate(258 -322) rotate(-8)'}>
               <rect x="-54" y="-18" width="108" height="36" strokeWidth={1.6} />
               <rect x="-49" y="-13" width="98" height="26" strokeWidth={0.6} />
               <text y="6" fontSize={15} fontWeight={700} letterSpacing="0.22em" textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>
