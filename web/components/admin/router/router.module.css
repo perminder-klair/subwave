@@ -9,8 +9,6 @@
   --rk-sep-soft: color-mix(in oklab, var(--ink) 16%, transparent);
   --rk-sep-strong: color-mix(in oklab, var(--ink) 42%, transparent);
   --rk-card: var(--card-bg, var(--surface));
-  --rk-display: #171512;
-  --rk-display-ink: #f2ede3;
   --rk-scope: #11100e;
   --rk-scope-ink: #b8d5b5;
   --rk-scope-dim: #a8afa2;
@@ -64,28 +62,39 @@
 .powerLamp[data-state="error"] { background: var(--danger); box-shadow: 0 0 8px color-mix(in oklab, var(--danger) 70%, transparent); }
 .powerLamp[data-state="idle"] { background: var(--rk-amber); box-shadow: 0 0 8px color-mix(in oklab, var(--rk-amber) 60%, transparent); }
 
-/* The Music sources header's status strip: a vacuum-fluorescent display with
-   the lamp at its head and one cell per reading, reflowing rather than
-   truncating, each value lit in its own state colour. It sits in the page
-   header, outside .console, so it carries the tokens it reads. */
+/* The Music sources header's status strip: the lamp at its head and one
+   labelled reading per cell, reflowing rather than truncating. A light panel
+   a shade off the card — it reads as part of the header, not an inset screen —
+   with colour only where a value carries state. It sits outside .console, so
+   it carries the tokens it reads. */
 .statusStrip {
-  --rk-green: #62b68a;
-  --rk-amber: #d59a3b;
+  --rk-green: #2f8a62;
+  --rk-amber: #a8690f;
   --rk-mono: var(--mono-font, ui-monospace, monospace);
+  --strip-rule: color-mix(in oklab, var(--ink) 12%, transparent);
   display: flex;
   align-items: stretch;
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--ink);
-  background: #171512 linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 70%);
+  border: 1px solid color-mix(in oklab, var(--ink) 22%, transparent);
+  background: color-mix(in oklab, var(--ink) 4%, var(--card-bg, var(--surface)));
+}
+:global(:root[data-theme="dark"]) .statusStrip {
+  --rk-green: #62b68a;
+  --rk-amber: #d59a3b;
+}
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme="light"])) .statusStrip {
+    --rk-green: #62b68a;
+    --rk-amber: #d59a3b;
+  }
 }
 .lampCell {
   display: flex;
   align-items: center;
   padding: 0 14px;
-  box-shadow: 1px 0 0 rgba(242, 237, 227, 0.12);
+  box-shadow: 1px 0 0 var(--strip-rule);
 }
-.lampCell .powerLamp { border-color: rgba(242, 237, 227, 0.4); }
 .vfd {
   flex: 1;
   margin: 0;
@@ -94,12 +103,12 @@
   grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
   overflow: hidden;
 }
-/* Dividers drawn right and below each cell, 1px outside it: the display's
+/* Dividers drawn right and below each cell, 1px outside it: the strip's
    overflow clips the outer ones, so the frame stays clean however it wraps. */
 .dcell {
   min-width: 0;
   padding: 7px 13px 8px;
-  box-shadow: 1px 0 0 rgba(242, 237, 227, 0.12), 0 1px 0 rgba(242, 237, 227, 0.12);
+  box-shadow: 1px 0 0 var(--strip-rule), 0 1px 0 var(--strip-rule);
 }
 .dcell dt {
   font-family: var(--rk-mono);
@@ -107,22 +116,21 @@
   font-weight: 800;
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  color: #8f978a;
+  color: var(--muted);
 }
 .dcell dd {
   margin: 3px 0 0;
   font-family: var(--rk-mono);
   font-size: 0.72rem;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.06em;
   line-height: 1.2;
-  color: #f2ede3;
-  text-shadow: 0 0 7px rgba(242, 237, 227, 0.22);
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
-.dcell[data-tone="ok"] dd { color: #8fd6a8; text-shadow: 0 0 7px rgba(143, 214, 168, 0.35); }
-.dcell[data-tone="warn"] dd { color: #e2b45b; text-shadow: 0 0 7px rgba(226, 180, 91, 0.35); }
-.dcell[data-tone="bad"] dd { color: #ee625a; text-shadow: 0 0 7px rgba(238, 98, 90, 0.35); }
+.dcell[data-tone="ok"] dd { color: var(--rk-green); }
+.dcell[data-tone="warn"] dd { color: var(--rk-amber); }
+.dcell[data-tone="bad"] dd { color: var(--danger); }
 
 .screw {
   position: absolute;
