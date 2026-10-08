@@ -3,9 +3,12 @@
 #
 # A git worktree checks out every TRACKED file, but the dev stack also needs
 # a handful of gitignored files that do NOT travel with the checkout:
-#   - .env                       (root .env — ADMIN_USER/PASS/SITE_URL; dev compose references it as ./.env)
-#   - controller/.env            (Navidrome + Ollama config; dev compose env_file)
-#   - web/.env.local             (dev API/stream URL overrides for the web UI)
+#   - .env                       (root .env — the controller's ONLY env_file in dev compose:
+#                                 ADMIN_*, SITE_URL, NAVIDROME_*, LLM/TTS keys)
+#   - controller/.env            (LEGACY — no compose file reads it any more; its keys are
+#                                 folded into the worktree's root .env where missing)
+#   - web/.env.local             (dev API/stream URL overrides for the web UI; scaffolded
+#                                 against $SUBWAVE_DEV_HOST, default localhost, if main has none)
 #   - docker/.env                (compose variable substitution — legacy; harmless to copy if present)
 #   - state/setup-config.json    (Navidrome creds the wizard saved; copying skips /onboarding)
 #   - state/secrets.env          (cloud LLM/TTS API keys, if the main checkout has any)
@@ -32,6 +35,8 @@
 #   prep-worktree.sh [worktree-path]   # worktree-path defaults to $PWD
 #   prep-worktree.sh --reset-state     # wipe + re-scaffold state/ first
 #   prep-worktree.sh --skip-npm        # skip the npm install step
+#   SUBWAVE_DEV_HOST=100.x.y.z prep-worktree.sh   # host baked into a scaffolded web/.env.local
+#                                                 # (e.g. a Tailscale IP for viewing from another device)
 
 set -euo pipefail
 
@@ -86,9 +91,49 @@ copy_env() {
 }
 
 copy_env .env
-copy_env controller/.env
-copy_env web/.env.local
 copy_env docker/.env
+
+# Dev compose reads ONLY the root .env (`env_file: ./.env`) since the compose
+# rename (8ec21021). A main checkout set up before that still keeps its
+# Navidrome creds and API keys in controller/.env, which nothing reads — so a
+# copied root .env boots a fresh station that can't reach Navidrome
+# (needsSetup: true, "could not reach http://navidrome:4533"). Fold any key the
+# legacy file has into the worktree's root .env, never overriding one it sets.
+# ICECAST_* is skipped: the root .env also feeds compose substitution, so a
+# folded password would override the one the broadcast container generates.
+LEGACY_ENV="$MAIN/controller/.env"
+ROOT_ENV="$WORKTREE/.env"
+if [ -f "$LEGACY_ENV" ]; then
+  touch "$ROOT_ENV"
+  added=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*|ICECAST_*) continue ;; esac
+    key="${line%%=*}"
+    [ "$key" = "$line" ] && continue
+    grep -q "^${key}=" "$ROOT_ENV" && continue
+    [ ${#added[@]} -eq 0 ] && printf '\n# Folded in from the main checkout'"'"'s legacy controller/.env by prep-worktree.sh\n' >> "$ROOT_ENV"
+    printf '%s\n' "$line" >> "$ROOT_ENV"
+    added+=("$key")
+  done < "$LEGACY_ENV"
+  if [ ${#added[@]} -gt 0 ]; then
+    echo "[prep] folded legacy controller/.env into .env: ${added[*]}"
+  else
+    echo "[prep] keep   .env — already has every key from legacy controller/.env"
+  fi
+fi
+
+if [ -e "$MAIN/web/.env.local" ]; then
+  copy_env web/.env.local
+elif [ -e "$WORKTREE/web/.env.local" ]; then
+  echo "[prep] keep   web/.env.local — already in worktree (left untouched)"
+else
+  # Without it the web UI calls same-origin /api, which only the prod Caddy
+  # edge serves — the dev player loads but never reaches the controller.
+  DEV_HOST="${SUBWAVE_DEV_HOST:-localhost}"
+  printf 'NEXT_PUBLIC_API_URL=http://%s:7701\nNEXT_PUBLIC_STREAM_URL=http://%s:7702/stream.mp3\n' \
+    "$DEV_HOST" "$DEV_HOST" > "$WORKTREE/web/.env.local"
+  echo "[prep] wrote  web/.env.local (host $DEV_HOST — set SUBWAVE_DEV_HOST to view from another device)"
+fi
 
 # ── fresh state/ scaffold ───────────────────────────────────────────────────
 STATE="$WORKTREE/state"
