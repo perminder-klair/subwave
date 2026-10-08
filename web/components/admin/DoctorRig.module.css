@@ -1,0 +1,39 @@
+/* The rig's state changes. A part inks in when its check comes back (the pen
+   glides from construction lines to ink), the part on the meter marches its
+   dashes, and its tag's dot pulses. All of it is layered on only under
+   no-preference, so the resting style is the finished still; lite mode kills
+   the animations globally and the transition here. */
+
+.live {
+  cursor: pointer;
+}
+.live:hover .leader {
+  stroke: var(--accent);
+}
+
+.hollow {
+  stroke-dasharray: 2 1.6;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .pen {
+    transition: stroke 1.2s ease, stroke-dasharray 1.6s ease;
+  }
+  .measuring {
+    animation: rig-march 0.9s linear infinite;
+  }
+  .pulse {
+    animation: rig-pulse 1.2s ease-in-out infinite;
+  }
+}
+
+:global(html.lite) .pen { transition: none; }
+
+@keyframes rig-march {
+  to { stroke-dashoffset: -11; }
+}
+
+@keyframes rig-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}

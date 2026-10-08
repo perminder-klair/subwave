@@ -1,10 +1,13 @@
 'use client';
 
 import { memo } from 'react';
-import type { CSSProperties } from 'react';
 import { cn } from '@/lib/cn';
+import styles from './BoothBuddy.module.css';
 
-// Decorative CSS mascot. Per-mood and per-size geometry requires inline styles.
+// DJ Doc: the booth's mascot, a little box with a face. Drawn as one SVG so it
+// stays crisp from the 16px top-bar badge up to the doctor page, and given real
+// depth: a shaded top and side in the theme's own tones, the same way the
+// isometric kit shades a box, where it used to cast a flat ink shadow.
 
 export type BuddyMood = 'content' | 'onair' | 'curious' | 'sleepy' | 'spooked';
 
@@ -21,7 +24,7 @@ interface MoodGeom {
   blink: boolean;
 }
 
-// Geometry at scale 1 (head = 64px wide); every value is multiplied by size/64.
+// Geometry in head units (the face is 64 wide); `size` scales the lot.
 const MOODS: Record<BuddyMood, MoodGeom> = {
   content: { eyeW: 8, eyeH: 8, pupil: 0, mouthW: 18, mouthH: 3, open: false, tilt: 0, antTilt: 0, z: false, blink: true },
   onair: { eyeW: 8, eyeH: 8, pupil: 0, mouthW: 22, mouthH: 11, open: true, tilt: 0, antTilt: 0, z: false, blink: true },
@@ -30,143 +33,95 @@ const MOODS: Record<BuddyMood, MoodGeom> = {
   spooked: { eyeW: 13, eyeH: 13, pupil: 5, mouthW: 11, mouthH: 11, open: false, tilt: 0, antTilt: 0, z: false, blink: false },
 };
 
-const INK = 'var(--ink)';
-const FILL = 'var(--bg)';
-const ACCENT = 'var(--accent)';
-const HEAD_W = 64;
+const W = 64;
+const H = 58;
+/** The box's depth, drawn up and to the right. */
+const DX = 7;
+const DY = 5;
+const BORDER = 3;
+/** Where the antenna stands: the middle of the top face. */
+const AX = W / 2 + DX / 2;
+const AY = -DY / 2;
+
+const VIEW = { x: -2, y: -26, w: W + DX + 4, h: 94 };
 
 export interface BoothBuddyProps {
   mood?: BuddyMood;
-  /** Head width in px; the whole sprite scales from it. */
+  /** Face width in px; the whole sprite scales from it. */
   size?: number;
   className?: string;
 }
 
 export default memo(function BoothBuddy({ mood = 'content', size = 20, className }: BoothBuddyProps) {
   const c = MOODS[mood] ?? MOODS.content;
-  const s = size / HEAD_W;
-  const px = (n: number) => `${(n * s).toFixed(2)}px`;
-  const playing = mood === 'onair';
+  const s = size / W;
 
-  // Outer wrapper owns the always-on "breathe", inner root the per-mood tilt.
-  // Separated because a CSS animation overrides an inline transform on the same
-  // element for the property it animates.
-  const breatheWrap: CSSProperties = {
-    display: 'inline-flex',
-    transformOrigin: 'center bottom',
-    animation: 'buddy-breathe 2.8s ease-in-out infinite',
-    lineHeight: 1,
-    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
-  };
-  const root: CSSProperties = {
-    position: 'relative',
-    display: 'inline-flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    transform: `rotate(${c.tilt}deg)`,
-    transformOrigin: 'center bottom',
-  };
-  const tip: CSSProperties = {
-    position: 'relative',
-    width: px(9),
-    height: px(9),
-    background: ACCENT,
-    border: `${px(1)} solid ${INK}`,
-    boxSizing: 'border-box',
-    transform: `rotate(${c.antTilt}deg)`,
-    transformOrigin: 'bottom center',
-    zIndex: 2,
-  };
-  const pulse: CSSProperties = {
-    position: 'absolute',
-    left: '50%',
-    top: '50%',
-    width: px(9),
-    height: px(9),
-    background: ACCENT,
-    animation: 'buddy-pulse 1.6s ease-out infinite',
-    zIndex: -1,
-  };
-  const stalk: CSSProperties = {
-    width: px(2.5),
-    height: px(13),
-    background: INK,
-    transform: `rotate(${c.antTilt * 0.5}deg)`,
-    transformOrigin: 'bottom center',
-    marginBottom: px(-1),
-  };
-  const head: CSSProperties = {
-    position: 'relative',
-    width: px(HEAD_W),
-    height: px(58),
-    background: FILL,
-    border: `${px(3)} solid ${INK}`,
-    boxSizing: 'border-box',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: px(8),
-    boxShadow: `${px(3)} ${px(3)} 0 ${INK}`,
-  };
-  const eyesRow: CSSProperties = { display: 'flex', gap: px(14), alignItems: 'center' };
-  const eye: CSSProperties = {
-    position: 'relative',
-    width: px(c.eyeW),
-    height: px(c.eyeH),
-    background: INK,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    animation: c.blink ? 'buddy-blink 4.5s steps(1,end) infinite' : 'none',
-    transformOrigin: 'center',
-  };
-  const pupil: CSSProperties = {
-    width: px(c.pupil),
-    height: px(c.pupil),
-    background: FILL,
-    transform: mood === 'curious' ? `translate(${px(2)}, ${px(-1)})` : 'none',
-  };
-  const mouth: CSSProperties = {
-    position: 'relative',
-    width: px(c.mouthW),
-    height: px(c.mouthH),
-    background: INK,
-    display: 'flex',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  };
-  const mouthInner: CSSProperties = { width: px(c.mouthW - 8), height: px(4), background: FILL };
-  const legsRow: CSSProperties = { display: 'flex', gap: px(16), marginTop: px(-1) };
-  const leg: CSSProperties = { width: px(3), height: px(8), background: INK };
-  const zWrap: CSSProperties = { position: 'absolute', top: px(-6), right: px(-10), width: px(20), height: px(20) };
-  const zBase: CSSProperties = { position: 'absolute', fontWeight: 800, color: INK, lineHeight: 1 };
+  // The face sits centred in the head's inner area, eyes over mouth.
+  const content = c.eyeH + 8 + c.mouthH;
+  const eyeY = H / 2 - content / 2;
+  const mouthY = eyeY + c.eyeH + 8;
+  const eyesLeft = W / 2 - (c.eyeW * 2 + 14) / 2;
+  const eyes = [eyesLeft, eyesLeft + c.eyeW + 14];
+  const look = mood === 'curious' ? { x: 2, y: -1 } : { x: 0, y: 0 };
 
   return (
-    <span aria-hidden="true" className={cn('v3-buddy', className)} style={breatheWrap}>
-      <span style={root}>
-        <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <span style={tip}>{playing && <span style={pulse} />}</span>
-          <span style={stalk} />
-        </span>
-        <span style={head}>
-          {c.z && (
-            <span style={zWrap}>
-              <span style={{ ...zBase, left: 0, top: px(6), fontSize: px(11), animation: 'buddy-z 2.4s ease-out infinite' }}>z</span>
-              <span style={{ ...zBase, left: px(2), top: px(6), fontSize: px(14), animation: 'buddy-z 2.4s ease-out infinite 1.2s' }}>z</span>
-            </span>
-          )}
-          <span style={eyesRow}>
-            <span style={eye}>{c.pupil > 0 && <span style={pupil} />}</span>
-            <span style={eye}>{c.pupil > 0 && <span style={pupil} />}</span>
-          </span>
-          <span style={mouth}>{c.open && <span style={mouthInner} />}</span>
-        </span>
-        <span style={legsRow}>
-          <span style={leg} />
-          <span style={leg} />
-        </span>
-      </span>
-    </span>
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      viewBox={`${VIEW.x} ${VIEW.y} ${VIEW.w} ${VIEW.h}`}
+      width={Number((VIEW.w * s).toFixed(2))}
+      height={Number((VIEW.h * s).toFixed(2))}
+      className={cn('v3-buddy', styles.root, className)}
+    >
+      <g transform={`rotate(${c.tilt} ${W / 2} ${H + 8})`}>
+        {/* Legs */}
+        <rect x={W / 2 - 11} y={H - 1} width="3" height="9" className={styles.ink} />
+        <rect x={W / 2 + 8} y={H - 1} width="3" height="9" className={styles.ink} />
+
+        {/* Antenna: tilts with the mood, pulses while on air */}
+        <g transform={`rotate(${c.antTilt * 0.7} ${AX} ${AY})`}>
+          <rect x={AX - 1.25} y={AY - 13} width="2.5" height="13" className={styles.ink} />
+          {mood === 'onair' && <rect x={AX - 4.5} y={AY - 21} width="9" height="9" className={cn(styles.accent, styles.pulse)} />}
+          <rect x={AX - 4.5} y={AY - 21} width="9" height="9" strokeWidth={1} className={cn(styles.accent, styles.edge)} />
+        </g>
+
+        {/* The box: top and side shaded, front face the face */}
+        <path d={`M0 0L${DX} ${-DY}H${W + DX}L${W} 0Z`} strokeWidth={2} className={cn(styles.top, styles.edge)} />
+        <path d={`M${W} 0L${W + DX} ${-DY}V${H - DY}L${W} ${H}Z`} strokeWidth={2} className={cn(styles.side, styles.edge)} />
+        <rect
+          x={BORDER / 2}
+          y={BORDER / 2}
+          width={W - BORDER}
+          height={H - BORDER}
+          strokeWidth={BORDER}
+          className={cn(styles.face, styles.edge)}
+        />
+
+        {eyes.map((x, i) => (
+          <g key={i} className={c.blink ? styles.blink : undefined}>
+            <rect x={x} y={eyeY} width={c.eyeW} height={c.eyeH} className={styles.ink} />
+            {c.pupil > 0 && (
+              <rect
+                x={x + (c.eyeW - c.pupil) / 2 + look.x}
+                y={eyeY + (c.eyeH - c.pupil) / 2 + look.y}
+                width={c.pupil}
+                height={c.pupil}
+                className={styles.face}
+              />
+            )}
+          </g>
+        ))}
+
+        <rect x={W / 2 - c.mouthW / 2} y={mouthY} width={c.mouthW} height={c.mouthH} className={styles.ink} />
+        {c.open && <rect x={W / 2 - (c.mouthW - 8) / 2} y={mouthY} width={c.mouthW - 8} height="4" className={styles.face} />}
+
+        {c.z && (
+          <>
+            <text x={W - 6} y="2" fontSize={11} fontWeight={800} className={cn(styles.zz, styles.z1)}>z</text>
+            <text x={W - 2} y="-4" fontSize={14} fontWeight={800} className={cn(styles.zz, styles.z2)}>z</text>
+          </>
+        )}
+      </g>
+    </svg>
   );
 });

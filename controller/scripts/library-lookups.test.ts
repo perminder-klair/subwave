@@ -200,7 +200,7 @@ test('v26 backfill tolerates malformed sources, rolls back failed DDL and restor
   for (const backup of [before, after]) {
     await db.restoreFromFile(backup);
     await db.open({ embeddingDim: 3, adoptStoredDim: true });
-    assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 27);
+    assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 28);
     assert.deepEqual(ids('valid'), ['malformed']);
     noOrphans();
   }

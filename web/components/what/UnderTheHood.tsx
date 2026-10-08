@@ -1,12 +1,5 @@
-import { Fragment } from 'react';
 import EditorialReveal from '../landing/EditorialReveal';
-
-const BOXES = [
-  { label: 'CONTROLLER', tone: 'default', note: 'node.js' },
-  { label: 'DJ BRAIN', tone: 'accent', note: 'llm' },
-  { label: 'LIQUIDSOAP', tone: 'default', note: 'mixer' },
-  { label: 'ICECAST', tone: 'default', note: 'one stream' },
-];
+import StackCutaway, { STACK_KEY } from './StackCutaway';
 
 export default function UnderTheHood() {
   return (
@@ -26,26 +19,30 @@ export default function UnderTheHood() {
         No socket, no message queue, the Unix way.
       </div>
 
-      <div className="bs-flow">
-        {BOXES.map((b, i) => (
-          <Fragment key={b.label}>
-            <div
-              className="bs-box"
-              data-tone={b.tone === 'accent' ? 'accent' : undefined}
-            >
-              {b.label}
-              <div className="mt-1 text-[9px] font-medium tracking-[0.18em] text-muted lowercase">
-                {b.note}
-              </div>
-            </div>
-            {i < BOXES.length - 1 && (
-              <div className="bs-arrow" aria-hidden="true">
-                ⟶
-              </div>
-            )}
-          </Fragment>
-        ))}
-      </div>
+      <figure className="m-0 mt-2 grid items-center gap-x-10 gap-y-6 md:grid-cols-[minmax(0,34rem)_minmax(0,1fr)]">
+        <StackCutaway className="mx-auto w-full max-w-[34rem]" />
+        <div>
+          <ol className="m-0 grid list-none gap-3 p-0">
+            {STACK_KEY.map(k => (
+              <li key={k.id} className="grid grid-cols-[1.75rem_minmax(0,1fr)] items-baseline gap-x-3">
+                <span
+                  aria-hidden="true"
+                  className="flex size-7 items-center justify-center rounded-full border border-ink font-mono text-[13px] font-bold"
+                >
+                  {k.id}
+                </span>
+                <span className="text-[14px] leading-[1.5]">
+                  <b className="font-mono text-[12px] tracking-[0.16em] uppercase">{k.name}</b>
+                  <span className="text-muted"> · {k.note}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+          <figcaption className="mt-5 border-t border-separator-strong pt-2 text-[11px] tracking-[0.18em] text-muted uppercase">
+            <b className="text-ink">Fig. 6</b> · One box with the lid off
+          </figcaption>
+        </div>
+      </figure>
 
       <p className="mt-6 max-w-[64ch] text-[14px] leading-[1.6] text-muted">
         No subscriptions, no round-trip to a data center, no algorithm tuned to

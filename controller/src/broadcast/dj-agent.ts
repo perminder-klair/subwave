@@ -869,6 +869,28 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   return 'queued';
 }
 
+// The per-pick effects nudge on the event turn. Compact on purpose: the full
+// per-effect coaching is effectsGuidance() in the system prompt — this only
+// keeps the vocabulary and the deliberate-choice reminder fresh in the newest
+// turn. Re-describing all seven effects here tripled the coaching per pick
+// (system + event + schema description). It names only the gestures the
+// operator has left on (#1565): the system prompt already calls the rest
+// switched off, and a nudge still offering them contradicted it. With every
+// switch off the clause goes, exactly like DJ mode off. With all six on it is
+// the historical text byte for byte.
+export function effectEventClause(historyNote = ''): string {
+  if (!settings.effectsActive()) return '';
+  const on = new Set<TransitionEffect>(settings.enabledEffects());
+  if (on.size === 0) return '';
+  const names = (kinds: TransitionEffect[]) => kinds.filter(k => on.has(k)).map(k => `"${k}"`).join('/');
+  const roles = ([
+    [names(['washout', 'loop']), 'end your pick'],
+    [names(['sweep', 'dissolve', 'chop']), 'resolve a clash'],
+    [names(['blend']), 'only for an exceptionally locked pair'],
+  ] as const).filter(([kinds]) => kinds).map(([kinds, role]) => `${kinds} ${role}`);
+  return ` Set "transition" by what THIS moment needs, per the TRANSITION EFFECTS guidance — ${[...roles, '"normal" otherwise'].join(', ')}. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`;
+}
+
 // Called by the queue watcher when an autonomous track starts and the queue is
 // empty. Posts the event to the session, then picks the next track (and an
 // optional between-track link) via the agent, falling back to the pool.
@@ -940,14 +962,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     const historyNote = recentT.length
       ? ` Your recent transition choices, oldest first: ${recentT.join(', ')} — the station strips a third repeat, so vary deliberately.`
       : '';
-    // Compact on purpose: the full per-effect coaching is effectsGuidance()
-    // in the system prompt — this nudge only keeps the vocabulary and the
-    // deliberate-choice reminder fresh in the newest turn. Re-describing all
-    // seven effects here tripled the coaching per pick (system + event +
-    // schema description).
-    const effectClause = settings.effectsActive()
-      ? ` Set "transition" by what THIS moment needs, per the TRANSITION EFFECTS guidance — "washout"/"loop" end your pick, "sweep"/"dissolve"/"chop" resolve a clash, "blend" only for an exceptionally locked pair, "normal" otherwise. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
-      : '';
+    const effectClause = effectEventClause(historyNote);
     // The turn is split in two: `text` is the factual event the booth log shows
     // the operator, `meta.promptSuffix` carries the model-facing coaching
     // clauses. windowMessages() re-joins them, so the model sees one message and

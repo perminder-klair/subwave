@@ -17,6 +17,7 @@ import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, ru
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { communitySkillConfig } from '../community/registry.js';
 import {
   builtinSkillFileSchema,
   customSkillFileSchema,
@@ -200,7 +201,9 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
   if (rejectInvalidCron(res, fields)) return;
 
   try {
-    await writeSkillFile(fields);
+    // A catalog feed is written as the skill's own knob, so a code-free catalog
+    // skill installs with a data tool rather than a brief alone.
+    await writeSkillFile({ ...fields, ...communitySkillConfig(cs) });
     await loadSkills();
     syncSkillCrons();
     queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);

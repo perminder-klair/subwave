@@ -144,7 +144,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             A fetch that fails or times out <strong>stands the segment down</strong> rather
-            than letting the DJ invent one.
+            than letting the DJ invent one. So does a feed with nothing fresh left: a{' '}
+            <strong>Run now</strong> or <code className="bs-code-inline">cron:</code> on a
+            drained feed reports that it stood down.
           </li>
         </ul>
         <p className="text-muted">

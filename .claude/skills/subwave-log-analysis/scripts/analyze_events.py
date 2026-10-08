@@ -323,6 +323,32 @@ def report_picker(events, traces):
                 if c > 1:
                     print(f"    {c:>3}x  {a}")
 
+        # The seam record (#1829): how each track came in, the DJ's ask on the
+        # pick, and the armed effects a strip took back. Absent on events from
+        # a controller older than the record, so the block only prints when
+        # some play carries it.
+        seams = Counter(e["transition"] for e in plays if e.get("transition"))
+        asks = Counter(e["transitionAsk"] for e in plays if e.get("transitionAsk"))
+        drops = Counter(f'{d.get("effect")}: {d.get("reason")}'
+                        for e in plays for d in (e.get("transitionDrops") or []))
+        if seams or asks or drops:
+            print()
+            n_seams = sum(seams.values())
+            effect_seams = sum(c for k, c in seams.items()
+                               if k != "Normal" and not k.startswith("After "))
+            print(f"Transitions    : {n_seams} seams, {effect_seams} with an effect"
+                  + (f" ({100*effect_seams/n_seams:.0f}%)" if n_seams else ""))
+            if seams:
+                print("  seams armed    : " +
+                      "  ".join(f"{k}={v}" for k, v in seams.most_common()))
+            if asks:
+                print("  DJ asked for   : " +
+                      "  ".join(f"{k}={v}" for k, v in asks.most_common()))
+            if drops:
+                print(f"  dropped ({sum(drops.values())}):")
+                for k, c in drops.most_common(10):
+                    print(f"    {c:>3}x  {k}")
+
 
 def report_health(events, traces):
     section("HEALTH & ANOMALIES")

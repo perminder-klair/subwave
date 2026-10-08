@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { pollAsyncWhileVisible } from '@/lib/poll';
-import { splitAudibleTurns } from '@/lib/sessionFeed';
+import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type {
   ActiveShow,
@@ -113,7 +113,7 @@ export function useStationFeed(): StationFeed {
         // winds it back past the track start.
         const bufSec = npRes.stream?.bufferSeconds;
         if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
-          leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
+          leadMsRef.current = Math.min(Math.max(bufSec, 0), MAX_LEAD_SECONDS) * 1000;
         }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
         // Prefer the queue's start time over "first seen by this client": a tab

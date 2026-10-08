@@ -40,11 +40,14 @@ export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
-// Single gate for the transition effects (filter sweep + echo washout): they're
-// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
-// schema/prompt builders use this to decide whether to offer the DJ the
-// `transition` choice; when off, the guidance is never shown and nothing is
-// applied.
+// Gate for the six DJ transition effects (TRANSITION_EFFECTS): on whenever the
+// on-air persona is in DJ mode. The per-effect operator switches
+// (settings/transition-effects.ts, #1565) narrow it and compose with it at the
+// call sites, never in here. The picker schema/prompt builders use this to
+// decide whether to offer the DJ the `transition` choice; when off, the
+// guidance is never shown and nothing is applied. DJ mode also drives
+// pair-drain, stem blends and the transition stinger, which read djMode
+// directly.
 export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }

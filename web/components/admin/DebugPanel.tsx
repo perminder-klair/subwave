@@ -111,8 +111,6 @@ export default function DebugPanel() {
         </div>
       </section>
 
-      <PlaybackFailures timezone={data?.timezone} locale={data?.locale} />
-
       {err && <ErrorState error={err} />}
 
       {!data && !err && (
@@ -266,6 +264,10 @@ export default function DebugPanel() {
           </Card>
         </>
       )}
+
+      {/* Outside the data block on purpose: it has its own on-demand query, so
+          it stays usable while /debug is down. With data it sits under DJ log. */}
+      <PlaybackFailures timezone={data?.timezone} locale={data?.locale} />
     </div>
   );
 }
