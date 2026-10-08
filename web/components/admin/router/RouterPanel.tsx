@@ -25,24 +25,37 @@ import { buildChannels, type RouterView } from './model';
 import { ServiceMatrix } from './ServiceMatrix';
 import { SignalPath } from './SignalPath';
 import { SourceChannels } from './SourceChannels';
-import { RackPanel, Screws } from './Rack';
+import { Faceplate, RackPanel, type FaceplateCell } from './Rack';
 import s from './router.module.css';
 
 const ACTIVITY_POLL_MS = 1_500;
 // Health asks every serving backend for its library counts, so it is not polled hard.
 const HEALTH_POLL_MS = 30_000;
 
-function summaryLine(view: RouterView): string {
-  const r = view.router;
-  if (!r) return 'ESTABLISHING LINK…';
-  const parts =
+/** The faceplate display: what the router is doing, one reading per cell. */
+function faceplateCells(view: RouterView | undefined, statusError: string | null): FaceplateCell[] {
+  const r = view?.router;
+  if (!view) return [{ label: 'Link', value: statusError ? 'NO LINK TO THE CONTROLLER' : 'ESTABLISHING…', tone: statusError ? 'bad' : undefined }];
+  const failover = view.mode === 'router' && view.failover?.active;
+  const mode: FaceplateCell =
     view.mode !== 'router'
-      ? ['MODE DIRECT NAVIDROME', 'ROUTER BYPASSED']
-      : view.failover?.active
-        ? ['FAILOVER', 'NAVIDROME DIRECT']
-        : ['MODE ROUTER', `SERVING ${r.serving ? r.serving.name.toUpperCase() : 'NOTHING'}`];
-  parts.push(`ROUTER v${r.router.version}`, `PLUGIN API v${r.router.apiVersion}`, `${r.plugins.length} PLUGINS`, `${r.endpoints.length} ENDPOINTS`);
-  return parts.join(' / ');
+      ? { label: 'Mode', value: 'DIRECT', tone: 'warn' }
+      : failover
+        ? { label: 'Mode', value: 'FAILOVER', tone: 'bad' }
+        : { label: 'Mode', value: 'ROUTER', tone: 'ok' };
+  const serving: FaceplateCell =
+    view.mode !== 'router' || failover
+      ? { label: 'Serving', value: 'NAVIDROME DIRECT', tone: failover ? 'bad' : 'warn' }
+      : { label: 'Serving', value: r?.serving ? r.serving.name.replace(/\+/g, ' + ').toUpperCase() : 'NOTHING', tone: r?.serving ? undefined : 'bad' };
+  if (!r) return [mode, serving, { label: 'Router', value: 'UNREACHABLE', tone: 'bad' }];
+  return [
+    mode,
+    serving,
+    { label: 'Router', value: `v${r.router.version}` },
+    { label: 'Plugin API', value: `v${r.router.apiVersion}` },
+    { label: 'Plugins', value: r.plugins.length },
+    { label: 'Endpoints', value: r.endpoints.length },
+  ];
 }
 
 export default function RouterPanel() {
@@ -81,53 +94,34 @@ export default function RouterPanel() {
   const channels = useMemo(() => (view ? buildChannels(view) : []), [view]);
   const backends = channels.filter((c) => c.kind === 'source');
 
-  const lamp =
+  const lamp: 'ok' | 'idle' | 'error' =
     statusQuery.isError || view?.routerError || view?.router?.configError || view?.failover?.active ? 'error' : view?.mode === 'navidrome' ? 'idle' : 'ok';
   const statusError = statusQuery.isError ? errorMessage(statusQuery.error) : null;
 
   return (
     <div className={s.console}>
-      <header className={s.faceplate}>
-        <Screws />
-        <span className={s.screw} data-at="bl" aria-hidden="true" />
-        <span className={s.screw} data-at="br" aria-hidden="true" />
-        <div className={s.brand}>
-          <span className={s.powerLamp} data-state={lamp} aria-hidden="true" />
-          <div>
-            <h1>SUB/WAVE ROUTER</h1>
-            <p>Music sources / live diagnostics</p>
-          </div>
-        </div>
-        <div className={s.readout} aria-live="polite" title={view ? summaryLine(view) : undefined}>
-          {view ? summaryLine(view) : statusError ? 'NO LINK TO THE CONTROLLER' : 'ESTABLISHING LINK…'}
-        </div>
-        {view?.mode === 'navidrome' && (
-          <p className={s.runtimeNote}>
-            Station plays Navidrome directly
-            <br />
-            router bypassed
-          </p>
-        )}
-        {view?.mode === 'router' && view.failover?.active && (
-          <p className={s.runtimeNote}>
-            Router down — station fell back
-            <br />
-            to Navidrome directly
-          </p>
-        )}
-        <div className={s.faceplateActions}>
-          <Btn sm onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
-            <RefreshCw aria-hidden="true" className={cn(statusQuery.isFetching && 'animate-spin')} />
-            Re-check health
-          </Btn>
-          <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
-            {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
-          </Btn>
+      <Faceplate
+        title="SUB/WAVE ROUTER"
+        subtitle="Music sources / live diagnostics"
+        lamp={lamp}
+        cells={faceplateCells(view, statusError)}
+        actions={
+          <>
+            <Btn sm onClick={() => void statusQuery.refetch()} disabled={statusQuery.isFetching}>
+              <RefreshCw aria-hidden="true" className={cn(statusQuery.isFetching && 'animate-spin')} />
+              Re-check health
+            </Btn>
+            <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !routerUp}>
+              {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
+            </Btn>
+          </>
+        }
+        primary={
           <Link href="/admin/sources?tab=sources" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
             Configure sources
           </Link>
-        </div>
-      </header>
+        }
+      />
 
       {statusError && (
         <V3Alert tone="error" title="could not load the router status">{statusError}</V3Alert>

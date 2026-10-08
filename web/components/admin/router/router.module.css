@@ -52,35 +52,41 @@
 }
 
 .faceplate {
-  min-height: 82px;
-  padding: 16px 20px;
+  padding: 16px 20px 14px;
   display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.brand { display: flex; align-items: center; gap: 13px; min-width: 250px; }
+/* Top row: the nameplate beside a display of labelled readings. */
+.faceTop {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 22px;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand h1 {
   margin: 0;
   font-family: var(--rk-display-font);
-  font-size: clamp(1.45rem, 2vw, 2rem);
+  font-size: clamp(1.15rem, 1.5vw, 1.45rem);
   font-weight: 650;
-  line-height: 0.95;
-  letter-spacing: -0.035em;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
 }
-.brand p,
-.runtimeNote {
+.brand p {
   margin: 5px 0 0;
   font-family: var(--rk-mono);
-  font-size: 0.58rem;
+  font-size: 0.55rem;
   font-weight: 700;
   line-height: 1.5;
-  letter-spacing: 0.11em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
+  white-space: nowrap;
 }
-.runtimeNote { max-width: 190px; margin: 0; color: var(--accent); }
 
 .powerLamp,
 .scopeLamp {
@@ -95,22 +101,59 @@
 .powerLamp[data-state="error"] { background: var(--danger); box-shadow: 0 0 8px color-mix(in oklab, var(--danger) 70%, transparent); }
 .powerLamp[data-state="idle"] { background: var(--rk-amber); box-shadow: 0 0 8px color-mix(in oklab, var(--rk-amber) 60%, transparent); }
 
-.readout {
-  flex: 1;
-  min-width: 260px;
-  padding: 10px 13px;
+/* A vacuum-fluorescent display: one cell per reading, reflowing rather than
+   truncating, each value lit in its own state colour. */
+.vfd {
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
   overflow: hidden;
   border: 1px solid var(--ink);
-  background: var(--rk-display);
-  color: var(--rk-display-ink);
-  font-family: var(--rk-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.065em;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  background: var(--rk-display) linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 70%);
 }
+/* Dividers drawn right and below each cell, 1px outside it: the display's
+   overflow clips the outer ones, so the frame stays clean however the cells
+   wrap. */
+.dcell {
+  min-width: 0;
+  padding: 9px 14px 10px;
+  box-shadow: 1px 0 0 rgba(242, 237, 227, 0.12), 0 1px 0 rgba(242, 237, 227, 0.12);
+}
+.dcell dt {
+  font-family: var(--rk-mono);
+  font-size: 0.48rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #8f978a;
+}
+.dcell dd {
+  margin: 4px 0 0;
+  font-family: var(--rk-mono);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  color: var(--rk-display-ink);
+  text-shadow: 0 0 7px rgba(242, 237, 227, 0.22);
+  overflow-wrap: anywhere;
+}
+.dcell[data-tone="ok"] dd { color: #8fd6a8; text-shadow: 0 0 7px rgba(143, 214, 168, 0.35); }
+.dcell[data-tone="warn"] dd { color: #e2b45b; text-shadow: 0 0 7px rgba(226, 180, 91, 0.35); }
+.dcell[data-tone="bad"] dd { color: #ee625a; text-shadow: 0 0 7px rgba(238, 98, 90, 0.35); }
 
-.faceplateActions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* Bottom row: the control strip — secondary keys left, the primary right. */
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--rk-sep-strong);
+}
+.controls > :first-child { display: flex; flex-wrap: wrap; gap: 8px; }
+.controlPrimary { margin-left: auto; }
 
 .screw {
   position: absolute;
@@ -415,9 +458,13 @@ a.stripFoot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
   .feedList { height: 220px; }
 }
 
+@media (max-width: 900px) {
+  .faceTop { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+}
+
 @media (max-width: 640px) {
-  .faceplate { align-items: stretch; gap: 12px; padding: 18px 16px; }
-  .brand, .readout { width: 100%; min-width: 0; }
+  .faceplate { padding: 18px 16px 14px; }
+  .controlPrimary { margin-left: 0; }
   .rackHeader { align-items: flex-start; padding: 12px 16px 10px; flex-direction: column; }
   .rackHeader > div:first-child { width: 100%; overflow-wrap: anywhere; }
 

@@ -18,7 +18,7 @@ import { cn } from '../../../lib/cn';
 import { buttonVariants } from '../../ui/button';
 import { V3Alert } from '../../ui/alert';
 import { Btn } from '../ui';
-import { RackPanel, Screws } from '../router/Rack';
+import { Faceplate, RackPanel } from '../router/Rack';
 import { CAPABILITY_BANK, formatMs } from '../router/model';
 import rs from '../router/router.module.css';
 import { bayReadout, buildBay, slotLabel, type BayModule, type CellState } from './pluginBay';
@@ -54,39 +54,32 @@ export function PluginsTab({ view, adminFetch }: { view: MusicSourceView; adminF
   }
 
   const r = bayReadout(modules);
-  const lamp = r.faults ? 'error' : view.mode === 'navidrome' ? 'idle' : 'ok';
-  const readout = [
-    `${r.slots} SLOTS`,
-    `${r.onAir} ON AIR`,
-    `${r.installed} INSTALLED`,
-    `${r.faults} ${r.faults === 1 ? 'FAULT' : 'FAULTS'}`,
-    `PLUGIN API v${status.router.apiVersion}`,
-  ].join(' / ');
-
+  const lamp: 'ok' | 'idle' | 'error' = r.faults ? 'error' : view.mode === 'navidrome' ? 'idle' : 'ok';
   return (
     <div className={rs.console}>
-      <header className={rs.faceplate}>
-        <Screws />
-        <span className={rs.screw} data-at="bl" aria-hidden="true" />
-        <span className={rs.screw} data-at="br" aria-hidden="true" />
-        <div className={rs.brand}>
-          <span className={rs.powerLamp} data-state={lamp} aria-hidden="true" />
-          <div>
-            <h1>PLUGIN BAY</h1>
-            <p>Source modules / router v{status.router.version}</p>
-          </div>
-        </div>
-        <div className={rs.readout} title={readout} aria-live="polite">{readout}</div>
-        <div className={rs.faceplateActions}>
+      <Faceplate
+        title="PLUGIN BAY"
+        subtitle={`Source modules / router v${status.router.version}`}
+        lamp={lamp}
+        cells={[
+          { label: 'Slots', value: r.slots },
+          { label: 'On air', value: r.onAir, tone: r.onAir ? 'ok' : undefined },
+          { label: 'Installed', value: r.installed },
+          { label: 'Faults', value: r.faults, tone: r.faults ? 'bad' : undefined },
+          { label: 'Plugin API', value: `v${status.router.apiVersion}` },
+        ]}
+        actions={
           <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending}>
             <RefreshCw aria-hidden="true" className={cn(rescan.isPending && 'animate-spin')} />
             {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
           </Btn>
+        }
+        primary={
           <Link href="/admin/sources?tab=sources" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
             Configure sources
           </Link>
-        </div>
-      </header>
+        }
+      />
 
       <RackPanel
         title="Module rack"
