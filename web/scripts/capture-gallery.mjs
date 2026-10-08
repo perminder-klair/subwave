@@ -54,7 +54,7 @@ const ONLY = args.only || null;
   const skinIds = new Set(PRESS_RUN_PLATES.map(p => p.skinId));
   if (PRESS_RUN_PLATES.length !== 8) throw new Error('expected exactly 8 plates');
   if (new Set(themeIds).size !== PRESS_RUN_PLATES.length) throw new Error('every theme must appear exactly once');
-  if (skinIds.size !== 7) throw new Error('every skin must appear at least once');
+  if (skinIds.size !== PRESS_RUN_PLATES.length) throw new Error('every skin must appear exactly once');
 }
 
 const { chromium } = load('playwright');
@@ -95,6 +95,9 @@ for (const plate of PRESS_RUN_PLATES) {
   }, [plate.skinId, plate.themeId]);
   const page = await context.newPage();
   await page.goto(`${BASE}/listen`, { waitUntil: 'domcontentloaded' });
+  // A dev server paints its route indicator over the player's corner; it is
+  // not part of any skin.
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' }).catch(() => {});
 
   // Theme override painted: every built-in theme is a registry palette, and
   // ThemeProvider applies palettes as inline tokens on <html>.
@@ -130,7 +133,7 @@ for (const plate of PRESS_RUN_PLATES) {
   }
 
   // Cover art up — the strongest "this frame looks on-air" signal. A skin
-  // that draws no sleeve (AXO) says so in its status line instead.
+  // that draws no sleeve (AXO, Cipher) says so in its status line instead.
   await page.waitForFunction(
     () => Array.from(document.images).some(i => i.src.includes('/cover') && i.complete && i.naturalWidth > 0)
       || document.body.innerText.toLowerCase().includes('tuned · locked'),

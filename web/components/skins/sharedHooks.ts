@@ -37,6 +37,10 @@ export interface RequestSlipCopy {
   failed: string;
 }
 
+/** How a submitted request ended, for skins that word success and refusal
+ *  differently. Upgrades along with `ack` when the booth resolves the pick. */
+export type RequestOutcome = 'sent' | 'refused' | 'failed';
+
 export interface RequestSlip {
   text: string;
   setText: (v: string) => void;
@@ -48,11 +52,14 @@ export interface RequestSlip {
   /** Outcome line to show in place of the form, or null while composing.
    *  Upgrades in place once the pick resolves. */
   ack: string | null;
+  /** What `ack` reports, null alongside it. */
+  outcome: RequestOutcome | null;
   /** Clear the ack and return to the form. Cancels any in-flight polling. */
   reset: () => void;
   sending: boolean;
-  /** Submit the current text. No-op while empty or already sending. */
-  send: () => Promise<void>;
+  /** Submit the current text, or `text` when a skin keeps its own (Cipher's
+   *  tape). No-op while empty or already sending. */
+  send: (text?: string) => Promise<void>;
 }
 
 /** The shared request-slip state machine: compose → send → show the
@@ -62,6 +69,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   const [text, setText] = useState('');
   const [name, setName] = useState('');
   const [ack, setAck] = useState<string | null>(null);
+  const [outcome, setOutcome] = useState<RequestOutcome | null>(null);
   const [sending, setSending] = useState(false);
 
   // Poll lifecycle held in refs so reset()/unmount can stop an in-flight loop
@@ -101,6 +109,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
       }
       if (data?.status === 'failed') {
         setAck(data.message || copy.refused);
+        setOutcome('refused');
         return;
       }
       if (data?.status === 'unknown') return;
@@ -110,14 +119,15 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
     pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
   };
 
-  const send = async () => {
-    const trimmed = text.trim();
+  const send = async (override?: string) => {
+    const trimmed = (override ?? text).trim();
     if (!trimmed || sending) return;
     stopPolling();
     setSending(true);
     try {
       const res = await submitRequest(trimmed, name.trim());
       setAck(res.success ? (res.ack || copy.sent) : (res.message || copy.refused));
+      setOutcome(res.success ? 'sent' : 'refused');
       if (res.success) {
         setText('');
         // The match runs in the booth, so poll for the real pick and upgrade
@@ -126,6 +136,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
       }
     } catch {
       setAck(copy.failed);
+      setOutcome('failed');
     } finally {
       setSending(false);
     }
@@ -134,8 +145,9 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
   const reset = useCallback(() => {
     stopPolling();
     setAck(null);
+    setOutcome(null);
   }, [stopPolling]);
-  return { text, setText, name, setName, ack, reset, sending, send };
+  return { text, setText, name, setName, ack, outcome, reset, sending, send };
 }
 
 export interface TrackLike {

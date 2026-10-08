@@ -19,7 +19,7 @@ const EXAMPLE_THEME = `{
   }
 }`;
 
-// The seven faces the controller ships. Kept here so the copy below and the list
+// The eight faces the controller ships. Kept here so the copy below and the list
 // stay in lockstep with components/skins/index.ts.
 const SKINS = [
   {
@@ -49,6 +49,10 @@ const SKINS = [
   {
     name: 'AXO-1',
     blurb: 'A hi-fi stack drawn at 30° isometric — the power switch, volume knob and keys in the drawing are the controls, and the lines ink in when you tune in.',
+  },
+  {
+    name: 'Cipher-3',
+    blurb: 'A rotor cipher machine — the lampboard spells the song one letter per beat, rotor I is the volume, and a request is typed on its keys, enciphered as you go.',
   },
 ];
 
@@ -83,7 +87,7 @@ export default function Themes() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">THE SKINS</p>
-        <h2>Seven faces ship in the box.</h2>
+        <h2>Eight faces ship in the box.</h2>
         <p>
           Each skin is a completely different full-screen layout built on the
           same core. The station-wide pick is a contact sheet in admin

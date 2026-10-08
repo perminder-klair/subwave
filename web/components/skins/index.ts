@@ -66,6 +66,14 @@ export const SKINS: SkinManifest[] = [
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./axo/AxoSkin'),
   },
+  {
+    id: 'cipher',
+    name: 'Cipher-3',
+    description:
+      'A rotor cipher machine — the lampboard spells the song, and your request is typed on its keys.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./cipher/CipherSkin'),
+  },
 ];
 
 // Id facts (default id, legacy aliases) live in lib/skin.ts so the server
