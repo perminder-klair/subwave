@@ -57,6 +57,11 @@ export interface SourceManifest {
   entry?: string;
   homepage?: string;
   config?: ConfigField[];
+  /**
+   * For development and tests only. The router loads, lists and serves it like
+   * any other plugin and reports the flag; the station hides it from operators.
+   */
+  devOnly?: boolean;
 }
 
 // --- canonical model (native ids, loose) -----------------------------------------
@@ -257,7 +262,11 @@ export interface SourceContext {
  */
 export interface SourcePlugin {
   capabilities?: {
-    /** Advertise the OpenSubsonic sonicSimilarity extension (served by similarSongs). */
+    /**
+     * Advertise the OpenSubsonic sonicSimilarity extension, served by
+     * `similarSongs`. Kept for plugins whose only similarity IS audio-based;
+     * read only when `sonicSimilar` is absent — implement that instead.
+     */
     sonicSimilarity?: boolean;
   };
 
@@ -281,6 +290,13 @@ export interface SourcePlugin {
   artistInfo?(id: string, count: number): Promise<ArtistInfo | undefined>;
   /** `id` may be a song or an artist id. */
   similarSongs?(id: string, count: number): Promise<Song[]>;
+  /**
+   * Audio-based neighbours of a song, most similar first: the OpenSubsonic
+   * sonicSimilarity extension (getSonicSimilarTracks). A separate picker
+   * signal from `similarSongs`, so never answer one from the other; leave it
+   * out when the backend cannot measure sound.
+   */
+  sonicSimilar?(id: string, count: number): Promise<Song[]>;
   topSongs?(artistName: string, count: number): Promise<Song[]>;
   /** `undefined` = unknown id; `null` = the song exists but has no lyrics. */
   lyrics?(id: string): Promise<Lyrics | null | undefined>;

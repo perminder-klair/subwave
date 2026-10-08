@@ -35,7 +35,7 @@ test('a router-mode station converts with its own Navidrome and keeps the router
     music: { mode: 'router', sources: [{ plugin: 'folder', config: { path: '/music' } }] },
   }));
   writeFileSync(join(root, 'music-source-switch.json'), '{"version":1,"at":"2026-10-07T12:00:00.000Z","from":"a","to":"b"}');
-  await ms.writeRouterConfig(ms.readSelection(await setupConfig.loadSetupConfig()));
+  await setupConfig.syncRouterConfig();
   mkdirSync(join(root, 'router', 'plugins', 'folder'), { recursive: true });
   writeFileSync(join(root, 'router', 'plugins', 'folder', 'subwave-source.json'), '{}');
   const routerConfig = readFileSync(join(root, 'router', 'config.json'), 'utf8');

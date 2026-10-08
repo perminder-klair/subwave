@@ -52,6 +52,23 @@ test('the internal API needs the router credentials', async () => {
   assert.match((byName.get('old-api') as any).error, /plugin API v99/);
 });
 
+test('the demo library is reported devOnly, and is still selectable and served', async () => {
+  r.writeConfig(configWith([{ plugin: 'mock' }]));
+  const status = await reload();
+  // Built-ins and the working fixture only: the clash-name fixture also calls itself `mock`.
+  const listed = status.plugins.filter((p: any) => p.builtin || p.name === 'good');
+  const devOnly = Object.fromEntries(listed.map((p: any) => [p.name, p.devOnly]));
+  assert.equal(devOnly.mock, true);
+  for (const name of ['navidrome', 'jellyfin', 'plex', 'good']) assert.equal(devOnly[name], false, `${name} is not devOnly`);
+  // Hiding it is the station's job: the router builds, serves and tests it as before.
+  assert.deepEqual(status.active.map((a: any) => a.plugin), ['mock']);
+  assert.equal(status.serving.name, 'mock');
+  const random = await r.rest('getRandomSongs', { size: 2 });
+  assert.equal(random.randomSongs.song.length, 2);
+  const tested = (await (await r.internal('/test', { method: 'POST', body: JSON.stringify({ plugin: 'mock' }) })).json()) as any;
+  assert.equal(tested.ok, true);
+});
+
 test('Subsonic auth: wrong credentials are code 40, wrong user too', async () => {
   const resp = await fetch(`${r.base}/rest/ping?${r.auth('subwave', 'wrong-password-xxxxxxxx')}`);
   const body = ((await resp.json()) as any)['subsonic-response'];

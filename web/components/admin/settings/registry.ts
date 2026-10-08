@@ -3,7 +3,7 @@
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart, Music2, BrainCircuit,
+  Activity, Archive, Save, AlertTriangle, Heart, BrainCircuit,
   MessageCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -45,11 +45,6 @@ export const SECTIONS = [
     id: 'station', group: 'the station', label: 'Station',
     hint: 'name · location · privacy', icon: Radio,
     formKeys: ['station', 'stationDescription', 'timezone', 'locale', 'weather', 'privacy', 'requests'],
-  },
-  {
-    id: 'music', group: 'the station', label: 'Music source',
-    hint: 'navidrome · jellyfin · plex', icon: Music2,
-    formKeys: [],
   },
   {
     id: 'theme', group: 'the station', label: 'Skin & Themes',
@@ -216,13 +211,6 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'One request per listener at a time', section: 'station', card: 'Listener requests', keywords: 'ip pending single' },
   { label: 'Publish persona souls', section: 'station', card: 'Public API', keywords: 'system prompt schedule personas public json' },
 
-  // ── music source ───────────────────────────────────────────────────────────
-  { label: 'Server URL', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic host url' },
-  { label: 'Username', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic login user' },
-  { label: 'Password', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic secret salt token' },
-  { label: 'Music source', section: 'music', card: 'Source', keywords: 'navidrome jellyfin plex router plugin library backend' },
-  { label: 'Merge several sources', section: 'music', card: 'Merge several sources', keywords: 'combine two libraries jellyfin plex' },
-  { label: 'Installed plugins', section: 'music', card: 'Installed plugins', keywords: 'plugin rescan emby third-party source' },
 
   // ── skin & themes ──────────────────────────────────────────────────────────
   { label: 'Station skin', section: 'theme', card: 'Player skin', keywords: 'classic unit platter drift subamp tty listen face' },

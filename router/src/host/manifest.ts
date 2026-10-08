@@ -33,6 +33,7 @@ export const manifestSchema = z
     entry: z.string().min(1).max(200).optional(),
     homepage: z.string().url().optional(),
     config: z.array(configFieldSchema).max(30).optional(),
+    devOnly: z.boolean().optional(),
   })
   .refine((m) => new Set((m.config ?? []).map((f) => f.key)).size === (m.config ?? []).length, {
     message: 'config keys must be unique',

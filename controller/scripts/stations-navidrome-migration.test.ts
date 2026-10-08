@@ -222,14 +222,25 @@ test('fresh process restart and profile switch retain setup status and authentic
   const boot = async (expectSetup = false) => {
     const { stdout } = await run(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
+      const { readFileSync } = await import('node:fs');
       const { config, NAVIDROME_ENV_ENABLED } = await import('./src/config.ts');
-      const { loadNavidromeConfig } = await import('./src/setup/config.ts');
+      const { loadNavidromeConfig, storedNavidrome, syncRouterConfig } = await import('./src/setup/config.ts');
+      const { ROUTER_CONFIG_PATH } = await import('./src/setup/music-source.ts');
       const { getSetupStatus, getSetupStatusSync } = await import('./src/setup/firstRun.ts');
+      // Boot order: the router's config.json, then the live connection.
+      await syncRouterConfig();
       await loadNavidromeConfig();
       assert.equal(NAVIDROME_ENV_ENABLED, false);
       assert.equal((await getSetupStatus()).needsSetup, ${expectSetup});
       assert.equal(getSetupStatusSync().needsSetup, ${expectSetup});
       if (!${expectSetup}) {
+        // Behind the router (the default) the navidrome source is handed this
+        // station's own connection...
+        const nav = await storedNavidrome();
+        const routed = JSON.parse(readFileSync(ROUTER_CONFIG_PATH, 'utf8')).sources.find((s) => s.plugin === 'navidrome');
+        assert.deepEqual(routed.config, { url: nav.url, user: nav.user, password: nav.password });
+        // ...and that connection authenticates, as direct mode and the failover use it.
+        Object.assign(config.navidrome, nav);
         const { getPlaylists } = await import('./src/music/subsonic.ts');
         assert.equal((await getPlaylists())[0].id, 'working');
       }

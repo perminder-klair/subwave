@@ -1,0 +1,324 @@
+/* Admin → Music sources → Plugins: the plugin bay. Rendered inside the router
+   console's `.console` (router/router.module.css), whose --rk-* tokens it
+   uses, so the bay and the Monitor share one rack, one phosphor and one set of
+   lamps in every theme. */
+
+/* ── module rack ─────────────────────────────────────────────────────────── */
+
+/* The bay's counts, in the rack panel's header. */
+.readout { display: flex; flex-wrap: wrap; gap: 4px; }
+.readout span {
+  padding: 3px 7px;
+  border: 1px solid var(--rk-sep-strong);
+  font-family: var(--rk-mono);
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.readout [data-tone="ok"] { border-color: var(--rk-green); color: var(--rk-green); }
+.readout [data-tone="bad"] { border-color: var(--danger); color: var(--danger); }
+
+.bay {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.module {
+  --mod-lamp: var(--rk-sep-strong);
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 0 0 12px;
+  border: 1px solid var(--ink);
+  background: var(--rk-card);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+  box-shadow: 3px 3px 0 color-mix(in oklab, var(--ink) 22%, transparent);
+}
+.module:hover { transform: translate(-1px, -1px); box-shadow: 4px 4px 0 color-mix(in oklab, var(--ink) 30%, transparent); }
+.module:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.module[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 3px; }
+.module[data-state="onair"] { --mod-lamp: var(--rk-green); }
+.module[data-state="fault"] { --mod-lamp: var(--danger); }
+.module[data-state="standby"] { background: color-mix(in oklab, var(--ink) 3%, var(--rk-card)); }
+
+/* Rack ears: a band across the top with the slot number and two mounting holes. */
+.ears {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--ink);
+  background: color-mix(in oklab, var(--ink) 6%, var(--rk-card));
+  font-family: var(--rk-mono);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+.module[data-state="fault"] .ears {
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--danger) 22%, var(--rk-card)) 0 7px, var(--rk-card) 7px 14px);
+}
+.hole {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border: 1px solid color-mix(in oklab, var(--ink) 60%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 40%, var(--rk-card), color-mix(in oklab, var(--ink) 70%, transparent));
+}
+.slot { flex: 1; }
+.led {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: var(--mod-lamp);
+}
+.module[data-state="onair"] .led { box-shadow: 0 0 8px var(--rk-green); }
+.module[data-state="fault"] .led { box-shadow: 0 0 8px var(--danger); animation: blink 1.1s steps(1) infinite; }
+.module[data-state="standby"] .led { background: transparent; }
+@keyframes blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0.2; } }
+
+.title { display: block; padding: 0 12px; }
+.title strong { display: block; font-family: var(--rk-display-font); font-size: 1.25rem; font-weight: 650; line-height: 1.05; letter-spacing: -0.02em; }
+.title code { display: block; margin-top: 4px; color: var(--muted); font-family: var(--rk-mono); font-size: 0.55rem; }
+
+.tags { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px; }
+.tags span, .tags b {
+  padding: 2px 5px;
+  border: 1px solid var(--ink);
+  font-family: var(--rk-mono);
+  font-size: 0.48rem;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.tags b { background: var(--ink); color: var(--bg); }
+.tags .warn { border-color: var(--danger); color: var(--danger); }
+
+/* Capability jacks: a patch field, lit where the module backs the op. */
+.jacks { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px 4px; padding: 10px 12px; margin: 0 12px; border: 1px solid var(--rk-sep-strong); background: color-mix(in oklab, var(--ink) 3%, transparent); }
+.jack { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+.socket {
+  display: block;
+  position: relative;
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in oklab, var(--ink) 55%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in oklab, var(--ink) 85%, transparent) 0 3px, transparent 3.5px);
+}
+.jack[data-on="true"] .socket { border-color: var(--rk-green); box-shadow: 0 0 6px color-mix(in oklab, var(--rk-green) 55%, transparent); background: radial-gradient(circle, var(--rk-green) 0 3px, transparent 3.5px); }
+.jack[data-on="unknown"] .socket { border-style: dashed; background: none; }
+.jack small { font-family: var(--rk-mono); font-size: 0.42rem; font-weight: 800; letter-spacing: 0.06em; color: var(--muted); }
+.jack[data-on="true"] small { color: var(--rk-green); }
+
+/* What it backs: one segment per Subsonic endpoint. */
+.strip { display: block; padding: 0 12px; }
+.strip > span:first-child { display: flex; gap: 2px; height: 9px; }
+.cell { display: block; flex: 1; border: 1px solid var(--rk-sep-strong); background: transparent; }
+.cell[data-cell="full"] { background: var(--rk-green); border-color: var(--rk-green); }
+.cell[data-cell="degraded"] { background: var(--rk-amber); border-color: var(--rk-amber); }
+.cell[data-cell="unsupported"] { background: var(--danger); border-color: var(--danger); }
+.strip small { display: block; margin-top: 5px; color: var(--muted); font-family: var(--rk-mono); font-size: 0.5rem; letter-spacing: 0.06em; }
+
+/* Settings as knobs. */
+.knobs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px; }
+.knob {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 7px 3px 4px;
+  border: 1px solid var(--rk-sep-strong);
+  border-radius: 999px;
+  font-family: var(--rk-mono);
+  font-size: 0.5rem;
+}
+.knob::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--ink);
+  border-radius: 50%;
+  background: conic-gradient(var(--ink) 0 12%, transparent 12% 100%);
+}
+.knob[data-required="true"] { border-color: var(--ink); font-weight: 800; }
+.knob svg { width: 9px; height: 9px; }
+.knobNote { display: block; padding: 0 12px; color: var(--muted); font-family: var(--rk-mono); font-size: 0.5rem; line-height: 1.5; }
+
+.faultText { display: block; margin: 0 12px; padding: 7px 9px; border: 1px solid var(--danger); color: var(--danger); font-family: var(--rk-mono); font-size: 0.55rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* The empty slot at the end of the rack. */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 300px;
+  padding: 20px;
+  border: 1px dashed color-mix(in oklab, var(--ink) 55%, transparent);
+  background: repeating-linear-gradient(135deg, color-mix(in oklab, var(--ink) 4%, transparent) 0 6px, transparent 6px 12px);
+  color: var(--muted);
+  font-family: var(--rk-mono);
+  text-align: center;
+}
+.empty b { font-size: 2.2rem; line-height: 1; color: color-mix(in oklab, var(--ink) 40%, transparent); }
+.empty strong { font-size: 0.6rem; letter-spacing: 0.16em; color: var(--ink); }
+.empty span { font-size: 0.52rem; line-height: 1.6; max-width: 22ch; }
+
+/* ── module inspector ───────────────────────────────────────────────────── */
+
+.inspector { display: grid; grid-template-columns: minmax(0, 1fr) 300px; border: 1px solid var(--ink); }
+.scope {
+  min-width: 0;
+  min-height: 360px;
+  padding: 16px 18px;
+  background: var(--rk-scope);
+  color: var(--rk-scope-ink);
+  background-image: radial-gradient(color-mix(in srgb, var(--rk-scope-ink) 9%, transparent) 1px, transparent 1px);
+  background-size: 16px 16px;
+  font-family: var(--rk-mono);
+  font-size: 11px;
+  line-height: 1.75;
+}
+.scopeHead { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--rk-scope-dim); font-size: 9px; letter-spacing: 0.14em; }
+.line { display: grid; grid-template-columns: 11ch minmax(0, 1fr); gap: 10px; }
+.line > span:first-child { color: var(--rk-scope-dim); }
+.line > span:last-child { overflow-wrap: anywhere; }
+.rule { margin: 8px 0; border-top: 1px dashed color-mix(in srgb, var(--rk-scope-ink) 30%, transparent); }
+.sub { color: var(--rk-scope-dim); letter-spacing: 0.12em; font-size: 9px; margin-bottom: 2px; }
+.row { display: grid; grid-template-columns: 2ch 22ch minmax(0, 1fr); gap: 8px; }
+.row[data-cell="degraded"] > span:first-child { color: #e2b45b; }
+.row[data-cell="unsupported"] > span:first-child, .err { color: #ee625a; }
+.row[data-cell="full"] > span:first-child { color: var(--rk-scope-ink); }
+.dim { color: var(--rk-scope-dim); }
+.cursor { display: inline-block; width: 7px; height: 13px; margin-left: 2px; vertical-align: -2px; background: var(--rk-scope-ink); animation: blink 1s steps(1) infinite; }
+
+.plate {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-left: 1px solid var(--ink);
+  background: var(--rk-card);
+}
+.meterBig { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--rk-sep-strong); }
+.meterBig > div { padding: 10px 8px; border-right: 1px solid var(--rk-sep-soft); font-family: var(--rk-mono); }
+.meterBig > div:last-child { border-right: 0; }
+.meterBig span { display: block; color: var(--muted); font-size: 0.48rem; letter-spacing: 0.1em; }
+.meterBig strong { display: block; margin-top: 4px; font-size: 1.35rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+.meterBig [data-tone="ok"] { color: var(--rk-green); }
+.meterBig [data-tone="warn"] { color: var(--rk-amber); }
+.meterBig [data-tone="bad"] { color: var(--danger); }
+
+/* An engraved spec plate. */
+.spec {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  background: linear-gradient(180deg, color-mix(in oklab, var(--ink) 4%, var(--rk-card)), var(--rk-card));
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--bg) 60%, transparent), inset 0 -1px 0 color-mix(in oklab, var(--ink) 18%, transparent);
+  font-family: var(--rk-mono);
+  font-size: 0.55rem;
+  line-height: 1.9;
+}
+.spec div { display: flex; justify-content: space-between; gap: 10px; border-bottom: 1px dotted var(--rk-sep-strong); }
+.spec div:last-child { border-bottom: 0; }
+.spec dt { color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+.spec dd { margin: 0; min-width: 0; overflow: hidden; font-weight: 800; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.plateActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+
+/* ── install a module ───────────────────────────────────────────────────── */
+
+.install { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.tapes { display: flex; flex-direction: column; gap: 12px; }
+/* Label-maker tape: embossed white capitals on black. */
+.tape {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 7px 14px;
+  background: #121212;
+  color: #f4f1ea;
+  font-family: var(--rk-mono);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.9), 0 -1px 0 rgba(255, 255, 255, 0.25);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 5px) 50%, 100% 100%, 0 100%, 5px 50%);
+}
+.tape:nth-child(odd) { transform: rotate(-0.6deg); }
+.tape:nth-child(even) { transform: rotate(0.5deg); margin-left: 14px; }
+.tape > span { min-width: 0; overflow-wrap: anywhere; }
+.tape b { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #f4f1ea; color: #121212; font-size: 0.6rem; text-shadow: none; }
+.tape code { color: #f2c200; text-transform: none; letter-spacing: 0.02em; }
+
+.term {
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--ink);
+  background: var(--rk-scope);
+  color: var(--rk-scope-ink);
+  font-family: var(--rk-mono);
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+.term .dim { color: var(--rk-scope-dim); }
+
+/* A hazard sticker. */
+.hazard {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px;
+  background: repeating-linear-gradient(45deg, #f2c200 0 12px, #121212 12px 24px);
+}
+.hazard > div {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #f4f1ea;
+  color: #121212;
+  font-family: var(--rk-mono);
+  font-size: 0.62rem;
+  line-height: 1.6;
+}
+.hazard svg { width: 22px; height: 22px; flex: none; }
+.hazard a { color: inherit; text-decoration: underline; }
+
+@media (max-width: 980px) {
+  .inspector { grid-template-columns: minmax(0, 1fr); }
+  .plate { border-left: 0; border-top: 1px solid var(--ink); }
+  .install { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .empty { min-height: 150px; }
+  .tape:nth-child(even) { margin-left: 0; }
+  .row { grid-template-columns: 2ch minmax(0, 1fr); }
+  .row > span:last-child { grid-column: 2; }
+  .line { grid-template-columns: 9ch minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .module[data-state="fault"] .led, .cursor { animation: none; }
+  .module, .module:hover { transition: none; transform: none; }
+}

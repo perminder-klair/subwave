@@ -602,13 +602,21 @@ export interface SceneReference {
 // ─── from controller/src/schemas/music-source.ts ─────────────────────────
 
 // Music-source selection (#692): which backend the station's Subsonic client
-// talks to. `navidrome` is the direct connection (setup-config.json's
-// `navidrome` block, unchanged); `router` sends every Subsonic call through the
-// SUB/WAVE music router, which answers from music-source plugins.
+// talks to. `router` sends every Subsonic call through the SUB/WAVE music
+// router, which answers from music-source plugins; `navidrome` is the direct
+// connection to the station's Navidrome, kept as an escape hatch and as the
+// automatic failover when the router is down (music/source-failover.ts).
 //
 // Lives in setup-config.json beside the Navidrome password (per station, 0600),
-// because plugin config carries secrets too. Absent → `navidrome`, so an
-// upgrade is byte-identical.
+// because plugin config carries secrets too. Absent → the router serving the
+// station's own Navidrome with its raw ids (DEFAULT_MUSIC_SELECTION): every
+// track id is what a direct connection published, so an upgrading station
+// moves behind the router with nothing to re-link.
+//
+// The built-in `navidrome` source has no settings of its own: it always plays
+// the station's Navidrome connection (setup-config.json's `navidrome` block,
+// env applied), injected when the router's config.json is written. One place
+// for those credentials, shared with direct mode and the failover.
 //
 // The router-status shapes mirror router/src/internal/routes.ts; change both
 // together. They are parsed leniently (.catch) because the router is a separate
@@ -623,6 +631,9 @@ export const MUSIC_PLUGIN_NAME_RE = /^[a-z][a-z0-9-]{1,31}$/;
 /** Most sources a merged set may hold. */
 export const MUSIC_SOURCES_MAX = 8;
 
+/** The built-in plugin that plays the station's own Navidrome connection. */
+export const STATION_NAVIDROME_PLUGIN = 'navidrome';
+
 export const musicConfigValueSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
 
 export const musicSourceEntrySchema = z.object({
@@ -634,18 +645,33 @@ export const musicSourceEntrySchema = z.object({
 
 export type MusicSourceEntry = z.infer<typeof musicSourceEntrySchema>;
 
-/** The saved selection, read leniently: a damaged block degrades to direct Navidrome. */
+export type MusicSelection = { mode: MusicMode; merge: boolean; sources: MusicSourceEntry[] };
+
+/** Absent or damaged → the router serving the station's own Navidrome, raw ids. */
+export const DEFAULT_MUSIC_SELECTION: MusicSelection = {
+  mode: 'router',
+  merge: false,
+  sources: [{ plugin: STATION_NAVIDROME_PLUGIN, config: {}, rawIds: true }],
+};
+
+/** The saved selection, read leniently: a damaged block degrades to the default. */
 export const musicSelectionSchema = z
   .object({
-    mode: z.enum(MUSIC_MODES).catch('navidrome'),
+    mode: z.enum(MUSIC_MODES).catch('router'),
     merge: z.boolean().catch(false),
     sources: z.array(musicSourceEntrySchema).max(MUSIC_SOURCES_MAX).catch([]),
   })
-  .catch({ mode: 'navidrome', merge: false, sources: [] });
+  .catch(DEFAULT_MUSIC_SELECTION);
 
-export type MusicSelection = z.infer<typeof musicSelectionSchema>;
+/** The station's Navidrome alone, behind the router, publishing its own ids: the default. */
+export function isStationNavidromeOnly(sel: { mode: MusicMode; sources: readonly { plugin: string; rawIds?: boolean }[] }): boolean {
+  return sel.mode === 'router' && sel.sources.length === 1 && sel.sources[0]!.plugin === STATION_NAVIDROME_PLUGIN && sel.sources[0]!.rawIds !== false;
+}
 
-export const DEFAULT_MUSIC_SELECTION: MusicSelection = { mode: 'navidrome', merge: false, sources: [] };
+/** Whether the station's Navidrome connection is part of what it plays (direct, or as a router source). */
+export function usesStationNavidrome(sel: { mode: MusicMode; sources: readonly { plugin: string }[] }): boolean {
+  return sel.mode === 'navidrome' || sel.sources.some((s) => s.plugin === STATION_NAVIDROME_PLUGIN);
+}
 
 /**
  * POST /settings/music-source and the onboarding `music` block. A secret left
@@ -735,6 +761,9 @@ export const musicPluginInfoSchema = z.object({
   // What the plugin supported the last time the router built it (active or
   // tested); null when it has not been built since the router started.
   capabilities: musicCapabilitiesSchema.nullable().catch(null),
+  // For development and tests only (the demo library): hidden from operators
+  // unless already selected or SUBWAVE_DEV_PLUGINS=1.
+  devOnly: z.boolean().catch(false),
 });
 
 export type MusicPluginInfo = z.infer<typeof musicPluginInfoSchema>;
@@ -886,7 +915,10 @@ export function musicSelectionIdentity(
   sel: { mode: MusicMode; merge?: boolean; sources: readonly MusicIdentitySource[] },
   plugins: readonly Pick<MusicPluginInfo, 'name' | 'config'>[] = [],
 ): string {
-  if (sel.mode !== 'router') return 'navidrome';
+  // The station's Navidrome behind the router with raw ids publishes exactly
+  // the ids a direct connection does, so moving between the two (the default,
+  // the escape hatch, the failover) is never a switch.
+  if (sel.mode !== 'router' || isStationNavidromeOnly(sel)) return 'navidrome';
   return JSON.stringify(
     sel.sources.map((s) => {
       const keys = musicIdentityKeys(s, plugins.find((p) => p.name === s.plugin))

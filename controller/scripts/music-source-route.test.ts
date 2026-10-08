@@ -33,9 +33,11 @@ const { tagger, switchBlocksMessage } = await import('../src/broadcast/tagger.js
 const { router: musicRoutes } = await import('../src/routes/settings/music-source.js');
 const { router: coreRoutes } = await import('../src/routes/settings/core.js');
 
-// Boot: the controller provisions the router's credentials, then loads the connection.
-await ms.writeRouterConfig(ms.readSelection(await setupConfig.loadSetupConfig()));
+// An upgraded station: a Navidrome connection and no music block. Boot writes
+// the router's config.json (its credentials, and the station's Navidrome as its
+// default source), then loads the live connection.
 await setupConfig.saveSetupConfig({ navidrome: { url: 'http://navidrome.test:4533', user: 'nd-user', pass: 'nd-pass' } });
+await setupConfig.syncRouterConfig();
 await setupConfig.loadNavidromeConfig();
 // Hold the tagger's slot so a switch reports the carry-across walk as pending
 // instead of spawning a real one from inside a test.
@@ -71,14 +73,21 @@ test('the music-source routes are admin-only', async () => {
   assert.equal(res.status, 401);
 });
 
-test('GET reports direct Navidrome and the router inventory', async () => {
+test('GET reports the default: the station\'s Navidrome behind the router, and the inventory', async () => {
   const { status, body } = await call('GET', '/settings/music-source');
   assert.equal(status, 200);
-  assert.equal(body.mode, 'navidrome');
+  assert.equal(body.mode, 'router');
+  assert.deepEqual(body.sources, [{ plugin: 'navidrome', config: {}, rawIds: true, secretsSet: [] }]);
   assert.equal(body.routerError, null);
-  assert.deepEqual(body.router.active, [], 'the router idles in navidrome mode');
+  assert.deepEqual(body.router.active.map((a: any) => a.plugin), ['navidrome'], 'the router serves it');
+  assert.equal(config.navidrome.url, routerProc.url, 'the live connection is the router');
+  // The station connection it plays, without the password.
+  assert.deepEqual({ ...body.navidrome, env: undefined }, { url: 'http://navidrome.test:4533', user: 'nd-user', passSet: true, env: undefined });
+  assert.equal(body.failover.active, false);
+  assert.equal(body.failover.eligible, true);
+  // The demo library is for development: hidden from the operator.
   const names = body.router.plugins.map((p: any) => p.name).sort();
-  assert.deepEqual(names, ['jellyfin', 'mock', 'navidrome', 'plex']);
+  assert.deepEqual(names, ['jellyfin', 'navidrome', 'plex']);
   const jf = body.router.plugins.find((p: any) => p.name === 'jellyfin');
   assert.ok(jf.config.some((f: any) => f.key === 'apiKey' && f.type === 'secret'));
 });
@@ -93,8 +102,8 @@ test('a save refuses a draft the router could not serve, and changes nothing', a
   res = await call('POST', '/settings/music-source', { mode: 'router', sources: [{ plugin: 'nope-plugin' }] });
   assert.equal(res.status, 400);
   assert.match(res.body.error, /no music-source plugin named 'nope-plugin'/);
-  assert.equal(config.navidrome.url, 'http://navidrome.test:4533');
-  assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).mode, 'navidrome');
+  assert.equal(config.navidrome.url, routerProc.url);
+  assert.deepEqual(ms.readSelection(await setupConfig.loadSetupConfig()).sources.map((s) => s.plugin), ['navidrome']);
 });
 
 test('switching to the router makes it the live Subsonic connection', async () => {
@@ -217,7 +226,7 @@ test('a draft test reports health without saving it', async () => {
   assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!.plugin, 'jellyfin', 'nothing was saved');
 });
 
-test('the direct Navidrome section saves without hijacking a router-mode station', async () => {
+test('the Navidrome connection is kept on file while the station plays other sources', async () => {
   const res = await call('POST', '/settings/navidrome', { url: 'http://navidrome2.test:4533' });
   assert.equal(res.status, 200);
   assert.deepEqual(res.body, { ok: true, live: false });
@@ -235,7 +244,7 @@ test('rescan picks up a plugin dropped into state/router/plugins', async () => {
   assert.ok(res.body.router.plugins.some((p: any) => p.name === 'good' && p.error === null && !p.builtin));
 });
 
-test('switching back to Navidrome restores the stored connection and idles the router', async () => {
+test('going direct to Navidrome restores the stored connection and idles the router', async () => {
   const res = await call('POST', '/settings/music-source', { mode: 'navidrome' });
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(config.navidrome.url, 'http://navidrome2.test:4533');
@@ -244,6 +253,26 @@ test('switching back to Navidrome restores the stored connection and idles the r
   assert.deepEqual(routerConfig.sources, []);
   // The router sources are kept on file for next time.
   assert.equal(ms.readSelection(await setupConfig.loadSetupConfig()).sources[0]!.plugin, 'jellyfin');
+});
+
+test('back behind the router, the station\'s Navidrome is the same library, and its connection saves live', async () => {
+  const markerPath = path.join(stateRoot, 'music-source-switch.json');
+  const marker = () => (existsSync(markerPath) ? readFileSync(markerPath, 'utf8') : null);
+  const before = marker();
+  let res = await call('POST', '/settings/music-source', { mode: 'router', sources: [{ plugin: 'navidrome', config: {} }] });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.switched, false, 'direct and behind the router publish the same ids');
+  assert.equal(marker(), before, 'no new switch marker');
+  assert.equal(config.navidrome.url, routerProc.url);
+  const routed = () => JSON.parse(readFileSync(path.join(routerDir, 'config.json'), 'utf8')).sources;
+  assert.deepEqual(routed(), [{ plugin: 'navidrome', config: { url: 'http://navidrome2.test:4533', user: 'nd-user', password: 'nd-pass' }, rawIds: true }]);
+
+  // A new login for the station's Navidrome reaches the router at once.
+  res = await call('POST', '/settings/navidrome', { user: 'nd-user-2' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.deepEqual(res.body, { ok: true });
+  assert.equal(routed()[0].config.user, 'nd-user-2');
+  assert.equal(config.navidrome.url, routerProc.url, 'still the router');
 });
 
 test('the booth line names the track blocks a switch could not place', () => {

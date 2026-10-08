@@ -1,10 +1,6 @@
-import type { Metadata } from 'next';
-import RouterPanel from '../../../components/admin/router/RouterPanel';
+import { redirect } from 'next/navigation';
 
-export const metadata: Metadata = {
-  title: 'Music router',
-};
-
+// The router console became the Monitor tab of Admin → Music sources.
 export default function AdminRouterPage() {
-  return <RouterPanel />;
+  redirect('/admin/sources?tab=monitor');
 }

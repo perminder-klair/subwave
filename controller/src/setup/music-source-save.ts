@@ -10,12 +10,16 @@ import { clearServerCaches } from '../music/subsonic.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { queue } from '../broadcast/queue.js';
 import { startReconcile, tagger } from '../broadcast/tagger.js';
-import { loadSetupConfig, saveSetupConfig } from './config.js';
+import { resetFailover } from '../music/source-failover.js';
+import { applyNavidromeToLiveConfig, loadSetupConfig, saveSetupConfig, syncRouterConfig } from './config.js';
 import { resolveNavidrome } from './navidrome-policy.js';
 import {
+  currentSelection,
   keepStoredSecrets,
   keptSecretKeys,
   markSourceSwitch,
+  navidromeComplete,
+  noteStationNavidrome,
   readRouterAuth,
   routerConnection,
   routerReload,
@@ -25,11 +29,24 @@ import {
   writeRouterConfig,
 } from './music-source.js';
 import {
+  STATION_NAVIDROME_PLUGIN,
   missingMusicFields,
   musicSelectionPatchSchema,
+  usesStationNavidrome,
   type MusicSelection,
   type RouterStatus,
 } from '../schemas/music-source.js';
+
+const NAVIDROME_MISSING = 'Navidrome needs a server address, username and password — set the Navidrome connection first';
+
+type NavidromeCredentials = { url?: string; user?: string; pass?: string };
+
+/** The station's Navidrome connection, with credentials about to be saved in the same request laid over it. */
+async function stationNavidrome(pending?: NavidromeCredentials) {
+  const stored = (await loadSetupConfig()).navidrome ?? {};
+  const typed = Object.fromEntries(Object.entries(pending ?? {}).filter(([, v]) => typeof v === 'string' && v.trim() !== ''));
+  return resolveNavidrome({ ...stored, ...typed }, NAVIDROME_ENV_ENABLED);
+}
 
 /**
  * Validate a draft selection against the router's plugin manifests. Shared by
@@ -38,12 +55,16 @@ import {
 export async function prepareSelection(
   body: unknown,
   prev: MusicSelection,
+  /** Navidrome credentials the same request saves first (the onboarding wizard). */
+  pendingNavidrome?: NavidromeCredentials,
 ): Promise<{ ok: true; selection: MusicSelection; status: RouterStatus | null } | { ok: false; code: number; error: string }> {
   const parsed = musicSelectionPatchSchema.safeParse(body);
   if (!parsed.success) return { ok: false, code: 400, error: firstMessage(parsed.error) };
   const draft = parsed.data;
+  const nav = await stationNavidrome(pendingNavidrome);
+  if (usesStationNavidrome(draft) && !navidromeComplete(nav)) return { ok: false, code: 400, error: NAVIDROME_MISSING };
   if (draft.mode === 'navidrome') {
-    // Switching back keeps the router sources on file for next time.
+    // Going direct keeps the router sources on file for next time.
     return { ok: true, selection: { mode: 'navidrome', merge: prev.merge, sources: prev.sources }, status: null };
   }
   let status: RouterStatus;
@@ -52,16 +73,18 @@ export async function prepareSelection(
   } catch (err: any) {
     return { ok: false, code: 503, error: err?.message || 'the music router is not reachable' };
   }
-  const sources = draft.sources.map((s) => ({
-    ...s,
-    // A Navidrome library moving behind the router keeps the ids the station
-    // already stores, unless the operator chose otherwise.
-    rawIds: s.rawIds ?? (s.plugin === 'navidrome' ? true : undefined),
-  }));
+  const sources = draft.sources.map((s) =>
+    s.plugin === STATION_NAVIDROME_PLUGIN
+      ? // The station's Navidrome: its settings are the station connection, and
+        // it keeps the ids the station already stores unless told otherwise.
+        { ...s, config: {}, rawIds: s.rawIds ?? true }
+      : s,
+  );
   for (const entry of sources) {
     const plugin = status.plugins.find((p) => p.name === entry.plugin);
     if (!plugin) return { ok: false, code: 400, error: `no music-source plugin named '${entry.plugin}' is installed in the router` };
     if (plugin.error) return { ok: false, code: 400, error: `${plugin.label} cannot load: ${plugin.error}` };
+    if (entry.plugin === STATION_NAVIDROME_PLUGIN) continue; // checked above, against the station connection
     const missing = missingMusicFields(entry, plugin, keptSecretKeys(entry, prev.sources, plugin));
     if (missing.length) {
       const labels = missing.map((k) => plugin.config.find((f) => f.key === k)?.label ?? k);
@@ -93,7 +116,8 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
   /** started: the carry-across walk is running now; pending: it waits for the running tagger. */
   reconcile: 'started' | 'pending' | null;
 }> {
-  const auth = await writeRouterConfig(selection);
+  const nav = await stationNavidrome();
+  const auth = await writeRouterConfig(selection, nav);
 
   let router: RouterStatus | null = null;
   let routerError: string | null = null;
@@ -105,7 +129,7 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
     if (selection.mode === 'router') routerError = err?.message || 'router unreachable';
   }
   if (routerError) {
-    await writeRouterConfig(prev);
+    await writeRouterConfig(prev, nav);
     // Best effort: the router also re-reads config.json on its own poll.
     router = await routerReload().catch(() => router);
     return { router, routerError, switched: false, reconcile: null };
@@ -113,13 +137,11 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
 
   await saveSetupConfig({ music: selection });
   setCurrentSelection(selection);
-
-  if (selection.mode === 'router') {
-    Object.assign(config.navidrome, routerConnection(auth ?? readRouterAuth()));
-  } else {
-    const sc = await loadSetupConfig();
-    Object.assign(config.navidrome, resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED));
-  }
+  noteStationNavidrome(nav);
+  // The save applies its own connection; a failover in progress ends here and
+  // the monitor re-decides from the new selection.
+  resetFailover();
+  Object.assign(config.navidrome, selection.mode === 'router' ? routerConnection(auth ?? readRouterAuth()) : nav);
 
   const from = selectionIdentity(prev, plugins);
   const to = selectionIdentity(selection, plugins);
@@ -150,6 +172,30 @@ export async function applySelection(selection: MusicSelection, prev: MusicSelec
     }
   }
   return { router, routerError: null, switched, reconcile };
+}
+
+/**
+ * The station's Navidrome connection was just saved (Admin → Music sources, the
+ * wizard, the CLI): make it live wherever it plays. Direct mode applies it to
+ * the Subsonic client; behind the router the navidrome source is rebuilt from
+ * it. Shared by every writer of that connection so the live apply cannot drift.
+ * Returns whether the station is now playing it.
+ */
+export async function applyNavidromeConnection(submitted: { url?: string; user?: string; pass?: string }): Promise<boolean> {
+  const sel = currentSelection();
+  if (sel.mode !== 'router') {
+    applyNavidromeToLiveConfig(submitted);
+    noteStationNavidrome(await stationNavidrome());
+  } else {
+    await syncRouterConfig();
+    if (!usesStationNavidrome(sel)) return false;
+    // Best effort: the router also notices the rewritten config.json on its own poll.
+    await routerReload().catch(() => null);
+  }
+  clearServerCaches();
+  clearNavidromeCache();
+  clearPoolCache();
+  return true;
 }
 
 function describe(sel: MusicSelection, plugins: RouterStatus['plugins']): string {

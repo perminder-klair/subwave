@@ -3,20 +3,30 @@
 // foreign item model — this is a Subsonic client: the router in reverse. Most
 // ops are one call whose parameters already match.
 //
-// You only need this behind the router to MERGE a Navidrome library with
-// another source; a station on Navidrome alone talks to it directly. When it
-// does sit behind the router, the controller sets `rawIds`, so the ids the
-// station already stores keep resolving.
+// It is the station's default source: a station on Navidrome reaches it
+// through the router, and the controller sets `rawIds`, so the ids the station
+// already stores keep resolving.
 //
 // Subsonic reports failure inside an HTTP 200, so call() reads the envelope's
 // status rather than resp.status; a JSON body on the binary endpoints means the
 // "audio" is an error message, which the router's media guard refuses.
+//
+// Sonic similarity is the one op that depends on the server rather than on
+// this code: getSonicSimilarTracks exists only when the server advertises the
+// OpenSubsonic `sonicSimilarity` extension (Navidrome >= 0.62 with a
+// similarity plugin). The router reads capabilities off the object the factory
+// returns, so the factory asks once, before it resolves, and defines
+// `sonicSimilar` only on a yes.
 
 import crypto from 'node:crypto';
 import { defineSource, isVariousArtists, type Album, type Artist, type ArtistRef, type Playlist, type ReplayGain, type Song } from '../../sdk/index.js';
 
 const NOT_FOUND = 70;
 const UNIMPLEMENTED = [0, 30];
+// The extensions probe runs inside construction, which the registry gives 15s
+// before refusing the whole selection (registry.ts CONSTRUCT_TIMEOUT_MS), so it
+// gets a third of that and is a "no" when it runs out.
+const EXTENSIONS_PROBE_MS = Number(process.env.ROUTER_NAVIDROME_PROBE_MS) || 5_000;
 
 class SubsonicError extends Error {
   constructor(
@@ -122,7 +132,30 @@ const refs = (v: SubRef[] | undefined): ArtistRef[] | undefined => {
 
 const dateOf = (d: SubDateParts | undefined) => (d?.year ? { year: d.year, month: d.month ?? 1, day: d.day ?? 1 } : undefined);
 
-export default defineSource((ctx) => {
+// getSonicSimilarTracks wraps each song in a `sonicMatch` entry
+// ({ entry: Child, similarity }), nested under `sonicSimilarTracks` or at the
+// top of the envelope, and some servers inline the Child itself. The same three
+// shapes the controller tolerates (music/subsonic.ts sonicSimilarSongs).
+interface SonicMatch extends Partial<SubChild> {
+  entry?: SubChild;
+  song?: SubChild;
+  similarity?: number;
+}
+
+interface SonicBody {
+  sonicMatch?: SonicMatch[];
+  sonicSimilarTracks?: { sonicMatch?: SonicMatch[] };
+}
+
+function sonicChildren(body: SonicBody | undefined): SubChild[] {
+  const matches = body?.sonicMatch ?? body?.sonicSimilarTracks?.sonicMatch ?? [];
+  if (!Array.isArray(matches)) return [];
+  return matches
+    .map((m) => m?.entry ?? m?.song ?? m)
+    .filter((c): c is SubChild => typeof c?.id === 'string' && c.id !== '');
+}
+
+export default defineSource(async (ctx) => {
   const base = String(ctx.config.url ?? '').replace(/\/+$/, '');
   const user = String(ctx.config.user ?? '');
   const pass = String(ctx.config.password ?? '');
@@ -144,8 +177,8 @@ export default defineSource((ctx) => {
   // Auth and permission failures throw rather than degrading to an empty
   // library: health derives "unreachable" from a throw, and a wrong password
   // must read as broken, not as a library with no songs.
-  async function call<T>(endpoint: string, params: Params = {}): Promise<T> {
-    const resp = await ctx.fetch(url(`/rest/${endpoint}`, params));
+  async function call<T>(endpoint: string, params: Params = {}, init: RequestInit = {}): Promise<T> {
+    const resp = await ctx.fetch(url(`/rest/${endpoint}`, params), init);
     if (!resp.ok) throw new Error(`Navidrome ${endpoint} → HTTP ${resp.status}`);
     const body = (await resp.json()) as { 'subsonic-response'?: { status?: string; error?: { code?: number; message?: string } } };
     const env = body['subsonic-response'];
@@ -242,7 +275,35 @@ export default defineSource((ctx) => {
     return body?.playlist && playlistFrom(body.playlist);
   }
 
+  // Any failure is a "no", never a failed build: the library still serves, and
+  // the next rebuild (a save, a Rescan, a router restart) asks again. A server
+  // that answered is quietly a no (one older than OpenSubsonic refuses the
+  // endpoint); one that could not be reached is worth a line, since that no
+  // lasts until the rebuild.
+  async function advertisesSonicSimilarity(): Promise<boolean> {
+    try {
+      const body = await call<{ openSubsonicExtensions?: unknown }>('getOpenSubsonicExtensions', {}, { signal: AbortSignal.timeout(EXTENSIONS_PROBE_MS) });
+      const exts = Array.isArray(body.openSubsonicExtensions) ? (body.openSubsonicExtensions as unknown[]) : [];
+      return exts.some((e) => (typeof e === 'string' ? e : (e as { name?: unknown } | null)?.name) === 'sonicSimilarity');
+    } catch (err) {
+      if (!(err instanceof SubsonicError)) {
+        ctx.log.warn(`could not read the server's OpenSubsonic extensions (${err instanceof Error ? err.message : String(err)}); sonic similarity is off until this source is rebuilt`);
+      }
+      return false;
+    }
+  }
+
+  // Audio-based neighbours: a different endpoint, and a different picker
+  // signal, from getSimilarSongs2's Last.fm ones — never answered by it.
+  async function sonicSimilar(id: string, count: number): Promise<Song[]> {
+    return sonicChildren(await find<SonicBody>('getSonicSimilarTracks', { id, count })).map(song);
+  }
+
+  const sonic = await advertisesSonicSimilarity();
+
   return {
+    ...(sonic ? { sonicSimilar } : {}),
+
     async song(id) {
       const body = await find<{ song?: SubChild }>('getSong', { id });
       return body?.song && song(body.song);

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scanPlugins } from '../src/host/loader.js';
-import { resolveConfig } from '../src/host/manifest.js';
+import { parseManifest, resolveConfig } from '../src/host/manifest.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const BUILTIN = resolve(here, '../src/sources');
@@ -22,6 +22,16 @@ test('built-ins load without errors', async () => {
     assert.equal(p.builtin, true);
     assert.equal(typeof p.factory, 'function');
   }
+});
+
+test('devOnly is an optional boolean in the manifest, and only the demo library sets it', async () => {
+  const plugins = await scanPlugins(BUILTIN, '/nonexistent');
+  const flags = Object.fromEntries(plugins.map((p) => [p.name, p.manifest?.devOnly === true]));
+  assert.deepEqual(flags, { jellyfin: false, mock: true, navidrome: false, plex: false });
+  const base = { name: 'x-source', label: 'X', version: '1.0.0', apiVersion: 1, idPrefix: 'xs' };
+  assert.equal(parseManifest(base).devOnly, undefined);
+  assert.equal(parseManifest({ ...base, devOnly: true }).devOnly, true);
+  assert.throws(() => parseManifest({ ...base, devOnly: 'yes' }), /devOnly/);
 });
 
 test('broken third-party plugins are reported with a reason', async () => {

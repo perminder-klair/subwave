@@ -1,8 +1,8 @@
 # SUB/WAVE music router
 
-Serves the Subsonic API the SUB/WAVE controller already speaks, and answers it from **music-source plugins**: Jellyfin, Plex, Navidrome, a generated demo library, and anything installed in `state/router/plugins/`. It is what lets a station play from something other than Navidrome without the controller, Liquidsoap or the analyzer knowing.
+Serves the Subsonic API the SUB/WAVE controller already speaks, and answers it from **music-source plugins**: Navidrome, Jellyfin, Plex, a generated demo library (for development), and anything installed in `state/router/plugins/`. It is what lets a station play from Navidrome, something else, or several libraries at once without the controller, Liquidsoap or the analyzer knowing.
 
-It ships as the `router` service in every compose file and idles until **Admin → Settings → Music source** selects it. See [`docs/internals/music-sources.md`](../docs/internals/music-sources.md) for how it fits, and [`docs/music-source-plugins.md`](../docs/music-source-plugins.md) to write a plugin.
+It ships as the `router` service in every compose file, and every station plays through it by default: its Navidrome, served by the built-in navidrome plugin with Navidrome's own track ids. Sources are chosen in **Admin → Music sources**. If the router is down while a station plays its Navidrome alone, the controller falls back to a direct connection until it answers. See [`docs/internals/music-sources.md`](../docs/internals/music-sources.md) for how it fits, and [`docs/music-source-plugins.md`](../docs/music-source-plugins.md) to write a plugin.
 
 ## Run it
 
@@ -36,6 +36,7 @@ The controller writes `state/router/config.json` (credentials and the active sta
 | `ROUTER_POLL_MS` | `2000` | config poll |
 | `ROUTER_OP_TIMEOUT_MS` | `25000` | per plugin op; under the controller's 30s |
 | `ROUTER_MEDIA_TIMEOUT_MS` | `30000` | time for a stream to start answering |
+| `ROUTER_NAVIDROME_PROBE_MS` | `5000` | the navidrome source asking its server for OpenSubsonic extensions while it is built; running out means no sonic similarity |
 | `ROUTER_LOG_REQUESTS` | — | `1` logs every Subsonic request |
 | `ROUTER_SOURCE`, `ROUTER_USER`, `ROUTER_PASS` | — | dev/test only: used when `config.json` has no sources / no credentials |
 | `JELLYFIN_*`, `PLEX_*`, `SONG_MIN_SEC`, … | — | per-field overrides declared in each plugin's manifest (`env`) |
