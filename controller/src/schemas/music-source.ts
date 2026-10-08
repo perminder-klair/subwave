@@ -130,6 +130,9 @@ export const musicPluginInfoSchema = z.object({
   config: z.array(musicConfigFieldSchema).catch([]),
   envLocked: z.array(z.string()).catch([]),
   error: z.string().nullable().catch(null),
+  // What the plugin supported the last time the router built it (active or
+  // tested); null when it has not been built since the router started.
+  capabilities: musicCapabilitiesSchema.nullable().catch(null),
 });
 
 export type MusicPluginInfo = z.infer<typeof musicPluginInfoSchema>;
@@ -144,6 +147,18 @@ export const musicActiveSourceSchema = z.object({
   health: musicHealthSchema,
 });
 
+// Which optional op each Subsonic endpoint leans on (router subsonic/coverage.ts),
+// for the admin service matrix.
+export const musicEndpointCoverageSchema = z.object({
+  endpoint: z.string(),
+  group: z.string().catch('Other'),
+  needs: musicCapabilitiesSchema.keyof().nullable().catch(null),
+  whenMissing: z.enum(['degraded', 'unsupported']).nullable().catch(null),
+  feature: z.string().optional(),
+});
+
+export type MusicEndpointCoverage = z.infer<typeof musicEndpointCoverageSchema>;
+
 export const routerStatusSchema = z.object({
   router: z.object({ version: z.string(), apiVersion: z.number() }),
   configured: z.boolean().catch(false),
@@ -151,6 +166,9 @@ export const routerStatusSchema = z.object({
   configError: z.string().nullable().catch(null),
   plugins: z.array(musicPluginInfoSchema).catch([]),
   active: z.array(musicActiveSourceSchema).catch([]),
+  // What the handlers see: the one active source, or the merged set (union of capabilities).
+  serving: z.object({ name: z.string(), label: z.string(), capabilities: musicCapabilitiesSchema }).nullable().catch(null),
+  endpoints: z.array(musicEndpointCoverageSchema).catch([]),
 });
 
 export type RouterStatus = z.infer<typeof routerStatusSchema>;
@@ -166,6 +184,47 @@ export const routerTestResultSchema = z.object({
 });
 
 export type RouterTestResult = z.infer<typeof routerTestResultSchema>;
+
+// --- router activity (GET /internal/activity on the router) -----------------------
+// The admin Music router page's Signal path monitor: recent Subsonic requests
+// and the source calls each made. Mirrors router/src/host/activity.ts, which
+// never records a query string, id or credential.
+
+export const routerActivityCallSchema = z.object({
+  source: z.string(),
+  op: z.string(),
+  ms: z.number().nullable().catch(null),
+  // `unsupported`: the source lacks the op and the handler degraded around it.
+  state: z.enum(['pending', 'ok', 'error', 'unsupported']).catch('error'),
+});
+
+export type RouterActivityCall = z.infer<typeof routerActivityCallSchema>;
+
+export const routerActivityRequestSchema = z.object({
+  id: z.string(),
+  endpoint: z.string(),
+  /** controller | liquidsoap | analyzer, or the caller's user-agent product name. */
+  client: z.string().catch('unknown'),
+  at: z.number(),
+  ms: z.number().nullable().catch(null),
+  state: z.enum(['pending', 'ok', 'error']).catch('error'),
+  error: z.string().optional(),
+  calls: z.array(routerActivityCallSchema).catch([]),
+});
+
+export type RouterActivityRequest = z.infer<typeof routerActivityRequestSchema>;
+
+export const routerActivitySchema = z.object({
+  /** Changes when the router restarts. */
+  session: z.string(),
+  now: z.number(),
+  since: z.number().catch(0),
+  capacity: z.number().catch(60),
+  totals: z.object({ requests: z.number(), failed: z.number() }).catch({ requests: 0, failed: 0 }),
+  requests: z.array(routerActivityRequestSchema).catch([]),
+});
+
+export type RouterActivity = z.infer<typeof routerActivitySchema>;
 
 /**
  * Required fields a draft source still lacks, given its plugin's manifest.

@@ -10,6 +10,7 @@ import express, { type Router } from 'express';
 import { z } from 'zod';
 import { SOURCE_API_VERSION, type ConfigField } from '../sdk/types.js';
 import { sourceEntrySchema } from '../config.js';
+import { activitySnapshot } from '../host/activity.js';
 import { describe, probe, type Health } from '../host/health.js';
 import { resolveConfig } from '../host/manifest.js';
 import {
@@ -19,12 +20,15 @@ import {
   configError,
   credentials,
   currentConfig,
+  getSource,
+  lastSeenCapabilities,
   plugins,
   refreshIfChanged,
   rescan,
 } from '../host/registry.js';
 import type { Capabilities } from '../host/types.js';
 import { checkBasic } from '../subsonic/auth.js';
+import { ENDPOINT_COVERAGE, type EndpointCoverage } from '../subsonic/coverage.js';
 import { ROUTER_VERSION } from '../subsonic/respond.js';
 
 export interface PluginInfo {
@@ -39,6 +43,8 @@ export interface PluginInfo {
   config: ConfigField[];
   envLocked: string[];
   error: string | null;
+  /** From the last time this plugin was built (active or tested); null if not since the router started. */
+  capabilities: Capabilities | null;
 }
 
 export interface ActiveInfo {
@@ -58,6 +64,10 @@ export interface RouterStatus {
   configError: string | null;
   plugins: PluginInfo[];
   active: ActiveInfo[];
+  /** What the handlers see: the one active source, or the merged set (its capabilities are the union). */
+  serving: { name: string; label: string; capabilities: Capabilities } | null;
+  /** Which optional op each Subsonic endpoint leans on (subsonic/coverage.ts). */
+  endpoints: EndpointCoverage[];
 }
 
 function pluginInfos(): PluginInfo[] {
@@ -75,11 +85,13 @@ function pluginInfos(): PluginInfo[] {
       config: m?.config ?? [],
       envLocked: m ? resolveConfig(m, {}).envLocked : [],
       error: p.error ?? null,
+      capabilities: m ? lastSeenCapabilities(m.name) : null,
     };
   });
 }
 
 export async function status(): Promise<RouterStatus> {
+  const serving = getSource();
   const active = await Promise.all(
     activeEntries().map(async (e): Promise<ActiveInfo> => ({
       plugin: e.plugin,
@@ -98,6 +110,8 @@ export async function status(): Promise<RouterStatus> {
     configError: configError() ?? null,
     plugins: pluginInfos(),
     active,
+    serving: serving ? { name: serving.name, label: serving.label, capabilities: serving.capabilities } : null,
+    endpoints: ENDPOINT_COVERAGE,
   };
 }
 
@@ -118,6 +132,12 @@ export function internalRoutes(): Router {
 
   router.get('/status', async (_req, res) => {
     res.json(await status());
+  });
+
+  // The admin Signal path monitor: recent /rest requests and the source calls
+  // each made. Never a query string, id or credential (host/activity.ts).
+  router.get('/activity', (_req, res) => {
+    res.set('cache-control', 'no-store').json(activitySnapshot());
   });
 
   router.post('/reload', async (_req, res) => {
