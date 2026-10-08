@@ -17,6 +17,7 @@ const jellyfin: MusicPluginInfo = {
   homepage: null,
   envLocked: [],
   error: null,
+  capabilities: null,
   config: [
     { key: 'url', label: 'Server URL', type: 'url', required: true },
     { key: 'apiKey', label: 'API key', type: 'secret', required: true },

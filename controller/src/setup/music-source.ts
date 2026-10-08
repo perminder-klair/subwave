@@ -24,11 +24,13 @@ import {
   DEFAULT_MUSIC_SELECTION,
   musicSecretKeys,
   musicSelectionSchema,
+  routerActivitySchema,
   routerStatusSchema,
   routerTestResultSchema,
   type MusicPluginInfo,
   type MusicSelection,
   type MusicSourceEntry,
+  type RouterActivity,
   type RouterStatus,
   type RouterTestResult,
 } from '../schemas/music-source.js';
@@ -302,6 +304,11 @@ export async function routerStatus(): Promise<RouterStatus> {
 /** Re-read config.json and rescan plugins now, rather than on the router's next poll. */
 export async function routerReload(): Promise<RouterStatus> {
   return routerStatusSchema.parse(await routerFetch('/reload', { method: 'POST' }));
+}
+
+/** The router's recent Subsonic requests, for the admin Signal path monitor. */
+export async function routerActivity(): Promise<RouterActivity> {
+  return routerActivitySchema.parse(await routerFetch('/activity'));
 }
 
 export async function routerTest(entry: MusicSourceEntry): Promise<RouterTestResult> {

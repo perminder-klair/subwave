@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import express from 'express';
 import { HOST, PORT, POLL_MS, configStamp } from './config.js';
+import { markRequestFailed, trackRequest } from './host/activity.js';
 import { configError, configStampSeen, getSource, refreshIfChanged, reloadConfig, rescan } from './host/registry.js';
 import { internalRoutes } from './internal/routes.js';
 import { checkAuth } from './subsonic/auth.js';
@@ -34,47 +35,53 @@ export function createApp(): express.Express {
   // Subsonic accepts GET and POST, and endpoint names with a legacy `.view` suffix.
   app.all('/rest/:endpoint', express.urlencoded({ extended: false, limit: '1mb' }), async (req, res) => {
     const endpoint = String(req.params.endpoint).replace(/\.view$/, '');
-    // formPost: a POSTed form carries the same params as a query string.
-    if (req.method === 'POST' && req.body && typeof req.body === 'object') {
-      Object.defineProperty(req, 'query', { value: { ...(req.query as object), ...(req.body as object) } });
-    }
-    const binary = BINARY_ENDPOINTS.has(endpoint);
-    let authErr = checkAuth(req);
-    if (authErr && (await refreshIfChanged())) authErr = checkAuth(req);
-    const src = getSource();
-    if (authErr) return respondError(req, res, src?.name, authErr.code, authErr.message, binary ? 401 : 200);
-    if (!src) {
-      const reason = configError() ?? 'no music source is selected — choose one in Admin → Settings → Music source';
-      return respondError(req, res, undefined, 0, reason, binary ? 503 : 200);
-    }
-    const handler = handlers[endpoint];
-    if (LOG_REQUESTS) {
-      const shown = Object.entries(req.query as Record<string, unknown>)
-        .filter(([k]) => !AUTH_PARAMS.has(k))
-        .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('|') : String(v)}`)
-        .join(' ');
-      console.log(`[rest] ${endpoint}${shown ? ` ${shown}` : ''}`);
-    }
-    if (!handler) return respondError(req, res, src.name, 0, `Endpoint '${endpoint}' is not implemented by the SUB/WAVE router`);
-    try {
-      await handler(req, res, src);
-    } catch (err) {
-      const { code, message } = describeError(err);
-      console.warn(`[rest] ${endpoint} failed: ${message}`);
-      if (!res.headersSent) {
-        // A thrown error on a binary endpoint must not be a 200 (respond.ts);
-        // 500 rather than 404 because the id may be fine and the backend down.
-        respondError(req, res, src.name, code, message, binary ? 500 : 200);
-      } else {
-        res.destroy();
-      }
-    }
+    // Recorded for the admin Signal path monitor (host/activity.ts).
+    await trackRequest(req, res, endpoint, () => serveRest(req, res, endpoint));
   });
 
   app.use((_req, res) => {
     res.status(404).type('text/plain').send('SUB/WAVE music router — see /health\n');
   });
   return app;
+}
+
+async function serveRest(req: express.Request, res: express.Response, endpoint: string): Promise<void> {
+  // formPost: a POSTed form carries the same params as a query string.
+  if (req.method === 'POST' && req.body && typeof req.body === 'object') {
+    Object.defineProperty(req, 'query', { value: { ...(req.query as object), ...(req.body as object) } });
+  }
+  const binary = BINARY_ENDPOINTS.has(endpoint);
+  let authErr = checkAuth(req);
+  if (authErr && (await refreshIfChanged())) authErr = checkAuth(req);
+  const src = getSource();
+  if (authErr) return respondError(req, res, src?.name, authErr.code, authErr.message, binary ? 401 : 200);
+  if (!src) {
+    const reason = configError() ?? 'no music source is selected — choose one in Admin → Settings → Music source';
+    return respondError(req, res, undefined, 0, reason, binary ? 503 : 200);
+  }
+  const handler = handlers[endpoint];
+  if (LOG_REQUESTS) {
+    const shown = Object.entries(req.query as Record<string, unknown>)
+      .filter(([k]) => !AUTH_PARAMS.has(k))
+      .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join('|') : String(v)}`)
+      .join(' ');
+    console.log(`[rest] ${endpoint}${shown ? ` ${shown}` : ''}`);
+  }
+  if (!handler) return respondError(req, res, src.name, 0, `Endpoint '${endpoint}' is not implemented by the SUB/WAVE router`);
+  try {
+    await handler(req, res, src);
+  } catch (err) {
+    const { code, message } = describeError(err);
+    console.warn(`[rest] ${endpoint} failed: ${message}`);
+    if (!res.headersSent) {
+      // A thrown error on a binary endpoint must not be a 200 (respond.ts);
+      // 500 rather than 404 because the id may be fine and the backend down.
+      respondError(req, res, src.name, code, message, binary ? 500 : 200);
+    } else {
+      markRequestFailed(message);
+      res.destroy();
+    }
+  }
 }
 
 // Re-read config.json when it changes; retry a rejected selection now and

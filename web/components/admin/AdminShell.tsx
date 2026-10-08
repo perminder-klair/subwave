@@ -42,6 +42,7 @@ import {
   Braces,
   Boxes,
   Webhook,
+  Cable,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -214,6 +215,7 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
         ],
       },
+      { href: '/admin/router', id: 'router', label: 'Music router', icon: Cable },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
