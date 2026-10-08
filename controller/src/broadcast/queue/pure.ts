@@ -54,6 +54,45 @@ export function nextTransitionLabel(
   return labels.length > 0 ? labels.join(' + ') : 'Normal';
 }
 
+// The gestures the INCOMING track carries for the seam into it (radio.liq arms
+// them off `b`); washout and loop ride the outgoing track's own exit instead.
+export const ENTRY_EFFECTS = ['sweep', 'blend', 'dissolve', 'chop'] as const;
+
+// Something the mixer placed BETWEEN two songs, read off its marker at play time.
+// None of these is a song — none reaches now-playing.json — so `outgoing` at a
+// track start is the song before it, and the seam actually aired was from this.
+export type Interposed = 'jingle' | 'bed' | 'break';
+const INTERPOSED_LABEL: Record<Interposed, string> = {
+  jingle: 'After jingle',
+  bed: 'After bed',
+  break: 'After break',
+};
+
+// The durable seam record for a track that just started: the label of the seam
+// INTO it, as armed, and any entry gesture that was armed yet could not air.
+// One precedence rule with the dashboard (nextTransitionLabel), so the two never
+// disagree about the same seam. Labels what the controller ARMED: a mixer older
+// than this controller can still differ, which a mixer-side marker would settle.
+//   * a jingle in between: radio.liq stands every entry gesture down on the
+//     jingle's seam, so the ones still armed here are stranded;
+//   * a bed or a pause-and-talk break in between: their own drain paths already
+//     stripped the entry gestures, so there is nothing left to strand;
+//   * the outgoing song's exit gesture went into whatever was interposed, never
+//     into this track, so it is not this seam's.
+// Null when the song before is unknown (the first track after a boot).
+export function seamRecordAtPlay(
+  outgoing: TransitionItem | null | undefined,
+  incoming: TransitionItem,
+  interposed: Interposed | null,
+): { label: string | null; stranded: Array<(typeof ENTRY_EFFECTS)[number]> } {
+  if (interposed) {
+    const stranded = interposed === 'jingle' ? ENTRY_EFFECTS.filter(k => incoming.track[k] === true) : [];
+    return { label: INTERPOSED_LABEL[interposed], stranded };
+  }
+  if (!outgoing) return { label: null, stranded: [] };
+  return { label: nextTransitionLabel(outgoing, { ...incoming, sent: true }), stranded: [] };
+}
+
 // How many transition asks the anti-streak ledger keeps, and so how many the
 // pick prompts are shown.
 export const TRANSITION_LEDGER_SIZE = 4;

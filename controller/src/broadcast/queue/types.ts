@@ -6,6 +6,8 @@
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
 import type { HostSpeechStamp } from '../session.js';
 import type { ClipSeamCues } from '../stem-seam.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
+import type { MixDropReason } from '../../schemas/transitions.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -57,7 +59,21 @@ export interface Track {
   // its ending is a cut rather than its own. radio.liq reads liq_show_fade off
   // the OUTGOING track and suppresses the exit gestures above.
   showFade?: boolean;
+  // The durable seam record (library.db plays.transition_*): the DJ's ask on
+  // this pick before any strip, and every armed gesture a strip took back.
+  // Rides the track so it survives queue.json across a restart; written to
+  // the play row when the track airs. Never annotated to Liquidsoap.
+  transitionAsk?: TransitionEffect | 'normal';
+  mixDrops?: MixDrop[];
   [k: string]: unknown;
+}
+
+// One armed gesture that did not reach air, and why. `auto` marks the
+// length-cap washout, which the controller armed rather than the DJ.
+export interface MixDrop {
+  effect: TransitionEffect;
+  reason: MixDropReason;
+  auto?: true;
 }
 
 // One entry in the queue. `upcoming` holds these before play; `current` and

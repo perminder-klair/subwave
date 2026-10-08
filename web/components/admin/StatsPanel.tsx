@@ -1,6 +1,7 @@
 'use client';
 
-// /stats reports activity since boot; /listeners reports persisted audience history.
+// /stats reports activity since boot, except `transitions`, which is read from the
+// play history; /listeners reports persisted audience history.
 
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
@@ -20,6 +21,8 @@ import {
   type HourBucket,
 } from '../../lib/audienceStats';
 import { statsKeys } from './stats-queries';
+import type { MixDropReason, TransitionEffect } from '@/lib/schemas.generated';
+import { countRows, dropReasonLabel, effectLabel, effectSeamCount, reasonSummary } from '../../lib/transitionStats';
 
 interface LatencyStats {
   avg?: number;
@@ -139,11 +142,27 @@ interface RequestsStats {
   topRequesters: TopRequesterRow[];
 }
 
+// The durable seam record, from library.db `plays` over the last `days` days —
+// unlike the in-memory rollups above, it survives a controller restart. Null
+// when the library DB is unavailable.
+interface TransitionStats {
+  days: number;
+  since: string;
+  seams: number;                          // plays with a recorded seam label
+  bySeam: Record<string, number>;         // label of the seam INTO the track ('Normal', 'Washout + Sweep', …)
+  asked: number;                          // DJ picks with a recorded ask
+  byAsk: Record<string, number>;          // the DJ's ask before any strip ('normal' | effect id)
+  dropped: number;
+  byReason: Partial<Record<MixDropReason, number>>;
+  byEffect: Partial<Record<TransitionEffect, Partial<Record<MixDropReason, number>>>>;
+}
+
 interface StatsResponse {
   llm?: LlmStats;
   tts?: TtsStats;
   djLog?: DjLogStats;
   requests?: RequestsStats;
+  transitions?: TransitionStats | null;
   error?: string;
 }
 
@@ -500,6 +519,100 @@ const RANGE_OPTIONS = [
 ];
 
 class StatsShapeError extends Error {}
+
+interface EffectDropRow {
+  effect: string;
+  count: number;
+  reasons: string;
+}
+
+// The durable seam record as three views of one pipeline: what the DJ asked for
+// on its picks, what each seam was armed with, and why asks did not make it.
+// `t` is null when the play history is unavailable; the caller hides the card
+// altogether for a controller too old to send the key.
+function TransitionsCard({ t }: { t: TransitionStats | null }) {
+  const sub = `last ${t?.days ?? 7} days · from the play history, so it survives restarts`;
+  if (!t || t.seams === 0) {
+    return (
+      <Card title="Transitions" sub={sub}>
+        <span className="field-hint italic">
+          {!t
+            ? 'play history unavailable'
+            : 'no transitions recorded yet — each aired track records how it came in'}
+        </span>
+      </Card>
+    );
+  }
+  const asks = countRows(t.byAsk, effectLabel);
+  const seams = countRows(t.bySeam);
+  const reasons = countRows(t.byReason, dropReasonLabel);
+  const withEffect = effectSeamCount(t.bySeam);
+  const effectAsks = t.asked - (t.byAsk.normal ?? 0);
+  const effectRows: EffectDropRow[] = Object.entries(t.byEffect ?? {})
+    .map(([effect, rec]) => ({
+      effect: effectLabel(effect),
+      count: Object.values(rec ?? {}).reduce<number>((sum, n) => sum + (n || 0), 0),
+      reasons: reasonSummary(rec),
+    }))
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.count - a.count || a.effect.localeCompare(b.effect));
+  return (
+    <Card title="Transitions" sub={sub}>
+      <div className="grid gap-0">
+        <MetricStrip>
+          <StatCell label="Seams" value={fmtInt(t.seams)} sub="aired tracks with a recorded way in" />
+          <StatCell label="With an effect" value={fmtInt(withEffect)} accent={withEffect > 0}
+            sub={`${fmtPct(withEffect / t.seams)} of seams`} />
+          <StatCell label="DJ asks" value={fmtInt(t.asked)} sub={`${fmtInt(effectAsks)} for an effect`} />
+          <StatCell label="Dropped" value={fmtInt(t.dropped)} last
+            sub="effects that did not air as chosen" />
+        </MetricStrip>
+
+        <div className="stack-mobile grid grid-cols-[1fr_1fr_1fr] gap-0">
+          <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
+            <div className="caption mb-2">the DJ asked for</div>
+            {asks.length ? (
+              <BarList max={asks[0]?.count || 1} rows={asks} />
+            ) : (
+              <span className="field-hint italic">no DJ picks recorded</span>
+            )}
+          </div>
+          <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">
+            <div className="caption mb-2">seams armed</div>
+            <BarList max={seams[0]?.count || 1} rows={seams} />
+          </div>
+          <div className="p-3.5">
+            <div className="caption mb-2">why effects were dropped</div>
+            {reasons.length ? (
+              <BarList max={reasons[0]?.count || 1} rows={reasons} />
+            ) : (
+              <span className="field-hint italic">nothing dropped</span>
+            )}
+          </div>
+        </div>
+
+        {effectRows.length > 0 && (
+          <div className="border-t border-separator-soft p-3.5">
+            <div className="caption mb-2">drops by effect</div>
+            <ScrollBox>
+              <Table<EffectDropRow>
+                empty="No drops"
+                rows={effectRows}
+                cols={[
+                  { key: 'effect', label: 'Effect' },
+                  { key: 'count', label: 'Dropped', align: 'right',
+                    render: r => <span className="mono-num">{r.count}</span> },
+                  { key: 'reasons', label: 'Why',
+                    render: r => <span className="text-muted">{r.reasons}</span> },
+                ]}
+              />
+            </ScrollBox>
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
 
 export default function StatsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
@@ -1000,6 +1113,10 @@ export default function StatsPanel() {
               </ScrollBox>
             )}
           </Card>
+
+          {/* Absent (undefined) means a controller too old to keep the record:
+              no card rather than a misleading "unavailable". */}
+          {data.transitions !== undefined && <TransitionsCard t={data.transitions} />}
         </>
       )}
 
