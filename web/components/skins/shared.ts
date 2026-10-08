@@ -104,6 +104,33 @@ export function lastVoiceLine(messages: SessionTurn[]): BoothLine | null {
   return null;
 }
 
+/** Rough spoken length of a line at broadcast pace (~2.6 words a second) plus
+ *  a breath, clamped to something a link or segment actually runs. */
+export function speechMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(45_000, Math.max(3_000, Math.round((words / 2.6) * 1000) + 1_200));
+}
+
+// A turn is stamped near the live edge and the listener sits up to 60s behind
+// it (useStationFeed clamps bufferSeconds there), so a line older than that
+// plus its own length has already been heard in full.
+const ON_AIR_STALE_MS = 60_000;
+
+/** How much longer the DJ's latest line is plausibly still being heard, in ms,
+ *  counted from the moment it reached the feed (useStationFeed holds a stamped
+ *  line until it is audible). 0 when there is no line or it is history. The
+ *  feed carries no clip length, so this is an estimate from the word count. */
+export function voiceOnAirMs(
+  line: { text: string; t: string | number | undefined } | null,
+  nowMs: number,
+): number {
+  if (!line) return 0;
+  const dur = speechMs(line.text);
+  const stamp = typeof line.t === 'number' ? line.t : typeof line.t === 'string' ? Date.parse(line.t) : NaN;
+  if (Number.isFinite(stamp) && nowMs - stamp > ON_AIR_STALE_MS + dur) return 0;
+  return dur;
+}
+
 /** Timestamp of a queue/history entry. The live controller stamps history
  *  with `queuedAt`; `t` is the documented field on older payloads — accept
  *  either so clocks render on both. */

@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { Pill } from '../ui';
 import { cn } from '../../../lib/cn';
+import { AXO, type BoxFaces } from '../../skins/axo/geometry';
 
 // Each card frames a pure-CSS miniature of that skin's real layout. The motion
 // idles unless a card is the live skin or under the cursor, gated through Tailwind
@@ -206,6 +207,100 @@ function PlatterPreview() {
   );
 }
 
+// The isometric stack in miniature, drawn from the skin's own geometry so the
+// card can't drift from the player: speakers, receiver, tape deck, turntable,
+// every box as its three shaded faces with a heavier silhouette. The record
+// spins and the power ring blinks under the shared play-state gate. Strokes
+// don't scale with the drawing, so a hairline stays a hairline at card size.
+const AXO_TOP = 'fill-bg';
+const AXO_LEFT = 'fill-[color-mix(in_oklab,var(--ink)_4%,var(--bg))]';
+const AXO_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_10%,var(--bg))]';
+const AXO_WELL = 'fill-[color-mix(in_oklab,var(--ink)_16%,var(--bg))]';
+
+/** One box: top (w×d), front-left (w×h) and front-right (d×h) faces. */
+function AxoBox({ f, w, d, h }: { f: BoxFaces; w: number; d: number; h: number }) {
+  return (
+    <>
+      <rect transform={f.T} width={w} height={d} className={AXO_TOP} />
+      <rect transform={f.L} width={w} height={h} className={AXO_LEFT} />
+      <rect transform={f.R} width={d} height={h} className={AXO_RIGHT} />
+    </>
+  );
+}
+
+function AxoPreview() {
+  const posts = [AXO.pBL, AXO.pBR];
+  const front = [AXO.pFL, AXO.pFR];
+  return (
+    <div className="flex h-full w-full items-stretch">
+      <div className="grid w-[30%] content-start gap-1.5 border-r border-ink p-2.5 pt-5">
+        <span className="h-[3px] w-1/2 bg-vermilion" />
+        <span className="h-[5px] w-full bg-ink" />
+        <span className="h-[3px] w-2/3 bg-muted" />
+        <span className="mt-1 h-[3px] w-full bg-soft-border" />
+        <span className="h-[3px] w-4/5 bg-soft-border" />
+      </div>
+      <div className="relative flex-1 bg-[radial-gradient(circle,var(--soft-border)_1px,transparent_1.5px)] bg-size-[9px_5.2px]">
+        <svg
+          viewBox="-250 -420 590 690"
+          className="absolute inset-0 size-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+          strokeWidth={0.7}
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <AxoBox f={AXO.spL} w={80} d={100} h={250} />
+          <path d={AXO.silSpL} strokeWidth={1.2} />
+          {posts.map((p, i) => <AxoBox key={i} f={p} w={8} d={8} h={232} />)}
+          <AxoBox f={AXO.s0} w={240} d={150} h={8} />
+          <AxoBox f={AXO.rcv} w={220} d={132} h={80} />
+          <g transform={AXO.rcv.L}>
+            <rect x="12" y="42" width="112" height="20" className="fill-ink" />
+            <circle cx="186" cy="38" r="22" className={AXO_WELL} />
+            <circle
+              cx="142"
+              cy="24"
+              r="12"
+              strokeWidth={1.2}
+              className={cn('stroke-vermilion', BLINK)}
+            />
+          </g>
+          <path d={AXO.silRcv} strokeWidth={1.2} />
+          <AxoBox f={AXO.s1} w={240} d={150} h={8} />
+          <AxoBox f={AXO.tape} w={220} d={132} h={62} />
+          <g transform={AXO.tape.L}>
+            <rect x="12" y="8" width="110" height="46" className={AXO_WELL} />
+            <circle cx="44" cy="34" r="10" className="fill-bg" />
+            <circle cx="90" cy="34" r="10" className="fill-bg" />
+            <rect x="134" y="8" width="44" height="14" className="fill-ink" />
+          </g>
+          <path d={AXO.silTape} strokeWidth={1.2} />
+          <AxoBox f={AXO.s2} w={240} d={150} h={8} />
+          <path d={AXO.lid} className="fill-[color-mix(in_oklab,var(--ink)_5%,transparent)]" />
+          <AxoBox f={AXO.tt} w={220} d={132} h={24} />
+          <g transform={AXO.tt.T}>
+            <circle cx="96" cy="66" r="57" className={AXO_WELL} />
+            <g className={cn('origin-center [transform-box:fill-box]', REEL)}>
+              <circle cx="96" cy="66" r="52" className={AXO_LEFT} />
+              <circle cx="96" cy="66" r="36" />
+              <circle cx="96" cy="66" r="18" className="fill-vermilion stroke-none" />
+              <line x1="96" y1="16" x2="96" y2="26" strokeWidth={1} />
+            </g>
+            <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} />
+          </g>
+          <path d={AXO.silTt} strokeWidth={1.2} />
+          {front.map((p, i) => <AxoBox key={i} f={p} w={8} d={8} h={232} />)}
+          <AxoBox f={AXO.spR} w={80} d={100} h={250} />
+          <g transform={AXO.spR.L}>
+            <circle cx="40" cy="92" r="20" className={AXO_WELL} />
+            <circle cx="40" cy="178" r="31" className={AXO_WELL} />
+          </g>
+          <path d={AXO.silSpR} strokeWidth={1.2} />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
 const PREVIEWS: Record<string, () => ReactNode> = {
   classic: ClassicPreview,
   unit: UnitPreview,
@@ -213,6 +308,7 @@ const PREVIEWS: Record<string, () => ReactNode> = {
   subamp: SubampPreview,
   tty: TtyPreview,
   platter: PlatterPreview,
+  axo: AxoPreview,
 };
 
 // A neutral wireframe for any skin without a bespoke poster (community skins).

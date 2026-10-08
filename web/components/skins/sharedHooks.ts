@@ -4,9 +4,10 @@
 // here reads only the core contexts, per the skin contract (see types.ts);
 // wording and layout stay with each skin.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
+import { lastVoiceLine, voiceOnAirMs } from './shared';
 
 /** Whether a skin may run a JS-driven (motion) transition right now. Lite
  *  mode's `animation: none !important` reaches only CSS keyframes, so a skin
@@ -205,6 +206,30 @@ export function useTrackLike(): TrackLike {
     pending,
     like,
   };
+}
+
+/** True while the DJ's latest spoken line is plausibly still on air for this
+ *  listener (see voiceOnAirMs). Keyed on the line itself, so a later poll that
+ *  appends a track or an event never stretches the window. */
+export function useDjOnAir(): boolean {
+  const { session } = usePlayerFeed();
+  const line = useMemo(() => lastVoiceLine(session.messages), [session.messages]);
+  const text = line?.text ?? null;
+  const t = line?.t;
+  const [onAir, setOnAir] = useState(false);
+
+  useEffect(() => {
+    const ms = voiceOnAirMs(text == null ? null : { text, t }, Date.now());
+    if (ms <= 0) {
+      setOnAir(false);
+      return;
+    }
+    setOnAir(true);
+    const id = window.setTimeout(() => setOnAir(false), ms);
+    return () => window.clearTimeout(id);
+  }, [text, t]);
+
+  return onAir;
 }
 
 /** Keyboard/button volume nudge — clamps to [0, 1] on whole-percent steps. */

@@ -54,7 +54,7 @@ const ONLY = args.only || null;
   const skinIds = new Set(PRESS_RUN_PLATES.map(p => p.skinId));
   if (PRESS_RUN_PLATES.length !== 8) throw new Error('expected exactly 8 plates');
   if (new Set(themeIds).size !== PRESS_RUN_PLATES.length) throw new Error('every theme must appear exactly once');
-  if (skinIds.size !== 6) throw new Error('every skin must appear at least once');
+  if (skinIds.size !== 7) throw new Error('every skin must appear at least once');
 }
 
 const { chromium } = load('playwright');
@@ -62,7 +62,11 @@ const sharp = load('sharp');
 
 // The station must actually be broadcasting — a silent player screenshots as
 // an empty face and lies about every skin.
-const nowRes = await fetch(`${API}/api/now-playing`).catch(() => null);
+// The Caddy edge serves the controller under /api; a bare dev controller
+// (:7701) does not, so fall back to the unprefixed route.
+const nowRes = await fetch(`${API}/api/now-playing`)
+  .then(r => (r.ok ? r : fetch(`${API}/now-playing`)))
+  .catch(() => null);
 const now = nowRes && nowRes.ok ? await nowRes.json() : null;
 // Live shape is `{ nowPlaying: { title, artist, ... } }` (lib/types.ts
 // NowPlayingResponse) — fall back to a flat `.title` too in case a future
@@ -105,19 +109,33 @@ for (const plate of PRESS_RUN_PLATES) {
   );
 
   // Dismiss the tune-in gate: click the skin's tune affordance if it exposes
-  // one by name, otherwise Space (the shell-level tune shortcut).
-  const tuneBtn = page.getByRole('button', { name: /tune in/i }).first();
-  if (await tuneBtn.isVisible().catch(() => false)) {
-    await tuneBtn.click().catch(() => {});
-  } else {
-    await page.keyboard.press('Space').catch(() => {});
+  // one by name, otherwise Space (the shell-level tune shortcut). The marker
+  // above clears on hydration, but a listener-picked skin is a lazy chunk that
+  // can mount later (seconds later on a cold dev server), and a press in that
+  // gap reaches no listener. So retry until the shell's <audio> has a source:
+  // that is set the moment a tune is handled, long before the stream plays,
+  // so a slow stream can't make a second press tune back out.
+  const tuned = () => page.evaluate(() => !!document.querySelector('audio')?.getAttribute('src'));
+  for (let attempt = 0; attempt < 5 && !(await tuned()); attempt++) {
+    const tuneBtn = page.getByRole('button', { name: /tune in/i }).first();
+    if (await tuneBtn.isVisible().catch(() => false)) {
+      await tuneBtn.click().catch(() => {});
+    } else {
+      await page.keyboard.press('Space').catch(() => {});
+    }
+    await page.waitForFunction(
+      () => !!document.querySelector('audio')?.getAttribute('src'),
+      null, { timeout: 2500 },
+    ).catch(() => {});
   }
 
-  // Cover art up — the strongest "this frame looks on-air" signal.
+  // Cover art up — the strongest "this frame looks on-air" signal. A skin
+  // that draws no sleeve (AXO) says so in its status line instead.
   await page.waitForFunction(
-    () => Array.from(document.images).some(i => i.src.includes('/cover') && i.complete && i.naturalWidth > 0),
+    () => Array.from(document.images).some(i => i.src.includes('/cover') && i.complete && i.naturalWidth > 0)
+      || document.body.innerText.toLowerCase().includes('tuned · locked'),
     null, { timeout: 30000 },
-  ).catch(() => console.warn(`  [${plate.id}] cover art never settled — capturing anyway`));
+  ).catch(() => console.warn(`  [${plate.id}] never looked on-air — capturing anyway`));
   // Let idle motion settle: needle drop, spectrum warm-up, CRT flicker-in.
   await page.waitForTimeout(3000);
 

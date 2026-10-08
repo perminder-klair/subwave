@@ -4,7 +4,7 @@
 // Plain data, no React, because the capture script imports it from node.
 
 export type PressRunSkinId =
-  | 'classic' | 'unit' | 'drift' | 'subamp' | 'tty' | 'platter';
+  | 'classic' | 'unit' | 'drift' | 'subamp' | 'tty' | 'platter' | 'axo';
 
 export type PressRunThemeId =
   | 'classic-light' | 'classic-dark' | 'blueprint' | 'cyberpunk'
@@ -70,8 +70,8 @@ export const PRESS_RUN_PLATES: readonly PressRunPlate[] = [
   plate(7, 'classic', 'Classic',
     'The original SUB/WAVE face — masthead, centre stage, waveform, transport deck.',
     'signal', 'Signal'),
-  plate(8, 'platter', 'Platter',
-    'The flagship vinyl face — a reference turntable is the interface, needle and all.',
+  plate(8, 'axo', 'AXO-1',
+    'A hi-fi stack drawn at 30° — the switch, knob and keys in the drawing are the controls.',
     'recon', 'Recon'),
 ];
 
