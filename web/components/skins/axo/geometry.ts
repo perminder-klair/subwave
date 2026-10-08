@@ -1,40 +1,10 @@
-// The AXO stack's drawing, computed once. 30° isometric: a world point (x, y, z)
-// lands on screen at ((x − y)·cos30, (x + y)·sin30 − z). Each box face is drawn
-// flat inside a shear matrix so its controls can be laid out in plain 2D, and
-// silhouettes are traced separately at a heavier pen. Pure data, no React.
+// The AXO stack's drawing, computed once with the shared isometric kit
+// (components/iso/geometry.ts): every box is its three faces in a shear
+// matrix, silhouettes traced separately at a heavier pen. Pure data, no React.
 
-const C = 0.8660254;
-const S = 0.5;
+import { P, box, sil, poly, hatchStrip, loop, arrow, n, type BoxFaces, type Pt } from '@/components/iso/geometry';
 
-type Pt = [number, number];
-
-const n = (v: number) => Math.round(v * 100) / 100;
-const P = (x: number, y: number, z: number): Pt => [n((x - y) * C), n((x + y) * S - z)];
-const mat = (a: number, b: number, c: number, d: number, p: Pt) =>
-  `matrix(${[a, b, c, d, p[0], p[1]].join(' ')})`;
-
-export interface BoxFaces {
-  /** Top face — its local x runs along world x, local y along world y. */
-  T: string;
-  /** Front-left face — local x along world x, local y downward. */
-  L: string;
-  /** Front-right face — local x along world −y, local y downward. */
-  R: string;
-}
-
-const box = (x: number, y: number, z: number, w: number, d: number, h: number): BoxFaces => ({
-  T: mat(C, S, -C, S, P(x, y, z + h)),
-  L: mat(C, S, 0, 1, P(x, y + d, z + h)),
-  R: mat(C, -S, 0, 1, P(x + w, y + d, z + h)),
-});
-
-const poly = (pts: Pt[]) => `M${pts.map(p => p.join(' ')).join('L')}Z`;
-
-const sil = (x: number, y: number, z: number, w: number, d: number, h: number) =>
-  poly([
-    P(x, y, z + h), P(x + w, y, z + h), P(x + w, y, z),
-    P(x + w, y + d, z), P(x, y + d, z), P(x, y + d, z + h),
-  ]);
+export type { BoxFaces };
 
 /** Tick ring around a knob, sweeping 270° from −135°. */
 const ring = (cx: number, cy: number, r0: number, r1: number, count: number) => {
@@ -44,40 +14,6 @@ const ring = (cx: number, cy: number, r0: number, r1: number, count: number) => 
     d += `M${n(cx + Math.sin(a) * r0)} ${n(cy - Math.cos(a) * r0)}L${n(cx + Math.sin(a) * r1)} ${n(cy - Math.cos(a) * r1)}`;
   }
   return d;
-};
-
-/** Floor hatching: a strip on the ground to the +x side of an object, 45° in plan. */
-const hatchStrip = (x0: number, x1: number, y0: number, y1: number, step: number) => {
-  let d = '';
-  const W = x1 - x0;
-  for (let k = y0; k <= y1 + W; k += step) {
-    const t0 = Math.max(0, k - y1);
-    const t1 = Math.min(W, k - y0);
-    if (t1 - t0 < 1) continue;
-    d += `M${P(x0 + t0, k - t0, 0).join(' ')}L${P(x0 + t1, k - t1, 0).join(' ')}`;
-  }
-  return d;
-};
-
-/** A hand-drawn loop that doesn't quite close, for circling a control. */
-const loop = (cx: number, cy: number, rx: number, ry: number) => {
-  let d = '';
-  for (let i = 0; i <= 44; i++) {
-    const a = -0.6 + (i / 44) * (Math.PI * 2 + 0.9);
-    const w = 1 + 0.07 * Math.sin(a * 3 + 1);
-    const dx = (i / 44) * 4;
-    d += `${i ? 'L' : 'M'}${n(cx + dx + Math.cos(a) * rx * w)} ${n(cy - dx * 0.5 + Math.sin(a) * ry * w)}`;
-  }
-  return d;
-};
-
-const arrow = (x0: number, y0: number, qx: number, qy: number, x1: number, y1: number) => {
-  const ang = Math.atan2(y1 - qy, x1 - qx);
-  const h = 10;
-  const a1 = ang + Math.PI - 0.45;
-  const a2 = ang + Math.PI + 0.45;
-  return `M${x0} ${y0}Q${qx} ${qy} ${x1} ${y1}`
-    + `M${n(x1 + Math.cos(a1) * h)} ${n(y1 + Math.sin(a1) * h)}L${x1} ${y1}L${n(x1 + Math.cos(a2) * h)} ${n(y1 + Math.sin(a2) * h)}`;
 };
 
 let dialTicks = '';

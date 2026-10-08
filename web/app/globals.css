@@ -1717,51 +1717,6 @@ header.bs-masthead-lift {
     border-color: var(--accent);
 }
 
-/* Architecture box — used in HowWeBroadcast. */
-.bs-box {
-    border: 1px solid var(--ink);
-    padding: 14px 16px;
-    font-size: 12px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    font-weight: 700;
-    text-align: center;
-    background: var(--bg);
-}
-.bs-box[data-tone="accent"] {
-    background: var(--ink);
-    color: var(--bg);
-}
-.bs-arrow {
-    font-size: 18px;
-    color: var(--muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-/* Architecture flow — stacks vertically on phones so the boxes don't overflow. */
-.bs-flow {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    align-items: center;
-    gap: 8px;
-    margin-top: 28px;
-    width: 70%;
-    margin-left: auto;
-    margin-right: auto;
-}
-@media (max-width: 720px) {
-    .bs-flow {
-        grid-template-columns: 1fr;
-        gap: 6px;
-        width: 100%;
-    }
-    .bs-flow .bs-arrow {
-        transform: rotate(90deg);
-    }
-}
-
 /* Two-column landing grid — the fold split. */
 .bs-grid-split {
     display: grid;
