@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { IsoBox } from './IsoBox';
-import { P, box, hatchStrip } from './geometry';
+import { boxFaces, hatchStrip, project } from './geometry';
 import iso from './Iso.module.css';
 import { cn } from '@/lib/cn';
 
@@ -75,7 +75,7 @@ function Tapes() {
 /** A desk calendar on a blank month. */
 function Calendar() {
   const x = -36, y = -6, w = 72, d = 14, h = 62;
-  const rings = [16, 36, 56].map(o => P(x + o, y + 2, h + 4));
+  const rings = [16, 36, 56].map(o => project(x + o, y + 2, h + 4));
   // It stands tall, so it sits lower in the frame than the flat drawings.
   return (
     <g transform="translate(0 26)">
@@ -108,7 +108,7 @@ function Calendar() {
 /** A patch panel with nothing plugged in, its lead lying loose. */
 function Jack() {
   const x = -52, y = -26, w = 74, d = 22, h = 34;
-  const floor = box(-200, -200, 0, 400, 400, 0).T;
+  const floor = boxFaces({ x: -200, y: -200, z: 0, w: 400, d: 400, h: 0 }).T;
   return (
     <>
       {shadow(x, y, w, d)}

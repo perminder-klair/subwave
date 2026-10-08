@@ -44,20 +44,25 @@ export interface MachineInput {
   talkMs: number;
 }
 
+/** Where the lampboard is in the song, as the tape prints it. */
+export interface Spelling {
+  /** Index into the song's sequence on the beat, -1 when none. */
+  cursor: number;
+  /** Tuning sweep: how much of the title has resolved (0–1), and the scatter
+   *  seed for the rest. */
+  scramble: number;
+  seed: number;
+}
+
 export interface Machine {
   msg: Message;
   /** The key held down: a letter, 'SPACE', or null. */
   down: string | null;
   /** The bulb lit right now. */
   lit: string | null;
-  /** Index into the song's sequence on the beat, -1 when none. */
-  cursor: number;
+  spelling: Spelling;
   /** Characters of the DJ's line typed so far. */
   talkN: number;
-  /** Tuning sweep: how much of the title has resolved (0–1), and the scatter
-   *  seed for the rest. */
-  scramble: number;
-  seed: number;
   /** Type a character. `hold` keeps the key down (and its bulb lit) until
    *  release(); otherwise it springs back on its own. */
   press: (ch: string, hold?: boolean) => void;
@@ -84,26 +89,26 @@ type Action =
 
 const keyId = (ch: string) => (ch === ' ' ? 'SPACE' : ch.toUpperCase());
 
-function reducer(s: State, a: Action): State {
-  switch (a.type) {
+function machineReducer(state: State, action: Action): State {
+  switch (action.type) {
     case 'type': {
-      const u = typeInto(s.msg, a.ch, a.vol);
+      const typed = typeInto(state.msg, action.ch, action.vol);
       // A key that types nothing still goes down.
-      if (!u) return { ...s, down: keyId(a.ch) };
-      return { msg: u.msg, down: keyId(a.ch), keyLit: u.lamp };
+      if (!typed) return { ...state, down: keyId(action.ch) };
+      return { msg: typed.msg, down: keyId(action.ch), keyLit: typed.lamp };
     }
     case 'up':
-      return s.down ? { ...s, down: null } : s;
+      return state.down ? { ...state, down: null } : state;
     case 'unlight':
-      return s.keyLit ? { ...s, keyLit: null } : s;
+      return state.keyLit ? { ...state, keyLit: null } : state;
     case 'del':
-      return s.msg.plain ? { ...s, msg: deleteLast(s.msg), keyLit: null } : s;
+      return state.msg.plain ? { ...state, msg: deleteLast(state.msg), keyLit: null } : state;
     case 'clear':
-      return s.msg.plain ? { ...s, msg: { ...EMPTY_MESSAGE, rotors: s.msg.rotors }, keyLit: null } : s;
+      return state.msg.plain ? { ...state, msg: { ...EMPTY_MESSAGE, rotors: state.msg.rotors }, keyLit: null } : state;
     case 'step':
-      return { ...s, msg: { ...s.msg, rotors: stepRotors(s.msg.rotors) } };
+      return { ...state, msg: { ...state.msg, rotors: stepRotors(state.msg.rotors) } };
     case 'rotors':
-      return { ...s, msg: { ...s.msg, rotors: a.rotors } };
+      return { ...state, msg: { ...state.msg, rotors: action.rotors } };
   }
 }
 
@@ -130,8 +135,8 @@ interface AmbientFrame {
 
 export function useCipherMachine(input: MachineInput): Machine {
   const { calm, vol, seq, beat, anchor, talk, talkMs } = input;
-  const [s, dispatch] = useReducer(reducer, {
-    msg: { ...EMPTY_MESSAGE, rotors: { m: 10, r: 16 } },
+  const [s, dispatch] = useReducer(machineReducer, {
+    msg: { ...EMPTY_MESSAGE, rotors: { middle: 10, right: 16 } },
     down: null,
     keyLit: null,
   });
@@ -189,7 +194,7 @@ export function useCipherMachine(input: MachineInput): Machine {
         run, lit: SCAN[k % SCAN.length] ?? null, cursor: -1, talkN: 0,
         scramble: Math.min(1, (el % SWEEP_CYCLE_MS) / RESOLVE_MS), seed: k,
       });
-      dispatch({ type: 'rotors', rotors: { m: scatter(k, 1), r: scatter(k, 2) } });
+      dispatch({ type: 'rotors', rotors: { middle: scatter(k, 1), right: scatter(k, 2) } });
       timer = window.setTimeout(sweep, SWEEP_MS);
     };
 
@@ -237,10 +242,12 @@ export function useCipherMachine(input: MachineInput): Machine {
     msg: s.msg,
     down: s.down,
     lit: ambient === 'off' ? s.keyLit : (f?.lit ?? null),
-    cursor: f?.cursor ?? -1,
+    spelling: {
+      cursor: f?.cursor ?? -1,
+      scramble: live && ambient === 'connecting' ? (f?.scramble ?? 0) : 1,
+      seed: f?.seed ?? 0,
+    },
     talkN: live ? (f?.talkN ?? 0) : talkLen,
-    scramble: live && ambient === 'connecting' ? (f?.scramble ?? 0) : 1,
-    seed: f?.seed ?? 0,
     press,
     release,
     del: useCallback(() => dispatch({ type: 'del' }), []),

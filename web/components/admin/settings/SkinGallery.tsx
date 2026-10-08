@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { Pill } from '../ui';
 import { cn } from '../../../lib/cn';
-import { AXO, type BoxFaces } from '../../skins/axo/geometry';
+import { AXO, type DrawnBlock } from '../../skins/axo/geometry';
+import { ROWS as CIPHER_ROWS } from '../../skins/cipher/cipher';
 
 // Each card frames a pure-CSS miniature of that skin's real layout. The motion
 // idles unless a card is the live skin or under the cursor, gated through Tailwind
@@ -218,12 +219,12 @@ const AXO_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_10%,var(--bg))]';
 const AXO_WELL = 'fill-[color-mix(in_oklab,var(--ink)_16%,var(--bg))]';
 
 /** One box: top (w×d), front-left (w×h) and front-right (d×h) faces. */
-function AxoBox({ f, w, d, h }: { f: BoxFaces; w: number; d: number; h: number }) {
+function AxoBox({ b }: { b: DrawnBlock }) {
   return (
     <>
-      <rect transform={f.T} width={w} height={d} className={AXO_TOP} />
-      <rect transform={f.L} width={w} height={h} className={AXO_LEFT} />
-      <rect transform={f.R} width={d} height={h} className={AXO_RIGHT} />
+      <rect transform={b.T} width={b.w} height={b.d} className={AXO_TOP} />
+      <rect transform={b.L} width={b.w} height={b.h} className={AXO_LEFT} />
+      <rect transform={b.R} width={b.d} height={b.h} className={AXO_RIGHT} />
     </>
   );
 }
@@ -248,11 +249,11 @@ function AxoPreview() {
           strokeLinejoin="round"
           aria-hidden="true"
         >
-          <AxoBox f={AXO.spL} w={80} d={100} h={250} />
-          <path d={AXO.silSpL} strokeWidth={1.2} />
-          {posts.map((p, i) => <AxoBox key={i} f={p} w={8} d={8} h={232} />)}
-          <AxoBox f={AXO.s0} w={240} d={150} h={8} />
-          <AxoBox f={AXO.rcv} w={220} d={132} h={80} />
+          <AxoBox b={AXO.spL} />
+          <path d={AXO.spL.sil} strokeWidth={1.2} />
+          {posts.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBox b={AXO.s0} />
+          <AxoBox b={AXO.rcv} />
           <g transform={AXO.rcv.L}>
             <rect x="12" y="42" width="112" height="20" className="fill-ink" />
             <circle cx="186" cy="38" r="22" className={AXO_WELL} />
@@ -264,19 +265,19 @@ function AxoPreview() {
               className={cn('stroke-vermilion', BLINK)}
             />
           </g>
-          <path d={AXO.silRcv} strokeWidth={1.2} />
-          <AxoBox f={AXO.s1} w={240} d={150} h={8} />
-          <AxoBox f={AXO.tape} w={220} d={132} h={62} />
+          <path d={AXO.rcv.sil} strokeWidth={1.2} />
+          <AxoBox b={AXO.s1} />
+          <AxoBox b={AXO.tape} />
           <g transform={AXO.tape.L}>
             <rect x="12" y="8" width="110" height="46" className={AXO_WELL} />
             <circle cx="44" cy="34" r="10" className="fill-bg" />
             <circle cx="90" cy="34" r="10" className="fill-bg" />
             <rect x="134" y="8" width="44" height="14" className="fill-ink" />
           </g>
-          <path d={AXO.silTape} strokeWidth={1.2} />
-          <AxoBox f={AXO.s2} w={240} d={150} h={8} />
+          <path d={AXO.tape.sil} strokeWidth={1.2} />
+          <AxoBox b={AXO.s2} />
           <path d={AXO.lid} className="fill-[color-mix(in_oklab,var(--ink)_5%,transparent)]" />
-          <AxoBox f={AXO.tt} w={220} d={132} h={24} />
+          <AxoBox b={AXO.tt} />
           <g transform={AXO.tt.T}>
             <circle cx="96" cy="66" r="57" className={AXO_WELL} />
             <g className={cn('origin-center [transform-box:fill-box]', REEL)}>
@@ -287,14 +288,14 @@ function AxoPreview() {
             </g>
             <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} />
           </g>
-          <path d={AXO.silTt} strokeWidth={1.2} />
-          {front.map((p, i) => <AxoBox key={i} f={p} w={8} d={8} h={232} />)}
-          <AxoBox f={AXO.spR} w={80} d={100} h={250} />
+          <path d={AXO.tt.sil} strokeWidth={1.2} />
+          {front.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBox b={AXO.spR} />
           <g transform={AXO.spR.L}>
             <circle cx="40" cy="92" r="20" className={AXO_WELL} />
             <circle cx="40" cy="178" r="31" className={AXO_WELL} />
           </g>
-          <path d={AXO.silSpR} strokeWidth={1.2} />
+          <path d={AXO.spR.sil} strokeWidth={1.2} />
         </svg>
       </div>
     </div>
@@ -308,13 +309,12 @@ const CIPHER_PANEL = 'fill-bg';
 const CIPHER_PLATE = 'fill-[color-mix(in_oklab,var(--ink)_5%,var(--bg))]';
 const CIPHER_WELL = 'fill-[color-mix(in_oklab,var(--ink)_13%,var(--bg))]';
 const CIPHER_SKIRT = 'fill-[color-mix(in_oklab,var(--ink)_12%,var(--bg))]';
-const CIPHER_ROWS = [9, 8, 9] as const;
 
 function CipherPreview() {
-  const lamps = CIPHER_ROWS.flatMap((n, row) =>
+  const lamps = CIPHER_ROWS.flatMap(({ length: n }, row) =>
     Array.from({ length: n }, (_, i) => ({ x: (n === 8 ? 316 : 264) + i * 104, y: 285 + row * 54 })),
   );
-  const keys = CIPHER_ROWS.flatMap((n, row) =>
+  const keys = CIPHER_ROWS.flatMap(({ length: n }, row) =>
     Array.from({ length: n }, (_, i) => ({ x: 264 + i * 104, y: 518 + row * 66 })),
   );
   return (

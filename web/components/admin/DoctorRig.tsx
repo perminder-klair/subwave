@@ -1,8 +1,8 @@
 'use client';
 
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { IsoBox, InkFilter } from '../iso/IsoBox';
-import { P, arrow, loop, n } from '../iso/geometry';
+import { arrow, loop, project, round2 } from '../iso/geometry';
 import iso from '../iso/Iso.module.css';
 import { cn } from '@/lib/cn';
 import styles from './DoctorRig.module.css';
@@ -21,8 +21,10 @@ import type { DoctorReport, DoctorReview, DoctorStatus } from './doctor-queries'
 // DJ Doc's rig, drawn: the five parts its intro names, set out on one bench in
 // the same order. The drawing is the status display. A part nobody has checked
 // stays in construction lines, the one on the meter marches, a checked part
-// inks in, and the one thing to fix first gets circled. Each part jumps to its
-// rows in the rundown below.
+// inks in, and the one thing to fix first gets circled. The words live in the
+// HTML key under the drawing, so they stay readable on a phone: each part's
+// verdict, and which one to fix first. A key entry (or a click on its part in
+// the drawing) jumps to that part's rows in the rundown below.
 
 const BENCH_Z = 8;
 /** How far above the bench every tag floats: clear of the tallest part. */
@@ -49,7 +51,7 @@ const LAYOUT: Record<RigPartId, PartLayout> = {
 
 const centre = (id: RigPartId, z: number) => {
   const l = LAYOUT[id];
-  return P(l.x + l.w / 2, Y0 + l.d / 2, z);
+  return project(l.x + l.w / 2, Y0 + l.d / 2, z);
 };
 
 const VERDICT: Record<RigState, string> = {
@@ -70,6 +72,21 @@ function verdictText(state: RigState, counts: Record<DoctorStatus, number>): str
 
 /** A checked part draws in ink; everything else stays in construction lines. */
 const inked = (s: RigState) => s === 'ok' || s === 'warn' || s === 'fail';
+
+const shortName = (name: string) => name.replace(/^The /, '');
+
+/** The key's status dot, matching the drawn tag's: ink for clean, filled
+ *  accent for a failure, an accent ring for a warning or the part on the
+ *  meter, a dashed ring for anything not yet checked. */
+const KEY_DOT: Record<RigState, string> = {
+  ok: 'bg-ink',
+  fail: 'bg-[var(--accent)]',
+  warn: 'border-[1.5px] border-[var(--accent)]',
+  measuring: cn('border-[1.5px] border-[var(--accent)]', styles.pulse),
+  idle: 'border border-dashed border-ink',
+  pending: 'border border-dashed border-ink',
+  skip: 'border border-dashed border-ink',
+};
 
 interface DoctorRigProps {
   report: DoctorReport | null;
@@ -101,16 +118,9 @@ export default function DoctorRig({ report, review, running, className }: Doctor
   };
   const interactive = complete;
 
-  const summary = RIG_PARTS.map(p => `${p.name.replace(/^The /, '')} ${verdictText(states[p.id], counts(p.id))}`).join(', ');
-
   return (
     <div className={cn(iso.sheet, className)}>
-      <svg
-        viewBox="-84 -114 432 354"
-        className="block h-auto w-full overflow-visible"
-        role={interactive ? 'group' : 'img'}
-        aria-label={`The station rig: ${summary}.`}
-      >
+      <svg viewBox="-84 -114 432 354" className="block h-auto w-full overflow-visible" aria-hidden="true">
         <defs>
           <InkFilter id="doctor-rig-wob" />
         </defs>
@@ -125,29 +135,24 @@ export default function DoctorRig({ report, review, running, className }: Doctor
         {RIG_PARTS.map(p => (
           <g
             key={p.id}
-            aria-hidden="true"
             onClick={interactive ? () => jump(p.id) : undefined}
             className={cn(iso.pen, styles.pen, !inked(states[p.id]) && iso.penOff, states[p.id] === 'measuring' && styles.measuring, interactive && styles.live)}
           >
             <PartDrawing id={p.id} />
           </g>
         ))}
-        {RIG_PARTS.map(p => {
-          const state = states[p.id];
-          return (
-            <Tag
-              key={p.id}
-              id={p.id}
-              name={p.name.replace(/^The /, '')}
-              state={state}
-              verdict={verdictText(state, counts(p.id))}
-              onActivate={interactive && firstSectionOf(report, p.id) ? () => jump(p.id) : undefined}
-            />
-          );
-        })}
+        {RIG_PARTS.map(p => (
+          <Tag
+            key={p.id}
+            id={p.id}
+            name={shortName(p.name)}
+            state={states[p.id]}
+            onActivate={interactive && firstSectionOf(report, p.id) ? () => jump(p.id) : undefined}
+          />
+        ))}
 
         {/* The inked layer: what to fix first, or a clean bill. */}
-        <g filter="url(#doctor-rig-wob)" className={iso.ink} strokeWidth={1.6} aria-hidden="true">
+        <g filter="url(#doctor-rig-wob)" className={iso.ink} strokeWidth={1.6}>
           {circled && <FixFirst id={circled} />}
           {allClean && (
             <>
@@ -159,6 +164,38 @@ export default function DoctorRig({ report, review, running, className }: Doctor
           )}
         </g>
       </svg>
+
+      <ol aria-label="The station rig" className="m-0 mt-3 flex list-none flex-wrap justify-center gap-x-4 gap-y-1.5 p-0 font-mono text-[11px] tracking-[0.12em] uppercase">
+        {RIG_PARTS.map(p => {
+          const state = states[p.id];
+          const entry = (
+            <>
+              <span aria-hidden="true" className={cn('size-2 flex-none rounded-full', KEY_DOT[state])} />
+              <b>{shortName(p.name)}</b>
+              <span className={state === 'warn' || state === 'fail' ? 'text-[var(--accent)]' : 'text-muted'}>
+                {verdictText(state, counts(p.id))}
+              </span>
+              {circled === p.id && <span className="font-bold text-[var(--accent)]">· fix this first</span>}
+            </>
+          );
+          return (
+            <li key={p.id}>
+              {interactive && firstSectionOf(report, p.id) ? (
+                <button
+                  type="button"
+                  onClick={() => jump(p.id)}
+                  className="flex cursor-pointer items-center gap-1.5 border-0 bg-transparent p-0 font-[inherit] tracking-[inherit] text-ink uppercase hover:text-[var(--accent)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+                >
+                  {entry}
+                  <span className="sr-only">, show its findings</span>
+                </button>
+              ) : (
+                <span className="flex items-center gap-1.5">{entry}</span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -166,8 +203,8 @@ export default function DoctorRig({ report, review, running, className }: Doctor
 function FixFirst({ id }: { id: RigPartId }) {
   const l = LAYOUT[id];
   const [cx, cy] = centre(id, BENCH_Z + l.h / 2);
-  const rx = n((l.w + l.d) * 0.5 + 10);
-  const ry = n(l.h / 2 + 30);
+  const rx = round2((l.w + l.d) * 0.5 + 10);
+  const ry = round2(l.h / 2 + 30);
   const noteX = Math.max(-78, cx - 150);
   const noteY = Math.min(234, cy + ry + 44);
   return (
@@ -185,67 +222,39 @@ interface TagProps {
   id: RigPartId;
   name: string;
   state: RigState;
-  verdict: string;
   onActivate?: () => void;
 }
 
-/** A part's tag: a status dot, its name and its verdict, with a leader down to
- *  the part. Once a report is in, the tag is the part's button. */
-function Tag({ id, name, state, verdict, onActivate }: TagProps) {
+/** A part's tag: a status dot and its name, with a leader down to the part.
+ *  Its verdict is in the HTML key; once a report is in, a click on the tag
+ *  jumps like the key's entry does. */
+function Tag({ id, name, state, onActivate }: TagProps) {
   const l = LAYOUT[id];
   const [tx, topY] = centre(id, BENCH_Z + l.h);
   // Every tag sits the same height above the bench, so the tags step down
   // the diagonal evenly and never meet, whatever height their parts are.
   const [bx, by] = centre(id, BENCH_Z);
-  const tagX = n(bx - 12);
-  const tagY = n(by - TAG_LIFT);
-  const onKey = onActivate
-    ? (e: KeyboardEvent<SVGGElement>) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onActivate();
-        }
-      }
-    : undefined;
+  const tagX = round2(bx - 12);
+  const tagY = round2(by - TAG_LIFT);
   return (
-    <g
-      role={onActivate ? 'button' : undefined}
-      tabIndex={onActivate ? 0 : undefined}
-      aria-label={onActivate ? `${name}: ${verdict}. Show its findings.` : undefined}
-      onClick={onActivate}
-      onKeyDown={onKey}
-      className={cn(styles.part, onActivate && styles.live)}
-    >
-      <g aria-hidden="true">
-        <line x1={tagX} y1={tagY + 16} x2={tx} y2={topY - 4} strokeWidth={0.6} className={cn(iso.sInk, styles.leader)} />
-        <rect x={tagX - 8} y={tagY - 14} width={92} height={36} className={cn(iso.fNone, styles.focus)} />
-        <circle
-          cx={tagX}
-          cy={tagY - 3.5}
-          r="3.6"
-          strokeWidth={1.2}
-          className={cn(
-            state === 'ok' && cn(iso.fInk, iso.ns),
-            state === 'fail' && cn(iso.fAcc, iso.ns),
-            state === 'warn' && cn(iso.fBg, iso.sAcc),
-            state === 'measuring' && cn(iso.fBg, iso.sAcc, styles.pulse),
-            (state === 'idle' || state === 'pending' || state === 'skip') && cn(iso.fBg, iso.sInk, styles.hollow),
-          )}
-        />
-        <text x={tagX + 8} y={tagY} fontSize={11} fontWeight={700} letterSpacing="0.16em" className={cn(iso.tx, iso.mono)}>
-          {name.toUpperCase()}
-        </text>
-        <text
-          x={tagX + 8}
-          y={tagY + 13}
-          fontSize={9.5}
-          fontWeight={600}
-          letterSpacing="0.06em"
-          className={cn(state === 'warn' || state === 'fail' ? iso.txAcc : iso.txMuted, iso.mono)}
-        >
-          {verdict}
-        </text>
-      </g>
+    <g onClick={onActivate} className={cn(onActivate && styles.live)}>
+      <line x1={tagX} y1={tagY + 16} x2={tx} y2={topY - 4} strokeWidth={0.6} className={cn(iso.sInk, styles.leader)} />
+      <circle
+        cx={tagX}
+        cy={tagY - 3.5}
+        r="3.6"
+        strokeWidth={1.2}
+        className={cn(
+          state === 'ok' && cn(iso.fInk, iso.ns),
+          state === 'fail' && cn(iso.fAcc, iso.ns),
+          state === 'warn' && cn(iso.fBg, iso.sAcc),
+          state === 'measuring' && cn(iso.fBg, iso.sAcc, styles.pulse),
+          (state === 'idle' || state === 'pending' || state === 'skip') && cn(iso.fBg, iso.sInk, styles.hollow),
+        )}
+      />
+      <text x={tagX + 8} y={tagY} fontSize={11} fontWeight={700} letterSpacing="0.16em" className={cn(iso.tx, iso.mono)}>
+        {name.toUpperCase()}
+      </text>
     </g>
   );
 }
@@ -310,8 +319,8 @@ function PartDrawing({ id }: { id: RigPartId }): ReactNode {
     }
     case 'mix': {
       const body = 22;
-      const mast = P(l.x + l.w - 8, Y0 + 8, z + body);
-      const tip = P(l.x + l.w - 8, Y0 + 8, z + l.h);
+      const mast = project(l.x + l.w - 8, Y0 + 8, z + body);
+      const tip = project(l.x + l.w - 8, Y0 + 8, z + l.h);
       return (
         <>
           <IsoBox
@@ -345,18 +354,18 @@ function PartDrawing({ id }: { id: RigPartId }): ReactNode {
     case 'voice': {
       const base = 4;
       const pole = 54;
-      const top = P(l.x + l.w / 2, Y0 + l.d / 2, z + base + pole);
+      const top = project(l.x + l.w / 2, Y0 + l.d / 2, z + base + pole);
       const [mx, my] = top;
       return (
         <>
           <IsoBox x={l.x} y={Y0} z={z} w={l.w} d={l.d} h={base} />
           <IsoBox x={l.x + l.w / 2 - 2} y={Y0 + l.d / 2 - 2} z={z + base} w={4} d={4} h={pole} outline={false} />
-          <rect x={n(mx - 9)} y={n(my - 34)} width="18" height="34" rx="9" strokeWidth={1.2} className={cn(iso.fBg, iso.solid)} />
+          <rect x={round2(mx - 9)} y={round2(my - 34)} width="18" height="34" rx="9" strokeWidth={1.2} className={cn(iso.fBg, iso.solid)} />
           <path
-            d={[8, 13, 18, 23].map(o => `M${n(mx - 7)} ${n(my - 34 + o)}H${n(mx + 7)}`).join('')}
+            d={[8, 13, 18, 23].map(o => `M${round2(mx - 7)} ${round2(my - 34 + o)}H${round2(mx + 7)}`).join('')}
             strokeWidth={0.5}
           />
-          <rect x={n(mx - 9)} y={n(my - 8)} width="18" height="5" className={iso.fW} />
+          <rect x={round2(mx - 9)} y={round2(my - 8)} width="18" height="5" className={iso.fW} />
         </>
       );
     }

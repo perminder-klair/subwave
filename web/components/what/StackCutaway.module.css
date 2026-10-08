@@ -55,13 +55,14 @@
   opacity: 0;
 }
 
+/* From the kit's construction pen to its ink (Iso.module.css .pen). */
 @keyframes stack-pen-in {
   from {
-    stroke: color-mix(in oklab, var(--ink) 45%, var(--bg));
-    stroke-dasharray: 3 2.5;
+    stroke: var(--iso-off);
+    stroke-dasharray: var(--iso-off-dash);
   }
   to {
-    stroke: var(--ink);
+    stroke: var(--iso-ink);
     stroke-dasharray: 6 0;
   }
 }

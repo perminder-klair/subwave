@@ -243,8 +243,8 @@ export default defineConfig([
   // Card"). Its styling is intrinsically state-driven: per-chip on/off fills,
   // active-preset inversion, the on-air toggle thumb transform, status colours
   // and the body dim are all computed from the form's live state over the theme
-  // tokens — the same dynamic-styling deal as the Observatory / Booth Sprite
-  // ports above. Its keyframes + pseudo-elements live in app/globals.css under
+  // tokens — the same dynamic-styling deal as the Observatory port above. Its
+  // keyframes + pseudo-elements live in app/globals.css under
   // `.sw-seg`.
   {
     files: ['components/admin/skills/SkillEditModal.tsx'],

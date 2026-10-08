@@ -11,7 +11,6 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { useReducedMotion } from 'motion/react';
 import styles from './Cipher.module.css';
 import { BlockKey, KeyRows, Lampboard, Panel, PowerKey, Rotor, Screws, TapeChars, type KeyHandlers } from './CipherParts';
 import {
@@ -20,6 +19,7 @@ import {
   beatMs,
   chr,
   groups,
+  keyToChar,
   lampSequence,
   mod26,
   stopToVol,
@@ -27,7 +27,7 @@ import {
   volGlyph,
   volToStop,
 } from './cipher';
-import { useCipherMachine, type Ambient } from './useCipherMachine';
+import { useCipherMachine, type Ambient, type Spelling } from './useCipherMachine';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -41,20 +41,32 @@ import { cn } from '@/lib/cn';
 import { fmtTime } from '@/lib/format';
 import {
   contextLine,
+  isPowered,
   lastVoiceLine,
+  listenPhase,
   listenerCountOf,
   progressRatio,
   speechMs,
   stationIdentity,
   trackMeta,
+  tuningStatus,
 } from '../shared';
-import { useDjOnAir, useRequestSlip, useSkinMotion, useTrackLike } from '../sharedHooks';
+import { useDjOnAir, useRequestSlip, useSkinCalm, useTrackLike, type RequestOutcome } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
-type Phase = 'offline' | 'standby' | 'connecting' | 'live';
 type TapeMode = 'offline' | 'compose' | 'sent' | 'talk' | 'music';
 
 const OFFLINE_COPY = 'Nothing is on the stream right now. Power is disabled until the station comes back.';
+// How the note on the wire ended: the eyebrow, and the tape's footnote.
+const SENT_EYEBROW: Record<RequestOutcome, string> = {
+  sent: 'sent · enciphered',
+  refused: 'returned',
+  failed: 'line down · not sent',
+};
+const SENT_FOOT: Record<'refused' | 'failed', string> = {
+  refused: 'returned by the booth · ask for another',
+  failed: 'not delivered · type it again',
+};
 // A sent note stays on the tape this long after the booth's last word on it.
 const SENT_HOLD_MS = 9000;
 // Below this scale a phone's keys drop under a fingertip, so the machine
@@ -112,12 +124,9 @@ export default function CipherSkin({ contained }: SkinProps) {
   const onMic = useDjOnAir();
   const like = useTrackLike();
 
-  // Lite stops the clock through useSkinMotion; reduced motion has to be read
-  // here too, because the media query can't reach a JS timer.
-  const reduced = useReducedMotion();
-  const calm = !useSkinMotion() || !!reduced;
+  const calm = useSkinCalm();
 
-  const phase: Phase = offline ? 'offline' : !tunedIn ? 'standby' : status === 'playing' ? 'live' : 'connecting';
+  const phase = listenPhase({ offline, tunedIn, status });
   const live = phase === 'live';
   const talking = live && onMic && !!voice && !muted;
 
@@ -151,7 +160,7 @@ export default function CipherSkin({ contained }: SkinProps) {
     talkMs: typingMs(Array.from(talkText).length, speechMs(talkText)),
   });
   const { msg } = machine;
-  const { m, r } = msg.rotors;
+  const { middle, right } = msg.rotors;
 
   const composing = !offline && msg.plain.length > 0;
   const mode: TapeMode = offline
@@ -201,9 +210,13 @@ export default function CipherSkin({ contained }: SkinProps) {
 
   // Event handlers outlive renders (window listeners, memoised keys), so they
   // read the latest closures from here.
-  const latest = useRef({ pressKey, send, release: machine.release, del: machine.del, clear: machine.clear, setVol, onPower, phase, vol, down: machine.down, plain: msg.plain });
+  const forHandlers = {
+    pressKey, send, release: machine.release, del: machine.del, clear: machine.clear, setVol, onPower,
+    phase, vol, down: machine.down, plain: msg.plain,
+  };
+  const latest = useRef(forHandlers);
   useEffect(() => {
-    latest.current = { pressKey, send, release: machine.release, del: machine.del, clear: machine.clear, setVol, onPower, phase, vol, down: machine.down, plain: msg.plain };
+    latest.current = forHandlers;
   });
   const keyHandlers = useMemo<KeyHandlers>(() => ({
     hold: c => latest.current.pressKey(c, true),
@@ -213,8 +226,8 @@ export default function CipherSkin({ contained }: SkinProps) {
 
   // The real keyboard types on the machine. Capture phase, so a typed S or T
   // reaches the tape before the shell's skin/theme shortcuts can act on it.
-  // In a showcase frame it only listens once the visitor has pointed at it,
-  // so the host page keeps its keys (Space still scrolls).
+  // In a showcase frame it only listens once the visitor has clicked or tapped
+  // inside it, so the host page keeps its keys (Space still scrolls).
   const rootRef = useRef<HTMLDivElement | null>(null);
   const engaged = useRef(!contained);
   useEffect(() => {
@@ -243,10 +256,18 @@ export default function CipherSkin({ contained }: SkinProps) {
         }
         return;
       }
+      const ch = keyToChar(k);
+      // Tuned in, the letter keys belong to the machine even while the stream
+      // is still locking, so S and T never fall through to the shell's skin
+      // and theme shortcuts. They only type once it is live.
+      if (L.phase === 'connecting') {
+        if (ch) e.preventDefault();
+        return;
+      }
       if (L.phase !== 'live') return;
-      if (/^[a-zA-Z0-9]$/.test(k) || (k === ' ' && !onControl)) {
+      if (ch || (k === ' ' && !onControl)) {
         e.preventDefault();
-        if (!e.repeat) L.pressKey(k.toUpperCase(), true);
+        if (!e.repeat) L.pressKey(ch ?? ' ', true);
       } else if (k === 'Backspace') {
         e.preventDefault();
         L.del();
@@ -263,7 +284,7 @@ export default function CipherSkin({ contained }: SkinProps) {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       const d = latest.current.down;
-      if (d && (e.key === ' ' ? d === 'SPACE' : e.key.toUpperCase() === d)) latest.current.release();
+      if (d && (e.key === ' ' ? d === 'SPACE' : keyToChar(e.key) === d)) latest.current.release();
     };
     // A key held while the window loses focus never sees its keyup.
     const onBlur = () => { if (latest.current.down) latest.current.release(); };
@@ -285,8 +306,8 @@ export default function CipherSkin({ contained }: SkinProps) {
 
   // ── Words ──────────────────────────────────────────────────────────
   const gate = showOverlay && !offline;
-  const powered = phase === 'connecting' || live;
-  const keyText = `rotors ${volGlyph(vol)} · ${chr(m)} · ${chr(r)}`;
+  const powered = isPowered(phase);
+  const keyText = `rotors ${volGlyph(vol)} · ${chr(middle)} · ${chr(right)}`;
   const eyebrow = offline
     ? 'off air'
     : phase === 'standby'
@@ -296,7 +317,7 @@ export default function CipherSkin({ contained }: SkinProps) {
         : mode === 'compose'
           ? `outgoing · to ${djName}`
           : mode === 'sent'
-            ? (slip.sending ? 'sending · enciphered' : slip.outcome === 'sent' ? 'sent · enciphered' : 'returned')
+            ? (slip.sending || !slip.outcome ? 'sending · enciphered' : SENT_EYEBROW[slip.outcome])
             : mode === 'talk'
               ? `${djName} · on air`
               : muted
@@ -311,15 +332,7 @@ export default function CipherSkin({ contained }: SkinProps) {
         : mode === 'offline' || mode === 'sent'
           ? ''
           : meta.facts.slice(0, 2).join(' · ');
-  const statusText = offline
-    ? 'off air'
-    : phase === 'standby'
-      ? 'standby'
-      : phase === 'connecting'
-        ? 'tuning…'
-        : muted
-          ? 'tuned · muted'
-          : 'tuned · locked';
+  const statusText = tuningStatus(phase, muted);
   const powerLabel = offline ? 'locked · off air' : phase === 'connecting' ? 'on · searching' : live ? 'on · locked' : 'off';
   const powerShort = offline ? 'locked' : phase === 'connecting' ? 'search' : live ? 'on' : 'off';
   const volLabel = muted ? 'muted' : `vol ${volGlyph(vol)} / ${VOL_STOPS}`;
@@ -327,23 +340,26 @@ export default function CipherSkin({ contained }: SkinProps) {
   const nowLine = [nowPlaying?.title, nowPlaying?.artist].filter(Boolean).join(' — ');
   const sentLine = slip.sending ? `On the wire to ${djName}…` : (slip.ack ?? `${djName} has your note.`);
 
-  const tape = {
-    mode, eyebrow, eyebrowR, title: title || 'Scanning the dial…', artist, artistAt, sub, nowLine,
-    cursor: machine.cursor, scramble: machine.scramble, seed: machine.seed,
-    elapsed, duration: nowPlaying?.duration, ratio,
-    talk: talkText, talkN: machine.talkN,
-    plain: msg.plain, cipher: groups(msg.cipher), keyText,
-    sentLine, sentCipher: sent ?? '', sentOk: slip.sending || slip.outcome === 'sent',
+  const tape: Omit<TapeProps, 'variant'> = {
+    mode, eyebrow, eyebrowR, keyText,
+    song: {
+      title: title || 'Scanning the dial…', artist, artistAt, sub, nowLine,
+      elapsed, duration: nowPlaying?.duration, ratio,
+    },
+    spelling: machine.spelling,
+    talk: { text: talkText, typed: machine.talkN },
+    compose: { plain: msg.plain, cipher: groups(msg.cipher) },
+    sent: { line: sentLine, cipher: sent ?? '', outcome: slip.sending ? null : slip.outcome },
   };
 
   const rotorI = (
     <Rotor name="I · vol" label="Volume" value={vol} max={VOL_STOPS} accent onChange={setVol} />
   );
   const rotorII = (
-    <Rotor name="II" label="Rotor II" value={m} onChange={v => machine.setRotors({ m: mod26(v), r })} />
+    <Rotor name="II" label="Rotor II" value={middle} onChange={v => machine.setRotors({ middle: mod26(v), right })} />
   );
   const rotorIII = (
-    <Rotor name="III" label="Rotor III" value={r} onChange={v => machine.setRotors({ m, r: mod26(v) })} />
+    <Rotor name="III" label="Rotor III" value={right} onChange={v => machine.setRotors({ middle, right: mod26(v) })} />
   );
   const likeFace = like.available ? `${like.count}` : '—';
   const canLike = like.available && !like.liked && !like.pending;
@@ -749,33 +765,38 @@ function SpaceBar({
   );
 }
 
-interface TapeProps {
-  variant: 'desk' | 'strip';
-  mode: TapeMode;
-  eyebrow: string;
-  eyebrowR: string;
+/** The song as the tape prints it while it plays. */
+interface TapeSong {
   title: string;
   /** Upper-cased, as the lampboard spells it. */
   artist: string;
+  /** Where the artist starts in the lampboard sequence. */
   artistAt: number;
   /** Album · year. */
   sub: string;
   /** "Title — Artist", under the DJ's words. */
   nowLine: string;
-  cursor: number;
-  scramble: number;
-  seed: number;
   elapsed: number;
   duration: number | undefined;
   ratio: number | null;
-  talk: string;
-  talkN: number;
-  plain: string;
-  cipher: string;
+}
+
+interface TapeProps {
+  variant: 'desk' | 'strip';
+  mode: TapeMode;
+  eyebrow: string;
+  eyebrowR: string;
+  /** The rotor readout, e.g. "rotors 18 · K · Q". */
   keyText: string;
-  sentLine: string;
-  sentCipher: string;
-  sentOk: boolean;
+  song: TapeSong;
+  spelling: Spelling;
+  /** The DJ's line, and how many of its characters have typed out. */
+  talk: { text: string; typed: number };
+  /** The listener's message: plain text, and its cipher in groups. */
+  compose: { plain: string; cipher: string };
+  /** The note on the wire: the booth's line, its cipher groups, and how it
+   *  ended (null while it is still sending). */
+  sent: { line: string; cipher: string; outcome: RequestOutcome | null };
 }
 
 /** Title sizes that keep a long name inside the tape: [size, lines]. */
@@ -791,26 +812,26 @@ function titleFit(len: number, variant: TapeProps['variant']): string {
 }
 
 /** The paper tape: what the machine is receiving, typing or sending. */
-function Tape(p: TapeProps) {
-  const desk = p.variant === 'desk';
+function Tape({ variant, mode, eyebrow, eyebrowR, keyText, song, spelling, talk, compose, sent }: TapeProps) {
+  const desk = variant === 'desk';
   const caret = <span className={styles.caret} aria-hidden="true" />;
-  const talkChars = Array.from(p.talk);
-  const typed = talkChars.slice(0, p.talkN).join('');
-  const done = p.talkN >= talkChars.length;
+  const talkChars = Array.from(talk.text);
+  const typed = talkChars.slice(0, talk.typed).join('');
+  const done = talk.typed >= talkChars.length;
 
   const progress = (
     <div className={cn('mt-auto flex items-center font-mono tabular-nums', desk ? 'gap-3 text-[12px]' : 'gap-2.5 text-[11px]')}>
-      <span className={cn(styles.txt, 'font-bold')}>{fmtTime(p.elapsed)}</span>
+      <span className={cn(styles.txt, 'font-bold')}>{fmtTime(song.elapsed)}</span>
       <div className={cn('relative flex-1', desk ? 'h-3.5' : 'h-3')}>
         <div className={cn('absolute inset-x-0 border-t border-dashed border-muted', desk ? 'top-[7px]' : 'top-1.5')} />
-        {p.ratio != null && (
+        {song.ratio != null && (
           <>
             <div className={cn('absolute left-0 h-0.5 bg-vermilion', desk ? 'top-1.5' : 'top-[5px]', styles.progFill)} />
             <div className={cn('absolute top-0 h-full w-0.5 bg-vermilion', styles.progHead)} />
           </>
         )}
       </div>
-      <span className="text-muted">{p.duration ? fmtTime(p.duration) : 'live'}</span>
+      <span className="text-muted">{song.duration ? fmtTime(song.duration) : 'live'}</span>
     </div>
   );
 
@@ -818,34 +839,34 @@ function Tape(p: TapeProps) {
     <div className={cn('flex min-h-0 flex-col', desk ? 'h-full gap-2' : 'flex-1 gap-1.5')}>
       {desk && (
         <div className="flex items-baseline justify-between gap-4">
-          <span className={cn('truncate font-mono text-[10px] font-bold tracking-[0.22em] uppercase', p.mode === 'offline' ? 'text-muted' : 'text-vermilion')}>
-            {p.eyebrow}
+          <span className={cn('truncate font-mono text-[10px] font-bold tracking-[0.22em] uppercase', mode === 'offline' ? 'text-muted' : 'text-vermilion')}>
+            {eyebrow}
           </span>
-          <span className="font-mono text-[9px] tracking-[0.22em] whitespace-nowrap text-muted uppercase">{p.eyebrowR}</span>
+          <span className="font-mono text-[9px] tracking-[0.22em] whitespace-nowrap text-muted uppercase">{eyebrowR}</span>
         </div>
       )}
 
-      {p.mode === 'music' && (
+      {mode === 'music' && (
         <>
-          <div className={cn(styles.txt, 'font-display leading-[1.05] font-bold tracking-[-0.01em]', titleFit(Array.from(p.title).length, p.variant))}>
-            <span className="sr-only">{p.title}</span>
+          <div className={cn(styles.txt, 'font-display leading-[1.05] font-bold tracking-[-0.01em]', titleFit(Array.from(song.title).length, variant))}>
+            <span className="sr-only">{song.title}</span>
             <span aria-hidden="true">
-              <TapeChars text={p.title} base={0} cursor={p.cursor} scramble={p.scramble} seed={p.seed} />
+              <TapeChars text={song.title} base={0} spelling={spelling} />
             </span>
           </div>
-          {(p.artist || p.sub) && (
+          {(song.artist || song.sub) && (
             <div className={cn('truncate font-mono tracking-[0.14em]', desk ? 'text-[14px]' : 'text-[11px]')}>
-              {p.artist && (
+              {song.artist && (
                 <span className={styles.txt}>
-                  <span className="sr-only">{p.artist}</span>
+                  <span className="sr-only">{song.artist}</span>
                   <span aria-hidden="true">
-                    <TapeChars text={p.artist} base={p.artistAt} cursor={p.cursor} scramble={p.scramble} seed={p.seed} />
+                    <TapeChars text={song.artist} base={song.artistAt} spelling={spelling} />
                   </span>
                 </span>
               )}
-              {p.sub && (
+              {song.sub && (
                 <span className={cn('tracking-[0.12em] text-muted uppercase', desk ? 'pl-2.5 text-[11px]' : 'pl-2')}>
-                  {p.artist ? '· ' : ''}{p.sub}
+                  {song.artist ? '· ' : ''}{song.sub}
                 </span>
               )}
             </div>
@@ -854,21 +875,21 @@ function Tape(p: TapeProps) {
         </>
       )}
 
-      {p.mode === 'talk' && (
+      {mode === 'talk' && (
         <>
           <div className="flex min-h-0 flex-1 flex-col justify-end overflow-hidden">
             <p className={cn('font-display leading-[1.35] text-pretty italic', desk ? 'text-[22px]' : 'text-[15px] leading-[1.4]')}>
-              <span className="sr-only">{p.talk}</span>
+              <span className="sr-only">{talk.text}</span>
               <span aria-hidden="true">“{typed}{done ? '”' : caret}</span>
             </p>
           </div>
           <span className={cn('flex-none truncate font-mono tracking-[0.14em] text-muted uppercase', desk ? 'text-[11px]' : 'text-[10px]')}>
-            ▸ {p.nowLine}
+            ▸ {song.nowLine}
           </span>
         </>
       )}
 
-      {p.mode === 'compose' && (
+      {mode === 'compose' && (
         <>
           <div
             className={cn(
@@ -876,38 +897,40 @@ function Tape(p: TapeProps) {
               desk ? 'text-[28px] leading-[1.2] tracking-[0.06em]' : 'text-[18px] leading-tight tracking-[0.05em]',
             )}
           >
-            {p.plain}{caret}
+            {compose.plain}{caret}
           </div>
           <div className="flex min-w-0 items-baseline gap-3">
             {desk && <span className="flex-none font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">Cipher</span>}
             <span className={cn('truncate font-mono text-vermilion', desk ? 'text-[14px] tracking-[0.12em]' : 'text-[11px] tracking-[0.1em]')}>
-              <span className="sr-only">Enciphered: </span>{p.cipher}
+              <span className="sr-only">Enciphered: </span>{compose.cipher}
             </span>
           </div>
           <div className={cn('mt-auto flex justify-between gap-4 font-mono tracking-[0.16em] text-muted uppercase', desk ? 'text-[10px]' : 'text-[9px]')}>
-            <span>{desk ? p.keyText : p.eyebrowR}</span>
-            <span>{desk ? 'enter send · esc clear' : p.keyText}</span>
+            <span>{desk ? keyText : eyebrowR}</span>
+            <span>{desk ? 'enter send · esc clear' : keyText}</span>
           </div>
         </>
       )}
 
-      {p.mode === 'sent' && (
+      {mode === 'sent' && (
         <>
           <div className={cn('line-clamp-2 font-display leading-[1.15] font-semibold italic', desk ? 'text-[30px]' : 'text-[20px]')}>
-            {p.sentLine}
+            {sent.line}
           </div>
           <div className={cn('font-mono break-words text-vermilion', desk ? 'text-[14px] tracking-[0.12em]' : 'text-[11px] tracking-[0.1em]')}>
-            {p.sentCipher}
+            {sent.cipher}
           </div>
           {desk && (
             <div className="mt-auto font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-              {p.sentOk ? `sent enciphered · ${p.keyText}` : 'not delivered · type it again'}
+              {sent.outcome === 'refused' || sent.outcome === 'failed'
+                ? SENT_FOOT[sent.outcome]
+                : `sent enciphered · ${keyText}`}
             </div>
           )}
         </>
       )}
 
-      {p.mode === 'offline' && (
+      {mode === 'offline' && (
         <>
           <div className={cn('font-display leading-[1.05] font-bold text-muted', desk ? 'text-[54px]' : 'text-[30px]')}>— off air —</div>
           <span className={cn('leading-normal text-pretty text-muted', desk ? 'text-[15px]' : 'text-[14px]')}>{OFFLINE_COPY}</span>

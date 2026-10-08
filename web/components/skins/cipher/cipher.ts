@@ -1,9 +1,14 @@
 // The rotor machine behind the Cipher skin, as pure data and functions. Three
-// rotors wired like the historical Enigma I, II and III with reflector B, so a
-// real machine set the same way would read the listener's request back.
-// Rotor I's position is the VOLUME, so it never steps; II and III step as
-// letters pass through, whether the listener types them or the lampboard
-// spells the song. No React here, so the wiring can be tested on its own.
+// rotors wired like the historical Enigma I, II and III with reflector B, and
+// II and III step as the real machine's middle and right rotors do, as letters
+// pass through, whether the listener types them or the lampboard spells the
+// song. Rotor I's position is the VOLUME, so it never steps, and so II never
+// double-steps either: a real machine set the same way (rings at A, no
+// plugboard) reads the listener's request back only until rotor II comes round
+// to E, where the real one would double-step II and turn I over. No React
+// here, so the wiring can be tested on its own.
+
+import { foldBpm } from '../shared';
 
 /** The Enigma's QWERTZ rows, shared by the lampboard and the keyboard. */
 export const ROWS = ['QWERTZUIO', 'ASDFGHJK', 'PYXCVBNML'] as const;
@@ -32,16 +37,16 @@ const REFL = az('YRUHQSLDPXNGOKMIEBFZCWVJAT');
 // Rotor III turns II over as it leaves V.
 const NOTCH = 21;
 
-/** Positions of the two stepping rotors, II (middle) and III (right). */
+/** Positions of the two stepping rotors: II in the middle, III on the right. */
 export interface Rotors {
-  m: number;
-  r: number;
+  middle: number;
+  right: number;
 }
 
 /** One keypress' worth of stepping, which happens BEFORE the letter is
  *  enciphered, as on the real machine. */
-export function stepRotors({ m, r }: Rotors): Rotors {
-  return { m: r === NOTCH ? mod26(m + 1) : m, r: mod26(r + 1) };
+export function stepRotors({ middle, right }: Rotors): Rotors {
+  return { middle: right === NOTCH ? mod26(middle + 1) : middle, right: mod26(right + 1) };
 }
 
 /** Letter index (0–25) through III, II, I, the reflector, and back.
@@ -72,6 +77,14 @@ export function foldLetter(ch: string): string | null {
   return /^[A-Z]$/.test(u) ? u : null;
 }
 
+/** What a physical key types on the machine: a letter (accents folded, as
+ *  typeInto does) or a digit, upper-cased; null for any other key, including
+ *  named keys such as 'Enter' or 'Dead'. */
+export function keyToChar(key: string): string | null {
+  if (Array.from(key).length !== 1) return null;
+  return /^[0-9]$/.test(key) ? key : foldLetter(key);
+}
+
 /** Type one character. Letters step the rotors and encipher; a space or a
  *  digit passes through as it is (the tape needs numbers for song titles; the
  *  machine never had them). Returns null when the keypress does nothing: the
@@ -94,7 +107,7 @@ export function typeInto(
   const letter = foldLetter(ch);
   if (!letter) return null;
   const rotors = stepRotors(msg.rotors);
-  const lamp = chr(encipher(letter.charCodeAt(0) - 65, [vol, rotors.m, rotors.r]));
+  const lamp = chr(encipher(letter.charCodeAt(0) - 65, [vol, rotors.middle, rotors.right]));
   return {
     msg: { plain: msg.plain + letter, cipher: msg.cipher + lamp, hist, rotors },
     lamp,
@@ -132,13 +145,10 @@ export function lampSequence(title: string, artist: string): { seq: (string | nu
 }
 
 /** Milliseconds per lampboard letter for a track's tempo: one per beat,
- *  folded by octaves into a readable 400–1000ms band (a 170 BPM reading
- *  spells on every other beat). 92 BPM when the tempo is unknown. */
+ *  folded by octaves into a readable 400–1000ms band, i.e. 60–150 BPM (a 170
+ *  BPM reading spells on every other beat). */
 export function beatMs(bpm: number | null | undefined): number {
-  let ms = typeof bpm === 'number' && bpm > 0 ? 60_000 / bpm : 652;
-  while (ms < 400) ms *= 2;
-  while (ms > 1000) ms /= 2;
-  return ms;
+  return 60_000 / foldBpm(bpm, 60, 150);
 }
 
 /** How fast the tape types a spoken line: spread over its estimated airtime

@@ -2,16 +2,16 @@
 // (components/iso/geometry.ts): every box is its three faces in a shear
 // matrix, silhouettes traced separately at a heavier pen. Pure data, no React.
 
-import { P, box, sil, poly, hatchStrip, loop, arrow, n, type BoxFaces, type Pt } from '@/components/iso/geometry';
+import { arrow, drawBlock, hatchStrip, loop, poly, project, round2, type DrawnBlock, type Pt } from '@/components/iso/geometry';
 
-export type { BoxFaces };
+export type { DrawnBlock };
 
 /** Tick ring around a knob, sweeping 270° from −135°. */
 const ring = (cx: number, cy: number, r0: number, r1: number, count: number) => {
   let d = '';
   for (let i = 0; i <= count; i++) {
     const a = ((-135 + (i * 270) / count) * Math.PI) / 180;
-    d += `M${n(cx + Math.sin(a) * r0)} ${n(cy - Math.cos(a) * r0)}L${n(cx + Math.sin(a) * r1)} ${n(cy - Math.cos(a) * r1)}`;
+    d += `M${round2(cx + Math.sin(a) * r0)} ${round2(cy - Math.cos(a) * r0)}L${round2(cx + Math.sin(a) * r1)} ${round2(cy - Math.cos(a) * r1)}`;
   }
   return d;
 };
@@ -19,44 +19,48 @@ const ring = (cx: number, cy: number, r0: number, r1: number, count: number) => 
 let dialTicks = '';
 for (let i = 0; i <= 13; i++) dialTicks += `M${16 + i * 8} 11V${i % 4 === 0 ? 20 : 15}`;
 
-const lidA = P(10, 10, 256), lidB = P(230, 10, 256), lidC = P(230, -24.16, 383.5), lidD = P(10, -24.16, 383.5);
-const li = P(18, 4, 268), lj = P(222, 4, 268), lk = P(222, -18, 372), ll = P(18, -18, 372);
-const g1 = P(40, 0, 290), g2 = P(70, -12, 335), g3 = P(56, 0, 300), g4 = P(78, -9, 330);
-const pw = P(152, 142, 64), mu = P(152, 142, 33);
-const lcdA = P(22, 142, 44), lcdB = P(124, 142, 30);
+const lidA = project(10, 10, 256), lidB = project(230, 10, 256), lidC = project(230, -24.16, 383.5), lidD = project(10, -24.16, 383.5);
+const li = project(18, 4, 268), lj = project(222, 4, 268), lk = project(222, -18, 372), ll = project(18, -18, 372);
+const g1 = project(40, 0, 290), g2 = project(70, -12, 335), g3 = project(56, 0, 300), g4 = project(78, -9, 330);
+const pw = project(152, 142, 64), mu = project(152, 142, 33);
+const lcdA = project(22, 142, 44), lcdB = project(124, 142, 30);
+
+/** A corner post of the rack, 8 × 8 and as tall as the shelving. */
+const post = (x: number, y: number) => drawBlock({ x, y, z: 0, w: 8, d: 8, h: 232 });
+/** A rack shelf at height z. */
+const shelf = (z: number) => drawBlock({ x: 0, y: 0, z, w: 240, d: 150, h: 8 });
+/** A component sitting in the rack: receiver, tape deck or turntable. */
+const unit = (z: number, h: number) => drawBlock({ x: 10, y: 10, z, w: 220, d: 132, h });
+/** A floor-standing speaker. */
+const speaker = (x: number) => drawBlock({ x, y: 20, z: 0, w: 80, d: 100, h: 250 });
 
 export interface SigBar { x: number; y: number; h: number }
 
 export const AXO = {
-  spL: box(-130, 20, 0, 80, 100, 250),
-  spR: box(290, 20, 0, 80, 100, 250),
-  pBL: box(0, 0, 0, 8, 8, 232), pBR: box(232, 0, 0, 8, 8, 232),
-  pFL: box(0, 142, 0, 8, 8, 232), pFR: box(232, 142, 0, 8, 8, 232),
-  s0: box(0, 0, 0, 240, 150, 8), s1: box(0, 0, 108, 240, 150, 8), s2: box(0, 0, 224, 240, 150, 8),
-  rcv: box(10, 10, 8, 220, 132, 80),
-  tape: box(10, 10, 116, 220, 132, 62),
-  tt: box(10, 10, 232, 220, 132, 24),
-  silSpL: sil(-130, 20, 0, 80, 100, 250),
-  silSpR: sil(290, 20, 0, 80, 100, 250),
-  silRcv: sil(10, 10, 8, 220, 132, 80),
-  silTape: sil(10, 10, 116, 220, 132, 62),
-  silTt: sil(10, 10, 232, 220, 132, 24),
+  spL: speaker(-130),
+  spR: speaker(290),
+  pBL: post(0, 0), pBR: post(232, 0),
+  pFL: post(0, 142), pFR: post(232, 142),
+  s0: shelf(0), s1: shelf(108), s2: shelf(224),
+  rcv: unit(8, 80),
+  tape: unit(116, 62),
+  tt: unit(232, 24),
   hatch: hatchStrip(-50, -24, 26, 120, 7) + hatchStrip(240, 270, 8, 150, 7) + hatchStrip(370, 396, 26, 120, 7),
   lid: poly([lidA, lidB, lidC, lidD]),
   lidInner: poly([li, lj, lk, ll]),
   lidGlint: `M${g1.join(' ')}L${g2.join(' ')}M${g3.join(' ')}L${g4.join(' ')}`,
   dialTicks,
   volTicks: ring(186, 38, 25, 29, 14),
-  sigBars: [0, 1, 2, 3, 4].map((i): SigBar => ({ x: 61 + i * 4, h: n(2 + i * 1.3), y: n(74.6 - (2 + i * 1.3)) })),
+  sigBars: [0, 1, 2, 3, 4].map((i): SigBar => ({ x: 61 + i * 4, h: round2(2 + i * 1.3), y: round2(74.6 - (2 + i * 1.3)) })),
   /** Sound lines: two per speaker, keyed `speaker:ring`. */
   arcs: [[0, 0], [0, 1], [1, 0], [1, 1]] as Array<[number, number]>,
   /** Screen position of each woofer's centre, which the sound lines radiate from. */
-  woofers: [P(-90, 120, 72), P(330, 120, 72)] as [Pt, Pt],
+  woofers: [project(-90, 120, 72), project(330, 120, 72)] as [Pt, Pt],
   loopPower: loop(pw[0], pw[1], 18, 13),
   loopMute: loop(mu[0], mu[1], 20, 12),
   arrowPress: arrow(-62, 198, -20, 190, -2, 102),
   arrowMute: arrow(-96, 184, -50, 176, -14, 132),
-  crossLcd: `M${lcdA.join(' ')}L${lcdB.join(' ')}M${P(22, 142, 30).join(' ')}L${P(124, 142, 44).join(' ')}`,
+  crossLcd: `M${lcdA.join(' ')}L${lcdB.join(' ')}M${project(22, 142, 30).join(' ')}L${project(124, 142, 44).join(' ')}`,
 } as const;
 
 /** Desktop frames the whole stack; mobile crops to the receiver and tape deck,

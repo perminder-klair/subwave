@@ -9,19 +9,16 @@
 // query can reach a JS loop.
 
 import { useEffect, useId, useRef } from 'react';
-import type { KeyboardEvent, PointerEvent, RefObject } from 'react';
+import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 import styles from './Axo.module.css';
 import { cn } from '@/lib/cn';
 import { useAnalyser } from '@/lib/hooks';
-import { AXO, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle } from './geometry';
-
-/** Where the station and this listener stand, collapsed to what the drawing
- *  draws differently. */
-export type AxoPhase = 'offline' | 'standby' | 'connecting' | 'live';
+import { AXO, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock } from './geometry';
+import { foldBpm, isPowered, type ListenPhase } from '../shared';
 
 export interface AxoSceneProps {
   variant: 'desk' | 'mobile';
-  phase: AxoPhase;
+  phase: ListenPhase;
   /** The DJ is on the mic right now. */
   talk: boolean;
   muted: boolean;
@@ -65,13 +62,10 @@ function keyActivate(fn: () => void) {
   };
 }
 
-/** Kick-drum period for the simulated level. Tempo readings can come back
- *  doubled on slow material, so fold into one comfortable octave. */
+/** Kick-drum period for the simulated level, folded into one comfortable
+ *  octave of tempo. */
 function beatSeconds(bpm: number | null): number {
-  let b = typeof bpm === 'number' && Number.isFinite(bpm) && bpm > 0 ? bpm : 92;
-  while (b > 150) b /= 2;
-  while (b < 70) b *= 2;
-  return 60 / b;
+  return 60 / foldBpm(bpm, 70, 150);
 }
 
 export default function AxoScene(props: AxoSceneProps) {
@@ -85,7 +79,7 @@ export default function AxoScene(props: AxoSceneProps) {
   // useId's punctuation varies across React versions; keep url(#…) plain.
   const wobId = `axo-wob-${useId().replace(/[^\w-]/g, '')}`;
 
-  const powered = phase === 'connecting' || phase === 'live';
+  const powered = isPowered(phase);
   const live = phase === 'live';
   const connecting = phase === 'connecting';
   const standby = phase === 'standby';
@@ -276,23 +270,19 @@ export default function AxoScene(props: AxoSceneProps) {
         <g className={cn(styles.draw, !powered && styles.drawOff)} aria-hidden="true">
           <path d={AXO.hatch} strokeWidth={0.5} opacity={0.5} />
 
-          <Speaker faces={AXO.spL} silhouette={AXO.silSpL} />
+          <Speaker block={AXO.spL} />
 
-          <g transform={AXO.pBL.L}><rect width="8" height="232" className={styles.fL} /></g>
-          <g transform={AXO.pBL.R}><rect width="8" height="232" className={styles.fR} /></g>
-          <g transform={AXO.pBR.L}><rect width="8" height="232" className={styles.fL} /></g>
-          <g transform={AXO.pBR.R}><rect width="8" height="232" className={styles.fR} /></g>
+          <Post block={AXO.pBL} />
+          <Post block={AXO.pBR} />
 
-          <Shelf faces={AXO.s0} />
+          <Shelf block={AXO.s0} />
 
           {/* Receiver */}
-          <g transform={AXO.rcv.T}>
-            <rect width="220" height="132" className={styles.fBg} />
+          <Face of={AXO.rcv} side="T" className={styles.fBg}>
             <path d="M14 20H206M14 28H206M14 36H206" strokeWidth={0.4} opacity={0.5} />
-          </g>
-          <g transform={AXO.rcv.R}><rect width="132" height="80" className={styles.fR} /></g>
-          <g transform={AXO.rcv.L}>
-            <rect width="220" height="80" className={styles.fL} />
+          </Face>
+          <Face of={AXO.rcv} side="R" className={styles.fR} />
+          <Face of={AXO.rcv} side="L" className={styles.fL}>
             <rect x="12" y="10" width="112" height="26" className={styles.fBg} />
             <path d={AXO.dialTicks} strokeWidth={0.6} className={styles.solid} />
             <text x="15" y="32" fontSize={5.5} fontWeight={500} className={cn(styles.tx, styles.mono)}>0:00</text>
@@ -383,16 +373,15 @@ export default function AxoScene(props: AxoSceneProps) {
             <text x="186" y="75" fontSize={5} fontWeight={700} letterSpacing="0.14em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
               VOLUME
             </text>
-          </g>
-          <path d={AXO.silRcv} strokeWidth={1.5} className={styles.solid} />
+          </Face>
+          <path d={AXO.rcv.sil} strokeWidth={1.5} className={styles.solid} />
 
-          <Shelf faces={AXO.s1} />
+          <Shelf block={AXO.s1} />
 
           {/* Tape deck */}
-          <g transform={AXO.tape.T}><rect width="220" height="132" className={styles.fBg} /></g>
-          <g transform={AXO.tape.R}><rect width="132" height="62" className={styles.fR} /></g>
-          <g transform={AXO.tape.L}>
-            <rect width="220" height="62" className={styles.fL} />
+          <Face of={AXO.tape} side="T" className={styles.fBg} />
+          <Face of={AXO.tape} side="R" className={styles.fR} />
+          <Face of={AXO.tape} side="L" className={styles.fL}>
             <rect x="12" y="8" width="110" height="46" className={styles.fW} />
             <rect x="18" y="12" width="98" height="38" className={styles.fBg} />
             {/* Tape packs: the left spool empties onto the right as the song plays. */}
@@ -438,24 +427,22 @@ export default function AxoScene(props: AxoSceneProps) {
             >
               KEEP
             </text>
-          </g>
-          <path d={AXO.silTape} strokeWidth={1.5} className={styles.solid} />
+          </Face>
+          <path d={AXO.tape.sil} strokeWidth={1.5} className={styles.solid} />
 
-          <Shelf faces={AXO.s2} />
+          <Shelf block={AXO.s2} />
 
           {/* Turntable */}
           <path d={AXO.lid} strokeWidth={0.8} className={styles.fLid} />
           <path d={AXO.lidInner} strokeWidth={0.4} opacity={0.6} />
           <path d={AXO.lidGlint} strokeWidth={0.5} opacity={0.45} />
-          <g transform={AXO.tt.L}>
-            <rect width="220" height="24" className={styles.fL} />
+          <Face of={AXO.tt} side="L" className={styles.fL}>
             <text x="12" y="15" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>
               AXO-1 · DIRECT DRIVE · 33⅓
             </text>
-          </g>
-          <g transform={AXO.tt.R}><rect width="132" height="24" className={styles.fR} /></g>
-          <g transform={AXO.tt.T}>
-            <rect width="220" height="132" className={styles.fBg} />
+          </Face>
+          <Face of={AXO.tt} side="R" className={styles.fR} />
+          <Face of={AXO.tt} side="T" className={styles.fBg}>
             <rect x="40" y="0" width="14" height="4" className={styles.fW} />
             <rect x="166" y="0" width="14" height="4" className={styles.fW} />
             <circle cx="96" cy="66" r="59" className={styles.fW} />
@@ -489,15 +476,13 @@ export default function AxoScene(props: AxoSceneProps) {
             <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txBg, styles.mono)}>33</text>
             <rect x="32" y="108" width="16" height="12" className={styles.fBg} />
             <text x="40" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.tx, styles.mono)}>45</text>
-          </g>
-          <path d={AXO.silTt} strokeWidth={1.5} className={styles.solid} />
+          </Face>
+          <path d={AXO.tt.sil} strokeWidth={1.5} className={styles.solid} />
 
-          <g transform={AXO.pFL.L}><rect width="8" height="232" className={styles.fL} /></g>
-          <g transform={AXO.pFL.R}><rect width="8" height="232" className={styles.fR} /></g>
-          <g transform={AXO.pFR.L}><rect width="8" height="232" className={styles.fL} /></g>
-          <g transform={AXO.pFR.R}><rect width="8" height="232" className={styles.fR} /></g>
+          <Post block={AXO.pFL} />
+          <Post block={AXO.pFR} />
 
-          <Speaker faces={AXO.spR} silhouette={AXO.silSpR} />
+          <Speaker block={AXO.spR} />
         </g>
 
         {/* The inked layer: sound lines, and notes only where they help. */}
@@ -642,16 +627,33 @@ export default function AxoScene(props: AxoSceneProps) {
   );
 }
 
-function Speaker({ faces, silhouette }: { faces: { T: string; L: string; R: string }; silhouette: string }) {
+/** One face of a block: its plane, and a rect sized from the block filling it
+ *  (top w × d, front-left w × h, front-right d × h), with whatever is drawn
+ *  on it laid out in that plane. */
+function Face({ of: b, side, className, children }: {
+  of: DrawnBlock;
+  side: 'T' | 'L' | 'R';
+  className?: string;
+  children?: ReactNode;
+}) {
+  const width = side === 'R' ? b.d : b.w;
+  const height = side === 'T' ? b.d : b.h;
+  return (
+    <g transform={b[side]}>
+      <rect width={width} height={height} className={className} />
+      {children}
+    </g>
+  );
+}
+
+function Speaker({ block }: { block: DrawnBlock }) {
   return (
     <>
-      <g transform={faces.T}>
-        <rect width="80" height="100" className={styles.fBg} />
+      <Face of={block} side="T" className={styles.fBg}>
         <rect x="8" y="8" width="64" height="84" strokeWidth={0.4} opacity={0.6} />
-      </g>
-      <g transform={faces.R}><rect width="100" height="250" className={styles.fR} /></g>
-      <g transform={faces.L}>
-        <rect width="80" height="250" className={styles.fL} />
+      </Face>
+      <Face of={block} side="R" className={styles.fR} />
+      <Face of={block} side="L" className={styles.fL}>
         <rect x="6" y="6" width="68" height="238" strokeWidth={0.4} />
         <circle cx="40" cy="36" r="10" className={styles.fBg} />
         <circle cx="40" cy="36" r="4" className={styles.fW} />
@@ -671,18 +673,28 @@ function Speaker({ faces, silhouette }: { faces: { T: string; L: string; R: stri
           </g>
         </g>
         <rect x="30" y="226" width="20" height="6" opacity={0.55} className={cn(styles.fInk, styles.ns)} />
-      </g>
-      <path d={silhouette} strokeWidth={1.5} className={styles.solid} />
+      </Face>
+      <path d={block.sil} strokeWidth={1.5} className={styles.solid} />
     </>
   );
 }
 
-function Shelf({ faces }: { faces: { T: string; L: string; R: string } }) {
+function Shelf({ block }: { block: DrawnBlock }) {
   return (
     <>
-      <g transform={faces.T}><rect width="240" height="150" className={styles.fBg} /></g>
-      <g transform={faces.L}><rect width="240" height="8" className={styles.fL} /></g>
-      <g transform={faces.R}><rect width="150" height="8" className={styles.fR} /></g>
+      <Face of={block} side="T" className={styles.fBg} />
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
+    </>
+  );
+}
+
+/** A rack post: only its sides show, the shelves cover its ends. */
+function Post({ block }: { block: DrawnBlock }) {
+  return (
+    <>
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
     </>
   );
 }

@@ -1,5 +1,5 @@
 import { IsoBox, InkFilter } from '../iso/IsoBox';
-import { P, box, hatchStrip, loop, arrow } from '../iso/geometry';
+import { arrow, boxFaces, hatchStrip, loop, project } from '../iso/geometry';
 import iso from '../iso/Iso.module.css';
 import { cn } from '@/lib/cn';
 import styles from './DeadAirFigure.module.css';
@@ -12,7 +12,7 @@ import styles from './DeadAirFigure.module.css';
 const RX = { x: 0, y: 0, w: 200, d: 120, h: 70 };
 
 /** The floor's own plane: world x/y map straight onto it. */
-const FLOOR = box(-200, -200, 0, 600, 600, 0).T;
+const FLOOR = boxFaces({ x: -200, y: -200, z: 0, w: 600, d: 600, h: 0 }).T;
 /** The power cord on the floor, in floor coordinates offset by +200. */
 const CORD = 'M400 260C440 260 432 318 472 330';
 
@@ -20,11 +20,11 @@ let DIAL_TICKS = '';
 for (let i = 0; i <= 13; i++) DIAL_TICKS += `M${16 + i * 8} 7V${i % 4 === 0 ? 15 : 11}`;
 
 /** The readout's corners (it sits at x 14–96, z 26–40 on the front face). */
-const lcdA = P(14, 120, 40);
-const lcdB = P(96, 120, 26);
-const lcdC = P(14, 120, 26);
-const lcdD = P(96, 120, 40);
-const plug = P(283, 136, 5);
+const lcdA = project(14, 120, 40);
+const lcdB = project(96, 120, 26);
+const lcdC = project(14, 120, 26);
+const lcdD = project(96, 120, 40);
+const plug = project(283, 136, 5);
 
 export default function DeadAirFigure({ className }: { className?: string }) {
   return (

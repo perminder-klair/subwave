@@ -11,6 +11,7 @@ import styles from './Cipher.module.css';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { ROWS, chr, scatter } from './cipher';
+import type { Spelling } from './useCipherMachine';
 
 /** A framed bay with its name notched into the top rule. */
 export function Panel({
@@ -323,16 +324,12 @@ export function BlockKey({
 export function TapeChars({
   text,
   base,
-  cursor,
-  scramble,
-  seed,
+  spelling: { cursor, scramble, seed },
 }: {
   text: string;
   /** Where this text starts in the lampboard sequence. */
   base: number;
-  cursor: number;
-  scramble: number;
-  seed: number;
+  spelling: Spelling;
 }) {
   const chars = Array.from(text);
   const resolved = Math.floor(scramble * chars.length);

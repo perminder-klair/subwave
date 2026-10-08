@@ -5,6 +5,7 @@
 // wording and layout stay with each skin.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useReducedMotion } from 'motion/react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
 import { lastVoiceLine, voiceOnAirMs } from './shared';
@@ -19,6 +20,16 @@ import { lastVoiceLine, voiceOnAirMs } from './shared';
 export function useSkinMotion(): boolean {
   const { lite } = useLiteMode();
   return !lite;
+}
+
+/** True when a skin that runs its own JS motion (a rAF loop, a timeout chain)
+ *  must stand it down and paint a still frame: lite mode, through
+ *  useSkinMotion, or reduced motion, which no media query can reach inside a
+ *  JS loop. */
+export function useSkinCalm(): boolean {
+  const reduced = useReducedMotion();
+  const motion = useSkinMotion();
+  return !motion || !!reduced;
 }
 
 // Poll cadence + give-up window for a submitted request's outcome. Past the

@@ -4,7 +4,16 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boothLines, lastVoiceLine, speechMs, voiceOnAirMs } from './shared';
+import {
+  boothLines,
+  foldBpm,
+  isPowered,
+  lastVoiceLine,
+  listenPhase,
+  speechMs,
+  tuningStatus,
+  voiceOnAirMs,
+} from './shared';
 import type { SessionTurn } from '@/lib/types';
 
 const feed: SessionTurn[] = [
@@ -69,4 +78,28 @@ test('the latest line counts as on air only until it is history', () => {
   assert.equal(voiceOnAirMs({ text, t: now - 60_000 - speechMs(text) - 1 }, now), 0);
   // An unparseable stamp fails towards "on air" rather than hiding a live line.
   assert.equal(voiceOnAirMs({ text, t: 'not a date' }, now), speechMs(text));
+});
+
+test('the listen phase: off air beats everything, then the gate, then the lock', () => {
+  assert.equal(listenPhase({ offline: true, tunedIn: true, status: 'playing' }), 'offline');
+  assert.equal(listenPhase({ offline: false, tunedIn: false, status: 'playing' }), 'standby');
+  assert.equal(listenPhase({ offline: false, tunedIn: true, status: 'connecting' }), 'connecting');
+  assert.equal(listenPhase({ offline: false, tunedIn: true, status: 'playing' }), 'live');
+  assert.deepEqual(
+    (['offline', 'standby', 'connecting', 'live'] as const).map(isPowered),
+    [false, false, true, true],
+  );
+  assert.equal(tuningStatus('live', false), 'tuned · locked');
+  assert.equal(tuningStatus('live', true), 'tuned · muted');
+  assert.equal(tuningStatus('connecting', true), 'tuning…');
+});
+
+test('a tempo folds by octaves into its band, never onto the edge', () => {
+  assert.equal(foldBpm(120, 70, 150), 120);
+  assert.equal(foldBpm(170, 70, 150), 85);
+  assert.equal(foldBpm(50, 60, 150), 100);
+  assert.equal(foldBpm(150, 60, 150), 150);
+  assert.equal(foldBpm(null, 70, 150), 92);
+  assert.equal(foldBpm(Infinity, 70, 150), 92);
+  assert.equal(foldBpm(-4, 70, 150), 92);
 });

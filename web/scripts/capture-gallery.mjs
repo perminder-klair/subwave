@@ -48,7 +48,9 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = args.out || join(HERE, '..', 'public', 'screenshots', 'gallery');
 const ONLY = args.only || null;
 
-// Data invariants — fail loudly before touching a browser.
+// Data invariants — fail loudly before touching a browser. That the plates
+// cover every REGISTERED skin is pinned by lib/press-run-plates.test.ts, since
+// importing the registry here would drag its next/dynamic wrappers into node.
 {
   const themeIds = PRESS_RUN_PLATES.map(p => p.themeId);
   const skinIds = new Set(PRESS_RUN_PLATES.map(p => p.skinId));
@@ -132,11 +134,16 @@ for (const plate of PRESS_RUN_PLATES) {
     ).catch(() => {});
   }
 
-  // Cover art up — the strongest "this frame looks on-air" signal. A skin
-  // that draws no sleeve (AXO, Cipher) says so in its status line instead.
+  // On air: the shell's <audio> is actually playing, and any cover art the
+  // skin draws has loaded. Read from the page rather than from a skin's own
+  // copy, so a skin that draws no sleeve (AXO, Cipher) needs no special case.
   await page.waitForFunction(
-    () => Array.from(document.images).some(i => i.src.includes('/cover') && i.complete && i.naturalWidth > 0)
-      || document.body.innerText.toLowerCase().includes('tuned · locked'),
+    () => {
+      const audio = document.querySelector('audio');
+      if (!audio || audio.paused || audio.currentTime <= 0) return false;
+      const covers = Array.from(document.images).filter(i => i.src.includes('/cover'));
+      return covers.length === 0 || covers.some(i => i.complete && i.naturalWidth > 0);
+    },
     null, { timeout: 30000 },
   ).catch(() => console.warn(`  [${plate.id}] never looked on-air — capturing anyway`));
   // Let idle motion settle: needle drop, spectrum warm-up, CRT flicker-in.

@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import styles from './Axo.module.css';
-import AxoScene, { type AxoPhase, type AxoSceneProps } from './AxoScene';
+import AxoScene, { type AxoSceneProps } from './AxoScene';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -22,24 +22,26 @@ import { Input } from '@/components/ui/input';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { useReducedMotion } from 'motion/react';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 import {
   contextLine,
   entryTime,
+  isPowered,
   lastVoiceLine,
+  listenPhase,
   listenerCountOf,
   progressRatio,
   stationIdentity,
   trackMeta,
+  tuningStatus,
   turnClock,
 } from '../shared';
 import {
   useDjOnAir,
   useRequestSlip,
-  useSkinMotion,
+  useSkinCalm,
   useTrackLike,
   useVolumeNudge,
   type RequestSlip,
@@ -78,20 +80,11 @@ export default function AxoSkin(_props: SkinProps) {
   const history = (state.history ?? []).slice(0, 3);
   const stationLocale = normalizeStationLocale(locale);
 
-  const phase: AxoPhase = offline
-    ? 'offline'
-    : !tunedIn
-      ? 'standby'
-      : status === 'playing'
-        ? 'live'
-        : 'connecting';
+  const phase = listenPhase({ offline, tunedIn, status });
   const live = phase === 'live';
+  const powered = isPowered(phase);
   const talk = live && onMic && !!voice;
-
-  // Lite stops the loop through useSkinMotion; reduced motion has to be read
-  // here too, because the media query can't reach a rAF loop.
-  const reduced = useReducedMotion();
-  const calm = !useSkinMotion() || !!reduced;
+  const calm = useSkinCalm();
 
   const title = offline ? '— off air —' : (nowPlaying?.title ?? 'Scanning the dial…');
   const artist = offline ? '' : (nowPlaying?.artist ?? '');
@@ -102,15 +95,7 @@ export default function AxoSkin(_props: SkinProps) {
       : muted
         ? 'now playing — muted'
         : 'now playing — side a';
-  const statusText = offline
-    ? 'off air'
-    : phase === 'standby'
-      ? 'standby'
-      : phase === 'connecting'
-        ? 'tuning…'
-        : muted
-          ? 'tuned · muted'
-          : 'tuned · locked';
+  const statusText = tuningStatus(phase, muted);
   const lcd = fit(
     offline
       ? 'OFF AIR · NO SIGNAL'
@@ -208,11 +193,11 @@ export default function AxoSkin(_props: SkinProps) {
 
   const statusBar = (pad: string) => (
     <div className={cn('flex flex-none items-center gap-4 border-t border-ink bg-field font-mono text-[10px] tracking-[0.16em] uppercase', pad)}>
-      <span className={cn('flex items-center gap-2 font-bold whitespace-nowrap', powered(phase) ? 'text-[var(--accent)]' : 'text-muted')}>
+      <span className={cn('flex items-center gap-2 font-bold whitespace-nowrap', powered ? 'text-[var(--accent)]' : 'text-muted')}>
         <span
           className={cn(
             'size-2 rounded-full',
-            powered(phase) ? 'bg-[var(--accent)]' : 'border border-[var(--muted)]',
+            powered ? 'bg-[var(--accent)]' : 'border border-[var(--muted)]',
           )}
         />
         {statusText}
@@ -460,10 +445,6 @@ export default function AxoSkin(_props: SkinProps) {
       </div>
     </div>
   );
-}
-
-function powered(phase: AxoPhase): boolean {
-  return phase === 'connecting' || phase === 'live';
 }
 
 /** The REC key's card: compose, send, then the booth's answer. */

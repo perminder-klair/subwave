@@ -9,13 +9,14 @@
   }
 }
 
+/* From the kit's construction pen to its ink (Iso.module.css .pen). */
 @keyframes admin-loading-ink {
   0%, 15% {
-    stroke: color-mix(in oklab, var(--ink) 45%, var(--bg));
-    stroke-dasharray: 3 2.5;
+    stroke: var(--iso-off);
+    stroke-dasharray: var(--iso-off-dash);
   }
   85%, 100% {
-    stroke: var(--ink);
+    stroke: var(--iso-ink);
     stroke-dasharray: 6 0;
   }
 }

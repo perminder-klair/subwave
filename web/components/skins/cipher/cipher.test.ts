@@ -13,6 +13,7 @@ import {
   encipher,
   foldLetter,
   groups,
+  keyToChar,
   lampSequence,
   stepRotors,
   typeInto,
@@ -21,7 +22,7 @@ import {
   type Message,
 } from './cipher';
 
-const blank = (m = 0, r = 0): Message => ({ plain: '', cipher: '', hist: [], rotors: { m, r } });
+const blank = (middle = 0, right = 0): Message => ({ plain: '', cipher: '', hist: [], rotors: { middle, right } });
 
 function typeAll(text: string, vol = 0, start = blank()): Message {
   let msg = start;
@@ -54,10 +55,15 @@ test('a message typed at the same setting reads back as the plain text', () => {
 });
 
 test('rotor III steps every letter and turns II over as it leaves V', () => {
-  assert.deepEqual(stepRotors({ m: 4, r: 20 }), { m: 4, r: 21 });
-  assert.deepEqual(stepRotors({ m: 4, r: 21 }), { m: 5, r: 22 });
-  assert.deepEqual(stepRotors({ m: 25, r: 21 }), { m: 0, r: 22 });
-  assert.deepEqual(stepRotors({ m: 0, r: 25 }), { m: 0, r: 0 });
+  assert.deepEqual(stepRotors({ middle: 4, right: 20 }), { middle: 4, right: 21 });
+  assert.deepEqual(stepRotors({ middle: 4, right: 21 }), { middle: 5, right: 22 });
+  assert.deepEqual(stepRotors({ middle: 25, right: 21 }), { middle: 0, right: 22 });
+  assert.deepEqual(stepRotors({ middle: 0, right: 25 }), { middle: 0, right: 0 });
+});
+
+test('rotor II never double-steps, because rotor I (the volume) never turns', () => {
+  // A real machine with II at E would step II and turn I over on this key.
+  assert.deepEqual(stepRotors({ middle: 4, right: 0 }), { middle: 4, right: 1 });
 });
 
 test('delete restores the rotors and the cipher exactly', () => {
@@ -88,6 +94,16 @@ test('accented letters fold onto the machine alphabet', () => {
   assert.equal(foldLetter('Ø'), null);
   assert.equal(foldLetter('ß'), null);
   assert.equal(typeAll('café').plain, 'CAFE');
+});
+
+test('the physical keyboard types letters, accented ones folded, and digits', () => {
+  assert.equal(keyToChar('s'), 'S');
+  assert.equal(keyToChar('é'), 'E');
+  assert.equal(keyToChar('7'), '7');
+  assert.equal(keyToChar(' '), null);
+  assert.equal(keyToChar('!'), null);
+  assert.equal(keyToChar('Enter'), null);
+  assert.equal(keyToChar('Dead'), null);
 });
 
 test('the tape stops at its length', () => {

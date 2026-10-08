@@ -1,5 +1,5 @@
 import { IsoBox, InkFilter } from '../iso/IsoBox';
-import { P, arrow, box, n, type Pt } from '../iso/geometry';
+import { arrow, boxFaces, project, round2, type Pt } from '../iso/geometry';
 import iso from '../iso/Iso.module.css';
 import { cn } from '@/lib/cn';
 import styles from './StackCutaway.module.css';
@@ -9,8 +9,10 @@ import styles from './StackCutaway.module.css';
 // across the shared state/ tray, and the DJ brain sits up front as a chip.
 // The flow reads left to right through the files, then up the mast.
 //
-// The drawing carries numbered balloons only; the words live in the HTML key
-// beside it, so they stay readable on a phone. The ink pens in as the figure
+// The drawing is keyed by numbered balloons, and every word a reader needs
+// lives in the HTML key beside it, so it stays readable on a phone. The
+// drawing's own lettering (panel legends, the wall stencils, the two ink notes)
+// only repeats what the key already says. The ink pens in as the figure
 // scrolls into view (where the browser has view timelines), and the mast
 // broadcasts, unless lite mode or reduced motion stills it.
 
@@ -25,9 +27,9 @@ const MIX = { x: 166, y: 24, w: 70, d: 72, h: 50 };
 const CHIP = { x: 172, y: 172, w: 58, d: 58, h: 12 };
 const TRAY = { x: 108, y: 108, w: 46, d: 46, h: 7 };
 
-const mastFoot = P(56, 56, FLOOR + TOWER.h);
-const mastTip = P(56, 56, FLOOR + TOWER.h + 64);
-const dipole = `M${P(42, 56, FLOOR + TOWER.h + 46).join(' ')}L${P(70, 56, FLOOR + TOWER.h + 46).join(' ')}`;
+const mastFoot = project(56, 56, FLOOR + TOWER.h);
+const mastTip = project(56, 56, FLOOR + TOWER.h + 64);
+const dipole = `M${project(42, 56, FLOOR + TOWER.h + 46).join(' ')}L${project(70, 56, FLOOR + TOWER.h + 46).join(' ')}`;
 
 /** Radio waves off the mast tip: three rings each side. */
 const wave = (side: 1 | -1, ring: number) => {
@@ -35,15 +37,15 @@ const wave = (side: 1 | -1, ring: number) => {
   const r = 16 + ring * 14;
   const a0 = side === 1 ? -0.7 : Math.PI - 0.7;
   const a1 = a0 + 1.4;
-  return `M${n(cx + Math.cos(a0) * r)} ${n(cy + Math.sin(a0) * r)}A${r} ${r} 0 0 1 ${n(cx + Math.cos(a1) * r)} ${n(cy + Math.sin(a1) * r)}`;
+  return `M${round2(cx + Math.cos(a0) * r)} ${round2(cy + Math.sin(a0) * r)}A${r} ${r} 0 0 1 ${round2(cx + Math.cos(a1) * r)} ${round2(cy + Math.sin(a1) * r)}`;
 };
 
 /** The floor's own plane: world x/y map straight onto it. */
-const FLOOR_TOP = box(0, 0, 0, W, W, FLOOR).T;
+const FLOOR_TOP = boxFaces({ x: 0, y: 0, z: 0, w: W, d: W, h: FLOOR }).T;
 const CABLE = 'M168 200C140 198 128 224 96 212';
 
 /** The top face a fresh file lands on, just above the stack in the tray. */
-const DROP = box(121, 116, FLOOR + TRAY.h + 4, 30, 36, 0).T;
+const DROP = boxFaces({ x: 121, y: 116, z: FLOOR + TRAY.h + 4, w: 30, d: 36, h: 0 }).T;
 
 /** Chip pins: five a side, standing on the floor. */
 const PIN_OFFSETS = [9, 19, 29, 39, 49];
@@ -57,19 +59,19 @@ const ARROWS = {
 interface Balloon { id: string; at: Pt; to: Pt }
 
 const BALLOONS: Balloon[] = [
-  { id: '1', at: [-196, 6], to: P(48, 200, FLOOR + CTRL.h) },
-  { id: '2', at: [34, 270], to: P(214, 214, FLOOR + CHIP.h) },
-  { id: '3', at: [-200, 226], to: P(124, 140, FLOOR + TRAY.h + 3) },
-  { id: '4', at: [200, 14], to: P(228, 32, FLOOR + MIX.h) },
-  { id: '5', at: [-120, -96], to: P(36, 70, FLOOR + TOWER.h) },
+  { id: '1', at: [-196, 6], to: project(48, 200, FLOOR + CTRL.h) },
+  { id: '2', at: [34, 270], to: project(214, 214, FLOOR + CHIP.h) },
+  { id: '3', at: [-200, 226], to: project(124, 140, FLOOR + TRAY.h + 3) },
+  { id: '4', at: [200, 14], to: project(228, 32, FLOOR + MIX.h) },
+  { id: '5', at: [-120, -96], to: project(36, 70, FLOOR + TOWER.h) },
 ];
 
 export const STACK_KEY = [
-  { id: '1', name: 'Controller', note: 'Node.js. Decides what plays and what gets said.' },
+  { id: '1', name: 'Controller', note: 'Node.js. Decides what plays and what gets said, and writes it down: next.txt, say.txt.' },
   { id: '2', name: 'DJ brain', note: 'The LLM. Picks the tracks, writes the links.' },
-  { id: '3', name: 'state/', note: 'One shared folder. The pieces pass plain files.' },
+  { id: '3', name: 'state/', note: 'One shared folder. The pieces pass plain files, nothing else.' },
   { id: '4', name: 'Liquidsoap', note: 'The mixer. Crossfades, ducks the voice, rotates jingles.' },
-  { id: '5', name: 'Icecast', note: 'One stream out, the same for every listener.' },
+  { id: '5', name: 'Icecast', note: 'One stream out, the same for every listener: MP3 always, Opus and FLAC when switched on.' },
 ] as const;
 
 export default function StackCutaway({ className }: { className?: string }) {

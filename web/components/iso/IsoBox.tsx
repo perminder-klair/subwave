@@ -1,17 +1,8 @@
 import type { ReactNode } from 'react';
-import { box, sil } from './geometry';
+import { boxFaces, silhouette, type Block } from './geometry';
 import styles from './Iso.module.css';
 
-interface IsoBoxProps {
-  x: number;
-  y: number;
-  z: number;
-  /** Size along world x. */
-  w: number;
-  /** Size along world y. */
-  d: number;
-  /** Height. */
-  h: number;
+interface IsoBoxProps extends Block {
   /** Drawn on the top face, in its own w × d plane. */
   top?: ReactNode;
   /** Drawn on the front-left face, in its own w × h plane. */
@@ -28,7 +19,7 @@ interface IsoBoxProps {
  *  out on, plus the silhouette. Inherits the pen from the enclosing group, so
  *  it draws inside a `.pen` layer from `Iso.module.css`. */
 export function IsoBox({ x, y, z, w, d, h, top, left, right, topFill, outline = true }: IsoBoxProps) {
-  const f = box(x, y, z, w, d, h);
+  const f = boxFaces({ x, y, z, w, d, h });
   return (
     <>
       <g transform={f.T}>
@@ -43,7 +34,7 @@ export function IsoBox({ x, y, z, w, d, h, top, left, right, topFill, outline = 
         <rect width={d} height={h} className={styles.fR} />
         {right}
       </g>
-      {outline && <path d={sil(x, y, z, w, d, h)} strokeWidth={1.5} className={styles.solid} />}
+      {outline && <path d={silhouette({ x, y, z, w, d, h })} strokeWidth={1.5} className={styles.solid} />}
     </>
   );
 }

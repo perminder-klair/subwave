@@ -1,15 +1,9 @@
 /* The rig's state changes. A part inks in when its check comes back (the pen
    glides from construction lines to ink), the part on the meter marches its
-   dashes, and its tag's dot pulses. Lite mode keeps none of the motion: the
-   transition snaps and the animations are killed globally. */
+   dashes, and its tag's dot pulses. All of it is layered on only under
+   no-preference, so the resting style is the finished still; lite mode kills
+   the animations globally and the transition here. */
 
-.pen {
-  transition: stroke 1.2s ease, stroke-dasharray 1.6s ease;
-}
-
-.part {
-  outline: none;
-}
 .live {
   cursor: pointer;
 }
@@ -17,21 +11,14 @@
   stroke: var(--accent);
 }
 
-/* Keyboard focus draws a dashed accent box around the tag. */
-.focus {
-  stroke: none;
-}
-.part:focus-visible .focus {
-  stroke: var(--accent);
-  stroke-width: 1.2;
-  stroke-dasharray: 3 2;
-}
-
 .hollow {
   stroke-dasharray: 2 1.6;
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .pen {
+    transition: stroke 1.2s ease, stroke-dasharray 1.6s ease;
+  }
   .measuring {
     animation: rig-march 0.9s linear infinite;
   }
@@ -40,9 +27,6 @@
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .pen { transition: none; }
-}
 :global(html.lite) .pen { transition: none; }
 
 @keyframes rig-march {
