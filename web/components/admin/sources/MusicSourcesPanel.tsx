@@ -14,20 +14,24 @@
 import { useCallback } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQueryClient } from '@tanstack/react-query';
-import { Activity, Music2, Puzzle, type LucideIcon } from 'lucide-react';
-import { adminJson, useAdminQuery } from '../../../lib/admin-query';
+import { Activity, Music2, Puzzle, RefreshCw, type LucideIcon } from 'lucide-react';
+import { adminJson, useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
 import { useAdminAuth } from '../../../lib/adminAuth';
-import { errorMessage } from '../../../lib/notify';
+import { errorMessage, notify } from '../../../lib/notify';
+import { cn } from '../../../lib/cn';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
-import { Card, Eyebrow } from '../ui';
+import { Btn, Card, Eyebrow } from '../ui';
 import { SectionTabs } from '../SectionTabs';
 import RouterPanel from '../router/RouterPanel';
+import { StatusStrip } from '../router/Rack';
+import { statusCells, statusLamp } from '../router/model';
 import { PluginsTab } from './PluginsTab';
 import { SourcesTab } from './SourcesTab';
 import { MUSIC_SOURCE_KEY, type MusicSourceView } from './queries';
 
 type TabId = 'sources' | 'plugins' | 'monitor';
+const HEALTH_POLL_MS = 30_000;
 const TAB_IDS = ['monitor', 'sources', 'plugins'] as const;
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'monitor', label: 'Monitor', icon: Activity },
@@ -49,12 +53,23 @@ export default function MusicSourcesPanel() {
     key: MUSIC_SOURCE_KEY,
     adminFetch,
     enabled: hydrated && !needsAuth,
+    // Health asks every serving backend for its counts, so it is not polled hard.
+    refetchInterval: () => HEALTH_POLL_MS,
     request: (fetcher, signal) => adminJson<MusicSourceView>(fetcher, '/settings/music-source', undefined, signal),
   });
   const view = query.data;
+  const statusError = query.isError ? errorMessage(query.error) : null;
   const reload = useCallback(async () => {
     await queryClient.invalidateQueries({ queryKey: MUSIC_SOURCE_KEY, exact: true });
   }, [queryClient]);
+  const rescan = useAdminMutation<unknown, void>({
+    adminFetch,
+    request: (_vars, fetcher) => adminJson(fetcher, '/settings/music-source/rescan', { method: 'POST' }),
+    onDone: async (_data, _vars, client) => {
+      await client.invalidateQueries({ queryKey: MUSIC_SOURCE_KEY, exact: true });
+      notify.ok('Plugins rescanned');
+    },
+  });
 
   // The active tab lives in the URL (?tab=…), read every render (as Connect and
   // Imaging do): the sidebar carries these tabs as sub-items, and a soft nav to
@@ -84,13 +99,27 @@ export default function MusicSourcesPanel() {
   return (
     <div className="grid gap-4">
       <section className="card">
-        <div className="border-b border-ink p-4">
-          <Eyebrow className="text-vermilion">music sources</Eyebrow>
-          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">Where the station&apos;s music comes from.</div>
-          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            {view ? <>Playing from {servingLine(view)}</> : 'Loading…'} Every track pick, cover and library lookup follows
-            this choice, and changes apply immediately — no restart.
+        <div className="grid gap-3 border-b border-ink p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <Eyebrow className="text-vermilion">music sources</Eyebrow>
+              <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">Where the station&apos;s music comes from.</div>
+              <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+                {view ? <>Playing from {servingLine(view)}</> : 'Loading…'} Every track pick, cover and library lookup follows
+                this choice, and changes apply immediately — no restart.
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Btn sm onClick={() => void query.refetch()} disabled={query.isFetching}>
+                <RefreshCw aria-hidden="true" className={cn(query.isFetching && 'animate-spin')} />
+                Re-check health
+              </Btn>
+              <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending || !view?.router}>
+                {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
+              </Btn>
+            </div>
           </div>
+          <StatusStrip lamp={statusLamp(view, statusError)} cells={statusCells(view, statusError)} />
         </div>
         <SectionTabs tabs={TABS} value={tab} onChange={selectTab} label="Music source sections" />
       </section>
@@ -100,7 +129,7 @@ export default function MusicSourcesPanel() {
       ) : !view ? (
         <Card title="Music sources"><SkeletonRows rows={3} /></Card>
       ) : tab === 'plugins' ? (
-        <PluginsTab view={view} adminFetch={adminFetch} />
+        <PluginsTab view={view} />
       ) : (
         <SourcesTab view={view} adminFetch={adminFetch} reload={reload} />
       )}

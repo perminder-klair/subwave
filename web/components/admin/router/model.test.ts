@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { MusicCapabilities, MusicPluginInfo, RouterActivityRequest, RouterStatus } from '../../../lib/schemas.generated';
-import { activityMetrics, backendNote, buildChannels, coverageRows, formatMs, sourcesOf, type RouterView } from './model';
+import { activityMetrics, backendNote, buildChannels, coverageRows, formatMs, sourcesOf, statusCells, statusLamp, type RouterView } from './model';
 
 const caps = (on: Partial<MusicCapabilities> = {}): MusicCapabilities => ({
   sonicSimilarity: false,
@@ -200,4 +200,29 @@ test('the Navidrome strip shows the station connection it plays, never a passwor
     ['Username', 'from env'],
     ['Password', '•••••• set'],
   ]);
+});
+
+test('the header strip reads the router at a glance, lighting what needs attention', () => {
+  const s = status({ active: [active('navidrome', 1)], serving: { name: 'navidrome', label: 'Navidrome', capabilities: caps() } });
+  const cells = statusCells(view(s), null);
+  assert.deepEqual(cells.map((c) => [c.label, c.value, c.tone]), [
+    ['Mode', 'ROUTER', 'ok'],
+    ['Serving', 'NAVIDROME', undefined],
+    ['Router', 'v1.0.0 · API v1', undefined],
+    ['Plugins', '5', undefined],
+    ['Endpoints', '3', undefined],
+    ['Faults', '1', 'bad'],
+  ]);
+  assert.equal(statusLamp(view(s), null), 'error', 'a plugin that failed to load lights the lamp');
+
+  const direct = statusCells(view(s, { mode: 'navidrome' }), null);
+  assert.deepEqual(direct.slice(0, 2).map((c) => [c.value, c.tone]), [['DIRECT', 'warn'], ['NAVIDROME DIRECT', 'warn']]);
+  const failedOver = statusCells(view(s, { failover: { active: true } }), null);
+  assert.deepEqual(failedOver.slice(0, 2).map((c) => [c.value, c.tone]), [['FAILOVER', 'bad'], ['NAVIDROME DIRECT', 'bad']]);
+  assert.deepEqual(statusCells(undefined, 'boom'), [{ label: 'Link', value: 'NO LINK TO THE CONTROLLER', tone: 'bad' }]);
+
+  const clean = status({ plugins: [plugin('navidrome')], active: [active('navidrome', 1)] });
+  assert.equal(statusLamp(view(clean), null), 'ok');
+  assert.equal(statusLamp(view(clean, { mode: 'navidrome' }), null), 'idle');
+  assert.ok(!statusCells(view(clean), null).some((c) => c.label === 'Faults'));
 });

@@ -11,19 +11,15 @@
 
 import { useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, ExternalLink, Lock, Puzzle, RefreshCw } from 'lucide-react';
-import { adminJson, useAdminMutation, type AdminFetch } from '../../../lib/admin-query';
-import { notify } from '../../../lib/notify';
-import { cn } from '../../../lib/cn';
+import { AlertTriangle, ExternalLink, Lock, Puzzle } from 'lucide-react';
 import { buttonVariants } from '../../ui/button';
 import { V3Alert } from '../../ui/alert';
-import { Btn } from '../ui';
-import { Faceplate, RackPanel } from '../router/Rack';
+import { RackPanel } from '../router/Rack';
 import { CAPABILITY_BANK, formatMs } from '../router/model';
 import rs from '../router/router.module.css';
 import { bayReadout, buildBay, slotLabel, type BayModule, type CellState } from './pluginBay';
 import ps from './plugins.module.css';
-import { MUSIC_SOURCE_KEY, type MusicSourceView } from './queries';
+import type { MusicSourceView } from './queries';
 
 const PLUGIN_GUIDE = 'https://github.com/perminder-klair/subwave/blob/main/docs/music-source-plugins.md';
 const NAVIDROME = 'navidrome';
@@ -31,19 +27,11 @@ const NAVIDROME = 'navidrome';
 const STATE_TEXT: Record<BayModule['state'], string> = { onair: 'on air', standby: 'standby', fault: 'fault' };
 const GLYPH: Record<CellState, string> = { full: '●', degraded: '◐', unsupported: '×', unknown: '·' };
 
-export function PluginsTab({ view, adminFetch }: { view: MusicSourceView; adminFetch: AdminFetch }) {
+export function PluginsTab({ view }: { view: MusicSourceView }) {
   const status = view.router;
   const modules = useMemo(() => (status ? buildBay(status, view.mode === 'router') : []), [status, view.mode]);
   const [selected, setSelected] = useState<string | null>(null);
   const current = modules.find((m) => m.plugin.name === selected) ?? modules[0];
-  const rescan = useAdminMutation<unknown, void>({
-    adminFetch,
-    request: (_vars, fetcher) => adminJson(fetcher, '/settings/music-source/rescan', { method: 'POST' }),
-    onDone: async (_data, _vars, client) => {
-      await client.invalidateQueries({ queryKey: MUSIC_SOURCE_KEY, exact: true });
-      notify.ok('Plugins rescanned');
-    },
-  });
 
   if (!status) {
     return (
@@ -54,36 +42,19 @@ export function PluginsTab({ view, adminFetch }: { view: MusicSourceView; adminF
   }
 
   const r = bayReadout(modules);
-  const lamp: 'ok' | 'idle' | 'error' = r.faults ? 'error' : view.mode === 'navidrome' ? 'idle' : 'ok';
   return (
     <div className={rs.console}>
-      <Faceplate
-        title="PLUGIN BAY"
-        subtitle={`Source modules / router v${status.router.version}`}
-        lamp={lamp}
-        cells={[
-          { label: 'Slots', value: r.slots },
-          { label: 'On air', value: r.onAir, tone: r.onAir ? 'ok' : undefined },
-          { label: 'Installed', value: r.installed },
-          { label: 'Faults', value: r.faults, tone: r.faults ? 'bad' : undefined },
-          { label: 'Plugin API', value: `v${status.router.apiVersion}` },
-        ]}
-        actions={
-          <Btn sm onClick={() => rescan.mutate()} disabled={rescan.isPending}>
-            <RefreshCw aria-hidden="true" className={cn(rescan.isPending && 'animate-spin')} />
-            {rescan.isPending ? 'Rescanning…' : 'Rescan plugins'}
-          </Btn>
-        }
-        primary={
-          <Link href="/admin/sources?tab=sources" className={buttonVariants({ variant: 'solid', size: 'sm' })}>
-            Configure sources
-          </Link>
-        }
-      />
-
       <RackPanel
         title="Module rack"
         description="Every music-source plugin the router has loaded, one per slot. Built-ins ship with SUB/WAVE; installed modules came from state/router/plugins/. Select one to inspect it."
+        action={
+          <span className={ps.readout} aria-label="Plugin bay readout">
+            <span>{r.slots} slots</span>
+            <span data-tone={r.onAir ? 'ok' : undefined}>{r.onAir} on air</span>
+            <span>{r.installed} installed</span>
+            <span data-tone={r.faults ? 'bad' : undefined}>{r.faults} {r.faults === 1 ? 'fault' : 'faults'}</span>
+          </span>
+        }
       >
         <div className={ps.bay}>
           {modules.map((m) => (

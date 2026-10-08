@@ -5,6 +5,21 @@
 
 /* ── module rack ─────────────────────────────────────────────────────────── */
 
+/* The bay's counts, in the rack panel's header. */
+.readout { display: flex; flex-wrap: wrap; gap: 4px; }
+.readout span {
+  padding: 3px 7px;
+  border: 1px solid var(--rk-sep-strong);
+  font-family: var(--rk-mono);
+  font-size: 0.52rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.readout [data-tone="ok"] { border-color: var(--rk-green); color: var(--rk-green); }
+.readout [data-tone="bad"] { border-color: var(--danger); color: var(--danger); }
+
 .bay {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
