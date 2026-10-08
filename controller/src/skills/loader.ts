@@ -430,9 +430,10 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
       cap.toolFn = makeFeedTool(name, feed);
       cap.toolName = toolNameFor(name);
       cap.toolDesc = (data.toolDescription || '').trim()
-        || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air.`;
+        || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air, or { available: false } when none are left.`;
       // requiresData is left undeclared, so abstain-policy.ts applies its
-      // default: a skill speaking from a feed stands down when the fetch fails.
+      // default: a skill speaking from a feed stands down when the fetch fails
+      // or nothing fresh is left on it.
     }
   }
 

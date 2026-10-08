@@ -56,6 +56,12 @@ const server: Server = createServer((req, res) => {
     res.end(rss(3, 'Story'));
     return;
   }
+  if (path === '/empty') {
+    // A well-formed feed that simply has nothing in it.
+    res.writeHead(200, { 'content-type': 'application/rss+xml' });
+    res.end(rss(0, 'Story'));
+    return;
+  }
   if (path === '/boom') {
     res.writeHead(500);
     res.end('nope');
@@ -133,8 +139,8 @@ const realLog = queue.log.bind(queue);
 
 const { loadSkills, readTemplate } = await import('../src/skills/loader.js');
 const { buildSegmentTools, fetchSegmentData } = await import('../src/llm/internal/tools/segment-tools.js');
-const { resolveFeedConfig, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
-const { requiresGrounding } = await import('../src/skills/abstain-policy.js');
+const { resolveFeedConfig, makeFeedTool, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
+const { requiresGrounding, standDownReason } = await import('../src/skills/abstain-policy.js');
 
 const caps = await loadSkills();
 const capOf = (kind: string) => caps.find(c => c.kind === kind);
@@ -175,8 +181,46 @@ test('items are burned on read, so a second fire offers the rest', async () => {
   const second: any = await cap.toolFn({}, state);
   assert.deepEqual(second.headlines.map((h: any) => h.title), ['Story 7', 'Story 8', 'Story 9', 'Story 10']);
 
+  // A drained feed is NOT an empty list (#1830): that read as usable data, so a
+  // forced run was ordered to speak with no items and invented a headline.
   const third: any = await cap.toolFn({}, state);
-  assert.deepEqual(third.headlines, [], 'nothing fresh left is an empty list, not an error');
+  assert.equal(third.available, false, 'nothing fresh left is available:false');
+  assert.equal(third.headlines, undefined, 'and carries no headlines key to read as data');
+  assert.match(third.reason, /already aired/);
+});
+
+test('a feed that fetched fine but was empty from the start is the same answer', async () => {
+  const empty = makeFeedTool('empty-feed', { url: feedUrl('/empty'), maxItems: 5 });
+  const state: any = {};
+  const result: any = await empty({}, state);
+  assert.equal(result.available, false);
+  assert.match(result.reason, /no items/);
+  assert.equal(result.headlines, undefined);
+});
+
+test('a drained or empty feed stands a grounded run down through the one chokepoint', async () => {
+  // The forced paths (Run now, skill cron, programme beat) and the pool
+  // director all ask standDownReason; none of them knows the feed's shape.
+  const cap = capOf('giveaway');
+  const state: any = {};
+  // Two fires spend the 10-item feed; a third has nothing left.
+  await cap.toolFn({}, state);
+  await cap.toolFn({}, state);
+  const drained = await fetchSegmentData(cap, {}, state);
+  assert.match(String(standDownReason(cap, drained)), /nothing fresh/);
+
+  const empty = { ...cap, toolFn: makeFeedTool('empty-feed', { url: feedUrl('/empty'), maxItems: 5 }) };
+  const none = await fetchSegmentData(empty, {}, {});
+  assert.match(String(standDownReason(empty, none)), /nothing fresh/);
+
+  // A fresh fire is still usable data — the change only touches the empty case.
+  const fresh = await fetchSegmentData(cap, {}, {});
+  assert.equal(standDownReason(cap, fresh), null);
+
+  // An operator who opts the skill out of grounding still gets a run: the
+  // shape tells the model why there are no items, it does not silence it.
+  const writesAnyway = { ...cap, config: { ...cap.config, requiresData: 'false' } };
+  assert.equal(standDownReason(writesAnyway, drained), null);
 });
 
 test('two feed skills keep separate dedup memory', async () => {
@@ -220,7 +264,7 @@ test('a feed skill stands down when the fetch fails', async () => {
   assert.equal(requiresGrounding(cap), true, 'a skill speaking from a feed is grounded by default');
   // The segment-tools wrapper turns a throw into the { error } shape the
   // abstain policy reads, rather than letting it escape into the tick.
-  const broken = { ...cap, toolFn: (await import('../src/skills/feed.js')).makeFeedTool('broken', { url: feedUrl('/boom'), maxItems: 5 }) };
+  const broken = { ...cap, toolFn: makeFeedTool('broken', { url: feedUrl('/boom'), maxItems: 5 }) };
   const data: any = await fetchSegmentData(broken, {}, {});
   assert.match(String(data.error), /500/);
 });

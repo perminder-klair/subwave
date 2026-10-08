@@ -265,13 +265,22 @@ function seenSetFor(state: any, kind: string): Set<string> {
 // caller (llm/internal/tools/segment-tools.ts, the forced path, the co-hosted
 // path) is unchanged — including the timeout and the `{ error }` degradation.
 //
-// Returns the news shape, `{ headlines: [{ title, detail }] }`, unchanged from
-// the tool.mjs this replaces: an empty array is "nothing fresh", not an error.
+// Returns the news shape, `{ headlines: [{ title, detail }] }`, when there is
+// something fresh, and `{ available: false, reason }` when there is not — never
+// an empty list (#1830). An empty list read as usable data to
+// abstain-policy.ts, so Run now, a skill cron or a programme beat on a drained
+// feed ordered a line with no items in it, and the model invented a headline.
+// `available: false` is the shape every data tool already uses for "nothing
+// worth airing", which stands those runs down and lets the pool path back off.
 export function makeFeedTool(kind: string, feed: ResolvedFeed) {
   return async function fetchFeedItems(_ctx?: unknown, state?: any) {
     const seen = seenSetFor(state, kind);
     const items = await fetchHeadlines({ feedUrl: feed.url, maxItems: feed.maxItems });
+    // A feed that fetched fine but carries no readable items is the same
+    // answer as one that has all aired. It touches no dedup memory.
+    if (!items.length) return { available: false, reason: 'the feed has no items' };
     const fresh = items.filter(it => !seen.has(hashHeadline(it.title))).slice(0, FEED_ITEMS_PER_FIRE);
+    if (!fresh.length) return { available: false, reason: 'every item on the feed has already aired' };
     // Burn on read so a later tick doesn't re-offer the same item.
     for (const it of fresh) seen.add(hashHeadline(it.title));
     if (seen.size > SEEN_HIGH_WATER) {
