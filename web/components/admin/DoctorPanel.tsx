@@ -14,6 +14,8 @@ import { Shimmer } from '../ai-elements/shimmer';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
 import { MessageResponse } from '../ai-elements/message';
 import { adminResponse } from '../../lib/admin-query';
+import DoctorRig from './DoctorRig';
+import { EXPECTED_SECTIONS, sectionAnchor } from './doctor-rig';
 import {
   doctorKeys,
   finishReport,
@@ -52,22 +54,6 @@ const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
 // GitHub's prefilled-issue form is a GET, and past ~8KB the request 414s or
 // silently truncates — stay well under and fall back to the clipboard.
 const HQ_URL_LIMIT = 7000;
-
-// Mirrors SECTION_CHECKS in controller/src/doctor.ts. Only the in-flight
-// shimmer rows key off it, so drift just shimmers the wrong names for a few
-// seconds; the finished report renders whatever actually arrived.
-const EXPECTED_SECTIONS = [
-  'LLM',
-  'Navidrome & library',
-  'Broadcast',
-  'Voice (TTS)',
-  'Capabilities',
-  'Content',
-  'Resources',
-  'Tuning',
-  'Storage',
-  'Setup',
-];
 
 function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   const c = { ok: 0, warn: 0, fail: 0, skip: 0 };
@@ -282,62 +268,77 @@ export default function DoctorPanel() {
   };
 
   const buddyMood: BuddyMood = review?.available && review.overall ? MOOD_BY_OVERALL[review.overall] : 'content';
+  // The health card's DJ Doc: listening while the levels run or the review is
+  // written, then the review's verdict, or the report's own worst finding.
+  const healthMood: BuddyMood =
+    running || reviewing
+      ? 'onair'
+      : review?.available && review.overall
+        ? MOOD_BY_OVERALL[review.overall]
+        : report?.counts.fail
+          ? 'spooked'
+          : report?.counts.warn
+            ? 'curious'
+            : 'content';
 
   return (
     <div className="mx-auto max-w-[1100px] px-0 py-8 sm:px-7">
       {ready && !hydrating && !report && (
         <Card title="DJ Doc" sub="booth's open">
-          <div className="flex items-start gap-4">
-            <BoothBuddy mood="curious" size={52} />
-            <div className="min-w-0 flex-1">
-              <p className="text-[15px] leading-[1.65]">
-                Yo — DJ Doc here, resident engineer for this station. I sit in the booth and listen to
-                the whole rig like it&apos;s a record: is the low end clean, is anything clipping, is the
-                mix on air or dropping out?
-              </p>
-              <p className="mt-3 text-[13px] tracking-[0.14em] text-muted uppercase">Here&apos;s what I run the levels on</p>
-              <ul className="mt-2 flex flex-col gap-2 text-[14px] leading-[1.5]">
-                <li>
-                  <span className="font-bold">The brain</span>{' '}
-                  <span className="text-muted">— your LLM DJ: reachable, quick enough, dialed to the right settings.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The crate</span>{' '}
-                  <span className="text-muted">— Navidrome + your mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The mix</span>{' '}
-                  <span className="text-muted">— Liquidsoap &amp; Icecast: on air, clean signal, listeners served.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The voice</span>{' '}
-                  <span className="text-muted">— your TTS engine, and whether it actually fits the machine you&apos;re running on.</span>
-                </li>
-                <li>
-                  <span className="font-bold">The extras</span>{' '}
-                  <span className="text-muted">— web search for artist news, your hardware&apos;s muscle, and your backups.</span>
-                </li>
-              </ul>
-              <p className="mt-4 text-[14px] leading-[1.6]">
-                Hit <span className="font-bold">Let&apos;s go</span> and I&apos;ll run the levels on all of it,
-                then tell you straight what&apos;s clean, what&apos;s muddy, and the one thing to fix first. No fluff.
-              </p>
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                <Btn
-                  tone="accent"
-                  lg
-                  onClick={letsGo}
-                  disabled={running || reviewing}
-                  className="px-9 py-3.5 text-[13px]"
-                >
-                  {running ? 'Running the levels…' : reviewing ? 'DJ Doc is listening…' : "Let's go"}
-                </Btn>
-                <span className="text-[12px] leading-[1.5] text-muted">
-                  Runs the full check and gets DJ Doc&apos;s read in one go.
-                </span>
+          <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+            <div className="flex items-start gap-4">
+              <BoothBuddy mood="curious" size={52} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[15px] leading-[1.65]">
+                  Yo — DJ Doc here, resident engineer for this station. I sit in the booth and listen to
+                  the whole rig like it&apos;s a record: is the low end clean, is anything clipping, is the
+                  mix on air or dropping out?
+                </p>
+                <p className="mt-3 text-[13px] tracking-[0.14em] text-muted uppercase">Here&apos;s what I run the levels on</p>
+                <ul className="mt-2 flex flex-col gap-2 text-[14px] leading-[1.5]">
+                  <li>
+                    <span className="font-bold">The brain</span>{' '}
+                    <span className="text-muted">— your LLM DJ: reachable, quick enough, dialed to the right settings.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The crate</span>{' '}
+                    <span className="text-muted">— Navidrome + your mood tags: connected, and stocked so the picks aren&apos;t blind.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The mix</span>{' '}
+                    <span className="text-muted">— Liquidsoap &amp; Icecast: on air, clean signal, listeners served.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The voice</span>{' '}
+                    <span className="text-muted">— your TTS engine, and whether it actually fits the machine you&apos;re running on.</span>
+                  </li>
+                  <li>
+                    <span className="font-bold">The extras</span>{' '}
+                    <span className="text-muted">— web search for artist news, your hardware&apos;s muscle, and your backups.</span>
+                  </li>
+                </ul>
+                <p className="mt-4 text-[14px] leading-[1.6]">
+                  Hit <span className="font-bold">Let&apos;s go</span> and I&apos;ll run the levels on all of it,
+                  then tell you straight what&apos;s clean, what&apos;s muddy, and the one thing to fix first. No fluff.
+                </p>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                  <Btn
+                    tone="accent"
+                    lg
+                    onClick={letsGo}
+                    disabled={running || reviewing}
+                    className="px-9 py-3.5 text-[13px]"
+                  >
+                    {running ? 'Running the levels…' : reviewing ? 'DJ Doc is listening…' : "Let's go"}
+                  </Btn>
+                  <span className="text-[12px] leading-[1.5] text-muted">
+                    Runs the full check and gets DJ Doc&apos;s read in one go.
+                  </span>
+                </div>
+                {err && <ErrorState error={err} onRetry={run} />}
               </div>
-              {err && <ErrorState error={err} onRetry={run} />}
             </div>
+            <DoctorRig report={null} review={null} running={false} className="mx-auto w-full max-w-[28rem] lg:mt-2" />
           </div>
         </Card>
       )}
@@ -359,30 +360,34 @@ export default function DoctorPanel() {
             </span>
           }
         >
-          <div>
-            <div className="min-w-0 flex-1">
-              <p className="text-[14px] leading-[1.6] text-muted">
-                Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
-                voices, capabilities, content, resources and storage. Where a safe fix exists you can
-                apply it in one click.
-              </p>
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
-                  {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
-                </Btn>
-                <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
-                <Btn
-                  onClick={sendToHQ}
-                  title="Open a prefilled GitHub issue with this report (you submit it)"
-                >
-                  Send report to Headquarters
-                </Btn>
-                <span className="font-mono text-[11px] text-muted">
-                  last run {new Date(report.t).toLocaleTimeString()}
-                </span>
+          <div className="grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
+            <div className="flex min-w-0 items-start gap-4">
+              <BoothBuddy mood={healthMood} size={52} />
+              <div className="min-w-0 flex-1">
+                <p className="text-[14px] leading-[1.6] text-muted">
+                  Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
+                  voices, capabilities, content, resources and storage. Where a safe fix exists you can
+                  apply it in one click.
+                </p>
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
+                    {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
+                  </Btn>
+                  <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
+                  <Btn
+                    onClick={sendToHQ}
+                    title="Open a prefilled GitHub issue with this report (you submit it)"
+                  >
+                    Send report to Headquarters
+                  </Btn>
+                  <span className="font-mono text-[11px] text-muted">
+                    last run {new Date(report.t).toLocaleTimeString()}
+                  </span>
+                </div>
+                {err && <ErrorState error={err} onRetry={run} />}
               </div>
-              {err && <ErrorState error={err} onRetry={run} />}
             </div>
+            <DoctorRig report={report} review={review} running={running} className="mx-auto w-full max-w-[28rem]" />
           </div>
         </Card>
       )}
@@ -498,7 +503,7 @@ export default function DoctorPanel() {
               const fails = sec.findings.filter((f) => f.status === 'fail').length;
               const warns = sec.findings.filter((f) => f.status === 'warn').length;
               return (
-                <Task key={sec.name} defaultOpen className="py-2.5 first:pt-0 last:pb-0">
+                <Task key={sec.name} id={sectionAnchor(sec.name)} defaultOpen className="scroll-mt-20 py-2.5 first:pt-0 last:pb-0">
                   <TaskTrigger title={sec.name}>
                     <div className="flex w-full cursor-pointer items-center gap-2">
                       <span className="text-[11px] font-bold tracking-[0.18em] text-ink uppercase">{sec.name}</span>
