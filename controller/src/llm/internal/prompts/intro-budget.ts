@@ -10,7 +10,7 @@ import { shiftOnsetMs } from '../../../music/silence-trim.js';
 // so the phrase, the backstop and the boundary-deferred segment's own timing
 // rule can never disagree about where "too early to talk" starts and where a
 // runway stops constraining at all (broadcast/vocal-runway.ts).
-import { VOCAL_RUNWAY_FLOOR_MS, VOCAL_RUNWAY_CEILING_MS } from '../../../broadcast/vocal-runway.js';
+import { VOCAL_RUNWAY_FLOOR_MS, VOCAL_RUNWAY_CEILING_MS, vocalRunwayMs } from '../../../broadcast/vocal-runway.js';
 
 // Intro runway (ms to where the track 'comes in') for a track, from the track
 // object or a library lookup. Null when un-analysed.
@@ -25,13 +25,22 @@ export function introMsFor(track: any): number | null {
 // null when un-analysed / instrumental ([] — no vocal to clash with). The
 // single resolver behind the never-talk-over-a-singer rule (feature:
 // vocal-aware transitions) — both the budget phrase and the enforcement
-// funnel key off it.
+// funnel key off it. The onset itself is composed by vocal-runway.ts (fresh
+// track ranges before the library row, earliest start, trimmed timeline), the
+// one place it is; only its "instrumental" Infinity maps to null here.
 export function firstVocalMsFor(track: any): number | null {
-  const ranges = track?.id ? library.get(track.id)?.vocalRanges : null;
-  if (!Array.isArray(ranges) || ranges.length === 0) return null;
-  const first = Number(ranges[0]?.startMs);
-  if (!Number.isFinite(first) || first < 0) return null;
-  return shiftOnsetMs(track, first);
+  const runway = vocalRunwayMs(track);
+  return runway != null && Number.isFinite(runway) ? runway : null;
+}
+
+// The runway the phrase and the backstop both budget against: a measured first
+// vocal when there is one (finite, ≥ 0), else the energy-heuristic intro.
+// Resolved ONCE so the advice and the cut cannot describe different songs —
+// they did, when the phrase read introMs while the backstop cut at the vocal.
+function measuredVocalMs(firstVocalMs: number | null | undefined): number | null {
+  return typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
+    ? firstVocalMs
+    : null;
 }
 
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no
@@ -42,15 +51,19 @@ export function firstVocalMsFor(track: any): number | null {
 // unlike the energy-heuristic intro_ms, a measured start below the 2.5s
 // floor is trustworthy, so instead of staying silent about it the phrase
 // tells the model to skip the line the deterministic backstop would drop
-// anyway. Omitted/null (un-analysed or instrumental) changes nothing.
+// anyway; at or above the floor it IS the runway the advice is sized from,
+// exactly as enforceIntroBudget sizes its cut. Omitted/null (un-analysed or
+// instrumental) changes nothing.
 export function introBudgetPhrase(introMs: number | null | undefined, firstVocalMs?: number | null): string {
-  if (typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs < VOCAL_RUNWAY_FLOOR_MS) {
+  const measured = measuredVocalMs(firstVocalMs);
+  if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) {
     return 'The vocals start almost immediately on this one — skip the spoken intro and let the track speak.';
   }
-  if (!introMs || introMs < VOCAL_RUNWAY_FLOOR_MS) return '';
-  if (introMs >= VOCAL_RUNWAY_CEILING_MS) return '';
-  const sec = Math.floor(introMs / 1000);
-  if (introMs < 6000) {
+  const runway = measured ?? introMs;
+  if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS) return '';
+  if (runway >= VOCAL_RUNWAY_CEILING_MS) return '';
+  const sec = Math.floor(runway / 1000);
+  if (runway < 6000) {
     return `The track's vocals come in around ${sec}s — keep this to a single short phrase that finishes before then; never run past it.`;
   }
   return `The track's vocals come in around ${sec}s — you have room for a sentence or two; use it, but land your last word before then rather than talking over the vocals.`;
@@ -89,9 +102,7 @@ export function enforceIntroBudget(
 ): string {
   const t = (text || '').trim();
   if (!t) return t;
-  const measured = typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
-    ? firstVocalMs
-    : null;
+  const measured = measuredVocalMs(firstVocalMs);
   if (measured != null && measured < VOCAL_RUNWAY_FLOOR_MS) return '';
   const runway = measured ?? introMs;
   if (!runway || runway < VOCAL_RUNWAY_FLOOR_MS || runway >= VOCAL_RUNWAY_CEILING_MS) return t;
