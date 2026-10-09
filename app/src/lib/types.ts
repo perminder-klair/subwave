@@ -159,8 +159,14 @@ export interface QueueEntry {
   album?: string;
   subsonic_id?: string;
   requestedBy?: string;
-  /** ISO timestamp present on history entries. */
+  /** ISO timestamp on older payloads; the live controller sends the three
+   *  below instead. All are live-edge. */
   t?: string;
+  /** When the track started airing; set once it reaches the air. */
+  startedAt?: string;
+  endedAt?: string;
+  /** When it joined the queue — earlier than it aired, often by minutes. */
+  queuedAt?: string;
   [key: string]: unknown;
 }
 
