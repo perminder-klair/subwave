@@ -701,6 +701,8 @@ export async function runCapability(
     if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
       const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
       hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
+    } else if (cap.toolPending && !cap.toolFn) {
+      hint = ' — its tool.mjs is awaiting your review in /admin/skills';
     } else if (cap.requiresKey) {
       hint = ` — set ${cap.requiresKey}`;
     }
@@ -885,6 +887,8 @@ export function skillCatalog() {
     return {
       name: c.skill,
       hasTool: typeof c.toolFn === 'function',
+      // Imported/restored code waiting for the operator's review; never loaded.
+      toolPending: !!c.toolPending,
       label: c.label || c.skill,
       description: c.desc || '',
       kind: c.kind,
