@@ -179,7 +179,7 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           On a solo or off-show hour the skill stands down; Run now reports that it requires
           a co-hosted show before any model or TTS call. If it has a data tool, that data
           must come back usable — gathered by the skill&apos;s own tool loop, or fetched in
-          code when the picker agent is off — or the whole discussion stays silent instead
+          code when Segments &amp; Skills runs direct — or the whole discussion stays silent instead
           of inventing facts.
         </p>
       </section>

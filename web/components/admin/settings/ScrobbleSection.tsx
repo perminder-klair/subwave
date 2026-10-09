@@ -8,16 +8,38 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
 import {
-  SectionHeader, SaveBar,
-  type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
+  SaveBar,
+  type FormState, type SettingsData, type SectionProps, type ScrobbleLastfmForm, type ScrobbleListenbrainzForm,
 } from './shared';
 
-interface ScrobbleSectionProps extends SectionProps {
+interface ScrobbleCardsProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
 }
 
-export function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleSectionProps) {
+// Which backends would actually submit, from the form plus any env-supplied
+// credential. Shared by the cards and the Listeners header metrics.
+export function scrobbleReadiness(form: FormState, data: SettingsData) {
+  const lf = form.scrobble.lastfm;
+  const lb = form.scrobble.listenbrainz;
+  const env = (data.env || {}) as Record<string, unknown>;
+  const lfApiKeySet = lf.apiKey === 'set' || !!env.LASTFM_API_KEY;
+  const lfApiSecretSet = lf.apiSecret === 'set' || !!env.LASTFM_API_SECRET;
+  const lfSessionSet = lf.sessionKey === 'set' || !!env.LASTFM_SESSION_KEY;
+  const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
+  return {
+    lfApiKeySet, lfApiSecretSet,
+    lfReady: lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet,
+    lbReady: lb.enabled && lbTokenSet,
+    // Navidrome has no credentials of its own — the station's existing
+    // connection is the credential, so "enabled" is the whole readiness test.
+    ndReady: !!form.scrobble.navidrome.enabled,
+  };
+}
+
+// The three scrobbling backends, as cards of the Listeners tab
+// (ListenersSection). Each keeps its own save, since each is independent.
+export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleCardsProps) {
   const lf = form.scrobble.lastfm;
   const lb = form.scrobble.listenbrainz;
   const nd = form.scrobble.navidrome;
@@ -30,16 +52,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const inputValue = (v: string) => (v === 'set' ? '' : v);
   const placeholder = (v: string, fallback: string) =>
     v === 'set' ? '•••••• (on file)' : fallback;
-  const env = (data.env || {}) as Record<string, unknown>;
-  const lfApiKeySet = lf.apiKey === 'set' || !!env.LASTFM_API_KEY;
-  const lfApiSecretSet = lf.apiSecret === 'set' || !!env.LASTFM_API_SECRET;
-  const lfSessionSet = lf.sessionKey === 'set' || !!env.LASTFM_SESSION_KEY;
-  const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
-  const lfReady = lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet;
-  const lbReady = lb.enabled && lbTokenSet;
-  // Navidrome has no credentials of its own — the station's existing connection
-  // is the credential, so "enabled" is the whole readiness test here.
-  const ndReady = !!nd.enabled;
+  const { lfApiKeySet, lfApiSecretSet, lfReady, lbReady, ndReady } = scrobbleReadiness(form, data);
 
   // Needs the API key + secret saved first (the backend reads them from settings/env).
   const canConnect = lfApiKeySet && lfApiSecretSet;
@@ -138,24 +151,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
 
   return (
     <>
-      <SectionHeader
-        eyebrow="scrobbling"
-        title="Station-wide scrobbling to Last.fm, ListenBrainz and your own Navidrome."
-        sub={<>
-          Each backend is independent, pick any of them. Last.fm and ListenBrainz
-          scrobble only when at least one listener is tuned in to the stream;
-          Navidrome logs every track the station airs, because that is what keeps
-          smart playlists rotating. For Last.fm, enter your API key and secret, then
-          hit <strong>Connect to Last.fm</strong> to authorize, no session-key
-          wrangling. Nothing here leaves the controller.
-        </>}
-        metrics={[
-          { n: lfReady ? 'on' : 'off', l: 'last.fm', accent: lfReady },
-          { n: lbReady ? 'on' : 'off', l: 'listenbrainz', accent: lbReady },
-          { n: ndReady ? 'on' : 'off', l: 'navidrome', accent: ndReady },
-        ]}
-      />
-
       <Card
         title="Last.fm"
         sub={lfReady ? `scrobbling as ${savedLf.username || '(unknown)'}` : 'not connected'}

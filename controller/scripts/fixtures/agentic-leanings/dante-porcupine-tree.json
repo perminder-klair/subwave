@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "Dante / Porcupine Tree false Leanings claim",
+  "sessionPath": "/var/sub-wave/sessions/sess_dfdb8660.json",
+  "eventAt": "2026-09-19T20:08:27.422Z",
+  "expected": {
+    "usedMusicalLeanings": false,
+    "tieBreakPatterns": [],
+    "note": "The selected track may be a sound choice, but \"warm vocal and melodic hook\" is neither Dante's Leanings nor grounded in the discovered metadata."
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "Maria / Marcella Detroit genuine Leanings claim",
+  "sessionPath": "/var/sub-wave/sessions/sess_4216a074.json",
+  "eventAt": "2026-09-19T11:04:26.859Z",
+  "expected": {
+    "usedMusicalLeanings": true,
+    "tieBreakPatterns": ["songwriting", "memorable voice", "distinctive voice"],
+    "note": "Marcella Detroit — I Believe is a 1990s pop selection whose claimed strong songwriting and memorable voice directly match Maria's stated Leanings."
+  }
+}

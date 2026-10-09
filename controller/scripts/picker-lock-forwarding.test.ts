@@ -1,7 +1,7 @@
-// Pins the hand-off of strict show locks from pickViaAgent (broadcast/dj-agent.ts)
+// Pins the hand-off of strict show locks from pickViaSelectionRoute (broadcast/dj-agent.ts)
 // to the agent's discovery tools (broadcast/dj-agent/agents.ts → buildPickerTools).
 //
-// THE DEFECT THIS GUARDS. A lock that pickViaAgent resolves and passes but that
+// THE DEFECT THIS GUARDS. A lock that pickViaSelectionRoute resolves and passes but that
 // something downstream fails to carry is not a crash and produces no log line:
 // it falls through to a `null` default and that whole dimension silently stops
 // being enforced on the agent path, while the pool picker still honours it. The
@@ -140,10 +140,10 @@ test('locks compose — all of them apply together, none overrides another', () 
 
 console.log('\nthe scope reaches the tools whole:');
 
-test('pickViaAgent builds ONE scope and hands it over unpacked', () => {
+test('pickViaSelectionRoute builds ONE scope and hands it over unpacked', () => {
   const src = read('../src/broadcast/dj-agent.ts');
   assert.match(src, /const scope = pickerScope\(\{/,
-    'pickViaAgent should assemble a single pickerScope(...) value');
+    'pickViaSelectionRoute should assemble a single pickerScope(...) value');
   assert.match(src, /pickerAgent\.run\(\{[^}]*\bscope,/s,
     'the picker run must receive the scope as one value');
 });

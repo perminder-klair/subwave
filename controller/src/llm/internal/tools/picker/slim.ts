@@ -83,8 +83,15 @@ export function slim(s: any) {
   const daysAgo = (ms: number) => Math.max(0, Math.round((Date.now() - ms) / 86400000));
   const songStats = library.trackPlayStatsFor(s);
   const artistStats = library.artistPlayStatsFor(s.artist);
+  const evidence = s.similarity;
+  const similarity = evidence && (evidence.kind === 'audio' || evidence.kind === 'text')
+    && typeof evidence.reference === 'string' && evidence.reference.length > 0
+    && typeof evidence.score === 'number' && Number.isFinite(evidence.score)
+    && evidence.score >= -1 && evidence.score <= 1
+    ? { kind: evidence.kind, reference: evidence.reference, score: evidence.score } : null;
   return {
     ...base,
+    ...(similarity ? { similarity } : {}),
     ...(moods.length ? { moods } : {}),
     ...(energy != null ? { energy } : {}),
     ...(durationSec != null ? { duration_sec: durationSec } : {}),

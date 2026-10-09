@@ -288,6 +288,54 @@ TAKEOVER_SHOW_NAME = "Verify Takeover Show"
 
 
 @check
+def music_selection(page):
+    """Selection saves and section Discard preserve independent LLM controls."""
+    original = json.loads(api("/settings"))["values"]["llm"]
+    keys = ["trackSelection", "shortlistPasses", "requestMatching", "segmentRuntime"]
+    try:
+        api_write("POST", "/settings", {"llm": {
+            "trackSelection": "agentic", "shortlistPasses": 3,
+            "requestMatching": "agentic", "segmentRuntime": "agentic",
+        }})
+        page.goto(f"{WEB}/admin/settings?section=selection")
+        shortlist = page.get_by_role("radio", name="Track Shortlist", exact=True)
+        shortlist.wait_for()
+        shortlist.click()
+        page.get_by_role("radio", name="5", exact=True).click()
+        with page.expect_response(
+            lambda r: r.url.endswith("/settings") and r.request.method == "POST"
+        ) as saved:
+            page.get_by_role("button", name="Save music selection", exact=True).click()
+        assert saved.value.status == 200
+        page.get_by_role("button", name="Discard", exact=True).wait_for(state="hidden")
+        llm = json.loads(api("/settings"))["values"]["llm"]
+        assert llm["trackSelection"] == "shortlist" and llm["shortlistPasses"] == 5
+        assert llm["pickerAgent"] is False
+        assert llm["requestMatching"] == "agentic" and llm["segmentRuntime"] == "agentic"
+
+        page.reload()
+        shortlist.wait_for()
+        assert shortlist.get_attribute("aria-checked") == "true"
+        page.get_by_role("radio", name="Agentic Tools", exact=True).click()
+        page.get_by_role("button", name=re.compile(r"DJ behaviour.*speech", re.I)).click()
+        direct = page.get_by_role("radio", name="Direct runtime", exact=True)
+        direct.click()
+        page.get_by_role("button", name=re.compile(r"LLM provider.*model routing", re.I)).click()
+        assert page.get_by_role("button", name="Discard", exact=True).count() == 0
+        assert page.get_by_text("Next-track picker", exact=True).count() == 0
+
+        page.get_by_role("button", name=re.compile(r"Music selection.*agentic", re.I)).click()
+        page.get_by_role("button", name="Discard", exact=True).click()
+        assert shortlist.get_attribute("aria-checked") == "true"
+        page.get_by_role("button", name=re.compile(r"DJ behaviour.*speech", re.I)).click()
+        assert direct.get_attribute("aria-checked") == "true"
+        page.get_by_role("button", name="Discard", exact=True).click()
+        assert page.get_by_role("radio", name="Agentic runtime", exact=True).get_attribute("aria-checked") == "true"
+    finally:
+        api_write("POST", "/settings", {"llm": {key: original[key] for key in keys}})
+
+
+@check
 def stream_buffer(page):
     """The listener buffer control round-trips the advertised Icecast depth.
 

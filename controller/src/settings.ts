@@ -108,6 +108,7 @@ import {
   DJ_RECAP_MINUTES_BOUNDS,
   PAUSE_TALK_MIN_SECONDS_BOUNDS,
   PICKER_ALBUM_HOURS_BOUNDS,
+  SHORTLIST_PASSES_BOUNDS,
   STREAM_BUFFER_SECONDS_BOUNDS,
   STREAM_COUNTRY_HEADER_RE,
   STREAM_GEOIP_DB_PATH_MAX,
@@ -323,6 +324,28 @@ const parsedIntIn = (
   return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : def;
 };
 
+// Unlike Agentic discoverySteps, zero has no useful meaning for controller-led
+// shortlist construction: one pass is the smallest real shortlist.
+const clampShortlistPasses = (v: unknown, def: number) => intIn(v, def, SHORTLIST_PASSES_BOUNDS.min, SHORTLIST_PASSES_BOUNDS.max);
+
+// The three route choices that replaced the single legacy `pickerAgent`
+// toggle. Anything else stored under these keys is treated as ABSENT rather
+// than as a choice, so a hand-edited or truncated value falls back to the
+// legacy toggle exactly as a missing one does.
+const storedTrackSelection = (v: unknown): 'agentic' | 'shortlist' | undefined =>
+  v === 'agentic' || v === 'shortlist' ? v : undefined;
+const storedRuntime = (v: unknown): 'agentic' | 'direct' | undefined =>
+  v === 'agentic' || v === 'direct' ? v : undefined;
+
+// The one upgrade that is not byte-identical (#1687): a station still carrying
+// the retired Candidate Pool toggle and no route of its own is moved to Track
+// Shortlist by load(). Remembered so the operator is TOLD — in the booth at boot
+// and in DJ Doc — until a save writes the route down and the note retires.
+let candidatePoolMigrated = false;
+export function migratedFromCandidatePool(): boolean {
+  return candidatePoolMigrated;
+}
+
 export async function load() {
   const cached = peek();
   if (cached) return cached;
@@ -350,6 +373,9 @@ export async function load() {
       }
     } catch {}
   }
+
+  candidatePoolMigrated = stored.llm?.pickerAgent === false
+    && storedTrackSelection(stored.llm?.trackSelection) === undefined;
 
   // ── personas ──────────────────────────────────────────────────────────────
   // No valid persona roster in settings.json (fresh install) → ship the seed
@@ -985,16 +1011,36 @@ export async function load() {
       // llama.cpp fell back to its own 1.0 default with nothing in the logs.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
       geminiSafety: normalizeGeminiSafety(stored.llm?.geminiSafety),
+      // `pickerAgent` is now derived, kept only so older API clients and the
+      // settings file still read a coherent value. Nothing on the pick path
+      // reads it: `trackSelection` is the route.
       pickerAgent:
-        typeof stored.llm?.pickerAgent === 'boolean'
-          ? stored.llm.pickerAgent
-          : DEFAULTS.llm.pickerAgent,
+        (storedTrackSelection(stored.llm?.trackSelection)
+          ?? (stored.llm?.pickerAgent === false ? 'shortlist' : DEFAULTS.llm.trackSelection)) === 'agentic',
+      // The one deliberate exception to "absent settings keep the pre-existing
+      // behaviour" (#1687, signed off by the maintainer): `pickerAgent: false`
+      // was the retired Candidate Pool setting, a controller-led pool plus one
+      // final model choice, so those stations move to its named replacement
+      // rather than presenting Agentic Tools while silently using the old
+      // fallback. An explicit stored `trackSelection` always wins.
+      trackSelection:
+        storedTrackSelection(stored.llm?.trackSelection)
+          ?? (stored.llm?.pickerAgent === false ? 'shortlist' : DEFAULTS.llm.trackSelection),
+      shortlistPasses: clampShortlistPasses(stored.llm?.shortlistPasses, DEFAULTS.llm.shortlistPasses),
       // A new explicit opt-in. Older settings files and malformed values remain
       // off, so guests never become an invisible source of editorial influence.
       guestMusicalLeanings:
         typeof stored.llm?.guestMusicalLeanings === 'boolean'
           ? stored.llm.guestMusicalLeanings
           : DEFAULTS.llm.guestMusicalLeanings,
+      // Before #1687 the legacy toggle also switched requests and segments, so a
+      // `pickerAgent: false` station without its own choice keeps both direct.
+      requestMatching:
+        storedRuntime(stored.llm?.requestMatching)
+          ?? (stored.llm?.pickerAgent === false ? 'direct' : DEFAULTS.llm.requestMatching),
+      segmentRuntime:
+        storedRuntime(stored.llm?.segmentRuntime)
+          ?? (stored.llm?.pickerAgent === false ? 'direct' : DEFAULTS.llm.segmentRuntime),
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
@@ -2039,11 +2085,32 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     // Route the primary inline key into keys[provider] AFTER the provider is
     // resolved, so it's stored under the identity it belongs to (issue #657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
-    if (l.pickerAgent !== undefined) {
+    if (l.pickerAgent !== undefined && l.trackSelection === undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+      next.llm.trackSelection = next.llm.pickerAgent ? 'agentic' : 'shortlist';
+      // Preserve the legacy single-toggle behaviour for API callers and older
+      // admin builds that do not yet send the three independent choices. The
+      // toggle moved all three together, in BOTH directions: switching it back
+      // on must restore agentic requests and segments too.
+      const legacyRuntime = next.llm.pickerAgent ? 'agentic' : 'direct';
+      if (l.requestMatching === undefined) next.llm.requestMatching = legacyRuntime;
+      if (l.segmentRuntime === undefined) next.llm.segmentRuntime = legacyRuntime;
+    }
+    if (l.trackSelection !== undefined) {
+      next.llm.trackSelection = l.trackSelection === 'shortlist' ? 'shortlist' : 'agentic';
+      next.llm.pickerAgent = next.llm.trackSelection === 'agentic';
+    }
+    if (l.shortlistPasses !== undefined) {
+      next.llm.shortlistPasses = clampShortlistPasses(Number(l.shortlistPasses), next.llm.shortlistPasses);
     }
     if (l.guestMusicalLeanings !== undefined) {
       next.llm.guestMusicalLeanings = !!l.guestMusicalLeanings;
+    }
+    if (l.requestMatching !== undefined) {
+      next.llm.requestMatching = l.requestMatching === 'direct' ? 'direct' : 'agentic';
+    }
+    if (l.segmentRuntime !== undefined) {
+      next.llm.segmentRuntime = l.segmentRuntime === 'direct' ? 'direct' : 'agentic';
     }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
@@ -2610,6 +2677,9 @@ export async function update(patch) {
   // inline credential getRedacted() masks, in a state dir other accounts can
   // list. schedule.json holds none and keeps whatever mode it has.
   await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2), { mode: 0o600 });
+  // Every save writes the whole llm block, the derived trackSelection with it,
+  // so the Candidate Pool migration is now on disk as an ordinary choice.
+  candidatePoolMigrated = false;
   await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify(

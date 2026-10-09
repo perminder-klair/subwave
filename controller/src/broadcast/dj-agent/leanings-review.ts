@@ -7,6 +7,11 @@
 
 import { bpmCompat, keyCompat } from '../../music/mix.js';
 
+// What modelTolerant writes when a review or Shortlist pick returns an
+// unusable musicalReason. It must never reach the Booth as if it were prose,
+// so every reason builder treats it as absent.
+export const MUSICAL_REASON_UNAVAILABLE = '[musical reason unavailable]';
+
 export type AgenticTrackRef = {
   id: string;
   title: string | null;
@@ -20,10 +25,15 @@ export type AgenticLeaningsReviewRejection =
   | 'missing-leanings-basis'
   | 'basis-not-in-leanings'
   | 'basis-not-supported-by-candidate'
+  | 'basis-already-supported-by-baseline'
   | 'not-flow-tie'
   | 'weak-musical-reason';
 
-export type AgenticPickResolution = {
+// One settled record of a pick for Debug and the event log, shared by both
+// selection routes so a field added for one cannot silently go missing from
+// the other. It rides the LLM call records by reference and is filled in only
+// after the guards and enqueue.
+export type PickResolution = {
   preliminary?: AgenticTrackRef;
   leaningsReview?: {
     outcome: AgenticLeaningsReviewOutcome;
@@ -35,7 +45,7 @@ export type AgenticPickResolution = {
     candidateIds?: string[];
     leaningsOptions?: string[];
     leaningsSources?: AgenticLeaningsOption[];
-    leaningsSource?: 'host' | 'guest';
+    leaningsSource?: 'host' | 'guest' | null;
     proposedReplacementId?: string | null;
     rejectionReason?: AgenticLeaningsReviewRejection | null;
   };
@@ -44,7 +54,10 @@ export type AgenticPickResolution = {
   reason?: string | null;
   queued?: boolean;
   usedMusicalLeanings?: boolean;
+  rejectionReason?: AgenticLeaningsReviewRejection | 'queue-collision' | 'pool-rescue' | null;
 };
+
+export type AgenticPickResolution = PickResolution;
 
 export function agenticTrackRef(song: { id: unknown; title?: unknown; artist?: unknown }): AgenticTrackRef {
   return {
@@ -228,6 +241,8 @@ function ordinarySimilarity(baseline: any, candidate: any): number {
     + (baseline?.instrumental === candidate?.instrumental && baseline?.instrumental != null ? 0.25 : 0);
 }
 
+const MIN_REVIEW_FLOW_SCORE = 2.5;
+
 const METADATA_GENERIC_WORDS = new Set(['music', 'track', 'tracks', 'record', 'records', 'material', 'sounds']);
 
 function exactLeaningsMetadataMatches(candidate: any, leaningsOptions: string[]): string[] {
@@ -255,7 +270,7 @@ export function eligibleAgenticLeanings(baseline: any, candidates: any[], source
   const host = sources.filter(({ source }) => source === 'host');
   const hostPhrases = host.map(({ phrase }) => phrase);
   const hostSupported = [baseline, ...candidates].some((candidate) =>
-    (String(candidate?.id) === String(baseline?.id) || ordinarySimilarity(baseline, candidate) >= 2.5)
+    (String(candidate?.id) === String(baseline?.id) || ordinarySimilarity(baseline, candidate) >= MIN_REVIEW_FLOW_SCORE)
     && exactLeaningsMetadataMatches(candidate, hostPhrases).length > 0);
   return hostSupported ? host : sources;
 }
@@ -263,19 +278,26 @@ export function eligibleAgenticLeanings(baseline: any, candidates: any[], source
 export function selectAgenticReviewCandidates(baseline: any, candidates: any[], leaningsOptions: string[] = [], limit = 6): any[] {
   if (!baseline?.id) return [];
   const baselineId = String(baseline.id);
+  // Reserve evidence slots for preferences that distinguish a challenger.
+  // Repeated broad genre matches must not crowd out a genuine tie-break.
+  const baselineMatches = new Set(exactLeaningsMetadataMatches(baseline, leaningsOptions).map(comparable));
+  const distinguishingOptions = leaningsOptions.filter(option => !baselineMatches.has(comparable(option)));
   const ranked = candidates
     .filter((candidate) => candidate?.id && String(candidate.id) !== baselineId)
     .map((candidate) => ({
       candidate,
       ordinaryScore: ordinarySimilarity(baseline, candidate),
-      leaningsScore: exactLeaningsMetadataScore(candidate, leaningsOptions),
+      leaningsScore: exactLeaningsMetadataScore(candidate, distinguishingOptions),
     }));
   const ordinaryRanked = [...ranked]
     .sort((left, right) => right.ordinaryScore - left.ordinaryScore || String(left.candidate.id).localeCompare(String(right.candidate.id)));
   const selected = ordinaryRanked.slice(0, Math.min(3, Math.max(1, limit - 1)));
   const selectedIds = new Set(selected.map(({ candidate }) => String(candidate.id)));
   const evidenceRanked = ranked
-    .filter(({ candidate, leaningsScore }) => leaningsScore > 0 && !selectedIds.has(String(candidate.id)))
+    // A stronger preference on a weak-flow track must not crowd out an
+    // otherwise viable tie-break. Use the same floor as the review/validator.
+    .filter(({ candidate, ordinaryScore, leaningsScore }) => ordinaryScore >= MIN_REVIEW_FLOW_SCORE
+      && leaningsScore > 0 && !selectedIds.has(String(candidate.id)))
     .sort((left, right) => right.leaningsScore - left.leaningsScore || right.ordinaryScore - left.ordinaryScore || String(left.candidate.id).localeCompare(String(right.candidate.id)));
   for (const item of evidenceRanked) {
     if (selected.length >= limit - 1) break;
@@ -294,11 +316,15 @@ export function selectAgenticReviewCandidates(baseline: any, candidates: any[], 
 
 export function compactAgenticReviewCandidate(track: any, leaningsOptions: string[] = [], baseline: any = null): Record<string, unknown> {
   const leaningsMatches = exactLeaningsMetadataMatches(track, leaningsOptions);
+  const baselineMatches = new Set(exactLeaningsMetadataMatches(baseline, leaningsOptions).map(comparable));
+  const leaningsAdvantages = baseline?.id && String(track?.id) !== String(baseline.id)
+    ? leaningsMatches.filter(option => !baselineMatches.has(comparable(option)))
+    : [];
   const similarity = baseline?.id ? ordinarySimilarity(baseline, track) : null;
   const flowCloseness = baseline?.id && String(track?.id) === String(baseline.id)
     ? 'baseline'
     : similarity != null
-      ? similarity >= 4 ? 'close' : similarity >= 2.5 ? 'possible' : 'weak'
+      ? similarity >= 4 ? 'close' : similarity >= MIN_REVIEW_FLOW_SCORE ? 'possible' : 'weak'
       : undefined;
   return Object.fromEntries(Object.entries({
     id: track?.id,
@@ -315,6 +341,7 @@ export function compactAgenticReviewCandidate(track: any, leaningsOptions: strin
     play_count: track?.play_count,
     last_played_days_ago: track?.last_played_days_ago,
     leaningsMatches: leaningsMatches.length ? leaningsMatches : undefined,
+    leaningsAdvantages: leaningsAdvantages.length ? leaningsAdvantages : undefined,
     flowCloseness,
   }).filter(([, value]) => value !== undefined && value !== null));
 }
@@ -325,6 +352,7 @@ export function validateAgenticLeaningsReplacement({
   musicalLeanings,
   allowedLeanings,
   supportedLeanings,
+  baselineSupportedLeanings,
   flowCloseness,
 }: {
   musicalReason: unknown;
@@ -332,6 +360,7 @@ export function validateAgenticLeaningsReplacement({
   musicalLeanings: unknown;
   allowedLeanings: string[];
   supportedLeanings: string[];
+  baselineSupportedLeanings: string[];
   flowCloseness: unknown;
 }): { valid: true; basis: string } | { valid: false; reason: AgenticLeaningsReviewRejection } {
   const rawBasis = typeof leaningsBasis === 'string' ? leaningsBasis.trim().replace(/\s+/g, ' ') : '';
@@ -345,6 +374,11 @@ export function validateAgenticLeaningsReplacement({
   }
   if (!supportedLeanings.some((option) => comparable(option) === basis)) {
     return { valid: false, reason: 'basis-not-supported-by-candidate' };
+  }
+  // A shared match proves compatibility, not that a preference changed the
+  // choice. Enforce this independently of the model's prompt and answer.
+  if (baselineSupportedLeanings.some((option) => comparable(option) === basis)) {
+    return { valid: false, reason: 'basis-already-supported-by-baseline' };
   }
   if (flowCloseness !== 'close' && flowCloseness !== 'possible') {
     return { valid: false, reason: 'not-flow-tie' };
@@ -446,7 +480,7 @@ export function agenticLeaningsSelectionReason({
     .replace(/\s{2,}/g, ' ')
     .replace(/[,:;\s]+$/, '')
     .trim();
-  if (!detail || detail === '[musical reason unavailable]' || detail.length < 16) {
+  if (!detail || detail === MUSICAL_REASON_UNAVAILABLE || detail.length < 16) {
     detail = 'its musical character brings a natural change of colour to the sequence';
   }
   if (detail) detail = detail[0].toLocaleLowerCase('en-GB') + detail.slice(1);

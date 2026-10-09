@@ -1,5 +1,5 @@
 import { normalizeStationLocale } from '../../../lib/format';
-import { normalizeGeminiSafety, TRANSITION_EFFECTS, type TransitionEffect } from '../../../lib/schemas.generated';
+import { normalizeGeminiSafety, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, type TransitionEffect } from '../../../lib/schemas.generated';
 import type { FormState, SettingsData, LlmHeaderRow } from './shared';
 
 // The single client-side copy, read by both form hydration and the dirty-check.
@@ -212,6 +212,11 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       reasoning: !!v.llm?.reasoning,
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
+      trackSelection: v.llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlistPasses: typeof v.llm?.shortlistPasses === 'number' ? v.llm.shortlistPasses : SHORTLIST_PASSES_DEFAULT,
+      guestMusicalLeanings: v.llm?.guestMusicalLeanings === true,
+      requestMatching: v.llm?.requestMatching === 'direct' ? 'direct' : 'agentic',
+      segmentRuntime: v.llm?.segmentRuntime === 'direct' ? 'direct' : 'agentic',
       // Fallback must track the controller's default (config.ts, 250): a
       // settings.json written before the field existed omits the key, and
       // seeding the OLD default here means opening Settings and saving any

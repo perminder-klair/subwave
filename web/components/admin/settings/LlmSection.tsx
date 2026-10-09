@@ -1,5 +1,7 @@
 'use client';
 
+import { LLM_PROVIDER_FORM_KEYS } from './registry';
+
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -18,15 +20,11 @@ import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import {
-  SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
+  SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
   type SectionProps, type LlmHeaderRow,
 } from './shared';
-// The floor's ceiling and the custom-header grammar, from the same schema
-// module the server bounds-checks against — a hardcoded copy here is a client
-// hint that can disagree with the save it is meant to pre-empt.
 import {
-  PICKER_MIN_TRACK_LENGTH_BOUNDS,
   LLM_HEADER_NAME_RE,
   LLM_HEADER_VALUE_RE,
   LLM_HEADER_VALUE_MAX,
@@ -358,17 +356,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         compatibleMode: form.llm.compatibleMode,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
-        pickerAgent: form.llm.pickerAgent,
-        noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
-        artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
-        requestWebResolve: form.llm.requestWebResolve,
-        agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
         dailyTokenCap: form.llm.dailyTokenCap,
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        discoverySteps: form.llm.discoverySteps,
         geminiSafety: { ...form.llm.geminiSafety },
         ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && (compatKeyInput.trim() || resetCompatKey)
           ? { apiKey: compatKeyInput.trim() }
@@ -390,13 +382,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
-      },
-      // Its own top-level key, not part of `llm`: the album cooldown is read by
-      // the stateless pool picker too, so it is picking config rather than LLM
-      // config. It rides in the same PATCH because it is edited on this card.
-      picker: {
-        albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
-        minTrackLengthSeconds: Math.max(0, parseInt(form.picker.minTrackLengthSeconds, 10) || 0),
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
@@ -439,19 +424,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       <Card title="Provider" sub="active routing">
         <div className="grid gap-[18px]">
-          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
-            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
-            <div className="grid min-w-0 gap-0.5">
-              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
-                Routing now · {llmProviderLabel(activeProvider)}
-              </span>
-              <span className="text-[14px] leading-[1.5] text-muted">
-                {activeModel
-                  ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
-                  : <>No model is set for this provider yet.</>}
-              </span>
-            </div>
-          </div>
+          <NowBanner label={<>Routing now · {llmProviderLabel(activeProvider)}</>}>
+            {activeModel
+              ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
+              : <>No model is set for this provider yet.</>}
+          </NowBanner>
 
           <div className="field">
             <div className="flex items-center gap-2">
@@ -807,7 +784,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </div>
       </Card>
 
-      <Advanced note="tuning, the fallback chain, the picker and the daily budget">
+      <Advanced note="tuning, the fallback chain and the daily budget">
       <Card title="Fallback" sub="backup when the primary is offline">
         <div className="grid gap-[18px]">
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
@@ -1022,7 +999,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.pickerAgent && (
+              {form.llm.trackSelection === 'agentic' && (
                 <div className="field">
                   <Label>Discovery rounds per pick</Label>
                   <Input
@@ -1243,204 +1220,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         </Card>
       )}
 
-      <Card title="Next-track picker" sub="how the DJ chooses">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-          <div>
-            <div className="text-[13px] font-bold">Agentic picker</div>
-            <div className="field-hint mt-1 max-w-[440px]">
-              When on, the picker is a tool-using agent that explores the library
-              itself; needs a model good at multi-step tool calls. Leave off for
-              small local models, where skill segments (weather, news&hellip;) then
-              run as one call instead of a tool loop.
-            </div>
-          </div>
-          <Seg
-            accent
-            value={form.llm.pickerAgent ? 'agent' : 'pool'}
-            options={[
-              { id: 'pool', label: 'Candidate pool' },
-              { id: 'agent', label: 'Agent' },
-            ]}
-            onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, pickerAgent: v === 'agent' } }))}
-          />
-        </div>
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Agent deadline (seconds)</Label>
-            <Input
-              type="number"
-              min={5}
-              max={300}
-              step={5}
-              value={Math.round(form.llm.agentTimeoutMs / 1000)}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, agentTimeoutMs: Number(e.target.value) * 1000 } }))
-              }
-              placeholder="45"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How long an agent pick or listener request may run before falling
-              back to the stateless picker. Slow reasoning models often need
-              20&ndash;40s per pick; lower it for snappier fallbacks on a fast
-              model. 5&ndash;300s.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="field mt-4">
-            <Label>Discovery rounds per pick</Label>
-            <Input
-              type="number"
-              min={0}
-              max={5}
-              step={1}
-              value={form.llm.discoverySteps}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, llm: { ...f.llm, discoverySteps: Number(e.target.value) } }))
-              }
-              placeholder="0"
-              className="max-w-[200px]"
-            />
-            <div className="field-hint">
-              How many times the DJ may search your library before it has to commit
-              to a track. {' '}<strong>0 = auto</strong>, which picks for you based on
-              your provider: 1 for self-hosted servers (Ollama, llama.cpp, vLLM,
-              LM Studio), 3 for the cloud providers. Raise it if you run a capable
-              model on your own hardware &mdash; auto is cautious there because many
-              local models wander when given more than one round. Lower it to 1 to
-              cut tokens and latency: every round is a separate call, and they all
-              share the agent deadline above. 0&ndash;5.
-            </div>
-          </div>
-        )}
-
-        {form.llm.pickerAgent && (
-          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
-            <div>
-              <div className="text-[13px] font-bold">Resolve described requests via web</div>
-              <div className="field-hint mt-1 max-w-[440px]">
-                When on, a listener who <em>describes</em> a track instead of naming
-                it (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on
-                the web, then matched to your library. Needs a web-search provider
-                set under Web search; otherwise it does nothing.
-              </div>
-            </div>
-            <Seg
-              accent
-              value={form.llm.requestWebResolve ? 'on' : 'off'}
-              options={[
-                { id: 'off', label: 'Off' },
-                { id: 'on', label: 'On' },
-              ]}
-              onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestWebResolve: v === 'on' } }))}
-            />
-          </div>
-        )}
-
-        <div className="field mt-4">
-          <Label>No-repeat window (tracks)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={1000}
-            step={10}
-            value={form.llm.noRepeatWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: e.target.value } }))
-            }
-            placeholder="250"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The last N <strong>distinct</strong> tracks can never be re-picked: a hard
-            guard on both the agent and candidate-pool pickers, on top of the time-based
-            window. Auto-scales down on a small library so it never blocks everything;
-            on a big library, raise it — it is the station&apos;s long memory.
-            {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;1000.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Artist spacing (slots)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={25}
-            step={1}
-            value={form.llm.artistVarietyWindow}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, artistVarietyWindow: e.target.value } }))
-            }
-            placeholder="5"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            Best-effort artist spacing across queued, on-air and recent tracks.
-            The agent tries another eligible candidate; the candidate pool
-            prefers artists outside this window, including when its model call
-            fails. Spacing can relax when eligible choices are limited or an
-            agent re-pick fails, and the picker logs why. {' '}<strong>0 = off</strong>.
-            The agent still tries to avoid repeating its pick-anchor artist.
-            Listener requests are exempt. Emergency playlist playback has no
-            live spacing check. 0&ndash;25.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Album cooldown (hours)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={72}
-            step={0.5}
-            value={form.picker.albumHours}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, albumHours: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            How long a <strong>record</strong> rests after one of its tracks airs, on
-            both pickers. Only worth setting <em>above</em> the artist spacing above
-            &mdash; below it, the artist guard already covers the same ground. Like
-            that one it yields rather than starving the pool, and compilations and
-            various-artists albums are exempt, since two tracks off one sampler is
-            ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
-          </div>
-        </div>
-
-        <div className="field mt-4">
-          <Label>Minimum track length (seconds)</Label>
-          <Input
-            type="number"
-            min={0}
-            max={PICKER_MIN_TRACK_LENGTH_BOUNDS.max}
-            step={1}
-            value={form.picker.minTrackLengthSeconds}
-            onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, picker: { ...f.picker, minTrackLengthSeconds: e.target.value } }))
-            }
-            placeholder="0"
-            className="max-w-[200px]"
-          />
-          <div className="field-hint">
-            The shortest a track can be to get picked, on both pickers and the
-            offline fallback playlist &mdash; the way to keep 40-second skits,
-            interludes and album intros off air. The mirror of the max track
-            length in Broadcast, but a <em>selection</em> filter: a short track is
-            never chosen, where a long one is simply faded out at the cap. A show
-            can set its own; listener requests are always exempt.
-            {' '}<strong>0 = off</strong> (the default). A non-zero value has to
-            be at least {data?.values?.minTrackSeconds ?? 30}s &mdash; the same
-            crossfade-derived minimum the track-length cap clears.
-          </div>
-        </div>
-      </Card>
-
       <Card title="Idle behaviour" sub="when no one's listening">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
           <div>
@@ -1542,7 +1321,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         onSave={save}
         saveLabel="Save LLM provider"
         errors={fieldErrors}
-        ownedKeys={['llm']}
+        ownedKeys={LLM_PROVIDER_FORM_KEYS}
         // All four key boxes are component-local — the panel diffs FormState
         // and cannot see them, so a pasted key alone would leave the section
         // "clean" and unmount the very button that saves it. The managed pair

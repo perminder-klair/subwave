@@ -191,6 +191,11 @@ app.listen(config.server.port, async (err?: Error) => {
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
+    // The one upgrade that changes behaviour without being asked (#1687), so it
+    // is said where the operator reads, every boot until a save records it.
+    if (settings.migratedFromCandidatePool()) {
+      queue.log('picker', 'Candidate Pool is retired: this station now selects tracks with Track Shortlist, its replacement. Review Settings → Music selection; saving any setting records the choice and retires this note.');
+    }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }

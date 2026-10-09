@@ -156,6 +156,11 @@ export interface LlmForm {
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
+  trackSelection: 'agentic' | 'shortlist';
+  shortlistPasses: number;
+  guestMusicalLeanings: boolean;
+  requestMatching: 'agentic' | 'direct';
+  segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
   requestWebResolve: boolean;
@@ -606,6 +611,23 @@ export type FormUpdater = (updater: (f: FormState) => FormState) => void;
  * mirror exists to prevent.
  */
 export type SettingsFieldErrors = Record<string, string>;
+
+/**
+ * The red "… now" block that opens a section's main card: what the station is
+ * running right now, from the SAVED config, so an unsaved edit below it never
+ * reads as live. LLM provider, TTS voice and Music selection all lead with one.
+ */
+export function NowBanner({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+      <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+      <div className="grid min-w-0 gap-0.5">
+        <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">{label}</span>
+        <span className="text-[14px] leading-[1.5] text-muted">{children}</span>
+      </div>
+    </div>
+  );
+}
 
 export interface SectionProps {
   data: SettingsData;

@@ -825,7 +825,7 @@ async function main() {
         { role: 'assistant', content: 'Just span Blue Monday.' },
         { role: 'user', content: 'Pick the track to play next. Stay silent — no link this time.' },
       ],
-      [{ name: 'searchByMood', args: { mood: 'late-night' }, result: [{ id: 'nEeVD8AWxtsGqdGS5vIvMr', title: 'Blue in Green' }] }],
+      [{ name: 'searchByMood', args: { mood: 'late-night' }, result: [{ id: 'nEeVD8AWxtsGqdGS5vIvMr', title: 'Blue in Green' }], round: 1 }],
     );
     assert.ok(prompt.includes('nEeVD8AWxtsGqdGS5vIvMr'), 'the discovered id must survive — without it a cornered model can only fabricate one');
     assert.ok(prompt.includes('searchByMood'), 'names the tool that produced the findings');
@@ -846,7 +846,7 @@ async function main() {
   await test('never renders the synthetic done tool as a finding', () => {
     const prompt = renderTerminalPrompt(
       [{ role: 'user', content: 'Pick.' }],
-      [{ name: 'done', args: { id: 'x' }, result: null }, { name: 'searchByMood', args: {}, result: [{ id: 'realId' }] }],
+      [{ name: 'done', args: { id: 'x' }, result: null, round: 1 }, { name: 'searchByMood', args: {}, result: [{ id: 'realId' }], round: 1 }],
     );
     assert.ok(!prompt.includes('done('), '`done` is the schema-emit signal, not a discovery result');
     assert.ok(prompt.includes('realId'), 'the genuine discovery still renders');
@@ -856,6 +856,7 @@ async function main() {
       name: `tool${i}`,
       args: {},
       result: [{ id: `id${i}`, blurb: 'x'.repeat(5000) }],
+      round: i + 1,
     }));
     const prompt = renderTerminalPrompt([{ role: 'user', content: 'Pick.' }], fat);
     assert.ok(prompt.length < 40_000, `prompt stays bounded (was ${prompt.length})`);

@@ -52,6 +52,8 @@ interface ToolResultLike {
 export interface StepLike {
   toolCalls?: ToolCallLike[];
   toolResults?: ToolResultLike[];
+  usage?: TokenUsage;
+  totalUsage?: TokenUsage;
 }
 
 // The flattened discovery-tool entry surfaced to /debug.
@@ -59,6 +61,8 @@ export interface ToolCallSummary {
   name: string | undefined;
   args: unknown;
   result: unknown;
+  // One-based discovery round, retained for faithful native-shortlist replay.
+  round: number;
 }
 
 // Reasoning is suppressed at the provider layer when `llm.reasoning` is off;
@@ -456,7 +460,7 @@ export function errReason(err: ErrorLike | null | undefined): string {
 // Flatten a tool-loop result's discovery trail for /debug. Excludes the
 // synthetic `done` tool — that is the schema-emit signal, not a discovery action.
 export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefined): ToolCallSummary[] {
-  return (result?.steps || []).flatMap((s) => {
+  return (result?.steps || []).flatMap((s, stepIndex) => {
     const results = s.toolResults || [];
     return (s.toolCalls || [])
       .filter((c) => c.toolName !== 'done')
@@ -464,6 +468,7 @@ export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefin
         name: c.toolName,
         args: c.input ?? c.args ?? null,
         result: results[i]?.output ?? results[i]?.result ?? null,
+        round: stepIndex + 1,
       }));
   });
 }

@@ -49,6 +49,21 @@ test('0 means auto: an untouched install still follows the capability table', as
   assert.equal(discoveryStepsFor({ ...CLOUD_LLM, discoverySteps: 0 }), 3, 'native provider keeps its 3');
 });
 
+test('a legacy pickerAgent:false cold-load keeps requests and segments off the tool loop', async () => {
+  const llm = await coldLoad({ pickerAgent: false });
+  assert.equal(llm.trackSelection, 'shortlist', 'the migrated UI must name the non-agentic route it will run');
+  assert.equal(llm.requestMatching, 'direct');
+  assert.equal(llm.segmentRuntime, 'direct');
+});
+
+test('the explicit track route keeps the legacy gate in sync', async () => {
+  await coldLoad({});
+  await settings.update({ llm: { trackSelection: 'shortlist' } } as any);
+  assert.equal(settings.get().llm.pickerAgent, false);
+  await settings.update({ llm: { trackSelection: 'agentic' } } as any);
+  assert.equal(settings.get().llm.pickerAgent, true);
+});
+
 test('an override survives a controller restart and reaches the harness', async () => {
   const llm = await coldLoad({ discoverySteps: 3 });
   assert.equal(llm.discoverySteps, 3);

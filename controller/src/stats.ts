@@ -10,6 +10,8 @@
 
 const MAX_TTS_CALLS = 120;
 export const ttsCalls: any[] = [];
+const MAX_SHORTLIST_PICKS = 40;
+export const shortlistPicks: any[] = [];
 
 // Recorded by audio/tts.js on every speak(): one entry per spoken segment,
 // success or failure, including whether the engine fell back to a local one.
@@ -20,6 +22,11 @@ export const ttsCalls: any[] = [];
 export function recordTts(call: any) {
   ttsCalls.unshift(call);
   if (ttsCalls.length > MAX_TTS_CALLS) ttsCalls.length = MAX_TTS_CALLS;
+}
+
+export function recordShortlistPick(call: any) {
+  shortlistPicks.unshift(call);
+  if (shortlistPicks.length > MAX_SHORTLIST_PICKS) shortlistPicks.length = MAX_SHORTLIST_PICKS;
 }
 
 // --- generic helpers ----------------------------------------------------
@@ -47,6 +54,17 @@ function latencyStats(values) {
     p95: percentile(sorted, 95),
     max: sorted[sorted.length - 1],
   };
+}
+
+export function summarizeShortlistPicks(calls: any[]) {
+  const primary = calls.filter(call => call.primary && typeof call.ms === 'number');
+  const latency = latencyStats(primary.map(call => call.ms));
+  // Five completed primary picks avoids treating a cold-start outlier as a
+  // station characteristic. 30s is deliberately conservative until then.
+  const warningMs = primary.length >= 5
+    ? Math.max(30_000, Math.ceil((latency.p95 * 1.5) / 1000) * 1000)
+    : 30_000;
+  return { count: primary.length, latency, warningMs, warmingUp: primary.length < 5 };
 }
 
 // --- cost estimation ----------------------------------------------------

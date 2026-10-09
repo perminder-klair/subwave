@@ -1,5 +1,5 @@
 // Pick-anchor and spacing artist guard policy — pure, unit-pinned
-// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaAgent;
+// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute;
 // this module owns which candidates a re-pick may choose from and whether the
 // guard fires at all, so both are testable without a model call.
 
@@ -97,7 +97,7 @@ export interface ArtistGuardDeps<T> {
   song: T;
   object: { id?: string | null } & Record<string, unknown>;
   pickAnchor: CandidateLike | null;
-  // The run's own candidates, keyed by id, as pickViaAgent's `extras.seen`.
+  // The run's own candidates, keyed by id, as pickViaSelectionRoute's `extras.seen`.
   seen: Iterable<[string, T]>;
   // queue.neighbourArtistRoots(window) — passed in rather than fetched, so the
   // caller owns every queue read. `window` is carried only for the log text.

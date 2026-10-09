@@ -27,9 +27,10 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
-  // Mutable controller-owned resolution objects may be supplied here. The
-  // ring keeps their references, allowing a caller to settle a diagnostic
-  // after downstream guards/enqueue without trusting the model's response.
+  // Callers may attach controller-resolved diagnostics to the recent-call
+  // record. Objects inside this value are deliberately retained by reference:
+  // selection code learns the verified queued track only after djObject
+  // returns, before withFailover records the successful call.
   telemetry = {},
   // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,

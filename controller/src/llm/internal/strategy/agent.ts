@@ -8,7 +8,7 @@ import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage, UsageMeter } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
@@ -240,7 +240,18 @@ export async function djAgent({
       // leave no result to read usage from. This sum is what telemetry/log.ts
       // records, on success and (attached to the error) on failure, and what
       // the daily token cap counts against.
-      const meter = createUsageMeter();
+      const billingMeter = createUsageMeter();
+      // Context capacity is the peak individual request, while billing counts
+      // every call. Observe the same callbacks so declines and retries retain
+      // both measurements without counting any tokens twice.
+      let contextPeakInput = 0;
+      const meter: UsageMeter = {
+        ...billingMeter,
+        onLanguageModelCallEnd: event => {
+          contextPeakInput = Math.max(contextPeakInput, usageOf({ usage: event.usage }).input);
+          billingMeter.onLanguageModelCallEnd(event);
+        },
+      };
       try {
         // No discovery tools + a model that ignores JSON mode: no loop to run,
         // and ToolLoopAgent + Output.object would throw NoObjectGeneratedError.
@@ -253,6 +264,7 @@ export async function djAgent({
             via: lastVia,
             sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
             usage: meter.usage(),
+            contextPeakInput,
             perf,
             warnings,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2), ...telemetry },
@@ -305,6 +317,7 @@ export async function djAgent({
                 via: lastVia,
                 sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
                 usage: meter.usage(),
+                contextPeakInput,
                 perf: perfOf(nr),
                 warnings: warningsOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
@@ -475,6 +488,7 @@ export async function djAgent({
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
           usage: meter.usage(),
+          contextPeakInput,
           perf: perfOf(result),
           warnings: warningsOf(result),
           // Full and untruncated. When the collapse answered, the flattened

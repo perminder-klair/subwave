@@ -53,6 +53,27 @@ interface ByModelRow {
   priced?: boolean;
 }
 
+interface ContextWindowRow {
+  kind: string;
+  calls: number;
+  samples: number;
+  averageInputTokens: number | null;
+  peakInputTokens: number | null;
+}
+
+interface ShortlistContextWindow {
+  samples: number;
+  // Largest prompt the window must hold: this route's picker plus every LLM
+  // function sharing the one num_ctx. pickerPeakInputTokens is the route's own.
+  peakInputTokens: number | null;
+  pickerPeakInputTokens?: number | null;
+  peakKind?: string | null;
+  suggestedTokens: number | null;
+  headroomPct?: number;
+  responseReserveTokens?: number;
+  message: string;
+}
+
 interface ByEngineRow {
   engine: string;
   count: number;
@@ -84,6 +105,11 @@ interface LlmStats {
   agent: { calls: number; avgSteps?: number; avgTools?: number };
   byKind: ByKindRow[];
   byModel: ByModelRow[];
+  contextWindows?: {
+    shortlist: ShortlistContextWindow;
+    agenticPicker: ShortlistContextWindow;
+    byKind: ContextWindowRow[];
+  };
   activeModel?: string;
   budget?: {
     enabled: boolean;
@@ -159,6 +185,7 @@ interface TransitionStats {
 
 interface StatsResponse {
   llm?: LlmStats;
+  trackSelection?: 'agentic' | 'shortlist';
   tts?: TtsStats;
   djLog?: DjLogStats;
   requests?: RequestsStats;
@@ -970,6 +997,78 @@ export default function StatsPanel() {
                 </div>
               </div>
             )}
+          </Card>
+
+          <Card
+            title="LLM context windows"
+            sub="reported input tokens · since controller start"
+            right={(() => {
+              // Lead with the route the station is actually running.
+              const active = data?.trackSelection === 'shortlist'
+                ? { label: 'shortlist', window: llm.contextWindows?.shortlist }
+                : { label: 'Agentic', window: llm.contextWindows?.agenticPicker };
+              return active.window?.suggestedTokens ? (
+                <Pill tone="accent">
+                  {active.label} recommends {fmtTokens(active.window.suggestedTokens)}
+                </Pill>
+              ) : null;
+            })()}
+          >
+            {(() => {
+              const context = llm.contextWindows;
+              const shortlist = context?.shortlist;
+              const agenticPicker = context?.agenticPicker;
+              const rows = context?.byKind ?? [];
+              return (
+                <div className="grid gap-0">
+                  <MetricStrip>
+                    <StatCell label="Shortlist num_ctx" accent
+                      value={fmtTokens(shortlist?.suggestedTokens)}
+                      sub={shortlist?.suggestedTokens
+                        ? `${fmtTokens(shortlist.peakInputTokens)} peak prompt${shortlist.peakKind ? ` · ${shortlist.peakKind.replace(/^sdk\./, '')}` : ''}`
+                        : 'waiting for shortlist usage'} />
+                    <StatCell label="Agentic Picker num_ctx" accent
+                      value={fmtTokens(agenticPicker?.suggestedTokens)}
+                      sub={agenticPicker?.suggestedTokens
+                        ? `${fmtTokens(agenticPicker.peakInputTokens)} peak prompt${agenticPicker.peakKind ? ` · ${agenticPicker.peakKind.replace(/^sdk\./, '')}` : ''}`
+                        : 'waiting for Agentic usage'} />
+                    <StatCell label="Headroom"
+                      value={agenticPicker?.headroomPct != null ? `${agenticPicker.headroomPct}%` : shortlist?.headroomPct != null ? `${shortlist.headroomPct}%` : '—'}
+                      sub={agenticPicker?.responseReserveTokens != null || shortlist?.responseReserveTokens != null
+                        ? `${fmtTokens(agenticPicker?.responseReserveTokens ?? shortlist?.responseReserveTokens)} response reserve`
+                        : 'applied once samples arrive'} />
+                    <StatCell label="Agentic samples" value={fmtInt(agenticPicker?.samples)} last
+                      sub="successful calls with input usage" />
+                  </MetricStrip>
+                  <div className="border-t border-separator-soft p-3.5">
+                    <p className="field-hint mb-3 max-w-[760px]">
+                      Ollama&apos;s num_ctx is one setting for every call, so each route&apos;s figure must hold its own
+                      picker prompts and every other LLM function running beside it (links, segments, requests). Agentic
+                      counts its largest individual model step rather than the whole tool loop. Both add headroom and a
+                      response reserve, then round up for a server context setting. The peak names the function that set it.
+                    </p>
+                    <Table<ContextWindowRow>
+                      empty="No LLM calls recorded yet"
+                      rows={rows}
+                      cols={[
+                        { key: 'kind', label: 'Function', render: r => r.kind.replace(/^sdk\./, '') },
+                        { key: 'calls', label: 'Calls', align: 'right',
+                          render: r => <span className="mono-num">{r.calls}</span> },
+                        { key: 'samples', label: 'Usage', align: 'right',
+                          render: r => <span className="mono-num">{r.samples}/{r.calls}</span> },
+                        { key: 'averageInputTokens', label: 'Avg context', align: 'right',
+                          render: r => <span className="mono-num">{fmtTokens(r.averageInputTokens)}</span> },
+                        { key: 'peakInputTokens', label: 'Peak', align: 'right',
+                          render: r => <span className="mono-num">{fmtTokens(r.peakInputTokens)}</span> },
+                      ]}
+                    />
+                    {agenticPicker?.suggestedTokens == null && shortlist?.suggestedTokens == null && (
+                      <p className="field-hint mt-3 italic">{agenticPicker?.message || shortlist?.message || 'Waiting for context-window evidence.'}</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </Card>
 
           <Card title="Voice / TTS usage" sub={`last ${tts.window} spoken segments`}>

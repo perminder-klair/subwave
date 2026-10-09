@@ -34,7 +34,7 @@ export default definePickerTool({
           return { error: 'sound search unavailable right now — use tracksByMood, searchByLyrics or similarSongs' };
         }
         const list = library.tracksByAudioVector(vecs[0], 60, { excludeIds: knnExclude });
-        const out = collect(list);
+        const out = collect(list, 8, { similarity: { kind: 'audio', reference: query.trim() } });
         return out.length ? out : emptyResult(list.length, 'nothing in the library sounds like that — choose from your other tool results this round');
       }
       catch (err) { return { error: (err as Error).message }; }

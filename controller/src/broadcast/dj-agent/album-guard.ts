@@ -56,7 +56,7 @@ export type AlbumGuardOutcome<T> =
 export interface AlbumGuardDeps<T> {
   song: T;
   object: { id?: string | null } & Record<string, unknown>;
-  /** The run's own candidates, keyed by id, as pickViaAgent's `extras.seen`. */
+  /** The run's own candidates, keyed by id, as pickViaSelectionRoute's `extras.seen`. */
   seen: Iterable<[string, T]>;
   /** queue.recentAlbumKeys(hours) — the caller owns every queue read. */
   recentAlbums: Set<string>;

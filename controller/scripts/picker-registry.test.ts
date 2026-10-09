@@ -92,12 +92,19 @@ test('a text index alone lights up tracksLikeThis but not searchByLyrics', () =>
 
 test('path-scoped tools are off unless their scope field is set', () => {
   const bare = namesOf(bareCtx());
-  for (const n of ['showPlaylistTracks', 'tracksTowardJourney', 'identifyRequestedTrack']) {
+  for (const n of ['showPlaylistTracks', 'tracksTowardJourney', 'identifyRequestedTrack', 'listenerFavourites']) {
     assert.ok(!bare.includes(n), `${n} must be off without its scope field`);
   }
   const withPlaylist = buildPickerContext(pickerScope({ playlistTracks: [{ id: 'x' }] }));
   assert.ok(namesOf({ ...withPlaylist, hasTextEmbeddings: false, hasAudioEmbeddings: false, hasEmbeddingProvider: false })
     .includes('showPlaylistTracks'));
+  // Likes that influence the DJ, with something liked: the gate is the scope
+  // value livePickerScope resolves from likes.djFavourites.
+  const withFavourites = buildPickerContext(pickerScope({ listenerFavourites: [{ track: { id: 'x' }, count: 1 }] }));
+  assert.ok(namesOf({ ...withFavourites, hasTextEmbeddings: false, hasAudioEmbeddings: false, hasEmbeddingProvider: false })
+    .includes('listenerFavourites'));
+  assert.ok(!namesOf(bareCtx({ scope: pickerScope({ listenerFavourites: [] }) })).includes('listenerFavourites'),
+    'an empty favourites list must not offer a tool that can only return []');
 });
 
 test('deepCuts needs the library mirror, not an embedding index', () => {

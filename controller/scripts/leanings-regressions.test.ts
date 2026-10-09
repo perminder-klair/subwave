@@ -51,7 +51,7 @@ test('viable host evidence prevents a conflicting guest replacement, including a
     const candidate = compactAgenticReviewCandidate(guestTrack, eligible.map(({ phrase }) => phrase), original);
     assert.equal(validateAgenticLeaningsReplacement({ musicalReason: 'its strings add a delicate texture to the sequence',
       leaningsBasis: 'classical', musicalLeanings: 'Host: dub; Guest: classical', allowedLeanings: eligible.map(({ phrase }) => phrase),
-      supportedLeanings: [], flowCloseness: candidate.flowCloseness,
+      supportedLeanings: [], baselineSupportedLeanings: [], flowCloseness: candidate.flowCloseness,
     }).valid, false);
   }
   const prompt = agenticLeaningsReviewPrompt({ baseline, challengers: [hostTrack, guestTrack], leaningsOptions: ['dub'], leaningsSources: sources });

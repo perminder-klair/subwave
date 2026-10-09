@@ -12,6 +12,7 @@ import {
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
+  SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
   HANDOVER_OFFSET_BOUNDS,
@@ -458,10 +459,22 @@ export const DEFAULTS = {
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.
     pickerAgent: true,
+    // Agentic Tools remains the upgrade-safe default. Track Shortlist performs
+    // controller-led discovery followed by one bounded structured selection.
+    trackSelection: 'agentic',
+    // Native discovery passes. Kept separate from agent discoverySteps: the
+    // latter is a tool-loop budget, while this is a controller source budget.
+    shortlistPasses: SHORTLIST_PASSES_DEFAULT,
     // Guest preferences are a deliberately optional, secondary programming
     // input. Keep them off for upgrades and new stations: a blank host field
-    // must mean no Musical Leanings are sent to the picker.
+    // must mean no Musical Leanings are sent to either picker.
     guestMusicalLeanings: false,
+    // Kept independent from Track selection: requests are the one place an
+    // operator may deliberately retain tool use beside a tool-free shortlist.
+    requestMatching: 'agentic',
+    // Segment and Skill delivery is independently selectable for the same
+    // reason: a station may use a bounded picker yet retain agentic research.
+    segmentRuntime: 'agentic',
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.

@@ -1,7 +1,7 @@
 // Review regression for #1651 / PR #1652: a listener request can land while
 // the pair-drain deadline pick is waiting on asynchronous agent selection.
 //
-// This deliberately drives the production runTrackEvent -> pickViaAgent ->
+// This deliberately drives the production runTrackEvent -> pickViaSelectionRoute ->
 // runArtistGuard -> enqueuePick -> queue.push path. Only pickerAgent.run is
 // deferred and made deterministic, so no model, station, or credentials are
 // involved. The assertions characterize the current race without promising
@@ -171,6 +171,7 @@ test('the event prompt names the captured anchor without claiming current adjace
   assert.match(observed.eventPrompt ?? '', /Pick-cycle anchor: "Heads We're Dancing"/);
   assert.match(observed.eventPrompt ?? '', /intended predecessor for this selection/);
   assert.doesNotMatch(observed.eventPrompt ?? '', /Now playing "Heads We're Dancing"|immediately preceding|twice in a row/);
+  assert.match(observed.eventPrompt ?? '', /\[id: held\]/, 'similarity discovery needs the captured anchor ID');
 });
 
 test('the interleaved Bill Evans request currently makes the candidate a soft spacing repeat', () => {

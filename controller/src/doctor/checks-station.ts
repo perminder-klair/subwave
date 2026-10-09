@@ -12,6 +12,7 @@ import * as db from '../music/library-db.js';
 import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
+import { settingsAgentRoutes } from '../schemas/settings.js';
 
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
@@ -148,8 +149,10 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // --- Agent deadline vs MEASURED latency ---
   // checkLlm only warns when the configured number looks low; here we compare it
   // to what the model is actually doing. If p90 latency crowds the deadline, the
-  // agentic picker is silently timing out into the pool on most tracks.
-  if (llm.pickerAgent !== false) {
+  // agent runs (Agentic Tools picks, agent-assisted requests, agentic segments)
+  // are silently timing out into their fallbacks.
+  const routes = settingsAgentRoutes(llm);
+  if (routes.any) {
     const lat = recentCalls
       .filter((c) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
       .map((c) => c.ms as number)
@@ -164,21 +167,21 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         detail: `p90 model latency ${(p90 / 1000).toFixed(1)}s vs ${Math.round(deadlineMs / 1000)}s deadline`,
         hint:
           ratio >= 0.8
-            ? 'Recent calls are running close to (or past) the agent deadline, so the agentic picker is probably timing out into the pool fallback on many tracks — you lose the session-aware picks you’re paying for. Raise Settings → LLM → agent deadline, or switch to a faster/smaller model (or turn reasoning OFF).'
+            ? 'Recent calls are running close to (or past) the agent deadline, so agent runs (Agentic Tools picks, agent-assisted requests or agentic segments) are probably timing out into their fallbacks — you lose the work you’re paying for. Raise Settings → Music selection → agent deadline, or switch to a faster/smaller model (or turn reasoning OFF). Track Shortlist and direct runtimes avoid the tool loop entirely.'
             : undefined,
       });
     }
   }
 
-  // --- Context window too small for the agentic picker (Ollama only) ---
-  if (llm.provider === 'ollama' && llm.pickerAgent !== false) {
+  // --- Context window too small for an agent tool loop (Ollama only) ---
+  if (llm.provider === 'ollama' && routes.any) {
     const nc = Number(llm.numCtx);
     if (Number.isFinite(nc) && nc > 0 && nc < 8192) {
       out.push({
         label: 'context window',
         status: 'warn',
-        detail: `numCtx ${nc} — tight for the agentic picker`,
-        hint: 'The agentic picker sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back to the pool. Raise Settings → LLM → context window to ≥8192 (16384 is the default), or turn the agentic picker off.',
+        detail: `numCtx ${nc} — tight for an agent tool loop`,
+        hint: 'An agent run (Agentic Tools picks, agent-assisted requests, agentic segments) sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back. Raise Settings → LLM → context window to ≥8192 (16384 is the default; Stats shows the size your own calls need), or switch those routes to Track Shortlist / direct.',
       });
     }
   }
@@ -198,14 +201,14 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     }
   }
 
-  // --- Max response size too small for the agentic picker ---
+  // --- Max response size too small for an agent tool loop ---
   {
     const mo = Number(llm.maxOutputTokens);
-    if (Number.isFinite(mo) && mo > 0 && mo < 1000 && llm.pickerAgent !== false) {
+    if (Number.isFinite(mo) && mo > 0 && mo < 1000 && routes.any) {
       out.push({
         label: 'max response size',
         status: 'warn',
-        detail: `maxOutputTokens ${mo} — low for the agentic picker`,
+        detail: `maxOutputTokens ${mo} — low for an agent tool loop`,
         hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM → max response size at 0 (strategy default) unless a small-context local model specifically needs it.',
       });
     }

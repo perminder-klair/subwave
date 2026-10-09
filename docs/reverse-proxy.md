@@ -40,7 +40,7 @@ when it runs elsewhere.
 Admin → Stats rolls listener sessions up by country, and the value it reads
 first is `CF-IPCountry` — which only Cloudflare sets. If your proxy can add a
 country header of its own (nginx with the GeoIP2 module, Traefik behind a CDN),
-forward it and name it in Admin → Settings → Danger zone → **Listener country**.
+forward it and name it in Admin → Settings → Broadcast & mixer → **Listener country**.
 Where it can't, point the same card at an offline `.mmdb` database instead.
 Neither is required: with no country, sessions are still counted, just without
 geography. Full recipe, including where to get a database:

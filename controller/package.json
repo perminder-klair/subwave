@@ -13,6 +13,7 @@
     "test:llm": "tsx scripts/llm-pure.test.ts",
     "test:connect": "tsx scripts/connect-catalog.test.ts",
     "test": "tsx scripts/run-tests.ts",
+    "leanings:replay": "tsx scripts/agentic-leanings-replay.ts",
     "llm-bench": "tsx scripts/llm-bench/cli.ts",
     "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
     "leanings-eval": "tsx scripts/leanings-eval.ts",

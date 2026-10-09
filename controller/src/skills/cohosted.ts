@@ -1,6 +1,6 @@
 // Return persona lines; queue.announceExchange owns TTS and playback.
-// settings.llm.pickerAgent selects model tool calls or code-side data gathering.
-// Pool mode fetches and checks grounding before its single structured model call.
+// settings.llm.segmentRuntime selects model tool calls or code-side data gathering.
+// Direct mode fetches and checks grounding before its single structured model call.
 
 import { djAgent, djObject } from '../llm/sdk.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
@@ -71,7 +71,7 @@ export async function runCohostedCapability({
 
   let out: CohostedObject;
 
-  if (!settings.get().llm?.pickerAgent) {
+  if (settings.get().llm?.segmentRuntime === 'direct') {
     // Pool mode: fetch in code, decide in code, one structured call. A skill
     // that writes from the moment survives a failed fetch (it writes from its
     // brief, as it always could); a GROUNDED one doesn't get that degradation

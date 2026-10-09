@@ -30,6 +30,12 @@ const validImperativeFixtures = {
   // admin-query-imperative: diagnosis-stream
   return adminResponse(adminFetch, '/doctor/stream', { headers: { Accept: 'text/event-stream' } });
 }\n`,
+  'DiscoveryPanel.tsx': `export async function run(adminFetch, name) {
+  // admin-query-imperative: discovery-tool-preview
+  await adminJson(adminFetch, \`/debug/discovery/tool/\${name}\`, { method: 'POST' });
+  // admin-query-imperative: discovery-comparison-preview
+  return adminJson(adminFetch, '/debug/discovery/compare', { method: 'POST' });
+}\n`,
   'PersonasPanel.tsx': `export async function run(adminFetch, id) {
   // admin-query-imperative: persona-bundle-export
   return adminResponse(adminFetch, \`/personas/\${id}/export\`);

@@ -323,7 +323,7 @@ export function JinglesSection({
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
             Set it to 0 to switch jingles off altogether. Changes take effect once you restart
-            the mixer — that button lives in Settings → danger zone.
+            the mixer — that button lives in Settings → Broadcast & mixer.
           </p>
           <Btn
             sm

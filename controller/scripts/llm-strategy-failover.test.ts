@@ -17,6 +17,7 @@ const settings = await import('../src/settings.js');
 const { primaryLeg, fallbackLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
+const { agenticPickerContextWindow } = await import('../src/llm/internal/telemetry/context-window.js');
 const { GenerationCancelledError } = await import('../src/llm/internal/core/generation.js');
 const previousCache = store.peek();
 const schema = z.object({ name: z.string() });
@@ -201,7 +202,29 @@ test('tool-choice refusal preserves executed discovery and usage through termina
   assert.equal(executions, 1, 'completed discovery must not execute again during recovery');
   assert.equal(calls, 4, 'one discovery, one main refusal, one recovery refusal, one terminal call');
   assert.ok(terminalPrompt.includes(candidate.name), 'the terminal prompt must carry the actual discovery result');
-  assert.deepEqual(result.toolCalls, [{ name: 'sample', args: {}, result: [candidate] }]);
+  assert.deepEqual(result.toolCalls, [{ name: 'sample', args: {}, result: [candidate], round: 1 }]);
   assert.deepEqual(recentCalls[0].usage, { input: 4, output: 4, total: 8 });
   assert.equal(recentCalls[0].via, 'ai-sdk:agent:terminal');
+});
+
+test('context peaks include refused requests in a successful terminal recovery', async t => {
+  const { primary } = configure(t, 'ollama', false);
+  const inputs = [1000, 30_000, 20_000, 2000];
+  let calls = 0;
+  mockGeneration(t, primary, async () => {
+    const index = calls++;
+    const result = index === 0 ? response('{}', 'sample')
+      : index === 3 ? response(JSON.stringify(answer), 'emit') : response('I decline to call done.');
+    result.usage.inputTokens = { total: inputs[index], noCache: inputs[index], cacheRead: 0, cacheWrite: 0 };
+    return result;
+  });
+  const result = await djAgent({
+    kind: 'djAgentPick', system: 'Choose a discovered candidate', messages: [{ role: 'user', content: 'Choose' }],
+    tools: { sample: { inputSchema: z.object({}), execute: async () => [answer] } }, schema,
+  });
+  assert.deepEqual(result.object, answer);
+  assert.equal(calls, 4);
+  assert.equal(recentCalls[0].usage.input, 53_000);
+  assert.equal(recentCalls[0].contextPeakInput, 30_000);
+  assert.equal(agenticPickerContextWindow(recentCalls).suggestedTokens, 38_912);
 });

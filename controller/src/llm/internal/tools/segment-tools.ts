@@ -5,6 +5,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { buildStationServices } from './station-services.js';
+import { repairLegacySkillData } from '../../../skills/abstain-policy.js';
 
 // `onResult(kind, data)` reports what each tool handed back, including the
 // `{ error }` degradation. The forced segment path needs it because the AGENT
@@ -48,6 +49,7 @@ export function buildSegmentTools(
         // degraded shape too — a tool that threw is exactly the case the
         // grounding check exists for. A throwing observer must not turn a
         // usable tool result into a tool error.
+        data = repairLegacySkillData(cap, data, input || {});
         try { onResult?.(cap.kind, data); } catch { /* observation is never fatal */ }
         return data;
       },
@@ -69,7 +71,7 @@ export async function fetchSegmentData(cap: any, ctx: any, state: any): Promise<
   const services = buildStationServices();
   try {
     const p = Promise.resolve(cap.toolFn(ctx, state, services, cap.config, {}));
-    return await withTimeout(p, 8000);
+    return repairLegacySkillData(cap, await withTimeout(p, 8000));
   } catch (err: any) {
     return { error: err?.message || String(err) };
   }

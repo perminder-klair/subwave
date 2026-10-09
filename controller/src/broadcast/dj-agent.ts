@@ -1,4 +1,3 @@
-import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
 // Run pick and request agents over the session. Disabled or failed agents fall back to the
 // stateless picker and link generator; both paths update the session.
 
@@ -27,7 +26,7 @@ import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed } from './clock-policy.js';
 import { pickerAgent, requestAgent } from './dj-agent/agents.js';
-import { pickerScope } from '../llm/tools.js';
+import { pickerScope, type PickerScope } from '../llm/tools.js';
 import {
   HANDOFF_MAX_AGE_MS,
   breakerFailure,
@@ -36,12 +35,21 @@ import {
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
-import { agenticLeaningsReviewPrompt, agenticLeaningsReviewSchema, agenticLeaningsReviewSystem, NO_AGENTIC_LEANINGS_INFLUENCE, pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, type EditorialLeaningsContext } from './dj-agent/schemas.js';
-import { agenticDiscoverySelectionReason, agenticLeaningsSources, eligibleAgenticLeanings, agenticLeaningsSelectionReason, agenticSelectionReason, agenticTrackRef, compactAgenticReviewCandidate, resolveAgenticLeaningsUsage, selectAgenticReviewCandidates, validateAgenticLeaningsReplacement, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
+import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
+import { shortlistSearchPreparation } from './shortlist-search-preparation.js';
+import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
+import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
+import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
+import { buildShortlist } from '../music/shortlist.js';
+import { djPick, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
+import { shortlistOffers } from '../music/shortlist-offers.js';
+import { SHORTLIST_PASSES_DEFAULT } from '../schemas/settings.js';
+import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
+import { recordShortlistPick } from '../stats.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -56,27 +64,61 @@ export { pickerAgent, requestAgent } from './dj-agent/agents.js';
 // Track event — a track started; pick the next one and maybe air a link.
 // ---------------------------------------------------------------------------
 
+// A corrective re-pick's answer held to its own candidate set: an exact id
+// passes, a near-miss is repaired as the first answer's would be (#939), and
+// anything else is no salvage at all. Both re-picks type the id as a plain
+// string, so this is where membership is decided.
+export function resolveRepickId<T extends { id?: unknown }>(
+  outcome: T | null | undefined,
+  seen: Map<string, unknown>,
+  agent: 'repick' | 'request-repick',
+): (T & { id: string }) | null {
+  if (!outcome) return null;
+  if (typeof outcome.id !== 'string') return null;
+  if (seen.has(outcome.id)) return outcome as T & { id: string };
+  const fixed = nearestId(outcome.id, seen.keys());
+  if (!fixed) return null;
+  logEvent('pick.repaired', { agent, from: outcome.id, to: fixed });
+  return { ...outcome, id: fixed };
+}
+
 // Stage-2 salvage for an agent run whose final id no tool surfaced (see the
-// cascade in pickViaAgent): one djObject call over the run's OWN accumulated
-// candidates (`seen`), with the id constrained to that exact set — z.enum
-// becomes a decode-time grammar on local models and a Zod reject elsewhere,
-// the same closing move pickNextTrack already uses. Returns a full pick object
-// (id/reason/transition) or null; never throws, so a salvage failure falls
-// through to the caller's pick.rejected path unchanged.
+// cascade in pickViaSelectionRoute): one djObject call over the run's OWN accumulated
+// candidates (`seen`). The id is a plain string checked against that set
+// afterwards, with the same near-miss repair as the first call — the closing
+// move pickNextTrack already uses. An enum here never reached the decoder on
+// the forced-tool providers and only turned a 2–3 character slip into a lost
+// salvage (#939). Returns a full pick object (id/reason/transition) whose id is
+// in `seen`, or null; never throws, so a salvage failure falls through to the
+// caller's pick.rejected path unchanged.
 // `reason`, when given, replaces the default "you returned a bad id" framing —
 // the pick-anchor artist guard (#1124) reuses this same constrained re-pick
 // but for a valid pick it wants to swap off the anchor artist, so the bad-id
 // wording would be false and confuse the model.
-async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
+async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null, telemetryKind = 'djAgentRepick', selectionContext = {}, shortlistResolution = null, health }: { health?: { modelFailed: boolean }; seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null; telemetryKind?: 'djAgentRepick' | 'djShortlistRepick'; selectionContext?: ShortlistSelectionContext; shortlistResolution?: ShortlistPickResolution | null }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
-  const schema = modelTolerant(pickSchemaBase().omit({ usedMusicalLeanings: true, leaningsTieBreak: true }).extend({
-    id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
-  }));
+  const shortlistRepick = telemetryKind === 'djShortlistRepick';
+  // The corrective call's eligible subset retains shortlist fit order. Never
+  // reopen discovery or return the rejected artist/album when the model fails.
+  const fallback = () => {
+    if (!shortlistRepick) return null;
+    if (health) health.modelFailed = true;
+    logEvent('pick.shortlistRepickFallback', { candidates: seen.size, id: ids[0] });
+    return controllerShortlistPick(seen.get(ids[0]));
+  };
+  const schema = shortlistRepick
+    ? shortlistPickSchema(ids)
+    : modelTolerant(pickSchemaBase().omit({ usedMusicalLeanings: true, leaningsTieBreak: true }).extend({
+      id: z.string().describe('the exact id of one candidate'),
+    }));
   const why = reason
     ?? `You explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`;
   try {
-    return await djObject({
+    // djObject records this nested object by reference. Fill it after the
+    // structured reply is known so Debug can show the controller-resolved
+    // selection beside the raw model response (which may name another track).
+    let outcome: any = await djObject({
       // Same show snapshot as the failed run (showAt) and the same playlist-
       // resolved gate — a tool-less salvage call must NOT reinstate "call
       // showPlaylistTracks first / every pick MUST come from the playlist" when
@@ -84,22 +126,39 @@ async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = t
       // different show than the run whose candidates we're re-picking from.
       // Two knowing mismatches with the real pick call: pickSystem's discovery
       // paragraph talks tools this tool-less call doesn't have (the "only ids
-      // from the candidates" framing below overrides it), and the listener
-      // favourites clause is absent (it rides the pick EVENT turn, not this
-      // system prompt) — acceptable because `seen` was discovered under the
-      // favourites-aware run this salvages.
-      // Corrective re-picks are part of establishing the ordinary-flow
-      // baseline. Keep them Leanings-blind so the separate review below is the
-      // only place where Musical Leanings can alter an Agentic choice.
-      system: pickSystem(showAt, playlistResolved, { host: null, guest: null, promptValue: null }),
-      prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\n${why}`,
+      // from the candidates" framing below overrides it), and the Agentic
+      // re-pick has no listener favourites clause (it rides the pick EVENT
+      // turn, not this system prompt) — acceptable because `seen` was
+      // discovered under the favourites-aware run this salvages. The Shortlist
+      // re-pick reads them from selectionContext, like its first call.
+      // Corrective re-picks are always Leanings-blind. A previous review can
+      // count only when its exact replacement survives these guards.
+      system: shortlistRepick
+        ? pickSystem(showAt, playlistResolved, true, { host: null, guest: null, promptValue: null })
+        : pickSystem(showAt, playlistResolved, false, { host: null, guest: null, promptValue: null }),
+      // Both routes see the recent transition ledger (present only while
+      // effects are active), so a corrective re-pick chooses a fresh transition
+      // for its new track instead of settling into one effect.
+      prompt: shortlistRepick
+        ? shortlistPickPrompt([...seen.values()], selectionContext) + `\n\n${why}`
+        : JSON.stringify({
+          ...(Array.isArray(selectionContext.recentTransitions) ? { context: { recentTransitions: selectionContext.recentTransitions } } : {}),
+          candidates: [...seen.values()],
+        }, null, 2) + `\n\n${why}${transitionChoiceNudge(selectionContext.recentTransitions)}`,
       schema,
       temperature: 0.5,
-      kind: 'djAgentRepick',
+      kind: telemetryKind,
+      ...(shortlistRepick && shortlistResolution ? { telemetry: { shortlistResolution } } : {}),
     });
+    outcome = resolveRepickId(outcome, seen, 'repick');
+    if (!outcome) return fallback();
+    if (!shortlistRepick) return outcome;
+
+    const track = seen.get(outcome.id);
+    const selectionReason = shortlistClauseSelectionReason(track, outcome.musicalReason);
+    return { ...outcome, selectionReason, reason: selectionReason };
   } catch {
-    return null;
+    return fallback();
   }
 }
 
@@ -111,26 +170,28 @@ async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = t
 // one — the idInSessionWindow diagnostic on the pick.rejected event is what
 // turns that hunch into a number.
 //
-// One djObject call constrained to the run's own candidates (z.enum — a
-// decode-time grammar on local models, a Zod reject elsewhere) salvages the run
-// instead of discarding it to the caller's stateless matcher cascade, which
-// still runs when this misses too. Reuses requestSystem()/requestSchema()'s own
-// wording and the same autoVoiceAllowed() gate for `intro`, so a re-picked
-// request is consistent with a first-try one. Never throws.
+// One djObject call over the run's own candidates salvages the run instead of
+// discarding it to the caller's stateless matcher cascade, which still runs
+// when this misses too. The id is a plain string checked against `seen`
+// afterwards, with the same near-miss repair as the first answer — an enum
+// never reached the decoder on the forced-tool providers and only turned a 2–3
+// character slip into a lost salvage (#939). Reuses requestSystem()/
+// requestSchema()'s own wording and the same autoVoiceAllowed() gate for
+// `intro`, so a re-picked request is consistent with a first-try one. Returns
+// a result whose id is in `seen`, or null. Never throws.
 async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
   { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null }) {
-  const ids = [...seen.keys()];
-  if (ids.length === 0) return null;
+  if (seen.size === 0) return null;
   const wantIntro = autoVoiceAllowed();
   const schema = modelTolerant(z.object({
-    id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
+    id: z.string().describe('the exact id of one candidate'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
     ...(wantIntro ? {
       intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro', persona)}`),
     } : {}),
   }));
   try {
-    return await djObject({
+    const outcome: any = await djObject({
       system: requestSystem(persona),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
         + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
@@ -138,16 +199,18 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
       temperature: 0.3,
       kind: 'djAgentRequestRepick',
     });
+    return resolveRepickId(outcome, seen, 'request-repick');
   } catch {
     return null;
   }
 }
 
-// `ctx` / `rankTarget` are carried only for the artist-guard's pool rescue
-// (#1187) — the agent's own run needs neither. They're the same values
-// runTrackEvent hands the ordinary pool fallback, so a rescued pick is built
-// from exactly the pool a failed agent run would have produced.
-async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAnchor = null, showAt = null, rankTarget = null, editorialLeanings }: { wantLink: boolean; audioWaypoint?: number[] | null; pickAnchor?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null; editorialLeanings: EditorialLeaningsContext }): Promise<boolean> {
+// Build the exact discovery scope used by a live next-track pick. Diagnostics
+// call this too, so a tool run sees the same recency, show and playlist policy
+// as the DJ rather than a convenient-but-different approximation.
+export async function livePickerScope(queue: any, { audioWaypoint = null, showAt = null, context = null }: { audioWaypoint?: number[] | null; showAt?: Date | null; context?: any } = {}) {
+  const preparedContext = context ? await prepareEpisodeContext(context) : null;
+  const episodeSource = preparedContext ? showPreparation.read({ context: preparedContext }).music : null;
   await library.load();
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total` (TAGGED tracks only) — see the same
@@ -173,8 +236,6 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // pick's look-ahead moment (showAt) so the anchored playlist is the show's
   // that will be on air when the pick plays — same clock as pickSystem's brief
   // and buildTools' locks.
-  ctx = await prepareEpisodeContext(ctx);
-  const episodeSource = showPreparation.read({ context: ctx }).music;
   const activeShow = settings.resolveActiveShow(showAt ?? undefined);
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
@@ -259,10 +320,16 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${activeShow.playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
   }
 
+  // Listener favourites (#991): the same opt-in list the Agentic pick event
+  // names, resolved once so the tool, the Shortlist plan and its selection
+  // context all read one snapshot.
+  const favourites = likes.djFavourites(settings.get()?.likes);
+
   // One scope value carries every constraint this pick runs under, and travels
   // to the discovery tools without being unpacked on the way (see PickerRunArgs
   // in dj-agent/agents.ts for why that matters).
   const scope = pickerScope({
+    sonicSimilarity: await subsonic.supportsSonicSimilarity(),
     episodeSource,
     recentIds,
     recentKeys,
@@ -287,32 +354,205 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     maxTrackSec,
     playlistLock,
     playlistTracks,
+    hasPlaylistAnchor: !!activeShow?.playlistIds?.length,
     excludedIds,
+    listenerFavourites: favourites.length ? favourites : null,
   });
 
-  // This object is deliberately shared by reference with the LLM call record.
-  // It is settled only after the guards and enqueue, so /debug reports what
-  // actually reached the queue rather than what either model claimed.
-  const agentPickResolution: AgenticPickResolution = {
-    guardOutcome: 'none',
-    queued: false,
-    usedMusicalLeanings: false,
+  return { scope, playlistTracks, activeShow, episodeSource, context: preparedContext };
+}
+
+// A Shortlist pick the controller made without the model: verified identity
+// with the neutral musical clause, and no transition gesture (a plain
+// crossfade), since no model judged the seam. `musicalReason` is empty so every
+// later reason rebuild lands on the same neutral clause.
+function controllerShortlistPick(track: any) {
+  const selectionReason = shortlistClauseSelectionReason(track, '');
+  return { id: String(track.id), musicalReason: '', transition: null, selectionReason, reason: selectionReason };
+}
+
+// What a Track Shortlist call needs that the Agentic route reads from its
+// session window and pick event: the set's arc (the pool prompt's recentPlays),
+// the listener favourites that event names, and a DJ-mode run's target (the
+// pool ranks on the same rankTarget). Shared with the Discovery Bench, so a
+// comparison sees what a live Shortlist pick sees. Each key is absent when
+// empty, so a station without the signal keeps the prompt it had.
+export function shortlistSignals(
+  queue: any,
+  scope: PickerScope,
+  rankTarget: { bpm: number | null; key: string | null } | null = null,
+): Pick<ShortlistSelectionContext, 'recentPlays' | 'listenerFavourites' | 'mixRun'> {
+  const recentPlays = Array.isArray(queue?.history) ? picker.summariseRecent(queue) : [];
+  const favourites = scope.listenerFavourites ?? [];
+  return {
+    ...(recentPlays.length ? { recentPlays } : {}),
+    ...(favourites.length ? {
+      listenerFavourites: favourites.map(({ track, count }) => ({
+        title: String(track?.title ?? 'unknown'),
+        ...(track?.artist ? { artist: String(track.artist) } : {}),
+        likes: count,
+      })),
+    } : {}),
+    ...(rankTarget ? { mixRun: { bpm: rankTarget.bpm, key: rankTarget.key } } : {}),
   };
-  const run = await pickerAgent.run({
-    editorial: ctx.episodeEditorial,
-    messages: session.windowMessages(),
-    scope,
-    showAt,
-    telemetry: { agentPickResolution },
-  });
-  const { toolCalls, extras } = run;
-  let { steps } = run;
-  let object = run.object;
+}
 
+// `ctx` / `rankTarget` are the same values runTrackEvent hands the ordinary
+// pool fallback, so the artist guard's pool rescue (#1187) builds a pick from
+// exactly the pool a failed run would have produced. The Agentic run needs
+// neither; the Shortlist also orders by `rankTarget` and names it as `mixRun`.
+// `health` is written by reference: `modelFailed` means the slot was filled
+// WITHOUT the model (a Shortlist whose call failed takes its own top track), so
+// the caller counts a breaker failure even though a track was queued.
+async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = null, pickAnchor = null, showAt = null, rankTarget = null, editorialLeanings, explore = false, health = { modelFailed: false } }: { wantLink: boolean; audioWaypoint?: number[] | null; pickAnchor?: any; showAt?: Date | null; rankTarget?: { bpm: number | null; key: string | null } | null; editorialLeanings: EditorialLeaningsContext; explore?: boolean; health?: { modelFailed: boolean } }): Promise<boolean> {
+  const pickStarted = performance.now();
+  const { scope, playlistTracks, activeShow, episodeSource, context: pickContext } = await livePickerScope(queue, { audioWaypoint, showAt, context: ctx });
+  // livePickerScope prepared the episode context (#1802). Every later use in
+  // this pick, the link writer and the pool rescue included, must see that
+  // prepared copy, not the raw one this function was handed.
+  if (pickContext) ctx = pickContext;
+  const useShortlist = settings.get().llm?.trackSelection === 'shortlist';
+  const anchorAnalysis = pickAnchor ? library.bpmKeyFor(pickAnchor) : null;
+  const anchorRecord = pickAnchor?.id ? library.get(pickAnchor.id) : null;
+  const recentTransitions = settings.effectsActive()
+    ? (typeof queue.recentTransitionChoices === 'function' ? queue.recentTransitionChoices() : [])
+    : undefined;
+  const selectionContext: ShortlistSelectionContext = {
+    currentTrack: pickAnchor ? {
+      id: pickAnchor.id ?? null,
+      title: pickAnchor.title ?? null,
+      artist: pickAnchor.artist ?? null,
+      album: pickAnchor.album ?? null,
+      bpm: anchorAnalysis?.bpm ?? undefined,
+      // The transition leaves the predecessor at its ending, so prefer the
+      // measured ending key over its dominant key when boundary analysis exists.
+      key: anchorAnalysis?.keyEnd ?? anchorAnalysis?.key ?? undefined,
+      pace: pickAnchor.paceMean ?? anchorRecord?.paceMean ?? undefined,
+    } : null,
+    journeyActive: !!audioWaypoint?.length,
+    link: wantLink ? 'A separate safe link may air for this pick.' : 'No link airs for this pick.',
+    ...(ctx?.episodeEditorial ? { episodeEditorial: ctx.episodeEditorial } : {}),
+    ...(recentTransitions ? { recentTransitions } : {}),
+    // Agentic prompts are left exactly as they were: that route reads these
+    // from its session window and pick event.
+    ...(useShortlist ? shortlistSignals(queue, scope, rankTarget) : {}),
+    ...(useShortlist ? shortlistSituation(ctx) : {}),
+    ...(useShortlist && explore ? { explore: true } : {}),
+    ...(useShortlist ? shortlistConversation(session.promptMemory()) : {}),
+  };
+  let steps: number;
+  let toolCalls: any[];
+  let extras: { seen: Map<string, any> };
+  let object: any;
+  let agentPickResolution: AgenticPickResolution | null = null;
+  let agentPreliminaryId: string | null = null;
+  let shortlistPickResolution: ShortlistPickResolution | null = null;
+  let shortlistPreliminaryId: string | null = null;
+  if (useShortlist) {
+    shortlistPickResolution = {
+      guardOutcome: 'none',
+      queued: false,
+      usedMusicalLeanings: false,
+    };
+    // This route builds and executes the controller's source plan directly.
+    // It deliberately never instantiates the tool-loop agent or a tool schema.
+    const occurrence = activeShow ? showPreparation.occurrence({
+      context: showAt ? { ...ctx, at: showAt.toISOString() } : ctx,
+    }) : null;
+    const searches = occurrence && !episodeSource && budget.optionalSegmentsAllowed()
+      ? await shortlistSearchPreparation.ensure({
+        occurrenceId: occurrence.id, expiresAt: occurrence.endsAt,
+        topic: activeShow?.topic ?? '', editorial: ctx?.episodeEditorial,
+        presenterNames: [activeShow?.persona?.name, ...(activeShow?.guests ?? []).map(guest => guest.name)]
+          .filter((name): name is string => typeof name === 'string' && !!name),
+      }) : [];
+    const shortlist = await buildShortlist({
+      scope,
+      currentTrackId: pickAnchor?.id ?? null,
+      currentArtist: pickAnchor?.artist ?? null,
+      discoveryPasses: settings.get().llm?.shortlistPasses ?? SHORTLIST_PASSES_DEFAULT,
+      moods: activeShow?.moods,
+      energies: activeShow?.energies,
+      genres: activeShow?.genres ?? scope.genreLock,
+      eras: activeShow?.eras,
+      dominantMood: ctx?.dominantMood,
+      explore,
+      searches,
+      // A fresh draw per pick, like `explore`, so one anchor does not always
+      // produce the same plan.
+      rotationSeed: Math.floor(Math.random() * 0x100000000),
+      // Same target the pool's soft re-rank uses: the run's, else the
+      // predecessor's own measured tempo and ending key.
+      transitionTarget: rankTarget ?? anchorAnalysis,
+    });
+    steps = shortlist.sourceRuns.length;
+    toolCalls = shortlist.sourceRuns;
+    extras = { seen: new Map(shortlist.candidates.map((candidate) => [candidate.id, candidate])) };
+    logEvent('shortlist.built', {
+      candidates: shortlist.uniqueCandidates,
+      sourceRuns: shortlist.sourceRuns,
+      elapsedMs: shortlist.elapsedMs,
+    });
+    if (!shortlist.candidates.length) {
+      const failure = classifyPickFailure({
+        pickedId: null,
+        seedId: pickAnchor?.id ?? null,
+        candidates: 0,
+        toolCalls: shortlist.sourceRuns.length,
+      });
+      throw Object.assign(new Error(failure.message), { pickFailure: failure });
+    }
+    shortlistOffers.record(shortlist.candidates.map(candidate => candidate.id));
+    let selection: { id: string; selectionReason: string; [field: string]: unknown };
+    try {
+      selection = await djPick({
+        candidates: shortlist.candidates,
+        showAt,
+        playlistResolved: !!playlistTracks?.length,
+        sourceRuns: shortlist.sourceRuns,
+        context: selectionContext,
+        shortlistResolution: shortlistPickResolution,
+      });
+    } catch (err: any) {
+      // djObject has already spent both of its attempts on this model. The
+      // pool answers its own failed call with its first candidate; this list
+      // is already ordered by transition fit, so its top track is the same
+      // move without paying the pool's two more attempts on the model that
+      // just failed. The failure still reaches the breaker (health).
+      health.modelFailed = true;
+      const top = shortlist.candidates[0];
+      queue.log('shortlist', `Track Shortlist model pick failed: ${err?.message || err} — taking the best-fitting shortlist track without another model call`);
+      logEvent('shortlist.modelFallback', { error: String(err?.message || err), candidates: shortlist.candidates.length, id: top.id });
+      selection = controllerShortlistPick(top);
+    }
+    object = { ...selection, reason: selection.selectionReason };
+  } else {
+    // Shared by reference with both Agentic LLM records. It is settled only
+    // after the guards and enqueue, so Debug reports what actually reached the
+    // queue rather than what either model claimed.
+    agentPickResolution = {
+      guardOutcome: 'none',
+      queued: false,
+      usedMusicalLeanings: false,
+    };
+    const run = await pickerAgent.run({
+      editorial: ctx?.episodeEditorial ?? '',
+      messages: session.windowMessages(),
+      scope,
+      showAt,
+      telemetry: { agentPickResolution },
+    });
+    steps = run.steps;
+    toolCalls = run.toolCalls;
+    extras = run.extras;
+    object = run.object;
+  }
   let song = object?.id ? extras.seen.get(object.id) : null;
 
-  // The agent returned an id that isn't in the candidate set it was shown.
-  // Two-stage salvage before giving up on the run (both observed live):
+  // The model returned an id that isn't in the candidate set it was shown.
+  // Both routes type that id as a plain string (#939), so it reaches here
+  // rather than dying in djObject's schema check. Two-stage salvage before
+  // giving up on the run (both observed live):
   //   1. Near-miss repair — the model transcribed a REAL id imperfectly
   //      (glm-5.1 dropped the final character of a 22-char nanoid; small
   //      local models corrupt 2-3 chars at a time, #939). nearestId only
@@ -320,9 +560,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   //      so this can't misfire onto a different track. Free — no model call.
   //   2. Corrective re-pick — the model fabricated an id outright (gpt-5-mini
   //      after an empty tool result) while its `seen` map held real
-  //      candidates. One djObject call constrained to those ids (grammar-
-  //      enforced on local models, Zod-checked everywhere) beats paying the
-  //      pool fallback + a breaker increment for a run that DID explore.
+  //      candidates. One djObject call over those candidates, repaired the
+  //      same way, beats paying the pool fallback + a breaker increment for a
+  //      run that DID explore.
   if (!song && object?.id && extras.seen.size) {
     const fixed = nearestId(object.id, extras.seen.keys());
     if (fixed) {
@@ -330,10 +570,23 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       queue.log('picker', `agent id "${object.id}" repaired to near-miss match "${fixed}"`);
       object = { ...object, id: fixed };
       song = extras.seen.get(fixed);
+      // A Shortlist reason names the track it was built for, which djPick
+      // could not resolve from the unrepaired id.
+      if (useShortlist) {
+        const selectionReason = shortlistClauseSelectionReason(song, object.musicalReason);
+        object = { ...object, selectionReason, reason: selectionReason };
+      }
     }
   }
   if (!song && extras.seen.size) {
-    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, showAt, playlistResolved: !!playlistTracks?.length });
+    const repicked = await repickFromSeen({
+      seen: extras.seen, badId: object?.id ?? null, showAt,
+      playlistResolved: !!playlistTracks?.length,
+      telemetryKind: useShortlist ? 'djShortlistRepick' : 'djAgentRepick',
+      selectionContext,
+      shortlistResolution: shortlistPickResolution,
+      health,
+    });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
       queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -373,104 +626,59 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     throw Object.assign(new Error(failure.message), { pickFailure: failure });
   }
 
-  // This first valid choice is the private Leanings-blind baseline. Review a
-  // small deterministic set around it rather than asking a small model to
-  // independently rerank the whole discovery pool.
-  const preliminaryId = String(song.id);
-  object = { ...object, reason: agenticDiscoverySelectionReason(song, object.reason) };
-  agentPickResolution.preliminary = agenticTrackRef(song);
-  agentPickResolution.leaningsReview = { outcome: 'not-run', replacementId: null };
-  if (editorialLeanings.promptValue && extras.seen.size > 1) {
-    const reviewDjName = session.onAirPersona()?.name ?? null;
-    const leaningsSources = agenticLeaningsSources(editorialLeanings, reviewDjName);
-    const eligibleLeanings = eligibleAgenticLeanings(song, [...extras.seen.values()], leaningsSources);
-    const leaningsOptions = eligibleLeanings.map(({ phrase }) => phrase);
-    const reviewCandidates = selectAgenticReviewCandidates(song, [...extras.seen.values()], leaningsOptions);
-    if (reviewCandidates.length >= 2 && leaningsOptions.length > 0) try {
-      const compactCandidates = reviewCandidates.map((candidate) => compactAgenticReviewCandidate(candidate, leaningsOptions, song));
-      const compactCandidatesById = new Map(compactCandidates.map((candidate) => [String(candidate.id), candidate]));
-      const review: any = await djObject({
-        system: agenticLeaningsReviewSystem(),
-        prompt: agenticLeaningsReviewPrompt({
-          baseline: compactCandidates[0],
-          challengers: compactCandidates.slice(1),
-          leaningsOptions,
-          leaningsSources,
-          context: {
-            currentTrack: pickAnchor ? { id: pickAnchor.id ?? null, title: pickAnchor.title ?? null, artist: pickAnchor.artist ?? null } : null,
-            link: wantLink ? 'A separate safe link may air for this pick.' : 'No link airs for this pick.',
-            djName: reviewDjName,
-          },
-        }),
-        schema: agenticLeaningsReviewSchema(reviewCandidates.map((candidate) => String(candidate.id)), leaningsOptions, preliminaryId),
-        temperature: 0,
+  // Both routes now hold a valid, Leanings-blind preliminary pick. Musical
+  // Leanings get one compact, separately recorded review over a small
+  // deterministic set around it (never a rerank of the whole discovery pool),
+  // and can only nominate a controller-verifiable close challenger. The pass
+  // is shared so the two routes cannot drift apart again.
+  const pickResolution = (useShortlist ? shortlistPickResolution : agentPickResolution)!;
+  if (useShortlist) {
+    shortlistPreliminaryId = String(song.id);
+  } else {
+    agentPreliminaryId = String(song.id);
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, object.reason) };
+  }
+  pickResolution.preliminary = agenticTrackRef(song);
+  // A model that just failed the pick is not asked to review one: the review
+  // is the same kind of structured call, and nothing model-chosen exists to
+  // review.
+  const leaningsPass = health.modelFailed ? { song, object, reviewed: false } : await runLeaningsReview({
+    song,
+    object,
+    seen: extras.seen,
+    editorialLeanings,
+    lastfmTagsFor: (id) => library.get(id)?.lastfmTags,
+    djName: session.onAirPersona()?.name ?? null,
+    context: selectionContext,
+    resolution: pickResolution,
+    route: useShortlist
+      ? {
+        kind: 'djShortlistLeaningsReview',
+        telemetry: { shortlistResolution: shortlistPickResolution },
+        label: 'Musical Leanings review',
+        fallback: 'using the initial Shortlist pick',
+        failureEvent: 'shortlist.leaningsReviewFailed',
+        // The Shortlist settles its final Booth wording after the guards
+        // (shortlistReasonForLeanings), so it keeps the review's own sentence.
+        replacementReason: (_replacement, leaningsReason) => leaningsReason,
+      }
+      : {
         kind: 'djAgentLeaningsReview',
         telemetry: { agentPickResolution },
-      });
-      steps += 1;
-      const selectedChanged = review.selectedId !== preliminaryId;
-      const reviewedCandidatesById = new Map(reviewCandidates.map((candidate) => [String(candidate.id), candidate]));
-      const replacement = selectedChanged ? reviewedCandidatesById.get(review.selectedId) : null;
-      const common = {
-        baselineId: preliminaryId,
-        reviewedSelectedId: review.selectedId,
-        candidateIds: reviewCandidates.map((candidate) => String(candidate.id)),
-        leaningsOptions,
-        leaningsSources,
-      };
-      if (selectedChanged && !replacement) {
-        agentPickResolution.leaningsReview = {
-          outcome: 'invalid', replacementId: null, proposedReplacementId: String(review.selectedId),
-          rejectionReason: 'unknown-candidate',
-          leaningsBasis: review.leaningsBasis === NO_AGENTIC_LEANINGS_INFLUENCE ? null : review.leaningsBasis,
-          ...common,
-        };
-        queue.log('picker', 'Agentic Leanings review rejected (unknown-candidate) — using preliminary pick');
-      } else if (replacement) {
-        const compactReplacement = compactCandidatesById.get(String(replacement.id));
-        const validation = validateAgenticLeaningsReplacement({
-          musicalReason: review.musicalReason,
-          leaningsBasis: review.leaningsBasis,
-          musicalLeanings: editorialLeanings.promptValue,
-          allowedLeanings: leaningsOptions,
-          supportedLeanings: Array.isArray(compactReplacement?.leaningsMatches) ? compactReplacement.leaningsMatches as string[] : [],
-          flowCloseness: compactReplacement?.flowCloseness,
-        });
-        if (validation.valid) {
-          const owner = eligibleLeanings.find(({ phrase }) => phrase === validation.basis);
-          object = {
-            ...object,
-            id: replacement.id,
-            reason: agenticLeaningsSelectionReason({ replacement, djName: reviewDjName, leaningsOwnerName: owner?.ownerName ?? (owner?.source === 'guest' ? 'The guest' : reviewDjName), basis: validation.basis, musicalReason: review.musicalReason }),
-            transition: review.transition,
-          };
-          song = replacement;
-          agentPickResolution.leaningsReview = {
-            outcome: 'replaced', replacementId: String(replacement.id), track: agenticTrackRef(replacement),
-            leaningsBasis: validation.basis, leaningsSource: owner?.source, ...common,
-          };
-        } else {
-          agentPickResolution.leaningsReview = {
-            outcome: 'invalid', replacementId: null, proposedReplacementId: String(replacement.id),
-            rejectionReason: validation.reason, track: agenticTrackRef(replacement),
-            leaningsBasis: review.leaningsBasis === NO_AGENTIC_LEANINGS_INFLUENCE ? null : review.leaningsBasis,
-            ...common,
-          };
-          queue.log('picker', `Agentic Leanings review rejected (${validation.reason}) — using preliminary pick`);
-        }
-      } else {
-        agentPickResolution.leaningsReview = {
-          outcome: 'kept', replacementId: null,
-          leaningsBasis: review.leaningsBasis === NO_AGENTIC_LEANINGS_INFLUENCE ? null : review.leaningsBasis,
-          ...common,
-        };
-      }
-    } catch (error) {
-      agentPickResolution.leaningsReview = { outcome: 'failed', replacementId: null };
-      logEvent('pick.leaningsReviewFailed', { agent: 'pick', candidates: extras.seen.size, error: String(error) });
-      queue.log('picker', 'Agentic Leanings review failed — using preliminary pick');
-    }
-  }
+        label: 'Agentic Leanings review',
+        fallback: 'using preliminary pick',
+        failureEvent: 'pick.leaningsReviewFailed',
+        failureFields: { agent: 'pick' },
+        replacementReason: (replacement, leaningsReason) =>
+          verifiedAgenticReason(agenticSelectionReason(replacement, leaningsReason), true, replacement),
+      },
+    review: (request) => djObject(request),
+    log: (line) => queue.log(useShortlist ? 'shortlist' : 'picker', line),
+    logEvent,
+  });
+  song = leaningsPass.song;
+  object = leaningsPass.object;
+  if (leaningsPass.reviewed) steps += 1;
 
   // Pick-anchor artist guard (#1124). The discovery tools return a tight
   // cluster around the pick anchor — frequently a run of the SAME artist — and
@@ -504,6 +712,26 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // escalated differently on purpose (see below): an anchor match is worth a
   // pool rescue, while spacing is a preference that yields to the run.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  let shortlistCorrected = false;
+  // Both guards decide WHICH candidates are eligible and hand that set to this
+  // re-pick. A model that already failed the pick is not asked to correct it:
+  // the controller takes the best-fitting eligible track instead, as it took
+  // the top of the whole list.
+  const guardRepick = (alt: Map<string, any>, reason: string) => {
+    if (health.modelFailed) {
+      const first = alt.values().next().value;
+      return Promise.resolve(first ? controllerShortlistPick(first) : null);
+    }
+    return repickFromSeen({
+      seen: alt, badId: null, showAt,
+      playlistResolved: !!playlistTracks?.length,
+      reason,
+      telemetryKind: useShortlist ? 'djShortlistRepick' : 'djAgentRepick',
+      selectionContext,
+      shortlistResolution: shortlistPickResolution,
+      health,
+    });
+  };
   // Read once: the album guard below steps around the same neighbours, and two
   // reads of a live queue across two awaits could disagree.
   const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
@@ -513,11 +741,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     // Every queue read stays here; the policy module is handed values only.
     recentRoots: neighbourRoots,
     window: varietyWindow,
-    repick: (alt, reason) => repickFromSeen({
-      seen: alt, badId: null, showAt,
-      playlistResolved: !!playlistTracks?.length,
-      reason,
-    }),
+    repick: guardRepick,
     poolRescue: (avoidArtist) => pickViaPool(
       queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint,
       { avoidArtist },
@@ -528,29 +752,47 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // The pool rescue enqueues, links and records its own session turn, so a
   // rescued slot is a filled slot — runTrackEvent must treat it as done.
   if (guarded.kind === 'rescued') {
-    agentPickResolution.guardOutcome = 'pool-rescue';
-    logEvent('pick.leaningsReview', {
-      agent: 'pick',
-      preliminaryId,
-      replacementId: agentPickResolution.leaningsReview?.replacementId ?? null,
-      baselineId: agentPickResolution.leaningsReview?.baselineId ?? null,
-      reviewedSelectedId: agentPickResolution.leaningsReview?.reviewedSelectedId ?? null,
-      proposedReplacementId: agentPickResolution.leaningsReview?.proposedReplacementId ?? null,
-      rejectionReason: agentPickResolution.leaningsReview?.rejectionReason ?? null,
-      leaningsBasis: agentPickResolution.leaningsReview?.leaningsBasis ?? null,
-    leaningsSource: agentPickResolution.leaningsReview?.leaningsSource ?? null,
-      finalId: null,
-      reviewOutcome: agentPickResolution.leaningsReview?.outcome ?? 'not-run',
-      guardOutcome: agentPickResolution.guardOutcome,
-      queued: false,
-      usedMusicalLeanings: false,
-    });
+    if (useShortlist && shortlistPickResolution) {
+      shortlistPickResolution.guardOutcome = 'pool-rescue';
+      shortlistPickResolution.queued = false;
+      shortlistPickResolution.usedMusicalLeanings = false;
+      shortlistPickResolution.rejectionReason = 'pool-rescue';
+      logEvent('shortlist.leaningsReview', {
+        preliminaryId: shortlistPreliminaryId,
+        replacementId: shortlistPickResolution.leaningsReview?.replacementId ?? null,
+        finalId: null,
+        reviewOutcome: shortlistPickResolution.leaningsReview?.outcome ?? 'not-run',
+        guardOutcome: 'pool-rescue', queued: false, usedMusicalLeanings: false,
+        rejectionReason: shortlistPickResolution.rejectionReason,
+      });
+    }
+    if (!useShortlist && agentPickResolution) {
+      agentPickResolution.guardOutcome = 'pool-rescue';
+      logEvent('pick.leaningsReview', {
+        agent: 'pick',
+        preliminaryId: agentPreliminaryId,
+        replacementId: agentPickResolution.leaningsReview?.replacementId ?? null,
+        baselineId: agentPickResolution.leaningsReview?.baselineId ?? null,
+        reviewedSelectedId: agentPickResolution.leaningsReview?.reviewedSelectedId ?? null,
+        proposedReplacementId: agentPickResolution.leaningsReview?.proposedReplacementId ?? null,
+        rejectionReason: agentPickResolution.leaningsReview?.rejectionReason ?? null,
+        leaningsBasis: agentPickResolution.leaningsReview?.leaningsBasis ?? null,
+        leaningsSource: agentPickResolution.leaningsReview?.leaningsSource ?? null,
+        finalId: null,
+        reviewOutcome: agentPickResolution.leaningsReview?.outcome ?? 'not-run',
+        guardOutcome: agentPickResolution.guardOutcome,
+        queued: false,
+        usedMusicalLeanings: false,
+      });
+    }
     return true;
   }
   if (guarded.kind === 'repicked') {
+    shortlistCorrected = useShortlist;
     object = guarded.object;
     song = guarded.song;
-    agentPickResolution.guardOutcome = 'artist-repick';
+    if (agentPickResolution) agentPickResolution.guardOutcome = 'artist-repick';
+    if (shortlistPickResolution) shortlistPickResolution.guardOutcome = 'artist-repick';
   }
 
   // Album cooldown (#1485 FR 3), at the same point of choice and for the same
@@ -578,37 +820,67 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       // path's filter uses, which is what makes the two paths agree.
       albumKeyOf: albumKeyFor,
       hours: albumHours,
-      repick: (alt, reason) => repickFromSeen({
-        seen: alt, badId: null, showAt,
-        playlistResolved: !!playlistTracks?.length,
-        reason,
-      }),
+      repick: guardRepick,
       log: (line) => queue.log('picker', line),
       logEvent,
     });
     if (albumGuarded.kind === 'repicked') {
+      shortlistCorrected = useShortlist;
       object = albumGuarded.object;
       song = albumGuarded.song;
-      agentPickResolution.guardOutcome = agentPickResolution.guardOutcome === 'artist-repick'
-        ? 'artist-and-album-repick'
-        : 'album-repick';
+      if (agentPickResolution) {
+        agentPickResolution.guardOutcome = agentPickResolution.guardOutcome === 'artist-repick'
+          ? 'artist-and-album-repick'
+          : 'album-repick';
+      }
+      if (shortlistPickResolution) {
+        shortlistPickResolution.guardOutcome = shortlistPickResolution.guardOutcome === 'artist-repick'
+          ? 'artist-and-album-repick'
+          : 'album-repick';
+      }
     }
   }
 
-  // A DJ-taste reference may survive only when the verified replacement is
-  // still the final track after both guards. Discovery and guard re-picks get
-  // a track-specific Agentic reason without Shortlist terminology.
-  const replacementId = agentPickResolution.leaningsReview?.replacementId ?? null;
-  const leaningsReplacementSurvivedGuards = resolveAgenticLeaningsUsage({
-    hasLeanings: !!editorialLeanings.promptValue,
-    preliminaryId,
-    replacementId,
-    finalId: String(song.id),
-    queued: true,
-  });
-  object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
-  agentPickResolution.final = agenticTrackRef(song);
-  agentPickResolution.reason = object.reason ?? null;
+  // The Shortlist model's note must never describe an earlier choice after a
+  // corrective artist/album repick. Replace an unsafe note at the final-track
+  // boundary, before either Booth/session text or queue metadata can see it.
+  if (useShortlist) {
+    const replacementId = shortlistPickResolution?.leaningsReview?.replacementId ?? null;
+    const replacementSurvivedGuards = resolveAgenticLeaningsUsage({
+      hasLeanings: !!editorialLeanings.promptValue,
+      preliminaryId: shortlistPreliminaryId,
+      replacementId,
+      finalId: String(song.id),
+      queued: true,
+    });
+    object.reason = replacementSurvivedGuards
+      ? shortlistReasonForLeanings(object.reason, true, song)
+      : shortlistClauseSelectionReason(song, object.musicalReason);
+    if (shortlistPickResolution) {
+      shortlistPickResolution.final = agenticTrackRef(song);
+      shortlistPickResolution.reason = object.reason ?? null;
+    }
+  } else if (agentPickResolution) {
+    // Agentic Leanings are a controller-verified final-selection cue, not a
+    // model-reported diagnostic. A natural DJ-taste reference may survive only
+    // when the review replacement is still the final track after both guards.
+    const replacementId = agentPickResolution.leaningsReview?.replacementId ?? null;
+    const leaningsReplacementSurvivedGuards = resolveAgenticLeaningsUsage({
+      hasLeanings: !!editorialLeanings.promptValue,
+      preliminaryId: agentPreliminaryId,
+      replacementId,
+      finalId: String(song.id),
+      // This provisional true answers only whether the reviewed replacement
+      // survived the guards. The definitive badge still waits for enqueue.
+      queued: true,
+    });
+    object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
+    agentPickResolution.final = agenticTrackRef(song);
+    agentPickResolution.reason = object.reason ?? null;
+  }
+  if (useShortlist) {
+    recordShortlistPick({ ms: Math.round(performance.now() - pickStarted), primary: !shortlistCorrected && !health.modelFailed });
+  }
 
   // The picker has seen private selection context. Only after its final choice
   // do we invoke the isolated listener-facing writer with safe prompt data.
@@ -673,38 +945,89 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
-  agentPickResolution.queued = queued !== -1;
-  agentPickResolution.usedMusicalLeanings = resolveAgenticLeaningsUsage({
-    hasLeanings: !!editorialLeanings.promptValue,
-    preliminaryId,
-    replacementId,
-    finalId: String(song.id),
-    queued: agentPickResolution.queued,
-  });
-  logEvent('pick.leaningsReview', {
-    agent: 'pick',
-    preliminaryId,
-    replacementId,
-    baselineId: agentPickResolution.leaningsReview?.baselineId ?? null,
-    reviewedSelectedId: agentPickResolution.leaningsReview?.reviewedSelectedId ?? null,
-    proposedReplacementId: agentPickResolution.leaningsReview?.proposedReplacementId ?? null,
-    rejectionReason: agentPickResolution.leaningsReview?.rejectionReason ?? null,
-    leaningsBasis: agentPickResolution.leaningsReview?.leaningsBasis ?? null,
-    leaningsSource: agentPickResolution.leaningsReview?.leaningsSource ?? null,
-    finalId: String(song.id),
-    reviewOutcome: agentPickResolution.leaningsReview?.outcome ?? 'not-run',
-    guardOutcome: agentPickResolution.guardOutcome,
-    queued: agentPickResolution.queued,
-    usedMusicalLeanings: agentPickResolution.usedMusicalLeanings,
-  });
-  if (!agentPickResolution.usedMusicalLeanings) {
-    object.reason = verifiedAgenticReason(object.reason, false, song);
-    agentPickResolution.reason = object.reason;
+  if (useShortlist && shortlistPickResolution) {
+    const replacementId = shortlistPickResolution.leaningsReview?.replacementId ?? null;
+    shortlistPickResolution.queued = queued !== -1;
+    shortlistPickResolution.usedMusicalLeanings = resolveAgenticLeaningsUsage({
+      hasLeanings: !!editorialLeanings.promptValue,
+      preliminaryId: shortlistPreliminaryId,
+      replacementId,
+      finalId: String(song.id),
+      queued: shortlistPickResolution.queued,
+    });
+    shortlistPickResolution.rejectionReason = queued === -1
+      ? 'queue-collision'
+      : shortlistPickResolution.leaningsReview?.rejectionReason ?? null;
+    if (!shortlistPickResolution.usedMusicalLeanings && queued === -1) {
+      object.reason = shortlistClauseSelectionReason(song, object.musicalReason);
+      shortlistPickResolution.reason = object.reason;
+    }
+    const selectionRecord = {
+      id: song.id,
+      track: { title: song.title ?? null, artist: song.artist ?? null },
+      preliminaryId: shortlistPreliminaryId,
+      replacementId: shortlistPickResolution.leaningsReview?.replacementId ?? null,
+      reviewedSelectedId: shortlistPickResolution.leaningsReview?.reviewedSelectedId ?? null,
+      proposedReplacementId: shortlistPickResolution.leaningsReview?.proposedReplacementId ?? null,
+      finalId: String(song.id),
+      selectionReason: shortlistPickResolution.reason,
+      usedMusicalLeanings: shortlistPickResolution.usedMusicalLeanings,
+      leaningsBasis: shortlistPickResolution.leaningsReview?.leaningsBasis ?? null,
+      leaningsSource: shortlistPickResolution.leaningsReview?.leaningsSource ?? null,
+      leaningsSources: shortlistPickResolution.leaningsReview?.leaningsSources ?? [],
+      leaningsOptions: shortlistPickResolution.leaningsReview?.leaningsOptions ?? [],
+      reviewOutcome: shortlistPickResolution.leaningsReview?.outcome ?? 'not-run',
+      guardOutcome: shortlistPickResolution.guardOutcome,
+      queued: shortlistPickResolution.queued,
+      rejectionReason: shortlistPickResolution.rejectionReason,
+      sourceHint: shortlistSourceHint(song.shortlistSources),
+      shortlistSources: song.shortlistSources ?? [],
+    };
+    logEvent('shortlist.selected', selectionRecord);
+    logEvent('shortlist.leaningsReview', selectionRecord);
+    if (shortlistPickResolution.queued) {
+      queue.log('shortlist', ['Shortlist Pick', selectionRecord.selectionReason, selectionRecord.sourceHint].filter(Boolean).join(' — '), selectionRecord);
+    }
+  }
+  if (!useShortlist && agentPickResolution) {
+    const replacementId = agentPickResolution.leaningsReview?.replacementId ?? null;
+    agentPickResolution.queued = queued !== -1;
+    agentPickResolution.usedMusicalLeanings = resolveAgenticLeaningsUsage({
+      hasLeanings: !!editorialLeanings.promptValue,
+      preliminaryId: agentPreliminaryId,
+      replacementId,
+      finalId: String(song.id),
+      queued: agentPickResolution.queued,
+    });
+    // A collision means the reviewed track did not reach the queue. Nothing
+    // airs or enters the session, and Debug should not retain preference copy
+    // beside a false verified flag.
+    if (!agentPickResolution.usedMusicalLeanings) {
+      object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), false, song);
+      agentPickResolution.reason = object.reason;
+    }
+    logEvent('pick.leaningsReview', {
+      agent: 'pick',
+      preliminaryId: agentPreliminaryId,
+      replacementId,
+      baselineId: agentPickResolution.leaningsReview?.baselineId ?? null,
+      reviewedSelectedId: agentPickResolution.leaningsReview?.reviewedSelectedId ?? null,
+      proposedReplacementId: agentPickResolution.leaningsReview?.proposedReplacementId ?? null,
+      rejectionReason: agentPickResolution.leaningsReview?.rejectionReason ?? null,
+      leaningsBasis: agentPickResolution.leaningsReview?.leaningsBasis ?? null,
+      leaningsSource: agentPickResolution.leaningsReview?.leaningsSource ?? null,
+      finalId: String(song.id),
+      reviewOutcome: agentPickResolution.leaningsReview?.outcome ?? 'not-run',
+      guardOutcome: agentPickResolution.guardOutcome,
+      queued: agentPickResolution.queued,
+      usedMusicalLeanings: agentPickResolution.usedMusicalLeanings,
+    });
+    if (agentPickResolution.usedMusicalLeanings) {
+      queue.log('picker', `Musical Leanings changed Agentic pick "${agentPreliminaryId}" to "${song.id}"`);
+    }
   }
   if (queued === -1) return false;
-  if (agentPickResolution.usedMusicalLeanings) {
-    queue.log('picker', `Musical Leanings changed Agentic pick "${preliminaryId}" to "${song.id}"`);
-  }
+  shortlistOffers.chosen(song.id);
   session.appendTurn({
     role: 'dj', kind: 'pick',
     text: object.reason || `Selected "${song.title}".`,
@@ -749,7 +1072,7 @@ function boundarySpeechContext(ctx: any, boundaryAt: unknown) {
 // Returns 'queued' when a pick was actually enqueued, 'empty' when the pool
 // produced none, 'collision' when its pick deduped against something already
 // queued. The final fallback ignores the answer (nothing is left to try), but
-// the artist-guard rescue in pickViaAgent needs the distinction: any non-queued
+// the artist-guard rescue in pickViaSelectionRoute needs the distinction: any non-queued
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
@@ -851,6 +1174,9 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the
   // slot — the next track-start re-triggers runTrackEvent for a fresh pick.
   if (queued === -1) return 'collision';
+  // A pool rescue can choose a track the Shortlist previously offered too.
+  // Clear the penalty only once that final track actually reaches the queue.
+  if (result.song.id) shortlistOffers.chosen(result.song.id);
   // The reason text is concise on a successful pool pick and useful context for
   // the next turn — but on a failed pool LLM (picker.js returns the sentinel
   // 'fallback (LLM pick failed)'), recording it as the DJ's session turn primes
@@ -920,6 +1246,10 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
       return;
     }
     const cheap = budget.preferCheapPicker();
+    // Resolve once for the complete logical selection: the prompt event, main
+    // model run and every corrective re-pick must agree on whether the rare
+    // guest nudge was present.
+    const editorialLeanings = resolveEditorialLeanings(showAt);
     // Station voice off (settings.tts.enabled) → still pick, never link. The
     // agent path's event message then orders silence (`say` stays in the
     // schema but nullable, and a disobedient line is dropped at the
@@ -975,10 +1305,6 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // multiplies across the window. Mirrored by the pool picker's listener-liked
     // source so both paths lean the same way — a lean, never a lock.
     const favClause = likes.favouritesClause(settings.get()?.likes);
-    // One immutable selection snapshot spans the event, main Agentic run and
-    // every constrained re-pick. In particular, guest sampling is not retried
-    // after the event turn has told the model which Leanings apply.
-    const editorialLeanings = resolveEditorialLeanings(showAt);
     // Exploration nudge (ε-greedy seed break, music/airing.ts): every pick
     // seeding discovery from the expected predecessor is a random walk that never
     // leaves its similarity cluster, so a fraction of picks steer the round
@@ -988,39 +1314,57 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // carrier of concrete candidates. Skipped mid-run/journey (they own the
     // direction) and on strict-playlist shows (deep cuts are almost surely
     // off-playlist, so the call would be spent on an emptyResult).
-    const exploreClause = !inRun && !audioWaypoint && !ctx?.activeShow?.playlistStrict
-      && Math.random() < EXPLORE_SEED_PROBABILITY
+    const explore = !inRun && !audioWaypoint && !ctx?.activeShow?.playlistStrict
+      && Math.random() < EXPLORE_SEED_PROBABILITY;
+    const exploreClause = explore
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
+    // The explicit pair-drain anchor keeps #1652's wording: it is the queued
+    // track this pick will follow, not necessarily what is on air now. Its id
+    // rides the model-only promptSuffix (anchorIdClause) instead of this text,
+    // so similarity tools can seed from it without the Booth showing an id.
     const eventText = explicitPickAnchor
       ? `Pick-cycle anchor: "${pickAnchor?.title}" by ${pickAnchor?.artist}`
-        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
         + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
         + '. This queued track is the intended predecessor for this selection. Pick the track intended to follow that anchor.'
       : `Now playing "${pickAnchor?.title}" by ${pickAnchor?.artist}`
         + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
         + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
         + '. Pick the track to play next.';
-    const promptSuffix = `${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
+    const anchorIdClause = explicitPickAnchor && pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '';
+    const promptSuffix = `${anchorIdClause}${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
     session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},
     });
 
-    // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
-    // and go straight to the one-call pool picker below to stretch the budget.
-    if (settings.get().llm?.pickerAgent && !cheap && !breakerOpen()) {
+    // `!cheap`: in the soft budget tier we skip both model-led routes and go
+    // straight to the one-call pool picker below to stretch the budget.
+    //
+    // `trackSelection` is the only route switch; the legacy `pickerAgent` flag
+    // is derived from it in settings and never read here. Both routes answer to
+    // the shared breaker: a model that cannot hold a structured pick fails the
+    // Shortlist's one bounded call for the same reason it fails the agent's
+    // done tool, and without the breaker every pick would spend that failed
+    // call and then the pool's own call on top.
+    const shortlistSelected = settings.get().llm?.trackSelection === 'shortlist';
+    if (!cheap && !breakerOpen()) {
       try {
-        const queued = await pickViaAgent(queue, ctx, {
-          wantLink, audioWaypoint, pickAnchor, showAt, rankTarget, editorialLeanings,
+        const health = { modelFailed: false };
+        const queued = await pickViaSelectionRoute(queue, ctx, {
+          wantLink, audioWaypoint, pickAnchor, showAt, rankTarget, editorialLeanings, explore, health,
         });
-        breakerSuccess();
+        // A Shortlist whose model call failed still fills the slot from its own
+        // list, but the failure counts: the breaker exists to notice a model
+        // that cannot hold a structured pick, whichever track ends up airing.
+        if (health.modelFailed) breakerFailure(queue);
+        else breakerSuccess();
         if (queued) return;
-        // The agent produced a valid pick but it was already queued/on-air, so
-        // push() dropped it. The agent itself is healthy — don't trip the
+        // The route produced a valid pick but it was already queued/on-air, so
+        // push() dropped it. The model itself is healthy — don't trip the
         // breaker; fall through to the pool for a fresh pick (auto.m3u backstops
         // if even the pool can only find an already-queued track).
-        queue.log('picker', 'agent pick already queued — falling back to pool');
+        queue.log('picker', `${shortlistSelected ? 'shortlist' : 'agent'} pick already queued — falling back to pool`);
       } catch (err) {
         // A run that made at least one real discovery call but ended with no
         // observed candidates is deliberately breaker-exempt (#1247). The empty
@@ -1034,7 +1378,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
         if (failure && !failure.countsAgainstBreaker) {
           queue.log('picker', `${failure.message} — falling back to pool`);
         } else {
-          queue.log('error', `DJ agent pick failed: ${err.message} — falling back to pool`);
+          queue.log('error', `${shortlistSelected ? 'Track Shortlist' : 'DJ agent'} pick failed: ${err.message} — falling back to pool`);
           breakerFailure(queue);
         }
       }
@@ -1056,7 +1400,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
 export async function runRequest(queue: any, { requester, text }: { requester: string; text: string }) {
-  if (!settings.get().llm?.pickerAgent || breakerOpen()) return null;
+  if (settings.get().llm?.requestMatching !== 'agentic' || breakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
   // the caller's stateless matcher cascade handle it without a model call.
@@ -1120,7 +1464,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const { toolCalls, extras } = run;
     // Reassigned when the unknown-id salvage below (repickRequestFromSeen)
     // lands a corrective re-pick — same let-after-destructure shape
-    // pickViaAgent uses for the identical reason.
+    // pickViaSelectionRoute uses for the identical reason.
     let object = run.object;
 
     // Chat escape (C1): an explicit kind:"chat" WITH a null id means this
@@ -1374,7 +1718,6 @@ export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps 
   const promptContext = incomingEditorial
     ? { ...speechContext, episodeEditorial: incomingEditorial }
     : speechContext;
-
   const outgoingEditorial = pending.episodeEditorial || '';
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {

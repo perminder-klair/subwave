@@ -144,8 +144,33 @@ export default function AdminSettings() {
             location the DJ reads from.
           </li>
           <li>
-            <strong>LLM provider</strong> — which model writes the DJ's words and picks
-            tracks, plus the toggles that tune the station to that model. See{' '}
+            <strong>Library tagger</strong> — the embedding provider and mood-propagation
+            settings behind the mood tags, plus where you kick off a tagging run. It sits
+            under Music Source, since it works on the library that source provides.
+          </li>
+          <li>
+            <strong>Music Selection</strong> — choose how tracks are selected (Agentic
+            Tools or Track Shortlist), and independently whether listener requests use
+            direct matching or agent assistance. Repeat rules, the track-length floor and
+            the agent deadline sit under its Advanced.
+          </li>
+          <li>
+            <strong>Skin &amp; themes</strong> — the player's default face (skin) and the
+            station-wide colour palette. Covered in{' '}
+            <Link href="/manual/themes" className="bs-link">Skins &amp; Themes</Link>.
+          </li>
+          <li>
+            <strong>Listeners</strong> — the heart button (whether it shows, whether a like
+            stars the track in Navidrome, and whether recent likes nudge what the DJ plays)
+            and station-wide scrobbling to Last.fm, ListenBrainz and Navidrome.
+          </li>
+          <li>
+            <strong>DJ Behaviour</strong> — when scheduled speech may air, how segments and
+            skills gather their facts, and the on-air cues around a show change.
+          </li>
+          <li>
+            <strong>LLM provider</strong> — where the model runs and which model writes
+            the DJ's words. See{' '}
             <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
           </li>
           <li>
@@ -155,39 +180,25 @@ export default function AdminSettings() {
             <Link href="/manual/dj" className="bs-link">How the DJ Works</Link>.
           </li>
           <li>
-            <strong>Library tagger</strong> — the embedding provider and mood-propagation
-            settings behind the mood tags, plus where you kick off a tagging run.
-          </li>
-          <li>
             <strong>Web search</strong> — the live-facts backend the skills draw on
             (DuckDuckGo, Tavily, or a self-hosted SearXNG).
           </li>
           <li>
-            <strong>Skin &amp; themes</strong> — the player's default face (skin) and the
-            station-wide colour palette. Covered in{' '}
-            <Link href="/manual/themes" className="bs-link">Skins &amp; Themes</Link>.
+            <strong>Archives &amp; Backup</strong> — record the broadcast to hourly files,
+            and export or restore the whole station's config.
           </li>
           <li>
-            <strong>Likes</strong> — the listener heart button: whether it shows, whether a
-            like stars the track in Navidrome, and whether recent likes nudge what the DJ
-            plays.
-          </li>
-          <li>
-            <strong>Scrobbling, Archives &amp; Backup</strong> — scrobble plays to Last.fm
-            / ListenBrainz, record the broadcast to hourly files, and export or restore the
-            whole station's config.
-          </li>
-          <li>
-            <strong>Danger zone</strong> — the broadcast controls that bite: crossfade
-            length, max track length, loudness levelling, the optional Opus / FLAC / AAC
-            stream mounts, and the buttons that stop the stream or restart the mixer.
+            <strong>Broadcast &amp; mixer</strong> — how the station sounds on every stream:
+            crossfade length, ducking, transitions, max track length, loudness levelling,
+            the optional Opus / FLAC / AAC stream mounts, and the buttons that stop the
+            stream or restart the mixer.
           </li>
         </ul>
         <div className="bs-callout">
           <div className="bs-eyebrow">MIX CHANGES NEED A MIXER RESTART</div>
           <p>
             Crossfade and jingle-ratio changes are read by the audio mixer only at
-            startup. The <strong>Danger zone</strong> can trigger that restart for you: the
+            startup. <strong>Broadcast &amp; mixer</strong> can trigger that restart for you: the
             stream drops for a few seconds and comes back with the new values applied.
           </p>
         </div>

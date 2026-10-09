@@ -2,7 +2,7 @@
 // in internal/telemetry/log.ts. Barrel so call sites keep importing from
 // `llm/log.js` unchanged.
 
-export { recentCalls, record, recordPick, lifetimeTokenCount } from './internal/telemetry/log.js';
+export { recentCalls, record, recordPick, lifetimeTokenCount, contextMeasurements } from './internal/telemetry/log.js';
 
 // Done-tool retry churn (D2) — the strategy layer's two "stopped without
 // calling done" retry sites record here; /debug reports the since-boot count

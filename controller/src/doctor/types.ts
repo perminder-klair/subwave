@@ -68,6 +68,9 @@ export interface DoctorReview {
 export interface StationSettings {
   llm?: {
     pickerAgent?: boolean;
+    trackSelection?: 'agentic' | 'shortlist';
+    requestMatching?: 'agentic' | 'direct';
+    segmentRuntime?: 'agentic' | 'direct';
     reasoning?: boolean;
     agentTimeoutMs?: number;
     provider?: string;
