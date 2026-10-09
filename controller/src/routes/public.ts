@@ -19,6 +19,7 @@ import { currentStarve } from '../broadcast/music-starve.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
+import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
@@ -57,7 +58,8 @@ const TRANSPARENT_PNG = Buffer.from(
 );
 
 // Public handlers must not reflect internal error text (state-dir paths, upstream
-// URLs); detail goes to the booth log. Admin routes still reflect err.message.
+// URLs); detail goes to the admin-only booth log. Admin routes still reflect
+// err.message.
 function publicError(res: express.Response, route: string, err: unknown): void {
   const detail = err instanceof Error ? err.message : String(err);
   queue.log('error', `${route} failed: ${detail}`);
@@ -422,9 +424,10 @@ router.get('/personas', async (req, res) => {
   }
 });
 
-// Queue + history + DJ log.
+// Queue + history. The booth log stays off this read: it is operator
+// diagnostics (admin: /debug, /debug/dj-log). Allowlist in util/public-feed.ts.
 router.get('/state', (req, res) => {
-  const snap = queue.snapshot();
+  const snap = publicQueueState(queue.snapshot());
   // `theme.active` rides along so pollers learn the effective theme changed
   // without refetching tokens; an on-air show's override wins over the default.
   const s = settings.get();
@@ -448,7 +451,7 @@ router.get('/state', (req, res) => {
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
     },
-    // For rendering djLog timestamps in station-local time (#418).
+    // For rendering timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
     // Private-station flags (#478): booleans only, never the password.
@@ -638,7 +641,8 @@ router.get('/themes', async (req, res) => {
 // while after a hard roll the outgoing show's tail (`meta.carried`) and a
 // `kind: 'show-boundary'` separator lead the feed, so a passive display does
 // not go blank at a show boundary (#1690). Display only; `session` still
-// describes the live session alone.
+// describes the live session alone. Each turn's meta is reduced to what a
+// booth renders (util/public-feed.ts); agent tool trails stay internal.
 router.get('/session', (req, res) => {
   const s = session.getSession();
   if (!s) return res.json({ session: null, messages: [] });
@@ -653,7 +657,7 @@ router.get('/session', (req, res) => {
     messages: composeBoothFeed(s, Date.now(), (at) => {
       const p = zonedParts(new Date(at));
       return clockDisplay(p.hour, p.minute, settings.get().locale === 'en-US');
-    }).slice(-120),
+    }).slice(-120).map(publicSessionTurn),
   });
 });
 

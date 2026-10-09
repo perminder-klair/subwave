@@ -147,15 +147,18 @@ export function registerSubwaveTools(
       title: "SUB/WAVE queue & history",
       description:
         "Get the SUB/WAVE station state: the upcoming track queue, recently played " +
-        "history, and the DJ booth log. Use this to check whether a requested song " +
-        "already landed in the queue, or to review what the DJ has been doing.",
+        "history, and — when this connection has admin credentials — the DJ booth log. " +
+        "Use this to check whether a requested song already landed in the queue, or to " +
+        "review what the DJ has been doing.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     () =>
       run(async () => {
         const data = await client.state();
-        return { content: [text(data)] };
+        // The booth log is operator diagnostics, off the public /state read.
+        const djLog = await client.boothLog();
+        return { content: [text(djLog ? { ...data, djLog } : data)] };
       }),
   );
 
