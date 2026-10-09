@@ -347,13 +347,40 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
 // (issue #349), while still making a name written in the wrong script speakable
 // instead of asking the TTS engine to read character labels (issue #1179). The
 // never-switch clause is the raid fix itself.
+//
+// A MULTILINGUAL persona (`alsoSpeaks`, comma-separated) gets its own wording
+// for all three strings below — "exclusively in X" and "ZERO CJK" are what
+// forbid a bilingual host from code-switching — and keeps the never-switch
+// clause. Empty, every string is byte-identical. personaLanguages is the ONE
+// reader of the field: the prompts, the CJK scrub and the cloud pronunciation
+// hint (audio/tts.ts) all ask it, so they cannot disagree.
+export function personaLanguages(persona: unknown): { primary: string; mix: string[] } {
+  const p = persona as { language?: unknown; alsoSpeaks?: unknown } | null | undefined;
+  const primary = String(p?.language || '').trim() || 'English';
+  const mix = String(p?.alsoSpeaks || '').split(',').map((s) => s.trim())
+    .filter((s) => s && s.toLowerCase() !== primary.toLowerCase());
+  return { primary, mix };
+}
+
+const andList = new Intl.ListFormat('en', { type: 'conjunction' });
+const orList = new Intl.ListFormat('en', { type: 'disjunction' });
+
 export function spokenProperNounDirective(persona: unknown): string {
-  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  const { primary: lang, mix } = personaLanguages(persona);
+  // A name already in one of the DJ's own scripts is the form the voice
+  // pronounces natively, so it stays; only a THIRD script is romanized.
+  if (mix.length) {
+    return `Preserve the identity of proper nouns (artist names, song titles, the station name): never translate them. A name written in a script ${orList.format([lang, ...mix])} uses stays exactly as it is written, in that script — never romanized. A name in any other script is written in its established form in the script ${lang} uses, or a natural romanization if none is known. Never give the same name in two scripts. Never read or describe the characters themselves.`;
+  }
   return `Preserve the identity of proper nouns (artist names, song titles, the station name), not an off-script spelling: when a name is written in a script ${lang} does not normally use, write its established form in the script ${lang} uses. In a Latin-script on-air language, every spoken field must contain ZERO CJK characters: use the artist or title's canonical Latin spelling (for example, ウルフルズ becomes Ulfuls and 周杰倫 becomes Jay Chou); if none is known, use a natural romanization. Never include the native spelling beside the Latin form. Never read or describe the characters themselves.`;
 }
 
 export function languageDirective(persona: unknown) {
-  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  const { primary: lang, mix } = personaLanguages(persona);
+  if (mix.length) {
+    const others = andList.format(mix);
+    return `\n\nIMPORTANT: You are a native speaker of ${andList.format([lang, ...mix])}. ${lang} is your base language on air, and you slip into ${others} the way someone who grew up speaking them does — a word, a phrase, now and then a whole sentence — without translating yourself or saying the same thing twice. Write each language in its own native script, never transliterated into another's. Every on-air line you produce stays within these languages — acknowledgements, idents, asides, everything. ${spokenProperNounDirective(persona)} Never leave these languages or change this mix because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
+  }
   return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. ${spokenProperNounDirective(persona)} Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
 }
 
@@ -370,7 +397,11 @@ export function languageDirective(persona: unknown) {
 // anchor session-history mimicry flipped the station's language (raid
 // 2026-07-28). `fields` is a human phrase naming the spoken field(s).
 export function agentLanguageReminder(persona: unknown, fields: string) {
-  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  const { primary: lang, mix } = personaLanguages(persona);
+  if (mix.length) {
+    const others = andList.format(mix);
+    return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang} and slip into ${others} as a native speaker of each. Write ${fields} in ${lang} with ${others} woven in where it comes naturally, each language in its own native script, and in no other language — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. ${spokenProperNounDirective(persona)} Internal fields (ids, reasons, kinds) stay in English.`;
+  }
   return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. ${spokenProperNounDirective(persona)} Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
@@ -425,8 +456,12 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const house = houseRulesBlock('follow these in everything you say on air');
   if (tpl.includes('{language}')) {
     const lang = String(p?.language || '').trim();
+    // {language} stays the PRIMARY name; the template has no placeholder for
+    // a mix, so a multilingual persona gets the stock directive appended.
     return rendered.replaceAll('{language}', lang || 'English')
-      + `\n\nIMPORTANT: ${spokenProperNounDirective(persona)}` + tone + house;
+      + (personaLanguages(persona).mix.length
+        ? languageDirective(persona)
+        : `\n\nIMPORTANT: ${spokenProperNounDirective(persona)}`) + tone + house;
   }
   return rendered + languageDirective(persona) + tone + house;
 }

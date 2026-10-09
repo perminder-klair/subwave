@@ -34,6 +34,9 @@ export interface Persona {
   // directive injected server-side).
   language: string;
   voiceStyle?: string;
+  // Comma-separated languages a multilingual DJ mixes into `language`
+  // ("Japanese"). Empty = a one-language persona.
+  alsoSpeaks: string;
   // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;

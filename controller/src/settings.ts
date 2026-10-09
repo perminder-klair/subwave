@@ -257,6 +257,7 @@ export {
   guestEditorialNudgeFromGuests,
   languageDirective,
   onAirRosterClause,
+  personaLanguages,
   personaMusicLeanings,
   pickOnAirSpeaker,
   renderDjPrompt,

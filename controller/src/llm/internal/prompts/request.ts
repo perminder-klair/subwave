@@ -125,8 +125,14 @@ export function requestMatcherSystem(persona: unknown): string {
   // search-facing field must stay in English / canonical names regardless, so
   // it still matches an English-tagged library. Language comes LAST (after the
   // persona clause) — repeating it last is what makes it stick.
-  const lang = String(p?.language || '').trim() || 'English';
-  const langSuffix = `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. For that spoken field only: ${settings.spokenProperNounDirective(persona)} Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`;
+  const { primary: lang, mix } = settings.personaLanguages(persona);
+  const otherFields = ` Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`;
+  // A multilingual persona takes the shared field-scoped reminder, so the
+  // ack keeps its mix on this fallback path too; the search fields stay bound
+  // to English either way.
+  const langSuffix = mix.length
+    ? settings.agentLanguageReminder(persona, 'the "ack" field') + otherFields
+    : `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. For that spoken field only: ${settings.spokenProperNounDirective(persona)}` + otherFields;
   return REQUEST_SYSTEM + personaSuffix + langSuffix;
 }
 

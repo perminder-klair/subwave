@@ -268,7 +268,8 @@ const MAX_EXCHANGE_LINES = 5;
 // beat of the show and were silently dropped from the open and the close.
 export function exchangeSystem({ host = null, show, castBlock, beatTask }: any): string {
   const lang = String(host?.language || '').trim() || 'English';
-  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
+  // Primary language only, as in banter.ts: each line airs in its speaker's voice.
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective({ language: lang })}`;
   return `You write short on-air exchanges between the hosts of "${show.name}" on a personal internet radio station.
 
 The cast (persona id — name (role): voice notes):

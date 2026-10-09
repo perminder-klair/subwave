@@ -47,6 +47,7 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     musicLean: typeof p?.musicLean === 'string' ? p.musicLean : '',
     language: typeof p?.language === 'string' ? p.language : '',
     voiceStyle: typeof p?.voiceStyle === 'string' ? p.voiceStyle : '',
+    alsoSpeaks: typeof p?.alsoSpeaks === 'string' ? p.alsoSpeaks : '',
     avatar: typeof p?.avatar === 'string' ? p.avatar : '',
     tts: {
       engine: p?.tts?.engine ?? 'piper',
