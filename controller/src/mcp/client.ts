@@ -294,15 +294,15 @@ export class SubwaveClient {
 
   /**
    * GET /debug/dj-log — the newest booth-log lines, admin-gated. Null without
-   * admin credentials, when they are refused, or against a controller that
-   * predates the route, so the state tool degrades to the public view instead
-   * of failing.
+   * admin credentials, when they are refused or locked out, or against a
+   * controller that predates the route, so the state tool degrades to the
+   * public view instead of failing.
    */
   async boothLog(): Promise<unknown[] | null> {
     if (!this.hasAdminCreds) return null;
     const body = await this.call<{ djLog?: unknown }>("/debug/dj-log", {
       admin: true,
-      allowStatuses: [401, 403, 404],
+      allowStatuses: [401, 403, 404, 429],
     });
     return Array.isArray(body?.djLog) ? body.djLog : null;
   }

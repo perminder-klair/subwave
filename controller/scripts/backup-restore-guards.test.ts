@@ -155,3 +155,29 @@ test('an oversized JSON member is refused by its declared size', async () => {
   assert.equal(res.status, 400);
   assert.match(res.body.error, /too large/);
 });
+
+test('ZIP path aliases cannot overwrite routed sidecars or the jingle playlist', async () => {
+  const files = ['jingles.m3u', 'jingles.json', 'sfx.json'];
+  const before = new Map(files.map(file => [file, readFileSync(path.join(stateRoot, file))]));
+  for (const file of files) {
+    for (const suffix of ['/.', '//.', '\\.']) {
+      const alias = file + suffix;
+      const zip = new AdmZip(backupOf([]));
+      zip.addFile('alias', Buffer.from(file === 'jingles.m3u'
+        ? '/not-this-station.wav\n'
+        : '{"items":{"escape":{"file":"../settings.json"}}}'));
+      const entry = zip.getEntry('alias');
+      assert.ok(entry);
+      // addFile normalizes paths; the serialized member must retain the alias.
+      entry.entryName = alias;
+      zip.addFile('sfx/restored.mp3', Buffer.from('restored audio'));
+      const result = await restore(zip.toBuffer());
+      assert.equal(result.status, 200, alias);
+      assert.deepEqual(result.body.restored, ['sfx'], alias);
+      for (const target of files) {
+        assert.deepEqual(readFileSync(path.join(stateRoot, target)), before.get(target), alias);
+      }
+      assert.equal(readFileSync(path.join(stateRoot, 'sfx', 'restored.mp3'), 'utf8'), 'restored audio');
+    }
+  }
+});

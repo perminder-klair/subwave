@@ -17,6 +17,9 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTempDir } from './test-utils/temp-dir.js';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 const root = createTempDir(join(tmpdir(), 'subwave-public-feed-'));
 process.env.STATE_DIR = root;
@@ -30,6 +33,8 @@ const { queue } = await import('../src/broadcast/queue.js');
 const { router: publicRouter } = await import('../src/routes/public.js');
 const { router: debugRouter } = await import('../src/routes/debug.js');
 const { SubwaveClient } = await import('../src/mcp/client.js');
+const { registerSubwaveTools } = await import('../src/mcp/tools.js');
+const { resetAdminLockout } = await import('../src/middleware/auth.js');
 
 const app = express();
 app.use(publicRouter);
@@ -143,4 +148,32 @@ test('the MCP client reads the booth log only with admin credentials', async () 
   assert.equal(await new SubwaveClient({ baseUrl: base }).boothLog(), null, 'no credentials: no call');
   const wrong = new SubwaveClient({ baseUrl: base, adminUser: 'feed-admin', adminPass: 'nope' });
   assert.equal(await wrong.boothLog(), null, 'refused credentials degrade, not throw');
+});
+
+test('the MCP state tool still returns public state during an admin lockout', async () => {
+  resetAdminLockout();
+  const wrong = new SubwaveClient({ baseUrl: base, adminUser: 'feed-admin', adminPass: 'stale-password' });
+  const mcpServer = new McpServer({ name: 'state-test', version: '1' });
+  const mcpClient = new Client({ name: 'state-test-client', version: '1' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  registerSubwaveTools(mcpServer, wrong);
+  try {
+    for (let i = 0; i < 10; i++) assert.equal(await wrong.boothLog(), null);
+    assert.equal((await fetch(`${base}/debug/dj-log`, { headers: ADMIN })).status, 429, 'admin lock is engaged');
+    const publicState = await wrong.state();
+    await mcpServer.connect(serverTransport);
+    await mcpClient.connect(clientTransport);
+    const result = await mcpClient.callTool({ name: 'subwave_station_state', arguments: {} });
+    assert.notEqual(result.isError, true);
+    assert.ok(Array.isArray(result.content));
+    const content = result.content[0];
+    assert.equal(content?.type, 'text');
+    assert.ok(content && content.type === 'text' && typeof content.text === 'string');
+    assert.deepEqual(JSON.parse(content.text), publicState);
+    assert.equal((await fetch(`${base}/debug/dj-log`, { headers: ADMIN })).status, 429, 'public fallback leaves the lock engaged');
+  } finally {
+    await mcpClient.close();
+    await mcpServer.close();
+    resetAdminLockout();
+  }
 });

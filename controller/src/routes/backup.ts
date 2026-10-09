@@ -192,7 +192,8 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       const name = entry.entryName;
       if (name === 'manifest.json' || name === 'settings.json' || name === 'library.db') continue;
       if (!isSafeZipEntry(name) || !RESTORABLE.has(topSegment(name))) continue;
-      if (ROUTED_FILES.has(name) || topSegment(name) === 'skills') continue;
+      // Routed root files have no children; extraction collapses aliases like sfx.json/.
+      if (ROUTED_FILES.has(topSegment(name)) || topSegment(name) === 'skills') continue;
       zip.extractEntryTo(entry, STATE_DIR, true, true);
       touched.add(topSegment(name));
     }

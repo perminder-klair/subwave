@@ -707,7 +707,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
 
   // req.body is already the parsed shape. Only the cleaned text reaches the
   // session/prompts/air; the raw text is kept on the entry for the operator log.
-  // Sanitize never grows its input, so no re-slice is needed.
+  // The schema has bounded both the original text and its NFKC expansion.
   const { text: rawText, name: rawName } = req.body as { text: string; name: string };
   const stripped = stripScriptedOpener(sanitizeRequestText(rawText));
   const text = stripped.text;

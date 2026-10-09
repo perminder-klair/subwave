@@ -17,7 +17,7 @@ export function normalizeListenerText(raw: string | null | undefined): string {
 
 // Strip prompt-injection markup from listener text before it is stored, logged,
 // displayed or fed to the LLM. A belt over the prompt framing, not the only layer.
-// Never grows its input, so callers need no re-slice after the schema's cap.
+// NFKC can expand text; the shared request schema caps both forms before this runs.
 export function sanitizeRequestText(raw: string | null | undefined): string {
   return normalizeListenerText(raw)
     // chat/template role + instruction tokens
