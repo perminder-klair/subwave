@@ -5,7 +5,7 @@
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable, isGenerationControlError } from '../core/pure.js';
+import { stripThinking, extractJson, perfOf, warningsOf, failureDiagnostics, schemaHint, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, googleSafetyOptions } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
@@ -41,16 +41,18 @@ export async function djObject({
       let lastErr;
       // Log the actual branch on failure so /stats identifies the broken output path.
       let lastVia;
+      // Both attempts are billed, so the record carries their sum on success
+      // AND on the throw — attempt 1's spend must not vanish behind attempt 2.
+      const meter = createUsageMeter();
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           let object;
-          let usage;
           let perf;
           let warnings;
           if (attempt === 1 && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
-            ({ object, usage, perf, warnings } = await withTransientRetry(kind,
-              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal }), signal));
+            ({ object, perf, warnings } = await withTransientRetry(kind,
+              () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal, meter }), signal));
           } else if (attempt === 1) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
@@ -64,9 +66,9 @@ export async function djObject({
               reasoning: reasoningFor(l.cfg),
               ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
+              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);
             object = result.output;
-            usage = usageOf(result);
             perf = perfOf(result);
             warnings = warningsOf(result);
           } else {
@@ -83,6 +85,7 @@ export async function djObject({
               reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
               ...googleSafetyOptions(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
+              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             }), signal);
             try {
               object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
@@ -90,10 +93,8 @@ export async function djObject({
               // Include raw output on parse failures for diagnosis.
               parseErr.text = result.text || '';
               parseErr.finishReason = result.finishReason;
-              parseErr.usage = result.usage;
               throw parseErr;
             }
-            usage = usageOf(result);
             perf = perfOf(result);
             warnings = warningsOf(result);
           }
@@ -101,7 +102,7 @@ export async function djObject({
             value: object,
             via: lastVia,
             sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
-            usage,
+            usage: meter.usage(),
             perf,
             warnings,
             // Keep /debug output complete; durable events still apply cap().
@@ -110,6 +111,7 @@ export async function djObject({
         } catch (err) {
           if (isGenerationControlError(err)) {
             (err as any).__via = lastVia;
+            meter.attachTo(err);
             throw err;
           }
           lastErr = err;
@@ -120,6 +122,7 @@ export async function djObject({
       }
       // Record the last branch, then let withFailover decide whether the backup can help.
       (lastErr as any).__via = lastVia;
+      meter.attachTo(lastErr);
       throw lastErr;
     },
     leg,

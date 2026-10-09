@@ -1,8 +1,9 @@
 // Expose the schema as the sole required emit tool and Zod-validate its input.
 // One step returns the object and usage, including for models that ignore JSON mode.
 
-import { generateText, tool, isStepCount } from 'ai';
-import { usageOf, perfOf, warningsOf } from '../core/pure.js';
+import { generateText, tool, isStepCount, ToolChoiceViolationError } from 'ai';
+import { perfOf, warningsOf, createUsageMeter } from '../core/pure.js';
+import type { UsageMeter } from '../core/pure.js';
 import { reasoningFor, forcedToolChoice, googleSafetyOptions } from '../provider/capabilities.js';
 
 // The TRANSPORT rule for this path, stated in the system channel because that
@@ -35,35 +36,66 @@ export function emitInstructions(system?: string): string {
   return base ? `${base}\n\n${EMIT_ANSWER_INSTRUCTION}` : EMIT_ANSWER_INSTRUCTION;
 }
 
+// `meter` is the caller's per-leg meter when it has one (djObject, djAgent),
+// so this call lands in the same sum as the attempt's other legs; standalone
+// callers get a private one. Either way a throw carries the billed usage —
+// a declined `emit` is a paid call — and the model's prose, for /debug.
 export async function objectViaToolCall(
   leg: any,
-  { system, prompt, messages, schema, temperature, maxOutputTokens, signal }: any,
+  { system, prompt, messages, schema, temperature, maxOutputTokens, signal, meter }: any,
 ): Promise<{ object: any; usage: any; perf?: any; warnings?: string[] }> {
+  const usage: UsageMeter = meter ?? createUsageMeter();
+  // This call's own share, so a shared meter's earlier legs are not reported
+  // twice by a caller that also sums the returned figure.
+  const before = usage.usage();
   let captured: any;
   const emit = tool({
     description: 'Return your final answer. Call this tool exactly once, with the complete result — calling it IS how you answer.',
     inputSchema: schema,
     execute: async (input: any) => { captured = input; return 'received'; },
   });
-  const result = await generateText({
-    // Forced single-tool call — always no-think (the no-think model is identical
-    // to leg.model except for OpenRouter, where reasoning is fixed at build time).
-    model: leg.noThinkModel ?? leg.model,
-    instructions: emitInstructions(system),
-    ...(messages ? { messages } : { prompt }),
-    temperature,
-    maxOutputTokens,
-    tools: { emit },
-    // 'required' by default; an operator can downgrade to 'auto' per leg for a
-    // server whose forced-tool backend crashes (issue #570). With one tool
-    // visible + the "call it exactly once" instruction, a capable model still
-    // emits via the tool; a miss throws below → caller's fallback.
-    toolChoice: forcedToolChoice(leg.cfg),
-    stopWhen: isStepCount(1),
-    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
-    ...googleSafetyOptions(leg.cfg),
-    ...(signal ? { abortSignal: signal } : {}),
-  } as any);
-  if (captured === undefined) throw new Error('model never called the emit tool');
-  return { object: schema.parse(captured), usage: usageOf(result), perf: perfOf(result), warnings: warningsOf(result) };
+  let result: any;
+  try {
+    result = await generateText({
+      // Forced single-tool call — always no-think (the no-think model is identical
+      // to leg.model except for OpenRouter, where reasoning is fixed at build time).
+      model: leg.noThinkModel ?? leg.model,
+      instructions: emitInstructions(system),
+      ...(messages ? { messages } : { prompt }),
+      temperature,
+      maxOutputTokens,
+      tools: { emit },
+      // 'required' by default; an operator can downgrade to 'auto' per leg for a
+      // server whose forced-tool backend crashes (issue #570). With one tool
+      // visible + the "call it exactly once" instruction, a capable model still
+      // emits via the tool; a miss throws below → caller's fallback.
+      toolChoice: forcedToolChoice(leg.cfg),
+      stopWhen: isStepCount(1),
+      reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
+      ...googleSafetyOptions(leg.cfg),
+      ...(signal ? { abortSignal: signal } : {}),
+      onLanguageModelCallEnd: usage.onLanguageModelCallEnd,
+    } as any);
+    if (captured === undefined) {
+      const err: any = new Error('model never called the emit tool');
+      err.text = result.text || '';
+      err.finishReason = result.finishReason;
+      throw err;
+    }
+    const object = schema.parse(captured);
+    const after = usage.usage();
+    return {
+      object,
+      usage: { input: after.input - before.input, output: after.output - before.output, total: after.total - before.total },
+      perf: perfOf(result),
+      warnings: warningsOf(result),
+    };
+  } catch (err: any) {
+    // The prose the model wrote instead of calling `emit`, for /debug.
+    if (ToolChoiceViolationError.isInstance(err)) {
+      (err as any).text = err.content.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('\n');
+    }
+    usage.attachTo(err);
+    throw err;
+  }
 }
