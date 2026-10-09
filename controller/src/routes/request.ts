@@ -12,10 +12,14 @@ import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
+import * as likes from '../broadcast/likes.js';
 import { generateQueuedRequestIntro } from '../broadcast/request-intro.js';
 import * as webhooks from '../broadcast/webhooks.js';
 import * as settings from '../settings.js';
-import { stripScriptedOpener, cleanRequesterName, stillInFlight, screenAck, isNamedRequester, sorryNoMatch } from '../util/request-guard.js';
+import {
+  sanitizeRequestText, stripScriptedOpener, cleanRequesterName, cleanMissedArtist, stillInFlight, screenAck,
+  isNamedRequester, sorryNoMatch,
+} from '../util/request-guard.js';
 import {
   checkRateLimit, checkGlobalRateLimit, commitRateLimit, commitGlobalRateLimit, clientIp,
   REQUESTS_DISABLED,
@@ -26,24 +30,6 @@ import { shuffle } from '../util/shuffle.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 
 export const router = express.Router();
-
-// Strip prompt-injection markup from listener text before it is stored, logged,
-// displayed or fed to the LLM. A belt over the prompt framing, not the only layer.
-function sanitizeRequestText(raw: string): string {
-  return String(raw ?? '')
-    // chat/template role + instruction tokens
-    .replace(/\[\/?INST\]|<<\/?SYS>>|<\|[^|>]*\|>/gi, ' ')
-    // any HTML/XML-ish tag
-    .replace(/<\/?[a-z][^>]*>/gi, ' ')
-    // leading role markers that fake a new turn
-    .replace(/^[ \t]*(system|assistant|developer)\s*:/gim, ' ')
-    // the "ignore the previous instructions" family
-    .replace(/\b(ignore|disregard|forget|override)\b[^.!?\n]*\b(previous|prior|above|earlier|all)\b[^.!?\n]*\binstructions?\b/gi, ' ')
-    // double quotes would break out of the "${text}" framing
-    .replace(/"/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 // In-memory request ledger, ephemeral by design: a restart drops in-flight
 // requests, and the track is either already queued or it isn't.
@@ -250,6 +236,9 @@ async function resolveRequest(entry) {
       // not leave 'anon' in it as if it were a name (#1347).
       text: `${isNamedRequester(requester) ? `Listener "${requester}" requests` : 'An unnamed listener requests'}: "${text}"`
         + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : ''),
+      // The bare text, so the echo guards can check every request still in the
+      // agents' window without the line's own framing words (not public meta).
+      meta: { requestText: text },
     });
   } catch (err) {
     queue.log('error', `Session update for request failed: ${err.message}`);
@@ -550,11 +539,13 @@ async function resolveRequest(entry) {
     if (pick) pickSource = `library-mood:${ctx.dominantMood}(context)`;
   }
 
-  // 2g. Starred: the operator's favourites are always a safe pick.
+  // 2g. Starred: the operator's favourites are always a safe pick — the
+  // operator's, not a star a listener like left behind (likes.operatorStarred).
   if (!pick) {
     try {
       const starred = await subsonic.getStarred();
-      pick = randomFresh(starred);
+      await likes.load();
+      pick = randomFresh(likes.operatorStarred(starred, (settings.get() as any)?.likes));
       if (pick) pickSource = 'starred';
     } catch {}
   }
@@ -572,7 +563,10 @@ async function resolveRequest(entry) {
     const hit = got.includes(want) || want.includes(got)
       || want.split(/\s+/).some(t => t.length >= 3 && got.includes(t));
     if (!hit) {
+      // The raw reading stays on the operator's log; only the cleaned form, or
+      // nothing, may reach a prompt.
       entry.artistMiss = matched.artist;
+      entry.missedArtist = cleanMissedArtist(matched.artist);
       queue.log('miss', `Requested artist "${matched.artist}" not in library — airing ${pick.artist} instead`);
     }
   }
@@ -593,10 +587,12 @@ async function resolveRequest(entry) {
   queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
   // On an artist miss the up-front ack (written before the cascade knew it would
-  // miss) is a lie; replace it with an honest stand-in line.
+  // miss) is a lie; replace it with an honest stand-in line. Fixed copy that
+  // names nobody: this line is also the DJ's session turn when no intro airs,
+  // and the artist is the listener's own words read back by the matcher.
   let ack: string;
   if (entry.artistMiss) {
-    ack = `No ${entry.artistMiss} in the crates — here's something that fits the moment instead.`;
+    ack = `Couldn't find that artist in the crates — here's something that fits the moment instead.`;
   } else {
     const screened = screenAck(matched.ack, text, 'Coming right up.');
     if (screened.guard) {
@@ -606,14 +602,15 @@ async function resolveRequest(entry) {
     ack = screened.ack;
   }
 
-  // 3. DJ intro. On a miss, pass the absent artist so the intro owns the
-  // substitution. Station voice off means no intro and no model call; the ack
-  // still reaches the listener.
+  // 3. DJ intro. On a miss, flag it (and pass the cleaned name, when one
+  // survived) so the intro owns the substitution. Station voice off means no
+  // intro and no model call; the ack still reaches the listener.
   const generatedIntro = await generateQueuedRequestIntro({
     track: pick,
     context: ctx,
     requestedBy: requester,
-    artistMiss: entry.artistMiss || null,
+    artistMiss: !!entry.artistMiss,
+    missedArtist: entry.missedArtist ?? null,
     recap: queue.getDjRecap(),
     recentTracks: queue.getRecentTracks(),
     recentOpeners: queue.getRecentOpeners(),

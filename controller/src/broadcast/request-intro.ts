@@ -25,8 +25,12 @@ export async function generateQueuedRequestIntro(
   const script = autoVoiceAllowed()
     ? await generate({ ...args, requestText, persona: owner.persona })
     : null;
+  // The retry must see no listener-derived text at all, or it can echo again:
+  // the request text is withheld, and so is the missed artist's NAME (the miss
+  // itself stays flagged, so the retry is still honest about the stand-in).
+  const { missedArtist: _missedArtist, ...withoutListenerText } = args;
   const guarded = await guardIntro(script, requestText, () =>
-    generate({ ...args, persona: owner.persona }));
+    generate({ ...withoutListenerText, persona: owner.persona }));
   const current = session.finalizeAutomaticHostSpeech(guarded.script, owner);
   return {
     introScript: current.text,

@@ -3,6 +3,37 @@
 // checks at a call site.
 import { REQUEST_NAME_MAX } from '../schemas/request.js';
 
+// The ONE normaliser for listener text, run before every check below and before
+// the text is stored. NFKC folds full-width and compatibility forms onto their
+// plain letters; then every format character (\p{Cf}: zero-width space/joiners,
+// word joiner, soft hyphen, BOM, bidi controls) is DELETED, not replaced with a
+// space. Those characters are invisible on screen and silent in TTS, so leaving
+// them in lets "start\u200b your answer" slip past the opener patterns and lets a
+// payload salted inside each word split into fragments the echo match never
+// lines up. Combining marks are kept: Devanagari, Thai and friends need them.
+export function normalizeListenerText(raw: string | null | undefined): string {
+  return String(raw ?? '').normalize('NFKC').replace(/\p{Cf}/gu, '');
+}
+
+// Strip prompt-injection markup from listener text before it is stored, logged,
+// displayed or fed to the LLM. A belt over the prompt framing, not the only layer.
+// Never grows its input, so callers need no re-slice after the schema's cap.
+export function sanitizeRequestText(raw: string | null | undefined): string {
+  return normalizeListenerText(raw)
+    // chat/template role + instruction tokens
+    .replace(/\[\/?INST\]|<<\/?SYS>>|<\|[^|>]*\|>/gi, ' ')
+    // any HTML/XML-ish tag
+    .replace(/<\/?[a-z][^>]*>/gi, ' ')
+    // leading role markers that fake a new turn
+    .replace(/^[ \t]*(system|assistant|developer)\s*:/gim, ' ')
+    // the "ignore the previous instructions" family
+    .replace(/\b(ignore|disregard|forget|override)\b[^.!?\n]*\b(previous|prior|above|earlier|all)\b[^.!?\n]*\binstructions?\b/gi, ' ')
+    // double quotes would break out of the "${text}" framing
+    .replace(/"/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 // "Read this verbatim" directive family; the payload always trails the
 // directive, so the earliest match is the cut point. The `(?=…)` tail on the
 // first pattern is required: its nouns are ordinary words, so without it
@@ -22,7 +53,7 @@ const OPENER_DIRECTIVES: RegExp[] = [
 const MIN_KEPT_WORDS = 2;
 
 export function stripScriptedOpener(raw: string): { text: string; injection: string | null } {
-  const text = String(raw ?? '');
+  const text = normalizeListenerText(raw);
   let cut = -1;
   for (const re of OPENER_DIRECTIVES) {
     const m = re.exec(text);
@@ -36,9 +67,12 @@ export function stripScriptedOpener(raw: string): { text: string; injection: str
 }
 
 // Lowercase, punctuation-stripped, unicode-safe tokens shared by the echo checks.
+// Both sides go through the same normaliser, and combining marks are deleted
+// rather than turned into spaces, so a word only splits where it visibly does.
 function words(s: string | null | undefined): string[] {
-  return String(s ?? '')
+  return normalizeListenerText(s)
     .toLowerCase()
+    .replace(/\p{M}/gu, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
     .filter(Boolean);
@@ -100,31 +134,110 @@ export function sorryNoMatch(requester: string | null | undefined): string {
     : 'Sorry, nothing in the crates matched that.';
 }
 
+// Latin look-alikes from the two other scripts the name allow-list admits. Only
+// used to compare a name against the reserved list, never to rewrite what a
+// listener typed, so an ordinary Cyrillic or Greek name is left as written.
+const CONFUSABLES: Record<string, string> = {
+  а: 'a', в: 'b', е: 'e', ё: 'e', к: 'k', м: 'm', н: 'h', о: 'o', р: 'p', с: 'c',
+  т: 't', у: 'y', х: 'x', і: 'i', ї: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ӏ: 'l', ɡ: 'g',
+  α: 'a', β: 'b', ε: 'e', η: 'n', ι: 'i', κ: 'k', μ: 'u', ν: 'v', ο: 'o', ρ: 'p',
+  τ: 't', υ: 'u', χ: 'x', ω: 'w', ϲ: 'c',
+};
+
+// Comparison key for the reserved-name screen: normalised, case-folded,
+// look-alikes folded, and split into words on anything that is not a letter or
+// digit, so "Wren.", "Ｗｒｅｎ" and "Wrеn" (Cyrillic е) all key the same as
+// "Wren".
+function nameWords(s: string | null | undefined): string[] {
+  return normalizeListenerText(s)
+    .toLowerCase()
+    .replace(/\p{M}/gu, '')
+    .replace(/./gsu, (ch) => CONFUSABLES[ch] ?? ch)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+}
+
+// True when the name IS a reserved name or carries one as a run of whole words
+// ("DJ Wren", "Admin_", "night owl fan" against a persona "Night Owl"). Whole
+// words only, so a name that merely contains the letters ("Madjid" vs "dj",
+// "Ghost" vs "host") is never caught.
+function impersonatesReserved(name: string, reserved: string[]): boolean {
+  const nw = nameWords(name);
+  if (!nw.length) return false;
+  for (const r of reserved) {
+    const key = nameWords(r).join('');
+    if (key.length < 2) continue;
+    for (let i = 0; i < nw.length; i++) {
+      let run = '';
+      for (let j = i; j < nw.length && run.length < key.length; j++) {
+        run += nw[j];
+        if (run === key) return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function cleanRequesterName(raw: string | null | undefined, reserved: string[] = []): string {
-  const cleaned = String(raw ?? '')
+  const cleaned = normalizeListenerText(raw)
     .replace(NAME_DISALLOWED, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, NAME_MAX)
     .trim();
   if (!cleaned) return ANON_REQUESTER;
-  const lc = cleaned.toLowerCase();
-  if (reserved.some((r) => r && String(r).trim().toLowerCase() === lc)) return ANON_REQUESTER;
+  if (impersonatesReserved(cleaned, reserved)) return ANON_REQUESTER;
   return cleaned;
+}
+
+// The artist a listener asked for that the library does not have, in the form
+// an intro may name on air ("no Katy Perry in the crates"). It is the matcher's
+// reading of the listener's own words, so it is listener text: normalised,
+// reduced to the characters artist names actually use, and refused outright
+// (null) when it is too long to be a name or carries a scripted opener. A
+// refused name is dropped, never truncated, so the intro owns the miss without
+// naming anyone rather than reading out half a sentence. The prompt still
+// frames whatever survives as data with a judgment clause; this is the half a
+// rule can decide.
+const MISSED_ARTIST_MAX_CHARS = 60;
+const MISSED_ARTIST_MAX_WORDS = 8;
+const MISSED_ARTIST_DISALLOWED = /[^\p{L}\p{M}\p{N}\s.,'’&+!?\-/$()*#@~_]/gu;
+
+export function cleanMissedArtist(raw: string | null | undefined): string | null {
+  const cleaned = normalizeListenerText(raw)
+    .replace(MISSED_ARTIST_DISALLOWED, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+  if (cleaned.length > MISSED_ARTIST_MAX_CHARS) return null;
+  if (cleaned.split(' ').length > MISSED_ARTIST_MAX_WORDS) return null;
+  if (stripScriptedOpener(cleaned).injection) return null;
+  return cleaned;
+}
+
+// Every request text a line must not read back: the request being answered plus
+// any other listener text the model could see. An empty entry is skipped.
+type RequestTexts = string | ReadonlyArray<string | null | undefined>;
+
+function echoesAny(script: string | null | undefined, texts: RequestTexts, minRun?: number): boolean {
+  const list = typeof texts === 'string' ? [texts] : texts;
+  return list.some((t) => !!t && echoesRequest(script, t, minRun ? { minRun } : {}));
 }
 
 // Echo-guard a spoken intro. `regenerate` must build its script WITHOUT the
 // request text in the prompt, so one retry suffices; a still-echoing or throwing
-// retry drops the intro (the track still airs).
+// retry drops the intro (the track still airs). `requestText` may also carry the
+// other request texts in the model's window, so a line that reads out a
+// DIFFERENT listener's request is caught too.
 export async function guardIntro(
   script: string | null,
-  requestText: string,
+  requestText: RequestTexts,
   regenerate: () => Promise<string | null>,
 ): Promise<{ script: string | null; guard: string | null }> {
-  if (!script || !echoesRequest(script, requestText)) return { script, guard: null };
+  if (!script || !echoesAny(script, requestText)) return { script, guard: null };
   let clean: string | null = null;
   try { clean = await regenerate(); } catch { clean = null; }
-  if (clean && !echoesRequest(clean, requestText)) return { script: clean, guard: 'echo-regenerated' };
+  if (clean && !echoesAny(clean, requestText)) return { script: clean, guard: 'echo-regenerated' };
   return { script: null, guard: 'echo-dropped' };
 }
 
@@ -137,30 +250,27 @@ const ACK_MIN_RUN = 10;
 // not an echo, so it does not flag.
 export function screenAck(
   ack: string | null | undefined,
-  requestText: string,
+  requestText: RequestTexts,
   fallback: string,
 ): { ack: string; guard: string | null } {
   const a = String(ack ?? '').trim();
   if (!a) return { ack: fallback, guard: null };
-  if (!echoesRequest(a, requestText, { minRun: ACK_MIN_RUN })) return { ack: a, guard: null };
+  if (!echoesAny(a, requestText, ACK_MIN_RUN)) return { ack: a, guard: null };
   return { ack: fallback, guard: 'ack-replaced' };
 }
 
 // Pick-path echo guard: the session window carries request text verbatim, so an
 // injected phrasing can resurface in a LATER pick's link, which neither
-// guardIntro nor screenAck sees. `recent` is the request log's newest-first
-// ring; only the last `lookback` texts are checked.
+// guardIntro nor screenAck sees. `windowTexts` must be every request text still
+// in the window the agent read (session.windowRequestTexts()), pending requests
+// included: a guard whose horizon is shorter than the window lets a request age
+// out of the check while the model can still quote it.
 export function echoesRecentRequest(
   script: string | null | undefined,
-  recent: Array<{ text?: string | null }> | null | undefined,
-  { lookback = 5 }: { lookback?: number } = {},
+  windowTexts: ReadonlyArray<string | null | undefined> | null | undefined,
 ): boolean {
-  if (!script || !Array.isArray(recent)) return false;
-  for (const entry of recent.slice(0, lookback)) {
-    const text = entry?.text;
-    if (text && echoesRequest(script, text)) return true;
-  }
-  return false;
+  if (!script || !Array.isArray(windowTexts)) return false;
+  return echoesAny(script, windowTexts);
 }
 
 // Will the mixer eat this pick whole? (#1594) `cross(duration=d)` buffers d

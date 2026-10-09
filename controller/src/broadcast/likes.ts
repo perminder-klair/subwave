@@ -357,6 +357,30 @@ export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean
     .join('; ')}. Treat these as a strong preference signal when they fit the moment — but keep variety, never loop the same favourites back-to-back.`;
 }
 
+// The starred list as OPERATOR curation. A listener like is mirrored to a
+// Navidrome star (`likes.starInNavidrome`), so getStarred() alone cannot tell the
+// operator's hand from one anonymous tap — and every consumer that presents
+// stars as "the operator's favourites" would be letting listener signal steer
+// picks with `influenceDj` off. Same gate as favouritesClause: with listener
+// influence on, a liked star is welcome; otherwise a star whose only likes are
+// listener likes is dropped, while one with an operator heart, or with no like
+// record at all (starred in Navidrome by hand), stays. The store must be loaded
+// (load()) for the filter to see anything.
+export function operatorStarred<T extends { id?: unknown }>(
+  songs: T[] | null | undefined,
+  cfg: { enabled?: boolean; influenceDj?: boolean } | null | undefined,
+): T[] {
+  const list = Array.isArray(songs) ? songs : [];
+  if (cfg?.enabled && cfg?.influenceDj) return [...list];
+  const listenerOnly = new Set<string>();
+  const operator = new Set<string>();
+  for (const r of records) (isOperator(r) ? operator : listenerOnly).add(r.songId);
+  return list.filter((s) => {
+    const id = String(s?.id ?? '');
+    return !listenerOnly.has(id) || operator.has(id);
+  });
+}
+
 // Listener key truncated to a short handle: enough to spot "same listener",
 // never reversible to an IP.
 export function recent(limit = 30) {
