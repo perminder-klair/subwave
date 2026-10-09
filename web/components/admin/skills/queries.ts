@@ -15,6 +15,8 @@ export interface CommunitySkill {
   cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
+  // The RSS/Atom feed this skill installs with — it fetches before it speaks.
+  feed?: string;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;

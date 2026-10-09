@@ -41,7 +41,8 @@ import type { HostSpeechStamp, TurnMeta } from './session.js';
 import type { PromptMemoryEntry } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
-import { TRANSITION_EFFECTS } from '../settings/vocab.js';
+import { TRANSITION_EFFECTS, type TransitionEffect } from '../settings/vocab.js';
+import type { MixDropReason } from '../schemas/transitions.js';
 import { logEvent } from '../observability/events.js';
 import { recordPlaybackFailure } from '../observability/playback-failures.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
@@ -115,6 +116,10 @@ import {
   shouldDropObsoleteHostSpeech,
   shouldDropStaleLink,
   sleep,
+  TRANSITION_LEDGER_SIZE,
+  transitionAskOf,
+  ENTRY_EFFECTS,
+  seamRecordAtPlay,
   voiceChannelFor,
 } from './queue/pure.js';
 import {
@@ -139,6 +144,7 @@ import {
   speechDurationMs,
   writeHandoff,
   jingleAiredAtMs,
+  interposedSince,
   type QueuedVoice,
   type VoiceHandoff,
 } from './queue/voice-io.js';
@@ -387,6 +393,7 @@ class Queue {
   _lastBed: string | null = null;      // last bed aired — anti-repeat for bed-policy.pickBed
   _lastBedStartedAt = 0;               // bed-playing.json's last-seen startedAt — the edge onBedStarted fires on
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
+  _mixApplied = new WeakSet<QueueItem>(); // items applyMixTransition has reached — their ask is the ledger's, not a pending one
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: RecentPlay[] = [];
@@ -1153,13 +1160,36 @@ class Queue {
   // pick event turn so the model can SEE its own habit and break it (it has
   // no other way to know what it recently chose; session-history imitation is
   // how both the all-normal and all-blend monocultures formed).
+  //
+  // The ledger fills at DRAIN, but under pair-drain the held head only drains
+  // once its successor is picked — so the pick being built right now would
+  // never see the ask just before it. Model picks the drain has not reached
+  // yet are appended in queue order; requests, studio pushes and blocks carry
+  // no ask and are skipped. Read-only: the ledger, and so the anti-streak
+  // strip, keeps its drain-time timing.
   recentTransitionChoices(): string[] {
-    return [...this._recentEffects];
+    const pending = this.upcoming
+      .filter(i => !i.sent && i.aiPicked && i.track && !this._mixApplied.has(i))
+      .map(i => transitionAskOf(i.track))
+      .filter((k): k is NonNullable<typeof k> => k != null);
+    return [...this._recentEffects, ...pending].slice(-TRANSITION_LEDGER_SIZE);
+  }
+
+  // Record one armed gesture that a strip is about to take back, onto the track
+  // it rode — the seam record written to the play row when the track airs. Call
+  // it BEFORE the delete, while the flag (and washoutAuto) still say what it
+  // was. Idempotent per effect+reason, since a drain retry re-runs the strips.
+  noteDrop(track: Track, effect: TransitionEffect, reason: MixDropReason) {
+    if (track[effect] !== true) return;
+    const drops = (track.mixDrops ??= []);
+    if (drops.some(d => d.effect === effect && d.reason === reason)) return;
+    drops.push(effect === 'washout' && track.washoutAuto ? { effect, reason, auto: true } : { effect, reason });
   }
 
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
-  stripEffect(track: Track, reason: string) {
+  stripEffect(track: Track, reason: string, code: MixDropReason) {
+    for (const k of TRANSITION_EFFECTS) this.noteDrop(track, k, code);
     const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : track.chop ? 'chop' : track.loop ? 'loop' : 'washout';
     delete track.sweep;
     delete track.washout;
@@ -1308,6 +1338,7 @@ class Queue {
       // stamps (washout/loop/crossSec) govern this track's OWN ending and stay.
       if (item.track && (item.track.sweep || item.track.blend || item.track.dissolve || item.track.chop)) {
         const kind = item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.dissolve ? 'dissolve' : 'chop';
+        for (const k of ENTRY_EFFECTS) this.noteDrop(item.track, k, 'bed');
         delete item.track.sweep;
         delete item.track.blend;
         delete item.track.dissolve;
@@ -1336,10 +1367,21 @@ class Queue {
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
+    this._mixApplied.add(item);
+    // The seam record's ASK: what the DJ chose on this pick, before any strip
+    // below. Recorded only where the choice was offered — a DJ-mode pick, or
+    // one that carries a flag from before DJ mode flipped off — so a plain
+    // station does not fill the record with 'normal' it never chose. Once: a
+    // drain retry sees the flags this pass already stripped.
+    if (item.aiPicked && item.track.transitionAsk === undefined
+      && (persona?.djMode || TRANSITION_EFFECTS.some(k => item.track[k]))) {
+      const ask = transitionAskOf(item.track);
+      if (ask) item.track.transitionAsk = ask;
+    }
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'dj mode off', 'dj-mode-off');
       return;
     }
 
@@ -1354,6 +1396,7 @@ class Queue {
     // both and switching off the sweep must not take the washout with it.
     for (const kind of TRANSITION_EFFECTS) {
       if (item.track[kind] && !settings.effectEnabled(kind)) {
+        this.noteDrop(item.track, kind, 'switched-off');
         delete item.track[kind];
         this.log('mix', `${kind} dropped (switched off in settings)`);
       }
@@ -1373,7 +1416,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor', 'no-predecessor');
       return;
     }
 
@@ -1389,12 +1432,13 @@ class Queue {
     // plus effect gating — still capped by the operator crossfade ceiling.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
 
-    // DJ transition effects (sweep/washout) — the agent proposes, the data
+    // DJ transition effects (all six) — the agent proposes, the data
     // disposes; a rejected flag is stripped so getAnnotatedUri never stamps it.
-    // A washout also gets canvas + tempo stamps on the flagged track ITSELF,
-    // since its liq_cross_duration governs its own end, exactly where the wash
-    // fires. The sweep needs no stamps: the transition into it is already sized
-    // and its envelope scales to whatever d it gets.
+    // The exit gestures (washout, loop) get canvas + tempo stamps on the
+    // flagged track ITSELF, since its liq_cross_duration governs its own end,
+    // exactly where they fire. The entry gestures need no canvas: the
+    // transition into them is already sized and their envelopes scale to
+    // whatever d they get (chop still takes a gate period, below).
     //
     // Auto-arm a washout when the cap will CUT this pick (duration >
     // effectiveMaxTrackSec → drain stamps liq_cue_out): the ending is a forced
@@ -1413,10 +1457,16 @@ class Queue {
     // rather than a DJ choice, but it is the same gesture at the same cost —
     // an operator who switched the washout off did not ask for it back on the
     // capped exits. The cut still happens; it is just a plain crossfade.
-    if (cappedExit && !item.track.washout && !item.track.loop && settings.effectEnabled('washout')) {
-      item.track.washout = true;
-      item.track.washoutAuto = true;
-    }
+    // Re-run wherever a later strip takes away what kept it off (a variety-
+    // stripped washout or loop, a loop with no tempo): the cap's echo-out is
+    // not a choice those strips ration.
+    const armCapWashout = () => {
+      if (cappedExit && !item.track.washout && !item.track.loop && settings.effectEnabled('washout')) {
+        item.track.washout = true;
+        item.track.washoutAuto = true;
+      }
+    };
+    armCapWashout();
 
     // Ending-aware exit canvas (feature: outro analysis). The pair-sized
     // feature-1 value above can't be applied (#749), but a track's measured
@@ -1466,8 +1516,27 @@ class Queue {
     if (item.stemSeam) {
       for (const k of ['sweep', 'blend', 'dissolve', 'chop'] as const) {
         if (item.track[k]) {
+          this.noteDrop(item.track, k, 'stem-seam');
           delete item.track[k];
           this.log('mix', `${k} dropped (the seam into this pick is a rendered stem blend)`);
+        }
+      }
+    }
+    // Show-boundary cut (#1574): the predecessor is CUT at a show change, and
+    // radio.liq stands every gesture down on that seam (it reads liq_show_fade
+    // off the outgoing track), so these would never air. Stripping them keeps
+    // the label, the booth log and the ledger describing the plain fade that
+    // does — and keeps a mixer older than the flag from running a held-hot
+    // entry gesture over a mid-record cut. Before the ledger, like the stem
+    // seam: that seam was never the model's to shape, so the ledger records
+    // what is left. The FIFO drain guarantees the predecessor already passed
+    // applyBoundaryStamps, with or without pair-drain.
+    if (prevTrack.showFade) {
+      for (const k of ['sweep', 'blend', 'dissolve', 'chop'] as const) {
+        if (item.track[k]) {
+          this.noteDrop(item.track, k, 'show-boundary');
+          delete item.track[k];
+          this.log('mix', `${k} dropped (the previous track is cut at a show change — that seam is a plain fade)`);
         }
       }
     }
@@ -1485,20 +1554,21 @@ class Queue {
     // monoculture and a stuck model stays stripped until it genuinely varies.
     // Auto (length-cap) washouts are deterministic, not choices, and are
     // invisible to the ledger in both directions.
-    const choice: string | null =
-      item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
-        : item.track.dissolve ? 'dissolve'
-        : item.track.chop ? 'chop'
-        : item.track.loop ? 'loop'
-        : (item.track.washout && !item.track.washoutAuto) ? 'washout'
-        : item.track.washoutAuto ? null : 'normal';
+    //
+    // Targeted, like the switch strip: only the counted ask goes. The blanket
+    // stripEffect() also took the cap's auto-washout off a capped pick whose
+    // ask was the third sweep, and the forced cut aired bare.
+    const choice = transitionAskOf(item.track);
     const last2 = this._recentEffects.slice(-2);
     if (choice && choice !== 'normal' && last2.length >= 2 && last2.every(k => k === choice)) {
-      this.stripEffect(item.track, `variety — third ${choice} in a row`);
+      this.noteDrop(item.track, choice, 'variety');
+      delete item.track[choice];
+      this.log('mix', `${choice} dropped (variety — third ${choice} in a row)`);
+      armCapWashout();
     }
     if (choice) {
       this._recentEffects.push(choice);
-      if (this._recentEffects.length > 4) this._recentEffects.shift();
+      if (this._recentEffects.length > TRANSITION_LEDGER_SIZE) this._recentEffects.shift();
     }
     // Entry-side effects (sweep/dissolve/chop) garnish the PREVIOUS track's
     // ending — a loop exit already armed on that track IS the transition, so
@@ -1506,10 +1576,12 @@ class Queue {
     // here keeps the pick log honest). Loops are FIFO-armed on their own
     // applyMixTransition pass, so prevTrack.loop is already validated.
     if (item.track.sweep && prevTrack.loop) {
+      this.noteDrop(item.track, 'sweep', 'yields-to-exit');
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (previous track already exits through a loop)');
     }
     if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
+      this.noteDrop(item.track, 'sweep', 'pair-fit');
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
     }
@@ -1518,10 +1590,12 @@ class Queue {
     // it only makes sense between COMPATIBLE tracks — the handover exposes a
     // clash rather than hiding it.
     if (item.track.blend && prevTrack.loop) {
+      this.noteDrop(item.track, 'blend', 'yields-to-exit');
       delete item.track.blend;
       this.log('mix', 'blend dropped (previous track already exits through a loop)');
     }
     if (item.track.blend && !mix.effectAllowedFor('blend', cur, next)) {
+      this.noteDrop(item.track, 'blend', 'pair-fit');
       delete item.track.blend;
       this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
     }
@@ -1533,10 +1607,12 @@ class Queue {
     // length-cap auto-arm. radio.liq enforces the same precedence as a
     // belt-and-braces guard; stripping here keeps the pick log honest.
     if (item.track.dissolve && (prevTrack.washout || prevTrack.loop)) {
+      this.noteDrop(item.track, 'dissolve', 'yields-to-exit');
       delete item.track.dissolve;
       this.log('mix', `dissolve dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
     }
     if (item.track.dissolve && !mix.effectAllowedFor('dissolve', cur, next)) {
+      this.noteDrop(item.track, 'dissolve', 'pair-fit');
       delete item.track.dissolve;
       this.log('mix', 'dissolve dropped (tracks too compatible — a blend keeps the groove a wash would kill)');
     }
@@ -1550,10 +1626,12 @@ class Queue {
     // washout riding the previous track's exit, same reasoning as the
     // dissolve: both gestures shape the same outgoing ending.
     if (item.track.chop && (prevTrack.washout || prevTrack.loop)) {
+      this.noteDrop(item.track, 'chop', 'yields-to-exit');
       delete item.track.chop;
       this.log('mix', `chop dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
     }
     if (item.track.chop && !mix.effectAllowedFor('chop', cur, next)) {
+      this.noteDrop(item.track, 'chop', 'pair-fit');
       delete item.track.chop;
       this.log('mix', 'chop dropped (tracks too compatible — a beat-blend beats a cut)');
     }
@@ -1571,8 +1649,10 @@ class Queue {
     // unmeasured track is noise, not craft (editorial otherwise, like the
     // washout — the variety ledger rations it).
     if (item.track.loop && !(next.bpm && next.bpm > 0)) {
+      this.noteDrop(item.track, 'loop', 'no-tempo');
       delete item.track.loop;
       this.log('mix', 'loop dropped (no measured tempo — a loop needs a bar length)');
+      armCapWashout();
     }
     if (item.track.loop) {
       item.track.crossSec = mix.loopCrossSecondsFor(next, maxSec);
@@ -1589,8 +1669,8 @@ class Queue {
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
-    // over a sweep/washout transition. Only ARMED here: this runs at drain
-    // time, right after the PREVIOUS track started — the crossfade this
+    // over a seam that carries an armed effect. Only ARMED here: this runs at
+    // drain time, right after the PREVIOUS track started — the crossfade this
     // stinger is sized for (prevTrack → item) is a full track away. Playing it
     // now (the original behaviour) landed a drum-roll a few seconds into a
     // song, apropos of nothing. onTrackStarted fires it when item airs, i.e.
@@ -1731,6 +1811,8 @@ class Queue {
       return null;
     }
     item.track.showFade = true;
+    this.noteDrop(item.track, 'washout', 'show-boundary');
+    this.noteDrop(item.track, 'loop', 'show-boundary');
     delete item.track.washout;
     delete item.track.washoutAuto;
     delete item.track.washoutDelay;
@@ -2064,6 +2146,8 @@ class Queue {
                 // (their canvases would fight the clip) and cut tight into
                 // the clip. Entry-side flags on ITEM are untouched — they
                 // garnish the seam INTO it, which already aired its stamps.
+                this.noteDrop(item.track, 'washout', 'stem-seam');
+                this.noteDrop(item.track, 'loop', 'stem-seam');
                 delete item.track.washout;
                 delete item.track.washoutAuto;
                 delete item.track.washoutDelay;
@@ -2676,6 +2760,7 @@ class Queue {
       // silence (or, worse, to the voice break) instead of its intended song.
       if (item.track.sweep || item.track.blend || item.track.dissolve || item.track.chop) {
         const kind = item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.dissolve ? 'dissolve' : 'chop';
+        for (const k of ENTRY_EFFECTS) this.noteDrop(item.track, k, 'pause-talk');
         delete item.track.sweep;
         delete item.track.blend;
         delete item.track.dissolve;
@@ -3421,6 +3506,17 @@ class Queue {
     // correlating session archives after the fact.
     const onAirShow = session.getSession()?.show || null;
 
+    // The seam record: how this track came in, the DJ's ask on it, and every
+    // armed gesture a strip took back (#1829). Labels what the controller
+    // ARMED — see seamRecordAtPlay for what a jingle, bed or break between the
+    // two songs does to it. An entry gesture stranded by a jingle is noted as
+    // a drop here, the one strip that happens in the mixer rather than the drain.
+    const prevStartedMs = outgoingPrev?.startedAt ? Date.parse(outgoingPrev.startedAt) : NaN;
+    const seam = seamRecordAtPlay(outgoingPrev, this.current, interposedSince(prevStartedMs));
+    for (const k of seam.stranded) this.noteDrop(this.current.track, k, 'jingle-seam');
+    const transitionAsk = this.current.track.transitionAsk ?? null;
+    const transitionDrops = this.current.track.mixDrops?.length ? this.current.track.mixDrops : null;
+
     // Milestone on the unified timeline — the anchor each pick trace hangs off.
     logEvent('track.play', {
       title: this.current.track.title,
@@ -3432,6 +3528,9 @@ class Queue {
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
       show: onAirShow?.name || null,
+      transition: seam.label,
+      transitionAsk,
+      transitionDrops,
     });
 
     // Durable play history (library.db `plays`) — backs the admin Library
@@ -3447,6 +3546,9 @@ class Queue {
       requestedBy: this.current.requestedBy || null,
       showId: onAirShow?.id || null,
       showName: onAirShow?.name || null,
+      transition: seam.label,
+      transitionAsk,
+      transitionDrops,
     });
 
     // `sourceTrackId` is the id from the music backend (Subsonic/Navidrome, or

@@ -1,0 +1,117 @@
+/* AXO — the hi-fi stack drawn at 30°. Colour lives here as theme tokens (the
+   strict lint forbids inline styles, and SVG presentation attributes don't
+   reliably resolve var()), geometry stays on the elements as attributes. */
+
+/* Face shading: the three visible sides of every box, plus wells and knobs. */
+.scene {
+  --iso-l: color-mix(in oklab, var(--ink) 4%, var(--bg));
+  --iso-r: color-mix(in oklab, var(--ink) 10%, var(--bg));
+  --iso-w: color-mix(in oklab, var(--ink) 16%, var(--bg));
+}
+
+/* The hairline layer. Unpowered, it falls back to dashed construction lines in
+   a faded pen; powering up inks it solid. */
+.draw {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 0.75;
+  stroke-dasharray: 6 0;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: stroke 1.2s ease, stroke-dasharray 1.6s ease;
+  --txt: var(--ink);
+}
+.drawOff {
+  stroke: color-mix(in oklab, var(--ink) 45%, var(--bg));
+  stroke-dasharray: 3 2.5;
+  --txt: var(--muted);
+}
+
+/* The hand-inked layer: vermilion, round-capped, run through the wobble filter. */
+.ink {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fBg { fill: var(--bg); }
+.fL { fill: var(--iso-l); }
+.fR { fill: var(--iso-r); }
+.fW { fill: var(--iso-w); }
+.fInk { fill: var(--ink); }
+.fAcc { fill: var(--accent); }
+.fLid { fill: color-mix(in oklab, var(--ink) 5%, transparent); }
+.fNone { fill: none; }
+
+.ns { stroke: none; }
+.solid { stroke-dasharray: none; }
+.sAcc { stroke: var(--accent); }
+.sBg { stroke: var(--bg); }
+.sInk { stroke: var(--ink); }
+
+/* Printed legends. --txt follows the power state; the rest are fixed inks. */
+.tx { fill: var(--txt); stroke: none; }
+.txMuted { fill: var(--muted); stroke: none; }
+.txBg { fill: var(--bg); stroke: none; }
+.txAcc { fill: var(--accent); stroke: none; }
+/* A lit key's legend: the same foreground the theme puts on an accent fill. */
+.txOn { fill: var(--primary-foreground); stroke: none; }
+/* An icon printed on a key: lucide strokes in currentColor, so these set the
+   colour. Solid even in standby — a legend, not a construction line. */
+.icon { stroke-dasharray: none; }
+.icTx { color: var(--txt); }
+.icMuted { color: var(--muted); }
+.icOn { color: var(--primary-foreground); }
+.icFill { fill: currentColor; }
+.mono { font-family: var(--mono-font), ui-monospace, monospace; }
+.display { font-family: var(--display-font), Georgia, serif; font-style: italic; }
+
+/* Hit areas over drawn controls. Transparent still counts as painted, so they
+   take the pointer; focus draws a dashed accent ring in place of an outline. */
+.hit {
+  fill: transparent;
+  stroke: none;
+  cursor: pointer;
+  outline: none;
+}
+.hit:focus-visible {
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-dasharray: 2 2;
+}
+.hitOff { cursor: default; }
+.knob {
+  cursor: ns-resize;
+  touch-action: none;
+}
+
+/* The drawing table: a dot on every isometric grid point. */
+.gridDesk,
+.gridMob {
+  background-image:
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 22%, transparent) 0.9px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 22%, transparent) 0.9px, transparent 1.4px);
+}
+.gridDesk {
+  background-size: 24px 13.856px;
+  background-position: 0 0, 12px 6.928px;
+}
+.gridMob {
+  background-size: 16px 9.238px;
+  background-position: 0 0, 8px 4.619px;
+}
+
+/* Progress: --pf (0..1) rides the skin root. */
+.progFill { width: calc(var(--pf, 0) * 100%); }
+.progHead { left: calc(var(--pf, 0) * 100%); }
+
+.pulse { animation: axo-pulse 2.4s ease-in-out infinite; }
+@keyframes axo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+/* Lite and reduced motion: the pen still changes state, it just doesn't glide. */
+:global(html.lite) .draw { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .draw { transition: none; }
+  .pulse { animation: none; }
+}

@@ -1,0 +1,72 @@
+/* The isometric kit's paper and pens, as theme tokens so a drawing follows
+   every theme. Geometry stays on the elements as attributes; colour lives
+   here, since the strict lint forbids inline styles and SVG presentation
+   attributes don't reliably resolve var(). The AXO skin keeps its own copy of
+   these (skins co-locate their styles). */
+
+/* Face shading: the three visible sides of every box, plus wells. */
+.sheet {
+  --iso-l: color-mix(in oklab, var(--ink) 4%, var(--bg));
+  --iso-r: color-mix(in oklab, var(--ink) 10%, var(--bg));
+  --iso-w: color-mix(in oklab, var(--ink) 16%, var(--bg));
+}
+
+/* The hairline pen. Its ink and its construction-line state are custom
+   properties, so a figure's own keyframes can ink from one to the other
+   (StackCutaway's pen-in, the admin loading console) without restating
+   either. */
+.pen {
+  --iso-ink: var(--ink);
+  --iso-off: color-mix(in oklab, var(--ink) 45%, var(--bg));
+  --iso-off-dash: 3 2.5;
+  fill: none;
+  stroke: var(--iso-ink);
+  stroke-width: 0.75;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+/* Construction lines: the same pen, faded and dashed. */
+.penOff {
+  stroke: var(--iso-off);
+  stroke-dasharray: var(--iso-off-dash);
+}
+
+/* The hand-inked layer: vermilion, round-capped, run through the wobble filter. */
+.ink {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fT,
+.fBg { fill: var(--bg); }
+.fL { fill: var(--iso-l); }
+.fR { fill: var(--iso-r); }
+.fW { fill: var(--iso-w); }
+.fInk { fill: var(--ink); }
+.fAcc { fill: var(--accent); }
+.fNone { fill: none; }
+
+.ns { stroke: none; }
+.solid { stroke-dasharray: none; }
+.sAcc { stroke: var(--accent); }
+.sBg { stroke: var(--bg); }
+.sInk { stroke: var(--ink); }
+
+/* Printed legends. */
+.tx { fill: var(--ink); stroke: none; }
+.txMuted { fill: var(--muted); stroke: none; }
+.txBg { fill: var(--bg); stroke: none; }
+.txAcc { fill: var(--accent); stroke: none; }
+.mono { font-family: var(--mono-font), ui-monospace, monospace; }
+.display { font-family: var(--display-font), Georgia, serif; font-style: italic; }
+
+/* The drawing table: a dot on every isometric grid point. */
+.grid {
+  background-image:
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px),
+    radial-gradient(circle, color-mix(in oklab, var(--ink) 18%, transparent) 0.9px, transparent 1.4px);
+  background-size: 20px 11.547px;
+  background-position: 0 0, 10px 5.7735px;
+}

@@ -10,6 +10,7 @@ import * as settings from '../../settings.js';
 import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
 import type { QueueItem, Track } from './types.js';
 import type { HostSpeechStamp } from '../session.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
 
 interface TransitionItem {
   track: Track;
@@ -24,13 +25,17 @@ interface TransitionItem {
 // admin honest until `sent` makes the pair authoritative. Exit gestures ride
 // the outgoing track while entry gestures ride the incoming track, so the
 // answer has to inspect both sides. Washout may combine with sweep/blend; stem
-// rendering owns the whole seam and therefore overrides every live effect.
+// rendering owns the whole seam and therefore overrides every live effect, and
+// a show-boundary cut on the outgoing track (#1574) stands every one down.
 export function nextTransitionLabel(
   outgoing: TransitionItem | null | undefined,
   incoming: TransitionItem | null | undefined,
 ): string | null {
   if (!incoming || incoming.sent !== true) return null;
   if (incoming.stemSeam) return 'Stem blend';
+  // radio.liq reads liq_show_fade off the OUTGOING track and disarms all six
+  // gestures, on both sides of the seam: what airs is the plain crossfade.
+  if (outgoing?.track.showFade) return 'Normal';
 
   const labels: string[] = [];
   const washing = outgoing?.track.washout === true;
@@ -47,6 +52,64 @@ export function nextTransitionLabel(
   if (!washing && !looping && incoming.track.chop) labels.push('Chop');
 
   return labels.length > 0 ? labels.join(' + ') : 'Normal';
+}
+
+// The gestures the INCOMING track carries for the seam into it (radio.liq arms
+// them off `b`); washout and loop ride the outgoing track's own exit instead.
+export const ENTRY_EFFECTS = ['sweep', 'blend', 'dissolve', 'chop'] as const;
+
+// Something the mixer placed BETWEEN two songs, read off its marker at play time.
+// None of these is a song — none reaches now-playing.json — so `outgoing` at a
+// track start is the song before it, and the seam actually aired was from this.
+export type Interposed = 'jingle' | 'bed' | 'break';
+const INTERPOSED_LABEL: Record<Interposed, string> = {
+  jingle: 'After jingle',
+  bed: 'After bed',
+  break: 'After break',
+};
+
+// The durable seam record for a track that just started: the label of the seam
+// INTO it, as armed, and any entry gesture that was armed yet could not air.
+// One precedence rule with the dashboard (nextTransitionLabel), so the two never
+// disagree about the same seam. Labels what the controller ARMED: a mixer older
+// than this controller can still differ, which a mixer-side marker would settle.
+//   * a jingle in between: radio.liq stands every entry gesture down on the
+//     jingle's seam, so the ones still armed here are stranded;
+//   * a bed or a pause-and-talk break in between: their own drain paths already
+//     stripped the entry gestures, so there is nothing left to strand;
+//   * the outgoing song's exit gesture went into whatever was interposed, never
+//     into this track, so it is not this seam's.
+// Null when the song before is unknown (the first track after a boot).
+export function seamRecordAtPlay(
+  outgoing: TransitionItem | null | undefined,
+  incoming: TransitionItem,
+  interposed: Interposed | null,
+): { label: string | null; stranded: Array<(typeof ENTRY_EFFECTS)[number]> } {
+  if (interposed) {
+    const stranded = interposed === 'jingle' ? ENTRY_EFFECTS.filter(k => incoming.track[k] === true) : [];
+    return { label: INTERPOSED_LABEL[interposed], stranded };
+  }
+  if (!outgoing) return { label: null, stranded: [] };
+  return { label: nextTransitionLabel(outgoing, { ...incoming, sent: true }), stranded: [] };
+}
+
+// How many transition asks the anti-streak ledger keeps, and so how many the
+// pick prompts are shown.
+export const TRANSITION_LEDGER_SIZE = 4;
+
+// The transition the model ASKED FOR on a pick, as the anti-streak ledger
+// counts it: entry gestures first, then the exits, else 'normal'. A length-cap
+// auto-washout is the controller's, not the model's, so it is no ask at all —
+// null keeps it invisible to the ledger in both directions. One rule for the
+// drain's ledger and the prompts' preview of picks it has not reached yet.
+export function transitionAskOf(track: Track): TransitionEffect | 'normal' | null {
+  if (track.sweep) return 'sweep';
+  if (track.blend) return 'blend';
+  if (track.dissolve) return 'dissolve';
+  if (track.chop) return 'chop';
+  if (track.loop) return 'loop';
+  if (track.washout && !track.washoutAuto) return 'washout';
+  return track.washoutAuto ? null : 'normal';
 }
 
 export function pickLinkInterval() {

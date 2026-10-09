@@ -8,6 +8,10 @@ export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
 // immediately.
 const MAX_HOLD_MS = 120_000;
 
+/** Ceiling on the listener's buffer behind the live edge, in seconds:
+ *  useStationFeed clamps the station's `stream.bufferSeconds` to it. */
+export const MAX_LEAD_SECONDS = 60;
+
 export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
   const raw = turn?.meta?.airedAt;
   if (typeof raw !== 'string') return null;

@@ -500,6 +500,7 @@ export default function ShowsPanel() {
 
       {shows.length === 0 && (
         <EmptyState
+          art="calendar"
           title="No shows scheduled"
           description="Add one to start programming the week."
         />

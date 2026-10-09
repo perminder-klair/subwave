@@ -134,8 +134,12 @@ every feed skill gets the same behaviour:
   next fire offers the ones after them rather than repeating. That memory is
   per-skill and lives for as long as the controller runs.
 - A fetch that fails or times out stands the segment down instead of letting the
-  DJ invent one — the same grounding rule every data-backed skill follows. Set
-  `requiresData: false` if your skill would rather write from its brief.
+  DJ invent one — the same grounding rule every data-backed skill follows. So
+  does a feed with **nothing fresh left**: once every item has aired, or when the
+  feed has no items at all, the tool returns `{ available: false }` rather than
+  an empty list, and **Run now** or a `cron:` reports that it stood down instead
+  of ordering a line with nothing in it. Set `requiresData: false` if your skill
+  would rather write from its brief.
 
 The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
 *Max items*, so a feed can be added, changed or cleared without touching disk.
@@ -262,7 +266,9 @@ the segment is required to produce a line, and the model is not offered a "stay
 silent" option.
 
 The one exception is the case where there is nothing to write from. If your
-skill has a `tool.mjs` and it returns `{ available: false }` or fails, the
+skill has a data tool — its own `tool.mjs`, or the one a
+[`feed:`](#feeds-without-code) line generates — and it returns
+`{ available: false }` or fails, the
 forced run **stands down** rather than ordering a line anyway: nothing airs, and
 the reason is logged (and returned to **Run now** as `aired: false`). Without
 that, a skill handed no facts and told it must speak can only invent them — which
@@ -536,7 +542,10 @@ by other operators. It's fetched **live** from the
 repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
-ever shipped or written, so installing from it never runs third-party code.
+ever shipped or written, so installing from it never runs third-party code. A
+catalog skill may still declare a [`feed:`](#feeds-without-code), which is a URL
+rather than code: install writes it into the skill's own `SKILL.md`, the modal
+shows which site it reads, and you can change or clear it like any other feed.
 
 ### Sharing your own
 

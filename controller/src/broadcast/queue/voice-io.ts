@@ -7,7 +7,7 @@ import { randomBytes } from 'node:crypto';
 import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
-import { sleep } from './pure.js';
+import { sleep, type Interposed } from './pure.js';
 import { awaitVoiceAir } from './voice-marker.js';
 
 const _handoffChains: Map<string, Promise<void>> = new Map();
@@ -237,6 +237,36 @@ export function jingleAiredAtMs(filename: string): number {
   } catch {
     return 0;
   }
+}
+
+// What the mixer placed between the previous song and the one starting now, if
+// anything: the latest jingle, bed or pause-and-talk marker stamped after the
+// previous song started. All three are written at cross-FEED time, a whole
+// song after `prevStartedMs` (itself a tick late), so the comparison has
+// minutes of margin. A marker from before the previous song — the files are
+// never deleted — is not after it and so never counts. Unreadable or absent
+// markers count as nothing interposed: this only labels a record.
+export function interposedSince(prevStartedMs: number, now = Date.now()): Interposed | null {
+  if (!Number.isFinite(prevStartedMs) || prevStartedMs <= 0) return null;
+  const markers: Array<[Interposed, string]> = [
+    ['jingle', config.liquidsoap.jinglePlayingFile],
+    ['bed', config.liquidsoap.bedPlayingFile],
+    ['break', config.liquidsoap.pauseTalkPlayingFile],
+  ];
+  let found: Interposed | null = null;
+  let latest = 0;
+  for (const [kind, file] of markers) {
+    try {
+      const startedMs = Number(JSON.parse(readFileSync(file, 'utf8'))?.startedAt) * 1000;
+      if (Number.isFinite(startedMs) && startedMs > prevStartedMs && startedMs <= now && startedMs > latest) {
+        found = kind;
+        latest = startedMs;
+      }
+    } catch {
+      // no marker — nothing of this kind has aired
+    }
+  }
+  return found;
 }
 
 // Bound a jingle hold by remaining time, its own window, and the absolute ceiling. Forecasts
