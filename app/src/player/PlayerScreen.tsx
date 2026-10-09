@@ -28,6 +28,7 @@ import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
 import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
+import { useStationGate } from '@/hooks/useStationGate';
 import { useStreamFormat } from '@/hooks/useStreamFormat';
 import { useTrackLike } from '@/hooks/useTrackLike';
 import type { StationApi } from '@/lib/api';
@@ -44,6 +45,7 @@ import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
+import StationGate from './StationGate';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
@@ -162,7 +164,14 @@ const RequestPage = memo(function RequestPage({
 });
 
 export default function PlayerScreen() {
-  const { api } = useStation();
+  const {
+    api,
+    name: savedStationName,
+    stationPassword,
+    loginPassword,
+    rememberStationPassword,
+    forgetStationPassword,
+  } = useStation();
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
@@ -209,6 +218,22 @@ export default function PlayerScreen() {
     artworkUrl: coverSrc,
   });
   const { tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted } = player;
+
+  // Private station (#478): the private player hides the whole face until the
+  // password is in ('checking' counts as hidden, so a saved password still
+  // being verified cannot flash it); stream-only auth prompts over the face.
+  const gate = useStationGate({
+    api,
+    privacy: state.privacy,
+    stationPassword,
+    loginPassword,
+    rememberStationPassword,
+    forgetStationPassword,
+    tunedIn,
+    status,
+    stop,
+  });
+  const hideFace = gate.solid && gate.phase !== 'ok';
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
@@ -336,9 +361,36 @@ export default function PlayerScreen() {
     if (h > 0) setHeaderInset((prev) => (Math.abs(prev - h) > 0.5 ? h : prev));
   }, []);
 
+  // A sheet is a Modal, so it would sit above the prompt and stay usable.
+  useEffect(() => {
+    if (gate.phase === 'prompt') setActiveSheet(null);
+  }, [gate.phase]);
+
+  // The pager unmounts behind a solid gate; bring it back on the home page.
+  useEffect(() => {
+    if (!hideFace) return;
+    activeRef.current = HOME_INDEX;
+    setActive(HOME_INDEX);
+    if (pagerW > 0) scrollX.setValue(HOME_INDEX * pagerW);
+  }, [hideFace, pagerW, scrollX]);
+
   const glassFilm = mode === 'light' ? 'rgba(255,255,255,0.22)' : `${colors.ink}12`;
 
   const tint = coverColors.vibrant;
+  const gateStationName = stationName || savedStationName;
+
+  if (hideFace) {
+    return (
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
+        <StationGate
+          checking={gate.phase !== 'prompt'}
+          solid
+          stationName={gateStationName}
+          unlock={gate.unlock}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -466,6 +518,10 @@ export default function PlayerScreen() {
           />
         </View>
       </SafeAreaView>
+
+      {gate.phase === 'prompt' ? (
+        <StationGate checking={false} solid={false} stationName={gateStationName} unlock={gate.unlock} />
+      ) : null}
 
       <Sheet
         open={activeSheet !== null}

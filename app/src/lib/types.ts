@@ -232,6 +232,11 @@ export interface StationState {
   locale?: StationLocale;
   /** Station-wide listener-player UI toggles (from GET /state). */
   ui?: { boothBuddy?: boolean };
+  /** Private-station locks (#478) — booleans only, never the password.
+   *  `privatePlayer` hides the player until the station password is given;
+   *  `listenerAuth` makes every stream mount demand it. Absent on an older
+   *  controller = fully public. */
+  privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
 }
 
 /** A single turn in the live DJ session. After a hard roll, GET /session
