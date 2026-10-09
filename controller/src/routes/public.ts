@@ -29,6 +29,7 @@ import { resolveSilenceTrim } from '../music/silence-trim.js';
 import { playableDurationSec } from '../broadcast/drain-policy.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { requireAdminUi } from '../middleware/auth.js';
 import { forwardedByProxy, listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
 import { resolveThemeProvenance } from '../util/theme-provenance.js';
@@ -712,10 +713,17 @@ router.get('/shows/community', async (req, res) => {
 });
 
 // Place-name lookup proxied over Open-Meteo's keyless geocoding API (the
-// controller owns all external IO). Unauthenticated because onboarding runs
-// pre-auth. 502 on upstream failure so the client can fall back to manual entry.
-router.get('/geocode', async (req, res) => {
+// controller owns all external IO). Admin-only: its two callers (the admin
+// Station tab and the onboarding wizard) both run signed in, and Open-Meteo
+// meters by source IP, so an open proxy here spends the same allowance the
+// station's own forecast fetch needs. requireAdminUi, not requireAdmin: the
+// web sign-in handles a 401, so no native Basic dialog. A place name is
+// short; a longer query is refused rather than forwarded. 502 on upstream
+// failure so the client can fall back to manual entry.
+const GEOCODE_QUERY_MAX = 100;
+router.get('/geocode', requireAdminUi, async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : '';
+  if (q.length > GEOCODE_QUERY_MAX) return res.status(400).json({ error: 'query too long' });
   try {
     const results = await geocodePlace(q);
     res.json({ results });
