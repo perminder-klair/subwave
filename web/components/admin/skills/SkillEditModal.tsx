@@ -620,7 +620,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           label: '↗ Share to community',
           onClick: shareToCommunity,
           title: 'Open a prefilled GitHub issue to share this skill with the community',
-          hidden: !(isEdit && custom && !hasTool),
+          hidden: !(isEdit && custom && !hasTool && !toolPending),
         },
       ]}
       primary={[
