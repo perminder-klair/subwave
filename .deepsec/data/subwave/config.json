@@ -9,7 +9,8 @@
     "**/node_modules/**",
     "**/.next/**",
     "app/ios/**",
-    "app/android/**"
+    "app/android/**",
+    ".claude/**"
   ],
   "priorityPaths": [
     "controller/src/routes/",

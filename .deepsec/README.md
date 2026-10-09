@@ -16,9 +16,9 @@ Currently configured project: `subwave` (target: `..`).
    `revalidate` / `triage`); deepsec auto-detects and reuses the
    subscription. See
    `node_modules/deepsec/dist/docs/vercel-setup.md` after install.
-3. Open the parent repo in your coding agent (Claude Code, Cursor, …)
-   and have it follow `data/subwave/SETUP.md` to fill in
-   `data/subwave/INFO.md`.
+3. `data/subwave/INFO.md` is already filled in. Keep it current when
+   a new public route, gate, import path or outbound fetch lands — it
+   is the threat model every `process` batch is judged against.
 
 ## Daily commands
 
@@ -51,10 +51,11 @@ in your agent to fill in INFO.md.
 ## Layout
 
 ```
-deepsec.config.ts        Project list (one entry per scanned repo)
+deepsec.config.ts        Project list + the inline plugin wiring matchers/
+matchers/                Custom matchers for .sh and .liq (no built-in covers them)
 data/subwave/
   INFO.md                Repo context — checked into git, hand-curated
-  SETUP.md               Agent setup prompt — checked in, deletable
+  config.json            ignorePaths / priorityPaths / promptAppend (scan reads ONLY this)
   project.json           Generated (gitignored)
   files/                 One JSON per scanned source file (gitignored)
   runs/                  Run metadata (gitignored)
