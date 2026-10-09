@@ -1,14 +1,7 @@
 'use client';
 
-// The one place player code talks to a controller. Every fetch and every
-// controller-relative URL (covers, persona avatars) is built here from a
-// StationOrigin, so pointing the player at another station means swapping the
-// origin (stationOrigin.ts) — no call site hardcodes a path.
-//
-// Response handling is deliberately per-endpoint: feed endpoints parse JSON
-// without an ok-check, /schedule and /themes throw on non-OK, /request/:id maps
-// 404 to status 'unknown', the beacon is fire-and-forget. Keep it that way;
-// this module is plumbing, not policy.
+// Build controller URLs from StationOrigin. Preserve endpoint-specific error handling: feed JSON,
+// throwing schedule/themes reads, unknown request 404s, and best-effort beacons.
 
 import { useMemo } from 'react';
 import {
@@ -69,9 +62,9 @@ export interface StationClient {
    *  Empty/nullish input stays '' so `<img>` fallbacks keep working. */
   resolve(path: string | null | undefined): string;
   coverUrl(subsonicId: string): string;
-  nowPlaying(): Promise<NowPlayingResponse>;
-  state(): Promise<StationState>;
-  session(): Promise<SessionPayload>;
+  nowPlaying(init?: { signal?: AbortSignal }): Promise<NowPlayingResponse>;
+  state(init?: { signal?: AbortSignal }): Promise<StationState>;
+  session(init?: { signal?: AbortSignal }): Promise<SessionPayload>;
   /** The caller owns timeout/abort. */
   health(init?: { signal?: AbortSignal }): Promise<Response>;
   schedule(): Promise<SchedulePayload>;
@@ -97,9 +90,9 @@ export function createStationClient(origin: StationOrigin): StationClient {
     origin,
     resolve: path => (path ? `${api}${path}` : ''),
     coverUrl: subsonicId => `${api}/cover/${encodeURIComponent(subsonicId)}`,
-    nowPlaying: () => fetch(`${api}/now-playing`).then(r => json<NowPlayingResponse>(r)),
-    state: () => fetch(`${api}/state`).then(r => json<StationState>(r)),
-    session: () => fetch(`${api}/session`).then(r => json<SessionPayload>(r)),
+    nowPlaying: init => fetch(`${api}/now-playing`, { signal: init?.signal }).then(r => json<NowPlayingResponse>(r)),
+    state: init => fetch(`${api}/state`, { signal: init?.signal }).then(r => json<StationState>(r)),
+    session: init => fetch(`${api}/session`, { signal: init?.signal }).then(r => json<SessionPayload>(r)),
     health: init => fetch(`${api}/health`, { cache: 'no-store', signal: init?.signal }),
     schedule: async () => {
       const r = await fetch(`${api}/schedule`);

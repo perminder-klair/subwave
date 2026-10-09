@@ -1,11 +1,5 @@
-// Commit-then-skip: an operator skip must air the committed pick, not a random
-// auto.m3u fill (#1300 bug 6). Pair-aware drain holds the tail pick unsent for
-// most of a track, so POST /dj/skip force-drains, waits for dj_queue_status to
-// report a ready request, then skips. Pure and I/O-free for the unit test.
-
-// Upper bound on the commit wait: a drain (5s/write), the 1s queue poll and a
-// subhttp fetch. Past it the skip proceeds anyway — operator intent to end THIS
-// track outranks what fills the slot.
+// Force-drain and await a resolved request before an operator skip. Proceed after the bounded
+// wait even if unconfirmed; ending the current track takes priority. #1300.
 export const SKIP_COMMIT_WAIT_MS = 20_000;
 
 // How often the wait loop re-reads queue state + probes dj_queue_status.

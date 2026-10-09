@@ -25,7 +25,7 @@ import {
   preferVocals,
   onlyVocals,
   applyStrictLocks,
-} from '../src/music/show-filter.ts';
+} from '../src/music/show-filter.js';
 
 // Bare shapes — no `id`, so nothing falls through to a library lookup and the
 // assertions are about the ranges alone.

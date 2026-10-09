@@ -1,10 +1,5 @@
-// The one place that answers "does this operator-supplied path point inside the
-// state dir?" (GET /debug/state-tree). Never inline a second copy: a wrong
-// answer here is a filesystem read primitive over the whole host.
-//
-// The realpath containment check stops a symlink planted in the state dir from
-// exposing /etc or the music library, and stays compatible with the documented
-// bind mount at <state>/stems (a bind mount realpaths INSIDE root).
+// Use realpath containment for /debug/state-tree to block symlink escapes.
+// A bind mount under state/stems still resolves inside the state root.
 
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, join, normalize, resolve, sep } from 'node:path';

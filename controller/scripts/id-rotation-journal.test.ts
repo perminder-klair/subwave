@@ -16,7 +16,7 @@ const NEW = '6VHl3uR4kss6sUPKA8Cwnk';
 test('a journal write failure rolls back adoption, including tags and vectors', () => {
   db.upsertTrackMeta(OLD, { title: 'Song', artist: 'Artist' });
   db.upsertTrackTags(OLD, { moods: ['warm'], energy: 'medium', source: 'llm', confidence: 1 });
-  db.upsertTrackVector(OLD, [1, 2, 3, 4, 5, 6, 7, 8]);
+  db.upsertTrackVector(OLD, [1, 2, 3, 4, 5, 6, 7, 8], db.resolvedEraYearForTrack(OLD));
   db.upsertTrackMeta(NEW, { title: 'Song', artist: 'Artist' });
   // SQLite aborts after the copy operations, at the journal write itself.
   db.runDdl(sql, `CREATE TRIGGER fail_rotation BEFORE INSERT ON id_rotation_journal

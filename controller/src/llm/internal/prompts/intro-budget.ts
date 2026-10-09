@@ -34,13 +34,6 @@ export function firstVocalMsFor(track: any): number | null {
   return shiftOnsetMs(track, first);
 }
 
-// Delegates to library.bpmKeyFor — the shared resolver that prefers the
-// analyzer's numbers and treats Navidrome's ID3-derived `bpm: 0` as unknown
-// rather than "carries analysis" (#862).
-export function bpmKeyFor(track: any): { bpm: number | null; key: string | null } {
-  return library.bpmKeyFor(track);
-}
-
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no
 // usable runway, so un-analysed tracks are never constrained.
 //

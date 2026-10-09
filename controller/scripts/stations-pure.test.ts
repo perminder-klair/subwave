@@ -56,7 +56,7 @@ for (const f of ['setup-config.json', 'library.db', 'moods.json', 'playlist-reci
   assert.equal(duplicateAction(f), 'skip');
 // skip: runtime + listener history + everything unknown (allowlist default)
 for (const f of [
-  'session.json', 'sessions', 'logs', 'archive', 'queue.json',
+  'session.json', 'sessions', 'logs', 'archive', 'queue.json', 'show-preparations.json',
   'recent-plays.json', 'now-playing.json', 'jingle-playing.json',
   'bed-playing.json', 'listeners.jsonl', 'audience.json', 'likes.json',
   'seen-curiosity.json', 'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
@@ -67,7 +67,7 @@ for (const f of [
 // --- conversion classification (spec §6) --------------------------------------
 for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
   assert.equal(conversionAction(f), 'keep', f);
-for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json'])
+for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json', 'show-preparations.json'])
   assert.equal(conversionAction(f), 'move', f);
 
 console.log('stations-pure.test: OK');

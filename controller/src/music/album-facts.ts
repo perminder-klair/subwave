@@ -1,10 +1,5 @@
-// The album cooldown's key, resolved against the library (#1485 FR 3).
-//
-// `music/recency.ts` owns the key and the exemption rule and stays pure, but
-// most candidates (raw Subsonic children, the agent's `seen` projection, play
-// rows) carry no compilation flags. This is the one place they are fetched, and
-// every consumer injects THIS function rather than `albumKey` directly so both
-// pick paths key one catalogue one way.
+// Resolve missing compilation flags from the library before applying recency album keys. All
+// picker consumers inject this resolver. #1485 FR 3.
 
 import * as library from './library.js';
 import { albumKey, type CandidateLike } from './recency.js';

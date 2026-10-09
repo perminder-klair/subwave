@@ -1,3 +1,4 @@
+import { showPreparation } from '../broadcast/show-preparation.js';
 // Admin-gated DJ command center behind /admin/dash. Manual triggers are an
 // operator override: they bypass the shouldFire frequency gate and cooldowns.
 import express from 'express';
@@ -16,6 +17,7 @@ import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, ru
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { communitySkillConfig } from '../community/registry.js';
 import {
   builtinSkillFileSchema,
   customSkillFileSchema,
@@ -110,6 +112,21 @@ const SAY_TEXT_MAX = 500;
 // 'link' → intro.txt (light duck, voice over the track).
 const SAY_KINDS = ['dj-speak', 'link'];
 
+router.get('/dj/show-preparation', requireAdmin, async (_req, res) => {
+  const context = await getFullContext();
+  res.json({ status: showPreparation.read({ context }).status });
+});
+
+router.post('/dj/show-preparation/retry', requireAdmin, async (_req, res) => {
+  try {
+    const context = await getFullContext();
+    const view = await showPreparation.retry({ context });
+    res.json({ status: view.status });
+  } catch (error) {
+    res.status(409).json({ error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 router.get('/dj/skills', requireAdmin, (req, res) => {
   res.json({ skills: skillCatalog() });
 });
@@ -184,7 +201,9 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
   if (rejectInvalidCron(res, fields)) return;
 
   try {
-    await writeSkillFile(fields);
+    // A catalog feed is written as the skill's own knob, so a code-free catalog
+    // skill installs with a data tool rather than a brief alone.
+    await writeSkillFile({ ...fields, ...communitySkillConfig(cs) });
     await loadSkills();
     syncSkillCrons();
     queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);

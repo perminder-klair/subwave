@@ -1,3 +1,5 @@
+import { prepareEpisodeContext, showPreparation } from '../broadcast/show-preparation.js';
+import type { ArtistEpisodeSource } from './episode-source.js';
 // The "pool path": build a balanced candidate pool from 7 Subsonic/library
 // sources, one LLM call to pick one. Fallback for the session DJ agent.
 
@@ -222,7 +224,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null, episodeSource: ArtistEpisodeSource | null = null) {
   await library.load();
   const { minTrackSec, maxTrackSec } = lengthLimits;
   // Prohibited rows must not consume a source's finite sampling slots.
@@ -267,6 +269,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     return out;
   };
 
+  if (episodeSource) add('episode-artist', episodeSource.tracks);
+  else {
   // 1. Similar-songs from the expected predecessor — strongest contextual signal.
   if (currentTrack?.id) {
     try {
@@ -506,6 +510,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
+  }
+
   // Strict playlist: drop off-playlist candidates before ranking, never-starving
   // to the unfiltered pool only if none survived. Recency still applies below.
   // Exclusions must precede soft preferences and the cap. Otherwise an excluded
@@ -532,7 +538,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   }
 
   // Cap per artist; a strict playlist anchor is intentionally single-artist.
-  const MAX_PER_ARTIST = strictPlaylist ? Infinity : 3;
+  const MAX_PER_ARTIST = episodeSource || strictPlaylist ? Infinity : 3;
   const perArtist = new Map<string, number>();
   // Soft re-rank runs BEFORE the cap so compatible tracks survive the slice.
   const curAnalysis = rankTarget
@@ -589,7 +595,7 @@ function summariseRecent(queue: { current?: QueueEntry | null; history: QueueEnt
   return items
     .filter((i) => i?.track?.title)
     .map((i) => {
-      const tags = i.track.id ? library.get(i.track.id) : null;
+      const tags = i.track.id ? library.getPlaybackMeta(i.track.id) : null;
       // Omitted, not nulled: nulls on un-tagged entries are wasted tokens.
       return {
         title: i.track.title,
@@ -612,6 +618,8 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // cascade, set only by the agent path's back-to-back artist guard.
 export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}) {
   await library.load();
+  ctx = await prepareEpisodeContext(ctx);
+  const episodeSource = showPreparation.read({ context: ctx }).music;
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total`, which counts only tagged tracks.
   const librarySize = stats.mirrorTotal || stats.total;
@@ -620,7 +628,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // Same configured SLOTS and name fold as the agent guard. 0 disables this
   // preference; the old library-scaled hours window did not honour that knob.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
-  const recentArtistRoots: Set<string> = queue.neighbourArtistRoots(varietyWindow);
+  const recentArtistRoots: Set<string> = episodeSource ? new Set() : queue.neighbourArtistRoots(varietyWindow);
   // Album cooldown: operator-set hours, not library-scaled. 0 = empty set.
   const recentAlbums = queue.recentAlbumKeys(settings.get().picker?.albumHours ?? 0);
   // Snapshot the predecessor this pick is expected to follow: the queued tail
@@ -657,6 +665,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     {
       show: activeShow,
       playlistTracks: playlistPool?.tracks ?? null,
+      episodeTracks: episodeSource?.tracks,
       excludedIds,
       resolvedGenres: strictGenreResolution.genres,
       minTrackSec,
@@ -675,7 +684,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource);
 
   // Excluded playlists: hard drop, no never-starve fallback.
   const candidates = excludedIds

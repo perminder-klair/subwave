@@ -377,6 +377,11 @@ export interface AnalyzeRequestOpts {
   // Stem-cache target dir on the shared volume; implies the Demucs separation
   // even without `vocal`.
   stems_dir?: string;
+  // Write stems only if the stems root (the parent of stems_dir) carries the
+  // `.subwave-stems` marker (music/stem-cache.ts). Lets an analyzer on another
+  // machine refuse to write into its own unmounted share; an older backend
+  // ignores the field.
+  stems_require_marker?: boolean;
   // Baseline analysis is already current; compute only the CLAP vector.
   embedding_only?: boolean;
 }
@@ -991,6 +996,7 @@ export async function analyzePathWithUrlFallback(
     const urlOpts = { ...opts };
     delete urlOpts.complete;
     delete urlOpts.stems_dir;
+    delete urlOpts.stems_require_marker;
     return analyze(songId, urlOpts);
   }
 }

@@ -1,18 +1,6 @@
-// Embedding models — the library tagger uses text embeddings for
-// KNN-propagating moods (see music/embeddings.ts + music/tag-library.ts).
-// Provider follows `settings.llm` by default — same auth, same dependency
-// surface — but operator can override either provider or model via
-// `settings.embedding.{provider,model}`.
-//
-// Default model per provider (all chosen for the homelab/single-host use case):
-//   ollama / unknown    → nomic-embed-text                (768d, free, local)
-//   openai / compat     → text-embedding-3-small          (1536d, ~$0.02/1M)
-//   google              → text-embedding-004              (768d)
-//   openrouter          → openai/text-embedding-3-small   (OpenAI-compatible
-//                                                          embeddings endpoint)
-//   anthropic           → falls back to openai embeddings (Anthropic has no
-//                                                          first-party API as
-//                                                          of 2026-05)
+// Embeddings inherit LLM provider/auth unless settings.embedding overrides them.
+// Anthropic has no embedding endpoint here, so its default uses OpenAI.
+// Model defaults are declared below; see music/embeddings.ts and music/tag-library.ts.
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';

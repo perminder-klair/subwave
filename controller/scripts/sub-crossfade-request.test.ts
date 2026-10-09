@@ -31,12 +31,13 @@
 //    critical path, and a throw there would turn a listener request into a 500.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-sub-crossfade-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-sub-crossfade-'));
 process.env.STATE_DIR = stateRoot;
 
 // An 18s crossfade — the figure the failure was measured at. minGapMs is well
@@ -141,13 +142,13 @@ test('the span reads the same end the cue_out was derived from', () => {
 test('an untrimmed track spans its whole tagged duration', () => {
   // No measurements and no library row → nothing to trim, so the file plays
   // whole. Absent input must coerce to today's behaviour, not to zero.
-  assert.equal(playableSpanSec({ id: 'unmeasured', title: 'X', artist: 'Y', duration: 45 }), 45);
+  assert.equal(playableSpanSec({ id: 'unmeasured', duration: 45 }), 45);
 });
 
 test('an unknown length yields null, never zero', () => {
   // Null is "no answer" and the predicate refuses to act on it. A zero here
   // would read as a 0-second track and warn on every unanalysed request.
-  assert.equal(playableSpanSec({ id: 'nothing', title: 'X', artist: 'Y' }), null);
+  assert.equal(playableSpanSec({ id: 'nothing' }), null);
   assert.equal(playableSpanSec(null), null);
 });
 
@@ -160,7 +161,7 @@ test('the span resolves through library.get for the shape real callers pass', ()
     title: 'DB Sting', artist: 'Imaging', album: 'Imaging', duration: 20,
   } as never);
   db.upsertTrackAnalysis('db-stinger', {
-    bpm: 120, key: 'C', introMs: 0, confidence: 1,
+    bpm: 120, musicalKey: 'C', introMs: 0, confidence: 1,
     leadSilenceMs: 4_000, tailSilenceMs: 4_000, tailStartMs: 16_000,
   });
   assert.equal(playableSpanSec({ id: 'db-stinger', duration: 20 }), 12.5);

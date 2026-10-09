@@ -1,9 +1,5 @@
-// Rewrites incoming system deep links before Expo Router matches them.
-//
-// RNTP routes a media-notification tap through a sentinel URL,
-// `trackplayer://notification.click`, which has no Expo Router route and lands
-// on +not-found. Catch that sentinel under any scheme and send it to the
-// player at `/`; everything else passes through untouched.
+// RNTP notification taps use trackplayer://notification.click, which has no
+// Expo Router route. Send that sentinel to the player under any scheme.
 
 import type { NativeIntent } from 'expo-router';
 

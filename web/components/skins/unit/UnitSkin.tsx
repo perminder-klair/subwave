@@ -1,9 +1,5 @@
 'use client';
 
-// Everything that moves is a co-located keyframe (Unit.module.css); the one
-// exception is the display's level meter, which follows the real stream spectrum
-// and writes each bar's scaleY straight to the DOM. Playback churn never
-// re-renders React.
 
 import {
   useEffect,
@@ -13,6 +9,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react';
+import { Heart, Play } from 'lucide-react';
 import styles from './Unit.module.css';
 import {
   usePlayerActions,
@@ -667,8 +664,9 @@ export default function UnitSkin(_props: SkinProps) {
                     like.available && !like.liked ? 'cursor-pointer' : 'cursor-default',
                   )}
                 >
-                  <span className="font-mono text-[9px] font-bold tracking-[0.16em] text-[var(--accent)] uppercase">
-                    now{like.count > 0 ? ` · ${like.count} ♥` : ''}
+                  <span className="flex items-center gap-1 font-mono text-[9px] font-bold tracking-[0.16em] text-[var(--accent)] uppercase">
+                    now
+                    {like.count > 0 && <> · {like.count} <Heart className="size-2.5 fill-current" /></>}
                   </span>
                   <span className="line-clamp-2 h-[2.2em] font-display text-[clamp(15px,1.4vw,20px)] leading-[1.05] font-extrabold text-[var(--u-keytext)]">
                     {title}
@@ -843,7 +841,7 @@ export default function UnitSkin(_props: SkinProps) {
                   like.pending && 'opacity-60',
                 )}
               >
-                {like.liked ? '♥' : '♡'}
+                <Heart className={cn('size-3.5', like.liked && 'fill-current')} />
                 {like.count > 0 && <span className="text-[10px] tabular-nums">{like.count}</span>}
               </button>
             )}
@@ -947,10 +945,11 @@ export default function UnitSkin(_props: SkinProps) {
             <span
               className={cn(
                 styles.engraved,
-                'text-center font-mono text-[11px] font-bold tracking-[0.22em] uppercase',
+                'flex items-center justify-center gap-2 font-mono text-[11px] font-bold tracking-[0.22em] uppercase',
               )}
             >
-              ▶ power on · tune in
+              <Play className="size-2.5 fill-current" strokeWidth={0} />
+              power on · tune in
             </span>
           </span>
         </button>

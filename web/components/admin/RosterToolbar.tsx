@@ -1,20 +1,5 @@
 'use client';
 
-/* The search / filter / sort bar above a roster list.
- *
- * Shows and personas share this one; skills does NOT yet, and that is the
- * honest state rather than an oversight. SkillsPanel's bar carries a
- * three-way DJ-or-show select and a five-way status select whose options are
- * skill-specific, and folding those in as props would make this component the
- * union of three screens instead of the shape they have in common. What it
- * owns is the part that IS common — the search box, the sort select, Clear,
- * the cards/list toggle and the tag chip row — with `extraFilters` as the slot
- * for whatever one panel needs and the others don't. Skills can move over
- * behind that slot later without this growing a skill-shaped prop.
- *
- * It renders no state of its own: every value and setter belongs to the panel,
- * because the panel is what has to hand the same filter to its ordering
- * function. */
 
 import type { ReactNode } from 'react';
 import { Search, X } from 'lucide-react';
@@ -69,8 +54,6 @@ export function RosterToolbar<S extends string>({
   return (
     <section className="card p-3.5">
       <div className="flex flex-wrap items-center gap-2">
-        {/* Phones get the search on its own row and the selects full-width;
-            `sm:` restores the single desktop row of fixed widths. */}
         <div className="relative w-full flex-none sm:min-w-[200px] sm:flex-1">
           <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
           <Input
@@ -97,7 +80,6 @@ export function RosterToolbar<S extends string>({
             <X size={14} /> Clear
           </Btn>
         )}
-        {/* Filters and sort drive both views. */}
         <div className="ml-auto flex items-center gap-2">
           {summary && <span className="caption">{summary}</span>}
           <RosterViewToggle view={view} onChange={onViewChange} />

@@ -1,10 +1,6 @@
 'use client';
 
-// Skill Edit Card -- the segment-sheet editor, shown as a modal over
-// /admin/skills. Creates a custom skill (POST /dj/skills) or edits a custom or
-// built-in one (PUT /dj/skills/:id/file). The controller is the validation gate.
-// The on/off toggle and Run now are LIVE operator actions and take no part in
-// the Save/dirty flow, which only writes the SKILL.md file fields.
+// Enable and Run now act immediately; Save writes the skill file.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -492,6 +488,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       context: contextValue.join(', '),
       window: windowValue === 'commute' ? 'commute' : '',
       cohosts: cohostsValue ? 'true' : '',
+      // The form's feed fields are plain inputs, which GitHub prefills by id.
+      feed: config.feed,
+      'feed-max-items': config.feedMaxItems,
     });
     window.open(url, '_blank', 'noopener,noreferrer');
   };
@@ -720,7 +719,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* Cron timer — optional dedicated schedule that fires the skill immediately */}
             <div className="sw-section">
               <div style={sectionLabel}>CRON TIMER — FIRE ON A FIXED SCHEDULE</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
@@ -797,7 +795,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               />
             </div>
 
-            {/* Window — custom skills only (built-in window isn't editable) */}
             {custom && (
               <div className="sw-section">
                 <Controller

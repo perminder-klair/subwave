@@ -15,12 +15,12 @@
 //    and the Icecast row must key the same listener to the same entry.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-conn-country-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-conn-country-'));
 
 const { resolveConnectionCountry } = await import('../src/broadcast/listener-country.js');
 const {

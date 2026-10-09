@@ -227,18 +227,12 @@ export default defineConfig([
     },
   },
 
-  // Exemption for the Booth Sprite — a pure-CSS mascot ported from a Claude
-  // Design prototype (docs/Booth-Sprite.html). Every span's geometry is computed
-  // per-mood and per-size (face/antenna dimensions, tilt, scale) over the theme
-  // tokens, so it's intrinsically inline-styled and can't be static Tailwind
-  // utilities — same dynamic-styling deal as the Observatory above.
-  //
-  // ModelCombobox is also here: its dropdown is portalled to <body> and
+  // ModelCombobox is here because its dropdown is portalled to <body> and
   // absolutely positioned from a runtime getBoundingClientRect (top/left/width),
   // so the position style is intrinsically dynamic. It was previously inline in
   // SettingsPanel (already exempt) before being extracted for reuse.
   {
-    files: ['components/BoothBuddy.tsx', 'components/admin/SettingsPanel.tsx', 'components/admin/llm/ModelCombobox.tsx'],
+    files: ['components/admin/SettingsPanel.tsx', 'components/admin/llm/ModelCombobox.tsx'],
     rules: {
       'react/forbid-dom-props': 'off',
     },
@@ -249,8 +243,8 @@ export default defineConfig([
   // Card"). Its styling is intrinsically state-driven: per-chip on/off fills,
   // active-preset inversion, the on-air toggle thumb transform, status colours
   // and the body dim are all computed from the form's live state over the theme
-  // tokens — the same dynamic-styling deal as the Observatory / Booth Sprite
-  // ports above. Its keyframes + pseudo-elements live in app/globals.css under
+  // tokens — the same dynamic-styling deal as the Observatory port above. Its
+  // keyframes + pseudo-elements live in app/globals.css under
   // `.sw-seg`.
   {
     files: ['components/admin/skills/SkillEditModal.tsx'],

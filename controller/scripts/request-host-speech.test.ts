@@ -79,7 +79,7 @@ test('the conversational request agent drops an intro if its captured host chang
     return model.promise;
   };
 
-  const pending = runRequest(queue, ctx(), { requester: 'alice', text: 'play the blue one' });
+  const pending = runRequest(queue, { requester: 'alice', text: 'play the blue one' });
   while (!runArgs) await new Promise(resolve => setImmediate(resolve));
   await settings.update({ shows: [show(B.id)] } as never);
   const song = { id: 'requested-song', title: 'Blue Song', artist: 'Artist', duration: 180 };

@@ -4,6 +4,8 @@ import type { ReactNode } from 'react';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { Pill } from '../ui';
 import { cn } from '../../../lib/cn';
+import { AXO, type DrawnBlock } from '../../skins/axo/geometry';
+import { ROWS as CIPHER_ROWS } from '../../skins/cipher/cipher';
 
 // Each card frames a pure-CSS miniature of that skin's real layout. The motion
 // idles unless a card is the live skin or under the cursor, gated through Tailwind
@@ -206,6 +208,168 @@ function PlatterPreview() {
   );
 }
 
+// The isometric stack in miniature, drawn from the skin's own geometry so the
+// card can't drift from the player: speakers, receiver, tape deck, turntable,
+// every box as its three shaded faces with a heavier silhouette. The record
+// spins and the power ring blinks under the shared play-state gate. Strokes
+// don't scale with the drawing, so a hairline stays a hairline at card size.
+const AXO_TOP = 'fill-bg';
+const AXO_LEFT = 'fill-[color-mix(in_oklab,var(--ink)_4%,var(--bg))]';
+const AXO_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_10%,var(--bg))]';
+const AXO_WELL = 'fill-[color-mix(in_oklab,var(--ink)_16%,var(--bg))]';
+
+/** One box: top (w×d), front-left (w×h) and front-right (d×h) faces. */
+function AxoBox({ b }: { b: DrawnBlock }) {
+  return (
+    <>
+      <rect transform={b.T} width={b.w} height={b.d} className={AXO_TOP} />
+      <rect transform={b.L} width={b.w} height={b.h} className={AXO_LEFT} />
+      <rect transform={b.R} width={b.d} height={b.h} className={AXO_RIGHT} />
+    </>
+  );
+}
+
+function AxoPreview() {
+  const posts = [AXO.pBL, AXO.pBR];
+  const front = [AXO.pFL, AXO.pFR];
+  return (
+    <div className="flex h-full w-full items-stretch">
+      <div className="grid w-[30%] content-start gap-1.5 border-r border-ink p-2.5 pt-5">
+        <span className="h-[3px] w-1/2 bg-vermilion" />
+        <span className="h-[5px] w-full bg-ink" />
+        <span className="h-[3px] w-2/3 bg-muted" />
+        <span className="mt-1 h-[3px] w-full bg-soft-border" />
+        <span className="h-[3px] w-4/5 bg-soft-border" />
+      </div>
+      <div className="relative flex-1 bg-[radial-gradient(circle,var(--soft-border)_1px,transparent_1.5px)] bg-size-[9px_5.2px]">
+        <svg
+          viewBox="-250 -420 590 690"
+          className="absolute inset-0 size-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+          strokeWidth={0.7}
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <AxoBox b={AXO.spL} />
+          <path d={AXO.spL.sil} strokeWidth={1.2} />
+          {posts.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBox b={AXO.s0} />
+          <AxoBox b={AXO.rcv} />
+          <g transform={AXO.rcv.L}>
+            <rect x="12" y="42" width="112" height="20" className="fill-ink" />
+            <circle cx="186" cy="38" r="22" className={AXO_WELL} />
+            <circle
+              cx="142"
+              cy="24"
+              r="12"
+              strokeWidth={1.2}
+              className={cn('stroke-vermilion', BLINK)}
+            />
+          </g>
+          <path d={AXO.rcv.sil} strokeWidth={1.2} />
+          <AxoBox b={AXO.s1} />
+          <AxoBox b={AXO.tape} />
+          <g transform={AXO.tape.L}>
+            <rect x="12" y="8" width="110" height="46" className={AXO_WELL} />
+            <circle cx="44" cy="34" r="10" className="fill-bg" />
+            <circle cx="90" cy="34" r="10" className="fill-bg" />
+            <rect x="134" y="8" width="44" height="14" className="fill-ink" />
+          </g>
+          <path d={AXO.tape.sil} strokeWidth={1.2} />
+          <AxoBox b={AXO.s2} />
+          <path d={AXO.lid} className="fill-[color-mix(in_oklab,var(--ink)_5%,transparent)]" />
+          <AxoBox b={AXO.tt} />
+          <g transform={AXO.tt.T}>
+            <circle cx="96" cy="66" r="57" className={AXO_WELL} />
+            <g className={cn('origin-center [transform-box:fill-box]', REEL)}>
+              <circle cx="96" cy="66" r="52" className={AXO_LEFT} />
+              <circle cx="96" cy="66" r="36" />
+              <circle cx="96" cy="66" r="18" className="fill-vermilion stroke-none" />
+              <line x1="96" y1="16" x2="96" y2="26" strokeWidth={1} />
+            </g>
+            <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} />
+          </g>
+          <path d={AXO.tt.sil} strokeWidth={1.2} />
+          {front.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBox b={AXO.spR} />
+          <g transform={AXO.spR.L}>
+            <circle cx="40" cy="92" r="20" className={AXO_WELL} />
+            <circle cx="40" cy="178" r="31" className={AXO_WELL} />
+          </g>
+          <path d={AXO.spR.sil} strokeWidth={1.2} />
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+// The rotor machine's top deck in miniature, laid out on the desk machine's own
+// grid (1360×800): power key, rotor windows, tape, the lampboard with two
+// bulbs taking turns, and the keyboard in its well.
+const CIPHER_PANEL = 'fill-bg';
+const CIPHER_PLATE = 'fill-[color-mix(in_oklab,var(--ink)_5%,var(--bg))]';
+const CIPHER_WELL = 'fill-[color-mix(in_oklab,var(--ink)_13%,var(--bg))]';
+const CIPHER_SKIRT = 'fill-[color-mix(in_oklab,var(--ink)_12%,var(--bg))]';
+
+function CipherPreview() {
+  const lamps = CIPHER_ROWS.flatMap(({ length: n }, row) =>
+    Array.from({ length: n }, (_, i) => ({ x: (n === 8 ? 316 : 264) + i * 104, y: 285 + row * 54 })),
+  );
+  const keys = CIPHER_ROWS.flatMap(({ length: n }, row) =>
+    Array.from({ length: n }, (_, i) => ({ x: 264 + i * 104, y: 518 + row * 66 })),
+  );
+  return (
+    <div className="flex h-full w-full items-center justify-center p-2.5 pt-5">
+      <svg
+        viewBox="0 0 1360 800"
+        className="h-full w-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+        strokeWidth={0.8}
+        aria-hidden="true"
+      >
+        <rect width="1360" height="788" className={CIPHER_PLATE} strokeWidth={1.2} />
+        {([
+          [20, 20, 164, 200], [198, 20, 440, 200], [652, 20, 688, 200],
+          [20, 234, 164, 214], [198, 234, 964, 214], [1176, 234, 164, 214],
+          [20, 462, 164, 306], [1176, 462, 164, 306],
+        ] as const).map(([x, y, w, h]) => <rect key={`${x}-${y}`} x={x} y={y} width={w} height={h} className={CIPHER_PANEL} />)}
+        <rect x="198" y="462" width="964" height="306" className={CIPHER_WELL} />
+
+        <g transform="translate(102 112)">
+          <circle r="40" className={CIPHER_WELL} />
+          <circle r="28" className={CIPHER_PANEL} />
+          <g transform="rotate(45)">
+            <rect x="-8" y="-36" width="16" height="72" className={CIPHER_PANEL} />
+            <line y1="-14" y2="14" className="stroke-vermilion" strokeWidth={2} />
+          </g>
+        </g>
+        {[278, 418, 558].map(c => (
+          <g key={c}>
+            <rect x={c - 48} y="66" width="70" height="88" className={CIPHER_PANEL} />
+            <rect x={c - 30} y="98" width="34" height="24" className="fill-ink stroke-none" />
+            <rect x={c + 28} y="66" width="20" height="88" className={CIPHER_WELL} />
+          </g>
+        ))}
+        <rect x="678" y="48" width="130" height="7" className="fill-vermilion stroke-none" />
+        <rect x="678" y="80" width="320" height="38" className="fill-ink stroke-none" />
+        <rect x="678" y="138" width="210" height="10" className="fill-muted stroke-none" />
+        <line x1="678" y1="192" x2="1314" y2="192" strokeDasharray="6 5" />
+        <line x1="678" y1="192" x2="930" y2="192" className="stroke-vermilion" strokeWidth={2} />
+
+        {([[46, 299, 84], [1202, 299, 84], [46, 540, 56], [46, 616, 56], [1198, 551, 128]] as const).map(([x, y, h], i) => (
+          <g key={`${x}-${y}`}>
+            <rect x={x} y={y + 8} width={i === 4 ? 120 : 112} height={h} className={CIPHER_SKIRT} />
+            <rect x={x} y={y} width={i === 4 ? 120 : 112} height={h} className={CIPHER_PANEL} />
+          </g>
+        ))}
+        {lamps.map(l => <circle key={`${l.x}-${l.y}`} cx={l.x} cy={l.y} r="25" className={CIPHER_PANEL} />)}
+        <circle cx="888" cy="393" r="25" className={cn('fill-vermilion stroke-none', BLINK)} />
+        <circle cx="1096" cy="285" r="25" className={cn('fill-vermilion stroke-none [animation-delay:525ms]', BLINK)} />
+        {keys.map(k => <circle key={`${k.x}-${k.y}`} cx={k.x} cy={k.y} r="29" className={CIPHER_PANEL} />)}
+        <rect x="472" y="699" width="416" height="36" className={CIPHER_PANEL} />
+      </svg>
+    </div>
+  );
+}
+
 const PREVIEWS: Record<string, () => ReactNode> = {
   classic: ClassicPreview,
   unit: UnitPreview,
@@ -213,6 +377,8 @@ const PREVIEWS: Record<string, () => ReactNode> = {
   subamp: SubampPreview,
   tty: TtyPreview,
   platter: PlatterPreview,
+  axo: AxoPreview,
+  cipher: CipherPreview,
 };
 
 // A neutral wireframe for any skin without a bespoke poster (community skins).

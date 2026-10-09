@@ -17,8 +17,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 
-import { MAX_ENTRIES, resolveStatePath } from '../src/util/state-path.ts';
-import { BadStatePathError, listStateDir } from '../src/util/state-tree.ts';
+import { MAX_ENTRIES, resolveStatePath } from '../src/util/state-path.js';
+import { BadStatePathError, listStateDir } from '../src/util/state-tree.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-statetree-'));
 const outside = mkdtempSync(join(tmpdir(), 'subwave-outside-'));

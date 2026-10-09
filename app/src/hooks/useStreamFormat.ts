@@ -1,8 +1,5 @@
-// Per-station stream-format preference, hydrated from AsyncStorage (defaults
-// render first, then snap to the stored value). `format` is the effective one
-// to tune with: the preference gated on platform decodability and the mounts
-// /now-playing advertises, so a mount turned off drops listeners back to the
-// MP3 floor on their next reconnect.
+// The stored preference is gated on platform support and advertised mounts.
+// Disabled mounts fall back to MP3 on the next reconnect.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {

@@ -1,7 +1,4 @@
-// Shared client for POST /settings/tts/preview, used by VoicePreviewButton and
-// VoicePicker so both audition through the same request shape. The endpoint
-// bypasses the on-air persona AND the silent engine fallback, so an unavailable
-// engine returns a real error rather than quietly playing Piper. No React, no DOM.
+// Previews bypass persona selection and silent engine fallback, returning an error for unavailable engines.
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { AdminResponseError, adminResponse } from '../../../lib/admin-query';
 

@@ -312,6 +312,17 @@ Three things to know before you do it:
   the share with the right `uid=`/`gid=` options) — a stem cache the analyzer
   can't write just means transitions fall back to a plain crossfade, but the
   same warning on `voice/` or `logs/` is worth acting on.
+- **An unmounted share is not read as an empty cache.** The cache root
+  carries a marker file, `.subwave-stems`, written the first time the analysis
+  pass uses the cache (an existing cache gets one on its next pass). If the
+  share is not mounted, the mount point is still there with no marker and no
+  stems in it while the library still has stems recorded, so the controller
+  treats the cache as offline: no stems are written, backfilled or swept, the
+  analysis pass and the hourly sweep log why, and the doctor warns. Mount the
+  share and everything resumes. An analyzer on another machine checks the
+  same marker on its own mount before writing. If you emptied the cache on
+  purpose and want to start again, create the file yourself:
+  `touch /mnt/bigdisk/subwave-stems/.subwave-stems`.
 
 ---
 

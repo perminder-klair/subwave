@@ -4,12 +4,12 @@
 // Run: npm test -- verified-facts-history
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-verified-facts-history-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-verified-facts-history-'));
 
 const library = await import('../src/music/library.js');
 const { linkPrompt } = await import('../src/llm/internal/prompts/scripts.js');

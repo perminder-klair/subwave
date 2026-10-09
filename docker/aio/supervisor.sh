@@ -104,8 +104,8 @@ bootstrap_state_dirs() {
 	# A RELOCATED stem cache (SUBWAVE_STEMS_DIR — the container path of the
 	# mount; compose sets it from STEMS_DIR, AIO operators pass -e) sits
 	# outside $dir, so the loop above never reaches it and the mount would
-	# keep its root-owned 755. Per-station subdirs under it are created by the
-	# analyzer itself, which inherits this 777.
+	# keep its root-owned 755. Marker initialization shares any per-station
+	# directories it creates too.
 	if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
 		state_prepare_dir "$SUBWAVE_STEMS_DIR"
 	fi

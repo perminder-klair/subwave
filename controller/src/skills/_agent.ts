@@ -1,3 +1,4 @@
+import { preparationSkillAt, prepareEpisodeContext } from '../broadcast/show-preparation.js';
 // Segment-director agent. agenticTick() (the 5-minute scheduler.skillsTick)
 // hands a tool-loop agent a snapshot of the moment plus real-world data tools
 // (llm/segment-tools.js) and asks whether anything is worth saying between
@@ -199,6 +200,7 @@ function availableCapabilities(ctx, now: Date) {
     // because the cron timer owes the same answers and reaches runCapability()
     // without passing through here.
     if (!skillEligible({
+      preparationSkill: preparationSkillAt(ctx),
       seeded: cap.seeded,
       skill: cap.skill,
       enabled,
@@ -688,6 +690,10 @@ export async function runCapability(
 ): Promise<CapabilityRun> {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
+  if (automaticHostSpeech && cap.skill === preparationSkillAt(ctx)) {
+    return { aired: false, queued: false, deferred: false, text: null, reason: 'reserved for episode preparation' };
+  }
+  ctx = await prepareEpisodeContext(ctx);
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed.
     let hint = '';
@@ -878,6 +884,7 @@ export function skillCatalog() {
     }
     return {
       name: c.skill,
+      hasTool: typeof c.toolFn === 'function',
       label: c.label || c.skill,
       description: c.desc || '',
       kind: c.kind,

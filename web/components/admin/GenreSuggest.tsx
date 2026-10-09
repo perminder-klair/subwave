@@ -1,8 +1,5 @@
 'use client';
 
-// Three chip states off GET /library/genres/related: empty field → most-stocked
-// genres, exact genre → its nearest by embedding similarity, partial text →
-// substring matches.
 
 import { useMemo } from 'react';
 import { cn } from '../../lib/cn';

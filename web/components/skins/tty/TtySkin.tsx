@@ -1,9 +1,9 @@
 'use client';
 
-// The registry aliases the retired `terminal` id to this skin (lib/skin.ts).
 
 import { useEffect, useRef, useState } from 'react';
 import { m, steps } from 'motion/react';
+import { Heart, Play } from 'lucide-react';
 import styles from './Tty.module.css';
 import {
   usePlayerActions,
@@ -198,7 +198,6 @@ export default function TtySkin(_props: SkinProps) {
                 </div>
                 {!offline && nowPlaying?.artist && (
                   <div className="text-[15px] tracking-[0.08em] uppercase">
-                    {/* Delayed so the artist prints after the title. */}
                     <Printed
                       text={
                         nowPlaying.artist
@@ -263,12 +262,18 @@ export default function TtySkin(_props: SkinProps) {
                 {booth.length === 0 && (
                   <div className="text-[12px] text-muted">▸ waiting for the booth…</div>
                 )}
-                {booth.map((line, i) => (
-                  <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
+                {/* After a show boundary the previous show's tail is dimmed and
+                    voiced under its own host, below a rule (#1690). */}
+                {booth.map((line, i) => line.boundary ? (
+                  <div key={`${line.t ?? i}-${i}`} role="separator" className="truncate text-[12px] leading-relaxed text-muted">
+                    ──── {line.text} ────
+                  </div>
+                ) : (
+                  <div key={`${line.t ?? i}-${i}`} className={cn('text-[12px] leading-relaxed break-words', line.carried && 'opacity-60')}>
                     <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
                     {line.kind === 'voice' ? (
                       <>
-                        <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
+                        <span className="font-bold text-[var(--accent)]">{(line.speaker ?? djName).toUpperCase()} ●</span>{' '}
                         <span>“{line.text}”</span>
                       </>
                     ) : (
@@ -350,9 +355,6 @@ export default function TtySkin(_props: SkinProps) {
                 </>
               )}
             </div>
-            {/* A second prompt line rather than a labelled field — signing is
-                optional, and a signed slip gets the name read on air (#1347).
-                Enter submits from here too, so a listener can tab down and go. */}
             {!slip.ack && (
               <div className="flex items-baseline gap-3">
                 <span className="text-muted select-none">:from ▸</span>
@@ -380,7 +382,11 @@ export default function TtySkin(_props: SkinProps) {
                 offline ? 'text-muted' : tunedIn ? 'text-[var(--accent)]' : 'text-ink hover:text-[var(--accent)]',
               )}
             >
-              {offline ? 'OFF AIR' : tunedIn ? (status === 'playing' ? 'TUNED ●' : 'TUNING…') : '▶ TUNE IN'}
+              {offline
+                ? 'OFF AIR'
+                : tunedIn
+                  ? (status === 'playing' ? 'TUNED ●' : 'TUNING…')
+                  : <span className="inline-flex items-center gap-1.5"><Play className="size-2.5 fill-current" strokeWidth={0} />TUNE IN</span>}
             </button>
             <button
               type="button"
@@ -406,7 +412,10 @@ export default function TtySkin(_props: SkinProps) {
                   like.pending && 'opacity-60',
                 )}
               >
-                {like.liked ? '[♥ LIKED]' : '[♥ LIKE]'}{like.count > 0 ? ` ${like.count}` : ''}
+                <span className="inline-flex items-center gap-1">
+                  [<Heart className={cn('size-3', like.liked && 'fill-current')} /> {like.liked ? 'LIKED' : 'LIKE'}]
+                  {like.count > 0 ? ` ${like.count}` : ''}
+                </span>
               </button>
             )}
             {signal.latencyMs != null && tunedIn && (

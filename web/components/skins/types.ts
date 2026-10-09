@@ -1,23 +1,7 @@
-// The skin contract -- what a player skin is and what it may touch.
-//
-// A skin renders everything between the shell's root <div> and the shared
-// services. The shell (components/player/PlayerShell.tsx) owns the headless core
-// (PlayerCoreProvider), the <audio> element and the toaster. A skin consumes:
-//   - usePlayerFeed / usePlayerAudio / usePlayerActions, the core contexts.
-//   - useStationClient, for cover/avatar URLs.
-//   - useTuneInGate. Every skin MUST render some tune-in affordance through it:
-//     the tap is the browser's audio-unblock gesture, not decoration.
-//   - shared.ts (pure derivations) and sharedHooks.ts; reuse before hand-rolling.
-//   - The theme tokens (--bg, --ink, --muted, --accent, --overlay,
-//     --soft-border, --field), so operator themes keep working.
-//
-// Skin styles are co-located, never added to globals.css. Keyboard shortcuts are
-// skin-owned; register them with useKeyboardShortcuts.
-//
-// Honor lite mode (html.lite): the global CSS kill stops co-located keyframes,
-// but JS-driven canvas/rAF loops must idle themselves (see subamp/Analyzer.tsx),
-// long transitions should be dropped, and any element that only becomes VISIBLE
-// through its animation needs an html.lite exception.
+// Skins consume PlayerCore contexts, StationClient, and shared helpers. Use useTuneInGate for the
+// browser audio gesture and theme tokens for colours. Co-locate styles. Lite mode requires JS
+// animation loops to stop, long transitions to be disabled, and animation-only content to remain
+// visible. See web/CLAUDE.md for the full contract.
 
 import type { ComponentType } from 'react';
 

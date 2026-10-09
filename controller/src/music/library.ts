@@ -38,11 +38,6 @@ export async function reset() {
   await load();
 }
 
-// WAL writes are durable per statement; kept as a no-op for existing callers.
-export async function save() {
-  // no-op
-}
-
 // Fold the WAL sidecar back into library.db (best-effort TRUNCATE checkpoint),
 // from the scheduler's hourly cleanup and the shutdown path (#786).
 export function checkpoint(): void {
@@ -206,8 +201,8 @@ export function getAlbumFacts(songId: string) {
   return loaded ? db.getAlbumFacts(songId) : null;
 }
 
-// Lean metadata for the /now-playing hot path, so a per-listener poll never
-// parses the heavy acoustic *_json blobs (#723).
+// Lean metadata for /now-playing and picker history, avoiding the heavy
+// acoustic *_json blobs (#723).
 export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
@@ -217,7 +212,7 @@ export function getPlaybackMeta(songId: string): db.TrackLite | null {
 // null and is never blind-appended.
 export function taggedAtOf(songId: string): string | null {
   if (!loaded) return null;
-  return db.getTrack(songId)?.taggedAt ?? null;
+  return db.getTaggedAt(songId);
 }
 
 // Musically-adjacent moods. The tagger tags by how a track FEELS, so
@@ -244,33 +239,14 @@ const MOOD_MIN_EXACT = 12;
 
 export function songsByMood(mood: string | null | undefined): any[] {
   if (!mood || !loaded) return [];
-  // rejectBlocked here (not on the final return) so the MOOD_MIN_EXACT
-  // widening threshold counts airable tracks, not blocked ones.
-  const flatten = (rows: db.MoodPoolRecord[]) =>
-    blocklist.rejectBlocked(rows.map(r => ({
-      id: r.id,
-      title: r.title,
-      artist: r.artist,
-      album: r.album,
-      albumId: r.albumId,
-      artistId: r.artistId,
-      year: r.year,
-      genres: r.genres,
-      genre: r.genre,
-      moods: r.moods,
-      energy: r.energy,
-      // Seconds, for the max-track-length cap (#447) — without it a long mix
-      // reads as "unknown length" and slips past.
-      durationSec: r.durationSec,
-    })));
-
-  const exact = flatten(db.songsByMood(mood));
+  // Count only airable tracks before deciding whether to widen the mood.
+  const exact = blocklist.rejectBlocked(db.songsByMood(mood));
   if (exact.length >= MOOD_MIN_EXACT) return exact;
 
   const seen = new Set(exact.map(s => s.id));
   const widened = [...exact];
   for (const neighbour of MOOD_NEIGHBOURS[mood] || []) {
-    for (const row of flatten(db.songsByMood(neighbour))) {
+    for (const row of blocklist.rejectBlocked(db.songsByMood(neighbour))) {
       if (seen.has(row.id)) continue;
       widened.push(row);
       seen.add(row.id);

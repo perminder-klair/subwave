@@ -1,13 +1,6 @@
-// Audience-source analytics for the admin Stats page: durable, aggregate-only.
-//
-// The player POSTs a one-shot /beacon on first load carrying document.referrer
-// + any UTM param — the external referrer is only visible on the initial HTML
-// navigation, so the browser has to hand it over. Country comes off that same
-// request through broadcast/listener-country.ts (#1485).
-//
-// Privacy: a raw IP is NEVER stored. It is salted+hashed with a process-random,
-// never-persisted salt only to dedupe sessions within a day; only the resulting
-// count reaches disk.
+// The initial beacon supplies referrer/UTM data and resolves country. Deduplicate with a
+// process-local salted IP hash; persist only aggregate counts, never raw IPs or the salt.
+// #1485.
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';

@@ -16,12 +16,13 @@
 // Run: npm test -- scene-vocab
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-scene-vocab-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-scene-vocab-'));
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
@@ -283,7 +284,7 @@ test('a rule that reads like an identity still survives a reload', async () => {
   // that path. Caught by driving a real controller, not by the suite.
   await sceneVocab.recordMerge(['TECHNO'], 'techno');
   const onDisk = JSON.parse(readFileSync(ALIAS_FILE, 'utf8')) as {
-    aliases: Array<{ from: string; to: string }>;
+    aliases: Array<{ from: string; to: string; at: string }>;
   };
   assert.deepEqual(
     onDisk.aliases.find(a => a.from === 'techno'),
@@ -298,7 +299,7 @@ test('a rule that reads like an identity still survives a reload', async () => {
 
 test('the rules survive a restart', () => {
   const onDisk = JSON.parse(readFileSync(ALIAS_FILE, 'utf8')) as {
-    aliases: Array<{ from: string; to: string }>;
+    aliases: Array<{ from: string; to: string; at: string }>;
   };
   assert.equal(onDisk.aliases.some(a => a.from === 'hiphop' && a.to === 'Hip-Hop'), true);
 

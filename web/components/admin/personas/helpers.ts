@@ -44,6 +44,7 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     localColour: typeof p?.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
     warmth: typeof p?.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
     soul: p?.soul ?? '',
+    musicLean: typeof p?.musicLean === 'string' ? p.musicLean : '',
     language: typeof p?.language === 'string' ? p.language : '',
     voiceStyle: typeof p?.voiceStyle === 'string' ? p.voiceStyle : '',
     avatar: typeof p?.avatar === 'string' ? p.avatar : '',

@@ -1007,22 +1007,14 @@ def clap_window_offsets(duration_s, window_s, max_windows=None):
     return offsets
 
 
-def embed_windows(embedder, path, librosa, duration_s):
-    """CLAP embedding averaged over up to three windows spread across the track
-    (start / middle / late), mean + L2-renormalised. A single leading window
-    misrepresents any track whose intro doesn't sound like the song (a quiet
-    build-up embeds as ambient); averaging windows fixes that with the same
-    model, dim and storage schema. The local file may be byte-capped
-    (fetch_audio / the controller's downloadCapped truncate), so its real
-    decodable length can be shorter than the header duration — a non-leading
-    window that decodes to under ~5s is skipped, and the worst case degrades to
-    exactly the old leading-window behaviour. `duration_s` is the caller's
-    header-duration probe (0.0 = unknown → leading window only)."""
-    import numpy as np
-
-    batch_windows = embedder.batches_windows()
-    windows = []
-    vecs = []
+def iter_clap_windows(path, librosa, duration_s):
+    """Decode the CLAP windows (48 kHz mono, ANALYZE_SECONDS each) at the
+    offsets clap_window_offsets picks, yielding `(offset_s, samples)` one at a
+    time. A generator on purpose: the CPU/ONNX path embeds and releases each
+    window before the next is decoded (see facet_clap). The local file may be
+    byte-capped, so its decodable length can be shorter than the header
+    duration — a non-leading window that decodes to under ~5s is skipped, and a
+    window whose decode fails is logged and skipped."""
     for offset in clap_window_offsets(duration_s, ANALYZE_SECONDS):
         try:
             y48, _sr48 = load_audio(
@@ -1035,16 +1027,30 @@ def embed_windows(embedder, path, librosa, duration_s):
             continue
         if offset > 0 and len(y48) < CLAP_SR * 5:
             continue  # truncated tail of a byte-capped download
+        yield offset, y48
+
+
+def facet_clap(embedder, windows):
+    """Facet `clap`: one CLAP vector from already-decoded 48 kHz mono windows
+    (any iterable of samples), mean + L2-renormalised. No file access — the
+    caller decides where the windows come from. Returns None when no window
+    produced a vector."""
+    import numpy as np
+
+    batch_windows = embedder.batches_windows()
+    pending = []
+    vecs = []
+    for y48 in windows:
         if batch_windows:
-            windows.append(y48)
+            pending.append(y48)
         else:
-            # Preserve the CPU/ONNX one-window memory envelope: decode, embed,
-            # and release each window before moving to the next offset.
+            # Preserve the CPU/ONNX one-window memory envelope: embed and
+            # release each window before the next one is pulled (decoded).
             vecs.append(np.asarray(embedder.embed(y48, CLAP_SR), dtype=np.float64))
     if batch_windows:
         vecs = [
             np.asarray(vec, dtype=np.float64)
-            for vec in embedder.embed_many(windows, CLAP_SR)
+            for vec in embedder.embed_many(pending, CLAP_SR)
         ]
     if not vecs:
         return None
@@ -1055,18 +1061,27 @@ def embed_windows(embedder, path, librosa, duration_s):
     return [float(x) for x in mean]
 
 
-def analyze_outro(path, librosa, duration_s, complete=None):
-    """Tail features for the crossfade seam — the outgoing track's ending is
-    what actually decides whether a transition lands. Decodes the last
-    OUTRO_SECONDS and returns
-      {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?}
-    with all timestamps ABSOLUTE (offset by the tail's position), or None when
-    the tail decodes short (a truncated file's "tail" is mid-song audio — never
-    emit features measured off the wrong region).
+def embed_windows(embedder, path, librosa, duration_s):
+    """CLAP embedding averaged over up to three windows spread across the track
+    (start / middle / late). A single leading window misrepresents any track
+    whose intro doesn't sound like the song (a quiet build-up embeds as
+    ambient); averaging windows fixes that with the same model, dim and storage
+    schema. `duration_s` is the caller's header-duration probe (0.0 = unknown →
+    leading window only). Path-based wrapper: iter_clap_windows decodes,
+    facet_clap embeds."""
+    return facet_clap(
+        embedder, (y48 for _offset, y48 in iter_clap_windows(path, librosa, duration_s))
+    )
 
-    A track too short for a distinct outro returns only the edge-silence
-    fields, and only when `complete` is True — see the gate below.
-    Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier too."""
+
+def decode_tail(path, librosa, duration_s, complete=None):
+    """Decode the tail window that facet_tail measures, or return None when the
+    file cannot prove it reaches its end. Returns `(y_src, sr, offset_s)`:
+    channel-preserving samples starting at ABSOLUTE `offset_s` and running to
+    the end of the decodable file.
+
+    A track too short for a distinct outro is decoded from zero, and only when
+    `complete` is True — see the gate below."""
     import numpy as np
 
     if not duration_s:
@@ -1086,13 +1101,36 @@ def analyze_outro(path, librosa, duration_s, complete=None):
     offset = max(0.0, duration_s - OUTRO_SECONDS) if distinct_outro else 0.0
     # Channel-preserving decode for the loudness meter (the tail LUFS must be
     # comparable to the body's stereo loudness_lufs — issue #998); RMS shape
-    # and the beat grid work off the mono downmix as before.
+    # and the beat grid work off the mono downmix (facet_tail).
     y_src, sr = load_audio(librosa, path, sr=ANALYZE_SR, mono=False, offset=offset)
-    y = librosa.to_mono(y_src) if y_src is not None else None
     # Validation backstop for an unknown completeness: a truncated file either
-    # errors here or decodes well short of the requested tail — skip it.
+    # errors here or decodes well short of the requested tail — skip it. The
+    # last axis is the sample axis for mono (n,) and multichannel (c, n) alike.
     expected_s = min(OUTRO_SECONDS, duration_s)
-    if y is None or len(y) < ANALYZE_SR * expected_s * 0.6:
+    if y_src is None or np.shape(y_src)[-1] < ANALYZE_SR * expected_s * 0.6:
+        return None
+    return y_src, sr, offset
+
+
+def facet_tail(y_src, sr, offset, duration_s, librosa):
+    """Facet `tail`: features of the crossfade seam from an already-decoded
+    window that is PROVEN to run to the end of the file (decode_tail, or later
+    a ranged read). `offset` is the window's absolute start in seconds and
+    `duration_s` the file's duration. Returns
+      {startMs, ending: 'fade'|'cold', lufs?, bpm?, beats?, bars?,
+       tail_silence_ms?, tail_start_ms?}
+    with all timestamps ABSOLUTE, or None when nothing is measurable.
+
+    A track too short for a distinct outro returns only the edge-silence
+    fields. Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier
+    too."""
+    import numpy as np
+
+    if y_src is None:
+        return None
+    distinct_outro = duration_s > OUTRO_SECONDS + 1.0
+    y = librosa.to_mono(y_src)
+    if y is None or len(y) == 0:
         return None
 
     # A short track has no distinct musical outro to characterize, but a
@@ -1180,6 +1218,19 @@ def analyze_outro(path, librosa, duration_s, complete=None):
     if bars_ms:
         out["bars"] = bars_ms
     return out
+
+
+def analyze_outro(path, librosa, duration_s, complete=None):
+    """Tail features for the crossfade seam — the outgoing track's ending is
+    what actually decides whether a transition lands. Path-based wrapper:
+    decode_tail proves and decodes the last OUTRO_SECONDS, facet_tail measures
+    them. None when the tail cannot be proven (a truncated file's "tail" is
+    mid-song audio — never emit features measured off the wrong region)."""
+    window = decode_tail(path, librosa, duration_s, complete)
+    if window is None:
+        return None
+    y_src, sr, offset = window
+    return facet_tail(y_src, sr, offset, duration_s, librosa)
 
 
 # Lazily loaded, at most once. None means "no embeddings this run" — either
@@ -1414,6 +1465,35 @@ def get_vocal_detector(force=False):
     # Fresh load AND cache hit — see get_embedder (#1204).
     _touch_heavy()
     return _vocal_detector
+
+
+# Marker file at the stem cache root (controller music/stem-cache.ts). A stems
+# share that is not mounted on this machine still leaves its mount point, and
+# writing there fills the local disk with stems the controller never sees.
+STEMS_MARKER = ".subwave-stems"
+_stems_unmarked_logged = False
+
+
+def stems_root_marked(stems_dir):
+    """True when the stem cache root (the parent of the per-track stems_dir)
+    carries the marker."""
+    root = os.path.dirname(os.path.normpath(stems_dir))
+    return os.path.isfile(os.path.join(root, STEMS_MARKER))
+
+
+def stems_dir_to_write(stems_dir, require_marker):
+    """The stems_dir this request may write to, or None. With require_marker,
+    a cache root without the marker gets no writes (logged once per process),
+    and since stems_cached then stays unset, the controller does not stamp the
+    track as attempted."""
+    global _stems_unmarked_logged
+    if not stems_dir or not require_marker or stems_root_marked(stems_dir):
+        return stems_dir
+    if not _stems_unmarked_logged:
+        _stems_unmarked_logged = True
+        log(f"stem cache root {os.path.dirname(os.path.normpath(stems_dir))} has no {STEMS_MARKER} marker "
+            "(stems share not mounted here?): stems are not written until it is")
+    return None
 
 
 def write_stems(stems, window, dest_dir):
@@ -1867,11 +1947,127 @@ def measure_loudness(y, sr):
         return None, None
 
 
+def facet_head(y, sr, librosa):
+    """Facet `head`: musical features of the leading window (mono downmix of
+    the first ANALYZE_SECONDS). Pure — samples in, result fields out:
+      bpm, key, intro_ms, confidence (always present, may be None)
+      lead_silence_ms, sections, pace_curve, beats, bars, key_ranges
+        (omitted when not measured)
+    intro_ms is the energy heuristic; analyze() prefers the first vocal range
+    when vocal activity was measured."""
+    import numpy as np
+
+    bpm = None
+    beat_frames = []
+    try:
+        tempo, tracked_frames = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(np.atleast_1d(tempo)[0])
+        beat_frames = tracked_frames
+    except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
+        log(f"main beat tracking failed: {e}")
+
+    # Per-beat timestamps (ms) — already computed by beat_track, previously
+    # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
+    # librosa gives no true downbeat, but a bar grid is enough to bar-align a
+    # crossfade. Best-effort: an empty/odd grid simply yields fewer/no bars.
+    beats_ms = []
+    bars_ms = []
+    try:
+        bt = librosa.frames_to_time(beat_frames, sr=sr)
+        beats_ms = [int(round(float(t) * 1000.0)) for t in bt]
+        bars_ms = beats_ms[::4]
+    except Exception as e:  # noqa: BLE001 — beat grid is best-effort
+        log(f"beat grid failed: {e}")
+        beats_ms = []
+        bars_ms = []
+
+    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
+    chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
+    key, key_sep = estimate_key(chroma_mean)
+
+    # Per-region key (tonic + mode) over time — reuses the chroma above.
+    key_ranges = estimate_key_ranges(chroma, sr, librosa)
+
+    intro_ms = estimate_intro_ms(y, sr, librosa)
+
+    # Leading dead air, off the SAME decoded head window (free). Absolute
+    # floor, NOT intro_ms's relative one — see SILENCE_DBFS. None when the
+    # whole window reads silent: the gap outlasts ANALYZE_SECONDS and we
+    # cannot see where it ends, so the controller trims nothing.
+    lead_silence_ms, _tail_head, _tail_start_head = silence_edges_ms(y, sr)
+
+    # Structural sections over the decoded window (intro/leading sections are
+    # the reliable part — the outro of a long track is beyond ANALYZE_SECONDS).
+    # Reuses the chroma already computed for key estimation.
+    sections = estimate_sections(y, sr, librosa, chroma=chroma)
+
+    # Perceptual energy/momentum curve (decoupled from BPM).
+    pace = estimate_pace(y, sr, librosa)
+
+    # Overall confidence: dominated by how cleanly the key resolved, nudged by
+    # whether we got a plausible tempo. Kept conservative on purpose.
+    confidence = round(
+        0.5 * key_sep + (0.5 if bpm is not None and 40 <= bpm <= 220 else 0.0),
+        3,
+    )
+
+    out = {
+        "bpm": round(bpm, 1) if bpm is not None else None,
+        "key": key,
+        "intro_ms": int(intro_ms) if intro_ms is not None else None,
+        "confidence": confidence,
+    }
+    if lead_silence_ms is not None:
+        out["lead_silence_ms"] = int(round(lead_silence_ms))
+    if sections:
+        out["sections"] = sections
+    if pace:
+        out["pace_curve"] = pace
+    if beats_ms:
+        out["beats"] = beats_ms
+    if bars_ms:
+        out["bars"] = bars_ms
+    if key_ranges:
+        out["key_ranges"] = key_ranges
+    return out
+
+
+def facet_loudness(y_src, sr):
+    """Facet `loudness`: perceptual loudness (LUFS) and true-ish peak of a
+    channel-preserving decode — feeds per-track gain normalisation on the
+    playback side. Measured off real channels, not the mono downmix (issue
+    #998). Fields are omitted when not measured (pyloudnorm absent or the
+    meter failed), so a worker without pyloudnorm is byte-for-byte today."""
+    loudness_lufs, peak_db = measure_loudness(y_src, sr)
+    out = {}
+    if loudness_lufs is not None:
+        out["loudness_lufs"] = loudness_lufs
+    if peak_db is not None:
+        out["peak_db"] = peak_db
+    return out
+
+
+# Field order of analyze()'s flat response, kept stable across the facet split
+# so the emitted JSON is unchanged. Unknown keys (none today) go last.
+_RESULT_ORDER = (
+    "bpm", "key", "intro_ms", "confidence",
+    "lead_silence_ms", "tail_silence_ms", "tail_start_ms",
+    "loudness_lufs", "peak_db",
+    "sections", "pace_curve", "beats", "bars", "key_ranges",
+    "outro", "vocal_ranges", "audio_embedding", "stems_cached",
+)
+
+
 def analyze(
     librosa, url=None, path=None, embed=None, vocal=None, complete=None,
-    stems_dir=None, embedding_only=False,
+    stems_dir=None, embedding_only=False, stems_require_marker=False,
 ):
     import numpy as np
+
+    # Asked to check the cache root and it has no marker: no stem writes, and
+    # no stems_cached field, so the controller does not stamp the track as
+    # attempted. The separation itself is then only run if vocal asked for it.
+    stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
 
     # A controller-provided path is pre-fetched onto the shared volume and
     # owned by the caller; only files fetch_audio downloads here are ours to
@@ -1965,6 +2161,7 @@ def analyze(
                 if ys is not None and np.size(ys) > 0:
                     head_stems = detector.separate(ys)
                     vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+                    stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
                     if stems_dir:
                         try:
                             write_stems(head_stems, "head", stems_dir)
@@ -1996,12 +2193,17 @@ def analyze(
                     tail_vocals = detector.detect(
                         y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
                     )
+                    stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
                     if stems_dir:
                         try:
                             write_stems(tail_stems, "tail", stems_dir)
-                            write_tail_meta(stems_dir, tail_offset, duration_s)
+                            stems_dir = stems_dir_to_write(stems_dir, stems_require_marker)
+                            if stems_dir:
+                                write_tail_meta(stems_dir, tail_offset, duration_s)
                         except Exception as e:  # noqa: BLE001 — cache is best-effort
                             log(f"stem cache write (tail) failed: {e}")
+                    if not stems_dir:
+                        stems_cached = None
                     shift_ms = tail_offset * 1000.0
                     outro["vocalRanges"] = [
                         {
@@ -2027,111 +2229,24 @@ def analyze(
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
 
-    bpm = None
-    beat_frames = []
-    try:
-        tempo, tracked_frames = librosa.beat.beat_track(y=y, sr=sr)
-        bpm = float(np.atleast_1d(tempo)[0])
-        beat_frames = tracked_frames
-    except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
-        log(f"main beat tracking failed: {e}")
-
-    # Per-beat timestamps (ms) — already computed by beat_track, previously
-    # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
-    # librosa gives no true downbeat, but a bar grid is enough to bar-align a
-    # crossfade. Best-effort: an empty/odd grid simply yields fewer/no bars.
-    beats_ms = []
-    bars_ms = []
-    try:
-        bt = librosa.frames_to_time(beat_frames, sr=sr)
-        beats_ms = [int(round(float(t) * 1000.0)) for t in bt]
-        bars_ms = beats_ms[::4]
-    except Exception as e:  # noqa: BLE001 — beat grid is best-effort
-        log(f"beat grid failed: {e}")
-        beats_ms = []
-        bars_ms = []
-
-    chroma = librosa.feature.chroma_cqt(y=y, sr=sr)
-    chroma_mean = [float(x) for x in np.mean(chroma, axis=1)]
-    key, key_sep = estimate_key(chroma_mean)
-
-    # Per-region key (tonic + mode) over time — reuses the chroma above.
-    key_ranges = estimate_key_ranges(chroma, sr, librosa)
-
-    intro_ms = estimate_intro_ms(y, sr, librosa)
-
-    # Leading dead air, off the SAME decoded head window (free). Absolute
-    # floor, NOT intro_ms's relative one — see SILENCE_DBFS. None when the
-    # whole window reads silent: the gap outlasts ANALYZE_SECONDS and we
-    # cannot see where it ends, so the controller trims nothing.
-    lead_silence_ms, _tail_head, _tail_start_head = silence_edges_ms(y, sr)
-
+    result = facet_head(y, sr, librosa)
     # When vocal activity was measured, the start of the first vocal range is a
     # truer intro than the energy heuristic (an instrumental intro is exactly
     # the vocal-free leading region). Prefer it; fall back to the heuristic for
     # instrumentals ([] → keep the energy estimate) and un-run tracks.
     if vocal_ranges:
-        intro_ms = float(vocal_ranges[0]["startMs"])
-
-    # Structural sections over the decoded window (intro/leading sections are
-    # the reliable part — the outro of a long track is beyond ANALYZE_SECONDS).
-    # Reuses the chroma already computed for key estimation.
-    sections = estimate_sections(y, sr, librosa, chroma=chroma)
-
-    # Perceptual energy/momentum curve (decoupled from BPM).
-    pace = estimate_pace(y, sr, librosa)
-
-    # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
-    # normalisation toward a target on the playback side. Measured off the
-    # channel-preserving decode, not the mono downmix (issue #998). None when
-    # pyloudnorm is absent or measurement fails.
-    loudness_lufs, peak_db = measure_loudness(y_src, sr)
-
-    # Overall confidence: dominated by how cleanly the key resolved, nudged by
-    # whether we got a plausible tempo. Kept conservative on purpose.
-    confidence = round(
-        0.5 * key_sep + (0.5 if bpm is not None and 40 <= bpm <= 220 else 0.0),
-        3,
-    )
-
-    result = {
-        "bpm": round(bpm, 1) if bpm is not None else None,
-        "key": key,
-        "intro_ms": int(intro_ms) if intro_ms is not None else None,
-        "confidence": confidence,
-    }
-    # Edge dead air. Head rides this pass; the tail is measured inside
-    # analyze_outro (the only place a COMPLETE file is proven) and lifted out
-    # of the outro dict HERE so outro_json never carries it. Omitted when not
-    # measured — absence means "no silence signal, behave as today".
-    if lead_silence_ms is not None:
-        result["lead_silence_ms"] = int(round(lead_silence_ms))
+        result["intro_ms"] = int(float(vocal_ranges[0]["startMs"]))
+    result.update(facet_loudness(y_src, sr))
+    # Edge dead air. Head rides facet_head; the tail is measured by facet_tail
+    # (only ever fed a window proven to reach the end of the file) and lifted
+    # out of the outro dict HERE so outro_json never carries it. Omitted when
+    # not measured — absence means "no silence signal, behave as today".
     if outro is not None and "tail_silence_ms" in outro:
         result["tail_silence_ms"] = outro.pop("tail_silence_ms")
         if "tail_start_ms" in outro:
             result["tail_start_ms"] = outro.pop("tail_start_ms")
         if not outro:
             outro = None
-    # Only carry loudness fields when measured — absence signals "no loudness
-    # this pass", so a worker without pyloudnorm is byte-for-byte today.
-    if loudness_lufs is not None:
-        result["loudness_lufs"] = loudness_lufs
-    if peak_db is not None:
-        result["peak_db"] = peak_db
-    # Structural sections (omit when segmentation produced nothing).
-    if sections:
-        result["sections"] = sections
-    # Pace curve (omit when none produced).
-    if pace:
-        result["pace_curve"] = pace
-    # Beat / bar grid (omit when empty).
-    if beats_ms:
-        result["beats"] = beats_ms
-    if bars_ms:
-        result["bars"] = bars_ms
-    # Per-region key ranges (omit when none produced).
-    if key_ranges:
-        result["key_ranges"] = key_ranges
     # Outro (tail) features — omit when not computed (short/truncated file,
     # decode failure), so consumers treat absence as "no outro signal".
     if outro is not None:
@@ -2149,7 +2264,9 @@ def analyze(
     # stems written (tail rides along when the outro was computable).
     if stems_cached is not None:
         result["stems_cached"] = stems_cached
-    return result
+    ordered = {k: result[k] for k in _RESULT_ORDER if k in result}
+    ordered.update((k, v) for k, v in result.items() if k not in ordered)
+    return ordered
 
 
 def main():
@@ -2274,6 +2391,7 @@ def main():
                     embed=req.get("embed"), vocal=req.get("vocal"),
                     complete=req.get("complete"), stems_dir=req.get("stems_dir"),
                     embedding_only=req.get("embedding_only") is True,
+                    stems_require_marker=req.get("stems_require_marker") is True,
                 )
                 # If a getter stamped the clock, this request DID use a model —
                 # re-stamp so the countdown starts from the end of the work, not

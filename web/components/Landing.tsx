@@ -12,11 +12,6 @@ import Navidrome from './landing/Navidrome';
 import Coda from './what/Coda';
 import type { ShowcaseStation } from '@/lib/stations';
 
-// The public landing page — a newsprint-broadsheet article; sections live under
-// `what/` and `landing/`. `stations` (community catalog, resolved server-side)
-// feeds the showcase's station tabs; omit and the demo pins to this station.
-// The apps directory is deliberately not a section — it lives at /apps, reached
-// from the Back Pages footer.
 export default function Landing({ stations = [] }: { stations?: ShowcaseStation[] }) {
   return (
     <div className="min-h-screen overflow-x-clip bg-bg text-ink">

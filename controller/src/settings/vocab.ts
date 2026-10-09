@@ -893,6 +893,7 @@ export interface NormalizedShow {
   pauseTalk: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   moods: string[];
   themeId: string;
   genres: string[];

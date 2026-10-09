@@ -3,13 +3,13 @@
 // wired to track metadata instead of the plays table cannot pass unnoticed.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 
 test('picker candidates carry song and artist play frequency from station history', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'subwave-picker-frequency-'));
+  const stateDir = createTempDir(join(tmpdir(), 'subwave-picker-frequency-'));
   process.env.STATE_DIR = stateDir;
 
   const db = await import('../src/music/library-db.js');

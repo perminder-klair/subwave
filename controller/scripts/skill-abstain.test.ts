@@ -24,13 +24,14 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // _agent.ts pulls in settings/queue, which derive paths from STATE_DIR at
 // module scope — same preamble as skill-cron-gates.test.ts.
-const STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-abstain-'));
+const STATE_DIR = createTempDir(join(tmpdir(), 'skill-abstain-'));
 process.env.STATE_DIR = STATE_DIR;
 const DRY_WELL_ATTEMPTS = join(STATE_DIR, 'dry-well-attempts.txt');
 
@@ -113,7 +114,8 @@ test('a fetch error and an explicit available:false are both unusable', () => {
 });
 
 test('real data — and no data at all — are not stand-down reasons', () => {
-  assert.equal(unusableDataReason({ answer: 'a real answer', sources: [] }), null);
+  const data: Record<string, unknown> = { answer: 'a real answer', sources: [] };
+  assert.equal(unusableDataReason(data), null);
   assert.equal(unusableDataReason({ available: true }), null);
   // null is what fetchSegmentData returns for a capability with no tool.
   assert.equal(unusableDataReason(null), null);
@@ -124,7 +126,8 @@ test('standDownReason only fires for a grounded skill', () => {
   const empty = { available: false };
   assert.equal(typeof standDownReason(dataCap(), empty), 'string');
   assert.equal(standDownReason(dataCap({ kind: 'curiosity' }), empty), null);
-  assert.equal(standDownReason(dataCap(), { answer: 'something real' }), null);
+  const data: Record<string, unknown> = { answer: 'something real' };
+  assert.equal(standDownReason(dataCap(), data), null);
 });
 
 // --- 3. the schema and the prompt ------------------------------------------
@@ -139,6 +142,7 @@ test('the abstention field is absent, not false, on an ungrounded run', () => {
   assert.equal('air' in ungrounded, false);
   const grounded = forcedSchema({ mayAbstain: true })
     .parse({ reason: 'r', air: false, text: '', sfx: null });
+  assert.ok('air' in grounded);
   assert.equal(grounded.air, false);
 });
 
@@ -149,6 +153,7 @@ test('a grounded schema accepts a stand-down with an empty line', () => {
     text: '',
     sfx: null,
   });
+  assert.ok('air' in parsed);
   assert.equal(parsed.air, false);
 });
 

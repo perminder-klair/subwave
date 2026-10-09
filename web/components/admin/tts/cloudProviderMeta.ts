@@ -1,7 +1,3 @@
-// Single source of truth for the Cloud TTS provider picker, shared by the
-// Settings voice tab and the per-persona voice slot. No React, no DOM — safe to
-// unit-import. Mirrors engineMeta.ts, one level down: Cloud is an engine, these
-// are the services it can speak through.
 
 export interface CloudProviderMeta {
   id: string;

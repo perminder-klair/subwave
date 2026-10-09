@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-length-blend-'));
+const root = createTempDir(join(tmpdir(), 'subwave-length-blend-'));
 process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');

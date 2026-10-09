@@ -1,16 +1,7 @@
-// Per-provider capability descriptors: the single place per-provider quirks
-// live, so strategy code has no `provider ===` branches. Translates the
-// user-facing `llm.reasoning` toggle into each provider's thinking control and
-// declares the structural traits the strategy layer keys off.
-//
-// Pure — every function is a function of the passed `cfg` only, so the mappings
-// are unit-pinned (controller/scripts/llm-pure.test.ts).
-//
-// Thinking control rides AI SDK 7's top-level `reasoning` call option. Never mix
-// it with providerOptions: the SDK does not merge the two and reasoning-related
-// providerOptions silently win. Providers with no per-call channel (OpenRouter,
-// and the body-injection openai-compatible/locca path) return undefined here and
-// keep their construction-time wiring in registry.ts.
+// Keep provider quirks here; strategy code uses capabilities rather than provider branches.
+// AI SDK reasoning and reasoning-related providerOptions do not merge; the latter win.
+// OpenRouter/compat/locca use construction-time controls in registry.ts instead.
+// Pure cfg mappings are pinned by controller/scripts/llm-pure.test.ts.
 
 interface ThinkingArgs {
   modelId: string;
@@ -66,6 +57,22 @@ const NATIVE_DISCOVERY_STEPS = 3;
 
 const NONE = (): ReasoningLevel | undefined => undefined;
 
+// Claude generations whose thinking cannot be switched off: Sonnet 5.5, Opus
+// 5.5 and the Fable/Mythos 5 line 400 on `thinking:{type:"disabled"}`, and
+// 5.5/5.1 additionally 400 on forced tool use (`tool_choice` any/tool —
+// "tool_choice: type "tool" and "any" are not supported for this model"). Fable
+// 5.0 still accepts tool_choice, but forced tools need thinking off, which it
+// cannot do — so one predicate covers both consequences: never send 'none',
+// never force a tool. Matched on the model id rather than the provider, because
+// these ids reach us through the native provider, OpenRouter/gateway
+// (`anthropic/claude-sonnet-5.5`) and OpenAI-compatible proxies alike.
+// Separators may be `-` or `.` (gateways spell versions with dots).
+const THINKING_MANDATORY_CLAUDE_RE = /claude-(?:(?:opus|sonnet)-5[-.]5|(?:fable|mythos)-5)\b/i;
+
+export function thinkingMandatoryModel(modelId: string): boolean {
+  return THINKING_MANDATORY_CLAUDE_RE.test(String(modelId || ''));
+}
+
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
@@ -114,8 +121,13 @@ const CAPS: Record<string, ProviderCapabilities> = {
     repeatPenaltyApplies: false,
     // Extended thinking is off by default; 'medium' opts in. 'none' is required
     // on forced-tool legs because Claude rejects toolChoice while thinking.
-    reasoningLevel: ({ reasoning, forceNoThink }) =>
-      (reasoning && !forceNoThink ? 'medium' : 'none'),
+    // Thinking-mandatory generations 400 on 'none' and never get a forced tool
+    // (forcedToolChoice), so their floor is 'minimal' — adaptive thinking at
+    // effort low, the cheapest setting they accept.
+    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
+      if (thinkingMandatoryModel(modelId)) return reasoning ? 'medium' : 'minimal';
+      return reasoning && !forceNoThink ? 'medium' : 'none';
+    },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   google: {
@@ -163,12 +175,15 @@ const CAPS: Record<string, ProviderCapabilities> = {
   },
   // The gateway serializes the top-level level to whatever vendor the
   // `provider/model` id resolves to. Gemma downstreams are the exception, same
-  // 400 as the google entry (#1044), so omit the param for them.
+  // 400 as the google entry (#1044), so omit the param for them. A
+  // thinking-mandatory Claude downstream gets 'minimal' instead of 'none'.
   gateway: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    reasoningLevel: ({ modelId, reasoning, forceNoThink }) =>
-      ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
+      if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
+      return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
+    },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
 };
@@ -246,8 +261,14 @@ export function runDiscoverySteps(cfg: any, followProvider: boolean): number {
 // in the guided-decoding backend 'required' engages (#570). On 'auto' the
 // done-tool harness keeps its activeTools pinning, and misses fall through to
 // the stateless pool picker. Any value other than 'auto' means 'required'.
+//
+// A thinking-mandatory Claude model is 'auto' whatever the setting says: it
+// 400s on a forced tool, and on an OpenAI-compatible proxy 'required' arrives
+// as tool_choice:any. With one tool visible and EMIT_ANSWER_INSTRUCTION the
+// model still answers through it.
 export function forcedToolChoice(cfg: any): 'required' | 'auto' {
-  return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
+  if (cfg?.toolChoice === 'auto' || thinkingMandatoryModel(cfg?.model)) return 'auto';
+  return 'required';
 }
 
 // Per-call safety thresholds for the native `google` provider, as ai-sdk

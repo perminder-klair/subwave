@@ -25,8 +25,8 @@ skills the same way: from the admin UI, or by dropping a folder into
 
 This borrows the *format* of [Anthropic's skills](https://github.com/anthropics/skills)
 — a `SKILL.md` with YAML frontmatter and a markdown body, plus optional code —
-but **not** their meaning. A SUB/WAVE skill is exactly one thing: a between-track
-**spoken segment**. (You can't drop in `anthropics/skills/pdf` and have it do
+but **not** their meaning. A SUB/WAVE skill provides a between-track **spoken segment**, or its data tool
+can prepare a show through **Episode preparation skill**. (You can't drop in `anthropics/skills/pdf` and have it do
 anything — those manipulate documents.)
 
 ## Layout
@@ -38,9 +38,10 @@ state/skills/
     tool.mjs      # OPTIONAL: a data fetcher, wrapped as a tool the DJ can call
 ```
 
-Three copy-ready examples live in [`docs/examples/skills`](./examples/skills) —
+Copy-ready examples live in [`docs/examples/skills`](./examples/skills) —
 copy a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
 
+- [`random-artist-pick`](./examples/skills/random-artist-pick) prepares an artist spotlight show. Select it as the show's **Episode preparation skill**.
 - [`moon-phase`](./examples/skills/moon-phase) — the small end. No settings, no
   network, no memory: it works out the lunar phase from the date and returns it.
 - [`sunset`](./examples/skills/sunset) — the other end. Operator settings
@@ -133,8 +134,12 @@ every feed skill gets the same behaviour:
   next fire offers the ones after them rather than repeating. That memory is
   per-skill and lives for as long as the controller runs.
 - A fetch that fails or times out stands the segment down instead of letting the
-  DJ invent one — the same grounding rule every data-backed skill follows. Set
-  `requiresData: false` if your skill would rather write from its brief.
+  DJ invent one — the same grounding rule every data-backed skill follows. So
+  does a feed with **nothing fresh left**: once every item has aired, or when the
+  feed has no items at all, the tool returns `{ available: false }` rather than
+  an empty list, and **Run now** or a `cron:` reports that it stood down instead
+  of ordering a line with nothing in it. Set `requiresData: false` if your skill
+  would rather write from its brief.
 
 The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
 *Max items*, so a feed can be added, changed or cleared without touching disk.
@@ -261,7 +266,9 @@ the segment is required to produce a line, and the model is not offered a "stay
 silent" option.
 
 The one exception is the case where there is nothing to write from. If your
-skill has a `tool.mjs` and it returns `{ available: false }` or fails, the
+skill has a data tool — its own `tool.mjs`, or the one a
+[`feed:`](#feeds-without-code) line generates — and it returns
+`{ available: false }` or fails, the
 forced run **stands down** rather than ordering a line anyway: nothing airs, and
 the reason is logged (and returned to **Run now** as `aired: false`). Without
 that, a skill handed no facts and told it must speak can only invent them — which
@@ -535,7 +542,10 @@ by other operators. It's fetched **live** from the
 repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
-ever shipped or written, so installing from it never runs third-party code.
+ever shipped or written, so installing from it never runs third-party code. A
+catalog skill may still declare a [`feed:`](#feeds-without-code), which is a URL
+rather than code: install writes it into the skill's own `SKILL.md`, the modal
+shows which site it reads, and you can change or clear it like any other feed.
 
 ### Sharing your own
 
@@ -570,3 +580,89 @@ bundle's `name:`.
 > when the bundle has a tool, the response flags it so the UI can warn you before
 > you enable it. (Hardened against zip-slip; 5 MB upload cap, only `SKILL.md` +
 > `tool.mjs` are extracted. Reserved names and re-imports are rejected.)
+
+## Prepare an artist spotlight show
+
+A show's **Episode preparation skill** runs its `tool.mjs` before automatic music
+selection. The controller saves the result for that airing and supplies its
+research to the DJ. An artist result also restricts the agent picker, pool picker,
+and `auto.m3u` fallback to that artist's catalogue.
+
+1. Copy [`random-artist-pick`](./examples/skills/random-artist-pick) into
+   `state/skills/random-artist-pick/`.
+2. Open **Admin → Skills**, click **Rescan**, and enable the skill.
+3. Allow `random-artist-pick` in the show's host persona's skills list.
+4. Open **Admin → Shows**, edit the show, and select **Artist spotlight preparation**
+   under **Episode preparation skill**. Save the show.
+5. Give the show a topic such as “Explore the chosen artist's records using the
+   prepared sources.” Enable **Programme** for an opening, feature, and sign-off.
+
+Use the folder slug `random-artist-pick` for `preparationSkill`. A skill name in
+free-text instructions does not execute the skill. **Feature segment skill** is
+a separate spoken segment and cannot be the preparation skill too.
+
+The prepared subject survives a controller restart and the four-hour DJ session
+roll. Consecutive scheduled hours of the same show share one result, including
+across midnight. A takeover has its own result. Returning from a takeover resumes
+the scheduled airing's choice. A show scheduled for the entire week starts a new
+preparation at Sunday midnight in the station timezone.
+
+The current subject and failures appear in the show editor. **Retry preparation**
+retries a failed tool before it has selected a subject. An accepted subject stays
+fixed until the next airing, even if you change or remove the configured skill.
+**Retry catalogue** checks the saved artist again after a catalogue failure;
+it never runs the preparation tool or chooses another artist.
+
+### Preparation result contract
+
+The existing tool signature stays `tool(ctx, state, services, config, input)`.
+Preparation invokes that tool directly with an empty input. It creates no speech
+and does not ask a model to choose a tool. `state` starts empty for preparation;
+the controller owns the saved result.
+
+Return this shape for a successful preparation:
+
+```js
+{
+	available: true,
+	subject: 'Library artist name',
+	data: { facts: [], sources: [] },
+	music: { type: 'artist', artistId: 'exact-Navidrome-artist-id' }
+}
+```
+
+`subject` is required and limited to 160 characters. `data` is JSON, limited to
+32 KB. The DJ receives at most 6,000 characters of that data. `music` is optional;
+without it, the prepared subject affects speech while normal music selection
+continues. Unsupported music types and missing artist IDs are refused.
+
+Return `{ available: false, reason: '...' }` when no subject is available. Tool
+errors and invalid output leave ordinary broadcasting available. Automatic tool
+retries are limited to two attempts, at least one minute apart. Catalogue lookup
+has its own two attempts and keeps the already selected artist. A failure after
+the catalogue was ready keeps the research but returns to emergency ordinary
+selection until the catalogue is available again. The editor reports that loss
+of the artist restriction.
+
+The skill remains subject to its enabled setting, host allowlist, and readiness
+check. Its spoken co-host requirement does not apply to preparation. While the
+show owns this skill for preparation, the segment director, skill cron, and
+programme features cannot automatically run it again. Manual **Run now** remains
+an operator override. Listener and manual track requests also remain overrides.
+
+The artist restriction keeps playlist exclusions, blocklists, duration limits,
+and strict playlist intersections. Usual artist-spacing rules yield to the
+artist spotlight. Track deduplication and repeat protection still apply, with
+repeat protection sized to the available artist catalogue. The example chooses
+artists with at least two distinct tracks so the queue can rotate them.
+Membership uses exact track artist or lead album artist IDs. This includes
+collaborations released under the chosen artist, even when Navidrome assigns
+their combined track credit a different ID. A guest credit alone is insufficient.
+
+`services.library.randomArtist({ minDistinctTracks: 2 })` samples canonical
+Navidrome artist-index IDs with enough distinct tracks in the library mirror,
+including untagged tracks. Without a suitable mirror, it
+tries up to five artists from Navidrome's artist index. Research is optional in
+the example: no search results means the DJ must stick to supplied library facts.
+Existing custom tools that return arbitrary data need this result envelope to
+serve as preparation skills.

@@ -688,7 +688,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </div>
       </div>
 
-      {/* Disclosure state is not persisted — a fresh load starts collapsed. */}
       <div className="border-b border-ink px-4 py-3.5 sm:px-6">
         <button
           type="button"
@@ -806,7 +805,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
           )}
         </div>
-        {/* Collapsed to a single "off · Enable" line until opted in (#646). */}
         {(vocalOptedIn || !analysisOff) && (
           <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
             <span className="caption flex items-center gap-2">
@@ -900,7 +898,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
         )}
-        {/* Quiet-times gate (#1099) — a pass-level control, engine-independent. */}
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
           <span className="caption flex items-center gap-2">
             <Moon size={13} /> Quiet times · analyse only while idle
@@ -976,7 +973,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       </div>
       )}
 
-      {/* Scene vocabulary (#1577) — self-contained. */}
       <SceneVocabSection />
 
       {showFailBanner && (
@@ -1142,7 +1138,6 @@ export default function TaggingPanel(p: TaggingPanelProps) {
               <Square size={11} /> Stop
             </Btn>
           </div>
-          {/* Without this, a bar that resets to 0% each phase reads as "starting over". */}
           {stepList.length > 0 && (
             <div className="lib-steps">
               {stepList.map((s, i) => (

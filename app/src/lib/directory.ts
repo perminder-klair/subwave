@@ -1,7 +1,4 @@
-// Community stations directory client: the curated list the web app publishes
-// at `${directoryUrl}/stations.json`, so a fresh installer can browse without
-// knowing a URL. The origin defaults to the featured station's web origin and
-// is overridable via app.json `extra.directoryUrl`.
+// Directory origin defaults to the featured station; app.json extra.directoryUrl overrides it.
 
 import Constants from 'expo-constants';
 import { featuredStation } from './station';
@@ -20,8 +17,7 @@ export interface DirectoryStation {
   submitted?: string;
 }
 
-// Independent of lib/api's timeout: a hung directory origin must not stall the
-// Stations screen.
+// The directory timeout is separate from API requests so it cannot stall the Stations screen.
 const FETCH_TIMEOUT_MS = 8000;
 
 export function directoryUrl(): string {

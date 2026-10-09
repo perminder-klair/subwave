@@ -216,9 +216,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               </>
             )}
 
-            {/* Low-power toggle: drops backdrop blur + animations so weak GPUs stop
-                re-compositing frosted layers every frame. A kiosk can pin it with
-                ?lite=1. Stays open on toggle so the effect is visible. */}
+            {/* Keep the menu open so the listener can see the effect of toggling lite mode. */}
             <button
               type="button"
               aria-pressed={lite}

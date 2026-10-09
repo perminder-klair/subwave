@@ -22,26 +22,14 @@ import {
   type StateListing,
 } from './queries';
 
-// Read-only browser for the station's state dir, backed by GET /debug/state-tree.
-//
-// Deliberately NOT on the panel's 2s /debug poll: re-fetching a filesystem tree
-// every two seconds would fight the operator's expansion state, and there is no
-// live signal in it worth that cost. Loads on mount, reloads on Refresh.
-//
-// Loading is lazy per directory — one request per expand, never a walk. The tree
-// is driven CONTROLLED (`expanded` + `onExpandedChange`) rather than left to its
-// own internal state, because expanding a folder is what triggers the fetch: the
-// callback IS the load hook. The endpoint caps each listing and reports the real
-// `total`, which is what the truncation row renders; state/stems routinely holds
-// tens of thousands of dirs.
+// Load directories lazily on expansion and refresh explicitly; a filesystem poll would reset
+// expansion state. Render the endpoint total when a listing is truncated.
 
 type DirState =
   | { status: 'loading' }
   | { status: 'error'; error: string }
   | { status: 'ready'; entries: StateEntry[]; shown: number; total: number };
 
-/** voice/ was its own card before this tree existed — keep the DJ voice WAVs one
- *  glance away rather than one expand away. */
 const DEFAULT_EXPANDED = ['voice'];
 
 function fmtWhen(mtime?: string): string {

@@ -1,10 +1,5 @@
-// Which pipeline phases a tagger run executes. Its own module because
-// tag-library.ts runs main() on import and can't be test-imported.
-//
-// A RE-SCAN redoes already-done work for the existing population and must NEVER
-// forward-process never-touched tracks: it fires only the selected re-* passes
-// and suppresses the forward seed→propagate→active-learn discovery entirely.
-// A NORMAL run is a full forward pass minus any deselected steps.
+// Rescans rerun selected phases only for previously processed tracks. Normal runs process new
+// tracks through enabled phases.
 
 export interface RunFlags {
   rescan: boolean;

@@ -1,0 +1,100 @@
+{
+  "name": "Shelby / electronic flow tie from missed-evidence run",
+  "djName": "Shelby Hart",
+  "currentTrack": {
+    "id": "34g5ov37ncZszlUqPke5KY",
+    "title": "Message Man",
+    "artist": "twenty one pilots"
+  },
+  "musicalLeanings": "Shelby strongly favours electronic music across synth-pop, electro, house, techno, trip-hop, big beat, IDM and leftfield electronica. She enjoys distinctive production, unusual textures, deeper catalogue discoveries and tracks that connect different generations of electronic music. She'll happily move between accessible favourites and stranger material when the show allows it.",
+  "baseline": {
+    "id": "6iFuHecwKL1Khc14tyVo3N",
+    "title": "Distant Relative Salute",
+    "artist": "White Denim",
+    "year": 2013,
+    "genre": "Indie Rock",
+    "moods": ["celebratory"],
+    "energy": "high",
+    "instrumental": false,
+    "bpm": 112.3,
+    "key": "12A"
+  },
+  "candidates": [
+    {
+      "id": "13y9vaaI7wmJQUXX8JaoxZ",
+      "title": "Opportunities (Let’s Make Lots of Money) (full length original seven-inch)",
+      "artist": "Pet Shop Boys",
+      "year": 1986,
+      "genre": "Synth-Pop",
+      "moods": ["energetic", "workout"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 123,
+      "key": "5B"
+    },
+    {
+      "id": "5l6HPvL8aBiSNLLCrTrmEX",
+      "title": "Wide Awake",
+      "artist": "Audioslave",
+      "year": 2006,
+      "genre": "Hard Rock",
+      "moods": ["energetic", "workout"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 99.4,
+      "key": "7A"
+    },
+    {
+      "id": "0OaAhkisw7mD0FHsJZ3BVL",
+      "title": "Automatic High",
+      "artist": "S Club 8",
+      "year": 2002,
+      "genre": "Pop",
+      "moods": ["celebratory", "energetic"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 129.2,
+      "key": "2B"
+    },
+    {
+      "id": "0hEJTFgSGHtkvcMh9CiDLF",
+      "title": "Slide Away",
+      "artist": "The Verve",
+      "year": 1993,
+      "genre": "Rock",
+      "moods": ["celebratory", "festival"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 152,
+      "key": "10B"
+    },
+    {
+      "id": "5C6In5ywcpziq5Lo7GthV2",
+      "title": "Who Found Who",
+      "artist": "Jellybean",
+      "year": 1987,
+      "genre": "Electronic",
+      "moods": ["energetic", "celebratory"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 117.5,
+      "key": "12B"
+    },
+    {
+      "id": "6wX8WDZ7ermLI2f8eFi7Ef",
+      "title": "Genocide",
+      "artist": "The Offspring",
+      "year": 1994,
+      "genre": "Punk Rock",
+      "moods": ["energetic", "celebratory", "festival"],
+      "energy": "high",
+      "instrumental": false,
+      "bpm": 161.5,
+      "key": "9B"
+    }
+  ],
+  "expected": {
+    "selectedId": "5C6In5ywcpziq5Lo7GthV2",
+    "leaningsBasis": "electronic music"
+  }
+}

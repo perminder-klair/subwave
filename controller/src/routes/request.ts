@@ -341,7 +341,7 @@ async function resolveRequest(entry) {
   // Conversational DJ agent. On any failure fall through to the stateless
   // cascade below, so a request is never dropped.
   try {
-    const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
+    const agentRes = await djAgent.runRequest(queue, { requester, text });
     if (agentRes) {
       // Thread the agent's own echo-guard verdict into the durable log; the
       // other paths set it inline.

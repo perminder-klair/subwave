@@ -5,6 +5,7 @@
 // token-budget gated.
 
 import { z } from 'zod';
+import type { PlaylistGenerationResult } from '../schemas/playlist.js';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as embeddings from './embeddings.js';
@@ -65,15 +66,7 @@ export interface GenerateInput {
   recentPlayIds?: string[];
 }
 
-export interface GenerateResult {
-  tracks: DraftTrack[];
-  name?: string;
-  description?: string;
-  degraded: boolean;
-  reasons: string[];
-  poolSize: number;
-  usedFallback: boolean;
-}
+export type GenerateResult = PlaylistGenerationResult;
 
 const POOL_CAP = 120;              // candidates kept after merge/filter
 const LLM_CANDIDATE_CAP = 90;      // candidates shown to the model (token budget)

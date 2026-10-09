@@ -1,8 +1,5 @@
-// Built-in HTTP MCP endpoint: stateless Streamable HTTP, a fresh McpServer +
-// transport per POST (no sessions, no SSE — plain JSON). GET/DELETE are 405.
-// The endpoint itself is open; each tool call goes through a loopback
-// SubwaveClient that forwards the caller's Authorization header, so admin tools
-// 401 exactly as the REST endpoints they wrap.
+// Use a fresh stateless MCP server/transport per POST; GET/DELETE return 405.
+// Forward caller Authorization through loopback REST so admin tools keep their gates.
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';

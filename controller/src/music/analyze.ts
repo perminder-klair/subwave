@@ -211,7 +211,22 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     error: analyzer.vocalActivityError(),
     backend,
   });
-  const stemCache = stemDecision.widen;
+  let stemCache = stemDecision.widen;
+  // No stem write, backfill or sweep without the cache root's marker: an
+  // unmounted stems share must not read as an empty cache (stem-cache.ts).
+  // Checked before --re-analyze clears the stems stamps, so an offline cache
+  // keeps them.
+  if (stemCache) {
+    const root = await stemCacheStore.stemsRootStatus({ prepare: true });
+    if (!root.online) {
+      stemCache = false;
+      logEvent('warning', root.message ?? 'Stem cache offline: stems skipped this pass');
+    } else if (root.message) {
+      logEvent('warning', root.message);
+    } else if (root.action === 'create' || root.action === 'adopt') {
+      console.log(`[analyze] stem cache: ${root.action === 'create' ? 'created' : 'marked existing cache at'} ${stemCacheStore.stemsRoot()} (${stemCacheStore.STEMS_MARKER})`);
+    }
+  }
 
   // Snapshot the already-analysed ids BEFORE the clear wipes the bpm marker.
   // A raw --re-analyze leaves the scope null and redoes the whole library.
@@ -284,6 +299,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     stemSlotsLeft = await stemCacheStore.headroomTracks();
     existingStemDirs = await stemCacheStore.cachedTrackIdSet();
   }
+  // Net-new stem dirs this pass allocated (settled at the end of the pass).
+  const newStemIds: string[] = [];
+  let rewroteExistingStems = false;
   if (stemCache && !reAnalyzeScope) {
     // The loop spends stemSlotsLeft in ids order and the earlier widenings'
     // tracks run FIRST, draining slots before this slice is reached. Reserve
@@ -351,6 +369,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
     await scoreAudioMoods();
     return { available: true, backend, analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
+  if (stemCache) await stemCacheStore.markPassPending();
   logEvent('info', `Analysing audio for ${ids.length.toLocaleString('en-GB')} tracks…`);
   reportProgress({ phase: 'analyze', label: 'Analysing audio', done: 0, total: ids.length });
 
@@ -409,7 +428,11 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       slotsLeft: stemSlotsLeft,
       hasExistingDir: existingStemDirs.has(id),
     });
-    if (trackStemDecision.consumesSlot) stemSlotsLeft -= 1;
+    if (trackStemDecision.consumesSlot) {
+      stemSlotsLeft -= 1;
+      newStemIds.push(id);
+    }
+    if (trackStemDecision.want && existingStemDirs.has(id)) rewroteExistingStems = true;
     if (stemCache && !trackStemDecision.want && !stemGateAnnounced) {
       stemGateAnnounced = true;
       console.log(
@@ -422,7 +445,6 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   const runTrack = async (
     id: string,
-    index: number,
     downloadPromise?: Prefetch,
     admittedStems?: { dir: string | undefined },
   ): Promise<TrackWorkResult> => {
@@ -464,12 +486,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
             vocal,
             complete: localComplete,
             stems_dir,
+            stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
           })
         : await analyzer.analyze(id, {
             embed,
             vocal,
             stems_dir,
+            stems_require_marker: stems_dir ? true : undefined,
             embedding_only: embeddingOnly || undefined,
           });
       let storedVocal = false;
@@ -597,7 +621,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
       let outcome: DispatchOutcome<TrackWorkResult>;
       try {
-        outcome = { status: 'fulfilled', value: await runTrack(ids[i], i, current ?? undefined) };
+        outcome = { status: 'fulfilled', value: await runTrack(ids[i], current ?? undefined) };
       } catch (reason) {
         outcome = { status: 'rejected', reason };
       }
@@ -613,7 +637,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         // Reserve the pass-wide stem budget in source order, before the race.
         admittedStems.set(index, { dir: allocateStems(ids[index]) });
       },
-      run: (id, index) => runTrack(id, index, undefined, admittedStems.get(index)),
+      run: (id, index) => runTrack(id, undefined, admittedStems.get(index)),
       onOutcome: (outcome, id, index) => {
         admittedStems.delete(index);
         return commitOutcome(outcome, id, index);
@@ -633,7 +657,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // NOT oldest first, or this pass's best writes would be the first evicted;
   // the hourly cleanup cron sweeps too, this just settles the bill promptly).
   if (stemCache) {
-    const swept = await stemCacheStore.sweep().catch(() => null);
+    // New dirs can be added to the baseline. Rewrites and failed settlement
+    // require a fresh walk, even if an old under-budget snapshot remains.
+    const settled = await stemCacheStore.settlePassWrites(newStemIds, undefined, {
+      rewroteExisting: rewroteExistingStems,
+    }).catch(() => null);
+    const swept = settled?.withinBudget
+      ? null
+      : await stemCacheStore.sweep(undefined, { force: true }).catch(() => null);
     if (swept && swept.removed > 0) {
       console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
     }

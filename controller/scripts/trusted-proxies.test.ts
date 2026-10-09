@@ -3,7 +3,8 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,7 +88,7 @@ const SUPERVISORS = [
   { name: 'aio/supervisor.sh', path: join(docker, 'aio', 'supervisor.sh'), lib: 'SUBWAVE_SUPERVISOR_LIB' },
 ] as const;
 
-const shellTmp = mkdtempSync(join(tmpdir(), 'subwave-trusted-proxies-'));
+const shellTmp = createTempDir(join(tmpdir(), 'subwave-trusted-proxies-'));
 let caseNo = 0;
 
 type Render = { status: number; out: string; xml: string; marker: unknown; dir: string };

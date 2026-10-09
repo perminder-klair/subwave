@@ -7,13 +7,14 @@
 // half checks the value reaches its consumers, the harness and the prompt.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected before the first config-derived import.
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-discovery-steps-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-discovery-steps-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');

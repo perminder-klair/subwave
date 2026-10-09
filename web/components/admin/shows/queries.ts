@@ -1,8 +1,10 @@
 'use client';
 
+import { preparationStatusSchema } from '@/lib/schemas.generated';
+import { z } from 'zod';
 import type { QueryClient } from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
-import { useAdminQuery } from '@/lib/admin-query';
+import { useAdminMutation, useAdminQuery } from '@/lib/admin-query';
 import { settingsKeys } from '../settings/queries';
 import type {
   CommunityShow,
@@ -28,6 +30,7 @@ export const showKeys = {
   genres: () => ['shows', 'genres'] as const,
   playlists: () => ['shows', 'playlists'] as const,
   community: () => ['shows', 'community'] as const,
+  preparation: () => ['shows', 'preparation'] as const,
   blocklist: () => ['shows', 'blocklist'] as const,
 };
 
@@ -144,4 +147,25 @@ export async function fetchShowCandidates(
   const body = await response.json().catch(() => ({})) as CandidateDiagnostic & { error?: string };
   if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
   return body;
+}
+
+export type PreparationStatus = z.output<typeof preparationStatusSchema>;
+export function useShowPreparationQuery(adminFetch: AdminFetch, enabled: boolean) {
+  return useAdminQuery<PreparationStatus>({
+    key: showKeys.preparation(), adminFetch, enabled, refetchInterval: 5000,
+    request: async (fetcher, signal) => {
+      const body = await adminJson<{ status: unknown }>(fetcher, '/dj/show-preparation', undefined, signal);
+      return preparationStatusSchema.parse(body.status);
+    }, toastOnError: false,
+  });
+}
+export function useRetryShowPreparation(adminFetch: AdminFetch) {
+  return useAdminMutation<PreparationStatus, void>({
+    adminFetch,
+    request: async (_vars, fetcher) => {
+      const body = await adminJson<{ status: unknown }>(fetcher, '/dj/show-preparation/retry', { method: 'POST' });
+      return preparationStatusSchema.parse(body.status);
+    },
+    onDone: (status, _vars, client) => { client.setQueryData(showKeys.preparation(), status); },
+  });
 }

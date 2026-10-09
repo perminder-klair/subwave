@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.17.0",
+  "version": "1.19.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -15,6 +15,9 @@
     "test": "tsx scripts/run-tests.ts",
     "llm-bench": "tsx scripts/llm-bench/cli.ts",
     "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
+    "leanings-eval": "tsx scripts/leanings-eval.ts",
+    "leanings:review-replay": "tsx scripts/agentic-leanings-review-replay.ts",
+    "soul-library-eval": "tsx scripts/soul-library-eval.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
@@ -22,36 +25,39 @@
     "gen:schemas": "tsx scripts/gen-schemas.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^4.0.27",
-    "@ai-sdk/deepseek": "^3.0.19",
-    "@ai-sdk/elevenlabs": "^3.0.19",
-    "@ai-sdk/google": "^4.0.31",
-    "@ai-sdk/openai": "^4.0.27",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openrouter/ai-sdk-provider": "^3.0.0",
-    "adm-zip": "^0.6.0",
-    "ai": "^7.0.48",
-    "ai-sdk-ollama": "^4.1.0",
-    "better-sqlite3": "^11.10.0",
-    "dotenv": "^17.4.2",
-    "express": "^4.21.0",
-    "fast-xml-parser": "^5.10.1",
+    "@ai-sdk/anthropic": "^4.0.74",
+    "@ai-sdk/deepseek": "^3.0.61",
+    "@ai-sdk/elevenlabs": "^3.0.57",
+    "@ai-sdk/google": "^4.0.90",
+    "@ai-sdk/openai": "^4.0.86",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "adm-zip": "^0.6.1",
+    "ai": "^7.0.130",
+    "ai-sdk-ollama": "^4.4.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^18.0.6",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.11.2",
     "helmet": "^8.3.0",
     "mmdb-lib": "^3.0.3",
-    "multer": "^2.0.1",
+    "multer": "^2.4.0",
     "node-cron": "^4.6.0",
     "sqlite-vec": "^0.1.9",
-    "tsx": "^4.19.2",
+    "tsx": "^4.23.15",
     "umap-js": "^1.4.0",
-    "yaml": "^2.9.0",
-    "zod": "^4.4.3"
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/multer": "^2.2.0",
-    "@types/node": "^25.9.1",
-    "eslint": "^9.39.4",
+    "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.12.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.4"
+    "typescript-eslint": "^8.71.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   }
 }

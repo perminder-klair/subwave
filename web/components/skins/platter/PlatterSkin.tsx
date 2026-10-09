@@ -1,10 +1,9 @@
 'use client';
 
-// Everything that moves is a co-located keyframe (Platter.module.css) so
-// playback churn never touches React.
 
 import { useCallback, useRef } from 'react';
 import { AnimatePresence, m } from 'motion/react';
+import { ArrowUpRight, Heart, Play, Square } from 'lucide-react';
 import styles from './Platter.module.css';
 import {
   usePlayerActions,
@@ -90,11 +89,6 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* A 7" single, not an LP: the station airs one track at a time, so the
-          disc under the needle is always a 45 — a 7" label sits at half the
-          disc's width (an LP's is nearer a third), and Platter.module.css spins
-          it 1.35x faster. The spindle stays put: it's the deck's peg, one size
-          for either record. */}
       <div
         className={cn('absolute inset-[6%] rounded-full', styles.vinyl, styles.record, playing && styles.playing)}
         aria-hidden="true"
@@ -127,9 +121,7 @@ function Deck({
         aria-hidden="true"
       />
 
-      {/* One SVG in the deck's own coordinate space; the pivot at 86% 19% must
-          match .arm's transform-origin in Platter.module.css. .armLive sweeps
-          with the shared --pf var, .armRest parks it off the record. */}
+      {/* Match the pivot at 86% 19% to .arm transform-origin in Platter.module.css. */}
       <svg
         viewBox="0 0 100 100"
         className={cn(
@@ -232,7 +224,12 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <div className="hidden items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase md:flex">
-            {showName && <span className="max-w-[22vw] truncate">▸ {showName}</span>}
+            {showName && (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Play className="size-2.5 flex-none fill-current" />
+                <span className="max-w-[22vw] truncate">{showName}</span>
+              </span>
+            )}
             <span className="text-[var(--accent)]">with {djName}</span>
             <span className="max-w-[24vw] truncate border-l border-soft-border pl-3 text-muted">
               {contextLine(context) || (offline ? 'off air' : 'on air')}
@@ -248,15 +245,10 @@ export default function PlatterSkin(_props: SkinProps) {
             direct drive · quartz lock
           </span>
 
-          {/* On lg this wrapper collapses (display:contents) so the deck
-              centres in the whole plinth instead of this box. */}
           <div className="flex w-full items-center justify-center pt-8 lg:contents">
             <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
           </div>
 
-          {/* A row beneath the deck on phones; from lg the wrapper goes
-              display:contents so each cluster positions itself absolutely in
-              the plinth corners. */}
           <div className="flex w-full items-end justify-between gap-4 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
               <button
@@ -268,7 +260,9 @@ export default function PlatterSkin(_props: SkinProps) {
                   tunedIn ? 'bg-[var(--accent)] text-bg' : 'bg-bg text-ink hover:bg-[var(--field)]',
                 )}
               >
-                <span className="text-[30px] leading-none">{tunedIn ? '■' : '▶'}</span>
+                {tunedIn
+                  ? <Square className="size-6 fill-current" strokeWidth={0} />
+                  : <Play className="ml-1 size-7 fill-current" strokeWidth={0} />}
                 <span className="font-mono text-[8px] font-bold tracking-[0.22em]">{tunedIn ? 'STOP' : 'START'}</span>
               </button>
               <button
@@ -296,7 +290,7 @@ export default function PlatterSkin(_props: SkinProps) {
                     like.pending && 'opacity-60',
                   )}
                 >
-                  <span className="text-[16px] leading-none">{like.liked ? '♥' : '♡'}</span>
+                  <Heart className={cn('size-4', like.liked && 'fill-current')} />
                   {like.count > 0 && <span className="tabular-nums">{like.count}</span>}
                 </button>
               )}
@@ -425,8 +419,6 @@ export default function PlatterSkin(_props: SkinProps) {
             )}
           </div>
 
-          {/* Hidden in the single-column layout so the deck fits one screen
-              without scrolling. */}
           {voice && (
             <div className="hidden flex-none flex-col gap-2 border border-ink bg-surface px-4 py-3.5 lg:flex">
               <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
@@ -437,9 +429,6 @@ export default function PlatterSkin(_props: SkinProps) {
             </div>
           )}
 
-          {/* Desktop only, like the booth quote. Takes the leftover height and
-              ONLY its list scrolls — the surrounding column stays put
-              (lg:overflow-hidden), so the transport and slip don't move. */}
           <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-surface lg:flex">
             <div className="flex-none border-b border-[var(--line)] px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
               recently spun
@@ -505,12 +494,9 @@ export default function PlatterSkin(_props: SkinProps) {
                         : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
                     )}
                   >
-                    {slip.sending ? 'sending…' : 'send ↗'}
+                    {slip.sending ? 'sending…' : <span className="flex items-center gap-1">send <ArrowUpRight className="size-3" /></span>}
                   </button>
                 </div>
-                {/* The slip already reads as a letter, so the name is its
-                    sign-off. Optional — but when it's filled the DJ says it on
-                    air (#1347). */}
                 <div className="flex items-baseline gap-3">
                   <span className="w-[76px] flex-none font-mono text-[10px] font-bold tracking-[0.16em] text-muted uppercase">Yours —</span>
                   <input
@@ -559,8 +545,9 @@ export default function PlatterSkin(_props: SkinProps) {
           <span className="grid justify-items-center gap-6">
             <Deck playing={false} stationName={stationName} title={nowPlaying?.title ?? 'one live stream'} artist={artist} />
             <span className="grid justify-items-center gap-1.5 text-center">
-              <span className="font-mono text-[11px] font-bold tracking-[0.24em] text-[var(--accent)] uppercase">
-                ▶ drop the needle
+              <span className="flex items-center gap-2 font-mono text-[11px] font-bold tracking-[0.24em] text-[var(--accent)] uppercase">
+                <Play className="size-2.5 fill-current" strokeWidth={0} />
+                drop the needle
               </span>
               <span className="font-mono text-[11px] tracking-[0.2em] text-muted uppercase">tap to tune in</span>
             </span>

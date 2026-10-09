@@ -95,7 +95,9 @@ All read-only passthroughs. `now-playing` returns the current track, station
 context (time, weather, dominant mood), and live listener counts; `state`
 returns the upcoming queue, recent history, and the DJ booth log; `schedule`
 the personas, shows, and weekly grid (in the station's timezone); `session`
-the DJ's live session identity and recent transcript turns.
+the DJ's live session identity and recent transcript turns (for up to 30
+minutes after a show change these lead with the previous show's last few
+turns, flagged `meta.carried`, and a `kind: 'show-boundary'` separator).
 
 These exist so the agent can ground a request in what's actually on-air. A
 request like *"something slower than this"* is only meaningful if the model

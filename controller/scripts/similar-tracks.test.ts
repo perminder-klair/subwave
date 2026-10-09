@@ -5,11 +5,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-similar-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-similar-'));
 
 const {
   SIMILAR_LIMIT_DEFAULT,

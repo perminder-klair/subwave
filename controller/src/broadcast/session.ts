@@ -11,11 +11,13 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
-import { nextShowBoundaryMs } from './show-boundary.js';
+import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
+import { BOUNDARY_MAX_HORIZON_SEC, nextShowBoundaryMs, showKeyAt, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
+import { leaningsBlindPickReason } from './dj-agent/leanings-review.js';
 
 // Type-only import, erased at runtime, so no cycle with context.ts.
-export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
+export type SessionContext = Awaited<ReturnType<typeof getFullContext>> & { episodeOccurrenceId?: string | null };
 
 export interface HostSpeechStamp {
   readonly showKey: string;
@@ -55,11 +57,17 @@ interface ProgrammePlan {
   [k: string]: unknown;
 }
 
-export interface ProgrammeState {
+interface ProgrammeEpisode {
   status: 'pending' | 'ok' | 'fallback';
+  preparationSubject?: string;
+  preparationOccurrence?: { id: string; endsAt: number };
   plan: ProgrammePlan | null;
   beats?: Record<string, boolean>;
   introAiredAt: string | null;
+}
+
+export interface ProgrammeState extends ProgrammeEpisode {
+  interruptedEpisodes?: ProgrammeEpisode[];
 }
 
 // Stamped on a hard roll so a caller can air the two-voice mic-pass.
@@ -73,6 +81,8 @@ export interface RolledFrom {
   at?: number;
   /** A single-host acknowledgement for two adjacent scheduled shows. */
   sameHost?: boolean;
+  /** Saved source data for the outgoing sign-off, never its raw speech. */
+  episodeEditorial?: string;
 }
 
 // A mic-pass armed while the final outgoing track is on air. Look-ahead is
@@ -86,6 +96,7 @@ export interface BoundaryHandoff extends RolledFrom {
   targetKey: string;
   boundaryAt: number | null;
   contextAt?: string;
+  takeoverStartedAt?: number | null;
   finalTrack?: { id: string | null; title: string | null; artist: string | null } | null;
   /** Rendered into the queue, but not confirmed at the stream edge yet. */
   queued?: boolean;
@@ -104,6 +115,8 @@ interface Session {
   // roll puts it ahead of startedAt. maybeRoll refuses an older moment
   // (rollIsBackward); absent, the guard never blocks.
   ctxAt?: string;
+  /** Episode owner; null means the weekly grid, absent means a legacy session. */
+  takeoverStartedAt?: number | null;
   endedAt: string | null;
   show: { id?: string; name?: string; topic?: string } | null;
   persona: { id: string; name: string } | null;
@@ -115,6 +128,12 @@ interface Session {
   rolledFrom?: RolledFrom | null;
   boundaryHandoff?: BoundaryHandoff | null;
   hostRevision?: number;
+  /** The occurrence which opened this session; same-show takeovers may differ. */
+  episodeOccurrenceId?: string | null;
+  episodeEditorial?: string;
+  /** The outgoing show's recent booth tail (#1690). Display only: read solely
+   *  by GET /session, never by prompt memory or the agent window (#1479). */
+  boothCarry?: BoothCarry | null;
 }
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
@@ -386,6 +405,7 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     key: sessionKeyFor(ctx),
     startedAt: new Date().toISOString(),
     ctxAt: at.toISOString(),
+    takeoverStartedAt: showTakeoverStartedAt(at.getTime()),
     endedAt: null,
     show: ctx?.activeShow
       ? { id: ctx.activeShow.id, name: ctx.activeShow.name, topic: ctx.activeShow.topic }
@@ -398,6 +418,8 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     programme: null,
     messages: [],
     hostRevision: 0,
+    episodeOccurrenceId: ctx.episodeOccurrenceId,
+    episodeEditorial: ctx.episodeEditorial,
   };
   // Debounced persist only. An immediate unawaited write here could land after
   // maybeRoll's awaited post-stampRolledFrom persist() and leave a stale file.
@@ -424,15 +446,15 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
+  const at = contextDate(ctx);
+  // A look-ahead context has already advanced ownership; an older caller must
+  // not reset it simply because continuity cannot run backwards.
+  if (!aged && rollIsBackward(at, _session.ctxAt)) return _session;
+  const continuous = _session.key === nextKey && sessionRunContinues(_session, at);
   if (_session.key === nextKey) {
-    refreshHost(contextDate(ctx));
-    if (!aged) return _session;
+    refreshHost(at);
+    if (!aged && continuous) return _session;
   }
-
-  // A key change that only exists because the CALLER's clock is behind the
-  // look-ahead roll is not a boundary. Rolling here would archive the
-  // just-started session and hand onAirPersona() back to the outgoing DJ.
-  if (!aged && rollIsBackward(contextDate(ctx), _session.ctxAt)) return _session;
 
   const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
   if (bothAuto && !aged) return softShift(ctx, nextKey);
@@ -442,23 +464,26 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   // An armed final-track handoff may already have voiced (or, in
   // between-tracks mode, rendered and queued) this exact changeover. Do not
   // create a second mic-pass when the station clock reaches the boundary.
-  const handoffAlreadyCovered = prev.boundaryHandoff?.aired
-    && prev.boundaryHandoff.targetKey === nextKey;
-  const pendingBoundaryHandoff = prev.boundaryHandoff
-    && !prev.boundaryHandoff.aired
-    && prev.boundaryHandoff.targetKey === nextKey
-    ? prev.boundaryHandoff
+  const boundary = prev.boundaryHandoff?.targetKey === nextKey
+    && boundaryRunContinues(prev.boundaryHandoff, at) ? prev.boundaryHandoff : null;
+  const handoffAlreadyCovered = boundary?.aired;
+  const pendingBoundaryHandoff = boundary && !boundary.aired
+    ? boundary
     : null;
-  const boundaryProgramme = prev.boundaryHandoff?.targetKey === nextKey
-    ? prev.boundaryHandoff.programme ?? null
-    : null;
+  const boundaryProgramme = boundary?.programme ?? null;
   // Snapshot before end()/start() replace the live session — the outgoing DJ's
   // sign-off is generated after this returns (see priorPromptMemory above).
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
+  // Display-only booth tail for GET /session (#1690); never prompt memory.
+  next.boothCarry = snapshotBoothCarry(prev, next, at.getTime());
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
+  carryInterruptedProgramme(next, prev.programme, contextDate(ctx));
+  // A continuous 4h cap is still the same episode: keep its plan and aired
+  // beats. A prepared incoming programme takes precedence at a real boundary.
   if (boundaryProgramme) next.programme = boundaryProgramme;
+  else if (continuous && prev.programme) next.programme = prev.programme;
   stampRolledFrom(next, prev);
   if (handoffAlreadyCovered) next.handoffAired = true;
   if (pendingBoundaryHandoff) {
@@ -478,8 +503,12 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
 function stampRolledFrom(next: Session, prev: Session) {
   const prevId = prev?.persona?.id ?? null;
   const nextId = next?.persona?.id ?? null;
+  // A genuine change of show only. The 4h safety cap also hard-rolls, with the
+  // key unchanged: without the key check a long show (e.g. 23:00-06:00) had
+  // its host "acknowledge a show change" to themself four hours in.
   const sameHostShowChange = !!prevId && !!nextId && prevId === nextId
     && prev.key.startsWith('show:') && next.key.startsWith('show:')
+    && prev.key !== next.key
     && settings.get().djBehaviour.sameHostAcknowledgement;
   next.handoffAired = false;
   next.rolledFrom = (prevId && nextId && (prevId !== nextId || sameHostShowChange))
@@ -489,6 +518,7 @@ function stampRolledFrom(next: Session, prev: Session) {
         showName: prev?.show?.name ?? null,   // null for an auto block
         at: Date.now(),
         sameHost: sameHostShowChange,
+        episodeEditorial: prev.episodeEditorial || '',
       }
     : null;
 }
@@ -623,7 +653,8 @@ export function armBoundaryHandoff(
   const targetKey = sessionKeyFor(ctx);
   if (targetKey === _session.key) return false;
   if (!_session.key.startsWith('show:') && !targetKey.startsWith('show:')) return false;
-  const incoming = settings.getEffectivePersona(contextDate(ctx));
+  const at = contextDate(ctx);
+  const incoming = settings.getEffectivePersona(at);
   const outgoingId = _session.persona?.id;
   if (!outgoingId || !incoming?.id || outgoingId === incoming.id) return false;
   const boundaryAt = nextShowBoundaryMs(Date.now(), 6 * 3600);
@@ -637,6 +668,7 @@ export function armBoundaryHandoff(
     targetKey,
     boundaryAt,
     contextAt: typeof ctx?.at === 'string' ? ctx.at : new Date(boundaryAt ?? Date.now()).toISOString(),
+    takeoverStartedAt: showTakeoverStartedAt(at.getTime()),
     finalTrack: finalTrack ? {
       id: finalTrack.id ?? null,
       title: finalTrack.title ?? null,
@@ -644,6 +676,7 @@ export function armBoundaryHandoff(
     } : null,
     aired: false,
     at: Date.now(),
+    episodeEditorial: _session.episodeEditorial || '',
   };
   schedulePersist();
   return true;
@@ -724,6 +757,45 @@ export function getProgramme(): ProgrammeState | null {
   return _session?.programme || null;
 }
 
+export function unexpiredProgrammeEpisodes(programme: ProgrammeState, at: number): ProgrammeEpisode[] {
+  const { interruptedEpisodes = [], ...current } = programme;
+  const retained = new Map<string, ProgrammeEpisode>();
+  for (const episode of [...interruptedEpisodes, current]) {
+    const occurrence = episode.preparationOccurrence;
+    if (occurrence && occurrence.endsAt > at) retained.set(occurrence.id, episode);
+  }
+  return [...retained.values()].slice(-16);
+}
+
+// Boundary-prepared and continuous-cap objects retain ownership. A fresh
+// session can still resume any unexpired occurrence after a roll or restart.
+function carryInterruptedProgramme(next: Session, previous: ProgrammeState | null | undefined, at: Date) {
+  if (next.programme || !previous) return;
+  const retained = unexpiredProgrammeEpisodes(previous, at.getTime());
+  if (retained.length) next.programme = { status: 'pending', plan: null, beats: {}, introAiredAt: null, interruptedEpisodes: retained };
+}
+
+// Called only for the live preparation occurrence, so look-ahead research
+// cannot overwrite the outgoing presenter's source snapshot.
+export function rememberEpisodeEditorial(ctx: SessionContext) {
+  if (!_session || _session.key !== sessionKeyFor(ctx)) return;
+  if (_session.episodeEditorial === ctx.episodeEditorial) return;
+  _session.episodeEditorial = ctx.episodeEditorial;
+  const handoff = _session.boundaryHandoff;
+  if (handoff && handoff.targetKey !== _session.key && !handoff.aired) handoff.episodeEditorial = ctx.episodeEditorial;
+  schedulePersist();
+}
+
+export function rememberOpeningOccurrence(occurrence: { id: string; endsAt: number }) {
+  if (!_session) return;
+  const legacyProgramme = _session.programme && !_session.programme.preparationOccurrence && !_session.programme.interruptedEpisodes
+    ? _session.programme : null;
+  const missing = !_session.episodeOccurrenceId || legacyProgramme;
+  _session.episodeOccurrenceId ??= occurrence.id;
+  if (legacyProgramme) legacyProgramme.preparationOccurrence = occurrence;
+  if (missing) schedulePersist();
+}
+
 export function attachProgramme(programme: ProgrammeState) {
   if (!_session) return;
   _session.programme = programme;
@@ -802,7 +874,12 @@ export function windowMessages() {
       : null;
     // Model-only coaching clauses ride in meta.promptSuffix so the booth log's
     // verbatim turn text stays clean. Re-joined here for the model.
-    const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
+    // Keep the operator's original reason on disk, but remove preference prose
+    // from model history, including sessions written before this guard existed.
+    const promptText = m.role === 'dj' && m.kind === 'pick'
+      ? leaningsBlindPickReason(m.text, { title: m.meta?.title, artist: m.meta?.artist })
+      : m.text;
+    const text = m.meta?.promptSuffix ? `${promptText}${m.meta.promptSuffix}` : promptText;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${text}`
       : foreignSpeaker
@@ -820,22 +897,78 @@ export function windowMessages() {
   return out;
 }
 
-// Boot recovery: resume the persisted session if its key still matches, else
+function sessionRunContinues(stored: Session, at: Date): boolean {
+  return showRunContinues({
+    key: stored.key,
+    fromMs: new Date(stored.ctxAt ?? stored.startedAt).getTime(),
+    toMs: at.getTime(),
+    takeoverStartedAt: stored.takeoverStartedAt,
+  });
+}
+
+function boundaryRunContinues(boundary: BoundaryHandoff, at: Date): boolean {
+  const fromMs = boundary.boundaryAt ?? (boundary.contextAt ? new Date(boundary.contextAt).getTime() : null);
+  // Older handoff records without an anchor retain their recovery behaviour.
+  return fromMs === null || showRunContinues({
+    key: boundary.targetKey, fromMs, toMs: at.getTime(),
+    takeoverStartedAt: boundary.takeoverStartedAt,
+  });
+}
+
+function recoveredBoothCarry(previous: Session, next: Session): BoothCarry | null {
+  const at = new Date(next.ctxAt ?? next.startedAt);
+  const nowMs = at.getTime();
+  const previousAt = Date.parse(previous.ctxAt ?? previous.startedAt);
+  const boundary = previous.boundaryHandoff;
+  const persistedAt = boundary?.boundaryAt ?? Date.parse(boundary?.contextAt ?? '');
+  // A cap within one show keeps its ordinary roll semantics. An aired record
+  // targeting the outgoing session itself describes an earlier boundary.
+  if (previous.key === next.key) return snapshotBoothCarry(previous, next, nowMs);
+  if (boundary && boundary.targetKey === next.key
+      && Number.isFinite(persistedAt) && persistedAt >= previousAt && persistedAt <= nowMs
+      && boundaryRunContinues(boundary, at)) {
+    return snapshotBoothCarry(previous, next, persistedAt);
+  }
+  // Use the same station-clock scan as the real handoff path. Bound long
+  // outages to its horizon; anything older is already beyond the carry TTL.
+  const fromMs = Math.max(previousAt, nowMs - BOUNDARY_MAX_HORIZON_SEC * 1000);
+  const outgoingKey = previous.key.startsWith('show:') ? previous.key : 'default';
+  const incomingKey = next.key.startsWith('show:') ? next.key : 'default';
+  if (Number.isFinite(fromMs) && showKeyAt(fromMs) === outgoingKey) {
+    const scheduledAt = nextShowBoundaryMs(fromMs, (nowMs - fromMs) / 1000);
+    if (scheduledAt !== null) {
+      if (showKeyAt(scheduledAt) !== incomingKey || !showRunContinues({
+        key: next.key, fromMs: scheduledAt, toMs: nowMs,
+        takeoverStartedAt: next.takeoverStartedAt,
+      })) return null;
+      return snapshotBoothCarry(previous, next, scheduledAt);
+    }
+  }
+  return snapshotBoothCarry(previous, next, nowMs);
+}
+
+// Boot recovery: resume the persisted session if its show run still matches, else
 // archive it and start fresh.
 export async function recover(ctx: SessionContext): Promise<Session> {
   if (existsSync(config.session.currentFile)) {
     try {
       const stored = JSON.parse(await readFile(config.session.currentFile, 'utf8'));
       if (stored?.id && !stored.endedAt && stored.key === sessionKeyFor(ctx)
-          && Array.isArray(stored.messages)) {
+          && Array.isArray(stored.messages) && sessionRunContinues(stored, contextDate(ctx))) {
         _session = stored as Session;
+        const takeoverRepaired = _session.takeoverStartedAt === undefined;
+        if (takeoverRepaired) _session.takeoverStartedAt = showTakeoverStartedAt(contextDate(ctx).getTime());
+        const boundary = _session.boundaryHandoff;
+        const boundaryRepaired = boundary?.targetKey === _session.key && boundary.takeoverStartedAt === undefined
+          && boundaryRunContinues(boundary, contextDate(ctx));
+        if (boundaryRepaired) boundary.takeoverStartedAt = _session.takeoverStartedAt;
         const normalizedRevision = normalizedHostRevision(_session.hostRevision);
         const revisionRepaired = _session.hostRevision !== normalizedRevision;
         _session.hostRevision = normalizedRevision;
         _resumedQueuedHandoff = _session.boundaryHandoff?.queued === true;
         appendTurn({ role: 'event', kind: 'scenario', text: 'Controller restarted — session resumed.' });
         const repaired = refreshHost(contextDate(ctx));
-        if (repaired || revisionRepaired) await persist();
+        if (repaired || revisionRepaired || takeoverRepaired || boundaryRepaired) await persist();
         return _session;
       }
       // The restart happened after the station clock crossed the boundary, so
@@ -846,10 +979,14 @@ export async function recover(ctx: SessionContext): Promise<Session> {
       // An aired pair transfers its programme and covered-intro stamp without
       // reopening the show.
       if (stored?.boundaryHandoff
-          && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)) {
+          && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
+          && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
-        next.programme = boundary.programme ?? null;
+        carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
+        if (boundary.programme) next.programme = boundary.programme;
+        if (boundary.takeoverStartedAt === undefined) boundary.takeoverStartedAt = next.takeoverStartedAt;
         if (boundary.aired) {
           stampRolledFrom(next, stored as Session);
           next.handoffAired = true;
@@ -866,6 +1003,12 @@ export async function recover(ctx: SessionContext): Promise<Session> {
       if (stored?.id) {
         stored.endedAt = stored.endedAt || new Date().toISOString();
         await archive(stored);
+        const next = start(ctx);
+        // The lookback keeps a long outage from carrying stale turns (#1690).
+        next.boothCarry = recoveredBoothCarry(stored as Session, next);
+        carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
+        await persist();
+        return next;
       }
     } catch {}
   }

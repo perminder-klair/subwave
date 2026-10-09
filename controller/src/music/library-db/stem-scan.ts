@@ -1,14 +1,5 @@
-// Stem-cache scan scope and its ordering — the SQL projection of
-// `music/stem-priority.ts` (#1622 FR 14).
-//
-// The ranking RULE lives in that module: it is a policy reached from several
-// call sites (the backfill scope here, the byte-budget sweep in
-// music/stem-cache.ts) and it has to be readable and testable without a
-// database. This file is the query that applies it. Every weight, window and
-// eligibility rule is IMPORTED, never restated, and
-// scripts/stem-priority.test.ts pins the two against each other row-for-row —
-// the same discipline the era filter needs, because a JS scorer and a SQL
-// scorer that quietly disagree pick different tracks and nothing says so.
+// Project stem-priority into SQL using its shared constants. The test compares JS and SQL
+// scores row for row. #1622 FR 14, scripts/stem-priority.test.ts.
 
 import { requireDb } from './handle.js';
 import { analysisFailureExclusion } from './tracks.js';
@@ -29,23 +20,9 @@ export interface StemScanOpts {
   nowMs?: number;
 }
 
-// ---------------------------------------------------------------------------
-// The eligibility facts, in SQL
-// ---------------------------------------------------------------------------
-//
-// Both mirror the gates in broadcast/stem-blend.ts `maybeRenderBlend`, read
-// off the raw columns. json_valid() guards every json_* call — a malformed
-// column would otherwise throw mid-scan and take the whole backfill with it —
-// and the CASE is what makes that guard load-bearing, since SQLite does not
-// promise to short-circuit an AND chain.
-//
-// One accepted approximation on each side: `rows.ts` drops non-finite entries
-// when it parses these columns, so a grid that is entirely non-numeric counts
-// as present here and as absent at the seam. It costs one wasted slot on a
-// column no analyzer writes, and mirroring it would mean re-implementing
-// parseMsArray in SQL.
-
-// bars_json is a non-empty array → this track can be a seam's INCOMING side.
+// Use CASE with json_valid before JSON functions; SQLite does not guarantee AND
+// short-circuiting. SQL checks nonempty grids, while rows.ts also drops nonfinite values, so
+// malformed grids can waste a stem slot.
 const SQL_HEAD_GRID = (t: string) => `
   (CASE WHEN ${t}.bars_json IS NOT NULL AND json_valid(${t}.bars_json)
         THEN (CASE WHEN COALESCE(json_array_length(${t}.bars_json), 0) > 0 THEN 1 ELSE 0 END)
@@ -128,29 +105,9 @@ function dedupe(ids: readonly string[] | undefined): string[] {
   return [...new Set(ids.map(String).filter(Boolean))];
 }
 
-// ---------------------------------------------------------------------------
-// Scopes
-// ---------------------------------------------------------------------------
-
-// Ids that have never had a stem-caching pass (feature: stem backfill), so
-// turning the stem cache on for an already-analysed library fills it in
-// without the destructive, non-resumable --re-analyze that was the only path
-// before. Independent of the bpm/key scope, like unanalysedAudioIds and
-// needsVocalIds.
-//
-// stems_at stamps the ATTEMPT, not disk presence — see the migration-17 note.
-// That is what makes this converge: the LRU sweep evicts stem dirs whenever
-// the cache outgrows its budget, and a presence-based scope would drag every
-// evicted track back in on the next pass, forever, on any library bigger than
-// the budget.
-//
-// ORDERED BY PRIORITY, and the tiebreak is RANDOM() rather than id (#1622).
-// The budget always binds on a real library, so this order IS which tracks get
-// stems; `ORDER BY id` over Navidrome's opaque hashes spent it by lottery and
-// spent it on the same losers every night. Resumption does not depend on the
-// order — the stems_at stamp is what a resumed pass reads — so the order is
-// free to be a ranking, and free to redraw its enormous tie class each pass so
-// no track is permanently behind the cut. See music/stem-priority.ts.
+// Scan tracks with no stems_at attempt, independent of other analysis scopes. Disk absence is
+// not eligibility because eviction would otherwise cause endless re-separation. Rank by stem
+// priority and randomize ties; attempt stamps make resumption independent of order. #1622.
 export function needsStemsIds(limit?: number, opts: StemScanOpts = {}): string[] {
   const { expr, join, params } = buildPriority(opts);
   const sql =

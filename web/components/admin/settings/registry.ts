@@ -1,12 +1,5 @@
 'use client';
 
-// The settings surface described once, so three things can read it instead of
-// re-deriving it: the grouped nav rail, the per-section dirty dot + sticky save
-// bar, and the search box that jumps to a field.
-//
-// Only the SHAPE lives here — labels, which section owns which slice of the
-// form, which paths cost a mixer restart. The controls themselves stay in their
-// section components; this file never renders anything.
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
@@ -346,7 +339,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Serve the secondary Opus mount', section: 'danger', card: 'Opus stream', keywords: 'opus ogg mount restart' },
   { label: 'Bitrate', section: 'danger', card: 'Opus stream', keywords: 'opus kbps restart' },
   { label: 'Serve the lossless FLAC mount', section: 'danger', card: 'FLAC stream', keywords: 'flac lossless ogg mount restart' },
-  { label: 'Push ICY track titles on the Ogg mounts', section: 'danger', card: 'Ogg metadata', keywords: 'icy metadata ogg titles' },
+  { label: 'Push ICY track titles on the Opus mount', section: 'danger', card: 'Ogg metadata', keywords: 'opus icy metadata ogg flac native tags titles' },
   { label: 'Serve the AAC mount', section: 'danger', card: 'AAC stream', keywords: 'aac adts mount restart' },
   { label: 'Bitrate', section: 'danger', card: 'AAC stream', keywords: 'aac kbps restart' },
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },

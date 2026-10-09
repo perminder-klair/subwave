@@ -1,10 +1,5 @@
-// Legs — primary + optional fallback.
-//
-// A "leg" bundles everything a single LLM attempt needs: the resolved config
-// (so the strategy layer can pick the provider-specific structured-output path +
-// sampling from the right provider), the built AI SDK model, and a log label.
-// withFailover (core/failover.ts) tries the primary leg, and only on a
-// host-unreachable error retries against the fallback leg. See discussion #320.
+// A leg contains config, model and log label. withFailover owns primary/fallback
+// error eligibility; see core/failover.ts and discussion #320.
 
 import * as settings from '../../../settings.js';
 import { languageModel, resolveModelId, ollamaBaseUrl, llmCfg } from './registry.js';

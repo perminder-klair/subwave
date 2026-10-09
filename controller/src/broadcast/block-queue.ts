@@ -1,37 +1,7 @@
-// Album / block queueing — the pure half (#1622 FR 4).
-//
-// WHAT THIS FEATURE IS, AND WHAT IT IS NOT
-// ----------------------------------------
-// It is one press instead of twelve, in the right order, with an honest report
-// of what the never-play list refused. It is NOT a bypass feature, and that is
-// worth stating because the tracker framed it as one.
-//
-// Every guard named there was checked against the code: `picker.albumHours`
-// (#1485 FR 3) lives in `filterPickerCandidates` and `dj-agent/album-guard.ts`,
-// the artist guard in `dj-agent/artist-guard.ts` — all of them are PICK paths,
-// and an operator push reaches none of them. What the cooldown does to a queued
-// block is the right thing already: `queue.recentAlbumKeys` walks `upcoming`,
-// so the block's presence stops the picker adding more of the same record
-// behind it. There is nothing there to opt out of.
-//
-// The exemptions a block DOES need are the ones `POST /dj/queue-track` already
-// carries, and it carries them exactly as it did: `allowDuplicate: true` past
-// the #619 dedup guard, and `requestedBy: 'studio'` past the #447 length cap,
-// the show-boundary cut (#1574) and the bed's request reason (#1465). This
-// module invents no new bypass and the queue gains no new gate.
-//
-// THE ONE THING THAT IS NOT BYPASSED
-// ----------------------------------
-// The never-play blocklist. It is absolute, requests included, and a block of
-// thirty tracks is no different. `hitOf` is read here so the response can NAME
-// what was skipped, but the refusal still happens where it always has, in
-// `queue.push()` — this is a reporting read of the existing chokepoint, not a
-// second rule-filter, and the route pushes every planned track and records a
-// `-2` return as a skip whether or not this pass predicted it.
-//
-// Pure and I/O-free so scripts/queue-block.test.ts can pin the ordering, the
-// cap and the partition without a music server. The Subsonic lookups and the
-// pushes live in routes/dj.ts.
+// Operator blocks retain ordinary studio queue exemptions; blocklist refusal remains in
+// queue.push. This pure planner names skips and orders/caps tracks; routes/dj.ts performs
+// lookups and pushes. #1622 FR 4, #1485 FR 3, #619, #447, #1574, #1465,
+// scripts/queue-block.test.ts.
 
 import { QUEUE_BLOCK_MAX_TRACKS, type QueueBlockKind, type QueueBlockOrder } from '../schemas/dj.js';
 
@@ -66,21 +36,8 @@ export interface BlockPlan {
 }
 
 /**
- * An album's own running order.
- *
- * `subsonic.getAlbum` returns what the music server chose to return, which is
- * conventionally disc/track order and contractually nothing at all. This is the
- * one queue where getting that wrong is the entire failure — a shuffled album
- * is not a degraded album block, it is twelve tracks by one artist — so the
- * order is imposed here rather than trusted.
- *
- * Sorts on (discNumber, track) with the SOURCE ORDER as the final tiebreak, so
- * a release that tags neither comes back exactly as the server sent it instead
- * of being re-arranged into a sort's incidental order. A missing disc number
- * reads as disc 1, which is what a single-disc release omits it to mean; a
- * missing track number sorts to the END of its disc rather than the front,
- * because an untagged bonus cut appended to a tagged record is far commoner
- * than an untagged opener.
+ * Sort by disc, then track, preserving source order for ties. Missing discs mean disc 1;
+ * missing tracks sort last within their disc.
  */
 export function orderAlbumTracks<T extends BlockSong>(songs: readonly T[]): T[] {
   const num = (v: unknown, fallback: number): number => {
@@ -133,17 +90,8 @@ export interface PlanBlockInput<T extends BlockSong> {
 }
 
 /**
- * Source songs → the queue order, the skips and the truncation, in one pass.
- *
- * Order of operations is load-bearing:
- *
- *   1. ORDER first, so the cap takes the tail of the RECORD rather than the
- *      tail of whatever order the server happened to send.
- *   2. Drop the unplayable (no id — nothing to queue) and the blocked, and
- *      name both. Blocked tracks are removed BEFORE the cap so a record with
- *      two blocked cuts still queues its full length, rather than losing two
- *      more off the end to make room for tracks that were never going to air.
- *   3. Cap last, and report what it took.
+ * Order tracks, remove unplayable/blocked entries, then cap. Return named skips and truncation
+ * so refused tracks do not consume capacity.
  */
 export function planBlock<T extends BlockSong>(input: PlanBlockInput<T>): BlockPlan {
   const { kind, songs, order, limit, hitOf, rand } = input;
@@ -194,18 +142,8 @@ export function blockLabel(input: { kind: QueueBlockKind; name?: string | null; 
 }
 
 /**
- * Total seconds of air a planned block asks for.
- *
- * Spans are injected (in production `music/silence-trim.playableSpanSec`, which
- * is the span that will really air after the trim's cue points) rather than
- * read off `duration` here, because "how long is this track" is answered in
- * ONE place and this module is not it — see `music/track-floor.ts`.
- *
- * Returns null when ANY track's span is unknown, which is the honest answer for
- * a forecast: a partly-walked library would otherwise produce a total that is
- * short by however many rows it could not measure, and a show-change warning
- * derived from it would under-state the overrun — the direction that reads as
- * "this fits" when it does not.
+ * Sum injected playable spans. Return null if any track's span is unknown rather than
+ * understating a block forecast.
  */
 export function blockPlayableSec(
   tracks: readonly BlockSong[],

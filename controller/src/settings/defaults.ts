@@ -96,11 +96,9 @@ export const DEFAULTS = {
     // whole connection, so /now-playing publishes it as stream.bufferSeconds and
     // players subtract it to line titles up with the audio in someone's ears (#1114).
     bufferSeconds: 22,
-    // ICY (out-of-band) titles on the Ogg mounts. ON by default: most clients
-    // read the in-band Ogg comment once at connect and then freeze on that title
-    // (#1052). foobar2000 is the exception — it parses chained-Ogg tags correctly
-    // and the ICY channel breaks its Ogg-FLAC metadata — hence a toggle.
-    // MP3/AAC always use ICY and are unaffected.
+    // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
+    // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep
+    // this key and its default for stored-settings and Opus compatibility.
     oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts): after idleAfterMinutes with zero
     // listeners the mounts keep serving silence but the music chain stops being
@@ -460,6 +458,10 @@ export const DEFAULTS = {
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.
     pickerAgent: true,
+    // Guest preferences are a deliberately optional, secondary programming
+    // input. Keep them off for upgrades and new stations: a blank host field
+    // must mean no Musical Leanings are sent to the picker.
+    guestMusicalLeanings: false,
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.

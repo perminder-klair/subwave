@@ -201,8 +201,8 @@ if file.exists("#{state_dir}/liquidsoap_flac_enabled.txt") then
   flac_enabled := (raw == "true")
 end
 
-# ICY (out-of-band) per-track titles on BOTH Ogg mounts. ON by default — only an
-# explicit "false" disables. See make_stream_outputs() for the client trade-off.
+# Legacy ICY (out-of-band) per-track titles for the Opus mount. ON by default —
+# only an explicit "false" disables. FLAC always uses native chained Ogg tags.
 if file.exists("#{state_dir}/liquidsoap_ogg_icy_metadata.txt") then
   raw = string.trim(file.contents("#{state_dir}/liquidsoap_ogg_icy_metadata.txt"))
   ogg_icy_metadata := (raw != "false")
@@ -213,7 +213,7 @@ if file.exists("#{state_dir}/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} opus_icy_metadata=#{ogg_icy_metadata()} flac_metadata=native station_name=#{station_name()}")
 
 # subhttp:<full-url> — whole-file download via curl (http.get.stream returns
 # spurious 522s on the Cloudflare-fronted Navidrome origin).
@@ -494,10 +494,19 @@ def dj_transition(a, b) =
   # remaining() watcher:
   #   * washout + loop ride the ENDING track (`a`) — flag, delay tap and bar
   #     length were stamped on it when it was queued.
-  #   * sweep / dissolve / chop ride the INCOMING pick (`b`) — chosen from the
-  #     PAIR, armed only between clashing tracks (mix.effectAllowedFor).
-  # Precedence: loop beats everything, then washout (which may carry the
-  # length-cap auto-arm). The queue strips the losers upstream; enforced here too.
+  #   * sweep / dissolve / chop / blend ride the INCOMING pick (`b`) — chosen
+  #     from the PAIR, armed only where the pair suits it (mix.effectAllowedFor).
+  # Precedence: washout (which may carry the length-cap auto-arm) beats loop, and
+  # loop beats every incoming-side gesture; washout also excludes dissolve and
+  # chop. The queue strips the losers upstream; enforced here too.
+  #
+  # JINGLE SEAMS — the rotate and jingle_now both sit upstream of cross, so a
+  # stinger lands BETWEEN two picks: A -> J -> B. B's entry flag was chosen and
+  # validated for the A -> B pair (chop even carries A's beat period), but on air
+  # it would fire on the J -> B seam, filtering, washing or chopping the station
+  # ID. Both jingle sources stamp `subwave_jingle`, and an incoming-side gesture
+  # stands down when the OUTGOING track is a jingle. The controller cannot do
+  # this upstream: it never sees a jingle the mixer's own rotate placed.
   #
   # SHOW-BOUNDARY FADE (#1574) — liq_show_fade means the controller CUT this
   # track at a show change, so EVERY gesture stands down on both sides and the
@@ -507,11 +516,12 @@ def dj_transition(a, b) =
   # They cannot merely be left alone: forcing washing/looping false would ARM
   # the `b` gestures on seams where the outgoing one used to suppress them.
   boundary_fading = a.metadata["liq_show_fade"] == "true"
+  jingle_out = a.metadata["subwave_jingle"] == "true"
   washing = a.metadata["liq_washout"] == "true" and not boundary_fading
   looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
-  sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading
-  dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading
-  chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading
+  sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading and not jingle_out
+  dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
+  chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
   # FADE SHAPE per effect. exp drops the dry EARLY so the washout's tail reads
   # as a dissolve (it dips below unity mid-cross, which is the effect; the +6 dB
   # hazard is only for fades that hold full level early). log does the opposite,
@@ -595,7 +605,7 @@ def dj_transition(a, b) =
   # incoming arrives lows-first (b-side block further down). Armed only between
   # COMPATIBLE tracks (mix.effectAllowedFor). At e=0 the HPF sits at 30 Hz, i.e.
   # transparent, so the engage is seamless.
-  blending = b.metadata["liq_blend"] == "true" and not looping and not boundary_fading
+  blending = b.metadata["liq_blend"] == "true" and not looping and not boundary_fading and not jingle_out
   a_source =
     if blending then
       log("DJ blend: spectral handover into the next track (d=#{d}s)")
@@ -616,23 +626,27 @@ def dj_transition(a, b) =
     else
       a_source
     end
-  # WASHOUT ENVELOPE — dub-style tail. The comb feedback swells while the exp
-  # fade pulls the dry away, so the delay line self-sustains over the incoming
-  # track's opening. The tail must be dead before the transition source
-  # truncates at d, or it clicks off. Tap length (liq_washout_delay) is stamped
-  # by the controller, tempo-synced to a dotted eighth of the track's BPM.
+  # WASHOUT ENVELOPE — a tempo-synced slapback under the exp fade. This build's
+  # `comb` is a ONE-SHOT feed-forward echo (see the LOOP block): `feedback` is
+  # the level of a SINGLE delayed copy, so this is one echo of the fading track
+  # one tap behind it, not a recirculating dub tail. The echo is swelled in
+  # while the exp fade pulls the dry away, and must be dead before the
+  # transition source truncates at d, or it clicks off. Tap length
+  # (liq_washout_delay) is stamped by the controller, tempo-synced to a dotted
+  # eighth of the track's BPM. A real multi-repeat tail is tracked as follow-up
+  # work; it costs operators on the single streaming thread (#1565).
   a_source =
     if washing then
       wd = float_of_string(default=0.30, a.metadata["liq_washout_delay"])
       log("DJ washout: dissolving the outgoing track, tap=#{wd}s (d=#{d}s)")
       wash_src = a_source
-      # The swell must beat the exp fade: swelling at 25% seeds the tail from an
-      # already-faded signal and the wash is inaudible. Buildup is bounded by the
+      # The swell must beat the exp fade: swelling at 25% echoes an
+      # already-faded signal and the echo is inaudible. Level is bounded by the
       # exp fade starving the input, plus the bus limiter.
       def wash_fb() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
-        fb_max = -1.0            # peak feedback dB — nearer 0 = longer tail
+        fb_max = -1.0            # peak echo level, dB (one-shot comb: not a decay rate)
         fb_off = -90.0           # idle/silent
         t_swell = 0.10 * d
         t_hold  = 0.85 * d
@@ -649,9 +663,9 @@ def dj_transition(a, b) =
           fb_off
         end
       end
-      # Late makeup so the tail sits PRESENT over the incoming fade-in. It comes
-      # up only after the exp fade has dropped the dry, so it lifts the echoes
-      # alone and never bumps the still-audible song.
+      # Late makeup so the echo sits PRESENT over the incoming fade-in. It comes
+      # up only after the exp fade has dropped the dry, so it lifts the echo
+      # and never bumps the still-audible song.
       def wash_gain() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
@@ -665,10 +679,10 @@ def dj_transition(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      # Darkening tail. The comb's loop is fixed, so a lowpass AFTER it closes
-      # across the window instead (9 kHz -> 3 kHz) and later repeats arrive
-      # darker. Wet must ramp in: an RC at 9 kHz is not transparent, and
-      # engaging it full-wet would dull the still-audible dry.
+      # Darkening. A lowpass AFTER the comb closes across the window (9 kHz ->
+      # 3 kHz), so the track and its echo recede together. Wet must ramp in: an
+      # RC at 9 kHz is not transparent, and engaging it full-wet would dull the
+      # still-audible dry.
       def tail_cut() =
         e = source.elapsed(wash_src)
         e = if e < 0. then 0. else e end
@@ -692,14 +706,16 @@ def dj_transition(a, b) =
     else
       a_source
     end
-  # DISSOLVE ENVELOPE — reverb wash. Same topology as the washout (comb ->
-  # cascaded damped lowpass -> late makeup) with two differences:
+  # DISSOLVE ENVELOPE — a smear of early reflections. Same topology as the
+  # washout (comb -> cascaded damped lowpass -> late makeup) with two differences:
   #   1. FOUR parallel combs at mutually prime, tempo-UNRELATED delays
-  #      (89/113/151/181 ms) instead of one tempo-synced tap, so the tails smear
-  #      into diffuse ambience instead of a rhythmic pulse. No allpass exists in
+  #      (89/113/151/181 ms) instead of one tempo-synced tap, so the copies
+  #      smear into ambience instead of a rhythmic pulse. No allpass exists in
   #      the proven kit, so diffusion comes from the prime spread plus damping.
+  #      Each comb is ONE-SHOT (see the LOOP block), so this is four delayed
+  #      copies of the fading track, not a multi-second reverb tail.
   #   2. The damping lowpass closes deeper (7 kHz -> 1.2 kHz).
-  # Each comb's tail is isolated from its dry pass-through (the -4x subtraction
+  # Each comb's copy is isolated from its dry pass-through (the -4x subtraction
   # below) so the wash can run hot without multiplying the dry path.
   a_source =
     if dissolving then
@@ -708,13 +724,13 @@ def dj_transition(a, b) =
       def diss_fb() =
         e = source.elapsed(diss_src)
         e = if e < 0. then 0. else e end
-        # Per-tap dB. Tail decay is fb/delay per SECOND, so short taps need
-        # near-unity feedback: -0.5 dB on 89-181 ms taps ~= 3-6 dB/s, a
-        # multi-second wash. -2.5 dB on 43-101 ms taps decays 25-58 dB/s and
-        # renders indistinguishable from dry.
+        # Per-tap level of each comb's single copy, in dB. Tuned by ear when the
+        # comb was assumed to recirculate; it does not, so this is a level, not
+        # a decay rate (a longer, recirculating wash is follow-up work).
         fb_max = -0.5
         fb_off = -90.0
-        # Swell must beat the exp fade, as in the washout.
+        # Swell early, as in the washout. The dissolve rides the LINEAR fade,
+        # so the copies are seeded while the track is still near full level.
         t_swell = 0.10 * d
         t_hold  = 0.80 * d
         t_rel   = 0.93 * d
@@ -763,10 +779,10 @@ def dj_transition(a, b) =
         x = if e >= t_on then 1.0 else e / t_on end
         3.0 * x * x - 2.0 * x * x * x
       end
-      # PURE-TAIL isolation: comb passes its input through, so summing four
+      # PURE-COPY isolation: comb passes its input through, so summing four
       # combs directly would force a 0.25 weight to keep the dry at unity and
-      # bury the tails 12 dB down (measured: a -44 dB mid-cross crater).
-      # Subtracting the dry leaves ONLY the feedback tails.
+      # bury the copies 12 dB down (measured: a -44 dB mid-cross crater).
+      # Subtracting the dry leaves ONLY the four delayed copies.
       #
       # ONE subtraction for all four taps, never one per tap (#1565). The
       # per-tap form is algebraically identical (bit-identical over 60s) but
@@ -804,13 +820,21 @@ def dj_transition(a, b) =
   #     after the first quarter (full silence between the first stabs reads as
   #     dropouts).
   #   * WET ramps the gesture in, so gain is exactly 1 at e=0.
-  #   * MASTER silences the branch before the transition source truncates at d.
-  # Gate edges are ~12 ms smoothsteps; square edges click.
+  #   * MASTER silences the branch by 92% of dd. The incoming fade runs on the
+  #     same dd (see b_source below), or a crossfade longer than 10s leaves a
+  #     hole once the chop is done.
+  # Gate edges are written as ~12 ms smoothsteps, but an amplify getter is read
+  # once per 20 ms frame (frame.duration, measured on 2.4.5), so on air every
+  # edge is a frame-wide step and the smoothstep only shapes which frames open.
+  # Averaging the gate over each frame took just 1.2 dB off the edge splatter
+  # (1 kHz sine, -50.3 -> -51.5 dB), so softer edges need an audio-rate
+  # envelope, not a finer formula here.
+  chop_dd = if d > 10. then 10. else d end
   a_source =
     if chopping then
       p = float_of_string(default=0.5, b.metadata["liq_chop_period"])
       p = if p <= 0.05 then 0.5 else p end
-      dd = if d > 10. then 10. else d end
+      dd = chop_dd
       log("DJ chop: cutting the outgoing track on the beat (p=#{p}s, dd=#{dd}s, d=#{d}s)")
       chop_src = a_source
       def chop_gain() =
@@ -887,9 +911,26 @@ def dj_transition(a, b) =
   # delayed copy whatever the feedback, so no single comb can loop. Hence a
   # CASCADE OF DOUBLING DELAYS: K combs at bar, 2*bar, 4*bar, 8*bar convolve to
   # taps at every multiple 0..(2^K-1) of bar, so a one-bar capture tiles
-  # gaplessly and terminates by construction. At feedback=0.0 the tap set is
-  # flat at -6 dB whatever the stage count. Later stages are built only when
-  # their delay < d, since a tap at >= d is never heard.
+  # and terminates by construction. At feedback=0.0 every copy sits at the
+  # capture's own level whatever the stage count. Later stages are built only
+  # when their delay < d, since a tap at >= d is never heard.
+  #
+  # FRAME RULES (measured on 2.4.5, 1 kHz tone through the cascade). Two
+  # properties of this build decide whether the tiling is actually gapless:
+  #   * an amplify getter is read once per 20 ms frame, at the frame's START,
+  #     so the dry gate can only close on a frame boundary;
+  #   * a comb built inside the transition never stores its FIRST frame in the
+  #     delay line: a 0.2 s burst through comb(delay=1.0) comes back as
+  #     [1.02, 1.20), its opening frame missing.
+  # Together they put a dropout at EVERY repeat: the old gate (close at bar,
+  # bar to the nearest 0.01 s) aired 17-23 windows of silence over one
+  # transition, a full 20 ms hole per repeat when bar sat on the frame grid and
+  # about 10 ms when it did not. So the bar is snapped to the frame grid and the
+  # gate stays open ONE extra frame: the dry covers the frame no comb kept, and
+  # each comb's loop is then the bar starting one frame in. Measured: no 5 ms
+  # window more than 1 dB off the capture level at bar 1.33, 1.87 or 2.0. The
+  # snap moves the loop's tempo by at most 10 ms a bar; it is a tape loop with
+  # no beat phase anyway (below).
   #
   # Known compromise: the analyzer gives tempo, not beat PHASE, so this is a
   # tape-loop, not a gridded loop; the ride-out lowpass softens the splice tick.
@@ -897,19 +938,18 @@ def dj_transition(a, b) =
     if looping then
       bar = float_of_string(default=2.0, a.metadata["liq_loop_bar"])
       bar = if bar <= 0.2 then 2.0 else bar end
+      fd = frame.duration()
+      bar = fd * float_of_int(int_of_float(bar / fd + 0.5))
       log("DJ loop: catching the last bar of the outgoing track (bar=#{bar}s, d=#{d}s)")
       loop_src = a_source
-      # Dry gate: unity through the capture pass, then the hard cut. Everything
-      # after is the cascade re-emitting that one bar.
+      # Dry gate: unity through the capture pass plus the one frame the combs
+      # drop (FRAME RULES above), then the hard cut. Everything after is the
+      # cascade re-emitting that bar. The half-frame margin keeps an
+      # accumulated elapsed() a hair under a boundary from opening one more.
       def loop_dry() =
         e = source.elapsed(loop_src)
         e = if e < 0. then 0. else e end
-        edge = 0.012
-        if e < bar - edge then 1.0
-        elsif e < bar then
-          x = (e - (bar - edge)) / edge
-          1.0 - (3.0 * x * x - 2.0 * x * x * x)
-        else 0.0 end
+        if e < bar + 0.5 * fd then 1.0 else 0.0 end
       end
       # Ride-out darkening: the cutoff closes 9 kHz -> 2.5 kHz over the back
       # half. Wet stays 0 through the capture pass and ramps in only after the
@@ -955,7 +995,17 @@ def dj_transition(a, b) =
     else
       a_source
     end
-  b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
+  # The chop is the one gesture whose incoming fade does NOT span the buffer:
+  # the outgoing branch is silenced on the compressed chop clock (MASTER, 92%
+  # of chop_dd), so a fade over the full d left the seam empty from there to d.
+  # Measured on pink noise against the plain crossfade: at d=30 the old seam sank
+  # to -47.4 dB (track -37, plain cross -39.6), at d=14 to -41.9 dB; fading in
+  # over chop_dd holds it at or above -40.4 dB and never above the track's own
+  # level. This is not the +6 dB hazard in the invariant above, which needs the
+  # outgoing still up when the incoming arrives; here it is already gone. For
+  # d <= 10, chop_dd == d and the render is byte-identical.
+  b_fade = if chopping then chop_dd else d end
+  b_source = fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
   # INCOMING SIDE. Every effect here releases by driving WETNESS to 0, never by
   # parking the cutoff open: an RC filter at its open cutoff is still not
   # transparent, and the branch operators vanish at the d boundary, so the track
@@ -1093,6 +1143,9 @@ music =
       not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
+    # Mark a stinger for dj_transition's JINGLE SEAMS rule. music_meta is
+    # captured above this rotate, so the key never reaches now-playing.
+    jingles = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingles)
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
@@ -1104,6 +1157,9 @@ music =
 jingle_now = source.available(jingle_now_queue, {
   not bed_on_air() and not pause_talk_on_air() and time() > voice_until()
 })
+# The same mark as the rotate's jingles. Every jingle arrives here when the
+# controller owns the rotate (#1619), so this one covers both kinds.
+jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now)
 music = fallback(
   id="music_with_jingle_now",
   track_sensitive=true,
@@ -1457,9 +1513,11 @@ radio = smooth_add(
   special=intro
 )
 
-# SFX on top. A stinger rides BENEATH both the DJ and the music, so it barely
-# ducks; its own level and p are the two knobs.
-sfx_bed = amplify(0.7, sfx_queue)
+# SFX on top. smooth_add adds the stinger at its own level and only pulls the
+# programme under it to p (~-3 dB), so the stinger airs at unity. 0.7 here
+# buried stingers under the mic_chain-boosted DJ (#1689); the bus limiter below
+# catches the sum's peaks.
+sfx_bed = amplify(1.0, sfx_queue)
 radio = smooth_add(
   duration=0.3,     # snappier than voice — stingers are short, no lead-in clip
   p={0.7},          # ~-3 dB
@@ -1773,11 +1831,8 @@ def make_stream_outputs() =
         opus_enc,
         id="stream_opus",
         fallible=true,
-        # ICY metadata toggle (default ON). output.icecast's null default
-        # guesses ICY off for Ogg and relies on in-band chained-Ogg re-emission,
-        # but many clients (Ferrosonic, Cast, Symfonium) read the Ogg comment
-        # once at connect and freeze on the first title (#1052), while
-        # foobar2000 wants the opposite. Hence a toggle.
+        # Legacy Opus compatibility toggle. False selects the encoder's native
+        # chained-Ogg metadata path; true keeps the existing external ICY mode.
         send_icy_metadata=ogg_icy_metadata(),
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
@@ -1809,8 +1864,9 @@ def make_stream_outputs() =
         ),
         id="stream_flac",
         fallible=true,
-        # ICY toggle — see the /stream.opus note above (#1052 vs foobar2000).
-        send_icy_metadata=ogg_icy_metadata(),
+        # Ogg-FLAC metadata must stay in the encoder: Icecast does not apply
+        # external ICY updates to this codec, while false emits native chained tags.
+        send_icy_metadata=false,
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),

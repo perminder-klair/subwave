@@ -147,9 +147,7 @@ export default function BrowseTab({
         sub={browse ? `${num(browse.total)} match${browse.total === 1 ? '' : 'es'}` : ''}
         bodyClass="!p-0"
       >
-        {/* isFetching, not isLoading: isLoading is false on a cached-then-
-            revalidating page, which would drop the spinner during a page
-            change. isFetching is what browseLoading tracked. */}
+        {/* isFetching includes cached pages being revalidated. */}
         <RowsTable tab="browse" rows={browse?.rows || []} loading={browseQuery.isFetching} />
       </Card>
 

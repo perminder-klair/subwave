@@ -7,7 +7,3 @@ export function aboveTrackCeiling(track: LengthTrack | null | undefined, maxSec:
   const duration = trackLengthSeconds(track);
   return duration != null && duration > maxSec;
 }
-
-export function applyTrackCeiling<T extends LengthTrack>(tracks: T[], maxSec: number | null | undefined): T[] {
-  return tracks.filter(track => !aboveTrackCeiling(track, maxSec));
-}

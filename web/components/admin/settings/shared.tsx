@@ -65,21 +65,6 @@ export interface CloudTtsCfg {
   compatParams: { key: string; value: string }[];
 }
 
-// The single client-side copy, read by both form hydration and the dirty-check.
-// Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
-export const ELEVENLABS_VS_DEFAULTS = {
-  voiceStability: 0.5,
-  voiceStyle: 0,
-  voiceSimilarityBoost: 0.75,
-  voiceUseSpeakerBoost: true,
-} as const;
-
-export const FISH_TTS_DEFAULTS = {
-  temperature: 0.7,
-  topP: 0.7,
-  latency: 'normal' as const,
-};
-
 export interface TtsFallbackForm {
   enabled: boolean;
   engine: string;
@@ -127,15 +112,6 @@ export interface TtsForm {
 export interface LlmHeaderRow {
   name: string;
   value: string;
-}
-
-/**
- * Wire map -> editor rows. Order is the stored order, so the list renders the
- * way the operator left it.
- */
-export function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
-  if (!raw || typeof raw !== 'object') return [];
-  return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
 }
 
 /**
@@ -767,12 +743,6 @@ interface SaveBarProps {
   dirty?: boolean;
 }
 
-/**
- * Filter a fieldErrors map down to the paths a given save owns.
- *
- * Exported so a section can reuse the same scoping rule if it renders an error
- * somewhere other than its save bar.
- */
 export function ownedFieldErrors(
   errors: SettingsFieldErrors | undefined,
   ownedKeys: readonly string[] | undefined,
@@ -783,24 +753,8 @@ export function ownedFieldErrors(
   );
 }
 
-/**
- * Success/failure goes through the global toaster; a VALIDATION failure also
- * lands here, beside the button that caused it. These sections save a whole
- * block at once, so several fields can fail one click — and each message
- * already names its own dotted field, so grouping them loses nothing.
- *
- * The bar is authored HERE, at the end of the section it saves, but renders in
- * SettingsPanel's one sticky bar via a portal. Keeping the component in the
- * section's tree is what lets each save keep its own closure, note and error
- * scoping — nothing had to be lifted, and a section with two independent saves
- * (Scrobbling: Last.fm and ListenBrainz are separate services) simply portals
- * two rows.
- *
- * No portal target means nothing is unsaved, and the bar renders nothing —
- * which is also why the bar carries NOTHING but the save. A "Test" button next
- * to it would disappear the moment the section went clean, i.e. exactly when a
- * saved connection is worth testing. Non-save actions belong in the card.
- */
+/** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.
+ * Clean sections have no portal target, so keep Test and other non-save actions in their cards. */
 export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirty }: SaveBarProps) {
   const { saveSlot } = useSectionChrome();
   // Only a section whose state does not ride FormState passes `dirty`; for the
@@ -819,14 +773,8 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
           ))}
         </div>
       )}
-      {/* min-w-0 + break-words: notes carry unbroken values (an
-          `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
-          flex item's min-content and push the bar past a phone viewport. */}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
-      {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        {/* whileTap fires before the network call, so the commit is felt before
-            the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>

@@ -14,6 +14,13 @@ export function getTrack(id: string): TrackRecord | null {
   return row ? rowToTrack(row) : null;
 }
 
+export function getTaggedAt(id: string): string | null {
+  const row = requireDb()
+    .prepare<[string], Pick<TrackRow, 'tagged_at'>>('SELECT tagged_at FROM tracks WHERE id = ?')
+    .get(id);
+  return row?.tagged_at ?? null;
+}
+
 export interface TrackLite {
   genres: string[];
   genre: string | null;

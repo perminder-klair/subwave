@@ -1,6 +1,3 @@
-// Weekly schedule: day tabs (default today) plus collapsed show blocks with
-// persona avatars.
-
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
@@ -22,8 +19,7 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-// Hour label in the station's locale (#475). en-US compacts to "11pm" because
-// the 92px time gutter can't fit a full AM/PM range.
+// Compact en-US hours to fit the 92px time gutter.
 function fmtHour(hour: number, locale: StationLocale): string {
   if (locale === 'en-US') {
     const h = hour % 24;
@@ -38,9 +34,7 @@ function fmtHourRange(start: number, end: number, locale: StationLocale): string
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// Day-of-week (0=Sun) and hour (0-23) in the station's IANA timezone, so the
-// "now" highlight matches the station clock. Falls back to device-local when
-// no tz is set or Hermes' Intl lacks timeZone support.
+// Use station-local day/hour; fall back when Hermes lacks timeZone support.
 function tzNow(now: Date, tz?: string | null): { day: number; hour: number } {
   if (tz) {
     try {
@@ -69,7 +63,7 @@ interface Slot {
 }
 
 function collapseSlots(
-  dayGrid: Array<string | null>,
+  dayGrid: (string | null)[],
   shows: ScheduleShow[],
   personas: SchedulePersona[],
 ): Slot[] {
@@ -100,8 +94,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const appActive = useAppActive();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // null until a day tab is tapped; until then the view follows the station's
-  // own "today".
+  // Null follows the station day until the listener picks a tab.
   const [pickedDay, setPickedDay] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
   const location = context?.weather?.location ?? null;
@@ -133,8 +126,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const day = pickedDay ?? todayTz;
   const locale = normalizeStationLocale(data.locale);
 
-  // Host plus guest co-hosts this hour (#866). Guests are only known for the
-  // LIVE show; upcoming slots stay host-only.
+  // Guest co-hosts are known only for the live show.
   const onNowNames = [
     activeShow?.persona?.name,
     ...(activeShow?.guests || []).map((g) => g?.name),
@@ -142,8 +134,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
 
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
-  // Wrapped because Hermes' Intl timeZone support is narrower than a browser's;
-  // falls back to the viewer's local time.
+  // Hermes may lack Intl timeZone support; fall back to device-local time.
   let time: string;
   try {
     time = new Intl.DateTimeFormat(locale, {

@@ -1,0 +1,502 @@
+/* CIPHER-3 — the rotor machine. Colour lives here as theme tokens (the strict
+   lint forbids inline styles); layout stays in Tailwind on the elements. Two
+   families of variables: the PEN (solid ink when powered, dashed construction
+   lines in standby or off air) and the SIZE of each part, which the desk and
+   phone machines set differently so the parts themselves stay one component. */
+
+.root {
+  --faint: color-mix(in oklab, var(--ink) 45%, var(--bg));
+  --ln: 1.5px solid var(--ink);
+  --hl: 1px solid color-mix(in oklab, var(--ink) 50%, var(--bg));
+  --txt: var(--ink);
+  --sk: var(--ink);
+  --dash: none;
+  /* Face shading: lit top, shaded side, a deeper well, the key skirts. */
+  --iso-l: color-mix(in oklab, var(--ink) 5%, var(--bg));
+  --iso-r: color-mix(in oklab, var(--ink) 12%, var(--bg));
+  --iso-w: color-mix(in oklab, var(--ink) 18%, var(--bg));
+  --well: color-mix(in oklab, var(--ink) 13%, var(--bg));
+  --skirt: color-mix(in oklab, var(--ink) 32%, var(--bg));
+}
+.dim {
+  --ln: 1.5px dashed var(--faint);
+  --hl: 1px dashed var(--faint);
+  --txt: var(--muted);
+  --sk: var(--faint);
+  --dash: 4 3;
+}
+
+.ln { border: var(--ln); }
+.txt { color: var(--txt); }
+.isoL { background-color: var(--iso-l); }
+
+/* ── Part sizes ─────────────────────────────────────────────────────── */
+.desk {
+  --legend-top: -7px;
+  --legend-left: 12px;
+  --legend-pad: 6px;
+  --legend-font: 700 10px/12px var(--mono-font), ui-monospace, monospace;
+  --legend-track: 0.22em;
+  --rot-col: 124px;
+  --rot-col-gap: 4px;
+  --rot-btn-w: 96px;
+  --rot-btn-h: 32px;
+  --rot-h: 88px;
+  --rot-win: 70px;
+  --rot-ridge: 20px;
+  --rot-gap: 6px;
+  --rot-pitch: 6px;
+  --rot-small: 14px;
+  --rot-big: 34px;
+  --rot-tick: 7px;
+  --rot-tick-h: 6px;
+  --rot-label: 10px;
+  --lamp: 50px;
+  --lamp-cell-w: 104px;
+  --lamp-cell-h: 54px;
+  --lamp-drop: 4px;
+  --lamp-font: 18px;
+  --cap: 58px;
+  --cap-skirt: 65px;
+  --cap-cell-w: 104px;
+  --cap-cell-h: 66px;
+  --cap-push: 7px;
+  --cap-font: 20px;
+}
+.mob {
+  --legend-top: -6px;
+  --legend-left: 6px;
+  --legend-pad: 4px;
+  --legend-font: 700 9px/11px var(--mono-font), ui-monospace, monospace;
+  --legend-track: 0.18em;
+  --rot-col: 82px;
+  --rot-col-gap: 2px;
+  --rot-btn-w: 58px;
+  --rot-btn-h: 34px;
+  --rot-h: 56px;
+  --rot-win: 42px;
+  --rot-ridge: 12px;
+  --rot-gap: 4px;
+  --rot-pitch: 5px;
+  --rot-small: 10px;
+  --rot-big: 22px;
+  --rot-tick: 5px;
+  --rot-tick-h: 4px;
+  --rot-label: 9px;
+  --lamp: 28px;
+  --lamp-cell-w: 37px;
+  --lamp-cell-h: 31px;
+  --lamp-drop: 3px;
+  --lamp-font: 11px;
+  --cap: 33px;
+  --cap-skirt: 38px;
+  --cap-cell-w: 37px;
+  --cap-cell-h: 44px;
+  --cap-push: 5px;
+  --cap-font: 14px;
+}
+
+/* ── Panels: a framed bay with its name notched into the top rule ───── */
+.panel {
+  position: relative;
+  border: var(--ln);
+  background-color: var(--bg);
+}
+.legend {
+  position: absolute;
+  top: var(--legend-top);
+  left: var(--legend-left);
+  padding: 0 var(--legend-pad);
+  background-color: var(--iso-l);
+  font: var(--legend-font);
+  letter-spacing: var(--legend-track);
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--txt);
+}
+/* The keyboard sits in a darker well. */
+.panel.wellBay { background-color: var(--well); }
+/* Corner screws: a ring with one slot across it. */
+.screw {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: var(--hl);
+  background: linear-gradient(45deg, transparent 44%, var(--muted) 44% 56%, transparent 56%);
+}
+.plinth {
+  border: var(--ln);
+  border-top: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--ink) 30%, transparent) 0 1px,
+    transparent 1px 24px
+  );
+}
+
+/* ── Power key ──────────────────────────────────────────────────────── */
+.pen {
+  fill: none;
+  stroke: var(--sk);
+  stroke-dasharray: var(--dash);
+}
+.penFill { fill: var(--iso-w); }
+.penBg { fill: var(--bg); }
+.svgTxt { fill: var(--txt); }
+.svgAcc { stroke: var(--accent); fill: none; }
+.keyTurn {
+  transform: rotate(-45deg);
+  transition: transform 0.35s ease;
+}
+.keyOn { transform: rotate(45deg); }
+/* The gate's ring. Its resting style is the still frame lite and reduced
+   motion get; the ripple is layered on only where motion is welcome. */
+.ring {
+  fill: none;
+  stroke: var(--accent);
+  opacity: 0;
+}
+.ringOn { opacity: 0.8; }
+@media (prefers-reduced-motion: no-preference) {
+  .ringOn {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: cipher-ring 1.6s ease-out infinite;
+  }
+}
+@keyframes cipher-ring {
+  from { transform: scale(1); opacity: 0.9; }
+  to { transform: scale(1.48); opacity: 0; }
+}
+
+/* ── Rotors ─────────────────────────────────────────────────────────── */
+.rotCol {
+  width: var(--rot-col);
+  gap: var(--rot-col-gap);
+}
+.rotBtn {
+  width: var(--rot-btn-w);
+  height: var(--rot-btn-h);
+  color: var(--txt);
+}
+.rotBody {
+  height: var(--rot-h);
+  gap: var(--rot-gap);
+  cursor: ns-resize;
+  touch-action: none;
+}
+.rotWin {
+  width: var(--rot-win);
+  border: var(--ln);
+  background-color: var(--bg);
+}
+.rotSmall {
+  height: var(--rot-small);
+  font: 600 var(--rot-small) / 1 var(--mono-font), ui-monospace, monospace;
+  color: var(--muted);
+}
+.rotBig {
+  height: var(--rot-big);
+  font: 700 var(--rot-big) / 1 var(--mono-font), ui-monospace, monospace;
+  color: var(--txt);
+}
+/* The index arrow on the window's left edge. */
+.rotTick {
+  position: absolute;
+  left: 0;
+  top: calc(50% - var(--rot-tick-h));
+  border-left: var(--rot-tick) solid var(--accent);
+  border-top: var(--rot-tick-h) solid transparent;
+  border-bottom: var(--rot-tick-h) solid transparent;
+}
+/* The milled edge: --ridge (px) rides the element, so the ridges move with
+   the position. */
+.rotRidge {
+  width: var(--rot-ridge);
+  border: var(--ln);
+  background-color: var(--iso-w);
+  background-image: repeating-linear-gradient(
+    to bottom,
+    var(--sk) 0 1px,
+    transparent 1px var(--rot-pitch)
+  );
+  background-position: 0 var(--ridge, 0px);
+}
+.rotLabel {
+  font: 700 var(--rot-label) / 1 var(--mono-font), ui-monospace, monospace;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* ── Lampboard ──────────────────────────────────────────────────────── */
+.lampCell {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: var(--lamp-cell-w);
+  height: var(--lamp-cell-h);
+  z-index: 1;
+}
+.lamp {
+  position: relative;
+  width: var(--lamp);
+  height: calc(var(--lamp) + var(--lamp-drop));
+}
+.lampGlow,
+.lampFill,
+.lampSpec,
+.lampRim {
+  transition: opacity 320ms ease-in, color 260ms ease-in, border-color 260ms ease-in;
+}
+.lampGlow {
+  position: absolute;
+  left: calc(var(--lamp) * -0.76);
+  top: calc(var(--lamp) * -0.76);
+  width: calc(var(--lamp) * 2.52);
+  height: calc(var(--lamp) * 2.52);
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--accent) 42%, transparent) 0%,
+    color-mix(in oklab, var(--accent) 16%, transparent) 38%,
+    transparent 70%
+  );
+  opacity: 0;
+  pointer-events: none;
+}
+.lampBase,
+.lampGlass,
+.lampRim {
+  position: absolute;
+  left: 0;
+  width: var(--lamp);
+  height: var(--lamp);
+  border-radius: 50%;
+  border: var(--ln);
+}
+.lampBase {
+  top: var(--lamp-drop);
+  background-color: var(--iso-r);
+}
+.lampGlass {
+  top: 0;
+  overflow: hidden;
+  background-color: var(--bg);
+}
+.lampFill {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at 30% 26%,
+    color-mix(in oklab, var(--accent) 60%, #fff6e8) 0%,
+    var(--accent) 26%,
+    var(--accent) 60%,
+    color-mix(in oklab, var(--accent) 70%, var(--ink)) 100%
+  );
+  opacity: 0;
+}
+.lampSpec {
+  position: absolute;
+  left: calc(var(--lamp) * 0.18);
+  top: calc(var(--lamp) * 0.14);
+  width: calc(var(--lamp) * 0.28);
+  height: calc(var(--lamp) * 0.16);
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0;
+  transform: rotate(-30deg);
+}
+.lampRim {
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 700 var(--lamp-font) / 1 var(--mono-font), ui-monospace, monospace;
+  color: var(--txt);
+}
+/* Switch-on is near instant; switch-off fades like a cooling filament. */
+.lampOn { z-index: 2; }
+.lampOn .lampGlow,
+.lampOn .lampFill,
+.lampOn .lampSpec,
+.lampOn .lampRim {
+  transition-duration: 40ms;
+  transition-timing-function: ease-out;
+}
+.lampOn .lampGlow,
+.lampOn .lampFill { opacity: 1; }
+.lampOn .lampSpec { opacity: 0.55; }
+.lampOn .lampRim {
+  border: 1.5px solid color-mix(in oklab, var(--accent) 70%, var(--ink));
+  color: var(--primary-foreground);
+  text-shadow: 0 0 10px color-mix(in oklab, var(--accent) 50%, #fff);
+}
+
+/* ── Keyboard: round caps on a skirt, pushed down while held ────────── */
+.capCell {
+  display: flex;
+  justify-content: center;
+  width: var(--cap-cell-w);
+  height: var(--cap-cell-h);
+  touch-action: manipulation;
+}
+.mob .capCell { align-items: flex-start; padding-top: 3px; }
+.cap {
+  position: relative;
+  display: block;
+  width: var(--cap);
+  height: var(--cap-skirt);
+}
+.capSkirt {
+  position: absolute;
+  inset: 0;
+  border-radius: calc(var(--cap) / 2);
+  border: var(--ln);
+  background-color: var(--skirt);
+}
+.capTop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--cap);
+  height: var(--cap);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: var(--ln);
+  background-color: var(--bg);
+  font: 700 var(--cap-font) / 1 var(--mono-font), ui-monospace, monospace;
+  color: var(--txt);
+  transition: transform 70ms;
+}
+.desk .capTop::before {
+  content: '';
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  border: var(--hl);
+}
+[data-down] > .cap > .capTop { transform: translateY(var(--cap-push)); }
+
+/* Block keys (MUTE, KEEP, DEL, SEND, SPACE): a face on a skirt, --drop deep.
+   A latched key sits down in its well; a plain one goes down while pressed. */
+.block {
+  position: relative;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.blockSkirt,
+.blockFace {
+  position: absolute;
+  inset-inline: 0;
+  border: var(--ln);
+}
+.blockSkirt {
+  top: var(--drop);
+  bottom: 0;
+  background-color: var(--iso-r);
+}
+.blockFace {
+  top: 0;
+  bottom: var(--drop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--bg);
+  color: var(--txt);
+  transition: transform 70ms;
+}
+.capsSkirt .blockSkirt { background-color: var(--skirt); }
+.block:not(:disabled):active .blockFace,
+.block[data-down] .blockFace,
+.latched .blockFace { transform: translateY(var(--drop)); }
+.lit .blockFace {
+  border: 1.5px solid var(--ink);
+  background-color: var(--accent);
+  color: var(--primary-foreground);
+}
+.dead .blockFace { color: var(--muted); }
+
+@media (hover: hover) {
+  .capCell:hover .capTop,
+  .block:not(:disabled):not(.lit):hover .blockFace,
+  .rotBtn:hover {
+    background-color: var(--field);
+  }
+}
+
+/* ── Tape ───────────────────────────────────────────────────────────── */
+/* Sprocket holes along both edges of the paper tape. */
+.sprockets {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--ink) 35%, transparent) 1.4px,
+    transparent 1.9px
+  );
+  background-size: 12px 4px;
+}
+/* The character on the beat: accent ink, underlined. */
+.hot {
+  color: var(--accent);
+  box-shadow: inset 0 -0.08em 0 var(--accent);
+}
+/* The typing head. */
+.caret {
+  display: inline-block;
+  width: 0.45em;
+  height: 0.86em;
+  margin-left: 0.1em;
+  vertical-align: -0.12em;
+  background-color: var(--accent);
+}
+.progFill { width: calc(var(--pf, 0) * 100%); }
+.progHead { left: calc(var(--pf, 0) * 100%); }
+
+/* ── The sheet ──────────────────────────────────────────────────────── */
+.gridDesk,
+.gridMob {
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--ink) 20%, transparent) 0.9px,
+    transparent 1.4px
+  );
+}
+.gridDesk { background-size: 24px 24px; }
+.gridMob { background-size: 16px 16px; }
+
+/* Each machine is drawn at a fixed size and scaled to its box by script;
+   until the first fit lands it stays hidden, so it never flashes full size. */
+.fit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+}
+.fit:not([data-fit]) { visibility: hidden; }
+/* A phone too short for the whole machine drops the lampboard rather than
+   shrinking every key under a fingertip. */
+.mobBody { height: 516px; }
+.fit[data-compact] .mobBody { height: 390px; }
+.fit[data-compact] .lampBay { display: none; }
+
+/* Lite and reduced motion: the machine still changes state, it just doesn't
+   glide. Key travel stays: it is feedback, not ambience. */
+:global(html.lite) .lampGlow,
+:global(html.lite) .lampFill,
+:global(html.lite) .lampSpec,
+:global(html.lite) .lampRim,
+:global(html.lite) .keyTurn {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lampGlow,
+  .lampFill,
+  .lampSpec,
+  .lampRim,
+  .keyTurn {
+    transition: none;
+  }
+}

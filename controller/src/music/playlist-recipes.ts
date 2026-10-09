@@ -1,11 +1,5 @@
-// Persistent store of "recipes" behind sync-enabled playlists. A saved playlist
-// stays a plain Navidrome playlist (the track store); this side-file remembers
-// the vibe/seed/knob recipe that built it, so the sync engine can re-resolve it
-// and append newly-matching library songs. See
-//
-// Small, single-purpose: load / persist (atomic) + get / list / upsert / remove.
-// A missing file is an empty store; a corrupt file degrades to empty (never
-// throws into a caller — a bad side-file must not break playlist saves).
+// Persist sync recipes separately from Navidrome playlists. Missing or corrupt recipe files
+// read as empty so playlist saves continue.
 
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { config } from '../config.js';

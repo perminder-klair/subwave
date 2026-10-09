@@ -1,7 +1,5 @@
 'use client';
 
-/* The WAVs Chatterbox and PocketTTS clone from. Import-only — there is no
-   prompt-to-voice generator. Files dropped into state/voices/ by hand show up here. */
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
@@ -193,7 +191,6 @@ export function VoicesSection({ voicesData, busy, uploadVoice, onDelete, adminFe
                       </>
                     )}
                   </MetaLine>
-                  {/* Advisory, never blocking: the file is stored exactly as uploaded. */}
                   {v.warning === 'short' && (
                     <p className="mt-1.5 text-[11px] leading-[1.55] text-muted">
                       Under {minSec}s — there may not be enough speech here to clone reliably.

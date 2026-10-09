@@ -77,8 +77,6 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
         )}
         {shown.map((c, i) => (
           <details key={i} className="border border-separator-strong">
-            {/* minmax(0,1fr), not 1fr: an unbroken kind/preview word would set the
-                track's min-content floor and push the ms/clock cells off the card. */}
             <summary className="grid cursor-pointer grid-cols-[auto_auto_minmax(0,1fr)_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
               <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                 {c.ok ? '✓' : '✗'}

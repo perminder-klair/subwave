@@ -1,9 +1,5 @@
-// Genre suggestions for the show editor's "genre lean" field, behind
-// GET /library/genres/related. Adjacency is genre→genre cosine similarity over
-// each genre's mean text-embedding (library-db.genreCentroids).
-//
-// Also returns the full genre list by track count, which works with no
-// embeddings at all — `related` is then empty and `hasEmbeddings` false.
+// Genre suggestions use cosine similarity between mean text embeddings.
+// Without embeddings, return genre counts with an empty related list.
 
 import * as db from './library-db.js';
 import * as library from './library.js';
@@ -49,16 +45,27 @@ export function buildGenreSuggest(): GenreSuggest {
   if (hasEmbeddings) {
     // Unit-normalise each centroid so a dot product is the cosine similarity.
     const units = centroids.map((c) => normalise(c.centroid));
+    const neighbours: Array<Array<{ value: string; sim: number }>> = centroids.map(() => []);
+    const offer = (index: number, value: string, sim: number) => {
+      const sims = neighbours[index];
+      const higher = sims.findIndex(other => sim > other.sim);
+      const position = higher < 0 ? sims.length : higher;
+      if (position >= NEIGHBOURS) return;
+      // Equal scores retain centroid order. Keep at most NEIGHBOURS per genre.
+      sims.splice(position, 0, { value, sim });
+      if (sims.length > NEIGHBOURS) sims.pop();
+    };
     for (let i = 0; i < centroids.length; i++) {
-      const sims: Array<{ value: string; sim: number }> = [];
-      for (let j = 0; j < centroids.length; j++) {
-        if (j === i) continue;
+      for (let j = i + 1; j < centroids.length; j++) {
         const sim = dot(units[i], units[j]);
-        if (sim >= MIN_SIM) sims.push({ value: centroids[j].genre, sim });
+        if (sim >= MIN_SIM) {
+          offer(i, centroids[j].genre, sim);
+          offer(j, centroids[i].genre, sim);
+        }
       }
-      sims.sort((a, b) => b.sim - a.sim);
-      related[centroids[i].genre] = sims
-        .slice(0, NEIGHBOURS)
+    }
+    for (let i = 0; i < centroids.length; i++) {
+      related[centroids[i].genre] = neighbours[i]
         .map((s) => ({ value: s.value, songCount: countOf(s.value) }));
     }
   }

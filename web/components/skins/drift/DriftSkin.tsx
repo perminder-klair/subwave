@@ -1,8 +1,5 @@
 'use client';
 
-// Three washes take their colors from the current cover (vibrant + average via
-// useCoverColors, accent as the third) and crossfade over twenty seconds at a
-// track change.
 
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -162,8 +159,6 @@ export default function DriftSkin(_props: SkinProps) {
         aria-hidden="true"
       />
 
-      {/* The clock/context text is dropped on phones so the station line and
-          the theme icon can't collide in the middle. */}
       <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[11px] tracking-[0.24em] text-ink uppercase sm:max-w-[45%]">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
@@ -224,11 +219,7 @@ export default function DriftSkin(_props: SkinProps) {
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
       </div>
 
-      {/* Shown whenever the full-bleed gate isn't covering the screen, so with
-          the tune-in overlay disabled this layer IS the tune affordance.
-          pointer-events-none keeps this full-screen centering layer from
-          eating the corner controls' clicks; the one interactive child (the
-          title) re-enables events on itself. */}
+      {/* Keep the title clickable without intercepting clicks on the corner controls. */}
       {!showOverlay && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
@@ -345,9 +336,6 @@ export default function DriftSkin(_props: SkinProps) {
                     {slip.sending ? '…' : 'send'}
                   </button>
                 </div>
-                {/* Signing is optional, and the DJ reads the name on air when
-                    given one (#1347). Drift keeps it a hairline under the ask
-                    rather than a second framed field. */}
                 <div className="flex items-baseline gap-2">
                   <span className="font-mono text-[10px] tracking-[0.2em] text-muted uppercase">from</span>
                   <input

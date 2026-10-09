@@ -49,13 +49,11 @@ export function stationHistoryNoteFor(
     : null;
 }
 
-// Extra facts are derived from controller context, never model knowledge.
+// Station history supplements the track's library facts, never model knowledge.
 export function contextSleeveNotesFor(
   track: any,
-  context: any,
   stationHistoryNote: string | null = null,
 ): string[] {
-  void context;
   const notes = sleeveNotesFor(track);
   // A qualifying first play is a deliberately scarce current-music cue, so it
   // takes one of the two link slots ahead of routine album/year metadata.
@@ -75,10 +73,8 @@ export function contextSleeveNotesFor(
  */
 export function selectSleeveNotes(
   notes: readonly string[],
-  random: () => number = Math.random,
   includeReleaseYear = true,
 ): string[] {
-  void random;
   return (includeReleaseYear ? notes : notes.filter((note) => !note.startsWith('Release year:'))).slice(0, 2);
 }
 
@@ -106,27 +102,4 @@ export function releaseYearMentionEligible(
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0) % divisor === 0;
-}
-
-/**
- * The complete prompt packet. The track identity is always present when it is
- * known; up to two supplemental sleeve notes follow it. A malformed/raw track
- * degrades to no packet rather than creating an assertion from guesswork.
- */
-export function verifiedFactsForLink(
-  track: any,
-  random: () => number = Math.random,
-): string[] {
-  const title = text(track?.title);
-  if (!title) return [];
-  const artist = text(track?.artist) || 'unknown artist';
-  return [
-    `Track: "${title}" by ${artist}.`,
-    ...selectSleeveNotes(sleeveNotesFor(track), random),
-  ];
-}
-
-export function verifiedFactsSection(facts: readonly string[]): string {
-  if (!facts.length) return '';
-  return `Verified facts:\n${facts.map((fact) => `- ${fact}`).join('\n')}`;
 }

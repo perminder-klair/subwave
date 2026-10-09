@@ -1,9 +1,4 @@
-// The contract every discovery-tool file implements.
-//
-// One tool per file, named by its export, gated by its own `available`. The
-// gating lives WITH the tool because it is a fact about that tool (does its
-// backing index hold vectors? is this the request path?) — a central "which
-// tools are on" switch drifts from the tools it claims to describe.
+// Each tool owns its available gate, including checks for its backing indexes.
 
 import type { Tool } from 'ai';
 import type { PickerContext } from './scope.js';

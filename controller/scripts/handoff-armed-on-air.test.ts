@@ -25,6 +25,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
+const { getDateContext, getClockContext } = await import('../src/context.js');
 const { queue } = await import('../src/broadcast/queue.js');
 
 after(() => rmSync(root, { recursive: true, force: true }));
@@ -43,9 +44,10 @@ function blankSchedule() {
 function context(show: { id: string; name: string }, atMs: number): SessionContext {
   return {
     at: new Date(atMs).toISOString(),
-    time: { period: 'night', vibe: 'night', mood: 'calm' },
+    time: { period: 'night', vibe: 'night', mood: 'calm', show: '' },
     weather: null, festival: null, dominantMood: 'calm',
-    date: {}, clock: {}, listeners: 1,
+    date: getDateContext(new Date(atMs)), clock: getClockContext(new Date(atMs)), listeners: { count: 1 },
+    showHandover: null,
     activeShow: { ...show, topic: '', moods: ['calm'] },
   } as SessionContext;
 }

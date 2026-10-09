@@ -1,30 +1,6 @@
-// Feeds — the one place a skill's `feed:` frontmatter turns into data on air.
-//
-// Two layers live here:
-//
-//   1. FETCH + PARSE. `parseFeed` is the pure seam (no network, no config),
-//      pinned by scripts/feed-parse.test.ts. Parsing goes through
-//      fast-xml-parser rather than the regex scanner this module shipped with.
-//      The feed URL is OPERATOR input — any URL typed into a skill's `feed:`
-//      field — and the old scanner only matched shallow RSS 2.0 `<item>`
-//      blocks: an Atom feed (`<entry>`/`<summary>`), an RDF/RSS-1.0 feed
-//      (`<item>` at the document root, no `<channel>`), a namespaced title
-//      (`<dc:title>`), or a nested CDATA section all returned ZERO items. That
-//      failure is silent — the segment director just finds no headlines and the
-//      beat quietly never airs — which is why it's worth a dependency.
-//
-//   2. THE GENERIC FEED TOOL (#1616). `feed:` / `feedMaxItems:` used to be
-//      config for ONE hand-written tool.mjs — the built-in news skill's — so a
-//      custom skill could declare both, have them validate, save and read back
-//      everywhere, and still reach the model with no feed content and no
-//      `skill_<name>` tool at all. The declaration is the mechanism now:
-//      `resolveFeedConfig` reads a skill's own frontmatter and `makeFeedTool`
-//      builds the fetch/dedupe/truncate tool the loader attaches to any skill
-//      that has no tool.mjs of its own. News goes through that path like
-//      everything else — it no longer ships a tool.mjs.
-//
-// This file was `skills/news.ts` until #1616. Nothing in it was ever
-// news-specific; the name was the reason the mechanism read as news-only.
+// Parse RSS/Atom/RDF feeds with fast-xml-parser; see scripts/feed-parse.test.ts.
+// A skill with feed frontmatter and no tool.mjs receives makeFeedTool from the loader (#1616).
+// News uses the same generic path; config comes from resolveFeedConfig.
 
 import { XMLParser } from 'fast-xml-parser';
 import { config } from '../config.js';
@@ -68,6 +44,12 @@ function textOf(node: unknown): string {
   return String(node);
 }
 
+// A reference outside Unicode's range is left as the text it was rather than
+// throwing out of the parse.
+function fromCodePoint(code: number, ref: string): string {
+  try { return String.fromCodePoint(code); } catch { return ref; }
+}
+
 function stripHtml(s: string): string {
   return (s || '')
     // Entities are decoded by the parser; these handle a doubly-encoded feed,
@@ -79,6 +61,11 @@ function stripHtml(s: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    // Numeric character references. The parser decodes only the five named XML
+    // entities, so WordPress punctuation (&#8217;, &#038;) reached the model as
+    // literal text. Runs after &amp; so a doubly-encoded &amp;#8217; decodes too.
+    .replace(/&#(\d+);/g, (ref, dec) => fromCodePoint(Number(dec), ref))
+    .replace(/&#x([0-9a-f]+);/gi, (ref, hex) => fromCodePoint(parseInt(hex, 16), ref))
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -278,13 +265,22 @@ function seenSetFor(state: any, kind: string): Set<string> {
 // caller (llm/internal/tools/segment-tools.ts, the forced path, the co-hosted
 // path) is unchanged — including the timeout and the `{ error }` degradation.
 //
-// Returns the news shape, `{ headlines: [{ title, detail }] }`, unchanged from
-// the tool.mjs this replaces: an empty array is "nothing fresh", not an error.
+// Returns the news shape, `{ headlines: [{ title, detail }] }`, when there is
+// something fresh, and `{ available: false, reason }` when there is not — never
+// an empty list (#1830). An empty list read as usable data to
+// abstain-policy.ts, so Run now, a skill cron or a programme beat on a drained
+// feed ordered a line with no items in it, and the model invented a headline.
+// `available: false` is the shape every data tool already uses for "nothing
+// worth airing", which stands those runs down and lets the pool path back off.
 export function makeFeedTool(kind: string, feed: ResolvedFeed) {
   return async function fetchFeedItems(_ctx?: unknown, state?: any) {
     const seen = seenSetFor(state, kind);
     const items = await fetchHeadlines({ feedUrl: feed.url, maxItems: feed.maxItems });
+    // A feed that fetched fine but carries no readable items is the same
+    // answer as one that has all aired. It touches no dedup memory.
+    if (!items.length) return { available: false, reason: 'the feed has no items' };
     const fresh = items.filter(it => !seen.has(hashHeadline(it.title))).slice(0, FEED_ITEMS_PER_FIRE);
+    if (!fresh.length) return { available: false, reason: 'every item on the feed has already aired' };
     // Burn on read so a later tick doesn't re-offer the same item.
     for (const it of fresh) seen.add(hashHeadline(it.title));
     if (seen.size > SEEN_HIGH_WATER) {

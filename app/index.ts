@@ -6,4 +6,6 @@ import { PlaybackService } from './service';
 
 TrackPlayer.registerPlaybackService(() => PlaybackService);
 
+// Registration must run before the router starts the app.
+// eslint-disable-next-line import/first
 import 'expo-router/entry';

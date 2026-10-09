@@ -1,32 +1,6 @@
-// The Gemini Extended Voice Library — the ~2,000 prebuilt voices BEYOND the 30
-// featured studio ones in GEMINI_TTS_VOICES.
-//
-// WHY THIS IS A SEPARATE CATALOGUE
-// ---------------------------------
-// GEMINI_TTS_VOICES is Google's documented list of *30 featured studio voices*
-// (Zephyr…Sulafat). Google separately exposes ~2,089 *prebuilt* voices through
-// GET /v1beta/voices — different ids (`en-us-varo`, not `Varo`), richer
-// metadata (language, accent, gender, pitch, persona, context), and paginated.
-// An operator browsing AI Studio's "2,000+ voices" picker is looking at THIS
-// one. Verified against the live API: `{"voice":"Varo"}` and
-// `{"voice":"en-us-varo"}` both synthesise, while a nonsense name 400s with
-// "No matching speaker voice found" — so Google VALIDATES rather than silently
-// falling back, which is what makes the membership test below worth having.
-//
-// WHY GENDER AND ACCENT ARE FILTERS HERE AND NOT STYLE TEXT
-// ---------------------------------------------------------
-// Google is explicit: "Do not try to change immutable speaker traits in style:
-// avoid putting age, gender, names, or permanent accent changes in
-// speech_metadata.style. Instead, pick a regional voice from the Extended Voice
-// Library." So the operator picks a voice that HAS the trait; there is no
-// directive form to offer, and offering one would be a control that silently
-// does nothing. Also note the accent vocabulary is NOT "Australian" — the live
-// values are things like "Sydney English" (44 en-AU voices all carry it), which
-// is why nothing here hardcodes a list of accents or languages.
-//
-// The vocabulary is discovered, never restated: `facets()` returns the distinct
-// values actually present in a page, so the admin dropdown cannot drift from
-// what Google currently serves.
+// Google's paginated /v1beta/voices catalogue has regional ids and immutable
+// traits beyond GEMINI_TTS_VOICES. Select gender and accent by voice, not style text.
+// Derive language/accent facets from API results; Google rejects unknown voice ids.
 
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { apiKey } from './gemini.js';
@@ -306,38 +280,20 @@ export async function prewarm(opts: { force?: boolean } = {}): Promise<number> {
   const staged: LibraryVoice[] = [];
   try {
     // Bounded: Google serves ~2,100 prebuilt voices in three pages of 1000.
-    // The bound is a stop, not an expectation — a catalogue that grew past it
-    // leaves the tail undiscoverable rather than looping.
+    // Stop at the pagination bound rather than loop indefinitely.
     do {
       const page = await listLibraryVoices({ pageSize: MAX_PAGE_SIZE, pageToken: token, signal: AbortSignal.timeout(WARM_TIMEOUT_MS) });
       if (!page.ok) return known.size;
-      // Facets are STAGED here and PUBLISHED once pagination completes. Facets
-      // are collected HERE and nowhere else — a browse is usually FILTERED, and
-      // accumulating from a filtered page would rebuild the bug this replaces:
-      // the menu would describe the current result instead of the catalogue.
-      //
-      // Staging matters as much as the placement. Publishing per page makes
-      // `ready` true on the FIRST page, so if page three fails the caller gets
-      // a partial vocabulary that claims to be complete — later accents and
-      // languages simply absent, with no retry until a restart. Membership is
-      // unaffected: it is recorded per page on purpose, since a voice Google
-      // served exists whoever asked for it.
+      // Stage facets from the unfiltered catalogue and publish only after a complete walk.
+      // Filtered browse pages cannot define vocabulary. Record membership per page: served ids are valid.
       staged.push(...page.voices);
       token = page.nextPageToken;
       pages += 1;
       if (pages >= MAX_WALK_PAGES) break;
     } while (token);
 
-    // Stopping at the cap with a continuation token still in hand means the walk
-    // did NOT finish, so the vocabulary is partial. Publishing it would set
-    // `ready` true over an incomplete catalogue — the exact failure staging was
-    // introduced to prevent, just reached by a different route: accents and
-    // languages past the cap would be silently absent while the cache claimed to
-    // be complete, and `ensureFacets` would not retry.
-    //
-    // Nothing is published and the index is not marked warm, so the next call
-    // walks again. Membership recorded so far is kept: a voice Google served is a
-    // voice that exists, whoever asked for it.
+    // A remaining token means incomplete facets: publish nothing and leave the index
+    // unwarmed for retry. Keep confirmed voice membership from completed pages.
     if (token) {
       console.warn(`[tts] gemini voice library: walk stopped at the ${MAX_WALK_PAGES}-page cap with pages remaining; facets left unpublished`);
       return known.size;

@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { pollWhileVisible } from '@/lib/poll';
-import { splitAudibleTurns } from '@/lib/sessionFeed';
+import { pollAsyncWhileVisible } from '@/lib/poll';
+import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type {
   ActiveShow,
@@ -100,19 +100,20 @@ export function useStationFeed(): StationFeed {
         ? null
         : setTimeout(applySession, Math.max(0, nextChangeMs - Date.now()));
     };
-    const tick = async () => {
+    const tick = async (signal: AbortSignal) => {
       try {
         const [npRes, stRes, seRes] = await Promise.all([
-          client.nowPlaying(),
-          client.state(),
-          client.session(),
+          client.nowPlaying({ signal }),
+          client.state({ signal }),
+          client.session({ signal }),
         ]);
+        if (signal.aborted) return;
         const np = npRes.nowPlaying;
         // Clamped to 0–60s: a bad value parks the clock in the far future or
         // winds it back past the track start.
         const bufSec = npRes.stream?.bufferSeconds;
         if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
-          leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
+          leadMsRef.current = Math.min(Math.max(bufSec, 0), MAX_LEAD_SECONDS) * 1000;
         }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
         // Prefer the queue's start time over "first seen by this client": a tab
@@ -190,7 +191,7 @@ export function useStationFeed(): StationFeed {
         }
       } catch {}
     };
-    const stopPolling = pollWhileVisible(() => { void tick(); }, 5000);
+    const stopPolling = pollAsyncWhileVisible(tick, 5000);
     return () => {
       stopPolling();
       // A held track switch (or a held spoken line) must not land after teardown.

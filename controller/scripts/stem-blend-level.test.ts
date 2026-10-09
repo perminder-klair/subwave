@@ -165,7 +165,7 @@ try {
   await test('the drain stamps exactly what the render is handed', async () => {
     await settings.update({ loudness: { source: 'replaygain-then-measured' } });
     const { queue } = await import('../src/broadcast/queue.js');
-    const track = {
+    const track: Parameters<typeof queue.applyLoudnessGain>[0] = {
       id: 't9',
       title: 'A song',
       replayGain: { trackGain: -6, trackPeak: 0.5 },

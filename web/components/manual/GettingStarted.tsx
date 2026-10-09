@@ -62,7 +62,7 @@ export default function GettingStarted() {
           height={2048}
         />
         <p className="text-muted">
-          That's one of six faces the player can wear, and the palette icon in the corner
+          That's one of eight faces the player can wear, and the palette icon in the corner
           switches between them. See{' '}
           <Link href="/manual/themes" className="bs-link">Skins &amp; Themes</Link>.
         </p>

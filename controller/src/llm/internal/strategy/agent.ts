@@ -1,24 +1,10 @@
-// djAgent — conversational tool-loop with structured output. Throws on failure
-// so the caller can fall back to a stateless path.
-//
-// Strategy, resolved per leg by agentPlan():
-//   1. Native-first (non-Ollama tool-using agents): Output.object with AUTO
-//      tool_choice, so no forced tool conflicts with thinking mode. Any miss
-//      falls through to (2).
-//   2. Done-tool (Ollama always; everyone else on a native miss): a synthetic
-//      `done` tool whose inputSchema IS the schema sits beside the discovery
-//      tools, toolChoice:'required' forces a call every step, and prepareStep
-//      corners the model into discovery-then-done. Ollama is excluded from
-//      native because its tool-loop Output.object returns schema-valid but
-//      EMPTY JSON without ever calling discovery.
-//
-// When the model declines `done` anyway: main run → done-only recovery
-// (carrying the trail) → single-turn terminal collapse (#1157) → text salvage →
-// throw. Every leg draws on ONE shared deadline, so the leg count is a budget
-// decision as much as a correctness one.
+// agentPlan resolves native output or forced done-tool output per leg. Ollama
+// skips native: it can return empty schema-valid JSON without discovery.
+// Recovery proceeds through done-only, terminal collapse (#1157), then text salvage.
+// All attempts share one deadline; throw so callers can use their stateless fallback.
 
-import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
-import type { ModelMessage, ToolSet } from 'ai';
+import { Output, isStepCount, hasToolCall, ToolLoopAgent, ToolChoiceViolationError, tool } from 'ai';
+import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
@@ -47,6 +33,41 @@ interface AgentLike {
   generate(options: { messages: ModelMessage[]; abortSignal?: AbortSignal }): Promise<AgentGenerateResult>;
 }
 
+// The SDK throws before completing a step when a model declines a required
+// tool. Preserve completed discovery, the declining text and all billed usage
+// so the existing done-only/terminal recovery gets the same evidence as before.
+function createAgentAttempt() {
+  const steps: StepLike[] = [];
+  let responseMessages: ModelMessage[] = [];
+  const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const callbacks = {
+    onStepEnd: event => {
+      steps.push(event);
+      responseMessages = event.response.messages;
+    },
+    onLanguageModelCallEnd: event => {
+      const usage = usageOf({ usage: event.usage });
+      totalUsage.inputTokens += usage.input;
+      totalUsage.outputTokens += usage.output;
+      totalUsage.totalTokens += usage.total;
+    },
+  } satisfies Pick<ToolLoopAgentSettings<never, ToolSet>, 'onStepEnd' | 'onLanguageModelCallEnd'>;
+  return {
+    callbacks,
+    declined(err: ToolChoiceViolationError): AgentGenerateResult {
+      const text = err.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+      return {
+        text,
+        finishReason: err.finishReason,
+        totalUsage,
+        steps: [...steps, { toolCalls: [] }],
+        staticToolCalls: [],
+        response: { messages: [...responseMessages, { role: 'assistant', content: text }] },
+      };
+    },
+  };
+}
+
 interface AgentFailureError extends Error {
   text?: string;
   finishReason?: unknown;
@@ -64,6 +85,7 @@ interface DjAgentOptions {
   kind?: string;
   timeoutMs?: number;
   validate?: (object: unknown) => boolean;
+  telemetry?: Record<string, unknown>;
   // Follow the leg's per-provider discovery budget instead of the pinned single
   // historical step. Opt-in per agent, OFF by default: a caller's step cap can
   // be load-bearing, so only pick/request ask for it.
@@ -119,8 +141,9 @@ function gatedDiscoveryPrepareStep(discoveryToolNames: string[], toolChoice: 're
 // The done-only recovery agent: one re-run of the loop with `done` as the only
 // legal move, fed the failed run's discovery trail. The attempt after this one
 // leaves the loop behind entirely (renderTerminalPrompt + objectViaToolCall).
-function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto') {
+function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefined, temperature: number, maxOutputTokens: number, forcedChoice: 'required' | 'auto', attempt: ReturnType<typeof createAgentAttempt>) {
   return new ToolLoopAgent({
+    ...attempt.callbacks,
     // Recovery forces done-only every step → no-think model (see above).
     model: leg.noThinkModel ?? leg.model,
     // An explicit terminal instruction for gemma-class models that emit prose
@@ -165,11 +188,16 @@ function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label
     withTransientRetry(kind, () => fn(signal), signal));
 }
 
-function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[]): Promise<AgentGenerateResult> {
-  return runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
-    messages,
-    ...(signal ? { abortSignal: signal } : {}),
-  }));
+async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>): Promise<AgentGenerateResult> {
+  try {
+    return await runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
+      messages,
+      ...(signal ? { abortSignal: signal } : {}),
+    }));
+  } catch (err) {
+    if (attempt && ToolChoiceViolationError.isInstance(err)) return attempt.declined(err);
+    throw err;
+  }
 }
 
 export async function djAgent({
@@ -183,6 +211,7 @@ export async function djAgent({
   kind = 'sdk.djAgent',
   timeoutMs,
   providerDiscoveryBudget = false,
+  telemetry = {},
   // Caller acceptance check on the NATIVE path's object only — that branch
   // validates schema shape, not content, so a fabricated-but-well-formed answer
   // would otherwise sail through. A miss falls through to the done-tool path.
@@ -219,7 +248,7 @@ export async function djAgent({
             usage,
             perf,
             warnings,
-            extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2) },
+            extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2), ...telemetry },
           };
         }
 
@@ -281,7 +310,7 @@ export async function djAgent({
                 usage: usageOf(nr),
                 perf: perfOf(nr),
                 warnings: warningsOf(nr),
-                extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2) },
+                extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
@@ -309,7 +338,9 @@ export async function djAgent({
         // Ungated runs keep the caller's value.
         const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
 
+        const mainAttempt = createAgentAttempt();
         const agent = new ToolLoopAgent({
+          ...mainAttempt.callbacks,
           // useDoneTool legs force tool calls → no-think model; the schema-only
           // and free-text legs keep the operator's reasoning choice.
           model: useDoneTool ? (leg.noThinkModel ?? leg.model) : leg.model,
@@ -327,7 +358,7 @@ export async function djAgent({
           // On the done-tool path the schema lives on `done`, so no agent output.
           ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
         } as any);
-        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages, mainAttempt);
         let steps = result.steps?.length ?? 0;
         addUsage(usageOf(result));
 
@@ -370,8 +401,9 @@ export async function djAgent({
           lastVia = 'ai-sdk:agent:recovery';
           const priorMessages = result.response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
+          const recoveryAttempt = createAgentAttempt();
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
-            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice), recoveryMessages);
+            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
           steps = result.steps?.length ?? 0;
           addUsage(usageOf(result));
           captureTrail(result);
@@ -459,6 +491,7 @@ export async function djAgent({
             system, messages, toolCalls, steps,
             ...(terminalPrompt ? { terminalPrompt } : {}),
             response: schema ? JSON.stringify(object, null, 2) : String(object ?? ''),
+            ...telemetry,
           },
         };
       } catch (err) {

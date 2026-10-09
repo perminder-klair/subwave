@@ -40,11 +40,14 @@ export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
-// Single gate for the transition effects (filter sweep + echo washout): they're
-// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
-// schema/prompt builders use this to decide whether to offer the DJ the
-// `transition` choice; when off, the guidance is never shown and nothing is
-// applied.
+// Gate for the six DJ transition effects (TRANSITION_EFFECTS): on whenever the
+// on-air persona is in DJ mode. The per-effect operator switches
+// (settings/transition-effects.ts, #1565) narrow it and compose with it at the
+// call sites, never in here. The picker schema/prompt builders use this to
+// decide whether to offer the DJ the `transition` choice; when off, the
+// guidance is never shown and nothing is applied. DJ mode also drives
+// pair-drain, stem blends and the transition stinger, which read djMode
+// directly.
 export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }
@@ -57,6 +60,38 @@ export function effectsActive(persona: unknown = getEffectivePersona()): boolean
 // the string compare, same precedent as effectsActive() above.
 export function announceLinks(persona: unknown = getEffectivePersona()): boolean {
   return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
+}
+
+// A private, music-specific editorial preference for track selection. It is
+// intentionally separate from Soul: Soul informs the DJ's voice, while Music
+// Leanings can only break a close tie between already eligible candidates.
+export function personaMusicLeanings(persona: unknown = getEffectivePersona()): string | null {
+  const leaning = String((persona as { musicLean?: unknown } | null | undefined)?.musicLean || '').trim();
+  return leaning || null;
+}
+
+export type GuestEditorialNudge = {
+  guest: { id: string; name: string };
+  musicalLeanings: string;
+};
+
+// Guests can occasionally add a music-specific secondary nudge. The host
+// remains the primary editorial influence, and a guest's Soul stays strictly
+// on-air character rather than programming input.
+export function guestEditorialNudgeFromGuests(
+  guests: Array<{ id?: unknown; name?: unknown; musicLean?: unknown }>,
+  random: () => number = Math.random,
+): GuestEditorialNudge | null {
+  const eligible = guests.filter((guest) => String(guest.musicLean || '').trim());
+  if (!eligible.length || random() >= 0.25) return null;
+  const guest = eligible[Math.floor(random() * eligible.length)];
+  if (!guest || typeof guest.id !== 'string' || typeof guest.name !== 'string') return null;
+  return { guest: { id: guest.id, name: guest.name }, musicalLeanings: String(guest.musicLean).trim() };
+}
+
+export function guestEditorialNudge(date: Date = new Date(), random: () => number = Math.random) {
+  if (get().llm?.guestMusicalLeanings !== true) return null;
+  return guestEditorialNudgeFromGuests(getOnAirRoster(date).guests, random);
 }
 
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
@@ -252,6 +287,7 @@ function resolveShowShape(show, s) {
     // optional segmentSkill pins the feature beat to one capability kind.
     programme: show.programme === true,
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
+    preparationSkill: typeof show.preparationSkill === 'string' ? show.preparationSkill : '',
   };
 }
 

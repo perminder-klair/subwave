@@ -1,9 +1,6 @@
-// Admin-gated backup / restore of station config + the tag DB (#404).
-// Export excludes host-specific and secret files (Navidrome creds, icecast
-// secrets, live session/queue/logs); settings are written from the redacted view.
-// Two restore entry points share `applyBackupZip()`: the upload route and the
-// disk route, which exists because a big backup exceeds edge proxy upload caps
-// (#612). Export assembly is shared with the scheduled backup (#1570).
+// Exports omit host secrets and live state, using redacted settings (#404).
+// Upload and disk restore share applyBackupZip; disk restore bypasses proxy caps (#612).
+// Scheduled exports share the assembly path (#1570).
 import express from 'express';
 import AdmZip from 'adm-zip';
 import { existsSync } from 'node:fs';

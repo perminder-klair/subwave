@@ -238,6 +238,15 @@ export function trackCount(): number {
   }).n;
 }
 
+// How many track rows a prune against `liveIds` would delete (music/prune-policy.ts
+// decides whether it may).
+export function countMissingTracks(liveIds: ReadonlySet<string>): number {
+  const all = requireDb().prepare('SELECT id FROM tracks').all() as Array<{ id: string }>;
+  let n = 0;
+  for (const r of all) if (!liveIds.has(r.id)) n += 1;
+  return n;
+}
+
 // Drop track rows (and vectors) for ids no longer in Navidrome. `liveIds` must
 // come from a COMPLETE walk of subsonic.iterateAllSongs(): a partial set deletes
 // live tags. Returns rows deleted.

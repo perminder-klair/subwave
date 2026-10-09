@@ -11,12 +11,12 @@
 //
 // Run: npx tsx scripts/schedule-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-schedule-schema-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-schedule-schema-'));
 
 const {
   OVERRIDE_MAX_MINUTES,

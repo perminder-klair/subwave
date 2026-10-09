@@ -1,9 +1,5 @@
-// Direct Last.fm tag client (read-only), reusing the api_key configured for
-// scrobbling. Vanilla Navidrome's getArtistInfo2 never surfaces the tag[] array,
-// so tags via that route always came back empty.
-//
-// Read methods need only the api_key — no md5 signing or session key (unlike the
-// writes in broadcast/scrobble.ts). 5s timeout, [] on any failure, no retry.
+// Navidrome getArtistInfo2 omits tags, so read Last.fm directly. Reads need only the API key;
+// failures return [] without retry.
 
 import * as subsonic from './subsonic.js';
 import { LASTFM_API, resolveLastfmApiKey } from './lastfm-shared.js';

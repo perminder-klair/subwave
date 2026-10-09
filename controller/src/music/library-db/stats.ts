@@ -4,7 +4,7 @@
 import { SQL_HAS_MOODS, getDbNonce, requireDb } from './handle.js';
 import type { LibraryStats } from './types.js';
 
-// ~7 full-table scans, polled from several admin pages; uncached it blocks
+// Aggregate scans, polled from several admin pages; uncached they block
 // listener polls on the synchronous DB thread (#723).
 let statsCache: { at: number; value: LibraryStats } | null = null;
 const STATS_TTL_MS = 5000;
@@ -49,7 +49,7 @@ export function stats(): LibraryStats {
   const now = Date.now();
   if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
   const value = computeStats();
-  // Stamp AFTER the compute: it can exceed the TTL (~15s at 200k tracks), and a
+  // Stamp AFTER the compute: a large library can exceed the TTL, and a
   // start-of-compute stamp would expire on store.
   statsCache = { at: Date.now(), value };
   return value;
@@ -67,26 +67,17 @@ export function changeToken(): string {
 
 function computeStats(): LibraryStats {
   const d = requireDb();
-  const total =
-    (d.prepare(`SELECT COUNT(*) AS n FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as {
-      n: number;
-    }).n;
-  // Every row, tagged or not. `total` counts only TAGGED tracks and is the wrong
-  // denominator for the recency windows, no-repeat clamp and deepCuts gate.
-  const mirrorTotal =
-    (d.prepare(`SELECT COUNT(*) AS n FROM tracks`).get() as { n: number }).n;
-  const distinctArtists =
-    (
-      d
-        .prepare(
-          `SELECT COUNT(DISTINCT LOWER(TRIM(artist))) AS n
-           FROM tracks
-           WHERE ${SQL_HAS_MOODS}
-             AND artist IS NOT NULL
-             AND TRIM(artist) != ''`,
-        )
-        .get() as { n: number }
-    ).n;
+  // Count the whole mirror and the tagged subset in one pass. Empty moods,
+  // blank artists and untagged timestamps keep their original exclusions.
+  const totals = d.prepare(`
+    SELECT COUNT(*) AS mirrorTotal,
+           COUNT(*) FILTER (WHERE ${SQL_HAS_MOODS}) AS total,
+           COUNT(DISTINCT LOWER(TRIM(artist))) FILTER (
+             WHERE ${SQL_HAS_MOODS} AND artist IS NOT NULL AND TRIM(artist) != ''
+           ) AS distinctArtists,
+           MAX(tagged_at) FILTER (WHERE ${SQL_HAS_MOODS}) AS updatedAt
+      FROM tracks
+  `).get() as Pick<LibraryStats, 'mirrorTotal' | 'total' | 'distinctArtists' | 'updatedAt'>;
   const byMood: Record<string, number> = {};
   for (const r of d
     .prepare(
@@ -97,13 +88,16 @@ function computeStats(): LibraryStats {
     byMood[r.mood] = r.n;
   }
   const byEnergy: Record<string, number> = {};
-  for (const r of d
-    .prepare(
-      `SELECT energy, COUNT(*) AS n FROM tracks
-       WHERE ${SQL_HAS_MOODS} AND energy IS NOT NULL GROUP BY energy`,
-    )
-    .all() as Array<{ energy: string; n: number }>) {
-    byEnergy[r.energy] = r.n;
+  const bySource: Record<string, number> = {};
+  for (const r of d.prepare(`
+    SELECT energy, source, COUNT(*) AS n FROM tracks
+     WHERE ${SQL_HAS_MOODS} GROUP BY energy, source
+  `).all() as Array<{ energy: string | null; source: string | null; n: number }>) {
+    if (r.energy !== null) byEnergy[r.energy] = (byEnergy[r.energy] ?? 0) + r.n;
+    if (r.source !== null) {
+      const previous = Object.hasOwn(bySource, r.source) ? bySource[r.source] : 0;
+      bySource[r.source] = (previous ?? 0) + r.n;
+    }
   }
   // Per-tag counts, not a partition: a track counts toward every genre it
   // carries, so the sum can exceed `total`.
@@ -116,27 +110,14 @@ function computeStats(): LibraryStats {
     .all() as Array<{ genre: string; n: number }>) {
     byGenre[r.genre] = r.n;
   }
-  const bySource: Record<string, number> = {};
-  for (const r of d
-    .prepare(
-      `SELECT source, COUNT(*) AS n FROM tracks
-       WHERE ${SQL_HAS_MOODS} AND source IS NOT NULL GROUP BY source`,
-    )
-    .all() as Array<{ source: string; n: number }>) {
-    bySource[r.source] = r.n;
-  }
   const withEmbedding = (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
   const withAudioEmbedding = (
     d.prepare('SELECT COUNT(*) AS n FROM track_audio_vectors').get() as { n: number }
   ).n;
-  const updatedAt =
-    ((d.prepare(`SELECT MAX(tagged_at) AS t FROM tracks WHERE ${SQL_HAS_MOODS}`).get() as { t: string | null }).t) ||
-    null;
   return {
-    total, mirrorTotal, distinctArtists, byMood, byEnergy, byGenre, bySource,
-    withEmbedding, withAudioEmbedding, updatedAt,
+    ...totals, updatedAt: totals.updatedAt || null,
+    byMood, byEnergy, byGenre, bySource, withEmbedding, withAudioEmbedding,
   };
 }
-
