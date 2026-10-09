@@ -40,7 +40,9 @@ interface LibrarySong {
 export const router = express.Router();
 
 // `cursor` is an opaque base64 of `albumOffset:songIndexInAlbum`; nextCursor is
-// null at the end of the walk.
+// null only at the end of the walk. A page that spends its scan budget before
+// filling `limit` still hands back a cursor (possibly with no rows), so a
+// tagged stretch longer than the budget never reads as "nothing untagged".
 router.get('/library/untagged', requireAdmin, async (req, res) => {
   await library.load();
   const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 50) ?? 50, 1), 100);
@@ -51,20 +53,33 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
   const rows: LibrarySong[] = [];
   let nextCursor: string | null = null;
   let visited = 0;
-  const SCAN_BUDGET = 5000; // avoid pathological full-library walks per request
+  // Avoid pathological full-library walks per request. Checked per album and
+  // per song, so one request stops where the budget runs out.
+  const SCAN_BUDGET = 5000;
   const BATCH = 200;
   let albumOffset = startAlbumOffset;
   let songIndex = startSongIndex;
 
   try {
-    outer: while (visited < SCAN_BUDGET) {
+    outer: for (;;) {
       const albums = await subsonic.getAlbumList(albumOffset, BATCH);
       if (albums.length === 0) break;
       for (let i = 0; i < albums.length; i++) {
+        const first = i === 0 ? songIndex : 0;
+        if (visited >= SCAN_BUDGET) {
+          nextCursor = encodeCursor({ albumOffset: albumOffset + i, songIndex: first });
+          break outer;
+        }
         const album = albums[i];
         let songs: LibrarySong[] = [];
         try { songs = await subsonic.getAlbum(album.id); } catch { songs = []; }
-        for (let j = (i === 0 ? songIndex : 0); j < songs.length; j++) {
+        // A failed or empty album still cost a request.
+        if (songs.length <= first) visited++;
+        for (let j = first; j < songs.length; j++) {
+          if (visited >= SCAN_BUDGET) {
+            nextCursor = encodeCursor({ albumOffset: albumOffset + i, songIndex: j });
+            break outer;
+          }
           const s = songs[j];
           visited++;
           if (library.has(s.id)) continue;
