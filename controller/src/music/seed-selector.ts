@@ -8,7 +8,8 @@
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
-import { moodVocab } from '../settings.js';
+import * as settings from '../settings.js';
+import * as likes from '../broadcast/likes.js';
 import { shuffle } from '../util/shuffle.js';
 
 export interface SeedSelection {
@@ -27,7 +28,7 @@ export interface SelectorOpts {
 
 // Read per call, not at module load, so operator-added moods still match.
 function moodWords(): Set<string> {
-  return new Set(moodVocab().map(s => s.toLowerCase()));
+  return new Set(settings.moodVocab().map(s => s.toLowerCase()));
 }
 
 export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
@@ -58,9 +59,15 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   // Layer 2: operator's explicit signals.
   const operatorCap = Math.ceil(budget * 0.3);
 
+  // A listener like can star a track in Navidrome, so only the operator's own
+  // curation counts as an operator signal here (likes.operatorStarred, gated on
+  // likes.influenceDj). A dropped star is not lost: the stratified and k-means
+  // layers below still fill the budget from the whole library. Read-only load:
+  // this runs in the tagger child, and likes.json has one writer.
   if (chosen.size < operatorCap) {
     try {
-      const starred = await subsonic.getStarred();
+      await likes.load({ readOnly: true });
+      const starred = likes.operatorStarred(await subsonic.getStarred(), settings.get()?.likes);
       for (const s of starred) {
         if (chosen.size >= operatorCap) break;
         if (s?.id) take('operatorStarred', s.id);

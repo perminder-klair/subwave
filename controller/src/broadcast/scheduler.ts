@@ -13,6 +13,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
@@ -388,10 +389,18 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     queue.log('error', `Frequent-albums fetch failed: ${err.message}`);
   }
 
-  // 5. Starred — hand-curated.
+  // 5. Starred — hand-curated. Only the operator's curation earns this weight
+  // (likes.operatorStarred, gated on likes.influenceDj); a star a listener like
+  // left behind is held back as the last filler below, because this coast is
+  // the dead-air guard and the filter must never be what empties it.
+  let listenerStarred: any[] = [];
   try {
     const starred = shuffle(await subsonic.getStarred());
-    take('starred', enforce(starred), nz(STARRED_WEIGHT));
+    await likes.load();
+    const curated = likes.operatorStarred(starred, settings.get()?.likes);
+    const curatedIds = new Set(curated.map((s: any) => s?.id));
+    listenerStarred = starred.filter((s: any) => !curatedIds.has(s?.id));
+    take('starred', enforce(curated), nz(STARRED_WEIGHT));
   } catch (err) {
     queue.log('error', `Starred fetch failed: ${err.message}`);
   }
@@ -430,6 +439,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       } catch {}
     }
   }
+
+  // Listener-only stars as the last filler, only when every source above came
+  // back empty (see 5).
+  if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
 
   }
 

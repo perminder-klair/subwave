@@ -498,16 +498,28 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 8. Fallback if the pool is still thin — starred + random.
+  // 8. Fallback if the pool is still thin — starred + random. Starred means the
+  // operator's curation (likes.operatorStarred, gated on likes.influenceDj): a
+  // star a listener like left behind does not earn the slot. It is still
+  // music, though, so it comes back as the last filler when nothing else did —
+  // this pool is never-starve scope, and the filter must not be what empties it.
   if (pool.length < 8) {
+    let listenerStarred: any[] = [];
     try {
       const starred = await subsonic.getStarred();
-      add('starred', sampleFresh(shuffle(starred), recentIds, 4));
+      await likes.load();
+      const curated = likes.operatorStarred(starred, settings.get()?.likes);
+      const curatedIds = new Set(curated.map((s: any) => s?.id));
+      listenerStarred = starred.filter((s: any) => !curatedIds.has(s?.id));
+      add('starred', sampleFresh(shuffle(curated), recentIds, 4));
     } catch {}
     try {
       const random = await subsonic.getRandomSongs({ size: 10 });
       add('random', sampleFresh(random, recentIds, 4));
     } catch {}
+    if (!pool.length && listenerStarred.length) {
+      add('starred', sampleFresh(shuffle(listenerStarred), recentIds, 4));
+    }
   }
 
   }

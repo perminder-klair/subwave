@@ -93,7 +93,11 @@ async function flush(): Promise<void> {
   }
 }
 
-export async function load(): Promise<void> {
+// `readOnly` is for a process that only READS the store — the tagger child
+// (music/seed-selector.ts) filtering stars. It never mints and flushes a fresh
+// secret: this file has one writer, the controller, and a second process
+// writing `{ secret, likes: [] }` over it could discard likes recorded since.
+export async function load({ readOnly = false }: { readOnly?: boolean } = {}): Promise<void> {
   if (loaded) return;
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
@@ -111,7 +115,7 @@ export async function load(): Promise<void> {
     } catch {
       /* corrupt file — start fresh, the next flush overwrites it */
     }
-    if (!secret) {
+    if (!secret && !readOnly) {
       secret = randomBytes(24).toString('hex');
       scheduleFlush(); // persist the fresh secret even before the first like
     }
