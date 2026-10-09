@@ -46,10 +46,15 @@ every listener connect, so:
 > that guards the private player. Icecast always calls the controller directly
 > over the internal network, so the endpoint never needs to be reachable from
 > the internet. The bundled Caddy config returns 404 for
-> `/api/listener-auth`; if you use `docker-compose.byo.yml` with your own
-> Traefik/nginx/Caddy, block that path too. The controller slows repeated
-> failed attempts as a backstop (correct passwords are never delayed), but
-> not exposing the path at all is the real protection.
+> `/api/listener-auth` and everything under it; if you use
+> `docker-compose.byo.yml` with your own Traefik/nginx/Caddy, block that path
+> too — as a case-insensitive prefix, since the controller also answers a
+> trailing slash and any case
+> ([recipes](reverse-proxy.md#the-route-contract)). As backstops, the
+> controller refuses any call carrying a proxy's forwarding headers
+> (`X-Forwarded-For` and the like — Icecast's own call has none) and slows
+> repeated failed attempts (correct passwords are never delayed), but not
+> exposing the path at all is the real protection.
 
 ### Tuning in with a password
 

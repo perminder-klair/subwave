@@ -38,6 +38,27 @@ export function listenerAuthDecision(opts: {
   return safeEqual(mountAuthToken(opts.mount || ''), opts.password);
 }
 
+// Icecast calls POST /listener-auth over the private network with no
+// forwarding headers; every edge in the documented topologies (Caddy, nginx,
+// Traefik, Cloudflare) adds at least one. A forwarded call came through the
+// public route table, so it is not Icecast — whatever path variant got it past
+// the edge's deny rule. LISTENER_AUTH_URL must therefore point straight at the
+// controller, never through a proxy.
+const FORWARDING_HEADERS = [
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'forwarded',
+  'x-real-ip',
+  'cf-connecting-ip',
+  'via',
+] as const;
+
+export function forwardedByProxy(headers: Record<string, unknown> | undefined): boolean {
+  if (!headers) return false;
+  return FORWARDING_HEADERS.some((h) => headers[h] !== undefined);
+}
+
 // The UI gate fails closed. listenerAuthDecision fails open when stream auth
 // is off, so it cannot protect privatePlayer independently.
 export function stationAuthDecision(opts: {

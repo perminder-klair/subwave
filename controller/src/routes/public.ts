@@ -28,7 +28,7 @@ import { resolveSilenceTrim } from '../music/silence-trim.js';
 import { playableDurationSec } from '../broadcast/drain-policy.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
+import { forwardedByProxy, listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
 import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import {
@@ -469,8 +469,19 @@ router.get('/state', (req, res) => {
 // /station-auth instead. Not rate-limited per IP because the caller is always
 // Icecast and one bucket would throttle every listener; failures are damped
 // in-handler below instead (successes are never delayed).
+// A call carrying forwarding headers came through the public edge, not from
+// Icecast, so it gets the same 404 the edge's deny rule answers — before any
+// password is compared. Icecast's own calls carry none, so its fail-OPEN
+// decision below is unchanged.
 router.post(
   '/listener-auth',
+  (req, res, next) => {
+    if (forwardedByProxy(req.headers)) {
+      res.status(404).send('Not Found\n');
+      return;
+    }
+    next();
+  },
   express.urlencoded({ extended: false, limit: '10kb' }),
   async (req, res) => {
     await settings.load();
