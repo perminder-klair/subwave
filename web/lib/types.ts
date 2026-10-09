@@ -216,7 +216,9 @@ export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
  *  tail (`meta.carried: true`, `meta.carriedFrom`, `meta.personaName`) and
  *  one `role: 'event'`, `kind: 'show-boundary'` separator whose
  *  `meta.boundary` is `{ at, show, persona, fromShow, fromSessionId }` (#1690).
- *  See isCarriedTurn / isShowBoundary in lib/sessionFeed. */
+ *  See isCarriedTurn / isShowBoundary in lib/sessionFeed.
+ *  Spoken turns also carry `meta.airedAt` (the live-edge moment the words
+ *  began, #1382) and `meta.durationMs` (the clip's length, #1848). */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;

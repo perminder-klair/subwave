@@ -235,6 +235,8 @@ export interface StationState {
  *  `{ at, show, persona, fromShow, fromSessionId }` (#1690). */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
+/** Spoken turns also carry `meta.airedAt` (the live-edge moment the words
+ *  began, #1382) and `meta.durationMs` (the clip's length, #1848). */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;
