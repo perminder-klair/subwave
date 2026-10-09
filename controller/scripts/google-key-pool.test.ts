@@ -29,7 +29,6 @@ import {
   fingerprint,
   getLastFailure,
   holdRemainingMs,
-  isHeld,
   GOOGLE_KEY_MAX,
   poolKeyProblem,
   invalidatePool,
@@ -42,7 +41,6 @@ import {
   recordLastFailure,
   poolEntries,
   poolKeys,
-  poolRevision,
   poolSize,
   poolStatus,
   reportKeyFailure,
@@ -408,7 +406,7 @@ test('an exhausted pool surfaces the 429 instead of looping', async () => {
     assert.equal(res.status, 429, 'the 429 must reach the caller so failover can escalate');
     assert.equal(calls, 1, 'must not re-issue against the same spent key');
     // The body survives the read, which is what lets withFailover classify it.
-    const body = await res.json();
+    const body = (await res.json()) as any;
     assert.match(body.error.message, /retry in 20s/);
   } finally {
     globalThis.fetch = realFetch;
@@ -800,7 +798,7 @@ test('an exhausted pool short-circuits WITHOUT a request, and replays the real b
     assert.equal(call, learned, 'no further network I/O once the pool is spent');
     assert.deepEqual(seen, [K1, K2], 'only one attempt per key, ever');
     // And the replayed body is the provider's own, so the reason survives.
-    const body = await (await googleKeyFetch('https://example.test/v1/x', {})).json();
+    const body = (await (await googleKeyFetch('https://example.test/v1/x', {})).json()) as any;
     assert.equal(body.error.code, 'quota_exceeded');
   } finally {
     globalThis.fetch = realFetch;
@@ -1104,7 +1102,7 @@ test('the single-key field is greyed out while a pool exists, and says so', asyn
   assert.doesNotMatch(llmSection, /'GOOGLE_GENERATIVE_AI_API_KEYS'/,
     'the single field must not write the pool variable');
 
-  assert.match(llmSection, /const poolActive = isGoogle && googlePoolCount > 0/,
+  assert.match(llmSection, /const poolActive = googleKeyFieldInert\(keyVar, googlePoolCount\)/,
     'pool presence must drive the disabled state');
   assert.match(llmSection, /disabled=\{poolActive\}/,
     'the single-key input must be disabled while a pool exists');
