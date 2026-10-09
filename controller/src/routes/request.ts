@@ -9,6 +9,7 @@ import * as library from '../music/library.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as djAgent from '../broadcast/dj-agent.js';
+import * as budget from '../broadcast/dj-budget.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
@@ -200,6 +201,27 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
+// The matcher's reading without the matcher: at the hard token cap with
+// requests not exempt (dj-budget.requestsAllowed()), the cleaned request text
+// goes to the library search as-is, and the cascade's mood, similar and
+// starred rungs below still fit the room — the request resolves, just without
+// a model call. No ack: screenAck supplies the fixed fallback line.
+function modelFreeMatch(text: string): Awaited<ReturnType<typeof dj.matchRequest>> {
+  return {
+    kind: 'track', search_terms: [text], artist: null, genre: null, language: null,
+    sort: null, scope: 'song', mood: null, intent: 'library search (token budget reached)', ack: '',
+  } as Awaited<ReturnType<typeof dj.matchRequest>>;
+}
+
+// Requests accepted but not yet resolved. Their track is not in the upcoming
+// queue until resolveRequest() pushes it, which can take the agent's whole
+// timeout, so the maxPending gate counts them alongside the queued ones.
+function resolvingRequestCount(): number {
+  let n = 0;
+  for (const entry of requests.values()) if (entry.status === 'pending') n++;
+  return n;
+}
+
 async function resolveRequest(entry) {
   const { requester, text } = entry;
   entry.startedAt = Date.now();
@@ -369,12 +391,15 @@ async function resolveRequest(entry) {
   }
 
   // 1. LLM matches intent; the current track lets vibe queries be read against
-  // what is on air.
+  // what is on air. Gated before generation: past the hard token cap with
+  // requests not exempt, the model is not called at all.
   const currentTrack = queue.current?.track || null;
-  const matched = await dj.matchRequest(text, {
-    listenerName: requester,
-    nowPlaying: currentTrack,
-  });
+  const matched = budget.requestsAllowed()
+    ? await dj.matchRequest(text, {
+      listenerName: requester,
+      nowPlaying: currentTrack,
+    })
+    : modelFreeMatch(text);
   queue.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
     mood: matched.mood,
     scope: matched.scope,
@@ -738,8 +763,11 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
   }
   // LISTENER requests only — an operator's own studio push carries
   // `requestedBy: 'studio'` for the air-path exemptions and must not consume a
-  // slot in the listener queue. See queue.pendingListenerRequests().
-  const pendingCount = queue.pendingListenerRequests();
+  // slot in the listener queue. See queue.pendingListenerRequests(). Requests
+  // still resolving count too: they hold no queue slot yet, so a burst
+  // accepted inside one resolution window would otherwise all pass. The brief
+  // overlap between a push and its entry settling errs toward refusing.
+  const pendingCount = queue.pendingListenerRequests() + resolvingRequestCount();
   if (pendingCount >= (Number(cfg.maxPending) || 6)) {
     res.setHeader('Retry-After', String(retryAfter));
     return res.status(429).json({

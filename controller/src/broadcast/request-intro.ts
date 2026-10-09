@@ -5,6 +5,7 @@
 import * as dj from '../llm/dj.js';
 import { guardIntro } from '../util/request-guard.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { requestsAllowed } from './dj-budget.js';
 import * as session from './session.js';
 import type { Persona } from './queue/types.js';
 import type { HostSpeechStamp } from './session.js';
@@ -22,7 +23,9 @@ export async function generateQueuedRequestIntro(
   generate: (args: Record<string, unknown>) => Promise<string> = dj.generateIntro,
 ): Promise<QueuedRequestIntro> {
   const owner = session.captureAutomaticHostSpeech(session.onAirPersona());
-  const script = autoVoiceAllowed()
+  // Past the hard token cap with requests not exempt, the request still
+  // queues and acks; it just airs without a written intro.
+  const script = autoVoiceAllowed() && requestsAllowed()
     ? await generate({ ...args, requestText, persona: owner.persona })
     : null;
   // The retry must see no listener-derived text at all, or it can echo again:
