@@ -24,17 +24,30 @@ Currently configured project: `subwave` (target: `..`).
 
 ```bash
 pnpm deepsec scan
-pnpm deepsec process     --concurrency 5
-pnpm deepsec revalidate  --concurrency 5                  # cuts FP rate
+pnpm deepsec process     --concurrency 2 --filter controller/src/routes/
+pnpm deepsec revalidate  --concurrency 2                  # cuts FP rate
 pnpm deepsec export      --format md-dir --out ./findings
 ```
+
+The agent (`claude`) and model (`claude-opus-5-5`) are pinned in
+`deepsec.config.ts`; `--agent` / `--model` override them.
 
 `--project-id` is auto-resolved while there's only one project in
 `deepsec.config.ts`. Once you've added a second project, pass
 `--project-id subwave` (or whichever id you want) explicitly.
 
-`scan` is free (regex only). `process` is the AI stage (≈$0.30/file
-on Opus by default). Run state goes to `data/subwave/`.
+`scan` is free (regex only). `process` is the AI stage. On this repo
+it measured **about $1 per file** on Opus 5.5 (2026-10-09: 103 files,
+about 3½ h), because the agent follows imports across the codebase.
+A full scan has ~790 candidate files, so scope a run with `--filter` /
+`--only-slugs` / `--limit`. A logged-in `claude` CLI spends
+subscription quota instead of money.
+
+Keep `--concurrency` low: each worker is its own agent process. On an
+11 GB machine a run at 4 was stopped for low memory, and 2 finished.
+Interrupted files are picked up automatically by the next run.
+
+Run state goes to `data/subwave/`.
 
 ## Adding another project
 

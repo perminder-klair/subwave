@@ -28,4 +28,9 @@ export default defineConfig({
     // <deepsec:projects-insert-above>
   ],
   plugins: [subwavePlugin],
+  // deepsec's own defaults are the codex agent and, for claude, an older Opus.
+  // Pinned so the README's bare `pnpm deepsec process` runs what the last pass
+  // ran; --agent / --model still override.
+  defaultAgent: "claude",
+  defaultModel: "claude-opus-5-5",
 });
