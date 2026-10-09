@@ -90,10 +90,15 @@ export async function djObject({
             try {
               object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
             } catch (parseErr: any) {
-              // Include raw output on parse failures for diagnosis.
-              parseErr.text = result.text || '';
-              parseErr.finishReason = result.finishReason;
-              throw parseErr;
+              // A fixed message, with the parse error kept as `cause`: V8's
+              // JSON.parse message quotes the model's own reply, and the
+              // failover/retry classifiers read messages — a reply mentioning
+              // "Forbidden" or a "quota" must not read as a provider rejection.
+              // Raw output rides along for diagnosis, as before.
+              const err: any = new Error('object recovery reply was not valid JSON for the schema', { cause: parseErr });
+              err.text = result.text || '';
+              err.finishReason = result.finishReason;
+              throw err;
             }
             perf = perfOf(result);
             warnings = warningsOf(result);
