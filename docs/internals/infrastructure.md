@@ -69,7 +69,11 @@ The sidecar half is **N independent single-flight worker processes**, not one wo
 
 Navidrome connection precedence lives in `setup/navidrome-policy.ts`. The
 controller and both maintenance workers call `loadNavidromeConfig`; setup
-status and admin environment locks use the same policy. Once `stations/`
+status and admin environment locks use the same policy. The wizard save
+(`POST /onboarding/save`) writes only the Navidrome fields that are non-blank
+after normalisation: the web wizard sends an all-blank block when its Navidrome
+step is skipped, and since `saveSetupConfig` spreads the patch over the stored
+block, a blank would replace a saved credential rather than leave it alone. Once `stations/`
 exists, only the active profile's `setup-config.json` supplies its connection.
 Conversion saves the original station's effective connection before restarting.
 Before this policy applies, `stations/navidrome-migration.ts` runs synchronously
