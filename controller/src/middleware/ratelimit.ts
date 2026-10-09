@@ -137,6 +137,19 @@ export function checkAuthRateLimit(ip, surface = 'station-auth') {
   return { ok: true };
 }
 
+// Peek only: the same verdict as checkAuthRateLimit without spending an
+// attempt. For a surface that counts failures alone and so must ask BEFORE
+// comparing the password — asking only after a mismatch leaves the comparison
+// itself unthrottled.
+export function peekAuthRateLimit(ip, surface = 'station-auth') {
+  const now = Date.now();
+  const hits = (authHistoryFor(surface).get(ip) || []).filter(t => t > now - AUTH_WINDOW_MS);
+  if (hits.length >= AUTH_WINDOW_CAP) {
+    return { ok: false, retryAfter: Math.ceil((hits[0] + AUTH_WINDOW_MS - now) / 1000) };
+  }
+  return { ok: true };
+}
+
 // Listener-auth brute-force damper (#478). Deliberately delays FAILURES rather
 // than gating the request: a cap would have to reject correct passwords once
 // tripped, which locks real listeners out of a private stream. Counted globally,

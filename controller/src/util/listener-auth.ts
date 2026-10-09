@@ -59,6 +59,12 @@ export function forwardedByProxy(headers: Record<string, unknown> | undefined): 
   return FORWARDING_HEADERS.some((h) => headers[h] !== undefined);
 }
 
+// Whether either privacy lock is on. Read by stationAuthDecision and by
+// requireStationAuth's throttle, which must stay off on a public station.
+export function stationLockEngaged(opts: { privatePlayer: boolean; listenerAuth: boolean }): boolean {
+  return opts.privatePlayer || opts.listenerAuth;
+}
+
 // The UI gate fails closed. listenerAuthDecision fails open when stream auth
 // is off, so it cannot protect privatePlayer independently.
 export function stationAuthDecision(opts: {
@@ -68,7 +74,7 @@ export function stationAuthDecision(opts: {
   candidate?: string;
 }): boolean {
   // Neither lock engaged — nothing to unlock, so nothing to reject.
-  if (!opts.privatePlayer && !opts.listenerAuth) return true;
+  if (!stationLockEngaged(opts)) return true;
   // A lock is on but no password is on file: fail closed.
   if (!opts.password) return false;
   return safeEqual(opts.candidate || '', opts.password);

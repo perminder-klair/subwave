@@ -277,6 +277,45 @@ test('a failing API read cannot spend the player password box\'s attempts', asyn
   assert.equal(checkAuthRateLimit('203.0.113.250').ok, true);
 });
 
+test('a full failure bucket refuses the RIGHT password too, without comparing', async () => {
+  // Counting only failures is safe only if the bucket is read before the
+  // comparison. Read after it, a full bucket would 429 every wrong guess and
+  // still pass the right one — the cap would never stop the guessing.
+  await settings.update({ privacy: { password: PW, privatePlayer: true } } as never);
+  const ip = '198.51.100.42';
+  const call = async (headers: Record<string, string> = {}) => {
+    const res = fakeRes();
+    let passed = false;
+    await requireStationAuth(
+      { headers: { 'x-forwarded-for': ip, ...headers }, query: {}, socket: { remoteAddress: '127.0.0.1' } } as never,
+      res as never,
+      () => { passed = true; },
+    );
+    return { passed, res };
+  };
+
+  // The right password does not spend an attempt — this is a read an agent polls.
+  for (let i = 0; i < 25; i++) assert.equal((await call({ 'x-station-auth': PW })).passed, true);
+
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await call({ 'x-station-auth': `guess-${i}` })).res.code, 401, `failure ${i + 1} is a 401`);
+  }
+  const wrong = await call({ 'x-station-auth': 'guess-20' });
+  assert.equal(wrong.res.code, 429, 'the 21st failure is refused');
+  const right = await call({ 'x-station-auth': PW });
+  assert.equal(right.passed, false, 'the right password is refused while the bucket is full');
+  assert.equal(right.res.code, 429, 'and gets the same answer a wrong one does');
+  assert.ok(Number(right.res.headers['Retry-After']) > 0);
+
+  // Another address is unaffected.
+  assert.equal((await callGate({ headers: { 'x-station-auth': PW } })).passed, true);
+
+  // A public station never reads the counter, so leftover failures from its
+  // private days cannot shut a public read.
+  await settings.update({ privacy: { password: PW, privatePlayer: false, listenerAuth: false } } as never);
+  assert.equal((await call()).passed, true, 'public again → open, whatever the bucket holds');
+});
+
 test('GET /similar-tracks is mounted with requireStationAuth in front of it', async () => {
   const { router } = await import('../src/routes/public.js');
   const layer = (router as never as { stack: { route?: { path: string; methods: Record<string, boolean>; stack: { name: string }[] } }[] })
