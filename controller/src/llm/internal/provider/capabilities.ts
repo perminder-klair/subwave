@@ -55,6 +55,12 @@ export interface ProviderCapabilities {
   // would otherwise look up OPENAI_API_KEY. A key read here is captured at
   // construction, so it has to key the client cache (registry.pinnedApiKey).
   apiKeyEnv?: string;
+  // How legs.probeLegReachable checks this provider's host is up, for a
+  // provider that runs on the operator's own box:
+  //   'ollama-version' — GET <ollama base>/api/version
+  //   'openai-models'  — GET <chat base url>/models (llama.cpp, vLLM, LM Studio)
+  // Absent = a hosted provider with no cheap probe, assumed reachable.
+  reachabilityProbe?: 'ollama-version' | 'openai-models';
 }
 
 // Floor is the historical global value and what every forced-tool provider keeps.
@@ -96,6 +102,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // thinking. Never emit a level string: 'medium' → think:'medium', which 400s
     // models that only accept a boolean.
     reasoningLevel: ({ reasoning }) => (reasoning ? undefined : 'none'),
+    reachabilityProbe: 'ollama-version',
   },
   openai: {
     objectStrategy: 'native',
@@ -124,13 +131,17 @@ const CAPS: Record<string, ProviderCapabilities> = {
     samplingViaBody: true,
     reasoningLevel: NONE,
     embeddingEndpoint: 'configured',
+    reachabilityProbe: 'openai-models',
   },
+  // locca is the self-hosted llama.cpp transport (same builder as
+  // openai-compatible, its own default base URL), so it is probed like one.
   locca: {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     samplingViaBody: true,
     reasoningLevel: NONE,
     embeddingEndpoint: 'configured',
+    reachabilityProbe: 'openai-models',
   },
   anthropic: {
     objectStrategy: 'native',
