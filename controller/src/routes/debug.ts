@@ -80,6 +80,18 @@ router.get('/debug', requireAdmin, async (req, res) => {
   }
 });
 
+// The booth log on its own, for operator clients (the MCP station-state tool)
+// that want the newest lines without the whole /debug snapshot. GET /state
+// carried these 50 lines until it became a public projection; this is the
+// admin-gated home for the same slice.
+router.get('/debug/dj-log', requireAdmin, (req, res) => {
+  res.json({
+    djLog: queue.djLog.slice(0, 50),
+    djLogCount: queue.djLog.length,
+    timezone: getStationTimezone(),
+  });
+});
+
 async function buildDebugSnapshot(req: express.Request): Promise<any> {
   // Station zone so DJ-log timestamps render in station-local time (#418).
   let settingsSnapshot: any = null;

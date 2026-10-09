@@ -213,17 +213,11 @@ export interface LikeStatus {
   count?: number;
 }
 
-export interface DjLogEntry {
-  t?: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-/** `/state` response. */
+/** `/state` response. The booth log (`djLog`) is operator diagnostics and is
+ *  not part of this public read; older controllers still send it. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
-  djLog: DjLogEntry[];
   /** The on-air track, stamped at the LIVE EDGE. The authoritative start time,
    *  as opposed to when this client first saw the track. Shifted into
    *  listener-time before display (#1114). */

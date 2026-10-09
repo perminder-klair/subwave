@@ -45,7 +45,7 @@ export interface StationFeed {
   leadMs: number;
 }
 
-const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
+const EMPTY_STATE: StationState = { upcoming: [], history: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 const OFFLINE_CONFIRM_POLLS = 4;
 

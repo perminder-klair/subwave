@@ -191,17 +191,11 @@ export interface RequestResult {
   status?: RequestStatus;
 }
 
-export interface DjLogEntry {
-  t?: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-/** `/state` response. */
+/** `/state` response. The booth log (`djLog`) is operator diagnostics and is
+ *  not part of this public read; older controllers still send it. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
-  djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
   /** Operator player defaults. `skin` indexes components/skins;

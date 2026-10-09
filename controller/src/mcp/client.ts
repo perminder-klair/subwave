@@ -14,7 +14,8 @@
  *   - station-password gated:   GET /similar-tracks — open on a public station,
  *                               closed on a private one (a DIFFERENT secret
  *                               from the admin one; see stationHeader)
- *   - admin, Basic-auth gated:  the /dj/* command surface and /sfx
+ *   - admin, Basic-auth gated:  the /dj/* command surface, /sfx and
+ *                               /debug/dj-log (the booth log)
  *
  * Every failure is turned into a SubwaveError carrying a message written for
  * the agent — it says what went wrong AND what to do about it, so the model
@@ -286,9 +287,24 @@ export class SubwaveClient {
     return this.call<Record<string, unknown>>("/now-playing");
   }
 
-  /** GET /state — upcoming queue, recent history, and the DJ booth log. */
+  /** GET /state — upcoming queue and recent history (public; no booth log). */
   async state(): Promise<Record<string, unknown>> {
     return this.call<Record<string, unknown>>("/state");
+  }
+
+  /**
+   * GET /debug/dj-log — the newest booth-log lines, admin-gated. Null without
+   * admin credentials, when they are refused, or against a controller that
+   * predates the route, so the state tool degrades to the public view instead
+   * of failing.
+   */
+  async boothLog(): Promise<unknown[] | null> {
+    if (!this.hasAdminCreds) return null;
+    const body = await this.call<{ djLog?: unknown }>("/debug/dj-log", {
+      admin: true,
+      allowStatuses: [401, 403, 404],
+    });
+    return Array.isArray(body?.djLog) ? body.djLog : null;
   }
 
   /** GET /schedule — shows, personas, and the weekly schedule grid. */
