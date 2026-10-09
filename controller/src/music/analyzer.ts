@@ -699,18 +699,34 @@ function parseVectors(v: unknown, expected: number): number[][] | null {
   return out;
 }
 
-function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][] | null> {
+function localEmbedTexts(texts: string[], timeoutMs: number, signal?: AbortSignal): Promise<number[][] | null> {
   const id = `a${++reqSeq}`;
   return new Promise<number[][] | null>((resolve, reject) => {
+    // A cancelled caller stops waiting at once. The worker still finishes the
+    // line it was handed (stdin is already written); its answer finds no
+    // waiter and is dropped.
+    const onAbort = () => {
+      clearTimeout(timer);
+      pending.delete(id);
+      reject(new Error('embed-text request cancelled'));
+    };
     const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
       pending.delete(id);
       reject(new Error('embed-text request timed out'));
     }, timeoutMs);
     pending.set(id, {
-      resolve: (msg: WorkerMessage) => resolve(parseVectors(msg.text_embeddings, texts.length)),
-      reject,
+      resolve: (msg: WorkerMessage) => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve(parseVectors(msg.text_embeddings, texts.length));
+      },
+      reject: (err: Error) => {
+        signal?.removeEventListener('abort', onAbort);
+        reject(err);
+      },
       timer,
     });
+    signal?.addEventListener('abort', onAbort, { once: true });
     proc?.stdin.write(JSON.stringify({ id, texts }) + '\n');
   });
 }
@@ -728,15 +744,19 @@ function isTimeoutError(err: unknown): boolean {
 // meaningful. Returns null whenever the capability is absent; callers degrade,
 // never throw. One retry on TIMEOUT only, since with the idle model release
 // (#1204) a call can land on a cold worker whose CLAP reload eats the deadline;
-// bulk callers pass `coldRetry: false`.
+// bulk callers pass `coldRetry: false`. `signal` is the caller's own deadline
+// (a picker tool's abortSignal): an abort ends the call with null and is never
+// retried.
 export async function embedTexts(
   texts: string[],
-  opts: { timeoutMs?: number; coldRetry?: boolean } = {},
+  opts: { timeoutMs?: number; coldRetry?: boolean; signal?: AbortSignal } = {},
 ): Promise<number[][] | null> {
   if (texts.length === 0) return [];
+  const { signal } = opts;
+  if (signal?.aborted) return null;
   const timeoutMs = opts.timeoutMs ?? config.analyzer.requestTimeoutMs;
   const backend = await resolveBackend();
-  if (!backend) return null;
+  if (!backend || signal?.aborted) return null;
   if (backend === 'sidecar' && _sidecarTextCapable === false) return null;
   const attempt = async (): Promise<number[][] | null> => {
     if (backend === 'sidecar') {
@@ -746,6 +766,7 @@ export async function embedTexts(
         body: JSON.stringify({ texts }),
         timeoutMs,
         bodyDeadline: true,
+        ...(signal ? { signal } : {}),
       });
       // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
       // embeddings", not an error worth surfacing per call.
@@ -754,12 +775,13 @@ export async function embedTexts(
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
     }
     if (!ready) await startWorker();
-    return await localEmbedTexts(texts, timeoutMs);
+    if (signal?.aborted) return null;
+    return await localEmbedTexts(texts, timeoutMs, signal);
   };
   try {
     return await attempt();
   } catch (err) {
-    if (opts.coldRetry === false || !isTimeoutError(err)) return null;
+    if (opts.coldRetry === false || signal?.aborted || !isTimeoutError(err)) return null;
     try {
       return await attempt();
     } catch {

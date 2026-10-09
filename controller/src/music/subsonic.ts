@@ -92,6 +92,9 @@ const STALE_SOCKET_BACKOFF_MS = 250;
 
 type CallOptions = {
   retryFastTransport?: boolean;
+  // The caller's own deadline (a picker tool's abortSignal), on top of the
+  // per-request timeout. An abort ends the call; it is never retried.
+  signal?: AbortSignal;
 };
 
 // Reads and operations that are explicitly idempotent opt in at their call
@@ -117,14 +120,17 @@ function describeTransportError(endpoint: string, err: any): Error {
 async function boundedFetch(
   endpoint: string,
   url: string,
-  { retryFastTransport = false }: CallOptions = {},
+  { retryFastTransport = false, signal }: CallOptions = {},
 ) {
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     try {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
       subLog.recordHttpAttempt(endpoint, 'api');
-      return await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+      const timeout = AbortSignal.timeout(config.navidrome.timeoutMs);
+      return await fetch(url, { signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
     } catch (err: any) {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error(
           `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
@@ -289,13 +295,25 @@ const rejectArchive = (arr: any[]) =>
 // operator can review a blocked track; queue.push still refuses it. Every
 // airing path takes the default and never sees blocked songs.
 export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
+  return (await searchPage(query, { songCount, songOffset, includeBlocked })).songs;
+}
+
+// search() plus `rawCount`: how many songs the server returned for the page
+// BEFORE the archive and blocklist filters. A caller asking "was that a full
+// page?" must ask this — a 25-row page with one blocked track is still a full
+// page, not the end of a narrow result set.
+export async function searchPage(
+  query,
+  { songCount = 20, songOffset = 0, includeBlocked = false, signal }: { songCount?: number; songOffset?: number; includeBlocked?: boolean; signal?: AbortSignal } = {},
+): Promise<{ songs: any[]; rawCount: number }> {
   const r = await call(
     'search3',
     { query, songCount, songOffset, artistCount: 5, albumCount: 5 },
-    RETRY_FAST_TRANSPORT,
+    { ...RETRY_FAST_TRANSPORT, signal },
   );
-  const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
-  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
+  const raw = r.searchResult3?.song || [];
+  const songs = raw.filter((s) => !isStationArchive(s));
+  return { songs: includeBlocked ? songs : blocklist.rejectBlocked(songs), rawCount: raw.length };
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
@@ -414,23 +432,32 @@ function similarity(a: string, b: string): number {
 // not. Paired with the shared-token guard on multi-word names below.
 const ARTIST_MATCH_THRESHOLD = 0.82;
 
-export async function resolveArtist(name, { artistCount = 10 } = {}) {
+// Per-token searches in resolveArtist's relax step. One search3 per word is
+// sized for a NAME; a long query (free text, a whole sentence) would otherwise
+// fan out into one Navidrome round trip per word. A name longer than this
+// still gets its first words searched, and the fuzzy rank below compares
+// against the whole query either way.
+const RESOLVE_ARTIST_MAX_TOKEN_SEARCHES = 6;
+
+export async function resolveArtist(name, { artistCount = 10, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
   const query = normArtist(name);
   if (!query) return null;
 
   // 1. Exact index search.
-  const exact = await searchArtists(name, { artistCount });
+  const exact = await searchArtists(name, { artistCount, signal });
   const direct = exact.find((a: any) => normArtist(a.name) === query);
   if (direct) return direct;
 
   // 2. Relax — search per token ("Kahlon" finds "Sikander Kahlon"), unioned
-  //    with the exact hits.
+  //    with the exact hits. Distinct tokens only, capped, and stopped as soon as
+  //    the caller's deadline has passed.
   const tokens = query.split(' ').filter(t => t.length >= 2);
   const candidates = new Map<string, any>();
   for (const a of exact) candidates.set(a.id, a);
-  for (const token of tokens) {
+  for (const token of [...new Set(tokens)].slice(0, RESOLVE_ARTIST_MAX_TOKEN_SEARCHES)) {
+    if (signal?.aborted) break;
     try {
-      for (const a of await searchArtists(token, { artistCount })) {
+      for (const a of await searchArtists(token, { artistCount, signal })) {
         candidates.set(a.id, a);
       }
     } catch {}
@@ -622,11 +649,11 @@ export async function getArtist(id) {
   return r.artist || null;
 }
 
-export async function searchArtists(query, { artistCount = 5 } = {}) {
+export async function searchArtists(query, { artistCount = 5, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
   const r = await call(
     'search3',
     { query, artistCount, albumCount: 0, songCount: 0 },
-    RETRY_FAST_TRANSPORT,
+    { ...RETRY_FAST_TRANSPORT, signal },
   );
   return r.searchResult3?.artist || [];
 }
