@@ -42,6 +42,19 @@ export interface ProviderCapabilities {
   // derived as discoverySteps + 1, so a run always makes exactly one forced-done
   // attempt before the recovery cascade. Extra done steps make compliance worse.
   discoverySteps?: number;
+  // Where this provider's EMBEDDING leg sends requests, relative to its chat
+  // leg — which decides whether the chat key may follow it there.
+  //   'vendor'     — the vendor's own fixed endpoint serves both legs.
+  //   'configured' — an operator-set server; the same service only when both
+  //                  legs resolve to the same base URL.
+  //   absent       — never the chat leg's service (anthropic embeds via OpenAI;
+  //                  ollama takes no key; deepseek/gateway have no embeddings).
+  embeddingEndpoint?: 'vendor' | 'configured';
+  // Env var holding this provider's key, declared only where a builder must
+  // read it itself: the createOpenAI transport on another vendor's endpoint
+  // would otherwise look up OPENAI_API_KEY. A key read here is captured at
+  // construction, so it has to key the client cache (registry.pinnedApiKey).
+  apiKeyEnv?: string;
 }
 
 // Floor is the historical global value and what every forced-tool provider keeps.
@@ -97,6 +110,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
         ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
         : undefined,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
   },
   // openai-compatible and locca serve the same local GGUF model class as ollama:
   // under native Output.object they emit a schema-valid object without exploring,
@@ -109,12 +123,14 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // so the top-level param stays unset and the knobs ride the body.
     samplingViaBody: true,
     reasoningLevel: NONE,
+    embeddingEndpoint: 'configured',
   },
   locca: {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     samplingViaBody: true,
     reasoningLevel: NONE,
+    embeddingEndpoint: 'configured',
   },
   anthropic: {
     objectStrategy: 'native',
@@ -141,6 +157,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: ({ modelId, reasoning }) =>
       (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
   },
   deepseek: {
     objectStrategy: 'native',
@@ -161,6 +178,8 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: NONE,
     reasoningConstructionOnly: true,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
   },
   // Requesty is built via createOpenAI, so the level resolves through the openai
   // code path as reasoning_effort. Suppressed when reasoning is off or on a
@@ -172,6 +191,8 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? undefined : 'minimal'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
+    apiKeyEnv: 'REQUESTY_API_KEY',
   },
   // The gateway serializes the top-level level to whatever vendor the
   // `provider/model` id resolves to. Gemma downstreams are the exception, same
@@ -354,4 +375,30 @@ export function reasoningFor(
     reasoning: cfg?.reasoning === true,
     forceNoThink,
   });
+}
+
+const trimBaseUrl = (u: unknown): string => String(u || '').trim().replace(/\/+$/, '');
+
+// May the embedding leg reuse the chat leg's credentials (inline key, custom
+// headers)? Only when it talks to the same service: the same provider, and for
+// an operator-configured server the same resolved base URL. A credential that
+// follows the provider id alone reaches whichever server the embedding leg
+// points at — another vendor's API, or a separate self-hosted box. Callers pass
+// RESOLVED base URLs (registry.chatBaseUrl / embedding.embeddingBaseUrl), so a
+// blank field and its default compare as the same server.
+export function embeddingSharesChatCredential(
+  chat: { provider?: string; baseUrl?: string },
+  embed: { provider?: string; baseUrl?: string },
+): boolean {
+  if (!embed.provider || embed.provider !== chat.provider) return false;
+  switch (capabilitiesFor(embed.provider).embeddingEndpoint) {
+    case 'vendor':
+      return true;
+    case 'configured': {
+      const a = trimBaseUrl(chat.baseUrl);
+      return !!a && a === trimBaseUrl(embed.baseUrl);
+    }
+    default:
+      return false;
+  }
 }

@@ -552,14 +552,9 @@ router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
   if ((req.body || {}).headers !== undefined) {
     try {
       const saved = settings.get().embedding?.headers || {};
-      const edited = applyCustomHeadersPatch(saved, req.body.headers, 'embedding');
-      if (Object.keys(edited).length) {
-        overrides.headers = edited;
-      } else {
-        const station = settings.get();
-        const provider = overrides.provider || station.embedding?.provider || station.llm.provider;
-        overrides.headers = provider === station.llm.provider ? (station.llm.headers || {}) : {};
-      }
+      // An empty map inherits the chat leg's headers only when the probe
+      // targets the same service — resolveEmbeddingCfg owns that rule.
+      overrides.headers = applyCustomHeadersPatch(saved, req.body.headers, 'embedding');
     } catch (err: unknown) {
       return res.json({ ok: false, dim: null, code: 'invalid', message: (err as Error).message });
     }
