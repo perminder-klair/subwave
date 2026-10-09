@@ -4,6 +4,7 @@
 // close enough to the Subsonic XML convention for probes and casual clients.
 
 import type { Request, Response } from 'express';
+import { markRequestFailed } from '../host/activity.js';
 
 export const ROUTER_VERSION = '1.0.0';
 
@@ -73,6 +74,7 @@ export function respondError(
   message: string,
   httpStatus = 200,
 ): void {
+  markRequestFailed(message);
   res.status(httpStatus);
   send(req, res, { ...base(sourceName), status: 'failed', error: { code, message } });
 }

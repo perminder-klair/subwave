@@ -10,6 +10,7 @@
 // renders each plugin's settings from its manifest.
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useQueryClient } from '@tanstack/react-query';
 import { adminJson, useAdminQuery, type AdminFetch } from '../../../lib/admin-query';
 import { errorMessage, notify } from '../../../lib/notify';
@@ -457,6 +458,7 @@ function HealthCard({ status, saved }: { status: RouterStatus; saved: boolean })
                   {a.health.stats.songs.toLocaleString()} songs · {a.health.stats.albums.toLocaleString()} albums · {a.health.stats.artists.toLocaleString()} artists
                 </span>
               )}
+              {a.health.ms !== undefined && <span className="text-[12px] text-muted">· answered in {a.health.ms.toLocaleString()} ms</span>}
             </div>
             {a.health.error && <div className="text-[12px] text-[var(--danger)]">{a.health.error}</div>}
             <div className="flex flex-wrap gap-1.5">
@@ -468,6 +470,8 @@ function HealthCard({ status, saved }: { status: RouterStatus; saved: boolean })
         ))}
         <div className="field-hint">
           A source without a capability still plays; the DJ just has fewer discovery signals.
+          Live traffic and the full capability matrix are on the{' '}
+          <Link href="/admin/router" className="underline">Music router</Link> page.
         </div>
       </div>
     </Card>
