@@ -26,7 +26,7 @@ import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
-import { ENGINE_META, engineCategory } from '../tts/engineMeta';
+import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
 import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
@@ -487,6 +487,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
+  // Google key for the Gemini provider card. Same single credential the LLM
+  // section uses (GOOGLE_GENERATIVE_AI_API_KEY) — never the key pool, which
+  // has its own UI and its own PR.
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [geminiKeyTest, setGeminiKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [geminiKeyTesting, setGeminiKeyTesting] = useState(false);
   // Compat servers don't use the OPENAI/ELEVENLABS env keys — their optional bearer
   // is settings.tts.cloud.compatApiKey, so it rides the settings payload.
   const [compatKeyInput, setCompatKeyInput] = useState('');
@@ -504,7 +510,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   // Gemini is presented as a CLOUD PROVIDER card but keeps its own engine id,
   // so both panels are live at once — this is what keeps them tied to one
   // stored field instead of two that can disagree.
-  const geminiSelected = form.tts.defaultEngine === 'gemini';
+  const geminiSelected = form.tts.defaultEngine === GEMINI_CLOUD_PROVIDER;
   const isCompat = form.tts.cloud.provider === 'openai-compatible';
   const isFish = form.tts.cloud.provider === 'fish-audio';
   const ttsKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
@@ -581,12 +587,37 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       setCloudKeyTesting(false);
     }
   };
+  const testGeminiKey = async () => {
+    const hasTyped = !!geminiKeyInput.trim();
+    if (!hasTyped && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']) return;
+    setGeminiKeyTesting(true);
+    setGeminiKeyTest(null);
+    try {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'GOOGLE_GENERATIVE_AI_API_KEY', value: geminiKeyInput.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setGeminiKeyTest(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey('GOOGLE_GENERATIVE_AI_API_KEY', geminiKeyInput);
+        if (saved) { notify.ok('Key verified and saved'); setGeminiKeyInput(''); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
+    } catch (e) {
+      setGeminiKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setGeminiKeyTesting(false);
+    }
+  };
   // The engine grid is fed by the CONTROLLER's tts.engines, which is ENGINES and
   // therefore includes gemini. Gemini is a PROVIDER card here, so it is filtered
   // out at the point of use rather than removed from the shared list — that list
   // also backs the fallback slot and the per-engine gainDb/speed maps, which all
   // need the real engine id.
-  const engines = data.tts?.engines || ['piper'];
+  const engines = (data.tts?.engines || ['piper']).filter(e => e !== GEMINI_CLOUD_PROVIDER);
   const available = data.tts?.available || {};
   const providerCloudReady = isCompat
     ? !!(form.tts.cloud.baseUrl.trim() && form.tts.cloud.model.trim())
@@ -610,6 +641,11 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // process secret, so an empty undiscovered Fish voice would fail the settings
     // write before the key became usable.
     let managedKeySaved = false;
+    if (geminiKeyInput.trim()) {
+      const geminiKeySaved = await saveKey('GOOGLE_GENERATIVE_AI_API_KEY', geminiKeyInput);
+      if (!geminiKeySaved) return;
+      setGeminiKeyInput('');
+    }
     if (!isCompat && cloudKeyInput.trim()) {
       const cloudKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
       managedKeySaved = await saveKey(cloudKeyVar, cloudKeyInput);
@@ -698,7 +734,18 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
+    // Gemini is SELECTED as a provider card but is an ENGINE, not a
+    // `tts.cloud.provider` value: the controller's TTS_CLOUD_PROVIDERS enum is
+    // the four real cloud providers and refuses `gemini`, so persisting it here
+    // made every save 400 with "tts.cloud.provider must be one of: …". Its
+    // identity is carried by `tts.defaultEngine` (GEMINI_CLOUD_PROVIDER is the
+    // engine id too), and its settings live under `tts.gemini`.
+    if (provider === GEMINI_CLOUD_PROVIDER) {
+      return { ...f, tts: { ...f.tts, defaultEngine: GEMINI_CLOUD_PROVIDER } };
+    }
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
+    // Switching provider invalidates the old provider-specific ids; re-entering
+    // the already-selected engine preserves manual/custom values.
     const sameProvider = provider === f.tts.cloud.provider;
     const voice = sameProvider
       ? f.tts.cloud.voice
@@ -1156,6 +1203,26 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   both. A gateway or compatibility-server bearer is not a substitute:
                   Google rejects one with <code>API_KEY_INVALID</code>.
                 </div>
+                <div className="mt-2 flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={geminiKeyInput}
+                    placeholder={data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'] ? '•••••• (on file)' : (KEY_HINTS['GOOGLE_GENERATIVE_AI_API_KEY'] ?? '')}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setGeminiKeyInput(e.target.value)}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={testGeminiKey}
+                    disabled={geminiKeyTesting || (!geminiKeyInput.trim() && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'])}
+                  >
+                    {geminiKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Stored in <code>state/secrets.env</code> — the same single key the Gemini LLM uses, not the key pool. Takes effect after a controller restart. Leave blank to keep the existing key.
+                </div>
+                {geminiKeyTest && <KeyTestResult result={geminiKeyTest} />}
                 {geminiAvail === false && (
                   <div className="mt-2 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
                     Gemini TTS can&apos;t speak right now — no Google key. Add it under
@@ -1241,8 +1308,11 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           );
         })()}
 
-        {isCloudEngine && (() => {
-          const providerIds = data.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
+        {isCloudEngine && !geminiSelected && (() => {
+          const providerIds = [...new Set([
+            ...(data.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible']),
+            GEMINI_CLOUD_PROVIDER,
+          ])];
           return (
           // Three ordered steps — provider, then credentials, then what to
           // render with. Model and voice discovery both depend on the
@@ -1670,7 +1740,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         // Both key boxes are component-local — the panel diffs FormState and
         // cannot see them, so a pasted key alone would leave the section
         // "clean" and unmount the very button that saves it.
-        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim())}
+        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim() || geminiKeyInput.trim())}
       />
     </>
   );

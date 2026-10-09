@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
-
+import { GEMINI_CLOUD_PROVIDER } from './engineMeta';
 
 const here = join(process.cwd(), 'components/admin/tts');
 const fields = readFileSync(join(here, 'EngineVoiceFields.tsx'), 'utf8');
@@ -112,8 +112,8 @@ function providerSelectorGuard(): string {
 // which card lights up rather than about a string appearing in a file.
 function selectedCard(engine: string, cloudProvider: string): string {
   const expr = providerSelectorValue()
-    .replace(/geminiSelected/g, String(engine === 'gemini'))
-    .replace(/'gemini'/g, JSON.stringify('gemini'))
+    .replace(/geminiSelected/g, String(engine === GEMINI_CLOUD_PROVIDER))
+    .replace(/GEMINI_CLOUD_PROVIDER/g, JSON.stringify(GEMINI_CLOUD_PROVIDER))
     .replace(/value\.cloudProvider/g, JSON.stringify(cloudProvider));
   return new Function(`return (${expr});`)() as string;
 }
@@ -124,8 +124,8 @@ test('the Gemini card lights up when the engine is gemini', () => {
   // reading only cloudProvider renders every card unselected and the click looks
   // like it did nothing.
   assert.equal(
-    selectedCard('gemini', 'openai'),
-    'gemini',
+    selectedCard(GEMINI_CLOUD_PROVIDER, 'openai'),
+    GEMINI_CLOUD_PROVIDER,
     'the Gemini card must be the selected one when the engine is gemini',
   );
 });
@@ -161,8 +161,8 @@ test('the provider cards only exist for the engines that own a provider', () => 
     'a persona on the station default must not render provider cards');
   assert.equal(selectorIsRendered('cloud', false), true,
     'the cloud engine owns the provider choice');
-  assert.equal(selectorIsRendered('gemini', true), true,
+  assert.equal(selectorIsRendered(GEMINI_CLOUD_PROVIDER, true), true,
     'Gemini is an engine that presents as a provider card');
-  assert.equal(selectorIsRendered('gemini', false), false,
+  assert.equal(selectorIsRendered(GEMINI_CLOUD_PROVIDER, false), false,
     'geminiSelected is what admits the card, not the engine id alone');
 });

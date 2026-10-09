@@ -8,7 +8,7 @@ import type { VoiceOption } from '../personas/types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../../lib/cloudVoices';
 import {
-  buildCloudVoiceGroups, buildGeminiVoiceGroups, isKnownCloudVoice,
+  buildCloudVoiceGroups, buildGeminiVoiceGroups, defaultGeminiVoice, isKnownCloudVoice,
   isKnownGeminiVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
 } from '../../../lib/cloudVoiceGroups';
 import { useVoiceDiscovery } from '../../../hooks/useVoiceDiscovery';
@@ -19,13 +19,15 @@ import { EngineSelector } from './EngineSelector';
 import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
+import { GeminiVoiceLibrary } from './GeminiVoiceLibrary';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
-import { ENGINES, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
+import { ENGINES, GEMINI_CLOUD_PROVIDER, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../../ui/select';
+import { cn } from '../../../lib/cn';
 
 const ENGINE_IDS = ENGINES.map(e => e.id);
 // Personas may also follow the station default; the fallback slot may not.
@@ -44,7 +46,7 @@ export interface VoiceSlot {
 export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
   chatterbox: (
     <>
-      Chatterbox isn't currently available. It lives in the optional{' '}
+      Chatterbox isn’t currently available. It lives in the optional{' '}
       <code>tts-heavy</code> sidecar. Start it with{' '}
       <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
       <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
@@ -52,7 +54,7 @@ export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
   ),
   'pocket-tts': (
     <>
-      PocketTTS isn't currently available. It lives in the same optional{' '}
+      PocketTTS isn’t currently available. It lives in the same optional{' '}
       <code>tts-heavy</code> sidecar as Chatterbox. Start it with{' '}
       <code>docker compose --profile tts-heavy up -d</code> (or set{' '}
       <code>COMPOSE_PROFILES=tts-heavy</code> in <code>.env</code>).
@@ -60,7 +62,7 @@ export const ENGINE_UNAVAILABLE: Record<string, ReactNode> = {
   ),
   remote: (
     <>
-      The remote endpoint isn't reachable. Configure its URL in
+      The remote endpoint isn’t reachable. Configure its URL in
       Settings &rarr; Voice.
     </>
   ),
@@ -131,8 +133,16 @@ export function EngineVoiceFields({
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   // Mirrors the controller's TTS_CLOUD_PROVIDERS, so a payload predating the
   // field still offers every provider the server accepts.
-  const cloudProviders = data?.tts?.cloudProviders
-    || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
+  const cloudProviders = [...new Set([
+    ...(data?.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible']),
+    // Appended here rather than served by the controller: Gemini is its own
+    // engine id, so it never appears in tts.cloudProviders — but it IS offered
+    // as a provider card, so the picker has to list it.
+    GEMINI_CLOUD_PROVIDER,
+  ])];
+
+  // Chosen from the provider grid below but stored as its own engine id.
+  const geminiSelected = value.engine === GEMINI_CLOUD_PROVIDER;
 
   // Every slot uses the station-wide server, so no base URL is sent and the
   // server falls back to the saved one. ElevenLabs and Fish discovery is gated
@@ -177,9 +187,6 @@ export function EngineVoiceFields({
       if (cur && !CHATTERBOX_VOICE_RE.test(cur)) patch.voice = '';
     } else if (v === 'pocket-tts') {
       if (!POCKET_TTS_VOICE_RE.test(cur)) patch.voice = 'alba';
-    } else if (v === 'gemini') {
-      // Normalize gemini voice - if it's a known gemini voice or a voice_*/voicekey_* id, keep it
-      if (!cur) patch.voice = 'Puck';
     }
     // Remote engine voices are free text; no default.
     onChange(patch);
@@ -226,6 +233,10 @@ export function EngineVoiceFields({
         <div className="field-hint mb-4 max-w-[70ch]">{inheritNote}</div>
       )}
 
+      {/* The cloud-key alarm renders inside the cloud block below, which an
+          inheriting slot never shows — so repeat it here. A persona following a
+          station whose cloud voice has no key is exactly the one the warning is
+          for, and it is the shipped default for the whole seed roster. */}
       {inheriting && effective.engine === 'cloud' && cloudIssue && (
         <div role="alert" className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
           {cloudIssue}
@@ -235,6 +246,8 @@ export function EngineVoiceFields({
       {voiceEngine === 'piper' && (() => {
         const piperVoices: string[] = data?.tts?.piperVoices || [];
         const selected = value.voice || CB_DEFAULT_VOICE;
+        // The default entry auditions with voice '' (the engine's built-in);
+        // the sentinel only exists because an empty select value is invalid.
         const groups: VoicePickerGroup[] = [{
           voices: [
             { id: CB_DEFAULT_VOICE, label: 'Built-in default voice', previewVoice: '' },
@@ -256,10 +269,10 @@ export function EngineVoiceFields({
               preview={{ engine: 'piper', speed: previewSpeed, language: previewLanguage, adminFetch }}
             />
             <div className="field-hint">
-              Piper is fast, local, and keyless. Drop a voice's <code>.onnx</code> and its{' '}
+              Piper is fast, local, and keyless. Drop a voice’s <code>.onnx</code> and its{' '}
               <code>.onnx.json</code> manifest into <code>state/voices/</code> on the host (the
-              same files Home Assistant uses) and they'll show up here. Leave on the built-in
-              default if you don't have any.
+              same files Home Assistant uses) and they’ll show up here. Leave on the built-in
+              default if you don’t have any.
             </div>
           </div>
         );
@@ -319,6 +332,7 @@ export function EngineVoiceFields({
 
       {voiceEngine === 'chatterbox' && (() => {
         const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
+        // Shared voice folder (issue #213).
         const cbDir = 'state/voices/';
         const cbAvailable = data?.tts?.available?.chatterbox !== false;
         return (
@@ -344,7 +358,7 @@ export function EngineVoiceFields({
             <div className="field-hint">
               ~5s of clean speech is enough to clone a voice.{' '}
               <Link href="/admin/imaging?tab=voices" className="underline">Import one on the Voices page</Link>
-              {' '}— or drop WAVs into <code>{cbDir}</code> on the host — and it'll show up
+              {' '}— or drop WAVs into <code>{cbDir}</code> on the host — and it’ll show up
               here. Chatterbox also voices paralinguistic tags ([laugh], [sigh], …) the
               DJ may insert.
             </div>
@@ -358,6 +372,8 @@ export function EngineVoiceFields({
         const selected = value.voice || 'alba';
         const isBuiltin = pocketTtsVoices.some(v => v.id === selected);
         const isCustom = customVoices.includes(selected);
+        // null/undefined = not yet known (sidecar still booting). Only false
+        // means the engine confirmed it can't clone (issue #238).
         const ptCloning = data?.tts?.available?.pocketTtsCloning;
         const usingClone = isCustom || /\.wav$/i.test(selected);
         return (
@@ -366,7 +382,7 @@ export function EngineVoiceFields({
             {ptAvailable && ptCloning === false && usingClone && (
               <div className="mb-2.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
                 Voice <strong>cloning is unavailable</strong> in this build, so this
-                cloned voice won't play; PocketTTS reverts to a built-in voice. The
+                cloned voice won’t play; PocketTTS reverts to a built-in voice. The
                 cloning model (<code>kyutai/pocket-tts</code>) is gated on Hugging Face:
                 accept its terms, then set <code>HF_TOKEN</code> in your <code>.env</code>{' '}
                 and restart <code>tts-heavy</code>. Built-in voices below work without a token.
@@ -384,6 +400,8 @@ export function EngineVoiceFields({
                     voices: customVoices.map(v => ({ id: v, label: v })),
                   }]
                   : []),
+                // Voice not present: keep it visible so a save round-trips
+                // without rewriting, but flag it.
                 ...(!isBuiltin && !isCustom && value.voice
                   ? [{
                     label: 'Unknown',
@@ -398,7 +416,7 @@ export function EngineVoiceFields({
               CPU-only, ~6× real-time. Built-in voices cover English, French, German,
               Italian, Spanish and Portuguese. To clone one,{' '}
               <Link href="/admin/imaging?tab=voices" className="underline">import a ~5s clip on the Voices page</Link>
-              {' '}and it'll appear under <em>Custom</em> (cloning needs <code>HF_TOKEN</code>;
+              {' '}and it’ll appear under <em>Custom</em> (cloning needs <code>HF_TOKEN</code>;
               see above).
             </div>
           </div>
@@ -428,55 +446,25 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'gemini' && (() => {
-        const geminiAvail = data?.tts?.available?.gemini;
-        const voice = value.voice || 'Puck';
-        const isPreset = isKnownGeminiVoice(voice);
-        const voiceGroups = buildGeminiVoiceGroups();
-        return (
-          <>
-            {geminiAvail === false && notice('gemini')}
-            <div className="field max-w-[420px]">
-              <Label>Voice</Label>
-              <VoicePicker
-                value={isPreset ? voice : CUSTOM_VOICE_ID}
-                onChange={val => {
-                  onChange({ voice: val === CUSTOM_VOICE_ID ? '' : val });
-                }}
-                groups={voiceGroups}
-                title="Voice"
-                preview={{ engine: 'gemini', speed: previewSpeed, language: previewLanguage, voiceStyle: previewVoiceStyle, adminFetch }}
-              />
-              {!isPreset && (
-                <Input
-                  className="mt-2"
-                  aria-label="Custom Gemini voice id"
-                  value={value.voice}
-                  maxLength={100}
-                  placeholder="Designed voice_… or replicated voicekey_… id"
-                  onChange={(e: ChangeEvent<HTMLInputElement>) => onChange({ voice: e.target.value })}
-                />
-              )}
-              <div className="field-hint">
-                Pick one of Google's 30 featured voices, browse the voice library
-                for the ~2,000 more, or choose <em>Custom voice id…</em> for a Voice
-                Design (<code>voice_…</code>) or Voice Replication
-                (<code>voicekey_…</code>) id. Accent and gender come from the voice
-                you pick, not from the delivery note above — Gemini treats those as
-                fixed traits. The sample button auditions the saved voice plus the
-                persona's voice style.
-              </div>
-            </div>
-          </>
-        );
-      })()}
-
-      {value.engine === 'cloud' && (() => {
+      {(value.engine === 'cloud' || geminiSelected) && (() => {
         const isCompat = cloudProvider === 'openai-compatible';
+        const geminiAvail = data?.tts?.available?.gemini;
         const voice = value.voice.trim();
-        const isPreset = isKnownCloudVoice(cloudProvider, discoveredVoices, voice);
-        const hasList = discoveredVoices.length > 0 || !isCompat;
-        const voiceGroups = buildCloudVoiceGroups(cloudProvider, discoveredVoices);
+        // ONE voice field for whichever provider card is selected above it. The
+        // Gemini fold put Gemini into the provider grid, so this block serves it
+        // too — but a separate "Gemini voice" field also rendered above, giving a
+        // Gemini persona TWO voice inputs that both wrote the same `voice`. The
+        // second showed blank for any value the picker considered a preset, and
+        // whichever was typed into last silently won.
+        const isPreset = geminiSelected
+          ? isKnownGeminiVoice(voice)
+          : isKnownCloudVoice(cloudProvider, discoveredVoices, voice);
+        // A compat server that advertised nothing leaves no list to show, so
+        // fall back to a plain text box. Gemini always has its 30.
+        const hasList = geminiSelected || discoveredVoices.length > 0 || !isCompat;
+        const voiceGroups = geminiSelected
+          ? buildGeminiVoiceGroups()
+          : buildCloudVoiceGroups(cloudProvider, discoveredVoices);
         return (
           <>
             {cloudIssue && (
@@ -484,11 +472,21 @@ export function EngineVoiceFields({
                 {cloudIssue}
               </div>
             )}
+            {/* Provider and voice each get their own row: the provider grid is
+                four cards wide, and a voice id picked before the provider is
+                settled is a voice id that gets thrown away. */}
             <div className="grid gap-4">
               <div className="field">
                 <Label>Cloud provider</Label>
                 <CloudProviderSelector
-                  value={value.cloudProvider}
+                  // Gemini is an ENGINE that presents as a provider card, and
+                  // picking it writes `engine`, never `cloudProvider` — so
+                  // reading the displayed value off cloudProvider alone left the
+                  // Gemini card unhighlighted while it was plainly the active
+                  // selection (the click landed, the state just had nowhere to
+                  // show). Deriving the value from whichever field actually
+                  // carries the choice is what makes the card light up.
+                  value={geminiSelected ? GEMINI_CLOUD_PROVIDER : value.cloudProvider}
                   providerIds={cloudProviders}
                   availability={{
                     cloudByProvider: resolveKeyPresence(
@@ -496,17 +494,27 @@ export function EngineVoiceFields({
                     ),
                   }}
                   onChange={v => {
+                    // Gemini keeps its own engine id and takes no cloudProvider —
+                    // cloudTts never sees it — so it writes `engine`, not provider.
+                    if (v === GEMINI_CLOUD_PROVIDER) {
+                      onChange({ engine: GEMINI_CLOUD_PROVIDER, voice: defaultGeminiVoice() });
+                      return;
+                    }
+                    // Switching provider invalidates the old voice id.
+                    // openai-compatible has no curated voices, so blank lets
+                    // the operator pick from the new server's discovered list.
                     const next = CLOUD_VOICES[v as keyof typeof CLOUD_VOICES]?.[0]?.id || '';
                     onChange({ engine: 'cloud', cloudProvider: v, voice: next });
                   }}
                   enableHint={!cloudAlerted}
                   hint={isCompat
-                    ? <>The base URL and model come from the station's Cloud settings. Only the voice is set here.</>
-                    : <>The API key and model come from the station's Cloud settings. Only the voice is set here.</>}
+                    ? <>The base URL and model come from the station’s Cloud settings. Only the voice is set here.</>
+                    : <>The API key and model come from the station’s Cloud settings. Only the voice is set here.</>}
                 />
               </div>
               <div className="field max-w-[420px]">
-                <Label>Cloud voice</Label>
+                {geminiAvail === false && notice('gemini')}
+                <Label>{geminiSelected ? 'Voice' : 'Cloud voice'}</Label>
                 {!hasList ? (
                   <>
                     <Input
@@ -528,27 +536,52 @@ export function EngineVoiceFields({
                     <VoicePicker
                       value={isPreset ? voice : CUSTOM_VOICE_ID}
                       onChange={val => {
+                        // Clearing the preset flips isPreset false, which is
+                        // what reveals the free-text input below.
                         onChange({ voice: val === CUSTOM_VOICE_ID ? '' : val });
                       }}
                       groups={voiceGroups}
-                      title="Cloud voice"
-                      preview={{ engine: 'cloud', cloudProvider, speed: previewSpeed, adminFetch }}
+                      title={geminiSelected ? 'Voice' : 'Cloud voice'}
+                      preview={geminiSelected
+                        ? { engine: 'gemini', speed: previewSpeed, language: previewLanguage, voiceStyle: previewVoiceStyle, adminFetch }
+                        : { engine: 'cloud', cloudProvider, speed: previewSpeed, adminFetch }}
                     />
                     {!isPreset && (
                       <Input
-                        className="mt-2"
-                        aria-label="Custom cloud voice id"
+                        // A blank compat voice is legitimate — the server picks
+                        // its own default — so don't flag it red.
+                        className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
+                        aria-label={geminiSelected ? 'Custom Gemini voice id' : 'Custom cloud voice id'}
                         value={value.voice}
                         maxLength={100}
-                        placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
+                        placeholder={geminiSelected
+                          ? 'Designed voice_… or replicated voicekey_… id'
+                          : isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => onChange({ voice: e.target.value })}
                       />
                     )}
+                    {geminiSelected && (
+                      <GeminiVoiceLibrary
+                        adminFetch={adminFetch}
+                        value={value.voice}
+                        onChange={id => onChange({ voice: id })}
+                        speed={previewSpeed}
+                        sampleLanguage={previewLanguage}
+                      />
+                    )}
                     <div className="field-hint">
-                      {discoveredVoices.length > 0
+                      {geminiSelected
+                        ? <>Pick one of Google&apos;s 30 featured voices, browse the voice library
+                            for the ~2,000 more, or choose <em>Custom voice id…</em> for a Voice
+                            Design (<code>voice_…</code>) or Voice Replication
+                            (<code>voicekey_…</code>) id. Accent and gender come from the voice
+                            you pick, not from the delivery note above — Gemini treats those as
+                            fixed traits. The sample button auditions the saved voice plus the
+                            persona&apos;s voice style.</>
+                        : discoveredVoices.length > 0
                         ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
                             on your {isCompat ? 'server' : 'account'}. Choose <em>Custom voice id…</em> to
-                            enter one that isn't listed.</>
+                            enter one that isn&apos;t listed.</>
                         : <>Pick a default voice, or choose <em>Custom voice id…</em> to enter your own
                             (e.g. an OpenAI voice name, ElevenLabs voice id, or Fish Audio reference id).</>}
                     </div>
