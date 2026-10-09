@@ -12,6 +12,11 @@ const STORE_FILE = join(config.stateDir, 'audience.json');
 const RETAIN_DAYS = 60;          // how many day-buckets we keep on disk
 const LIST_CAP = 40;             // max distinct keys kept per map (top by count)
 const FLUSH_MS = 20_000;         // dirty-flag flush cadence
+// In-memory ceilings. POST /beacon is public, so what one day can hold must be
+// bounded where it is WRITTEN — capMap() below only trims the copy on disk.
+const DAY_MAP_MAX_KEYS = 500;    // distinct referrers/countries/paths per day
+const OTHER_KEY = '(other)';     // where a full map folds the long tail
+const DAY_SEEN_MAX = 50_000;     // distinct sessions deduped per day
 
 // Per-day (UTC) aggregate. `_seen` is the in-memory dedupe set — stripped on
 // serialize (underscore key), so it never reaches disk.
@@ -35,13 +40,35 @@ function todayUtc(d = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Count maps are keyed by beacon text, so they must have no prototype: on `{}`,
+// a key like `constructor` or `toString` reads an inherited function and the
+// count becomes a growing string.
+function countMap(from?: unknown): Record<string, number> {
+  const map: Record<string, number> = Object.create(null);
+  if (from && typeof from === 'object') {
+    for (const [k, v] of Object.entries(from)) {
+      if (typeof v === 'number' && Number.isFinite(v)) map[k] = v;
+    }
+  }
+  return map;
+}
+
 function bucketFor(date: string): DayBucket {
   let b = buckets.get(date);
   if (!b) {
-    b = { date, sessions: 0, referrers: {}, countries: {}, paths: {}, _seen: new Set() };
+    b = { date, sessions: 0, referrers: countMap(), countries: countMap(), paths: countMap(), _seen: new Set() };
     buckets.set(date, b);
+    pruneBuckets(date);
   }
   return b;
+}
+
+// A new day retires the old ones in memory too: only `today` still dedupes, and
+// nothing past RETAIN_DAYS is ever written or summarised again.
+function pruneBuckets(today: string): void {
+  const dates = [...buckets.keys()].sort();
+  for (const d of dates.slice(0, Math.max(0, dates.length - RETAIN_DAYS))) buckets.delete(d);
+  for (const b of buckets.values()) if (b.date !== today) b._seen.clear();
 }
 
 function hashIp(ip: string, date: string): string {
@@ -50,7 +77,8 @@ function hashIp(ip: string, date: string): string {
 
 function inc(map: Record<string, number>, key: string | undefined | null) {
   if (!key) return;
-  map[key] = (map[key] || 0) + 1;
+  const k = key in map || Object.keys(map).length < DAY_MAP_MAX_KEYS ? key : OTHER_KEY;
+  map[k] = (map[k] || 0) + 1;
 }
 
 // Collapse a raw document.referrer (+ optional UTM) into a single source label.
@@ -97,6 +125,9 @@ export function record(input: RecordInput): void {
   const b = bucketFor(date);
   const h = hashIp(ip, date);
   if (b._seen.has(h)) return;
+  // A day that has already deduped this many sessions stops counting new ones
+  // rather than holding an unbounded set; the rollup is advisory.
+  if (b._seen.size >= DAY_SEEN_MAX) return;
   b._seen.add(h);
 
   b.sessions += 1;
@@ -132,9 +163,9 @@ export interface AudienceSummary {
 export function summary({ sinceMinutes = 1440 }: { sinceMinutes?: number } = {}): AudienceSummary {
   const cutoff = new Date(Date.now() - sinceMinutes * 60 * 1000);
   const cutoffDate = todayUtc(cutoff);
-  const referrers: Record<string, number> = {};
-  const countries: Record<string, number> = {};
-  const paths: Record<string, number> = {};
+  const referrers = countMap();
+  const countries = countMap();
+  const paths = countMap();
   let sessions = 0;
   const days: { date: string; sessions: number }[] = [];
 
@@ -208,13 +239,14 @@ async function load(): Promise<void> {
       // resurrected because nothing reverses the hash.
       buckets.set(d.date, {
         date: d.date,
-        sessions: d.sessions || 0,
-        referrers: d.referrers || {},
-        countries: d.countries || {},
-        paths: d.paths || {},
+        sessions: Number.isFinite(d.sessions) ? d.sessions : 0,
+        referrers: countMap(d.referrers),
+        countries: countMap(d.countries),
+        paths: countMap(d.paths),
         _seen: new Set(),
       });
     }
+    pruneBuckets(todayUtc());
   } catch {
     /* corrupt file — start fresh, the next flush overwrites it */
   }
@@ -223,4 +255,12 @@ async function load(): Promise<void> {
 export async function startAudienceMonitor(): Promise<void> {
   await load();
   setInterval(() => { flush().catch(() => {}); }, FLUSH_MS);
+}
+
+// Test seams.
+export function resetAudience(): void {
+  buckets.clear();
+}
+export function bucketCount(): number {
+  return buckets.size;
 }
