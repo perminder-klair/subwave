@@ -20,5 +20,6 @@ Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/doc
   mismatch silently stops the card rendering rather than failing the build. Full
   rules in [`app/docs/TESTING.md`](docs/TESTING.md).
 - **`ios/` and `android/` are gitignored** (Continuous Native Generation) — regenerated from `app.json` + `assets/` by `expo prebuild` / EAS. The source of truth for icons/splash is `assets/` (disc-mark branding) + `app.json`.
+- **No payment call-to-action in the app.** The back panel's About sheet links to the project site, the setup guide, the source and Discord (`src/lib/links.ts`). The Ko-fi link lives on the site footer instead. A donate or tip link to the developer inside the binary fails App Store 3.1.1 and Play's Payments policy outside the US, and the app is live on both stores.
 
 Distribution is **EAS cloud builds** → iOS TestFlight + Android internal-distribution link (project `@pinku1/subwave`, bundle `com.getsubwave.app`). The repeat-release workflow lives in the `subwave-app-ios-release` and `subwave-app-android-release` skills; getting it onto a physical Android phone over USB is `subwave-app-android`. See `app/README.md`.

@@ -2,6 +2,7 @@
 // Memoized pages rely on useStationFeed preserving unchanged payload identities.
 
 import { BlurView } from 'expo-blur';
+import { router } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -46,6 +47,7 @@ import PagePanel from './PagePanel';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
+import AboutDrawer from './drawers/AboutDrawer';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import FormatDrawer from './drawers/FormatDrawer';
@@ -309,7 +311,7 @@ export default function PlayerScreen() {
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
   // Share one sheet to avoid competing dismissal callbacks.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | null>(
+  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | 'about' | null>(
     null,
   );
   const themeName = useMemo(
@@ -473,7 +475,9 @@ export default function PlayerScreen() {
               ? 'Sleep timer'
               : activeSheet === 'format'
                 ? 'Stream format'
-                : 'Theme'
+                : activeSheet === 'about'
+                  ? 'About SUB/WAVE'
+                  : 'Theme'
         }
       >
         {activeSheet === 'panel' ? (
@@ -487,6 +491,7 @@ export default function PlayerScreen() {
             onOpenSleep={() => setActiveSheet('sleep')}
             onOpenThemes={() => setActiveSheet('themes')}
             onOpenFormat={() => setActiveSheet('format')}
+            onOpenAbout={() => setActiveSheet('about')}
           />
         ) : null}
         {activeSheet === 'sleep' ? (
@@ -506,6 +511,14 @@ export default function PlayerScreen() {
           />
         ) : null}
         {activeSheet === 'themes' ? <ThemesDrawer /> : null}
+        {activeSheet === 'about' ? (
+          <AboutDrawer
+            onAddStation={() => {
+              setActiveSheet(null);
+              router.push('/onboarding');
+            }}
+          />
+        ) : null}
       </Sheet>
     </View>
   );
