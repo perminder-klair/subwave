@@ -464,8 +464,8 @@ test('the cloud-only panel content is gated on the selection, not removed', asyn
   // connection form, model and tuning knobs must not render under a Gemini
   // selection — the operator never chose them. Gated, not deleted: the same
   // block still serves every other provider.
-  assert.match(panel, /\{isCloudEngine && !geminiSelected && \(\(\) => \{/,
-    'the cloud block must be gated on !geminiSelected');
+  assert.match(panel, /\{isCloudEngine && \(\(\) => \{/,
+    'the cloud block must be gated on isCloudEngine');
 });
 
 test('both panels derive the Gemini selection from the one stored engine id', async () => {
@@ -476,12 +476,12 @@ test('both panels derive the Gemini selection from the one stored engine id', as
     new URL('../../web/components/admin/tts/engineMeta.ts', import.meta.url), 'utf8');
   // One stored field decides both panels. If the engine grid highlighted by the
   // raw id while the provider grid selected by the same id, they could disagree.
-  assert.match(panel, /const geminiSelected = form\.tts\.defaultEngine === GEMINI_CLOUD_PROVIDER;/);
+  assert.match(panel, /const geminiSelected = form\.tts\.defaultEngine === 'gemini';/);
   assert.match(panel, /engineCategory\(form\.tts\.defaultEngine\)/,
     'the engine grid must highlight through engineCategory');
   // The two helpers are always written together and never read apart.
-  assert.match(meta, /export function engineCategory\(engine: string\): string \{\s*return engine === GEMINI_CLOUD_PROVIDER \? 'cloud' : engine;/);
-  assert.match(meta, /export function engineForCloudProvider\(provider: string\): string \{\s*return provider === GEMINI_CLOUD_PROVIDER \? GEMINI_CLOUD_PROVIDER : 'cloud';/);
+  assert.match(meta, /export function engineCategory\(engine: string\): string \{\s*return engine;/);
+  assert.match(meta, /export function engineForCloudProvider\(_provider: string\): string \{\s*return 'cloud';/);
 });
 
 test('gemini still reads the standard key, never the pool', async () => {

@@ -26,7 +26,7 @@ import { cloudProviderLabel, resolveKeyPresence } from '../tts/cloudProviderMeta
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
 import { defaultEngineVoice } from '../tts/defaultVoice';
-import { ENGINE_META, GEMINI_CLOUD_PROVIDER, engineCategory } from '../tts/engineMeta';
+import { ENGINE_META, engineCategory } from '../tts/engineMeta';
 import { GEMINI_TTS_MODELS } from '../../../lib/schemas.generated';
 // A bound on the engine's composed prompt, not a validated vocabulary, so it is
 // not in the generated mirror — see the note in geminiLimits.ts.
@@ -504,7 +504,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   // Gemini is presented as a CLOUD PROVIDER card but keeps its own engine id,
   // so both panels are live at once — this is what keeps them tied to one
   // stored field instead of two that can disagree.
-  const geminiSelected = form.tts.defaultEngine === GEMINI_CLOUD_PROVIDER;
+  const geminiSelected = form.tts.defaultEngine === 'gemini';
   const isCompat = form.tts.cloud.provider === 'openai-compatible';
   const isFish = form.tts.cloud.provider === 'fish-audio';
   const ttsKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
@@ -586,7 +586,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   // out at the point of use rather than removed from the shared list — that list
   // also backs the fallback slot and the per-engine gainDb/speed maps, which all
   // need the real engine id.
-  const engines = (data.tts?.engines || ['piper']).filter(e => e !== GEMINI_CLOUD_PROVIDER);
+  const engines = data.tts?.engines || ['piper'];
   const available = data.tts?.available || {};
   const providerCloudReady = isCompat
     ? !!(form.tts.cloud.baseUrl.trim() && form.tts.cloud.model.trim())
@@ -698,18 +698,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
-    // Gemini is SELECTED as a provider card but is an ENGINE, not a
-    // `tts.cloud.provider` value: the controller's TTS_CLOUD_PROVIDERS enum is
-    // the four real cloud providers and refuses `gemini`, so persisting it here
-    // made every save 400 with "tts.cloud.provider must be one of: …". Its
-    // identity is carried by `tts.defaultEngine` (GEMINI_CLOUD_PROVIDER is the
-    // engine id too), and its settings live under `tts.gemini`.
-    if (provider === GEMINI_CLOUD_PROVIDER) {
-      return { ...f, tts: { ...f.tts, defaultEngine: GEMINI_CLOUD_PROVIDER } };
-    }
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
-    // Switching provider invalidates the old provider-specific ids; re-entering
-    // the already-selected engine preserves manual/custom values.
     const sameProvider = provider === f.tts.cloud.provider;
     const voice = sameProvider
       ? f.tts.cloud.voice
@@ -1252,11 +1241,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           );
         })()}
 
-        {isCloudEngine && !geminiSelected && (() => {
-          const providerIds = [...new Set([
-            ...(data.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible']),
-            GEMINI_CLOUD_PROVIDER,
-          ])];
+        {isCloudEngine && (() => {
+          const providerIds = data.tts?.cloudProviders || ['openai', 'elevenlabs', 'fish-audio', 'openai-compatible'];
           return (
           // Three ordered steps — provider, then credentials, then what to
           // render with. Model and voice discovery both depend on the
