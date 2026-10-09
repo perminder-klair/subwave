@@ -78,15 +78,25 @@ function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
+// A bare host[:port] — DNS name, IPv4 or bracketed IPv6. Anything else in a
+// Host header is not an origin this station could be serving from.
+const HOST_RE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
 // Origin for tune-in URLs. SITE_URL wins (canonical, immune to a spoofed Host);
-// unset, fall back to how the listener reached us so LAN deployments resolve.
+// unset, fall back to the Host the request arrived on so LAN deployments
+// resolve. X-Forwarded-Host is deliberately NOT read: every shipped proxy
+// recipe forwards the public Host unchanged (Caddy and Traefik by default, the
+// nginx recipe via `proxy_set_header Host $host`), while X-Forwarded-Host is a
+// client-suppliable header an edge may pass through verbatim and leave out of
+// its cache key. The scheme may still come from X-Forwarded-Proto — TLS ends at
+// the edge — but only as http/https.
 export function publicOrigin(req: express.Request): string {
   const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
   if (fromEnv) return fromEnv;
-  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const proto = xfProto || req.protocol || 'http';
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  return host ? `${proto}://${host}` : `http://localhost`;
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const proto = xfProto === 'https' || xfProto === 'http' ? xfProto : (req.protocol === 'https' ? 'https' : 'http');
+  const host = String(req.headers.host || '').trim();
+  return HOST_RE.test(host) ? `${proto}://${host}` : `http://localhost`;
 }
 
 // Proxy Subsonic cover art so browsers get MediaSession artwork without the
@@ -302,6 +312,13 @@ function listenMounts(req: express.Request) {
   return { station, entries };
 }
 
+// The body names an origin taken from the request when SITE_URL is unset, and
+// .pls/.m3u are on common CDN cache-by-extension lists, so a shared cache must
+// never keep one response for every listener.
+function noStoreTuneIn(res: express.Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 // With listener auth on, these would hand out credential-less URLs Icecast
 // rejects, so refuse; operators share credentialed URLs by hand.
 function tuneInFilesBlocked(res: express.Response): boolean {
@@ -311,6 +328,7 @@ function tuneInFilesBlocked(res: express.Response): boolean {
 }
 
 router.get('/listen.pls', (req, res) => {
+  noStoreTuneIn(res);
   if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
@@ -325,6 +343,7 @@ router.get('/listen.pls', (req, res) => {
 });
 
 router.get('/listen.m3u', (req, res) => {
+  noStoreTuneIn(res);
   if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['#EXTM3U'];
