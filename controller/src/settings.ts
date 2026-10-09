@@ -2606,8 +2606,10 @@ export async function update(patch) {
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, scheduleOverride: _override, ...settingsPersist } = next;
   // Atomic replace — a crash mid-write must not take the operator's whole
-  // config (or show schedule) with it.
-  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  // config (or show schedule) with it. Owner-only: settings.json carries every
+  // inline credential getRedacted() masks, in a state dir other accounts can
+  // list. schedule.json holds none and keeps whatever mode it has.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2), { mode: 0o600 });
   await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify(
