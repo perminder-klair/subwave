@@ -51,7 +51,7 @@ export interface StationFeed {
   locale: StationLocale;
 }
 
-const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
+const EMPTY_STATE: StationState = { upcoming: [], history: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 // Consecutive offline polls required before believing it (#463/#466) —
 // PlayerScreen stops playback on offline, so a transient blip must not count.
