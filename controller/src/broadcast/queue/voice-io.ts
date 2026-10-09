@@ -9,6 +9,7 @@ import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
 import { sleep, type Interposed } from './pure.js';
 import { awaitVoiceAir } from './voice-marker.js';
+import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
 
 const _handoffChains: Map<string, Promise<void>> = new Map();
 
@@ -297,11 +298,12 @@ export function voiceUri(
 }
 
 // Best-effort playback duration of the clip ITSELF. Reads the exact length from
-// a WAV header (the local engines), and estimates from word count for anything
-// else (cloud mp3). This is the figure published to consumers as `durationMs` —
-// the padding below belongs to the serialiser's hold, not to the speech.
+// a WAV header (the local engines) or measures an mp3 (the cloud engines), and
+// only estimates from word count when the file is neither. This is the figure
+// published to consumers as `durationMs` — the padding below belongs to the
+// serialiser's hold, not to the speech.
 export function clipDurationMs(wavPath: string, text: string): number {
-  return wavDurationMs(wavPath) ?? estimateSpeechMs(text);
+  return wavDurationMs(wavPath) ?? mp3DurationMs(wavPath) ?? estimateSpeechMs(text);
 }
 
 // The clip plus the lead-in and duck-tail padding: what the voice chain holds
@@ -318,9 +320,39 @@ function estimateSpeechMs(text: string): number {
   return Math.ceil((words / 2.3) * 1000);
 }
 
+// Bytes a clip may carry after its last frame (an ID3v1 or APE tag) before the
+// walk below is taken to have lost the stream rather than reached its end.
+const MP3_TRAILER_MAX_BYTES = 4096;
+
+// Duration of an mp3 clip (ElevenLabs, Fish, openai-compatible) without
+// decoding it: walk the frame headers and add up what each frame holds. That
+// stays exact on variable bitrate, where file size over bitrate can come out
+// seconds short, and short is the direction that lets the next line talk over
+// this one. Returns null, so the caller falls back to the estimate, for
+// anything that is not Layer III or that the walk cannot follow to the end.
+function mp3DurationMs(path: string): number | null {
+  try {
+    const buf = readFileSync(path);
+    let off = mp3FrameOffset(buf);
+    if (off == null) return null;
+    let seconds = 0;
+    let frames = 0;
+    for (let frame = mpegLayer3Frame(buf, off); frame && off + frame.length <= buf.length; frame = mpegLayer3Frame(buf, off)) {
+      seconds += frame.seconds;
+      frames += 1;
+      off += frame.length;
+    }
+    if (frames < 2 || buf.length - off > MP3_TRAILER_MAX_BYTES) return null;
+    return Math.ceil(seconds * 1000);
+  } catch {
+    return null;
+  }
+}
+
 // Duration from a WAV header (byteRate from `fmt `, byte count from `data`).
-// Returns null for non-WAV or anything it can't parse, so the caller falls back
-// to the word-count estimate. Reads only the first 4KB — headers are tiny.
+// Returns null for non-WAV or anything it can't parse, so the caller tries the
+// mp3 reader and then the word-count estimate. Reads only the first 4KB —
+// headers are tiny.
 function wavDurationMs(path: string): number | null {
   let fd: number | null = null;
   try {

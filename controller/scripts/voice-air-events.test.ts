@@ -113,8 +113,74 @@ test('durationMs published to consumers is the clip, not the padded hold', () =>
   assert.equal(clipDurationMs(wav, 'ignored'), 1000, 'exact length from the WAV header');
   // The lead-in and duck tail belong to the chain's lock, not to the speech.
   assert.equal(speechDurationMs(wav, 'ignored') - clipDurationMs(wav, 'ignored'), VOICE_LEADIN_MS + 700);
-  // Non-WAV (a cloud mp3) falls back to the word-count estimate.
+  // A file that cannot be read at all falls back to the word-count estimate.
   assert.ok(clipDurationMs(join(STATE, 'missing.wav'), 'one two three four five') > 0);
+});
+
+// Layer III frames as [header bytes, frame length, seconds of audio]. Lengths
+// follow from the header: 144 (MPEG-1) or 72 (MPEG-2) * bitrate / sample rate.
+const STEREO_128K = { header: [0xff, 0xfb, 0x90, 0x00], length: 417, seconds: 1152 / 44100 };
+const MONO_128K = { header: [0xff, 0xfb, 0x90, 0xc0], length: 417, seconds: 1152 / 44100 };   // what ElevenLabs sends
+const STEREO_320K = { header: [0xff, 0xfb, 0xe0, 0x00], length: 1044, seconds: 1152 / 44100 };
+const STEREO_32K = { header: [0xff, 0xfb, 0x10, 0x00], length: 104, seconds: 1152 / 44100 };
+const MPEG2_24KHZ_64K = { header: [0xff, 0xf3, 0x84, 0xc4], length: 192, seconds: 576 / 24000 };
+type Mp3Frame = typeof STEREO_128K;
+
+// Writes the frames back to back and returns the audio length in ms.
+function writeMp3(path: string, frames: Mp3Frame[], { id3Bytes = 0, tail = 0 }: { id3Bytes?: number; tail?: number } = {}): number {
+  const id3 = Buffer.alloc(id3Bytes ? 10 + id3Bytes : 0);
+  if (id3Bytes) {
+    id3.write('ID3', 0, 'ascii');
+    id3[3] = 4;
+    // synchsafe size: 7 bits per byte
+    id3[6] = (id3Bytes >> 21) & 0x7f; id3[7] = (id3Bytes >> 14) & 0x7f;
+    id3[8] = (id3Bytes >> 7) & 0x7f; id3[9] = id3Bytes & 0x7f;
+  }
+  const body = frames.map(f => {
+    const b = Buffer.alloc(f.length);
+    b.set(f.header, 0);
+    return b;
+  });
+  writeFileSync(path, Buffer.concat([id3, ...body, Buffer.alloc(tail, 0x41)]));
+  return Math.ceil(frames.reduce((sum, f) => sum + f.seconds, 0) * 1000);
+}
+
+const FIVE_WORDS = 'one two three four five';
+const ESTIMATE_MS = Math.ceil((5 / 2.3) * 1000);
+
+test('a cloud mp3 is measured, not guessed from its word count', () => {
+  const mp3 = join(STATE, 'clip.mp3');
+  // ~10s of audio behind five words: the estimate says 2.2s.
+  for (const [name, frame] of Object.entries({ stereo: STEREO_128K, mono: MONO_128K, 'mpeg-2 24kHz': MPEG2_24KHZ_64K })) {
+    const exact = writeMp3(mp3, Array(400).fill(frame));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact, name);
+  }
+  const tagged = writeMp3(mp3, Array(383).fill(MONO_128K), { id3Bytes: 6000, tail: 128 });
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), tagged, 'an ID3v2 tag and a trailing ID3v1-sized tag are skipped');
+});
+
+test('a variable-bitrate mp3 is never measured short', () => {
+  // File size over the first frame's bitrate reads this 10s clip as 1.3s: the
+  // next line would talk over nine seconds of this one.
+  const mp3 = join(STATE, 'vbr.mp3');
+  const exact = writeMp3(mp3, [STEREO_320K, ...Array(382).fill(STEREO_32K)]);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact);
+});
+
+test('an mp3 the walk cannot follow falls back to the estimate', () => {
+  const mp3 = join(STATE, 'broken.mp3');
+  // Frames, then junk the walk cannot cross: a partial length would be short.
+  writeMp3(mp3, Array(40).fill(STEREO_128K), { tail: 50_000 });
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'lost sync mid-file');
+  writeMp3(mp3, [STEREO_128K]);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'one frame is not evidence of mp3');
+  // Free-format (bitrate index 0) and the reserved index 15 carry no frame length.
+  for (const b2 of [0x00, 0xf0]) {
+    writeFileSync(mp3, Buffer.concat([Buffer.from([0xff, 0xfb, b2, 0x00]), Buffer.alloc(2000)]));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, `bitrate bits ${b2.toString(16)}`);
+  }
+  writeFileSync(mp3, Buffer.alloc(5000, 0x41));
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'not audio at all');
 });
 
 test('no marker file at all resolves null immediately', async () => {
