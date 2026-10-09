@@ -135,3 +135,84 @@ export function selectThinkingTurn(
   }
   return null;
 }
+
+/** Rough spoken length of a line at broadcast pace (~2.6 words a second) plus
+ *  a breath, clamped to something a link or segment actually runs. */
+export function speechMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(45_000, Math.max(3_000, Math.round((words / 2.6) * 1000) + 1_200));
+}
+
+// Turn kinds that map to "the DJ is on the mic". Tracks and request acks share
+// the booth-feed channel but aren't voiced over the music bus.
+const VOICE_TURN_KINDS = new Set([
+  'voice',
+  'segment',
+  'link',
+  'intro',
+  'station-id',
+  'weather',
+  'hourly',
+  'say',
+]);
+
+export function isVoiceTurn(turn: SessionTurn | null | undefined): boolean {
+  if (!turn) return false;
+  const kind = (turn.kind || '').toLowerCase();
+  if (VOICE_TURN_KINDS.has(kind)) return true;
+  const role = (turn.role || '').toLowerCase();
+  return role === 'voice' || role === 'segment';
+}
+
+// Sanity bound on a reported clip length, so a garbage value cannot hold the
+// window open; a real segment is a few minutes at most.
+const MAX_CLIP_MS = 15 * 60_000;
+
+/** How long a spoken turn lasts: the controller's measured `meta.durationMs`
+ *  when it sends one (#1848), else speechMs's estimate. */
+export function lineMs(turn: SessionTurn): number {
+  const d = turn.meta?.durationMs;
+  if (typeof d === 'number' && Number.isFinite(d) && d > 0 && d <= MAX_CLIP_MS) return d;
+  return speechMs(turn.text || '');
+}
+
+/** Whether one of the DJ's lines is being HEARD at `nowMs`, and when that next
+ *  changes (null = not until the feed does) — the lock screen's avatar swap.
+ *  The window runs from the line's live-edge stamp (`meta.airedAt`, else `t`)
+ *  plus the listener's buffer, for the clip's length. A window counted from the
+ *  stamp alone closes before the listener hears a word whenever the buffer
+ *  (22s by default) outlasts it.
+ *
+ *  The latest line that has started decides; a later line still inside the
+ *  buffer only schedules the next change. The previous show's carried tail
+ *  never counts, and a start too far ahead to be a real buffer is ignored.
+ *  The native app's lib/voice-turn.ts holds the same rule. */
+export function talkingState(
+  feed: SessionTurn[] | null | undefined,
+  leadMs: number,
+  nowMs: number,
+): { talking: boolean; nextChangeMs: number | null } {
+  const turns = feed ?? [];
+  let pendingMs: number | null = null;
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    if (!turn || !isVoiceTurn(turn) || isCarriedTurn(turn)) continue;
+    const stamp =
+      airedAtMs(turn) ??
+      (typeof turn.t === 'number' ? turn.t : typeof turn.t === 'string' ? Date.parse(turn.t) : NaN);
+    if (!Number.isFinite(stamp)) continue;
+    const startMs = stamp + Math.max(0, leadMs);
+    if (startMs > nowMs) {
+      if (startMs - nowMs <= MAX_HOLD_MS && (pendingMs == null || startMs < pendingMs)) {
+        pendingMs = startMs;
+      }
+      continue;
+    }
+    const endMs = startMs + lineMs(turn);
+    if (nowMs < endMs) {
+      return { talking: true, nextChangeMs: pendingMs == null ? endMs : Math.min(endMs, pendingMs) };
+    }
+    break;
+  }
+  return { talking: false, nextChangeMs: pendingMs };
+}
