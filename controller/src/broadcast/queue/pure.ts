@@ -5,11 +5,12 @@
 //
 // Part of the queue/ split - see ../queue.ts, which owns the Queue class.
 
-import * as library from '../../music/library.js';
+import { knownTrackLengthSeconds } from '../../music/track-duration.js';
 import * as settings from '../../settings.js';
-import { DRAIN_DEADLINE_SEC } from '../drain-policy.js';
+import { DRAIN_DEADLINE_SEC, playableDurationSec } from '../drain-policy.js';
 import type { QueueItem, Track } from './types.js';
 import type { HostSpeechStamp } from '../session.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
 
 interface TransitionItem {
   track: Track;
@@ -24,13 +25,17 @@ interface TransitionItem {
 // admin honest until `sent` makes the pair authoritative. Exit gestures ride
 // the outgoing track while entry gestures ride the incoming track, so the
 // answer has to inspect both sides. Washout may combine with sweep/blend; stem
-// rendering owns the whole seam and therefore overrides every live effect.
+// rendering owns the whole seam and therefore overrides every live effect, and
+// a show-boundary cut on the outgoing track (#1574) stands every one down.
 export function nextTransitionLabel(
   outgoing: TransitionItem | null | undefined,
   incoming: TransitionItem | null | undefined,
 ): string | null {
   if (!incoming || incoming.sent !== true) return null;
   if (incoming.stemSeam) return 'Stem blend';
+  // radio.liq reads liq_show_fade off the OUTGOING track and disarms all six
+  // gestures, on both sides of the seam: what airs is the plain crossfade.
+  if (outgoing?.track.showFade) return 'Normal';
 
   const labels: string[] = [];
   const washing = outgoing?.track.washout === true;
@@ -47,6 +52,64 @@ export function nextTransitionLabel(
   if (!washing && !looping && incoming.track.chop) labels.push('Chop');
 
   return labels.length > 0 ? labels.join(' + ') : 'Normal';
+}
+
+// The gestures the INCOMING track carries for the seam into it (radio.liq arms
+// them off `b`); washout and loop ride the outgoing track's own exit instead.
+export const ENTRY_EFFECTS = ['sweep', 'blend', 'dissolve', 'chop'] as const;
+
+// Something the mixer placed BETWEEN two songs, read off its marker at play time.
+// None of these is a song — none reaches now-playing.json — so `outgoing` at a
+// track start is the song before it, and the seam actually aired was from this.
+export type Interposed = 'jingle' | 'bed' | 'break';
+const INTERPOSED_LABEL: Record<Interposed, string> = {
+  jingle: 'After jingle',
+  bed: 'After bed',
+  break: 'After break',
+};
+
+// The durable seam record for a track that just started: the label of the seam
+// INTO it, as armed, and any entry gesture that was armed yet could not air.
+// One precedence rule with the dashboard (nextTransitionLabel), so the two never
+// disagree about the same seam. Labels what the controller ARMED: a mixer older
+// than this controller can still differ, which a mixer-side marker would settle.
+//   * a jingle in between: radio.liq stands every entry gesture down on the
+//     jingle's seam, so the ones still armed here are stranded;
+//   * a bed or a pause-and-talk break in between: their own drain paths already
+//     stripped the entry gestures, so there is nothing left to strand;
+//   * the outgoing song's exit gesture went into whatever was interposed, never
+//     into this track, so it is not this seam's.
+// Null when the song before is unknown (the first track after a boot).
+export function seamRecordAtPlay(
+  outgoing: TransitionItem | null | undefined,
+  incoming: TransitionItem,
+  interposed: Interposed | null,
+): { label: string | null; stranded: Array<(typeof ENTRY_EFFECTS)[number]> } {
+  if (interposed) {
+    const stranded = interposed === 'jingle' ? ENTRY_EFFECTS.filter(k => incoming.track[k] === true) : [];
+    return { label: INTERPOSED_LABEL[interposed], stranded };
+  }
+  if (!outgoing) return { label: null, stranded: [] };
+  return { label: nextTransitionLabel(outgoing, { ...incoming, sent: true }), stranded: [] };
+}
+
+// How many transition asks the anti-streak ledger keeps, and so how many the
+// pick prompts are shown.
+export const TRANSITION_LEDGER_SIZE = 4;
+
+// The transition the model ASKED FOR on a pick, as the anti-streak ledger
+// counts it: entry gestures first, then the exits, else 'normal'. A length-cap
+// auto-washout is the controller's, not the model's, so it is no ask at all —
+// null keeps it invisible to the ledger in both directions. One rule for the
+// drain's ledger and the prompts' preview of picks it has not reached yet.
+export function transitionAskOf(track: Track): TransitionEffect | 'normal' | null {
+  if (track.sweep) return 'sweep';
+  if (track.blend) return 'blend';
+  if (track.dissolve) return 'dissolve';
+  if (track.chop) return 'chop';
+  if (track.loop) return 'loop';
+  if (track.washout && !track.washoutAuto) return 'washout';
+  return track.washoutAuto ? null : 'normal';
 }
 
 export function pickLinkInterval() {
@@ -87,6 +150,44 @@ export const BACKFILL_DEDUP_MAX_GAP_MS = 15 * 60_000;
 // symmetric cost — an on-format-for-the-NEXT-show track starting a minute or
 // two early — is how real radio tees up a changeover anyway.
 export const PICK_SHOW_LOOKAHEAD_SEC = 120;
+
+// Resolve picker policy a little beyond the expected start so a genuine
+// changeover track can belong to the show it mostly airs in. That attribution
+// window is not permission for a long remaining track (or a sequence of short
+// ones) to walk arbitrarily far through the next programme: once a known show
+// boundary is crossed, the forecast stops one attribution window beyond it.
+//
+// `boundaryMs` is optional because the schedule can have no change inside the
+// scan horizon. Invalid inputs fail open to the historical forecast rather
+// than inventing a boundary or suppressing a pick.
+export function pickShowDate(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): Date | null {
+  if (!Number.isFinite(nowMs) || typeof leadSec !== 'number' || !Number.isFinite(leadSec)) return null;
+  const predicted = nowMs + (Math.max(0, leadSec) + PICK_SHOW_LOOKAHEAD_SEC) * 1000;
+  if (typeof boundaryMs !== 'number' || !Number.isFinite(boundaryMs)) return new Date(predicted);
+  const latest = boundaryMs + PICK_SHOW_LOOKAHEAD_SEC * 1000;
+  return new Date(Math.min(predicted, latest));
+}
+
+// A final-track handoff belongs only to a track whose expected END reaches the
+// real boundary. `showAt` deliberately includes the attribution window above,
+// so using it here would arm a handoff for a track that actually finishes
+// before the change.
+export function handoffAnchorReachesBoundary(
+  nowMs: number,
+  leadSec: number | null,
+  boundaryMs: number | null,
+): boolean {
+  return Number.isFinite(nowMs)
+    && typeof leadSec === 'number'
+    && Number.isFinite(leadSec)
+    && typeof boundaryMs === 'number'
+    && Number.isFinite(boundaryMs)
+    && nowMs + Math.max(0, leadSec) * 1000 >= boundaryMs;
+}
 
 // The moment the pick — and its attached link — actually starts AIRING:
 // `showAt` minus the attribution padding above. `showAt` deliberately probes
@@ -221,6 +322,31 @@ export function pickLeadSec(remainingSec: number | null, heldSec: number | null 
   return rem + heldSec;
 }
 
+// The seconds a HELD (not yet drained) pick anchor will actually air, for
+// pickLeadSec's `heldSec`. The drain only stamps the #447 length cap and the
+// silence-trim tail when the item goes out, which is AFTER the pick that follows
+// it is chosen — so its raw tagged duration overstates the lead by everything
+// the cap will cut. A 2h35 continuous mix held behind the on-air track under a
+// 600s cap walked `showAt` from 18:00 to 20:39, resolved the 20:00 show, and
+// aired its handoff two hours early while /now-playing still showed the
+// outgoing show. Composes the same cues the drain will: the cap (null for
+// listener requests, which are exempt), the trim tail and any cue already
+// stamped, earliest wins; then the head trim. Unknown length → null.
+export function heldAnchorPlayableSec(input: {
+  durationSec: number | null | undefined;
+  maxTrackSec: number | null | undefined;
+  cueOutSecs?: (number | null | undefined)[];
+  cueInSec?: number | null;
+}): number | null {
+  const early = [input.maxTrackSec, ...(input.cueOutSecs ?? [])]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  return playableDurationSec(
+    input.durationSec,
+    early.length ? Math.min(...early) : null,
+    input.cueInSec ?? null,
+  );
+}
+
 // Has this events-log play already been recorded by recordPlay? The old dedup
 // keyed on `${endedAt}|${title}` — an EXACT timestamp match — but recordPlay's
 // end-stamp never equals the event's start `t`, so it never fired and every
@@ -256,9 +382,7 @@ export function playAlreadyRecorded(
 // blend on an ending the cap never lets air (and strips the auto-washout
 // protecting the forced cut).
 export function knownDurationSec(track: Track): number {
-  const dur = Number(track.duration) || 0;
-  if (dur) return dur;
-  return track.id ? Number(library.get(track.id)?.durationSec) || 0 : 0;
+  return knownTrackLengthSeconds(track) ?? 0;
 }
 
 

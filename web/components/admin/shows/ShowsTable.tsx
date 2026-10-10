@@ -1,8 +1,5 @@
 'use client';
 
-// The "list" half of the cards/list toggle on /admin/shows. Takes a prepared
-// view-model rather than the panel's `Show` type, so ShowsPanel stays the only
-// place that knows how a show's facets, airtime and validity are derived.
 
 import { useMemo } from 'react';
 import { Pill, MetaChip } from '../ui';

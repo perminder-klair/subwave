@@ -31,6 +31,8 @@ import { isValidTimezone, setStationTimezone } from './time.js';
 // forwards straight from vocab.js, so the public surface is unchanged.
 import {
   CHATTERBOX_VOICE_RE,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_VOICES,
   DEFAULT_DJ_PROMPT_TEMPLATE,
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
@@ -51,10 +53,12 @@ import {
   WEATHER_CONDITIONS,
   WEATHER_MOOD_DEFAULTS,
   applyInlineKey,
+  applyCustomHeadersPatch,
   applyLlmLegPatch,
   canonicalKokoroLang,
   clamp01,
   clampAgentTimeout,
+  clampRequestTimeout,
   clampBudgetSoftPct,
   clampDailyTokenCap,
   clampMaxOutputTokens,
@@ -69,6 +73,7 @@ import {
   isDefaultTakeover,
   mintId,
   normalizeLlmHeaders,
+  normalizeGeminiSafety,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -91,6 +96,11 @@ import {
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
+// A bound on the engine's composed prompt, not a validated vocabulary — it lives
+// beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
+// admin field, pinned by scripts/gemini-tts-settings.test.ts).
+import { GEMINI_PRONUNCIATION_MAX } from './audio/gemini.js';
+import { isLibraryVoice, looksLikeLibraryId } from './audio/gemini-library.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
 import {
   DJ_RECAP_CHARS_BOUNDS,
@@ -103,6 +113,8 @@ import {
   STREAM_GEOIP_DB_PATH_MAX,
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
+  isGeminiLibraryLanguage,
+  normalizeGeminiLibraryLanguage,
   type ScheduledBackupSettings,
   type JingleRotateOwner,
 } from './schemas/settings.js';
@@ -222,16 +234,8 @@ export {
 export {
   assertNoOrphanMoods,
   validateDjPromptsStrict,
-  // The mood family delegates to schemas/settings.ts now (#1348); update() calls
-  // the registry directly, so these are re-exported straight from the source
-  // module for the callers that still take the validator API — backup import,
-  // onboarding, and scripts/moods.test.ts.
-  validateFestivalsStrict,
-  validateMoodScheduleStrict,
-  validateMoodsStrict,
   validatePersonasStrict,
   validateShowsStrict,
-  validateWeatherMoodsStrict,
 } from './settings/validate.js';
 export {
   agentLanguageReminder,
@@ -242,14 +246,18 @@ export {
   effectiveFadeAtShowEnd,
   effectiveFrequency,
   effectiveMaxTrackSec,
+  effectiveTrackLengthLimits,
   effectiveMinTrackSec,
   effectsActive,
   getActivePersona,
   getEffectivePersona,
   getOnAirRoster,
   getScheduleOverride,
+  guestEditorialNudge,
+  guestEditorialNudgeFromGuests,
   languageDirective,
   onAirRosterClause,
+  personaMusicLeanings,
   pickOnAirSpeaker,
   renderDjPrompt,
   resolveActiveShow,
@@ -437,6 +445,7 @@ export async function load() {
       voice: normalizeDuckDepth(stored.ducking?.voice, DEFAULTS.ducking.voice),
       intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
     },
+    maxTrackLengthMode: stored.maxTrackLengthMode === 'exclude' ? 'exclude' : 'cut',
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     // Station default for the show-boundary fade (#1574). Anything but an
     // explicit boolean reads as the shipped default (off), which is what makes
@@ -489,6 +498,8 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+      // Legacy wire/storage key: it now controls only Opus. Preserve every
+      // stored boolean; FLAC's native metadata policy lives in radio.liq.
       oggIcyMetadata:
         typeof stored.stream?.oggIcyMetadata === 'boolean'
           ? stored.stream.oggIcyMetadata
@@ -610,6 +621,9 @@ export async function load() {
       showWelcome: typeof stored.djBehaviour?.showWelcome === 'boolean'
         ? stored.djBehaviour.showWelcome
         : DEFAULTS.djBehaviour.showWelcome,
+      previewNextShow: typeof stored.djBehaviour?.previewNextShow === 'boolean'
+        ? stored.djBehaviour.previewNextShow
+        : DEFAULTS.djBehaviour.previewNextShow,
       sameHostAcknowledgement: typeof stored.djBehaviour?.sameHostAcknowledgement === 'boolean'
         ? stored.djBehaviour.sameHostAcknowledgement
         : DEFAULTS.djBehaviour.sameHostAcknowledgement,
@@ -805,6 +819,27 @@ export async function load() {
             ? stored.tts.pocketTts.voice
             : DEFAULTS.tts.pocketTts.voice,
       },
+      gemini: {
+        model:
+          typeof stored.tts?.gemini?.model === 'string'
+          && (GEMINI_TTS_MODELS as readonly string[]).includes(stored.tts.gemini.model.trim())
+            ? stored.tts.gemini.model.trim()
+            : DEFAULTS.tts.gemini.model,
+        voice:
+          typeof stored.tts?.gemini?.voice === 'string' && stored.tts.gemini.voice.trim()
+            ? stored.tts.gemini.voice.trim()
+            : DEFAULTS.tts.gemini.voice,
+        pronunciation:
+          typeof stored.tts?.gemini?.pronunciation === 'string'
+            ? stored.tts.gemini.pronunciation.trim().slice(0, GEMINI_PRONUNCIATION_MAX)
+            : DEFAULTS.tts.gemini.pronunciation,
+        // Lenient load: a value that is not a language tag reads as "no filter"
+        // rather than throwing, so a hand-edited or truncated settings.json
+        // cannot wedge boot. Same posture as every other lenient branch here.
+        libraryLanguage: isGeminiLibraryLanguage(stored.tts?.gemini?.libraryLanguage)
+          ? normalizeGeminiLibraryLanguage(stored.tts?.gemini?.libraryLanguage)
+          : DEFAULTS.tts.gemini.libraryLanguage,
+      },
       cloud: {
         // Explicit boolean wins; otherwise an install that already had a saved
         // cloud key keeps cloud on so the upgrade doesn't silently disable it.
@@ -933,6 +968,7 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
+      compatibleMode: stored.llm?.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.compatibleMode,
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -948,10 +984,17 @@ export async function load() {
       // value survived in memory for that process, vanished on restart, and
       // llama.cpp fell back to its own 1.0 default with nothing in the logs.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
+      geminiSafety: normalizeGeminiSafety(stored.llm?.geminiSafety),
       pickerAgent:
         typeof stored.llm?.pickerAgent === 'boolean'
           ? stored.llm.pickerAgent
           : DEFAULTS.llm.pickerAgent,
+      // A new explicit opt-in. Older settings files and malformed values remain
+      // off, so guests never become an invisible source of editorial influence.
+      guestMusicalLeanings:
+        typeof stored.llm?.guestMusicalLeanings === 'boolean'
+          ? stored.llm.guestMusicalLeanings
+          : DEFAULTS.llm.guestMusicalLeanings,
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
@@ -966,6 +1009,8 @@ export async function load() {
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
           : DEFAULTS.llm.requestWebResolve,
+      // Per-generation ceiling [5s, 30min], distinct from the agent cascade.
+      requestTimeoutMs: clampRequestTimeout(stored.llm?.requestTimeoutMs, DEFAULTS.llm.requestTimeoutMs),
       // Clamped to [5s, 300s]; settings.json files from before the field
       // existed pick up the default.
       agentTimeoutMs: clampAgentTimeout(stored.llm?.agentTimeoutMs, DEFAULTS.llm.agentTimeoutMs),
@@ -1010,11 +1055,13 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
+          compatibleMode: fb.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.fallback.compatibleMode,
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),
+          geminiSafety: normalizeGeminiSafety(fb.geminiSafety),
           discoverySteps: clampDiscoverySteps(fb.discoverySteps, DEFAULTS.llm.fallback.discoverySteps),
         };
       })(),
@@ -1056,6 +1103,7 @@ export async function load() {
         typeof stored.embedding?.apiKey === 'string'
           ? stored.embedding.apiKey.trim()
           : DEFAULTS.embedding.apiKey,
+      headers: normalizeLlmHeaders(stored.embedding?.headers),
       seedCount:
         Number.isFinite(stored.embedding?.seedCount) && stored.embedding.seedCount >= 0
           ? Math.floor(stored.embedding.seedCount)
@@ -1270,7 +1318,8 @@ export async function load() {
 // Lenient normalizer — used by load(). Drops invalid entries silently rather
 // than failing the whole boot.
 
-export async function update(patch) {
+/** Validate and compose a patch without persisting it or publishing its effective settings. */
+export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySet<string> } = {}) {
   const cur = await load();
   const next = JSON.parse(JSON.stringify(cur));
   let restart = false;
@@ -1318,6 +1367,9 @@ export async function update(patch) {
       next.ducking.intro = dk.intro;
       restart = true;
     }
+  }
+  if ('maxTrackLengthMode' in patch) {
+    next.maxTrackLengthMode = parseSettingsPatchKey('maxTrackLengthMode', patch.maxTrackLengthMode);
   }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
     // The bound lives once, in the shared schema — this applies it to the
@@ -1495,7 +1547,8 @@ export async function update(patch) {
       // and the serve-time fallback in GET /themes, and the same precedent as the
       // activeDjPromptId reset. Throwing here aborted the whole restore for any
       // install whose active theme id had since been retired (issue #917).
-      next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
+      const valid = themeIds ? themeIds.has(v) : await isValidThemeId(v);
+      next.theme.active = valid ? v : DEFAULT_THEME_ID;
       if (next.theme.active !== v) {
         console.warn(`[theme] active theme "${v}" is not a known theme id — falling back to "${DEFAULT_THEME_ID}"`);
       }
@@ -1596,6 +1649,7 @@ export async function update(patch) {
   if ('djBehaviour' in patch) {
     const behaviour = parseSettingsPatchKey<{
       showWelcome?: boolean;
+      previewNextShow?: boolean;
       sameHostAcknowledgement?: boolean;
       extendedSleeveNotes?: boolean;
       releaseYearMentions?: string;
@@ -1605,7 +1659,7 @@ export async function update(patch) {
     }>(
       'djBehaviour', patch.djBehaviour,
     );
-    for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
+    for (const key of ['showWelcome', 'previewNextShow', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
       if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
     if (behaviour.releaseYearMentions !== undefined) {
@@ -1634,7 +1688,7 @@ export async function update(patch) {
     // Snapshot the theme registry once so the validator can stay sync.
     // listThemes() returns built-ins + cached user themes (30 s TTL) — same
     // source the picker reads.
-    const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
+    const allowedThemeIds = themeIds ? new Set(themeIds) : new Set((await listThemes()).map(t => t.id));
     next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds, moodNames);
   }
   if ('schedule' in patch) {
@@ -1740,6 +1794,70 @@ export async function update(patch) {
           );
         }
         next.tts.pocketTts.voice = v;
+      }
+    }
+    if (t.gemini !== undefined) {
+      const gm = t.gemini || {};
+      if (gm.model !== undefined) {
+        // '' is meaningful and allowed: it means "use the engine's fallback
+        // chain", which is how a station that never chose a model should read.
+        const v = String(gm.model).trim();
+        if (v && !(GEMINI_TTS_MODELS as readonly string[]).includes(v)) {
+          throw new Error(`tts.gemini.model must be one of: ${GEMINI_TTS_MODELS.join(', ')}`);
+        }
+        next.tts.gemini.model = v;
+      }
+      if (gm.voice !== undefined) {
+        const v = String(gm.voice).trim();
+        // A voice must be one Google accepts. Left to speak time it becomes a
+        // 400 from deep inside the request and the operator reads a stack trace
+        // instead of a form error. A DESIGNED or REPLICATED id (`voice_…`,
+        // `voicekey_…`) is deliberately NOT in this list: it is an opaque
+        // per-project handle this code cannot validate, and refusing it would
+        // break custom voices outright.
+        //
+        // The Extended Voice Library adds a third accepted form, and this check
+        // is LOOSER than the runtime gate on purpose: the membership index can
+        // be cold (no key, or Google unreachable at boot), and refusing to save
+        // a real voice the operator just browsed to would be the worse failure.
+        // `looksLikeLibraryId` catches obvious garbage; anything that slips
+        // through degrades at speak time to the station voice, which is the
+        // graceful path that already exists.
+        if (v
+          && !/^(voice|voicekey)_/i.test(v)
+          && !(GEMINI_TTS_VOICES as readonly string[]).includes(v)
+          && !isLibraryVoice(v)
+          && !looksLikeLibraryId(v)) {
+          throw new Error(`tts.gemini.voice must be one of: ${GEMINI_TTS_VOICES.join(', ')}, a voice_… / voicekey_… id, or a voice from the Extended Voice Library`);
+        }
+        if (!v) throw new Error('tts.gemini.voice must not be blank');
+        next.tts.gemini.voice = v;
+      }
+      if (gm.pronunciation !== undefined) {
+        // Free text, deliberately NOT validated against a list — it is a natural
+        // language instruction ("Sook rhymes with look"), so any grammar is
+        // legitimate. Capped because it rides EVERY render inside the engine's
+        // style budget alongside the persona's voiceStyle and soul excerpt.
+        const v = String(gm.pronunciation).trim();
+        if (v.length > GEMINI_PRONUNCIATION_MAX) {
+          throw new Error(`tts.gemini.pronunciation must be at most ${GEMINI_PRONUNCIATION_MAX} characters`);
+        }
+        next.tts.gemini.pronunciation = v;
+      }
+      if (gm.libraryLanguage !== undefined) {
+        // A BCP-47 tag or empty ("every language"). Validated SHAPE-only: the
+        // set of languages Google serves is a moving target and a static enum
+        // here would refuse a tag the operator can plainly see in AI Studio.
+        // Canonicalised so the admin dropdown cannot hold three spellings of one
+        // language. Saving this is never required to make a voice work — it only
+        // chooses which page of the catalogue the browser opens on.
+        const v = normalizeGeminiLibraryLanguage(gm.libraryLanguage);
+        if (!isGeminiLibraryLanguage(v)) {
+          throw new Error(
+            `tts.gemini.libraryLanguage must be a BCP-47 language tag such as en-AU, or blank for every language`,
+          );
+        }
+        next.tts.gemini.libraryLanguage = v;
       }
     }
     if (t.cloud !== undefined) {
@@ -1924,6 +2042,9 @@ export async function update(patch) {
     if (l.pickerAgent !== undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
     }
+    if (l.guestMusicalLeanings !== undefined) {
+      next.llm.guestMusicalLeanings = !!l.guestMusicalLeanings;
+    }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
@@ -1934,6 +2055,11 @@ export async function update(patch) {
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
+    }
+    if (l.requestTimeoutMs !== undefined) {
+      const raw: unknown = l.requestTimeoutMs;
+      const numeric = typeof raw === 'number' || (typeof raw === 'string' && raw.trim() !== '') ? Number(raw) : NaN;
+      next.llm.requestTimeoutMs = clampRequestTimeout(numeric, next.llm.requestTimeoutMs);
     }
     if (l.agentTimeoutMs !== undefined) {
       next.llm.agentTimeoutMs = clampAgentTimeout(Number(l.agentTimeoutMs), next.llm.agentTimeoutMs);
@@ -2092,6 +2218,9 @@ export async function update(patch) {
       const v = String(e.apiKey).trim();
       if (v.length > 200) throw new Error('embedding.apiKey must be 0-200 chars');
       next.embedding.apiKey = v;
+    }
+    if (e.headers !== undefined) {
+      next.embedding.headers = applyCustomHeadersPatch(next.embedding.headers, e.headers, 'embedding');
     }
     if (e.seedCount !== undefined) {
       const v = parseInt(e.seedCount, 10);
@@ -2432,6 +2561,16 @@ export async function update(patch) {
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
 
+  }
+
+  return { saved: next, requiresRestart: restart };
+}
+
+export async function update(patch) {
+  const cur = await load();
+  const { saved: next, requiresRestart: restart } = await prepareUpdate(patch);
+  {
+    const personaIds = next.personas.map(p => p.id);
     // Garbage-collect avatar files for personas that no longer exist. Best
     // effort — a missing directory or a vanished file is fine, this just
     // keeps the on-disk state from accumulating dead images.
@@ -2467,8 +2606,10 @@ export async function update(patch) {
   // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, scheduleOverride: _override, ...settingsPersist } = next;
   // Atomic replace — a crash mid-write must not take the operator's whole
-  // config (or show schedule) with it.
-  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));
+  // config (or show schedule) with it. Owner-only: settings.json carries every
+  // inline credential getRedacted() masks, in a state dir other accounts can
+  // list. schedule.json holds none and keeps whatever mode it has.
+  await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2), { mode: 0o600 });
   await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify(

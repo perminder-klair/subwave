@@ -232,6 +232,34 @@ Design points as RESOLVED in the implementation:
   hard fallback at ~45s), which is also what finally applies the pair-sized
   `crossSecondsFor` — closing #749 for every DJ-mode seam, blended or not.
 
+### Stem-seam validation
+
+The worker's `blendStartSec` is the actual clip start. The controller's
+`outCueSec` is the outgoing playback cut, one 0.3-second overlap later;
+the incoming cue is one overlap before the worker's hand-off point.
+Queue recovery migrates the former `stemBlend.blendStartSec` field to
+`outCueSec` without changing its persisted value.
+
+The cue correction in #1775 depends on #1774's mixer buffer-sizing fix.
+Merge and ship #1774 first, or ship both together. Without that mixer fix,
+station crossfades of 0 or 0.1 seconds can shorten a clip seam below its
+0.3-second stamp, so compensating for 0.3 seconds still leaves a stutter.
+
+`bash scripts/stem-seam-test.sh` renders synthetic tracks through the real
+worker and the production annotation writers, `cue_cut`, `dj_transition`
+and `cross` wiring. It lifts mixer code directly from `liquidsoap/radio.liq`
+and checks 0, 0.1 and the mixer default, including an ordinary predecessor
+whose duration stamp can affect a broken mixer's buffers. It checks both
+buffer sizes and beat intervals, with a 25ms tolerance for audio frames.
+
+For combined validation before either PR is merged, fetch the final #1774
+commit and run `STEM_SEAM_RADIO_REF=<commit-sha> bash scripts/stem-seam-test.sh`.
+This reads that commit's mixer directly without merging or copying its
+implementation into #1775. The output identifies the exact mixer SHA and
+keeps the rendered scripts, WAVs and logs under `scripts/.fx-render/stemseam/`.
+Controller dependencies and Python with numpy and soundfile are required;
+Liquidsoap defaults to the production `savonet/liquidsoap:v2.4.5` image.
+
 ### The stem cache (analyzer change)
 
 The separation cost mostly disappears if the analyzer stops throwing its work

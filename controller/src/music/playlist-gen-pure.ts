@@ -261,11 +261,6 @@ export function filterByArtists(pool: PoolTrack[], artists: string[]): PoolTrack
   });
 }
 
-// Running total in seconds, for the builder's live tape counter.
-export function totalDurationSec(tracks: Array<{ durationSec?: number | null }>): number {
-  return tracks.reduce((sum, t) => sum + (t.durationSec ?? 0), 0);
-}
-
 const VIBE_SOURCES = new Set(['theme', 'sound', 'seed', 'seed-similar']);
 
 // Append-only sync selection: which tracks to ADD to a synced playlist. A

@@ -314,6 +314,23 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
 
+// Native Google safety flags are independent per LLM leg. Only a literal true
+// enables blocking; absent or malformed flags preserve the permissive default.
+const geminiSafetyFlagSchema = z.unknown().transform((raw) => raw === true).default(false);
+export const geminiSafetySchema = z.object({
+  harassment: geminiSafetyFlagSchema,
+  hateSpeech: geminiSafetyFlagSchema,
+  sexuallyExplicit: geminiSafetyFlagSchema,
+  dangerousContent: geminiSafetyFlagSchema,
+});
+export type GeminiSafety = z.output<typeof geminiSafetySchema>;
+
+export function normalizeGeminiSafety(raw: unknown): GeminiSafety {
+  return geminiSafetySchema.parse(
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {},
+  );
+}
+
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 
@@ -858,6 +875,7 @@ export const DJ_RECAP_CHARS_BOUNDS: SettingsNumericBound = { min: 40, max: 1000 
 // one stable home in Settings. A missing block remains the pre-existing off.
 export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
+  previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
@@ -1421,6 +1439,8 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
+export const maxTrackLengthModeSchema = z.enum(['cut', 'exclude'], { error: 'maxTrackLengthMode must be cut or exclude' });
+
 // ── maxTrackSeconds ──────────────────────────────────────────────────────────
 
 /**
@@ -1515,4 +1535,60 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
       }
       return v;
     });
+}
+
+// ── Gemini Extended Voice Library default filter ──────────────────────────────
+// A BCP-47 language tag, used ONLY to decide which page of the voice catalogue
+// the admin browser opens on. It is not a constraint on a persona's voice and it
+// never reaches the engine — Gemini takes its accent from the voice itself.
+//
+// Deliberately NOT an enum of the languages Google currently serves. That
+// vocabulary changes under us, and a list here would silently exclude a voice
+// the operator can see in AI Studio (the failure being fixed). The shape is
+// checked instead; the real values are discovered at browse time.
+export const GEMINI_LIBRARY_LANGUAGE_MAX = 35;
+
+// language[-Script][-REGION][-variant…]: a 2-3 letter (or 5-8 letter) primary
+// subtag, then optional 4-letter script, 2-letter/3-digit region, and any number
+// of 1-8 alphanumeric subtags. Structural only — it proves the string is a tag,
+// never that Google serves it.
+const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/i;
+
+/** Canonicalise a BCP-47 tag so `en-au`, `EN-AU` and `en-AU` cannot become three
+ *  dropdown entries: primary subtag lowercase, script Titlecase, region
+ *  UPPERCASE. Google's filter is a case-insensitive exact match, so this is
+ *  safe, and an unrecognisable tag is returned trimmed rather than dropped. */
+export function normalizeGeminiLibraryLanguage(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  // Index-safe rather than `parts[0]` / `p[0]`: this file is COPIED into the web
+  // bundle, which compiles it with `noUncheckedIndexedAccess`, and a mirror that
+  // does not typecheck is a mirror nobody can regenerate.
+  const out: string[] = [];
+  const parts = v.split('-');
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i] ?? '';
+    // Empty segments are KEPT, not skipped. Skipping them turned the malformed
+    // `en-AU-` into the valid `en-AU`, so a typo was silently repaired into a
+    // setting the operator never typed — the exact silent-repair behaviour the
+    // patch-path rules forbid. Preserved, the trailing hyphen fails BCP47 below
+    // and the save is refused, which is the answer the operator needs.
+    if (i > 0 && /^[a-z]{4}$/i.test(p)) {
+      out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {
+      out.push(p.toUpperCase());
+    } else {
+      out.push(p.toLowerCase());
+    }
+  }
+  return out.join('-');
+}
+
+/** Whether a value is a usable `libraryLanguage`. Empty is valid and means
+ *  "every language". Shared by the strict save path and the lenient load path
+ *  so a hand-edited settings.json cannot wedge boot — and mirrored, so the
+ *  admin form pre-flights with the same rule the route enforces. */
+export function isGeminiLibraryLanguage(raw: unknown): boolean {
+  const v = normalizeGeminiLibraryLanguage(raw);
+  return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
 }

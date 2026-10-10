@@ -1,11 +1,10 @@
 'use client';
 
-// Skills editor. A skill only fires autonomously when it is enabled here AND
-// assigned to the persona on air. "Run now" is an operator override: it bypasses
-// the enable toggle, the persona assignment, the frequency gate and the cooldown.
+// Run now bypasses enablement, persona assignment, frequency, and cooldown.
 import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { feedHost } from '../../lib/feed-host';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
@@ -41,6 +40,7 @@ interface ShowLite {
   name: string;
   personaId: string;
   segmentSkill: string;
+  preparationSkill: string;
 }
 
 // Does this persona run the skill? `skills: null` is the "all skills" sentinel.
@@ -104,7 +104,7 @@ export default function SkillsPanel() {
   const settingsQuery = useSettingsQuery<{
     values?: {
       personas?: Array<{ id?: string; name?: string; skills?: string[] | null }>;
-      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string }>;
+      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string; preparationSkill?: string }>;
     };
   }>({ adminFetch, enabled: queryEnabled });
   const skills = skillsQuery.data ?? null;
@@ -128,6 +128,7 @@ export default function SkillsPanel() {
         name: String(s.name || ''),
         personaId: String(s.personaId || ''),
         segmentSkill: typeof s.segmentSkill === 'string' ? s.segmentSkill : '',
+        preparationSkill: typeof s.preparationSkill === 'string' ? s.preparationSkill : '',
       })).filter(s => s.id) as ShowLite[],
     };
   }, [settingsQuery.data]);
@@ -224,8 +225,8 @@ export default function SkillsPanel() {
     } finally { setBusy(null); }
   };
 
-  // An imported bundle arrives disabled, and one carrying a tool.mjs runs code
-  // once enabled.
+  // An imported bundle arrives disabled, and a tool.mjs in it is held unloaded
+  // until the operator reads and trusts it from the skill's edit sheet.
   const importZip = async (file: File) => {
     try {
       const fd = new FormData();
@@ -233,7 +234,7 @@ export default function SkillsPanel() {
       const j = await importMutation.mutateAsync(fd);
       notify.ok(
         j.hasTool
-          ? `Imported “${j.slug}” — includes a data tool that runs code; review it before enabling`
+          ? `Imported “${j.slug}” — its tool.mjs is held unloaded; open Edit to read and trust it`
           : `Imported “${j.slug}” — disabled until you enable it`,
       );
     } catch (e) {
@@ -284,7 +285,7 @@ export default function SkillsPanel() {
     }
     const show = shows.find(x => x.id === who.slice(2));
     if (!show) return true;
-    if (show.segmentSkill === s.name) return true; // the show's pinned feature
+    if (show.segmentSkill === s.name || show.preparationSkill === s.name) return true; // the show's pinned feature
     const host = personas.find(x => x.id === show.personaId);
     return !!host && personaHasSkill(host, s.name);
   };
@@ -293,7 +294,7 @@ export default function SkillsPanel() {
     switch (status) {
       case 'enabled': return !!s.enabled;
       case 'disabled': return !s.enabled;
-      case 'needs-key': return s.ready === false;
+      case 'needs-key': return s.ready === false && !s.toolPending;
       case 'custom': return !!s.custom;
       case 'builtin': return !s.custom;
       default: return true;
@@ -328,8 +329,10 @@ export default function SkillsPanel() {
   };
 
   // Only meaningful while the DJ/show filter is sitting on a show.
-  const isPinned = (s: Skill): boolean =>
-    who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+  const isPinned = (s: Skill): boolean => {
+    const show = who.startsWith('s:') ? shows.find(x => x.id === who.slice(2)) : null;
+    return !!show && (show.segmentSkill === s.name || show.preparationSkill === s.name);
+  };
 
   return (
     <div className="grid gap-4">
@@ -365,8 +368,6 @@ export default function SkillsPanel() {
             Read this in the manual ↗
           </a>
         </div>
-        {/* Full-width row of its own on phones: an `ml-auto` cluster pushed
-            COMMUNITY / NEW SKILL off the right edge at 390px. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">
             {filtered ? `${visible.length} of ${skills.length}` : skills.length} skill{skills.length === 1 ? '' : 's'}
@@ -435,8 +436,6 @@ export default function SkillsPanel() {
               </SelectContent>
             </Select>
           )}
-          {/* Status + sort own one phone row. The wrapper is `display:contents`
-              from sm: up, so on desktop both selects are direct children. */}
           <div className="flex w-full gap-2 sm:contents">
             <Select value={status} onValueChange={v => setStatus(v as StatusFilter)}>
               <SelectTrigger className="min-w-0 flex-1 sm:w-[130px] sm:flex-none" aria-label="Filter by status">
@@ -561,8 +560,6 @@ export default function SkillsPanel() {
                 <Icon size={20} strokeWidth={1.75} aria-hidden />
               </span>
 
-              {/* Text stack and toggle rail are siblings, so the taller rail
-                  never inflates the name row. */}
               <div className="flex min-w-0 flex-1 items-start gap-3">
                 <div className="grid min-w-0 flex-1 gap-2.5">
                   <div className="flex min-w-0 items-center gap-2">
@@ -573,7 +570,14 @@ export default function SkillsPanel() {
                     {s.cohosts && <MetaChip accent>co-hosted</MetaChip>}
                   </div>
 
-                  {s.ready === false && (
+                  {s.toolPending && (
+                    <V3Alert tone="error" title="Code awaiting review">
+                      This skill came with a <code>tool.mjs</code> that hasn&apos;t been loaded. Open
+                      it with <strong>Edit</strong> to read the code, then trust or discard it. Until
+                      then it can&apos;t air.
+                    </V3Alert>
+                  )}
+                  {s.ready === false && !s.toolPending && (
                     <V3Alert tone="error" title="API key not set">
                       This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
                       variable set in <code>.env</code>. Until then it stays inert and never
@@ -650,8 +654,9 @@ export default function SkillsPanel() {
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-3">
             <span className="min-w-0 flex-1 text-[11px] leading-[1.5] text-muted">
-              Got a skill someone shared as a <code>.zip</code>? Import it here — it may include a
-              data tool that runs code, so it arrives disabled for review.
+              Got a skill someone shared as a <code>.zip</code>? Import it here. It arrives
+              disabled, and any <code>tool.mjs</code> in it is held unloaded — nothing in it runs
+              until you read it and trust it from the skill&apos;s Edit sheet.
             </span>
             <input
               ref={fileInputRef}
@@ -677,7 +682,9 @@ export default function SkillsPanel() {
         }
       >
         <div className="text-[12px] leading-[1.65] text-muted">
-          These prompt-only skills ship with SUB/WAVE and update when you do.
+          Community skills come from the live catalog, so new ones appear without an
+          upgrade. They carry no code: a skill marked <strong>reads</strong> fetches that public
+          feed before it speaks, and the rest work from the brief alone.
           <strong> Install</strong> copies one into <code>state/skills/</code> as your own
           editable skill — it arrives <strong>disabled</strong>, so review the brief, then
           enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
@@ -691,6 +698,7 @@ export default function SkillsPanel() {
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-extrabold">{c.label}</span>
                     {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
+                    {feedHost(c.feed) && <Pill className="text-[8px]">reads {feedHost(c.feed)}</Pill>}
                   </div>
                   <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
                   {(c.submittedBy || c.dateAdded) && (

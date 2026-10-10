@@ -1,6 +1,7 @@
 'use client';
 
 import { memo } from 'react';
+import { Play } from 'lucide-react';
 import { buildTagline } from '@/lib/tagline';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import type { ActiveShow, StationContext } from '@/lib/types';
@@ -54,11 +55,11 @@ export default memo(function TopBar({
                 className="v3-caption v3-focus min-w-0 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-ink hover:underline"
                 title={`${showName} — open schedule`}
               >
-                ▸ {showName}
+                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
               </button>
             ) : (
               <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
-                ▸ {showName}
+                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
               </span>
             )
           )}
@@ -91,7 +92,6 @@ export default memo(function TopBar({
           <ThemeSwitcher variant="player" />
         </div>
       </div>
-      {/* Too long to share the masthead row on mobile, so it drops below. */}
       {tagline && (
         <span
           className="v3-caption player-topbar-subline truncate text-muted md:hidden"

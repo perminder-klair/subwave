@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { relTime } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import type { QueueEntry } from '@/lib/types';
+import { entryTime } from '../../shared';
 
 export interface TimelineDrawerProps {
   upcoming?: QueueEntry[];
@@ -60,22 +61,25 @@ export default function TimelineDrawer({ upcoming, history }: TimelineDrawerProp
       {hasHistory && (
         <div>
           <SectionLabel>Played</SectionLabel>
-          {history?.map((t, i) => (
-            <div
-              key={`h-${i}`}
-              className="flex items-baseline justify-between gap-3 border-b border-separator-soft py-[11px]"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm text-ink">{t.title}</div>
-                <div className="truncate text-[11px] text-muted">{t.artist}</div>
+          {history?.map((t, i) => {
+            const at = entryTime(t);
+            return (
+              <div
+                key={`h-${i}`}
+                className="flex items-baseline justify-between gap-3 border-b border-separator-soft py-[11px]"
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-ink">{t.title}</div>
+                  <div className="truncate text-[11px] text-muted">{t.artist}</div>
+                </div>
+                {at && (
+                  <span className="v3-tab-num shrink-0 text-[10px] tracking-eyebrow text-muted uppercase">
+                    {relTime(at)} ago
+                  </span>
+                )}
               </div>
-              {t.t && (
-                <span className="v3-tab-num shrink-0 text-[10px] tracking-eyebrow text-muted uppercase">
-                  {relTime(t.t)} ago
-                </span>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

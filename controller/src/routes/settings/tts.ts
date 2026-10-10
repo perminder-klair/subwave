@@ -8,6 +8,7 @@ import * as settings from '../../settings.js';
 import * as tts from '../../audio/tts.js';
 import * as speech from '../../llm/speech.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { ensureFacets, listLibraryVoices } from '../../audio/gemini-library.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -38,9 +39,13 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       voice: typeof body.voice === 'string' ? body.voice : '',
       cloudProvider: typeof body.cloudProvider === 'string' ? body.cloudProvider : 'openai',
       cloudModel: typeof body.cloudModel === 'string' ? body.cloudModel : undefined,
+      // The UNSAVED Gemini model, so "Play sample" auditions the dropdown choice
+      // rather than the saved station model.
+      geminiModel: typeof body.geminiModel === 'string' ? body.geminiModel : undefined,
       speed: typeof body.speed === 'number' ? body.speed : undefined,
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,
+      voiceStyle: typeof body.voiceStyle === 'string' ? body.voiceStyle : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
       corrections: Array.isArray(body.corrections) ? body.corrections : undefined,
       voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
@@ -74,6 +79,74 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
   if (!provider) {
     return res.json({ ok: false, voices: [], provider: '', error: 'provider is required' });
   }
+
+  // The Gemini Extended Voice Library is a DIFFERENT catalogue from the four
+  // cloud providers above: ~2,000 prebuilt voices with their own ids
+  // (`en-us-varo`), their own metadata (accent, gender, pitch, persona) and
+  // their own pagination. It is branched here rather than pushed into
+  // voice-catalog.ts because it is not a Subclass-style provider API — the
+  // Google key is never on the query, and the filters are its own vocabulary.
+  if (provider === 'gemini') {
+    await settings.load();
+    // The station's saved browser default, read here rather than in the client
+    // so the setting is honoured by every caller (persona card and station
+    // panel alike) instead of each surface re-implementing the precedence.
+    const gemini = (settings.get().tts as any)?.gemini || {};
+    const q = (k: string) => String(req.query[k] ?? '').trim();
+    // Three-way: an explicit tag wins, the literal `any` means "override the
+    // saved default with no filter", and an absent query param falls back to
+    // the setting. Written as branches rather than `||` because 'any' is
+    // TRUTHY — a `||` chain would send it to Google as a language tag and get
+    // an empty page back, which looks like "this station has no voices".
+    const langParam = q('language');
+    const language = langParam
+      ? (langParam === 'any' ? '' : langParam)
+      : (gemini.libraryLanguage || '');
+    const page = await listLibraryVoices({
+      language,
+      gender: q('gender') || undefined,
+      pitch: q('pitch') || undefined,
+      accent: q('accent') || undefined,
+      context: q('context') || undefined,
+      search: q('search') || undefined,
+      pageSize: Number(req.query.pageSize) || undefined,
+      pageToken: q('pageToken') || undefined,
+    });
+    // The filter MENU is a vocabulary, so it comes from the whole catalogue and
+    // not from the page being paged through. Served from the boot prewarm's
+    // walk; `ensureFacets` fills it if boot ran without a key or before this
+    // feature existed. `ready: false` tells the UI to fall back to deriving
+    // options from the rows it does have rather than showing empty menus.
+    const facets = await ensureFacets();
+    return res.json({
+      ok: page.ok,
+      // The library's richer rows, so the picker can show accent/gender/pitch
+      // instead of a bare id. `id` is the value that goes on the wire.
+      voices: page.voices.map(v => ({
+        id: v.id,
+        label: v.name,
+        language: v.language,
+        accent: v.accent,
+        gender: v.gender,
+        pitch: v.pitch,
+        persona: v.persona,
+        description: v.description,
+      })),
+      facets: {
+        languages: facets.languages,
+        accents: facets.accents,
+        genders: facets.genders,
+        pitches: facets.pitches,
+        contexts: facets.contexts,
+        ready: facets.ready,
+      },
+      nextPageToken: page.nextPageToken,
+      applied: page.applied,
+      error: page.ok ? undefined : page.message,
+      provider,
+    });
+  }
+
   const baseUrl = String(req.query.baseUrl || '').trim();
   await settings.load();
   const cloud = settings.get().tts?.cloud || {};
@@ -111,5 +184,4 @@ router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
     clearTimeout(timer);
   }
 });
-
 

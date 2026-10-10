@@ -18,6 +18,29 @@ import { CallSection, FilterChip, JsonBlock, JsonOrText } from './bits';
 import { mapChatRole } from './TtsPanels';
 import { debugKeys } from './queries';
 
+function callUsesMusicalLeanings(call: {
+  ok?: boolean;
+  kind?: string;
+  response?: string;
+  agentPickResolution?: {
+    usedMusicalLeanings?: boolean;
+    preliminary?: { id?: string; title?: string | null; artist?: string | null };
+    final?: { id?: string; title?: string | null; artist?: string | null };
+  };
+  shortlistResolution?: { usedMusicalLeanings?: boolean };
+}): boolean {
+  if (call.ok === false) return false;
+  const agentic = call.kind === 'djAgentPick' || call.kind === 'djAgentLeaningsReview';
+  const shortlist = call.kind === 'djShortlistPick' || call.kind === 'djShortlistRepick';
+  if (!agentic && !shortlist) return false;
+  // Agentic influence is controller-derived after guards and enqueue. Never
+  // resurrect the old self-reported model flag from the raw response.
+  if (agentic) return call.agentPickResolution?.usedMusicalLeanings === true;
+  const resolved = call.shortlistResolution;
+  if (resolved?.usedMusicalLeanings !== undefined) return resolved.usedMusicalLeanings;
+  try { return JSON.parse(call.response || '{}').usedMusicalLeanings === true; } catch { return false; }
+}
+
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
     // Short exchanges size to content; agent runs (~40 turns) get a bounded,
@@ -222,13 +245,14 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 i === 0 && filter === 'all' ? 'bg-[var(--ink-softer)]' : 'bg-transparent',
               )}
             >
-              {/* minmax(0,1fr), not 1fr: an unbroken kind like `djAgentSegment` takes
-                  its min-content width and shoves the ms/clock cells off the card. */}
               <summary className="grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto_auto_auto] items-center gap-2 px-2.5 py-2 sm:gap-2.5">
                 <span className={cn('font-bold', c.ok ? 'text-vermilion' : 'text-[var(--danger)]')}>
                   {c.ok ? '✓' : '✗'}
                 </span>
-                <span className="truncate text-[12px] font-bold">{c.kind}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate text-[12px] font-bold">{c.kind}</span>
+                  {callUsesMusicalLeanings(c) && <span title="Musical Leanings changed the preliminary choice, and that replacement reached the queue" className="shrink-0 border border-vermilion/40 bg-vermilion/10 px-1 py-px text-[8px] font-bold tracking-[0.08em] text-vermilion">LEANINGS</span>}
+                </span>
                 <span className="caption text-[10px] whitespace-nowrap">
                   {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
                   {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
@@ -249,7 +273,6 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.responseText && (
                   <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
-                    {/* Model free text may contain markdown — the one MessageResponse call. */}
                     <MessageResponse className="whitespace-normal">
                       {c.responseText}
                     </MessageResponse>
@@ -288,6 +311,14 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                     <JsonOrText text={c.response} />
                   </CallSection>
                 )}
+                {c.agentPickResolution && (
+                  <CallSection
+                    label="verified selection"
+                    preview={oneLine(c.agentPickResolution.final || c.agentPickResolution)}
+                  >
+                    <JsonBlock value={c.agentPickResolution} />
+                  </CallSection>
+                )}
               </div>
             </details>
           ))}
@@ -296,4 +327,3 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
     </Card>
   );
 }
-

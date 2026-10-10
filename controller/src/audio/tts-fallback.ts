@@ -2,6 +2,7 @@
 // them literally. Keep the primary text untouched and sanitize only its rescue.
 export function fallbackTextFor(requested: string, cloudCueFamily: string | null, text: string): string {
   const expressiveRequest = requested === 'chatterbox'
+    || requested === 'gemini'
     || cloudCueFamily === 'fish-s21'
     || cloudCueFamily === 'elevenlabs-v3';
   if (!expressiveRequest || !text) return text;
@@ -18,6 +19,19 @@ export function fallbackTextFor(requested: string, cloudCueFamily: string | null
 export interface RescueSlot {
   engine: string;
   personaTts: { engine: string; voice: string; cloudProvider: string } | null;
+  /**
+   * The caller must NOT substitute the persona's own override for this slot's
+   * `null`. Set by `stationSlot()` only — `plainSlot()` deliberately leaves it
+   * unset, because there `null` means "nothing configured" and the persona's own
+   * voice is the right one.
+   *
+   * Without it the two meanings of `null` are indistinguishable at the one place
+   * that resolves it: `speak()` does `primarySlot.personaTts ?? personaTts`, so
+   * a persona on an unconfigured cloud provider whose same-engine hop resolved
+   * to `stationSlot('cloud')` got its OWN dead provider reattached and the render
+   * went back to the provider the availability probe had just rejected (#1793).
+   */
+  stationDefault?: boolean;
 }
 
 export interface TtsTarget {
@@ -100,9 +114,13 @@ export function orderedFallbacks(
     : primary;
   const candidates: RescueSlot[] = [
     ...(configured ? [configured] : []),
+    // `stationDefault` for the same reason `stationSlot()` sets it: these are
+    // hardcoded rungs, so their `null` means "engine's own credentials" and a
+    // caller must not backfill it with the persona's override.
     ...[defaultEngine, 'piper', 'kokoro'].map((engine) => ({
       engine: engine || '',
       personaTts: null,
+      stationDefault: true,
     })),
   ];
   const out: RescueSlot[] = [];

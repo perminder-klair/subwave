@@ -163,6 +163,9 @@ async function main() {
     for (const s of stemCache.STEM_NAMES) {
       writeFileSync(join(dir, `head-${s}.flac`), Buffer.alloc(1024 ** 2));
     }
+    // Written by hand, not by an analysis pass: the usage snapshot only learns
+    // about such a change at its next full walk, so drop it (stem-cache.ts).
+    rmSync(join(stateDir, 'stem-cache-usage.json'), { force: true });
     assert.equal(await stemCache.usageBytes(), 4 * 1024 ** 2);
     const expected = Math.floor((15 * 1024 ** 3 - 4 * 1024 ** 2) / stemCache.APPROX_TRACK_BYTES);
     assert.equal(await stemCache.headroomTracks(), expected);

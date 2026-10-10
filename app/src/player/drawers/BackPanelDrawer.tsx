@@ -1,11 +1,6 @@
-// The back panel: output jacks, the timer, the fascia switch, collapsed from
-// four masthead icons into one sheet.
-//
-// OUTPUT renders the native AirPlay/Cast buttons, which must be real native
-// views to present their system pickers. TIMER, SIGNAL and FASCIA are drill-in
-// rows: the parent swaps this sheet's content in place.
+// AirPlay and Cast require native views to open their system pickers.
 
-import { AudioLines, ChevronRight, MoonStar, Palette } from 'lucide-react-native';
+import { AudioLines, ChevronRight, Info, MoonStar, Palette } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { CastButton } from 'react-native-google-cast';
@@ -26,6 +21,7 @@ export interface BackPanelDrawerProps {
   onOpenSleep: () => void;
   onOpenThemes: () => void;
   onOpenFormat: () => void;
+  onOpenAbout: () => void;
 }
 
 export default function BackPanelDrawer({
@@ -38,6 +34,7 @@ export default function BackPanelDrawer({
   onOpenSleep,
   onOpenThemes,
   onOpenFormat,
+  onOpenAbout,
 }: BackPanelDrawerProps) {
   const { colors } = useTheme();
   const hasOutputs = Platform.OS === 'ios' || castAvailable;
@@ -104,7 +101,16 @@ export default function BackPanelDrawer({
         onPress={onOpenThemes}
       />
 
-      {/* Serial plate — pure flavour, like the sticker on the back of the unit. */}
+      <View style={{ height: 14 }} />
+
+      <SectionLabel text="ABOUT" />
+      <PanelRow
+        icon={<Info size={18} color={colors.muted} />}
+        title="SUB/WAVE"
+        value="Run your own"
+        onPress={onOpenAbout}
+      />
+
       <Text
         className="font-mono text-muted"
         style={{ fontSize: 8.5, letterSpacing: 2, textAlign: 'center', marginTop: 26, opacity: 0.7 }}
@@ -124,7 +130,6 @@ function SectionLabel({ text }: { text: string }) {
   );
 }
 
-/** A labeled output "jack": bordered socket around a native picker button. */
 function Socket({
   label,
   sub,
@@ -169,7 +174,6 @@ function Socket({
   );
 }
 
-/** Drill-in row. */
 function PanelRow({
   icon,
   title,

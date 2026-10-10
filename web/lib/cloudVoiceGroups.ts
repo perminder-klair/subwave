@@ -1,12 +1,5 @@
-// Merges voices discovered from a cloud TTS provider with the curated fallback
-// list into VoicePicker groups. Shared by the Personas and Settings pages so
-// the two can't drift.
-//
-// Per provider: openai-compatible has no curated list (ids are server-specific)
-// so the picker is entirely discovered; elevenlabs / fish-audio list discovered
-// voices first under "Your voices", which is where an operator's CLONED voices
-// appear and a hardcoded list can never know about; openai is never
-// discoverable, so its curated list is complete by construction.
+// Merge discovered and curated voices for both Settings and Personas. OpenAI-compatible has no
+// curated list; ElevenLabs and Fish show discovered voices first; OpenAI uses its curated list.
 import { CLOUD_VOICES } from './cloudVoices';
 import type { VoicePickerGroup } from '../components/admin/tts/VoicePicker';
 import type { DiscoveredVoice } from '../hooks/useVoiceDiscovery';
@@ -38,6 +31,70 @@ export function knownCloudVoiceIds(provider: string, discovered: DiscoveredVoice
 export function isKnownCloudVoice(provider: string, discovered: DiscoveredVoice[], voice: string): boolean {
   const v = voice.trim();
   return !!v && knownCloudVoiceIds(provider, discovered).has(v);
+}
+
+// Keep Gemini descriptors shared between the persona and station voice pickers.
+const GEMINI_PREBUILT_VOICES: { id: string; label: string }[] = [
+  { id: 'Zephyr', label: 'Zephyr — Bright' },
+  { id: 'Puck', label: 'Puck — Upbeat' },
+  { id: 'Charon', label: 'Charon — Informative' },
+  { id: 'Kore', label: 'Kore — Firm' },
+  { id: 'Fenrir', label: 'Fenrir — Excitable' },
+  { id: 'Leda', label: 'Leda — Youthful' },
+  { id: 'Orus', label: 'Orus — Firm' },
+  { id: 'Aoede', label: 'Aoede — Breezy' },
+  { id: 'Callirrhoe', label: 'Callirrhoe — Easy-going' },
+  { id: 'Autonoe', label: 'Autonoe — Bright' },
+  { id: 'Enceladus', label: 'Enceladus — Breathy' },
+  { id: 'Iapetus', label: 'Iapetus — Clear' },
+  { id: 'Umbriel', label: 'Umbriel — Easy-going' },
+  { id: 'Algieba', label: 'Algieba — Smooth' },
+  { id: 'Despina', label: 'Despina — Smooth' },
+  { id: 'Erinome', label: 'Erinome — Clear' },
+  { id: 'Algenib', label: 'Algenib — Gravelly' },
+  { id: 'Rasalgethi', label: 'Rasalgethi — Informative' },
+  { id: 'Laomedeia', label: 'Laomedeia — Upbeat' },
+  { id: 'Achernar', label: 'Achernar — Soft' },
+  { id: 'Alnilam', label: 'Alnilam — Firm' },
+  { id: 'Schedar', label: 'Schedar — Even' },
+  { id: 'Gacrux', label: 'Gacrux — Mature' },
+  { id: 'Pulcherrima', label: 'Pulcherrima — Forward' },
+  { id: 'Achird', label: 'Achird — Friendly' },
+  { id: 'Zubenelgenubi', label: 'Zubenelgenubi — Casual' },
+  { id: 'Vindemiatrix', label: 'Vindemiatrix — Gentle' },
+  { id: 'Sadachbia', label: 'Sadachbia — Lively' },
+  { id: 'Sadaltager', label: 'Sadaltager — Knowledgeable' },
+  { id: 'Sulafat', label: 'Sulafat — Warm' },
+];
+
+/** The Gemini half of the shared voice field: the 30 prebuilt voices, plus the
+ *  same "Custom voice id…" row every cloud provider ends with — so a designed
+ *  (`voice_…`) or replicated (`voicekey_…`) id has a home in the picker exactly
+ *  where an operator already looks for one. Never discoverable: Google's Voice
+ *  Library endpoint is not the prebuilt catalogue (it omits Puck, Zephyr and
+ *  Kore entirely), so the curated list here is the complete one. */
+export function buildGeminiVoiceGroups(): VoicePickerGroup[] {
+  return [{ label: 'Google prebuilt', voices: GEMINI_PREBUILT_VOICES }, { voices: [CUSTOM_ROW] }];
+}
+
+/** What the picker shows when the Gemini card is chosen and the slot has no
+ *  usable voice yet. Mirrors the cloud branch, which falls back to the first
+ *  curated id — landing an operator on an empty "Custom voice id…" box because
+ *  they picked a provider card reads as a broken field, not as a choice. */
+export function defaultGeminiVoice(): string {
+  // noUncheckedIndexedAccess: the list is a literal above, so this cannot be
+  // undefined at runtime — but the type says it could be, and the fallback
+  // keeps that from becoming a `voice: undefined` write.
+  return GEMINI_PREBUILT_VOICES[0]?.id ?? 'Puck';
+}
+
+/** True when the saved voice is one of the 30 prebuilt ids. Case-insensitive
+ *  because the engine accepts any case (verified — `Charon`/`charon`/`CHARON`
+ *  all render) and a persona stored in lowercase is still that voice, not a
+ *  custom one. */
+export function isKnownGeminiVoice(voice: string): boolean {
+  const v = voice.trim().toLowerCase();
+  return !!v && GEMINI_PREBUILT_VOICES.some(o => o.id.toLowerCase() === v);
 }
 
 /** Always ends with the "Custom voice id…" action row so an operator can enter

@@ -1,6 +1,3 @@
-// Listener request slip: a note to the booth, optional name, suggestion chips,
-// then submit and poll for the outcome through the station API.
-
 import { ArrowUpRight, Radio } from 'lucide-react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
@@ -80,15 +77,13 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
 
   const chips = useMemo(
     () => buildSuggestions(nowPlaying, context),
-    [nowPlaying?.artist, context?.festival?.name, context?.time?.vibe, context?.time?.show, context?.weather?.condition],
+    [nowPlaying, context],
   );
 
   const scheduleClose = () => {
     if (closeTimer.current) return;
     closeTimer.current = setTimeout(() => {
-      // Clear the ref as the timer fires: this drawer is a permanently mounted
-      // pager page, so a stale id would turn the guard above into a no-op and
-      // every later request would hang on "Closing…".
+      // This page stays mounted. Clear the timer ref so later requests can close it.
       closeTimer.current = null;
       onClose();
       setTimeout(() => setResult(null), 300);

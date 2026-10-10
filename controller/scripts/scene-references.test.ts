@@ -7,14 +7,15 @@
 // Run: npm test -- scene-references
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const STATE = mkdtempSync(join(tmpdir(), 'subwave-scene-refs-'));
+const STATE = createTempDir(join(tmpdir(), 'subwave-scene-refs-'));
 process.env.STATE_DIR = STATE;
 
 // The three stores are read from disk, so they are written before their importers.
@@ -79,8 +80,8 @@ const settings = await import('../src/settings.js');
 const blocklist = await import('../src/music/blocklist.js');
 const sceneVocab = await import('../src/music/scene-vocab.js');
 
-type SceneFilter = refs.SceneFilter;
-type SceneReferenceRow = refs.SceneReference;
+type SceneFilter = import('../src/music/scene-references.js').SceneFilter;
+type SceneReferenceRow = import('../src/music/scene-references.js').SceneReference;
 
 const show = (id: string, name: string, values: string[]): SceneFilter =>
   ({ kind: 'show', mode: 'genre', id, name, values });

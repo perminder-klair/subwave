@@ -15,12 +15,12 @@
 //
 // Run: npx tsx scripts/validate-wire-shape.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-validate-wire-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-validate-wire-'));
 
 const { validateBody, validateBodyAsync, validateSettingsBody } = await import(
   '../src/middleware/validate.js'

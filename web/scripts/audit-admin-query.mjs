@@ -68,6 +68,11 @@ const defaultOwnershipRegistry = [
     consumers: [{ file: 'MusicStarvedBanner.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
   },
   {
+    file: 'debug/queries.ts', function: 'fetchPlaybackFailures',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/debug/playback-failures', signal: 'signal' }],
+    consumers: [{ file: 'debug/PlaybackFailures.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
+  },
+  {
     file: 'debug/queries.ts', function: 'fetchDebug',
     reads: [{ callee: 'adminJson', method: 'GET', path: '/debug', signal: 'signal' }],
     consumers: [{ file: 'DebugPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
@@ -82,6 +87,13 @@ const defaultOwnershipRegistry = [
     reads: [{ callee: 'adminJson', method: 'GET', path: '/playlists/${}', signal: 'signal' }],
     consumers: [
       { file: 'PlaylistBuilderPanel.tsx', owner: 'fetchQuery', property: 'queryFn', count: 2 },
+    ],
+  },
+  {
+    file: 'tts/geminiLibraryQueries.ts', function: 'fetchLibraryPage',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/settings/tts/voices?${}', signal: 'signal' }],
+    consumers: [
+      { file: 'tts/geminiLibraryQueries.ts', owner: 'useInfiniteQuery', property: 'queryFn', count: 1 },
     ],
   },
   {
@@ -132,6 +144,9 @@ const allowed = new Map([
       method: 'GET',
       path: /^\/personas\/\$\{\}\/export$/,
     }],
+  ])],
+  ['debug/PlaybackFailures.tsx', new Map([
+    ['playback-failure-export', { callee: 'adminResponse', method: 'GET', path: /^\/debug\/playback-failures\/export$/ }],
   ])],
   ['debug/LlmCalls.tsx', new Map([
     ['llm-call-export', {

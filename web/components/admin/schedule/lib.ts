@@ -1,10 +1,4 @@
-// Pure derivations for the schedule page ("The Rundown", /admin/shows/schedule).
-// `schedule[day][hour]` holds a show id or null (day keys are JS getDay:
-// 0=Sun..6=Sat). Everything the screen renders derives from that one grid through
-// the block helpers here, so the board and the listing can never disagree.
-//
-// The grid's DIMENSIONS come from the mirrored schedule schema, which is also
-// what validates every save.
+// Schedule keys follow getDay(): 0 is Sunday, 6 is Saturday.
 import {
   SCHEDULE_DAYS,
   SCHEDULE_HOURS,

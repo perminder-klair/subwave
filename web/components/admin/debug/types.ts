@@ -1,11 +1,13 @@
-// Shapes of the controller's /debug response. Admin endpoints return loose JSON,
-// so these are narrowed with optional-chaining at call sites, not trusted outright.
 
 import type { StationLocale } from '../../../lib/types';
 
 export interface DebugIcecast {
   listeners?: number;
-  peakListeners?: number;
+  /** Sum of independent per-mount high-water marks, not a simultaneous peak.
+   * Matches the backend's raw Icecast field name. */
+  listener_peak?: number;
+  /** listenurl of every mount Icecast currently has a connected encoder on. */
+  activeMounts?: string[];
   error?: string;
 }
 
@@ -102,6 +104,31 @@ interface LlmCall {
    * From the controller's failureDiagnostics(); absent on success (see `response`). */
   responseText?: string;
   steps?: number;
+  /** Controller-verified Agentic diagnostic, settled after guards + enqueue. */
+  agentPickResolution?: {
+    preliminary?: { id?: string; title?: string | null; artist?: string | null };
+    leaningsReview?: {
+      outcome?: 'not-run' | 'kept' | 'replaced' | 'invalid' | 'failed';
+      replacementId?: string | null;
+      track?: { id?: string; title?: string | null; artist?: string | null } | null;
+      leaningsBasis?: string | null;
+      baselineId?: string | null;
+      reviewedSelectedId?: string | null;
+      candidateIds?: string[];
+      leaningsOptions?: string[];
+      leaningsSources?: Array<{ phrase: string; source: 'host' | 'guest'; ownerName: string | null }>;
+      leaningsSource?: 'host' | 'guest';
+      proposedReplacementId?: string | null;
+      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'not-flow-tie' | 'weak-musical-reason' | null;
+    };
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    final?: { id?: string; title?: string | null; artist?: string | null };
+    reason?: string | null;
+    queued?: boolean;
+    usedMusicalLeanings?: boolean;
+  };
+  /** Controller-verified Track Shortlist diagnostic for the completed pick. */
+  shortlistResolution?: { usedMusicalLeanings?: boolean };
 }
 
 export interface DebugLlm {
@@ -216,4 +243,4 @@ export interface DebugData {
   error?: string;
 }
 
-
+export type { PlaybackFailureHistory } from '../../../lib/schemas.generated';

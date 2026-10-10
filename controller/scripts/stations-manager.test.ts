@@ -13,7 +13,7 @@ const root = mkdtempSync(join(tmpdir(), 'subwave-mgr-'));
 try {
   // Seed a legacy single-station root.
   writeFileSync(join(root, 'settings.json'), '{"station":"Legacy FM"}');
-  writeFileSync(join(root, 'setup-config.json'), '{}');
+  writeFileSync(join(root, 'setup-config.json'), JSON.stringify({ navidrome: { url: 'http://music-a:4533', user: 'a', pass: 'secret-a' } }));
   writeFileSync(join(root, 'session.json'), '{}');
   writeFileSync(join(root, 'liquidsoap_crossfade.txt'), '4');
   writeFileSync(join(root, 'icecast-secrets.env'), 'SECRET=1');
@@ -57,17 +57,19 @@ try {
   assert.equal(night?.configured, false);
   assert.equal(night?.name, 'Night Shift');
 
-  // Env-configured installs (NAVIDROME_* in env, no setup-config.json anywhere)
-  // mark EVERY station configured — env creds are install-level.
+  // Env credentials must not configure a new profile.
   const envList = manager.listStations(root, 'x', true);
-  assert.ok(envList.every((s) => s.configured));
+  assert.equal(envList.find(s => s.id === 'main')?.configured, true);
+  assert.equal(envList.find(s => s.id === 'night-shift')?.configured, false);
 
-  // Duplicate: allowlist copies, runtime skipped, library.db via callback.
+  // Duplicate copies presentation, but no music credentials or library data.
   writeFileSync(join(root, 'stations', 'main', 'library.db'), 'not-really-sqlite');
-  const backups: string[] = [];
+  writeFileSync(join(root, 'stations', 'main', 'schedule.json'), JSON.stringify({
+    shows: [{ id: 'night', playlistIds: ['source-only'], excludedPlaylistIds: ['excluded'], genres: ['Jazz'] }],
+    schedule: { '0': ['night'] },
+  }));
   const dup = await manager.createStation(root, {
     name: 'Night Shift', mode: 'duplicate', currentName: 'Legacy FM',
-    backupLibraryDb: async (dest) => { backups.push(dest); },
   });
   assert.equal(dup.id, 'night-shift-2'); // slug collision → -2
   const dupDir = join(root, 'stations', 'night-shift-2');
@@ -75,7 +77,12 @@ try {
   assert.ok(existsSync(join(dupDir, 'liquidsoap_crossfade.txt')));
   assert.ok(existsSync(join(dupDir, 'jingles', 'a.wav')));
   assert.ok(!existsSync(join(dupDir, 'session.json')));
-  assert.deepEqual(backups, [join(dupDir, 'library.db')]);
+  assert.ok(!existsSync(join(dupDir, 'library.db')));
+  assert.ok(!existsSync(join(dupDir, 'setup-config.json')));
+  assert.equal(manager.listStations(root, 'x', true).find(s => s.id === dup.id)?.configured, false);
+  const copiedSchedule = JSON.parse(readFileSync(join(dupDir, 'schedule.json'), 'utf8'));
+  assert.deepEqual(copiedSchedule.shows, [{ id: 'night', genres: ['Jazz'] }]);
+  assert.deepEqual(copiedSchedule.schedule, { '0': ['night'] });
   // Duplicate overwrites the on-air name copied from the source.
   assert.equal(
     JSON.parse(readFileSync(join(dupDir, 'settings.json'), 'utf8')).station,
@@ -174,7 +181,7 @@ try {
 }
 
 // createStation: conversion succeeds, then something AFTER it (the duplicate
-// copy loop's library.db backup) throws. The conversion is durable the
+// copy's schedule parsing) throws. The conversion is durable the
 // instant it returns — pointer + stations/main are already on disk — so the
 // thrown error must carry converted:true (the route uses this to schedule
 // the restart despite the 400/500), and the partially-created new-station
@@ -182,19 +189,18 @@ try {
 const root3 = mkdtempSync(join(tmpdir(), 'subwave-mgr-create-fail-'));
 try {
   writeFileSync(join(root3, 'settings.json'), '{"station":"Legacy FM"}');
-  writeFileSync(join(root3, 'library.db'), 'not-really-sqlite'); // so the backup callback runs
+  writeFileSync(join(root3, 'schedule.json'), 'invalid-json'); // copied schedule cannot be parsed
 
   await assert.rejects(
     manager.createStation(root3, {
       name: 'X',
       mode: 'duplicate',
       currentName: 'Legacy FM',
-      backupLibraryDb: async () => { throw new Error('backup boom'); },
     }),
     (err: unknown) => {
       assert.ok(err instanceof manager.StationCreateError);
       assert.equal(err.converted, true);
-      assert.match(err.message, /backup boom/);
+      assert.match(err.message, /JSON/);
       return true;
     },
   );

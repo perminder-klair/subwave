@@ -21,12 +21,13 @@
 // upsertTrackAnalysis to the cue points.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-silence-trim-lib-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-silence-trim-lib-'));
 process.env.STATE_DIR = stateRoot;
 writeFileSync(
   path.join(stateRoot, 'settings.json'),
@@ -48,7 +49,7 @@ db.upsertTrackMeta('trimmed', {
   title: 'Trimmed', artist: 'A', album: 'Al', duration: 200,
 } as never);
 db.upsertTrackAnalysis('trimmed', {
-  bpm: 120, key: 'C', introMs: 8_000, confidence: 1,
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1,
   leadSilenceMs: 6_000, tailSilenceMs: 9_000, tailStartMs: 191_000,
 });
 

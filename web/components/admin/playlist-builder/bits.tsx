@@ -1,6 +1,5 @@
 'use client';
 
-// Shared micro-pieces and the energy colour scale.
 
 import { useRef } from 'react';
 import { X } from 'lucide-react';

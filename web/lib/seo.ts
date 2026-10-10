@@ -12,14 +12,8 @@ export function absoluteUrl(path = '/'): string {
   return urlOnBase(SITE_URL, path);
 }
 
-// Which install a page's content belongs to:
-// - 'shared'  -- the product site (landing, /setup, /manual, /news, catalogs),
-//   byte-identical on every install, so on a non-official install its canonical
-//   points at getsubwave.com rather than self-asserting over duplicate content.
-// - 'station' -- the operator's own surface (/, /listen) plus /privacy and
-//   /terms, which stay self-canonical everywhere.
-// 'shared' is the default: a forgotten flag on a new docs page should donate to
-// the official site rather than assert a fresh duplicate.
+// Shared pages canonicalise to the official site; station pages use the install origin. Default to
+// shared for new documentation pages.
 export type PageScope = 'shared' | 'station';
 
 // The URL a page declares as its canonical (and og:url -- crawlers treat a
@@ -31,12 +25,8 @@ export function canonicalUrl(path: string, scope: PageScope = 'shared'): string 
   return absoluteUrl(path);
 }
 
-// Next does not deep-merge nested objects like `openGraph` across the
-// layout->page chain, so siteName/title are restated here. `title` arrives
-// pre-branded and opts out of the root template via `absolute`. `twitter` is
-// restated because X prefers twitter:title/description over the og:* tags.
-// `siteName` defaults to the product name; player routes pass the operator's own
-// station name (#1086).
+// Next does not deep-merge openGraph, so repeat its fields here. Use absolute titles to bypass the
+// layout template and set Twitter fields explicitly.
 export function pageMeta({
   title,
   description,

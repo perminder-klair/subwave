@@ -1,11 +1,11 @@
 // Co-hosted skills: dynamic cast validation, persona mapping and grounded tool safety.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-cohosted-skill-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-cohosted-skill-'));
 
 const { cohostedSkillSchema, cohostedSkillSystem } = await import('../src/llm/internal/prompts/cohosted-skill.js');
 const { runCohostedCapability } = await import('../src/skills/cohosted.js');

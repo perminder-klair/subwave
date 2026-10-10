@@ -10,7 +10,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
 import { bedCreateSchema, imagingImportSchema } from '../schemas/imaging.js';
-import { audioContentType } from '../audio/audio-import.js';
+import { sendAudioFile } from '../util/audio-response.js';
 
 export const router = express.Router();
 
@@ -73,7 +73,7 @@ router.get('/beds/:name/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await beds.getPath(req.params.name);
     if (!filePath) return res.status(404).json({ error: 'unknown bed' });
-    res.type(audioContentType(filePath)).sendFile(filePath);
+    sendAudioFile(res, filePath);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

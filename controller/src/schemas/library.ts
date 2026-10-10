@@ -17,8 +17,6 @@ export interface ManualTagContext {
   moodNames: string[] | null;
 }
 
-export const MANUAL_TAG_SHAPE_ONLY: ManualTagContext = { moodNames: null };
-
 export function manualTagSchema(ctx: ManualTagContext) {
   return z.object({
     // A blank string is refused too, with the same message.

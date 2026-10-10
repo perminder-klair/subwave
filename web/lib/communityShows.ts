@@ -27,6 +27,7 @@ export interface CommunityShow {
   banter: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   maxTrackSeconds: number | null;
   minTrackLengthSeconds: number | null;
   // Stamped by the submission workflow. Absent on hand-added or pre-provenance

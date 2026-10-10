@@ -142,6 +142,7 @@ export function buildContextLines(
   const allow = normalizeContextFields(contextFields);
   const on = (f: ContextField) => allow === null || allow.has(f);
   const lines: string[] = [];
+  if (typeof context?.episodeEditorial === 'string' && context.episodeEditorial) lines.push(context.episodeEditorial);
   if (on('date') && context?.date) {
     lines.push(`Day: ${context.date.dayLabel}, ${context.date.dayOfMonth} ${context.date.monthLabel} (${context.date.season})`);
   }

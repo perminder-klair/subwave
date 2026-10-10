@@ -1,8 +1,5 @@
 'use client';
 
-// The "list" half of the cards/list toggle on /admin/personas. Same contract as
-// the slate cards: the row opens the editor, and the spine carries the same status
-// colour.
 
 import { useMemo } from 'react';
 import { API_BASE } from './constants';

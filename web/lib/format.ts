@@ -58,6 +58,35 @@ export function fmtClockMinute(
   }
 }
 
+// Compact station date + time for the admin header, e.g. "Fri 2 Oct · 14:37:45".
+// The weekday stays even in this compact form: the show schedule is weekly, so
+// the day is what tells an operator which programming is due. The clock follows
+// the station's timezone and 12h/24h convention.
+export function fmtStationDateTime(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  try {
+    const date = new Date(t);
+    // Built from parts, not .format(): ICU versions disagree on the
+    // punctuation between the weekday and the date ("Thu 24 Sep" vs
+    // "Thu, 24 Sep"), and the header should read the same in every browser.
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      ...(tz ? { timeZone: tz } : {}),
+    }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((p) => p.type === type)?.value ?? '';
+    const datePart = `${part('weekday')} ${part('day')} ${part('month')}`;
+    return `${datePart} · ${fmtClock(date.getTime(), tz, locale)}`;
+  } catch {
+    return '';
+  }
+}
+
 const DOW: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
 // Day-of-week (0=Sun) and hour (0-23) for `date` on the wall clock in `tz`.

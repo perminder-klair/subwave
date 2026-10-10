@@ -1,16 +1,11 @@
 'use client';
-// The engine picker and every engine's voice selector live in the shared
-// tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
-//
-// `tts` is bound as ONE useController over the whole slot, not a SelectField
-// per subfield: switching engine resets `voice` (cross-field work SelectField
-// can't express), and the controller's fieldErrors are block-level too — a bad
-// engine/voice combination comes back keyed at `personas.<i>.tts`.
+// Bind the whole TTS slot because changing engines resets the voice and server errors name the slot.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { fieldAria } from '@/lib/form';
+import { TextareaField } from '@/lib/form-fields';
 import { Field, FieldLabel, FieldError } from '@/components/ui/field';
 import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
@@ -18,7 +13,7 @@ import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
-import { composeTtsControlSpeeds } from '../../../lib/schemas.generated';
+import { PERSONA_VOICE_STYLE_MAX, composeTtsControlSpeeds } from '../../../lib/schemas.generated';
 
 interface PersonaVoiceCardProps {
   persona: Persona; // read-only: language (preview) + on-screen labels only
@@ -62,9 +57,7 @@ export function PersonaVoiceCard({
     <Card flat title="Voice" sub="text-to-speech engine">
       <div className="lg:grid lg:grid-cols-2 lg:items-start lg:gap-x-8">
         <Field data-invalid={aria.invalid || undefined} {...aria.groupProps} className="min-w-0">
-          {/* No single labelable control across engine + voice, so this Field
-              names itself via aria-labelledby (fieldAria's group variant),
-              matching BlockRulesCard's "values" chip group. */}
+          {/* Use a labelled group because engine and voice are separate controls. */}
           <FieldLabel asChild className="caption" {...aria.labelledByProps}>
             <span>Engine &amp; voice</span>
           </FieldLabel>
@@ -75,6 +68,7 @@ export function PersonaVoiceCard({
             adminFetch={adminFetch}
             previewSpeed={previewSpeed}
             previewLanguage={persona.language}
+            previewVoiceStyle={persona.voiceStyle}
             cloudIssue={cloudIssueText && (
               <>
                 <strong>This cloud voice won’t play.</strong> {cloudIssueText}{' '}
@@ -119,6 +113,17 @@ export function PersonaVoiceCard({
         </Field>
 
         <div className="field mt-3.5 max-w-[360px] lg:mt-0 lg:max-w-[460px]">
+          {resolvedEngine === 'gemini' && (
+            <TextareaField
+              control={control}
+              name={`personas.${index}.voiceStyle`}
+              label="Delivery style"
+              description="How Gemini should sound. Try warm and unhurried, or dry and understated. The sample uses your current style."
+              maxLength={PERSONA_VOICE_STYLE_MAX}
+              rows={3}
+              placeholder="Warm and unhurried"
+            />
+          )}
           <div className="flex items-baseline justify-between gap-3">
             <Label>Voice level (dB)</Label>
             <span className="font-mono text-[15px] font-extrabold text-[var(--accent)] tabular-nums">{gainLabel}</span>

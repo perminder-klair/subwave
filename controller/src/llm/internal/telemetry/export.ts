@@ -1,22 +1,6 @@
-// Serialising the recent-calls ring buffer for download (#1485, FR 15).
-//
-// The debug panel already RENDERS the last 120 model calls; what it could not
-// do is hand one to anyone else. Diagnosing a bad pick usually means quoting
-// the prompt, the tool trail and the response into an issue, and re-typing that
-// out of a browser details/summary is where the report stops being filed.
-//
-// THIS EXPORTS WHAT IS ALREADY THERE, VERBATIM. Every call object is written as
-// the ring holds it — no extra field, no extra redaction. `/debug` is admin-
-// gated and so is the export; anything that would be too sensitive to download
-// is already too sensitive to render, and the fix for that would be to log less,
-// not to filter one of the two readers. Whoever changes what `record()` stores
-// changes this file's output for free, which is the intended coupling.
-//
-// Two shapes, because the two audiences differ. JSON is one document an operator
-// attaches to an issue; NDJSON is one call per line, which `jq`, `grep` and the
-// station's own log tooling can stream without holding 120 prompts in memory.
-// Pure and separate from the route so both can be tested without HTTP
-// (scripts/llm-call-export.test.ts).
+// Export ring entries verbatim in JSON or NDJSON (#1485 FR 15). Both /debug and
+// export are admin-gated; any redaction belongs in record(), shared by both readers.
+// Pure serialization is pinned by scripts/llm-call-export.test.ts.
 
 export type LlmCallExportFormat = 'json' | 'ndjson';
 
@@ -40,9 +24,7 @@ export function llmCallExportFilename(format: LlmCallExportFormat, now = new Dat
 }
 
 export const LLM_CALL_EXPORT_CONTENT_TYPE: Record<LlmCallExportFormat, string> = {
-  // `application/x-ndjson` is the registered type; both carry an explicit
-  // charset because the prompts routinely hold non-ASCII (persona names,
-  // track titles, the DJ's own script).
+  // Include charset for non-ASCII names, titles and scripts.
   json: 'application/json; charset=utf-8',
   ndjson: 'application/x-ndjson; charset=utf-8',
 };

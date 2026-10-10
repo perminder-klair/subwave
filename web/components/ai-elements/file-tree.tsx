@@ -1,12 +1,6 @@
 "use client";
 
-// Vendored from the AI Elements registry (`npx ai-elements@latest add file-tree`).
-// Local edits, kept minimal so a re-add stays a one-line command:
-//   - `@/registry/default/ui/collapsible` -> `@/components/ui/collapsible`
-//   - `@/lib/utils` -> `@/lib/cn`
-//   - folder icons `text-blue-500` -> `text-vermilion`, the colour the State dir
-//     card has always used for directories. Upstream's raw blue is the one thing
-//     here that ignores the theme tokens entirely.
+// Vendored from AI Elements with local import paths and theme-aware folder icons.
 
 import {
   Collapsible,
@@ -172,6 +166,8 @@ export const FileTreeFolder = ({
     <FileTreeFolderContext.Provider value={folderContextValue}>
       <Collapsible onOpenChange={handleOpenChange} open={isExpanded}>
         <div
+          aria-expanded={isExpanded}
+          aria-selected={isSelected}
           className={cn("", className)}
           role="treeitem"
           tabIndex={0}
@@ -254,6 +250,7 @@ export const FileTreeFile = ({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
         onSelect?.(path);
       }
     },
@@ -265,6 +262,7 @@ export const FileTreeFile = ({
   return (
     <FileTreeFileContext.Provider value={fileContextValue}>
       <div
+        aria-selected={isSelected}
         className={cn(
           "flex cursor-pointer items-center gap-1 rounded px-2 py-1 transition-colors hover:bg-muted/50",
           isSelected && "bg-muted",
@@ -278,7 +276,6 @@ export const FileTreeFile = ({
       >
         {children ?? (
           <>
-            {/* Spacer for alignment */}
             <span className="size-4 shrink-0" />
             <FileTreeIcon>
               {icon ?? <FileIcon className="size-4 text-muted-foreground" />}

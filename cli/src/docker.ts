@@ -31,12 +31,6 @@ export function composeUp(
   return run(file, a);
 }
 
-// Run before composeUp() when a locally-built image may be masking the upstream
-// GHCR release under the same tag.
-export function composePull(file: ComposeFile): Promise<number> {
-  return run(file, ['pull']);
-}
-
 export function composeDown(file: ComposeFile): Promise<number> {
   // Never `-v` here — that wipes the state dir and with it every setting,
   // archive and jingle. composeDownFull() is the gated way to ask for that.

@@ -1,12 +1,5 @@
-// Outbound signalling for one spoken segment (#1382). The one place deciding
-// what the world is told, shared by the four call sites that air speech.
-//
-// Two timebases: `airedAt` is the LIVE EDGE from radio.liq's own clock (what
-// operator surfaces want), and a listener sits `streamBufferSeconds` behind it
-// (#1114), which rides the payload so a consumer need not fetch /now-playing.
-//
-// When air time can't be known, `estimated: true` says so and the timestamps
-// are OMITTED, never guessed.
+// Publish actual mixer air time at the live edge with the listener buffer offset. Unknown air
+// time sets estimated: true and omits timestamps. #1382, #1114.
 
 import * as settings from '../settings.js';
 import * as webhooks from './webhooks.js';

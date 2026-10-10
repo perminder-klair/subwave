@@ -6,13 +6,14 @@
 // Run: `npm test -- backup-schedule`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected at a throwaway dir before the first config-derived import.
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-backup-schedule-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-backup-schedule-'));
 process.env.STATE_DIR = stateRoot;
 
 const {
@@ -421,16 +422,16 @@ test('saving the schedule does NOT ask for a mixer restart', async () => {
 });
 
 test('the key is in the patch inventory, so POST /settings accepts it', async () => {
-  const { SETTINGS_PATCH_KEYS, validateSettingsPatch, SETTINGS_PATCH_SHAPE_ONLY } =
+  const { SETTINGS_PATCH_KEYS, validateSettingsPatch } =
     await import('../src/settings/patch-registry.js');
   // A key absent from this list is rejected at the route — the Backup panel
   // would post it and get a 400 naming an unknown key.
   assert.ok(SETTINGS_PATCH_KEYS.includes('backups'));
   assert.equal(
-    validateSettingsPatch({ backups: { cadence: 'daily', keep: 7 } }, SETTINGS_PATCH_SHAPE_ONLY),
+    validateSettingsPatch({ backups: { cadence: 'daily', keep: 7 } }),
     null,
   );
-  const bad = validateSettingsPatch({ backups: { keep: 0 } }, SETTINGS_PATCH_SHAPE_ONLY);
+  const bad = validateSettingsPatch({ backups: { keep: 0 } });
   assert.ok(bad, 'an out-of-range retention should be refused at the route');
   // The fieldErrors channel is the point of registering the key: the input can
   // only highlight itself if the error is keyed by its dotted path.

@@ -1,9 +1,5 @@
-// Localized sample sentences for the admin "Play sample" button. A persona's
-// `language` is free operator text, so the lookup normalizes (lowercase,
-// diacritics stripped) and matches English name, native name(s) and ISO 639-1
-// code; unknown/empty → null and the caller uses the English default.
-// A static table, not an LLM call, so the audition stays instant with the model
-// down. "SUB/WAVE" stays untranslated in every entry (#349).
+// Normalize language names/native names/ISO codes; unknown languages use the English sample.
+// Keep SUB/WAVE untranslated (#349). Static samples need no working LLM.
 
 interface PreviewEntry {
   // Normalized match keys: english name, native name(s), ISO 639-1 code.

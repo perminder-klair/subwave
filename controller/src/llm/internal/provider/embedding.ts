@@ -1,48 +1,62 @@
-// Embedding models — the library tagger uses text embeddings for
-// KNN-propagating moods (see music/embeddings.ts + music/tag-library.ts).
-// Provider follows `settings.llm` by default — same auth, same dependency
-// surface — but operator can override either provider or model via
-// `settings.embedding.{provider,model}`.
-//
-// Default model per provider (all chosen for the homelab/single-host use case):
-//   ollama / unknown    → nomic-embed-text                (768d, free, local)
-//   openai / compat     → text-embedding-3-small          (1536d, ~$0.02/1M)
-//   google              → text-embedding-004              (768d)
-//   openrouter          → openai/text-embedding-3-small   (OpenAI-compatible
-//                                                          embeddings endpoint)
-//   anthropic           → falls back to openai embeddings (Anthropic has no
-//                                                          first-party API as
-//                                                          of 2026-05)
+// Embeddings inherit LLM provider/auth unless settings.embedding overrides them.
+// Anthropic has no embedding endpoint here, so its default uses OpenAI.
+// Model defaults are declared below; see music/embeddings.ts and music/tag-library.ts.
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS } from './registry.js';
+import {
+  llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, chatBaseUrl, credentialSig, pinnedApiKey, OPENROUTER_APP_HEADERS,
+} from './registry.js';
+import { embeddingSharesChatCredential } from './capabilities.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
 // mutable Map across modules. Memoisation only; outputs are identical.
 const embedCache = new Map();
 
-function embeddingCfg() {
+// `overrides` (unsaved form values from the probe endpoint) are applied BEFORE
+// the chat leg's credentials are considered, so a probe against another
+// provider or server never inherits a key meant for the saved one.
+function embeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
   const s: any = settings.get().embedding || {};
   const llm = llmCfg();
+  // '' is meaningful for provider (= follow llm), so only override when a
+  // non-empty value is supplied.
+  const provider = overrides.provider || s.provider || llm.provider || 'ollama';
+  const baseUrl = overrides.baseUrl || s.baseUrl || llm.baseUrl || '';
+  // The chat leg's key and headers follow only to the SAME service — same
+  // provider, same resolved server (capabilities.embeddingSharesChatCredential).
+  // Following the provider id alone sent them wherever the embedding leg
+  // pointed: an anthropic chat key to OpenAI's embeddings API, a hosted chat
+  // key to a separate self-hosted embedding box.
+  const sharesChat = embeddingSharesChatCredential(
+    { provider: llm.provider, baseUrl: chatBaseUrl(llm) },
+    { provider, baseUrl: embeddingBaseUrl({ provider, baseUrl }) },
+  );
+  // An override map (the probe's unsaved rows) replaces the saved one; an empty
+  // own map, saved or unsaved, means "inherit" under the same rule as the key.
+  const ownHeaders = overrides.headers !== undefined ? overrides.headers : s.headers;
   return {
-    enabled: s.enabled !== false,
-    provider: s.provider || llm.provider || 'ollama',
-    model: s.model || '',
+    enabled: overrides.enabled ?? (s.enabled !== false),
+    provider,
+    model: overrides.model ?? (s.model || ''),
     // Key precedence: the saved settings field wins, then a dedicated
     // `EMBEDDING_API_KEY` env var (the env path most installs use -- keys live in
-    // state/secrets.env, not settings.json), then the chat key. This is a
-    // runtime env read like config.ts does for SEARCH_API_KEY, so the env value
-    // never gets baked into the persisted settings.json. It covers every
-    // provider uniformly -- including openai-compatible/locca, which can't safely
-    // grab a provider-conventional env var (createOpenAI would otherwise reach
-    // for OPENAI_API_KEY against an arbitrary self-hosted server).
-    apiKey: s.apiKey || process.env.EMBEDDING_API_KEY || llm.apiKey || '',
-    ollamaUrl: s.ollamaUrl || llm.ollamaUrl || '',
-    baseUrl: s.baseUrl || llm.baseUrl || '',
+    // state/secrets.env, not settings.json), then the chat key when it belongs
+    // to this same service. This is a runtime env read like config.ts does for
+    // SEARCH_API_KEY, so the env value never gets baked into the persisted
+    // settings.json. Otherwise blank: each builder below then falls through to
+    // its provider's own env var, or 'unused' for a self-hosted server (which
+    // can't safely grab a provider-conventional env var -- createOpenAI would
+    // otherwise reach for OPENAI_API_KEY against an arbitrary server).
+    apiKey: overrides.apiKey || s.apiKey || process.env.EMBEDDING_API_KEY
+      || (sharesChat ? llm.apiKey : '') || '',
+    ollamaUrl: overrides.ollamaUrl || s.ollamaUrl || llm.ollamaUrl || '',
+    baseUrl,
+    headers: Object.keys(ownHeaders || {}).length ? ownHeaders
+      : sharesChat ? (llm.headers || {}) : {},
   };
 }
 
@@ -143,7 +157,7 @@ export function isLocalEmbeddingProvider(provider: string): boolean {
 
 // Resolved embedding config. `settings.embedding` overrides settings.llm field
 // by field; `overrides` (e.g. unsaved form values from the probe endpoint) win
-// over both. Mirrors the precedence in embeddingCfg().
+// over both — see embeddingCfg() for the precedence and the credential rule.
 export interface EmbeddingCfg {
   enabled: boolean;
   provider: string;
@@ -151,20 +165,11 @@ export interface EmbeddingCfg {
   apiKey: string;
   ollamaUrl: string;
   baseUrl: string;
+  headers?: Record<string, string>;
 }
 
 export function resolveEmbeddingCfg(overrides: Partial<EmbeddingCfg> = {}): EmbeddingCfg {
-  const base = embeddingCfg();
-  return {
-    enabled: overrides.enabled ?? base.enabled,
-    // '' is meaningful for provider (= follow llm), so only override when a
-    // non-empty value is supplied.
-    provider: overrides.provider || base.provider,
-    model: overrides.model ?? base.model,
-    apiKey: overrides.apiKey || base.apiKey,
-    ollamaUrl: overrides.ollamaUrl || base.ollamaUrl,
-    baseUrl: overrides.baseUrl || base.baseUrl,
-  };
+  return embeddingCfg(overrides);
 }
 
 // Effective base URL for the openai-compatible embedding transport. `locca`
@@ -208,6 +213,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
         baseURL,
         apiKey: cfg.apiKey || 'unused',
         name: cfg.provider,
+        ...(Object.keys(cfg.headers || {}).length ? { headers: cfg.headers } : {}),
       });
       return provider.textEmbeddingModel(id);
     }
@@ -224,7 +230,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       // key is required — a missing one 401s with the 'unauthorized' message.
       const provider = createOpenAI({
         baseURL: 'https://openrouter.ai/api/v1',
-        apiKey: cfg.apiKey || process.env.OPENROUTER_API_KEY || 'unused',
+        apiKey: pinnedApiKey(cfg) || 'unused',
         name: 'openrouter',
         headers: OPENROUTER_APP_HEADERS,
       });
@@ -238,7 +244,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       // message.
       const provider = createOpenAI({
         baseURL: 'https://router.requesty.ai/v1',
-        apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
+        apiKey: pinnedApiKey(cfg) || 'unused',
         name: 'requesty',
       });
       return provider.textEmbeddingModel(id);
@@ -266,7 +272,11 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
 export function embeddingModel() {
   const cfg = resolveEmbeddingCfg();
   const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
-  const sig = `embed|${cfg.provider}|${id}|${cfg.apiKey || ''}|${cfg.ollamaUrl}|${cfg.baseUrl}`;
+  const headerSig = Object.entries(cfg.headers || {}).sort(([a], [b]) => a.localeCompare(b));
+  // Credentials key the cache by fingerprint only. pinnedApiKey covers the
+  // builders that read their env var at construction (openrouter, requesty), so
+  // a key saved through the secrets form takes effect without a restart.
+  const sig = `embed|${cfg.provider}|${id}|k${credentialSig(pinnedApiKey(cfg))}|${cfg.ollamaUrl}|${cfg.baseUrl}|h${credentialSig(headerSig.length ? JSON.stringify(headerSig) : '')}`;
 
   const cached = embedCache.get(sig);
   if (cached) return cached;

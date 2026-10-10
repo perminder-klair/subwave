@@ -652,8 +652,7 @@ const SidebarMenuSkeleton = React.forwardRef<
           data-sidebar="menu-skeleton-icon"
         />
       )}
-      {/* Fixed 70%: the stock component randomises this per instance, but
-          Math.random() during render trips the repo's react purity rule. */}
+      {/* Use a fixed width because Math.random() during render violates React purity. */}
       <Skeleton
         className="h-4 max-w-[70%] flex-1"
         data-sidebar="menu-skeleton-text"

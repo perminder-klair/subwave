@@ -1,3 +1,5 @@
+import { prepareEpisodeContext, showPreparation } from '../broadcast/show-preparation.js';
+import type { ArtistEpisodeSource } from './episode-source.js';
 // The "pool path": build a balanced candidate pool from 7 Subsonic/library
 // sources, one LLM call to pick one. Fallback for the session DJ agent.
 
@@ -10,14 +12,16 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
-import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, trackKey } from './recency.js';
+import { artistRootIn, artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, trackKey } from './recency.js';
 import { albumKeyFor } from './album-facts.js';
+import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { showNoRepeatGuard } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
+import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 
 // Raw Subsonic child, slimTrack library row, or Last.fm stub. A structural
 // superset of show-filter's FilterTrack and recency's CandidateLike.
@@ -80,17 +84,22 @@ const CACHE_TTL_MS = 30 * 60 * 1000;
 // Shorter TTL for an EMPTY result, so a transient blank clears quickly.
 const EMPTY_CACHE_TTL_MS = 5 * 60 * 1000;
 const cache = new Map();
+let cacheGeneration = 0;
 async function memo(key, ttl, fn) {
   const hit = cache.get(key);
   if (hit && Date.now() < hit.until) return hit.val;
+  const generation = cacheGeneration;
   const val = await fn();
   const isEmpty = Array.isArray(val) ? val.length === 0 : val == null;
-  cache.set(key, { val, until: Date.now() + (isEmpty ? Math.min(EMPTY_CACHE_TTL_MS, ttl) : ttl) });
+  if (generation === cacheGeneration) {
+    cache.set(key, { val, until: Date.now() + (isEmpty ? Math.min(EMPTY_CACHE_TTL_MS, ttl) : ttl) });
+  }
   return val;
 }
 
 // Must be called when the Navidrome creds change: entries hold old server ids.
 export function clearPoolCache() {
+  cacheGeneration++;
   cache.clear();
   offered.clear();
 }
@@ -180,7 +189,7 @@ function notRecent(recentIds: Set<string>) {
 
 // Fresh-only sample, no never-starve: starvation is handled at wider scopes
 // (the pool's relaxation cascade, the explore slot, the auto.m3u coast).
-function sampleFresh(items: Candidate[], recentIds: Set<string>, cap: number): Candidate[] {
+function sampleFreshCandidates(items: Candidate[], recentIds: Set<string>, cap: number): Candidate[] {
   return items.filter(notRecent(recentIds)).slice(0, cap);
 }
 
@@ -203,20 +212,24 @@ function sampleShowSource(
   return (fresh.length > 0 ? fresh : base).slice(0, cap);
 }
 
-async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max: number) {
+async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max: number, maxTrackSec: number | null) {
   const out: Candidate[] = [];
   for (const a of albums) {
     if (out.length >= max) break;
     try {
       const songs = await subsonic.getAlbum(a.id);
-      out.push(...shuffle(songs).slice(0, perAlbum));
+      out.push(...shuffle(applyKnownTrackCeiling(songs, maxTrackSec)).slice(0, perAlbum));
     } catch {}
   }
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, minTrackSec: number | null = null, exhaustiveRotation = false) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtistRoots: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, lengthLimits: { minTrackSec: number | null; maxTrackSec: number | null } = { minTrackSec: null, maxTrackSec: null }, exhaustiveRotation = false, excludedIds: Set<string> | null = null, episodeSource: ArtistEpisodeSource | null = null) {
   await library.load();
+  const { minTrackSec, maxTrackSec } = lengthLimits;
+  // Prohibited rows must not consume a source's finite sampling slots.
+  const sampleFresh = (items: Candidate[], ids: Set<string>, cap: number) =>
+    sampleFreshCandidates(applyKnownTrackCeiling(items, maxTrackSec), ids, cap);
   // knnExclude pushes the recency union INTO the KNN queries so an aired
   // cluster answers with the next neighbours out, not with fewer rows.
   const aired = library.lastAiredInfo();
@@ -226,6 +239,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const sources: Record<string, number> = {};
   const add = (label: string, items: Candidate[]) => {
     if (!items?.length) return;
+    items = applyKnownTrackCeiling(items, maxTrackSec);
     pool.push(...items.map((t) => ({ ...t, _source: label })));
     sources[label] = (sources[label] || 0) + items.length;
   };
@@ -255,6 +269,8 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     return out;
   };
 
+  if (episodeSource) add('episode-artist', episodeSource.tracks);
+  else {
   // 1. Similar-songs from the expected predecessor — strongest contextual signal.
   if (currentTrack?.id) {
     try {
@@ -354,13 +370,13 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       // Tighten the envelope to the exact union, never-starve.
       const exact = hasEraBound(showFilter!.eras) ? inYearRange(collected, showFilter!.eras) : collected;
       const leaned = lean(preferEnergy(exact.length ? exact : collected, showFilter!.energies));
-      add('show-genre', sampleShowSource(shuffle(leaned), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
+      add('show-genre', sampleShowSource(shuffle(applyKnownTrackCeiling(leaned, maxTrackSec)), recentIds, strict ? CAP_SHOW_GENRE_STRICT : CAP_SHOW_GENRE));
     } catch {}
   }
 
   // 1f. Show-anchored Navidrome playlist(s); in strict mode the whole universe.
   if (hasPlaylist) {
-    add('show-playlist', sampleShowSource(shuffle(playlistPool!.tracks), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST, exhaustiveRotation ? { ids: hardRecentIds, keys: hardRecentKeys } : null));
+    add('show-playlist', sampleShowSource(shuffle(applyKnownTrackCeiling(playlistPool!.tracks, maxTrackSec)), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST, exhaustiveRotation ? { ids: hardRecentIds, keys: hardRecentKeys } : null));
   }
 
   // 2. Mood-tagged library. A multi-mood show pools ALL its moods equally (#929).
@@ -413,23 +429,24 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
 
   // 4. Recently-added albums. The memo must cache a WIDE (~40-track) pool;
   // memoising the CAP_RECENT slice freezes the same 4 tracks for the whole TTL.
+  // Album sampling applies the hard ceiling, so the cache key must include it.
   try {
-    const recentPool = await memo('recent-track-pool', CACHE_TTL_MS, async () => {
+    const recentPool = await memo(`recent-track-pool:${maxTrackSec ?? 0}`, CACHE_TTL_MS, async () => {
       const albums = await subsonic.getRecentlyAddedAlbums({ size: 12 });
-      return tracksFromAlbums(shuffle(albums), 3, 40);
+      return tracksFromAlbums(shuffle(albums), 3, 40, maxTrackSec);
     });
     add('recent', sampleFresh(lean(shuffle(recentPool)), recentIds, nz(CAP_RECENT)));
   } catch {}
 
   // 5. Frequent albums — scrobble-backed favourites, same wide-pool pattern.
   try {
-    const freqPool = await memo('frequent-track-pool', CACHE_TTL_MS, async () => {
+    const freqPool = await memo(`frequent-track-pool:${maxTrackSec ?? 0}`, CACHE_TTL_MS, async () => {
       // Rotate the window (offset 0/12/24 per TTL): play counts are fed by
       // the station itself, so a fixed top-12 is a feedback loop.
       const offset = Math.floor(Math.random() * 3) * 12;
       let albums = await subsonic.getFrequentAlbums({ size: 12, offset });
       if (!albums.length && offset > 0) albums = await subsonic.getFrequentAlbums({ size: 12 });
-      return tracksFromAlbums(shuffle(albums), 3, 40);
+      return tracksFromAlbums(shuffle(albums), 3, 40, maxTrackSec);
     });
     add('frequent', sampleFresh(lean(shuffle(freqPool)), recentIds, nz(CAP_FREQUENT)));
   } catch {}
@@ -481,24 +498,41 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 8. Fallback if the pool is still thin — starred + random.
+  // 8. Fallback if the pool is still thin — starred + random. Starred means the
+  // operator's curation (likes.operatorStarred, gated on likes.influenceDj): a
+  // star a listener like left behind does not earn the slot. It is still
+  // music, though, so it comes back as the last filler when nothing else did —
+  // this pool is never-starve scope, and the filter must not be what empties it.
   if (pool.length < 8) {
+    let listenerStarred: any[] = [];
     try {
       const starred = await subsonic.getStarred();
-      add('starred', sampleFresh(shuffle(starred), recentIds, 4));
+      await likes.load();
+      const curated = likes.operatorStarred(starred, settings.get()?.likes);
+      const curatedIds = new Set(curated.map((s: any) => s?.id));
+      listenerStarred = starred.filter((s: any) => !curatedIds.has(s?.id));
+      add('starred', sampleFresh(shuffle(curated), recentIds, 4));
     } catch {}
     try {
       const random = await subsonic.getRandomSongs({ size: 10 });
       add('random', sampleFresh(random, recentIds, 4));
     } catch {}
+    if (!pool.length && listenerStarred.length) {
+      add('starred', sampleFresh(shuffle(listenerStarred), recentIds, 4));
+    }
+  }
+
   }
 
   // Strict playlist: drop off-playlist candidates before ranking, never-starving
   // to the unfiltered pool only if none survived. Recency still applies below.
-  let selectionPool = pool;
+  // Exclusions must precede soft preferences and the cap. Otherwise an excluded
+  // fresh artist can hide the only eligible (recent-artist) candidate from the
+  // never-starve cascade, then disappear at the final exclusion check.
+  let selectionPool = excludedIds ? pool.filter(t => t.id && !excludedIds.has(t.id)) : pool;
   let playlistInfo: { names: string[]; matched: number; total: number } | null = null;
   if (strictPlaylist) {
-    const inPl = pool.filter((t) => t?.id && playlistPool!.ids.has(t.id));
+    const inPl = selectionPool.filter((t) => t?.id && playlistPool!.ids.has(t.id));
     if (inPl.length) selectionPool = inPl;
   }
 
@@ -516,18 +550,18 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   }
 
   // Cap per artist; a strict playlist anchor is intentionally single-artist.
-  const MAX_PER_ARTIST = strictPlaylist ? Infinity : 3;
+  const MAX_PER_ARTIST = episodeSource || strictPlaylist ? Infinity : 3;
   const perArtist = new Map<string, number>();
   // Soft re-rank runs BEFORE the cap so compatible tracks survive the slice.
   const curAnalysis = rankTarget
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
   // Minimum track length (#1573) — a SELECTION filter, unlike the max cap's
   // cue_out cut. never-starve here: the wider scope behind the agent's hard floor.
-  const longEnough = applyTrackFloor(selectionPool, minTrackSec, { starve: false });
+  const longEnough = applyTrackFloor(applyKnownTrackCeiling(selectionPool, maxTrackSec), minTrackSec, { starve: false });
   const final = filterPickerCandidates(softRankByCompat(longEnough, curAnalysis, library.lastAiredInfo()), {
     recentIds,
     recentKeys,
-    recentArtists,
+    recentArtistRoots,
     // The SAME queue.recentAlbumKeys set the agent path's guard uses.
     recentAlbums,
     // Pool sources are mostly raw Subsonic children with no compilation flag.
@@ -573,7 +607,7 @@ function summariseRecent(queue: { current?: QueueEntry | null; history: QueueEnt
   return items
     .filter((i) => i?.track?.title)
     .map((i) => {
-      const tags = i.track.id ? library.get(i.track.id) : null;
+      const tags = i.track.id ? library.getPlaybackMeta(i.track.id) : null;
       // Omitted, not nulled: nulls on un-tagged entries are wasted tokens.
       return {
         title: i.track.title,
@@ -592,16 +626,21 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 }
 
 // Build a candidate pool, ask the LLM to choose one; null when it can't.
-// `opts.avoidArtist` (#1187) is a hard block held through the whole starvation
-// cascade, set only by the agent path's back-to-back artist guard.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}) {
+// Guard-rescue artist exclusions (#1187) hold through the whole starvation
+// cascade. Preserve the anchor as well as the rejected credit.
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null } = {}) {
   await library.load();
+  ctx = await prepareEpisodeContext(ctx);
+  const episodeSource = showPreparation.read({ context: ctx }).music;
   const stats = library.stats();
   // Sized off the MIRROR, not `stats.total`, which counts only tagged tracks.
   const librarySize = stats.mirrorTotal || stats.total;
   const windows = recencyWindowsForLibrary(stats.distinctArtists, librarySize);
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
-  const recentArtists = queue.recentArtistsSince(windows.artistHours);
+  // Same configured SLOTS and name fold as the agent guard. 0 disables this
+  // preference; the old library-scaled hours window did not honour that knob.
+  const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  const recentArtistRoots: Set<string> = episodeSource ? new Set() : queue.neighbourArtistRoots(varietyWindow);
   // Album cooldown: operator-set hours, not library-scaled. 0 = empty set.
   const recentAlbums = queue.recentAlbumKeys(settings.get().picker?.albumHours ?? 0);
   // Snapshot the predecessor this pick is expected to follow: the queued tail
@@ -628,6 +667,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // Minimum track length (#1573). Must resolve BEFORE the no-repeat guard
   // below, which counts the rotation this floor has already thinned.
   const minTrackSec = settings.effectiveMinTrackSec(activeShow);
+  const maxTrackSec = settings.effectiveTrackLengthLimits(activeShow).selectionMaxSec;
   // Count-based hard no-repeat guard (last N distinct plays), non-relaxable. A
   // resolved strict playlist clamps to its own post-exclusion identity count;
   // soft/unresolved anchors stay library-scoped. Mirrors the agent.
@@ -637,9 +677,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     {
       show: activeShow,
       playlistTracks: playlistPool?.tracks ?? null,
+      episodeTracks: episodeSource?.tracks,
       excludedIds,
       resolvedGenres: strictGenreResolution.genres,
       minTrackSec,
+      maxTrackSec,
     },
   );
   const effN = noRepeat.window;
@@ -649,12 +691,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
   }
   const blockedArtists = new Set<string>();
-  if (opts.avoidArtist) {
-    // Lead-artist key (#1251): a collab the act fronts is the same repeat.
-    const key = artistRootKey({ artist: opts.avoidArtist });
+  for (const artist of [opts.avoidArtist, opts.avoidAnchorArtist]) {
+    // Preserve both the rejected credit and the actual anchor. Matching one
+    // combined credit does not imply matching another that shares its act.
+    const key = artistRootKey({ artist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, minTrackSec, noRepeat.exhaustive);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource);
 
   // Excluded playlists: hard drop, no never-starve fallback.
   const candidates = excludedIds
@@ -662,10 +705,19 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     : rawCandidates;
 
   if (candidates.length === 0) {
-    queue.log('picker', opts.avoidArtist
-      ? `no candidates available excluding "${opts.avoidArtist}", skipping LLM pick`
+    const avoided = [opts.avoidArtist, opts.avoidAnchorArtist].filter(Boolean).join('", "');
+    queue.log('picker', avoided
+      ? `no candidates available excluding "${avoided}", skipping LLM pick`
       : 'no candidates available, skipping LLM pick');
     return null;
+  }
+
+  if (candidates.some(c => artistRootIn(artistRootKey(c), recentArtistRoots))) {
+    queue.log('picker', `artist spacing relaxed (window ${varietyWindow} slots): no candidate survived spacing with the active selection rules; keeping music available`);
+    logEvent('pick.artistSpacingRelaxed', {
+      agent: 'pool', basis: 'recent-window', window: varietyWindow,
+      reason: 'no-eligible-fresh-artist', candidates: candidates.length,
+    });
   }
 
   queue.log(

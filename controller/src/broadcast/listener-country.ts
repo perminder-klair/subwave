@@ -1,14 +1,5 @@
-// The country attached to a /beacon (#1485), resolved as a chain in descending
-// order of trust: `cf-ipcountry`, then the header named by
-// `settings.stream.countryHeader`, then an offline MMDB lookup over the IP.
-//
-// EVERY step FAILS OPEN: a malformed header, an unreadable database or a step
-// that throws is a MISS that falls through, and an exhausted chain returns
-// undefined, which record() doesn't count. This runs inside the listener's
-// first-load beacon, so it must never throw.
-//
-// Pure, taking its GeoIP step as an argument so the ordering is testable
-// without a database on disk.
+// Resolve beacon country through cf-ipcountry, the configured header, then GeoIP. Every
+// missing, malformed, or throwing step falls through; exhaustion returns undefined. #1485.
 
 import { STREAM_COUNTRY_HEADER_RE } from '../schemas/settings.js';
 
@@ -84,5 +75,41 @@ export function resolveListenerCountry(input: CountryResolveInput): string | und
     }
   }
 
+  return undefined;
+}
+
+// Icecast connections have no country headers. Try the IP's cached beacon country, then GeoIP
+// for clients without beacons. Each miss falls through; exhaustion returns no country.
+
+export type ConnectionCountrySource = 'beacon' | 'geoip';
+
+export interface ConnectionCountry {
+  country: string;
+  source: ConnectionCountrySource;
+}
+
+export interface ConnectionCountryInput {
+  ip?: string;
+  /** Injected so the order stays testable without the process-wide cache. */
+  beaconLookup?: (ip: string) => unknown;
+  geoipLookup?: (ip: string) => unknown;
+}
+
+export function resolveConnectionCountry(input: ConnectionCountryInput): ConnectionCountry | undefined {
+  const ip = String(input.ip ?? '').trim();
+  if (!ip) return undefined;
+  const links: [ConnectionCountrySource, ((ip: string) => unknown) | undefined][] = [
+    ['beacon', input.beaconLookup],
+    ['geoip', input.geoipLookup],
+  ];
+  for (const [source, lookup] of links) {
+    if (!lookup) continue;
+    try {
+      const country = normalizeCountryCode(lookup(ip));
+      if (country) return { country, source };
+    } catch {
+      /* a failing link is a miss */
+    }
+  }
   return undefined;
 }

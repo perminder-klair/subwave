@@ -5,12 +5,13 @@
 // cold load is what proves the saved value survives a controller restart.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-agent-timeout-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-agent-timeout-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');

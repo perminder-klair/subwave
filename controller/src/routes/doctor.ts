@@ -2,6 +2,7 @@
 // detail.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { generationHealthSnapshot } from '../llm/log.js';
 import * as doctor from '../doctor.js';
 
 export const router = express.Router();
@@ -55,6 +56,11 @@ router.get('/doctor/summary', requireAdmin, async (_req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Live and read-only; HTTP 200 is transport success, inspect snapshot.status.
+router.get('/doctor/llm', requireAdmin, (_req, res) => {
+  res.json(generationHealthSnapshot());
 });
 
 // Never-throwing ping, cached ~20s so polling every admin page doesn't drip

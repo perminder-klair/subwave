@@ -388,6 +388,9 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   d.prepare(`ALTER TABLE tracks DROP COLUMN tail_start_ms`).run();       // v25
   d.prepare(`ALTER TABLE tracks DROP COLUMN lead_silence_ms`).run();     // v24
   d.prepare(`ALTER TABLE tracks DROP COLUMN tail_silence_ms`).run();
+  // v27 — derived indexes/triggers must also be absent in a genuine v21 DB.
+  db.runDdl(d, `DROP TRIGGER tracks_moods_insert; DROP TRIGGER tracks_moods_update;
+    DROP TRIGGER tracks_moods_delete; DROP TABLE track_moods; DROP INDEX idx_tracks_energy;`);
   d.pragma('user_version = 21');
   db.close();
   await db.open({ embeddingDim: 768, adoptStoredDim: true });

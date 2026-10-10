@@ -1,12 +1,5 @@
-// Programme prompts — the "producer" layer behind broadcast/programme.ts.
-//
-// A programme show airs as a produced episode: intro → music → feature →
-// music → outro. One structured call at session start (generateProgrammePlan)
-// turns the show's topic brief + the moment into an episode plan; the beat
-// scripts below all reference that plan, which is what makes the hour read as
-// one produced sequence instead of three unrelated talk breaks. When the plan
-// call fails, the beats degrade to brief-only generation (the caller passes
-// plan: null) — the arc still airs, it just loses the cross-references.
+// Episode beats share a plan generated at session start. If planning fails,
+// plan:null falls back to the topic brief without cross-references.
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
@@ -169,13 +162,33 @@ export async function generateProgrammePlan({
     `\nWrite the plan — exactly ${featureCount} feature${featureCount > 1 ? 's' : ''}, in air order.`,
   ].filter(Boolean);
 
-  return djObject({
+  const plan = await djObject({
     system,
     prompt: promptLines.join('\n'),
     schema: planSchema(featureCount),
     temperature: 0.9,
     kind: 'generateProgrammePlan',
   });
+  return narrowPlanKinds(plan, skillKinds.map((k: { kind: string }) => k.kind), pinnedKind);
+}
+
+// The schema takes any string for `kind`, so a producer can name a capability
+// it was never offered — a built-in word like "news" is an easy guess for a
+// small model. Anything outside the menu (or the pinned kind) becomes null,
+// i.e. straight talk. broadcast/programme.ts runFeature re-checks at air time,
+// because the plan outlives the menu it was built from.
+export function narrowPlanKinds<T extends { features?: { kind?: string | null }[] }>(
+  plan: T,
+  offered: string[],
+  pinnedKind: string | null = null,
+): T {
+  if (!plan || !Array.isArray(plan.features)) return plan;
+  const allowed = new Set(pinnedKind ? [pinnedKind] : offered);
+  return {
+    ...plan,
+    features: plan.features.map((f) =>
+      (f?.kind != null && !allowed.has(f.kind) ? { ...f, kind: null } : f)),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,6 @@
 'use client';
 
-// Export redacts API keys; restore keeps configured keys (#404). Two restore
-// paths: a big tag DB can exceed a proxy's upload cap, so disk restore skips
-// the upload (#612). The schedule (#1570) is an ordinary `{ backups }` settings
-// key, kept here because it writes into the folder disk-restore reads.
+// Disk restore avoids proxy upload limits. Exports redact keys; restores retain configured keys.
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -518,7 +515,6 @@ export default function BackupPanel() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <div className="truncate text-[12px] font-bold">{f.name}</div>
-                    {/* Which files retention owns — same grammar as the sweep. */}
                     {f.auto && <Pill tone="ink">scheduled</Pill>}
                   </div>
                   <div className="text-[11px] text-muted">
@@ -526,7 +522,6 @@ export default function BackupPanel() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {/* Download the file AS IT IS; Export builds a fresh archive. */}
                   <Btn
                     sm
                     onClick={() => { void downloadDiskBackup(f.name); }}

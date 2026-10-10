@@ -2,7 +2,8 @@
 // Navidrome) that land outside settings.json.
 
 import express from 'express';
-import { config } from '../../config.js';
+import { navidromeEnvLocks } from '../../setup/navidrome-policy.js';
+import { config, NAVIDROME_ENV_ENABLED } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
@@ -71,11 +72,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         url: config.navidrome.url,
         user: config.navidrome.user,
         passSet: !!config.navidrome.password,
-        env: {
-          url: !!process.env.NAVIDROME_URL,
-          user: !!process.env.NAVIDROME_USER,
-          pass: !!process.env.NAVIDROME_PASS,
-        },
+        env: navidromeEnvLocks(NAVIDROME_ENV_ENABLED),
       },
       // What timezone '' (Auto) resolves to, for the UI's Auto label.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -91,6 +88,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         handover: { offsetMinutes: handoverOffsetMinutes() },
         djBehaviour: s.djBehaviour,
         maxTrackSeconds: s.maxTrackSeconds,
+        maxTrackLengthMode: s.maxTrackLengthMode,
         // Crossfade-relative floor, shared with the admin/show UI so client
         // hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
@@ -282,8 +280,9 @@ router.post('/settings/navidrome', requireAdmin, async (req, res) => {
       ['user', 'NAVIDROME_USER'],
       ['pass', 'NAVIDROME_PASS'],
     ] as const;
+    const locks = navidromeEnvLocks(NAVIDROME_ENV_ENABLED);
     for (const [field, envVar] of ENV_LOCKS) {
-      if (submitted[field] !== undefined && process.env[envVar]) {
+      if (submitted[field] !== undefined && locks[field]) {
         return res.status(400).json({
           ok: false,
           error: `${field} is managed by ${envVar} in the root .env — env always wins on boot; remove it there to manage it here`,

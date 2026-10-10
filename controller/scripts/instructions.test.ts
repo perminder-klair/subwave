@@ -32,6 +32,16 @@ test('a placeholder with no value throws rather than shipping the braces', () =>
   assert.throws(() => instruction('pool-picker', 'frame', {}), /left \{station\} unsubstituted/);
 });
 
+test('a VALUE containing {word} is content, not a missing placeholder', () => {
+  // Show topics and station names are free text; a "{word}" inside one used to
+  // read as unsubstituted and throw, disabling the pool picker's prompt.
+  const brief = instruction('picker', 'show-brief', { topic: 'Deep cuts from the {underground}' });
+  assert.ok(brief.includes('Deep cuts from the {underground}'));
+  const frame = instruction('pool-picker', 'frame', { station: 'Radio {x}' });
+  assert.ok(frame.includes('Radio {x}'));
+  assert.ok(instruction('pool-picker', 'show-brief', { topic: '$& {topic} $1' }).includes('$& {topic} $1'), 'inserted verbatim');
+});
+
 test('substitution fills every occurrence', () => {
   const out = instruction('picker', 'show-brief', { topic: 'late-night dub' });
   assert.ok(out.includes('late-night dub'));

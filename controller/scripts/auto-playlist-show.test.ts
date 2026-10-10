@@ -211,7 +211,7 @@ test('every refresh stamps what the file now holds', () => {
   );
   const inner = scheduler.slice(scheduler.indexOf('async function refreshAutoPlaylistInner'));
   const stamp = inner.indexOf('autoPlaylistBuild.built(show)');
-  const write = inner.indexOf('writeFileAtomic(config.liquidsoap.autoPlaylist');
+  const write = inner.indexOf('writeFileAtomicSync(config.liquidsoap.autoPlaylist');
   assert.ok(write >= 0 && stamp > write, 'the stamp records a build that LANDED — it comes after the write');
 });
 
@@ -234,4 +234,41 @@ test('only the operator-driven takeovers are exempt from the handover rule', () 
   assert.match(shows, /rollSessionNow\(\{ manual: true, reason: 'takeover cancelled' \}\)/);
   assert.doesNotMatch(scheduler, /rollSessionNow\(\{[^}]*manual: true[^}]*reason: 'takeover expired'[^}]*\}\)/,
     'the expiry is automatic — it must not claim the operator exemption');
+});
+
+test('overlapping deferred claims never restore an unbuilt show', () => {
+  const tracker = createShowBuildTracker();
+  tracker.built(null);
+  const first = tracker.claim(FAULTLINE);
+  const other = withField({ id: 'other' });
+  const second = tracker.claim(other);
+  first();
+  second();
+  assert.equal(tracker.needsRebuild(FAULTLINE), true);
+  assert.equal(tracker.needsRebuild(other), true);
+  assert.equal(tracker.needsRebuild(null), false);
+});
+
+test('a stale failed claim cannot undo a successful publication', () => {
+  const tracker = createShowBuildTracker();
+  tracker.built(null);
+  const rollback = tracker.claim(FAULTLINE);
+  const other = withField({ id: 'other' });
+  tracker.built(other);
+  rollback();
+  assert.equal(tracker.needsRebuild(other), false);
+});
+
+test('deferred show refresh rolls back rather than reporting success', () => {
+  const hook = scheduler.slice(scheduler.indexOf('export async function refreshAutoPlaylistOnShowChange'), scheduler.indexOf('async function refreshAutoPlaylistInner'));
+  assert.match(hook, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
+  assert.match(hook, /result === 'deferred'[\s\S]*?rollback\(\);[\s\S]*?return false/);
+});
+
+test('an artist preparation becoming ready or a new occurrence requires a fallback rebuild', () => {
+  const ready = { ...FAULTLINE, preparationIdentity: 'occurrence:ready:artist-a' };
+  const tracker = createShowBuildTracker(); tracker.built(ready);
+  assert.equal(tracker.needsRebuild({ ...ready }), false);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'occurrence:degraded:' }), true);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'next:ready:artist-a' }), true);
 });

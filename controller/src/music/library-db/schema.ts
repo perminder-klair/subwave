@@ -2,6 +2,7 @@
 
 import Database from 'better-sqlite3';
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { ensureFacetStatus } from './facets.js';
 
 // Returns the dim track_vectors is actually created at (stored dim when
 // `adoptStoredDim`, else `embeddingDim`) — the live schema dim.
@@ -395,6 +396,64 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 26');
   }
 
+  if (userVersion < 27) {
+    // Lock before rechecking: another opener may have completed the backfill
+    // while this connection waited. Never publish a partially built pool.
+    d.transaction(() => {
+      if ((d.pragma('user_version', { simple: true }) as number) >= 27) return;
+      const started = performance.now();
+      console.log('[library-db] building mood membership and energy indexes');
+      const labels = (source: string) =>
+        `SELECT value FROM json_each(CASE WHEN json_valid(${source}) THEN ${source} ELSE '[]' END) WHERE type = 'text'`;
+      const membership = (id: string, editorial: string, audio: string) =>
+        `INSERT OR IGNORE INTO track_moods(track_id, mood)
+         SELECT ${id}, value FROM (${labels(editorial)} UNION ${labels(audio)});`;
+      runDdl(d, `
+        CREATE INDEX idx_tracks_energy ON tracks(energy);
+        CREATE TABLE track_moods (
+          track_id TEXT NOT NULL,
+          mood TEXT NOT NULL,
+          PRIMARY KEY(track_id, mood)
+        );
+        CREATE INDEX idx_track_moods_mood ON track_moods(mood, track_id);
+        CREATE TRIGGER tracks_moods_insert AFTER INSERT ON tracks BEGIN
+          ${membership('NEW.id', 'NEW.moods', 'NEW.audio_moods')}
+        END;
+        CREATE TRIGGER tracks_moods_update AFTER UPDATE OF id, moods, audio_moods ON tracks
+        WHEN OLD.id IS NOT NEW.id OR OLD.moods IS NOT NEW.moods OR OLD.audio_moods IS NOT NEW.audio_moods
+        BEGIN
+          DELETE FROM track_moods WHERE track_id = OLD.id OR track_id = NEW.id;
+          ${membership('NEW.id', 'NEW.moods', 'NEW.audio_moods')}
+        END;
+        CREATE TRIGGER tracks_moods_delete AFTER DELETE ON tracks BEGIN
+          DELETE FROM track_moods WHERE track_id = OLD.id;
+        END;
+        INSERT OR IGNORE INTO track_moods(track_id, mood)
+          SELECT t.id, j.value FROM tracks t,
+            json_each(json_array(t.moods, t.audio_moods)) sources,
+            json_each(CASE WHEN json_valid(sources.value) THEN sources.value ELSE '[]' END) j
+          WHERE j.type = 'text';
+      `);
+      d.pragma('user_version = 27');
+      console.log(`[library-db] mood/energy indexes built in ${Math.round(performance.now() - started)}ms`);
+    }).immediate();
+  }
+
+  if (userVersion < 28) {
+    // The durable seam record (#1829): how each play came in (`transition`, a
+    // seam label), the DJ's ask on the pick (`transition_ask`) and the armed
+    // gestures a strip took back (`transition_drops`, JSON [{effect, reason}]).
+    // Nullable and additive: rows before this carry NULL, and an older
+    // controller's explicit-column INSERT never names them. Only the missing
+    // columns are added — a database whose user_version was wound back below
+    // this step (a downgrade, a hand repair) still has them, and ADD COLUMN on
+    // an existing column throws.
+    const have = new Set((d.prepare('PRAGMA table_info(plays)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = ['transition', 'transition_ask', 'transition_drops'].filter(c => !have.has(c));
+    if (add.length) runDdl(d, add.map(c => `ALTER TABLE plays ADD COLUMN ${c} TEXT;`).join('\n'));
+    d.pragma('user_version = 28');
+  }
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
@@ -464,6 +523,12 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
         `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
     );
   }
+
+  // Per-facet analysis status. Deliberately outside the user_version chain:
+  // created (and seeded from the columns above) on the first open that lacks
+  // it, so it never takes a number from upstream's migration sequence. Runs
+  // last because the seed reads track_audio_vectors.
+  ensureFacetStatus(d);
   return effectiveDim;
 }
 

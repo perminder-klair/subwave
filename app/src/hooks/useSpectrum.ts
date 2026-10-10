@@ -1,12 +1,5 @@
-// Synthesised spectrum for the visualizer. There is no real FFT available:
-// RNTP exposes no analyser and react-native-audio-api's only reads its own HLS
-// node, so the bars are modelled rather than measured (#298 is the same
-// problem on the web player).
-//
-// `active` drives full motion, idle settles to a low shimmer on a slower tick;
-// `visible` and app-background pause the simulation entirely. Time is
-// accumulated, so the groove is independent of the render cadence (`speed`)
-// and resumes cleanly from a pause. Values in [0, 1].
+// RNTP exposes no analyser, so these values are simulated rather than measured.
+// Pause when hidden or backgrounded; accumulated time preserves motion on resume.
 
 import { useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
@@ -22,9 +15,8 @@ export function useSpectrum(bins = 120, active = true, speed = 50, visible = tru
   const appActive = useAppActive();
   const running = appActive && visible;
 
-  // Simulation state in refs so ticking it re-renders only via setArr.
   const valuesRef = useRef<number[]>(Array(bins).fill(0.06));
-  // Seeded deterministically, no Math.random during render.
+  // No Math.random during render; use deterministic initial values.
   const ctrlRef = useRef<number[]>(
     Array.from({ length: CONTROL_POINTS }, (_, c) => 0.4 + 0.2 * Math.sin(c * 1.3)),
   );

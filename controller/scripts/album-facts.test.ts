@@ -16,12 +16,12 @@
 // Run: npm test -- album-facts
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-album-facts-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-album-facts-'));
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');

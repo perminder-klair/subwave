@@ -1,9 +1,6 @@
-// Controller side of the pre-rendered seam (docs/stem-transitions-research.md).
-// Decides whether an X→Y seam earns a rendered blend, asks the analyzer to mix one
-// from cached stems (cache-hit-only), and returns the cue points the drain stamps:
-// X cuts at blendStartSec, the clip airs annotated as Y, Y enters at inCueSec.
-// Any miss or failure returns null and the seam falls back to the plain pair-aware
-// crossfade — this may only upgrade a transition, never break one.
+// Render cache-hit stem transitions and return outgoing/incoming cue points shifted by the
+// seam overlap. Any miss or failure returns null for the normal pair-aware crossfade.
+// docs/stem-transitions-research.md.
 
 import path from 'node:path';
 import { readdir, stat, unlink } from 'node:fs/promises';
@@ -16,10 +13,11 @@ import * as loudness from '../music/loudness.js';
 import * as stemCache from '../music/stem-cache.js';
 import { readPidfile, isPidAlive } from '../music/tagger-lock.js';
 import { HARD_DEADLINE_SEC } from './drain-policy.js';
+import { CLIP_SEAM_CROSS_SEC, clipSeamCues, type ClipSeamCues } from './stem-seam.js';
 
-// Cross length at the two clip seams (X→clip, clip→Y): long enough to declick,
-// short enough that the rendered mix, not the crossfader, is the transition.
-export const CLIP_SEAM_CROSS_SEC = 0.3;
+// Cross length at the two clip seams (X→clip, clip→Y); the overlap arithmetic
+// lives with it in broadcast/stem-seam.ts.
+export { CLIP_SEAM_CROSS_SEC };
 
 // bpmCompat floor: the beat-carry loop is retriggered on the incoming grid, so
 // only near-locked (or clean half/double) tempos read as intentional.
@@ -31,10 +29,8 @@ export type BlendTrack = loudness.LoudnessTrack & {
   gainDb?: number;
 };
 
-interface BlendPlan {
+interface BlendPlan extends ClipSeamCues {
   clipPath: string;
-  blendStartSec: number; // X's liq_cue_out
-  inCueSec: number;      // Y's liq_cue_in
   clipSec: number;
 }
 
@@ -137,16 +133,19 @@ export async function maybeRenderBlend(
   }, { timeoutMs });
   if (!result) return null;
 
+  // The worker's points are where the clip starts and ends; the stamped cues
+  // sit one seam overlap outside them so each crossfade mixes the same instant
+  // of the music on both sides (broadcast/stem-seam.ts).
+  const cues = clipSeamCues(result);
   // Cue points must sit inside their tracks and leave real audio either side.
-  if (!(result.blendStartSec > 10 && result.blendStartSec < out.durationSec)) return null;
+  if (!(result.blendStartSec > 10 && cues.outCueSec < out.durationSec)) return null;
   if (!(result.inCueSec > 1 && result.clipSec > 2)) return null;
-  // cue_outs arbitrate as earliest-wins, so a trimmed end before the seam would
-  // cut the track before the clip's source region ever plays.
-  if (opts.outTrimEndSec != null && opts.outTrimEndSec < result.blendStartSec) return null;
+  // cue_outs arbitrate as earliest-wins, so a trimmed end before the extended
+  // cue would cut X before the seam overlap (or the clip's source region) plays.
+  if (opts.outTrimEndSec != null && opts.outTrimEndSec < cues.outCueSec) return null;
   return {
     clipPath: result.path,
-    blendStartSec: result.blendStartSec,
-    inCueSec: result.inCueSec,
+    ...cues,
     clipSec: result.clipSec,
   };
 }

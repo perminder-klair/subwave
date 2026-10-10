@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import {
@@ -46,6 +46,7 @@ import {
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import AdminQueryProvider from './AdminQueryProvider';
+import { AdminLoading } from './AdminLoading';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
@@ -102,6 +103,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { DiscMark } from '../../lib/discMark';
+import { fmtClock, fmtStationDateTime } from '../../lib/format';
 import { animate as motionAnimate } from 'motion/react';
 
 type NavIcon = ComponentType<{
@@ -299,11 +301,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }, [hydrated, pathname, router]);
 
   if (!hydrated) {
-    return (
-      <div className="admin-root paper flex min-h-screen items-center justify-center">
-        <span className="caption">loading…</span>
-      </div>
-    );
+    return <AdminLoading href={pathname || '/admin'} />;
   }
 
   if (!auth || needsAuth) {
@@ -349,7 +347,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
           </SidebarInset>
         </SidebarProvider>
         <AdminCommandMenu />
-        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
       </div>
     </AdminQueryProvider>
   );
@@ -474,13 +471,9 @@ function AdminSidebar({
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-2 py-3">
-        {/* A dropdown rather than an inline collapsible so it stays reachable
-            when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            {/* Non-modal: a modal Radix menu locks body scroll, and the lock's
-                15px scrollbar compensation pulls the sticky top bar off the
-                right edge. */}
+            {/* Radix scroll locking shifts the sticky header with scrollbar compensation. */}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
@@ -685,7 +678,7 @@ function CollapsibleNavItem({
 
 function TopBar({ pathname }: { pathname: string | null }) {
   const { section, page } = resolveCrumb(pathname);
-  const { nowPlaying, listeners } = useStationFeed();
+  const { nowPlaying, listeners, timezone, locale } = useStationFeed();
   const onAir = !!nowPlaying?.title;
   const listenersObj =
     listeners && typeof listeners === 'object'
@@ -735,6 +728,8 @@ function TopBar({ pathname }: { pathname: string | null }) {
         </BreadcrumbList>
       </Breadcrumb>
 
+      <StationClock tz={timezone} locale={locale} />
+
       <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] tracking-[0.22em] text-ink uppercase">
         <span
           ref={dotRef}
@@ -765,8 +760,7 @@ function TopBar({ pathname }: { pathname: string | null }) {
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        {/* modal={false} for the same reason as the sidebar's More menu: no body
-            scroll lock, so no scrollbar-compensation margin shift. */}
+        {/* Disable Radix scroll locking to avoid shifting the sticky header. */}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex min-h-9 cursor-pointer items-center gap-1 text-muted focus:outline-none sm:min-h-0"
@@ -800,6 +794,72 @@ function TopBar({ pathname }: { pathname: string | null }) {
         </DropdownMenu>
       </span>
     </header>
+  );
+}
+
+// Wait for the station timezone before displaying its clock. Measure the available flex slot for
+// full date, time only, or hidden output; viewport breakpoints miss sidebar and breadcrumb widths.
+const CLOCK_PLACEHOLDER = '--:--:--';
+const CLOCK_TEXT_CLASS = 'text-[11px] font-normal whitespace-nowrap tabular-nums';
+
+type ClockFit = 'full' | 'short' | 'none';
+
+function StationClock({ tz, locale }: { tz: string | null; locale: Parameters<typeof fmtStationDateTime>[2] }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const ready = !!tz;
+  const full = ready ? fmtStationDateTime(now, tz, locale) : CLOCK_PLACEHOLDER;
+  const short = ready ? fmtClock(now, tz, locale) : CLOCK_PLACEHOLDER;
+
+  const slotRef = useRef<HTMLSpanElement>(null);
+  const fullRef = useRef<HTMLSpanElement>(null);
+  const shortRef = useRef<HTMLSpanElement>(null);
+  const [fit, setFit] = useState<ClockFit>('none');
+
+  useLayoutEffect(() => {
+    const slot = slotRef.current;
+    if (!slot) return;
+    const measure = () => {
+      const avail = slot.clientWidth;
+      const fullW = fullRef.current?.offsetWidth ?? Infinity;
+      const shortW = shortRef.current?.offsetWidth ?? Infinity;
+      setFit(fullW <= avail ? 'full' : shortW <= avail ? 'short' : 'none');
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    // Observe the slot (sidebar toggle, window resize, neighbours growing)
+    // AND the two measuring copies (the text itself changing width — a new
+    // weekday, a font finishing loading).
+    const ro = new ResizeObserver(measure);
+    ro.observe(slot);
+    if (fullRef.current) ro.observe(fullRef.current);
+    if (shortRef.current) ro.observe(shortRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  const shown = fit === 'full' ? full : fit === 'short' ? short : null;
+
+  return (
+    <span ref={slotRef} className="relative flex min-w-0 flex-1 items-center justify-end overflow-hidden">
+      <span ref={fullRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
+        {full}
+      </span>
+      <span ref={shortRef} aria-hidden="true" className={`invisible absolute top-0 left-0 ${CLOCK_TEXT_CLASS}`}>
+        {short}
+      </span>
+      {shown != null && (
+        <span
+          className={`${CLOCK_TEXT_CLASS} ${ready ? 'text-ink' : 'text-muted'}`}
+          title={ready ? `Station time (${tz})` : 'Waiting for the station timezone'}
+        >
+          {shown}
+        </span>
+      )}
+    </span>
   );
 }
 

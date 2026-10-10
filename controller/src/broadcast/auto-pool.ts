@@ -1,19 +1,14 @@
-// Pure pool builder for the auto.m3u fallback (broadcast/scheduler.ts). No I/O:
-// the caller fetches the source lists and feeds them in via take().
-//
-// Three guards on every candidate:
-//   1. Recency — drop anything recently played, by id AND by lowercased
-//      `title|artist` key, so N duplicate copies can't slip one back on (#874).
-//   2. Dedup — never add the same track twice, by id AND key.
-//   3. Artist cap — cap one artist's share; per-source overridable for a source
-//      that IS an exact operator-pinned set.
+// Build the fallback pool from injected sources. Apply recency and dedup by both ID and
+// title/artist key, then per-source artist caps. #874.
 
+import { aboveTrackCeiling } from '../music/track-ceiling.js';
 import { artistKey, trackKey } from '../music/recency.js';
 
 export interface PoolBuilderOpts {
   recentIds: Set<string>;
   recentKeys: Set<string>;   // lowercased `title|artist` of recent plays
   targetPool: number;        // stop accepting once the pool reaches this size
+  selectionMaxSec?: number | null;
   maxPerArtist: number;      // cap any one artist's share of the pool
 }
 
@@ -50,7 +45,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= targetPool) break;
-      if (!t?.id) continue;
+      if (!t?.id || aboveTrackCeiling(t, opts.selectionMaxSec)) continue;
       // Key only when the song has a title (mirrors queue.recentlyPlayed) so a
       // title-less row can't collapse an artist's whole catalogue.
       const tk = t.title ? trackKey(t) : '';

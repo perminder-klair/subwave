@@ -39,6 +39,8 @@ import {
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
+  GEMINI_TTS_MODELS as GEMINI_TTS_MODEL_VALUES,
+  GEMINI_TTS_VOICES as GEMINI_TTS_VOICE_VALUES,
   TTS_SPEED_DEFAULT as TTS_SPEED_DEFAULT_VALUE,
   TTS_SPEED_MAX as TTS_SPEED_MAX_VALUE,
   TTS_SPEED_MIN as TTS_SPEED_MIN_VALUE,
@@ -53,12 +55,15 @@ import {
   LLM_HEADER_VALUE_MAX,
   LLM_HEADER_VALUE_RE,
   LLM_HEADERS_MAX,
+  normalizeGeminiSafety,
   SETTINGS_AAC_BITRATES,
   SETTINGS_LOUDNESS_SOURCES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
 } from '../schemas/settings.js';
+
+export { normalizeGeminiSafety } from '../schemas/settings.js';
 
 // Placeholders are substituted by renderDjPrompt(). {name} is mandatory:
 // update() refuses any custom template that drops it.
@@ -183,7 +188,7 @@ export function normalizeTtsSpeedMap(raw: unknown): Record<string, number> {
 // find->replace pairs applied to every booth-bound line before any engine sees
 // it. `from` is a literal phrase (regex-escaped at apply time); `to` '' drops
 // the phrase.
-export const TTS_CORRECTIONS_LIMIT = 100;
+export const TTS_CORRECTIONS_LIMIT = 500;
 const TTS_CORRECTION_FROM_MAX = 80;
 const TTS_CORRECTION_TO_MAX = 160;
 
@@ -344,6 +349,12 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
     if (v.length > 100) throw new Error(`${label}.model must be 0-100 chars`);
     target.model = v;
   }
+  if (l.compatibleMode !== undefined) {
+    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted') {
+      throw new Error(`${label}.compatibleMode must be "local" or "hosted"`);
+    }
+    target.compatibleMode = l.compatibleMode;
+  }
   // The inline API key is NOT handled here: applyInlineKey() routes it into
   // settings.llm.keys at the call site, after the provider is resolved, so one
   // provider's key can't leak into another's slot (#657).
@@ -397,38 +408,7 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   // Deliberately NOT keyed by provider the way baseUrl is: headers belong to one
   // server, so they follow the leg's inline API key instead.
   if (l.headers !== undefined) {
-    if (!l.headers || typeof l.headers !== 'object' || Array.isArray(l.headers)) {
-      throw new Error(`${label}.headers must be an object map of header name -> value`);
-    }
-    const incoming = l.headers as Record<string, unknown>;
-    const existing = (target.headers as Record<string, string> | undefined) ?? {};
-    const next: Record<string, string> = {};
-    for (const rawName of Object.keys(incoming)) {
-      const name = rawName.trim();
-      if (!LLM_HEADER_NAME_RE.test(name)) {
-        throw new Error(`${label}.headers has an invalid header name "${rawName}"`);
-      }
-      const raw = incoming[rawName];
-      if (raw === 'set') {
-        // Redacted on the way out: a row the operator did not retype must
-        // survive their save.
-        if (existing[name]) next[name] = existing[name];
-        continue;
-      }
-      const v = String(raw ?? '').trim();
-      if (!v) continue; // an emptied value drops the header, like providerBaseUrls
-      if (v.length > LLM_HEADER_VALUE_MAX) {
-        throw new Error(`${label}.headers.${name} must be 0-${LLM_HEADER_VALUE_MAX} chars`);
-      }
-      if (!LLM_HEADER_VALUE_RE.test(v)) {
-        throw new Error(`${label}.headers.${name} must be printable ASCII on a single line`);
-      }
-      next[name] = v;
-    }
-    if (Object.keys(next).length > LLM_HEADERS_MAX) {
-      throw new Error(`${label}.headers must have at most ${LLM_HEADERS_MAX} entries`);
-    }
-    target.headers = next;
+    target.headers = applyCustomHeadersPatch(target.headers, l.headers, label);
   }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
@@ -438,6 +418,15 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   }
   if (l.repeatPenalty !== undefined) {
     target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
+  }
+  // HARM_CATEGORY thresholds for the native `google` leg. Whole-object
+  // REPLACE (not a merge) so clearing a box in the editor actually clears it;
+  // each box is strictly boolean, anything else reads as allow.
+  if (l.geminiSafety !== undefined) {
+    if (!l.geminiSafety || typeof l.geminiSafety !== 'object' || Array.isArray(l.geminiSafety)) {
+      throw new Error(`${label}.geminiSafety must be an object map of category → boolean`);
+    }
+    target.geminiSafety = normalizeGeminiSafety(l.geminiSafety);
   }
   // Discovery-round budget. 0 = follow the provider capability table.
   if (l.discoverySteps !== undefined) {
@@ -469,6 +458,41 @@ export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provi
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;
   else delete llmHost.keys[provider];
+}
+
+// The chat and embedding editors use the same strict header rules and the same
+// redaction sentinel. A whole map replaces the previous one so Remove works.
+export function applyCustomHeadersPatch(existingRaw: unknown, incomingRaw: unknown, label: string): Record<string, string> {
+  if (!incomingRaw || typeof incomingRaw !== 'object' || Array.isArray(incomingRaw)) {
+    throw new Error(`${label}.headers must be an object map of header name -> value`);
+  }
+  const incoming = incomingRaw as Record<string, unknown>;
+  const existing = (existingRaw as Record<string, string> | undefined) ?? {};
+  const next: Record<string, string> = {};
+  for (const rawName of Object.keys(incoming)) {
+    const name = rawName.trim();
+    if (!LLM_HEADER_NAME_RE.test(name)) {
+      throw new Error(`${label}.headers has an invalid header name "${rawName}"`);
+    }
+    const raw = incoming[rawName];
+    if (raw === 'set') {
+      if (existing[name]) next[name] = existing[name];
+      continue;
+    }
+    const value = String(raw ?? '').trim();
+    if (!value) continue;
+    if (value.length > LLM_HEADER_VALUE_MAX) {
+      throw new Error(`${label}.headers.${name} must be 0-${LLM_HEADER_VALUE_MAX} chars`);
+    }
+    if (!LLM_HEADER_VALUE_RE.test(value)) {
+      throw new Error(`${label}.headers.${name} must be printable ASCII on a single line`);
+    }
+    next[name] = value;
+  }
+  if (Object.keys(next).length > LLM_HEADERS_MAX) {
+    throw new Error(`${label}.headers must have at most ${LLM_HEADERS_MAX} entries`);
+  }
+  return next;
 }
 
 // Lenient load-path read of a leg's stored `headers` map (#1618): repairs or
@@ -760,6 +784,10 @@ export const POCKET_TTS_VOICE_RE = TTS_POCKET_VOICE_RE;
 // Empty is valid (use the built-in default voice). Used by chatterbox and
 // pocket-tts (#213).
 export const CHATTERBOX_VOICE_RE = TTS_CHATTERBOX_VOICE_RE;
+// Gemini's model + voice vocabularies, re-exported under the plain names the
+// rest of the controller imports, mirroring TTS_CLOUD_PROVIDERS above.
+export const GEMINI_TTS_MODELS: readonly string[] = GEMINI_TTS_MODEL_VALUES;
+export const GEMINI_TTS_VOICES: readonly string[] = GEMINI_TTS_VOICE_VALUES;
 // The entity-id pattern shows, personas and skill assignments share. Defined
 // once as SHOW_ID_RE in the shared show schema: a mirrored module may import
 // only 'zod', so it is homed in the first feature that needed it.
@@ -865,6 +893,7 @@ export interface NormalizedShow {
   pauseTalk: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   moods: string[];
   themeId: string;
   genres: string[];
@@ -1029,3 +1058,9 @@ export const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 // analyzer's measured LUFS, or tag-with-measured-fallback (the default).
 export const LOUDNESS_SOURCES = SETTINGS_LOUDNESS_SOURCES;
 export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
+
+// Independent provider-generation deadline: always finite, including zero.
+export function clampRequestTimeout(raw: unknown, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(1_800_000, Math.max(5_000, Math.floor(raw)));
+}

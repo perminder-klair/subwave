@@ -17,7 +17,7 @@
 // Run: `tsx scripts/id-adoption.test.ts` (folded into `npm run test`).
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -56,6 +56,7 @@ async function main() {
   const stemCache = await import('../src/music/stem-cache.js');
   const rotation = await import('../src/music/id-rotation.js');
   const { ROTATION_PREFIX } = await import('../src/music/tagger-progress.js');
+  const { checkFacets } = await import('../src/music/facet-check.js');
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
   const sql = db.requireDb();
 
@@ -248,6 +249,27 @@ async function main() {
     });
   });
 
+  await test('facet status follows the adopted track and its merged columns', () => {
+    const facets = (id: string) => Object.fromEntries(
+      (sql.prepare('SELECT facet, status, attempts FROM track_facet_status WHERE track_id = ?').all(id) as
+        Array<{ facet: string; status: string; attempts: number }>)
+        .map((r) => [r.facet, r.status === 'failed' ? `failed×${r.attempts}` : r.status]),
+    );
+    for (const old of [OLD_HEX, OLD_NANO, OLD_FAIL, OLD_REDONE]) {
+      assert.deepEqual(facets(old), {}, `rows left behind on ${old}`);
+    }
+    assert.deepEqual(facets(NEW_HEX), {
+      head: 'ok', loudness: 'ok', tail: 'ok', clap: 'ok', vocal: 'ok', stems: 'ok',
+    });
+    // The un-analysed successor inherits the strikes on every facet...
+    assert.equal(facets(NEW_FAIL).head, 'failed×3');
+    // ...the cleanly re-analysed one must not get them back.
+    assert.equal(facets(NEW_REDONE).head, 'ok');
+    assert.ok(!Object.values(facets(NEW_REDONE)).some((v) => v.startsWith('failed')));
+    const r = checkFacets();
+    assert.ok(r.ok, JSON.stringify({ drift: r.drift, orphans: r.orphans, scopes: r.scopes }));
+  });
+
   console.log('idempotence and inertness:');
 
   await test('a second run over the same walk is a no-op', async () => {
@@ -265,6 +287,8 @@ async function main() {
     assert.equal(r.adopted, 0);
     assert.equal(r.pruned, 1);
     assert.equal(sql.prepare('SELECT 1 FROM tracks WHERE id = ?').get(KEEP), undefined);
+    assert.equal(sql.prepare('SELECT 1 FROM track_facet_status WHERE track_id = ?').get(KEEP), undefined);
+    assert.ok(checkFacets().ok, 'facet table drifted after the prune');
   });
 
   db.close();

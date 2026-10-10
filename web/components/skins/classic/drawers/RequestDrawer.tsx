@@ -235,8 +235,6 @@ export default function RequestDrawer({
                 <label className="mb-2 block text-[9px] tracking-[0.3em] text-muted uppercase">
                   Dear DJ —
                 </label>
-                {/* The textarea is borderless and transparent so only the
-                    ruled paper below shows through. */}
                 <div className={cn('relative border-l-2 border-l-vermilion pl-3', RULED_PAPER)}>
                   <textarea
                     ref={taRef}
@@ -337,9 +335,6 @@ function SuccessCard({ result }: SuccessCardProps) {
         </div>
       )}
 
-      {/* Skipped entirely on a resolved-but-no-track outcome (a conversational
-          reply, not a music request): the ack quote above carries the whole
-          answer, and an empty title/artist pair would read as a broken card. */}
       {(pending || track) && (
         <m.div layout className="border-y border-soft-border py-4">
           <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">

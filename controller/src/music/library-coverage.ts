@@ -1,10 +1,6 @@
-// Library coverage: Navidrome song total vs tagged/analysed tracks.
-//
-// `total` costs one getAlbum call per album, so get() never starts a scan
-// (#1570) — only refresh() walks, called by the Count-library button and the two
-// ends of a tagger run. A library reset is deliberately not a trigger, and
-// concurrent callers share the in-flight promise. The count persists to
-// state/library-count.json so a restart doesn't blank it.
+// get() never counts Navidrome: refresh() performs the expensive album walk. A reset is not a
+// scan trigger. Share concurrent refreshes and persist the result to library-count.json.
+// #1570.
 
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { config } from '../config.js';

@@ -1,33 +1,6 @@
-// Vocal-aware runway — the one answer to "how long may the DJ talk over the
-// START of this track, on the timeline it will actually be PLAYED on?", plus
-// the one rule that reads it for a boundary-deferred spoken segment (#1622
-// FR 5a). Policy module in the sense the root CLAUDE.md means it: the queue
-// asks a question, this answers it, and scripts/vocal-runway.test.ts pins the
-// answers.
-//
-// Two things are composed here, and neither may be done at a call site again:
-//
-//   bed-policy.rampBudgetMs  — the three-state read of `vocalRanges`. A number
-//                              is the MEASURED onset, Infinity is an
-//                              instrumental (nothing to trample), null is
-//                              not-computed (unknown). All three carry meaning
-//                              and none of them is a zero.
-//   silenceTrim.shiftOnsetMs — that onset moved onto the TRIMMED timeline. The
-//                              analyzer measures from byte zero and the drain
-//                              may be about to cut a leading blank off this
-//                              very track, so an 8s onset on a track with a 6s
-//                              leading blank is 2s of runway on air.
-//
-// The composition already existed inline in queue.maybePushBed, and
-// intro-budget.firstVocalMsFor applies the same shift to the same measurement
-// for the link path. Both readers now go through here, because the failure
-// recorded at that maybePushBed comment is exactly what a third spelling
-// produces: the prompt was told the runway was 2s while the bed decision still
-// thought it was 8s, and the two declined a bed the link needed.
-//
-// The band constants live here rather than in intro-budget for the same reason:
-// llm/internal/prompts already imports broadcast policy (clock-policy,
-// announce-line), so this is the direction that keeps ONE fold of the numbers.
+// Resolve vocal onset onto the silence-trimmed playback timeline. Keep measured onset,
+// instrumental Infinity, and unknown null distinct; the queue and intro budget share this
+// composition. #1622, scripts/vocal-runway.test.ts.
 
 import * as library from '../music/library.js';
 import * as silenceTrim from '../music/silence-trim.js';

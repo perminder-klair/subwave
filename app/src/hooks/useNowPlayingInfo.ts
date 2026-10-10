@@ -1,9 +1,5 @@
-// Pushes track metadata to the OS lock screen / CarPlay via
-// TrackPlayer.updateNowPlayingMetadata; while the DJ is talking the persona
-// avatar and name are swapped in. Remote-control handlers live in service.ts.
-//
-// What counts as "talking" and what the strip shows live in lib/voice-turn.ts
-// and lib/air-card.ts, shared with the Live Activity so the two can't drift.
+// Talking state and card contents come from lib/voice-turn and lib/air-card,
+// shared with the Live Activity.
 
 import { useEffect } from 'react';
 import TrackPlayer from 'react-native-track-player';
@@ -17,6 +13,8 @@ export interface UseNowPlayingInfoParams {
   tunedIn: boolean;
   nowPlaying: NowPlayingTrack | null;
   boothFeed?: SessionTurn[];
+  /** Listener buffer behind the live edge (useStationFeed.leadMs). */
+  leadMs: number;
   activeShow?: ActiveShow | null;
 }
 
@@ -25,13 +23,13 @@ export function useNowPlayingInfo({
   tunedIn,
   nowPlaying,
   boothFeed,
+  leadMs,
   activeShow,
 }: UseNowPlayingInfoParams): void {
-  const talking = useTalking(boothFeed);
+  const talking = useTalking(boothFeed, leadMs);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  // Keyed on the resolved strings, not the feed objects: a new activeShow
-  // object on an unchanged poll would re-push and flicker the artwork.
+  // Use resolved strings as dependencies to avoid flickering artwork on unchanged polls.
   const title = card?.title;
   const artist = card?.artist;
   const album = card?.album;

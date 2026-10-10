@@ -1,5 +1,3 @@
-// Shapes the shows panel and its editor share. Every cap re-exports the shared
-// show schema's own constant, so nothing here can drift from the controller.
 
 import {
   EXCLUDED_PLAYLISTS_PER_SHOW,
@@ -90,6 +88,7 @@ export interface Show {
   /** Pin the feature segment to one skill. Empty = producer picks per episode.
    *  Only used with programme on. */
   segmentSkill: string;
+  preparationSkill: string;
   /** Operator organisation tags. They filter and group this list and nothing
    *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
@@ -112,6 +111,7 @@ export interface CommunityShow {
   banter: boolean;
   programme: boolean;
   segmentSkill: string;
+  preparationSkill: string;
   maxTrackSeconds: number | null;
   minTrackLengthSeconds: number | null;
   submittedBy?: string;   // GitHub login of the contributor who submitted it
@@ -203,9 +203,12 @@ export interface SkillOption {
   label?: string;
   name?: string;
   enabled?: boolean;
+  ready?: boolean;
+  hasTool?: boolean;
 }
 
 export interface Persona {
+  skills?: string[];
   id: string;
   name?: string;
   tagline?: string;

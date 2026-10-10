@@ -1,13 +1,11 @@
 'use client';
 
-// Visual pickers for the show editor's "persona owner" and "theme override"
-// fields. Swatch colours route through useDynamicStyle because the lint rule (#50)
-// bans the inline `style` prop.
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { cn } from '../../../lib/cn';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { SkeletonText } from '../../ui/skeleton';
+import { Input } from '../../ui/input';
 import { SWATCH_KEYS } from '../../../lib/theme-tokens.generated';
 import type { PlaylistIndexStatus } from './types';
 
@@ -76,12 +74,12 @@ export function GuestPersonaPicker({
 }) {
   if (!personas.length) return null;
   const toggle = (id: string) => {
-    if (value.includes(id)) onChange(value.filter((v) => v !== id));
+    if (value.includes(id)) onChange(value.filter(v => v !== id));
     else if (value.length < max) onChange([...value, id]);
   };
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-      {personas.map((p) => {
+      {personas.map(p => {
         const selected = value.includes(p.id);
         const full = !selected && value.length >= max;
         const src = p.avatar ? `${apiBase}/persona-avatar/${encodeURIComponent(p.id)}` : null;
@@ -101,14 +99,14 @@ export function GuestPersonaPicker({
                   src={src}
                   alt=""
                   className="absolute inset-0 h-full w-full object-cover"
-                  onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+                  onError={e => {
+                    e.currentTarget.style.visibility = 'hidden';
+                  }}
                 />
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-extrabold text-ink">
-                {p.name?.trim() || 'Unnamed'}
-              </span>
+              <span className="block truncate text-[13px] font-extrabold text-ink">{p.name?.trim() || 'Unnamed'}</span>
               <span className="block truncate text-[11px] text-muted">
                 {selected ? 'in the studio' : p.tagline?.trim() || 'no tagline'}
               </span>
@@ -142,7 +140,7 @@ function ThemeCard({
       className={cn(cardClass(selected), 'gap-2 p-2')}
     >
       <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
-        {SWATCH_KEYS.map((k) => (
+        {SWATCH_KEYS.map(k => (
           <Swatch key={k} color={tokens?.[k]} />
         ))}
       </span>
@@ -174,16 +172,17 @@ export function PlaylistPicker({
   selected,
   max,
   onChange,
+  searchLabel,
 }: {
   playlists: PlaylistOpt[];
   status: PlaylistIndexStatus;
   selected: string[];
   max: number;
   onChange: (next: string[]) => void;
+  searchLabel: string;
 }) {
-  const missing = status === 'ready'
-    ? selected.filter((id) => !playlists.some((p) => p.id === id))
-    : [];
+  const [search, setSearch] = useState('');
+  const missing = status === 'ready' ? selected.filter(id => !playlists.some(p => p.id === id)) : [];
 
   // Same box as the loaded list so the field doesn't jump when it resolves.
   if (status === 'loading') {
@@ -200,8 +199,8 @@ export function PlaylistPicker({
   if (status === 'error') {
     return (
       <span className="field-hint opacity-60">
-        Couldn&apos;t reach Navidrome to list playlists, so this show&apos;s pinned
-        playlists are left as they are. Reopen this panel to try again.
+        Couldn&apos;t reach Navidrome to list playlists, so this show&apos;s pinned playlists are left as they are.
+        Reopen this panel to try again.
       </span>
     );
   }
@@ -209,60 +208,62 @@ export function PlaylistPicker({
   if (!playlists.length && !missing.length) {
     return (
       <span className="field-hint opacity-60">
-        No Navidrome playlists found yet. Create some in Navidrome, then reopen
-        this panel.
+        No Navidrome playlists found yet. Create some in Navidrome, then reopen this panel.
       </span>
     );
   }
 
   const atCap = selected.length >= max;
+  const matching = playlists.filter(playlist =>
+    playlist.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()),
+  );
   return (
-    <div className="grid max-h-44 gap-1 overflow-y-auto border border-ink bg-[var(--ink-softer)] p-2">
-      {playlists.map((pl) => {
-        const checked = selected.includes(pl.id);
-        const capped = !checked && atCap;
-        return (
+    <div className="grid gap-2">
+      <div className="flex items-center gap-3">
+        <Input
+          type="search"
+          aria-label={searchLabel}
+          placeholder="Find a playlist…"
+          value={search}
+          onChange={event => setSearch(event.target.value)}
+        />
+        <span className="flex-none text-[11px] text-muted tabular-nums">
+          {selected.length}/{max} selected
+        </span>
+      </div>
+      <div className="grid max-h-52 gap-1 overflow-y-auto border border-ink bg-[var(--ink-softer)] p-2">
+        {matching.map(pl => {
+          const checked = selected.includes(pl.id);
+          const capped = !checked && atCap;
+          return (
+            <label
+              key={pl.id}
+              className={cn('flex items-center gap-2 text-sm', capped ? 'opacity-40' : 'cursor-pointer')}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={capped}
+                onChange={() => onChange(checked ? selected.filter(id => id !== pl.id) : [...selected, pl.id])}
+              />
+              <span className="truncate">{pl.name}</span>
+              {pl.songCount != null && <span className="field-hint">({pl.songCount})</span>}
+            </label>
+          );
+        })}
+        {missing.map(id => (
           <label
-            key={pl.id}
-            className={cn(
-              'flex items-center gap-2 text-sm',
-              capped ? 'opacity-40' : 'cursor-pointer',
-            )}
+            key={id}
+            className="flex cursor-pointer items-center gap-2 text-sm opacity-70"
+            title={`Playlist ${id} no longer exists in Navidrome. Uncheck to remove it from this show.`}
           >
-            <input
-              type="checkbox"
-              checked={checked}
-              disabled={capped}
-              onChange={() =>
-                onChange(
-                  checked
-                    ? selected.filter((id) => id !== pl.id)
-                    : [...selected, pl.id],
-                )
-              }
-            />
-            <span className="truncate">{pl.name}</span>
-            {pl.songCount != null && (
-              <span className="field-hint">({pl.songCount})</span>
-            )}
+            <input type="checkbox" checked onChange={() => onChange(selected.filter(x => x !== id))} />
+            <span className="truncate">(missing) {id}</span>
+            <span className="field-hint">deleted in Navidrome</span>
           </label>
-        );
-      })}
-      {missing.map((id) => (
-        <label
-          key={id}
-          className="flex cursor-pointer items-center gap-2 text-sm opacity-70"
-          title={`Playlist ${id} no longer exists in Navidrome. Uncheck to remove it from this show.`}
-        >
-          <input
-            type="checkbox"
-            checked
-            onChange={() => onChange(selected.filter((x) => x !== id))}
-          />
-          <span className="truncate">(missing) {id}</span>
-          <span className="field-hint">deleted in Navidrome</span>
-        </label>
-      ))}
+        ))}
+        {matching.length === 0 && <p className="p-2 text-xs text-muted">No playlists match this search.</p>}
+      </div>
     </div>
   );
 }
@@ -278,7 +279,7 @@ export function ThemePicker({
   value: string; // '' = station default
   onChange: (id: string) => void;
 }) {
-  const active = themes.find((t) => t.id === activeThemeId);
+  const active = themes.find(t => t.id === activeThemeId);
   return (
     <div className="flex flex-wrap gap-2">
       <ThemeCard
@@ -288,7 +289,7 @@ export function ThemePicker({
         tokens={active?.tokens ?? LIVE_TOKENS}
         onClick={() => onChange('')}
       />
-      {themes.map((t) => (
+      {themes.map(t => (
         <ThemeCard
           key={t.id}
           selected={value === t.id}

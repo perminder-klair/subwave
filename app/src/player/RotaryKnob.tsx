@@ -1,8 +1,4 @@
-// Rotary volume knob: an SVG tick ring and a pointer sweeping -135° to +135°
-// with the level. Drag up/right to raise, down/left to lower, cumulative from
-// the grab point.
-
-import { useRef } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { PanResponder, View } from 'react-native';
 import Svg, { Line } from 'react-native-svg';
 import { useTheme } from '@/theme/ThemeContext';
@@ -19,10 +15,16 @@ export interface RotaryKnobProps {
 export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobProps) {
   const { colors } = useTheme();
   const valueRef = useRef(value);
-  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => {
+    valueRef.current = value;
+    onChangeRef.current = onChange;
+  }, [value, onChange]);
   const startRef = useRef(value);
 
-  const pan = useRef(
+  // PanResponder stores these callbacks; refs are read only during gestures.
+  // eslint-disable-next-line react-hooks/refs
+  const [pan] = useState(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 1 || Math.abs(g.dy) > 1,
@@ -31,17 +33,16 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
       },
       onPanResponderMove: (_, g) => {
         const delta = (-g.dy + g.dx) / 200;
-        onChange(clamp(startRef.current + delta));
+        onChangeRef.current(clamp(startRef.current + delta));
       },
     }),
-  ).current;
+  );
 
   const angle = -135 + value * 270;
   const c = size / 2;
 
   return (
     <View style={{ width: size, height: size }} {...pan.panHandlers}>
-      {/* radial tick ring */}
       <Svg width={size} height={size} style={{ position: 'absolute' }}>
         {Array.from({ length: TICKS }).map((_, i) => {
           const a = (i / TICKS) * Math.PI * 2 - Math.PI / 2;
@@ -62,7 +63,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         })}
       </Svg>
 
-      {/* knob body */}
       <View
         style={{
           position: 'absolute',
@@ -77,7 +77,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         }}
       />
 
-      {/* pointer (rotates around knob centre) */}
       <View style={{ position: 'absolute', width: size, height: size, transform: [{ rotate: `${angle}deg` }] }}>
         <View
           style={{
@@ -92,7 +91,6 @@ export default function RotaryKnob({ value, onChange, size = 44 }: RotaryKnobPro
         />
       </View>
 
-      {/* centre cap */}
       <View
         style={{ position: 'absolute', left: c - 3, top: c - 3, width: 6, height: 6, borderRadius: 3, backgroundColor: colors.ink }}
       />

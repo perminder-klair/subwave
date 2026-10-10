@@ -72,13 +72,8 @@ const SelectContent = React.forwardRef<
       position={position}
       {...props}>
       <SelectScrollUpButton />
-      {/* Viewport deliberately has NO fixed height. Upstream shadcn sets
-          `h-[var(--radix-select-trigger-height)]` here, which pinned the
-          scrollable region to the trigger's row height and made long lists
-          unscrollable (issue #213). Keep the `var(...)` wrapper on the Content's
-          max-height too: under Tailwind v4 the bare `[--radix-...]` shorthand
-          emits an invalid `max-height` that is silently dropped, so the clamp
-          vanishes and a long list overflows off-screen. */}
+      {/* A fixed viewport height makes long lists unscrollable (#213). Content max-height needs
+          var(...); Tailwind v4 drops the bare custom-property shorthand. */}
       <SelectPrimitive.Viewport
         className={cn("p-1", position === "popper" &&
           "w-full min-w-[var(--radix-select-trigger-width)]")}>

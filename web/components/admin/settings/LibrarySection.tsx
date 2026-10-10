@@ -16,8 +16,10 @@ import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelecto
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { cn } from '../../../lib/cn';
+import { HeaderRowsEditor } from './LlmSection';
 import {
   SectionHeader, SaveBar, KeyStatus,
+  headerMap,
   type SectionProps,
 } from './shared';
 
@@ -86,6 +88,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         provider: e.provider,
         model: e.model,
         providerBaseUrls: e.providerBaseUrls,
+        headers: headerMap(e.headers),
         ollamaUrl: e.ollamaUrl,
         seedCount: parseInt(e.seedCount, 10) || 0,
         knnNeighbours: parseInt(e.knnNeighbours, 10) || 10,
@@ -178,12 +181,13 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // POST body, not query params — the unsaved bearer token must never ride a
   // URL that reverse-proxy access logs capture.
   const probeBody = () => {
-    const b: Record<string, string> = {};
+    const b: Record<string, string | Record<string, string>> = {};
     if (e.provider) b.provider = e.provider;
     if (e.model) b.model = e.model;
     if (embedBaseUrl) b.baseUrl = embedBaseUrl;
     if (e.ollamaUrl) b.ollamaUrl = e.ollamaUrl;
     if (compatEmbedKeyInput.trim()) b.apiKey = compatEmbedKeyInput.trim();
+    b.headers = headerMap(e.headers);
     return b;
   };
 
@@ -330,9 +334,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
       <Card title="Embedding server" sub="where embeddings come from">
         <div className="grid gap-[18px]">
-          {/* Provider/model/dim resolve to a working default even with both fields
-              blank, so say so rather than looking unconfigured. Hidden when the
-              effective provider can't embed — the warning below covers that. */}
           {canEmbed && effectiveModel && (
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
@@ -370,8 +371,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
             </div>
-            {/* The banner above already states the resolved provider/model/dim, so
-                only the already-embedded-with-a-different-model warning goes here. */}
             {embeddedMeta && embeddedMeta.model !== effectiveModel && (
               <div className="field-hint">
                 Your library is embedded with{' '}
@@ -486,9 +485,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Embeddings need a <strong>dedicated</strong> server: one
-                llama.cpp / locca process can&apos;t serve both chat and
-                embeddings.{' '}
+                {effectiveProvider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                  ? <>Leave blank to use the chat service&apos;s embedding endpoint. For Azure, enter a different resource URL ending in <code>/openai/v1</code> only when embeddings live on another resource. Enter the embedding deployment name above. </>
+                  : <>Embeddings need a <strong>dedicated</strong> server when a local chat server cannot embed. </>}
                 {effectiveProvider === 'locca' ? (
                   <>
                     Leave blank to use the locca embed server on its default port
@@ -496,7 +495,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
-                ) : (
+                ) : form.llm.compatibleMode === 'hosted' ? null : (
                   <>
                     Leave blank only if this server itself does embeddings;
                     otherwise run a separate embedding server (
@@ -534,6 +533,19 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
           )}
 
+          {effectiveProvider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Embedding request headers</Label>
+              <HeaderRowsEditor idPrefix="embedding-header" rows={e.headers}
+                onChange={rows => setForm(f => ({ ...f, embedding: { ...f.embedding, headers: rows } }))} />
+              <div className="field-hint">
+                Leave empty to use the chat connection&apos;s headers when embeddings
+                use the same provider and server. For a separate Azure embedding resource,
+                add its <code>api-key</code> here. Values are hidden after saving.
+              </div>
+            </div>
+          )}
+
           {effectiveProvider === 'ollama' && (
             <div className="field">
               <Label>Embedding server URL</Label>
@@ -553,9 +565,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
           )}
 
-          {/* embedKeyVar is undefined for ollama / openai-compatible / locca, which
-              need no conventional key. The override only matters when embeddings run
-              on a different provider than the DJ. */}
           {embedKeyVar && (
             <>
               <div className="field">
@@ -612,8 +621,6 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         </div>
       </Card>
 
-      {/* No run button: the bulk tagger is launched from the Library page's
-          "Start tagging" flow. */}
 
       <Advanced note="seed count, propagation thresholds and enrichment">
       <Card title="Seed phase" sub="how many tracks to LLM-tag">

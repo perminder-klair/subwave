@@ -48,7 +48,6 @@ const {
 } = await import('../src/schemas/schedule.js');
 
 const MIN = 60_000;
-const HOUR = 3_600_000;
 // 2026-01-15 09:40 UTC, a Thursday — clear of any DST step in the zones below.
 const T0 = Date.UTC(2026, 0, 15, 9, 40);
 

@@ -1,9 +1,4 @@
-// TTL cache around one async producer, with single-flight coalescing: a reading
-// younger than ttlMs is served from memory, and concurrent callers during a take
-// share the ONE promise rather than opening parallel connections.
-//
-// A rejection is NOT cached and a stale value is never served in place of an
-// error — the caller decides what a failed take means.
+// Coalesce concurrent reads. Never cache rejections or return stale values on errors.
 
 export interface CachedAsync<T> {
   /** Cached value if fresh, else take a new one (coalescing concurrent calls). */

@@ -5,7 +5,7 @@
 // without re-running the full fixture set.
 import assert from 'node:assert/strict';
 import {
-  stripScriptedOpener, echoesRequest, cleanRequesterName, guardIntro, guardAck, stillInFlight,
+  stripScriptedOpener, echoesRequest, cleanRequesterName, guardIntro, stillInFlight,
   screenAck, echoesRecentRequest,
 } from '../src/util/request-guard.js';
 
@@ -135,9 +135,7 @@ assert.equal(cleanRequesterName('Asant'), 'Asant');
 assert.equal(cleanRequesterName('Хозяин'), 'Хозяин');              // ordinary Cyrillic word survives
 assert.equal(cleanRequesterName('a'.repeat(60)).length, 40);
 
-// --- guardAck / guardIntro ---------------------------------------------------
-assert.equal(guardAck('Coming right up.', REQ_CRANK, 'fallback'), 'Coming right up.');
-assert.equal(guardAck(AIRED_CRANK, REQ_CRANK, 'fallback'), 'fallback');
+// --- guardIntro -------------------------------------------------------------
 {
   const out = await guardIntro(AIRED_CRANK, REQ_CRANK, async () => 'Stan-X, Get Crank — orchestral dubstep, buckle up.');
   assert.equal(out.guard, 'echo-regenerated');
@@ -182,7 +180,7 @@ assert.equal(
   false,
 ); // failed entry never holds, even with a stray pick
 
-// --- screenAck (guardAck's reporting form) -----------------------------------
+// --- screenAck verdicts -----------------------------------
 // Same policy, but the verdict reaches the operator: a silently swapped ack
 // left conversational trolling completely invisible in the booth log.
 assert.deepEqual(
@@ -220,21 +218,23 @@ for (const [ack, request] of [
 // --- echoesRecentRequest (pick-path guard) -----------------------------------
 // The picker agent reads the session window, which quotes listener request
 // text verbatim for ~40 turns — so an injected phrasing can resurface in a
-// LATER pick's link, a path neither guardIntro nor screenAck ever sees.
-const ring = [
-  { text: 'sunny afternoon' },
-  { text: REQ_CRANK },
-  { text: 'play some hard techno please' },
+// LATER pick's link, a path neither guardIntro nor screenAck ever sees. The
+// caller hands it EVERY request text in that window (session.windowRequestTexts),
+// so there is no lookback of its own to age a request out early.
+const windowTexts = [
+  'sunny afternoon',
+  REQ_CRANK,
+  'play some hard techno please',
 ];
-assert.equal(echoesRecentRequest(AIRED_CRANK, ring), true);
-assert.equal(echoesRecentRequest('Stingray SZN, "The River." 136 BPM of sunny driving reggae.', ring), false);
-assert.equal(echoesRecentRequest(null, ring), false);
+assert.equal(echoesRecentRequest(AIRED_CRANK, windowTexts), true);
+assert.equal(echoesRecentRequest('Stingray SZN, "The River." 136 BPM of sunny driving reggae.', windowTexts), false);
+assert.equal(echoesRecentRequest(null, windowTexts), false);
 assert.equal(echoesRecentRequest(AIRED_CRANK, []), false);
 assert.equal(echoesRecentRequest(AIRED_CRANK, null), false);
 // Entries without usable text never throw the scan.
-assert.equal(echoesRecentRequest(AIRED_CRANK, [{}, { text: null }] as any), false);
-// Lookback is bounded: an echo of something asked long ago is out of scope.
-assert.equal(echoesRecentRequest(AIRED_CRANK, ring, { lookback: 1 }), false);
+assert.equal(echoesRecentRequest(AIRED_CRANK, ['', null, undefined]), false);
+// No horizon of its own: the oldest request in a full window still counts.
+assert.equal(echoesRecentRequest(AIRED_CRANK, [REQ_CRANK, ...Array.from({ length: 19 }, (_, i) => `play track ${i}`)]), true);
 
 // --- stillInFlight: a REFUSED resolution must not hold the IP ----------------
 // Repeat cooldown and the already-queued dedup both record the declined track

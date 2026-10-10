@@ -27,10 +27,7 @@ export function BudgetMeter({ budget }: { budget: DebugBudget }) {
       <span className="caption">tokens</span>
       <Context maxTokens={cap} usedTokens={used}>
         <ContextTrigger className="h-auto gap-1 rounded-none px-1.5 py-0.5 text-[11px]" />
-        {/* bg-bg (opaque): --overlay is translucent and lets the strip below bleed through. */}
         <ContextContent align="start" className="rounded-none border-ink bg-bg">
-          {/* Custom header children: the stock header's Progress bar paints bg-muted,
-              a text colour in this theme, not a surface. */}
           <ContextContentHeader>
             <div className="flex items-center justify-between gap-3 text-xs">
               <span>{pct} of daily cap</span>

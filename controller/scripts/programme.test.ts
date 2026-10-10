@@ -141,7 +141,7 @@ function emptyWeek(): Record<number, (string | null)[]> {
   for (const handover of [5, 10, 15, 20]) {
     for (let offset = 0; offset < 60; offset += 15) {
       for (const [start, kind] of [[35, 'feature'], [60 - handover, 'outro']] as const) {
-        const hits = [];
+        const hits: number[] = [];
         for (let p = 0; p < 60; p += 5) {
           const stationMin = (p + offset) % 60;
           const w = beatWindow(stationMin, handover, STRIDE);

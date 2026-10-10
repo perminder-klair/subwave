@@ -21,10 +21,8 @@ function stationClockOptions(locale: StationLocale): Intl.DateTimeFormatOptions 
   return locale === 'en-US' ? { hour12: true } : { hour12: false };
 }
 
-// Time-of-day for an on-air event in the station's zone, so stamps agree with
-// what the DJ speaks (#418). `tz` is the IANA zone from /now-playing, falling
-// back to the device zone; `locale` picks 24h vs AM/PM (#475). '' when the
-// timestamp is missing.
+// Use station zone and locale for on-air stamps; fall back to device zone.
+// Return empty for missing timestamps.
 export function fmtClock(
   t: string | number | null | undefined,
   tz?: string | null,
@@ -40,6 +38,40 @@ export function fmtClock(
   } catch {
     return String(t);
   }
+}
+
+// HH:MM (no seconds) in the station's zone; mirrors web's fmtClockMinute.
+// Used for the booth's show-boundary separator (#1690). '' when unparseable.
+export function fmtClockMinute(
+  t: string | number | Date,
+  tz?: string | null,
+  locale?: StationLocale | null,
+): string {
+  const stationLocale = normalizeStationLocale(locale);
+  try {
+    return new Date(t).toLocaleTimeString(stationLocale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      ...stationClockOptions(stationLocale),
+      ...(tz ? { timeZone: tz } : {}),
+    });
+  } catch {
+    return '';
+  }
+}
+
+/** When a history entry aired: `startedAt`, else the older `t`, else
+ *  `queuedAt` as a last resort. null when none parses. The web's entryTime
+ *  reads only `t` then `queuedAt`; `startedAt` is the truer "played at". */
+export function playedAt(e: {
+  t?: unknown;
+  startedAt?: unknown;
+  queuedAt?: unknown;
+} | null | undefined): string | null {
+  for (const v of [e?.startedAt, e?.t, e?.queuedAt]) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) return v;
+  }
+  return null;
 }
 
 export function relTime(t: string | number | Date): string {

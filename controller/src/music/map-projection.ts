@@ -1,9 +1,5 @@
-// Sound-map projection: every stored CLAP audio vector to 2D with UMAP,
-// normalised to [0,1] per axis, persisted as tracks.map_x/map_y.
-// UMAP at library scale is minutes of synchronous CPU, so it NEVER runs on the
-// controller's event loop — runProjection() is the core the CLI child
-// (src/music/project-map.ts) runs; startProjection() spawns it. The child's final
-// transaction bumps data_version, so the observatory ETag invalidates itself.
+// Run UMAP projection in the CLI child, never the controller event loop. Its final transaction
+// updates data_version to invalidate the map ETag.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { UMAP } from 'umap-js';
@@ -86,23 +82,23 @@ let child: ChildProcess | null = null;
 let startedAt: string | null = null;
 let lastLog: string[] = [];
 
-export function isStale(): boolean {
-  const vectors = db.audioVectorCount();
+function isStale(vectors: number, meta: ProjectionStatus['meta']): boolean {
   if (vectors < MIN_VECTORS) return false; // nothing worth projecting
-  const meta = db.getMapProjectionMeta();
   if (!meta || meta.algo !== ALGO || meta.space !== SPACE) return true;
   const drift = Math.abs(vectors - meta.count);
   return drift >= STALE_ABS && drift / Math.max(1, vectors) >= STALE_FRACTION;
 }
 
 export function projectionStatus(): ProjectionStatus {
+  const meta = db.getMapProjectionMeta();
+  const audioVectors = db.audioVectorCount();
   return {
     running: child != null,
     startedAt,
     lastLog: lastLog.slice(-12),
-    meta: db.getMapProjectionMeta(),
-    audioVectors: db.audioVectorCount(),
-    stale: isStale(),
+    meta,
+    audioVectors,
+    stale: isStale(audioVectors, meta),
   };
 }
 
@@ -143,7 +139,8 @@ export function startProjection(): boolean {
 export function maybeProjectOnBoot(delayMs = 30_000): void {
   setTimeout(() => {
     try {
-      if (!isStale()) return;
+      const vectors = db.audioVectorCount();
+      if (vectors < MIN_VECTORS || !isStale(vectors, db.getMapProjectionMeta())) return;
       console.log('[map-projection] sound map stale — starting background projection');
       startProjection();
     } catch (err: any) {

@@ -1,34 +1,6 @@
-// When a FORCED skill run may stand down instead of speaking (issue #1412).
-//
-// The autonomous director has always been able to choose silence — `air: false`
-// is a first-class outcome of both segmentSchema and simpleSegmentSchema. The
-// FORCED path (runCapability: the operator's Run-now button, a skill's own cron
-// timer, the programme feature beat) had no such option: forcedSystem said
-// "silence is not an option" and an empty line threw. That is right for a
-// segment written from the moment itself, and wrong the instant the segment is
-// supposed to be ABOUT something the skill went and fetched.
-//
-// The reported failure is the sharp version: web-search searched "Cue musician
-// latest news", got an empty answer and three sources about other things
-// entirely, and was then told it must produce a line. Its own SKILL.md says
-// "use only what the search returned; if it surfaced nothing solid, say
-// nothing" — so the two instructions could not both be obeyed, and the model
-// resolved the contradiction by recycling a hallucination from an earlier
-// break. A model handed no facts and ordered to speak can only invent.
-//
-// So: a skill that speaks FROM fetched data stands down when that data comes
-// back unusable. Two decisions, kept here rather than at the call sites because
-// the forced path reaches them from three callers and the pool/agent paths each
-// ask again:
-//
-//   requiresGrounding(cap)   — may this skill's forced run stand down at all?
-//   unusableDataReason(data) — is what the tool returned fit to write from?
-//
-// Deliberately NOT a gate in the CLAUDE.md sense ("manual operator triggers are
-// exempt from every automatic gate"): nothing here decides whether the operator
-// is ALLOWED a segment. It decides whether there are facts to write one from,
-// and the operator hears about it — POST /dj/skill answers `aired: false` with
-// the reason rather than a fabricated line.
+// Grounded skills stand down when fetched data is unusable (#1412), including
+// manual, cron and programme runs. This checks facts, not operator authorization:
+// POST /dj/skill returns aired:false with a reason rather than inventing a script.
 
 // A skill data tool's return value, as far as this policy cares. Everything
 // else in it is the skill's own business.

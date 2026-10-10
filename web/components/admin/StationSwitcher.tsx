@@ -1,9 +1,5 @@
 'use client';
 
-// Sidebar station switcher. Switching runs the same flow as the panel's MAKE
-// LIVE: confirm → POST /stations/:id/activate → full-screen overlay until the
-// restarted controller answers with the new boot-frozen station id
-// (useStationSwitchPoll). Renders nothing until the station list loads.
 
 import Link from 'next/link';
 import { useState } from 'react';
@@ -68,8 +64,6 @@ export default function StationSwitcher({
                 <ChevronsUpDown className="ml-auto size-4 opacity-60" />
               </SidebarMenuButton>
             </DropdownMenuTrigger>
-            {/* A long station name would otherwise size the menu past a phone
-                viewport — cap it and let the item labels truncate. */}
             <DropdownMenuContent side="bottom" align="start" className="max-w-[calc(100vw-2rem)] min-w-[13rem]">
               <DropdownMenuLabel>Stations</DropdownMenuLabel>
               <DropdownMenuItem disabled className="justify-between gap-2">

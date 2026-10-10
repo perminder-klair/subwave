@@ -1,8 +1,5 @@
 'use client';
 
-// The Rundown — /admin/shows/schedule. Renders the controller's 7×24 `schedule`
-// grid from GET /settings; every edit is local until PUT /schedule saves the week.
-// Takeovers (#930) are read-only here; they outrank the grid in resolveActiveShow.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -519,8 +516,6 @@ export default function SchedulePanel() {
             <span className="font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink">{clockLabel}</span>
             <Mu className="text-[9px]">{zoneLabel}</Mu>
           </div>
-          {/* Phones get the status and Save from the sticky `SaveBar` alone —
-              repeating them here costs a row of a 24-hour screen. */}
           <div className="ml-auto flex flex-none flex-wrap items-center gap-3 sm:flex-nowrap">
             <span className="hidden flex-none items-center gap-2 sm:flex">
               {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
@@ -551,8 +546,6 @@ export default function SchedulePanel() {
             </Button>
           </div>
         </div>
-        {/* Headline is sr-only: every row of chrome above the 24-hour board costs
-            a row of the week, and the eyebrow already names the page. */}
         <h1 className="sr-only">The Rundown — programme the week, one hour at a time</h1>
         <Mu className="mt-1.5 block text-[9px] tracking-[0.1em]">
           Empty hours run autonomously · every change goes live on save

@@ -427,8 +427,6 @@ export interface ManualTagContext {
   moodNames: string[] | null;
 }
 
-export const MANUAL_TAG_SHAPE_ONLY: ManualTagContext = { moodNames: null };
-
 export function manualTagSchema(ctx: ManualTagContext) {
   return z.object({
     // A blank string is refused too, with the same message.
@@ -611,6 +609,13 @@ export interface SceneReference {
 // forwards partial patches to settings.update(), and z.object would strip
 // whatever the wizard learns to send next.
 
+// Persisted connection reads drop malformed fields so setup stays recoverable.
+export const savedNavidromeCredentialsSchema = z.object({
+  url: z.string().catch(''),
+  user: z.string().catch(''),
+  pass: z.string().catch(''),
+}).catch({ url: '', user: '', pass: '' });
+
 /**
  * One normalisation for Navidrome credentials: trim, and strip trailing slashes
  * off the url (`${url}/rest/ping` against a stored `…:4533/` double-slashes and
@@ -705,8 +710,31 @@ export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
+// HALF the composed-style budget, and that is the whole derivation.
+//
+// The 300 this replaces equalled `VOICE_STYLE_MAX` — the entire budget
+// `geminiStyle()` composes for one render — so a directive at the cap consumed
+// all of it and `budget = max(0, 300 - operator - station)` left the persona's
+// character excerpt at zero. Every station with a pronunciation note lost the
+// character on every segment, silently, with no error anywhere.
+//
+// It is NOT a provider limit. `speech_metadata.style` has no documented
+// per-field cap, and rendering with 300 / 1000 / 3000 / 6000-character styles all
+// returned 200 against both models in MODELS. The ceiling that matters is local:
+// operator directive first, station note second, character excerpt with whatever
+// is left. 300 therefore could never be right, because it is the total.
+//
+// Half the budget leaves the other half to the two things this must not crowd
+// out. With a typical station note that is a ~130-character character excerpt —
+// enough to read as character — and the note is still honoured in full, because
+// only the excerpt is budget-limited.
+export const PERSONA_VOICE_STYLE_MAX = 150;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
+// Unlike Soul, musical leanings are a compact backstage selection cue. Keeping
+// this deliberately shorter prevents a second persona prompt from growing into
+// an unbounded editorial brief on every pick.
+export const PERSONA_MUSIC_LEAN_MAX = 500;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -762,6 +790,7 @@ export const TTS_ENGINES = [
   'pocket-tts',
   'cloud',
   'remote',
+  'gemini',
 ] as const;
 
 /**
@@ -782,6 +811,38 @@ export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as cons
  * chosen without knowing the engine fails the synth or 400s there.
  */
 export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
+
+// ── Gemini TTS vocabularies ──────────────────────────────────────────────────
+//
+// MODELS — verified through the EXACT request gemini.ts builds (`/interactions`
+// with a `speech_metadata` annotation AND a `speech_config` voice), because a
+// model that synthesises audio through generateContent can still 400 on every
+// render through this engine. The engine always sends a speech annotation,
+// because per-persona voiceStyle is sent on every turn:
+//
+//   gemini-3.1-flash-tts-preview  -> "Speech metadata is not supported for this model."
+//   gemini-2.5-flash-preview-tts -> "Speech annotations are not supported for model"
+//   gemini-2.5-pro-preview-tts   -> "Speech annotations are not supported for model"
+//
+// They are deliberately ABSENT rather than offered-and-broken. Unlocking them
+// means the engine has to omit an empty annotation, which it cannot do while a
+// persona's voiceStyle may be set — a separate decision, not a dropdown entry.
+//
+// VOICES — the 30 prebuilt studio voices, verified by rendering through each.
+// `GET /v1beta/voices` is NOT the source: it is the Live/native-audio catalogue
+// (1000 rows, 198 unique), which omits Puck/Zephyr/Kore entirely.
+export const GEMINI_TTS_MODELS = [
+  'gemini-3.8-flash-lite-tts',
+  'gemini-3.8-flash-tts',
+] as const;
+
+export const GEMINI_TTS_VOICES = [
+  'Zephyr', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Aoede',
+  'Callirrhoe', 'Autonoe', 'Enceladus', 'Iapetus', 'Umbriel', 'Algieba',
+  'Despina', 'Erinome', 'Algenib', 'Rasalgethi', 'Laomedeia', 'Achernar',
+  'Alnilam', 'Schedar', 'Gacrux', 'Pulcherrima', 'Achird', 'Zubenelgenubi',
+  'Vindemiatrix', 'Sadachbia', 'Sadaltager', 'Sulafat',
+] as const;
 
 export const TTS_CLOUD_PROVIDERS = [
   'openai',
@@ -924,10 +985,12 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
       } else if (voice.length < 1 || voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
-    } else if (engine === 'remote' || engine === PERSONA_TTS_INHERIT) {
-      // remote: sidecar-interpreted ids. inherit: no engine is known yet, so no
-      // per-engine rule can apply (resolvePersonaVoiceSlot decides at speak
-      // time). Both leave only the length cap, and empty is valid.
+    } else if (engine === 'remote' || engine === 'gemini' || engine === PERSONA_TTS_INHERIT) {
+      // remote: sidecar-interpreted ids. gemini: a Google voice name, or a
+      // designed/replicated `voice_…`/`voicekey_…` handle, or empty for the
+      // station floor. inherit: no engine is known yet, so no per-engine rule
+      // can apply (resolvePersonaVoiceSlot decides at speak time). All three
+      // leave only the length cap, and empty is valid.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
@@ -1004,6 +1067,9 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
     engine !== 'chatterbox' &&
     engine !== 'piper' &&
     engine !== 'remote' &&
+    // gemini reads a Google voice id (or empty = the station floor), so a
+    // Kokoro id here would be spoken as gibberish rather than merely unused.
+    engine !== 'gemini' &&
     engine !== PERSONA_TTS_INHERIT
   ) {
     voice = 'bf_isabella';
@@ -1051,7 +1117,9 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  musicLean: string;
   language: string;
+  voiceStyle: string;
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
@@ -1103,6 +1171,9 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
+    // A private, music-specific editorial preference. It never changes the
+    // presenter's voice and never overrides show filters or safety policy.
+    musicLean: personaCoercedText('musicLean', 0, PERSONA_MUSIC_LEAN_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -1112,6 +1183,12 @@ export const personaSchema = z
         .string({ error: 'language must be a string' })
         .trim()
         .max(PERSONA_LANGUAGE_MAX, `language must be 0-${PERSONA_LANGUAGE_MAX} chars`)
+        .default(''),
+    ),
+    voiceStyle: z.preprocess(
+      personaNullToUndefined,
+      z.string({ error: 'voiceStyle must be a string' }).trim()
+        .max(PERSONA_VOICE_STYLE_MAX, `voiceStyle must be 0-${PERSONA_VOICE_STYLE_MAX} chars`)
         .default(''),
     ),
     frequency: z.enum(PERSONA_FREQUENCIES, {
@@ -1210,7 +1287,9 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      musicLean: p.musicLean,
       language: p.language,
+      voiceStyle: p.voiceStyle,
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
@@ -1242,12 +1321,18 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
+    musicLean: typeof raw.musicLean === 'string'
+      ? raw.musicLean.trim().slice(0, PERSONA_MUSIC_LEAN_MAX)
+      : '',
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:
       typeof raw.language === 'string'
         ? raw.language.trim().slice(0, PERSONA_LANGUAGE_MAX)
         : undefined,
+    voiceStyle: typeof raw.voiceStyle === 'string'
+      ? raw.voiceStyle.trim().slice(0, PERSONA_VOICE_STYLE_MAX)
+      : undefined,
     frequency: (PERSONA_FREQUENCIES as readonly string[]).includes(raw.frequency as string)
       ? raw.frequency
       : 'moderate',
@@ -1462,6 +1547,47 @@ export function resolvePersonaVoiceSlot(
   };
 }
 
+// ─── from controller/src/schemas/playback-failures.ts ────────────────────
+
+// Preserve the historical reader's repair rules for missing or unsafe metadata.
+// Never retain URLs, annotated URIs, absolute paths or unrecognised fields.
+const playbackFailureScalarSchema = z.unknown().optional().transform((value): string | null => {
+  if (typeof value !== 'string' || /(?:\w+:\/\/|^\/|^[A-Za-z]:\\|^annotate:)/.test(value)) return null;
+  return value.slice(0, 500);
+});
+
+export const playbackFailureIdentitySchema = z.object({
+  attemptId: playbackFailureScalarSchema.pipe(z.string().min(1)),
+  sourceTrackId: playbackFailureScalarSchema,
+  title: playbackFailureScalarSchema,
+  artist: playbackFailureScalarSchema,
+  album: playbackFailureScalarSchema,
+  source: z.enum(['ai', 'request', 'operator']),
+});
+
+export const playbackFailureSchema = playbackFailureIdentitySchema.extend({
+  t: z.string().refine(value => Number.isFinite(Date.parse(value)))
+    .transform(value => new Date(value).toISOString()),
+  stage: z.literal('fetch'),
+  reason: z.literal('source-resolution-failed'),
+});
+
+export const playbackFailureEventSchema = playbackFailureSchema.extend({
+  type: z.literal('track.failed'),
+});
+
+export const playbackFailureHistorySchema = z.object({
+  failures: z.array(playbackFailureSchema),
+  retentionDays: z.number(),
+  truncated: z.boolean(),
+  warnings: z.array(z.string()),
+});
+
+export type PlaybackFailure = z.output<typeof playbackFailureSchema>;
+export type PlaybackFailureInput = Pick<PlaybackFailure, 'attemptId' | 'source'>
+  & Partial<Pick<PlaybackFailure, 'sourceTrackId' | 'title' | 'artist' | 'album'>>;
+export type PlaybackFailureHistory = z.output<typeof playbackFailureHistorySchema>;
+
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────
 
 // Shared playlist schemas — the request bodies of the /playlists routes and
@@ -1483,6 +1609,37 @@ export function resolvePersonaVoiceSlot(
 // rejects is the operator's input being WRONG: a save with no name, an append
 // with no ids, a patch that changes nothing, a generate with nothing to
 // generate from.
+
+export const playlistGenerationResultSchema = z.object({
+  tracks: z.array(z.object({
+    id: z.string(),
+    title: z.string(),
+    artist: z.string(),
+    album: z.string(),
+    durationSec: z.number(),
+    year: z.number().nullable(),
+    genre: z.string().nullable(),
+    energy: z.string().nullable(),
+    moods: z.array(z.string()),
+    instrumental: z.boolean().nullable(),
+  })),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  degraded: z.boolean(),
+  reasons: z.array(z.string()),
+  poolSize: z.number(),
+  usedFallback: z.boolean(),
+});
+
+export const playlistGenerationStartSchema = z.object({ jobId: z.string().min(1) });
+
+export const playlistGenerationPollSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('running') }),
+  z.object({ status: z.literal('error'), error: z.string().optional() }),
+  z.object({ status: z.literal('done'), result: playlistGenerationResultSchema }),
+]);
+
+export type PlaylistGenerationResult = z.infer<typeof playlistGenerationResultSchema>;
 
 // The one cap a playlist name gets. It exists so an API caller can't store a
 // name the library list then has to render; the save modal's input runs the
@@ -1741,7 +1898,11 @@ export const listenerRequestSchema = z.object({
     .string({ error: 'Empty request' })
     .trim()
     .min(1, 'Empty request')
-    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`),
+    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`)
+    .refine(
+      text => text.normalize('NFKC').length <= REQUEST_TEXT_MAX,
+      `Keep it under ${REQUEST_TEXT_MAX} characters.`,
+    ),
   // Optional, but refused rather than sliced; no `.catch()` (it cannot tell a
   // wrong type from a too-long value). Reserved names are the guard's business.
   name: z.preprocess(
@@ -2082,6 +2243,25 @@ export const scheduleOverrideRequestSchema = z
     }
   });
 
+// ─── from controller/src/schemas/session-archives.ts ─────────────────────
+
+// Read only the fields needed by the archive list; old sessions may omit them.
+export const sessionArchiveSummaryInput = z.object({
+  id: z.string().optional(),
+  kind: z.string().optional(),
+  key: z.string().optional(),
+  startedAt: z.string().optional(),
+  endedAt: z.string().nullable().optional(),
+  show: z.object({ name: z.string().optional() }).nullable().optional(),
+  persona: z.object({ name: z.string().optional() }).nullable().optional(),
+  messages: z.unknown().optional(),
+});
+
+export const sessionArchivePageQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+});
+
 // ─── from controller/src/schemas/settings.ts ─────────────────────────────
 
 // Shared schemas for individual `POST /settings` patch keys — the first slice
@@ -2398,6 +2578,23 @@ export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 /** At most this many custom headers per leg, and this long a value. */
 export const LLM_HEADERS_MAX = 10;
 export const LLM_HEADER_VALUE_MAX = 500;
+
+// Native Google safety flags are independent per LLM leg. Only a literal true
+// enables blocking; absent or malformed flags preserve the permissive default.
+const geminiSafetyFlagSchema = z.unknown().transform((raw) => raw === true).default(false);
+export const geminiSafetySchema = z.object({
+  harassment: geminiSafetyFlagSchema,
+  hateSpeech: geminiSafetyFlagSchema,
+  sexuallyExplicit: geminiSafetyFlagSchema,
+  dangerousContent: geminiSafetyFlagSchema,
+});
+export type GeminiSafety = z.output<typeof geminiSafetySchema>;
+
+export function normalizeGeminiSafety(raw: unknown): GeminiSafety {
+  return geminiSafetySchema.parse(
+    raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {},
+  );
+}
 
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
@@ -2943,6 +3140,7 @@ export const DJ_RECAP_CHARS_BOUNDS: SettingsNumericBound = { min: 40, max: 1000 
 // one stable home in Settings. A missing block remains the pre-existing off.
 export const djBehaviourPatchSchema = settingsBlockOf({
   showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
+  previewNextShow: z.boolean({ error: 'djBehaviour.previewNextShow must be a boolean' }),
   sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
   extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
   releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
@@ -3506,6 +3704,8 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
+export const maxTrackLengthModeSchema = z.enum(['cut', 'exclude'], { error: 'maxTrackLengthMode must be cut or exclude' });
+
 // ── maxTrackSeconds ──────────────────────────────────────────────────────────
 
 /**
@@ -3601,6 +3801,123 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
       return v;
     });
 }
+
+// ── Gemini Extended Voice Library default filter ──────────────────────────────
+// A BCP-47 language tag, used ONLY to decide which page of the voice catalogue
+// the admin browser opens on. It is not a constraint on a persona's voice and it
+// never reaches the engine — Gemini takes its accent from the voice itself.
+//
+// Deliberately NOT an enum of the languages Google currently serves. That
+// vocabulary changes under us, and a list here would silently exclude a voice
+// the operator can see in AI Studio (the failure being fixed). The shape is
+// checked instead; the real values are discovered at browse time.
+export const GEMINI_LIBRARY_LANGUAGE_MAX = 35;
+
+// language[-Script][-REGION][-variant…]: a 2-3 letter (or 5-8 letter) primary
+// subtag, then optional 4-letter script, 2-letter/3-digit region, and any number
+// of 1-8 alphanumeric subtags. Structural only — it proves the string is a tag,
+// never that Google serves it.
+const BCP47 = /^[a-z]{2,3}(-[a-z]{4})?(-([a-z]{2}|[0-9]{3}))?(-[a-z0-9]{1,8})*$/i;
+
+/** Canonicalise a BCP-47 tag so `en-au`, `EN-AU` and `en-AU` cannot become three
+ *  dropdown entries: primary subtag lowercase, script Titlecase, region
+ *  UPPERCASE. Google's filter is a case-insensitive exact match, so this is
+ *  safe, and an unrecognisable tag is returned trimmed rather than dropped. */
+export function normalizeGeminiLibraryLanguage(raw: unknown): string {
+  const v = String(raw ?? '').trim();
+  if (!v) return '';
+  // Index-safe rather than `parts[0]` / `p[0]`: this file is COPIED into the web
+  // bundle, which compiles it with `noUncheckedIndexedAccess`, and a mirror that
+  // does not typecheck is a mirror nobody can regenerate.
+  const out: string[] = [];
+  const parts = v.split('-');
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i] ?? '';
+    // Empty segments are KEPT, not skipped. Skipping them turned the malformed
+    // `en-AU-` into the valid `en-AU`, so a typo was silently repaired into a
+    // setting the operator never typed — the exact silent-repair behaviour the
+    // patch-path rules forbid. Preserved, the trailing hyphen fails BCP47 below
+    // and the save is refused, which is the answer the operator needs.
+    if (i > 0 && /^[a-z]{4}$/i.test(p)) {
+      out.push(p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+    } else if (i > 0 && /^([a-z]{2}|[0-9]{3})$/i.test(p)) {
+      out.push(p.toUpperCase());
+    } else {
+      out.push(p.toLowerCase());
+    }
+  }
+  return out.join('-');
+}
+
+/** Whether a value is a usable `libraryLanguage`. Empty is valid and means
+ *  "every language". Shared by the strict save path and the lenient load path
+ *  so a hand-edited settings.json cannot wedge boot — and mirrored, so the
+ *  admin form pre-flights with the same rule the route enforces. */
+export function isGeminiLibraryLanguage(raw: unknown): boolean {
+  const v = normalizeGeminiLibraryLanguage(raw);
+  return v === '' || (v.length <= GEMINI_LIBRARY_LANGUAGE_MAX && BCP47.test(v));
+}
+
+// ─── from controller/src/schemas/show-preparation.ts ─────────────────────
+
+export const preparationResultSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(false), reason: z.string().max(500).optional() }),
+  z.object({
+    available: z.literal(true),
+    subject: z.string().trim().min(1).max(160),
+    data: z.json().default(null).refine(value => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 32768, 'preparation data must be at most 32 KB'),
+    music: z.object({ type: z.literal('artist'), artistId: z.string().trim().min(1).max(256) }).optional(),
+  }),
+]);
+
+export const preparationOccurrenceSchema = z.object({
+  id: z.string().min(1), showId: z.string().min(1),
+  source: z.enum(['scheduled', 'takeover']),
+  startsAt: z.number().finite(), endsAt: z.number().finite(),
+});
+
+const preparationRecordBase = z.object({
+  occurrence: preparationOccurrenceSchema,
+  skill: z.string(), configuration: z.string(),
+});
+export const preparationRecordSchema = z.discriminatedUnion('kind', [
+  preparationRecordBase.extend({
+    kind: z.literal('failed'), reason: z.string(), attempts: z.number().int(), retryAt: z.number().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('selected'),
+    result: preparationResultSchema.options[1],
+    attempts: z.number().int(), retryAt: z.number(), reason: z.string().nullable(),
+  }),
+  preparationRecordBase.extend({
+    kind: z.literal('ready'), result: preparationResultSchema.options[1], preparedAt: z.number(),
+  }),
+]);
+export const preparationStoreSchema = z.object({ version: z.literal(1), records: z.array(preparationRecordSchema).max(256) });
+export type PreparationResult = z.output<typeof preparationResultSchema>;
+export type AcceptedPreparation = Extract<PreparationResult, { available: true }>;
+export type PreparationOccurrence = z.output<typeof preparationOccurrenceSchema>;
+export type PreparationRecord = z.output<typeof preparationRecordSchema>;
+
+export const preparationStatusSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unconfigured') }),
+  z.object({ kind: z.enum(['selected', 'ready', 'failed', 'degraded']), occurrence: preparationOccurrenceSchema,
+    skill: z.string(), subject: z.string().nullable(), reason: z.string().nullable() }),
+]);
+export type PreparationStatus = z.output<typeof preparationStatusSchema>;
+
+export const preparationArtistSchema = z.object({ id: z.string().min(1), name: z.string().min(1), album: z.array(z.object({ id: z.string(), songCount: z.number().optional() })).default([]) });
+export const preparationArtistCreditSchema = z.object({ id: z.string().min(1), name: z.string().optional() });
+export const preparationTrackSchema = z.object({
+  id: z.string().min(1), artistId: z.string().nullable().optional(),
+  artists: z.array(preparationArtistCreditSchema).optional(),
+  albumArtists: z.array(preparationArtistCreditSchema).optional(),
+  title: z.string().default(''), artist: z.string().default(''),
+  album: z.string().nullish().transform(value => value ?? undefined), albumId: z.string().nullish().transform(value => value ?? undefined),
+  duration: z.number().nullable().optional(), durationSec: z.number().nullable().optional(),
+  year: z.number().nullable().optional(),
+}).passthrough();
+export type PreparationTrack = z.output<typeof preparationTrackSchema>;
 
 // ─── from controller/src/schemas/show.ts ─────────────────────────────────
 
@@ -3877,6 +4194,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
+      preparationSkill: z.preprocess(nullToUndefined, z.string().trim().max(SHOW_SEGMENT_SKILL_MAX).default('')),
       // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
@@ -4006,6 +4324,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
+      if (c.value.preparationSkill && c.value.preparationSkill === c.value.segmentSkill) {
+        c.issues.push({ code: 'custom', input: c.value.segmentSkill, path: ['segmentSkill'], message: 'must differ from the show preparation skill' });
+      }
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
           code: 'custom',
@@ -4112,9 +4433,10 @@ export function repairShowForLoad(
     id: typeof raw.id === 'string' && SHOW_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, SHOW_NAME_MAX) : undefined,
     topic: typeof raw.topic === 'string' ? raw.topic.slice(0, SHOW_TOPIC_MAX) : undefined,
-    segmentSkill: typeof raw.segmentSkill === 'string'
+    segmentSkill: typeof raw.segmentSkill === 'string' && raw.segmentSkill.trim() !== (typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim() : '')
       ? raw.segmentSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX)
       : undefined,
+    preparationSkill: typeof raw.preparationSkill === 'string' ? raw.preparationSkill.trim().slice(0, SHOW_SEGMENT_SKILL_MAX) : undefined,
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
@@ -4564,6 +4886,47 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/transitions.ts ──────────────────────────
+
+// Why a DJ transition effect did not make it onto a seam — the vocabulary of the
+// durable seam record (`plays.transition_drops`, the `track.play` event and the
+// Stats panel's Transitions card). One code per strip site in the drain, so a
+// count means one thing; the booth log keeps its own human sentence per site.
+//
+// Codes are STORED, so they are append-only: renaming one orphans every row
+// already written under it. Retire a code by leaving it here unused.
+export const MIX_DROP_REASONS = [
+  'dj-mode-off',     // the on-air persona left DJ mode between pick and drain
+  'switched-off',    // the operator switched this effect off (transitions.effects)
+  'no-predecessor',  // nothing on air to transition from (first track after boot)
+  'stem-seam',       // a pre-rendered stem blend owns the seam
+  'show-boundary',   // the seam is a show-change cut, which airs as a plain fade
+  'variety',         // the anti-streak rule: a third identical ask in a row
+  'yields-to-exit',  // the previous track already exits through a washout or loop
+  'pair-fit',        // the measured pair does not suit this effect
+  'no-tempo',        // the exit loop needs the track's measured tempo
+  'bed',             // an instrumental bed replaced the seam it was chosen for
+  'pause-talk',      // a pause-and-talk break replaced the seam it was chosen for
+  'jingle-seam',     // a jingle aired between the two tracks; the mixer stood down
+] as const;
+
+export type MixDropReason = (typeof MIX_DROP_REASONS)[number];
+
+export const MIX_DROP_REASON_LABELS: Record<MixDropReason, string> = {
+  'dj-mode-off': 'DJ mode off',
+  'switched-off': 'Switched off',
+  'no-predecessor': 'Nothing to follow',
+  'stem-seam': 'Stem blend seam',
+  'show-boundary': 'Show change cut',
+  'variety': 'Repeat rule',
+  'yields-to-exit': 'Previous exit effect',
+  'pair-fit': 'Pair did not suit it',
+  'no-tempo': 'No measured tempo',
+  'bed': 'Bed took the seam',
+  'pause-talk': 'Pause-and-talk break',
+  'jingle-seam': 'Jingle in between',
+};
 
 // ─── from controller/src/schemas/webhook.ts ──────────────────────────────
 

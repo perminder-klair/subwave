@@ -98,7 +98,6 @@ export default function SearchTab({
     <>
       <Card bodyClass="!py-3">
         <div className="grid gap-2.5">
-          {/* On lean installs the tab stays plain metadata search. */}
           {coverage?.soundSearchAvailable === true && (
             <div className="flex flex-wrap items-center gap-3">
               <Seg
@@ -119,7 +118,6 @@ export default function SearchTab({
               )}
             </div>
           )}
-          {/* Phone: query on its own row, both buttons on the row under it. */}
           <form onSubmit={runSearch} className="grid grid-cols-[1fr_auto] gap-2 sm:grid-cols-[1fr_auto_auto]">
             <InputGroup className="col-span-2 sm:col-span-1">
               <InputGroupAddon><Search /></InputGroupAddon>

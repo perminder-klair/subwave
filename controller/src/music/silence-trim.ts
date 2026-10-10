@@ -1,12 +1,6 @@
-// Dead-air trim: the single answer to where a track starts and stops making
-// sound, read by the queue drain, the auto.m3u rewrite and /now-playing's clock.
-//
-// Input is the analyzer's ABSOLUTE-floor measurements only. `introMs` and
-// `outro.startMs` are relative to the track's own loud level, so a quiet piano
-// intro reads as silence; never wire one to a cue point.
-//
-// Three guards: the operator's min-gap dial, a margin at each edge, and
-// MAX_TRIM_SEC. Unmeasured input yields null both sides and the track plays whole.
+// Use absolute-floor silence measurements for cues, never relative intro/outro estimates that
+// can mistake quiet music for silence. Bound trims with the minimum gap, edge margins, and
+// MAX_TRIM_SEC; unknown measurements preserve the whole track.
 
 import * as settings from '../settings.js';
 import * as library from './library.js';

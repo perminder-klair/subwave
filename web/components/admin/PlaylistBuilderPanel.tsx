@@ -1,7 +1,5 @@
 'use client';
 
-/* Playlist Builder: a RECIPE rail (prompt + seeds + tuning) beside a RESULT
-   pane state machine. Saves land in Navidrome via the /playlists routes. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDebounceValue } from 'usehooks-ts';
@@ -710,8 +708,6 @@ export default function PlaylistBuilderPanel() {
               className="mb-[22px]"
             />
 
-            {/* Raw Controller: the array half needs RHF's field, but the search
-                dropdown above it is transient UI, not a form value. */}
             <Controller
               control={recipeControl}
               name="seeds"
@@ -815,8 +811,6 @@ export default function PlaylistBuilderPanel() {
                             : 'any'}
                     </span>
                   )}
-                  {/* Raw Controller, not SwitchField: the live length badge sits
-                      between the label and the switch. */}
                   <Controller
                     control={recipeControl}
                     name="capOn"
@@ -826,9 +820,6 @@ export default function PlaylistBuilderPanel() {
                   />
                 </div>
               </div>
-              {/* Raw Controller pair, not TextField: DualRange clamps lo against
-                  hi inside its own onChange, so lo<=hi holds by construction --
-                  no zod rule to bind. Two Controllers for two field paths. */}
               <Controller control={recipeControl} name="minSec" render={({ field: lo }) => (
                 <Controller control={recipeControl} name="maxSec" render={({ field: hi }) => (
                   <DualRange
@@ -858,7 +849,6 @@ export default function PlaylistBuilderPanel() {
                             : 'any bpm'}
                     </span>
                   )}
-                  {/* Same reason as Track length's switch above. */}
                   <Controller
                     control={recipeControl}
                     name="bpmOn"

@@ -3,16 +3,20 @@
 // half picks one. The rounding is pinned by clock-phrase.test.ts; here the
 // clause must never widen past exactly one time the band produced.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import test from 'node:test';
+import test, { after } from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-hourly-time-'));
+const originalStateDir = process.env.STATE_DIR;
+const stateDir = mkdtempSync(join(tmpdir(), 'subwave-hourly-time-'));
+process.env.STATE_DIR = stateDir;
 
 const { spokenTimePhrase, spokenTimePhrases } = await import('../src/time.js');
 const { getClockContext } = await import('../src/context.js');
 const { nextHourlyTimeClause } = await import('../src/llm/internal/prompts/scripts.js');
+const settings = await import('../src/settings.js');
+const { generateHourlyTime, buildContextLines } = await import('../src/llm/dj.js');
 
 const clockAt = (hour: number, minute: number) => ({
   spokenHour: 'six in the evening',
@@ -83,4 +87,109 @@ test('the clock context carries the band, canonical wording first', () => {
   assert.ok(Array.isArray(clock.spokenTimeOptions));
   assert.equal(clock.spokenTimeOptions[0], clock.spokenTime);
   assert.ok(clock.spokenTimeOptions.length >= 3);
+});
+
+async function captureHourly(context: unknown, showWelcome = false) {
+  const originalLlm = structuredClone(settings.get().llm);
+  const realFetch = globalThis.fetch;
+  const requests: Array<{ messages: Array<{ role: string; content: string }> }> = [];
+  try {
+    await settings.update({ llm: {
+      provider: 'openai-compatible', model: 'fixture-model',
+      baseUrl: 'http://127.0.0.1:9/v1', fallback: { enabled: false },
+    } });
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      assert.ok(url.startsWith('http://127.0.0.1:9/'), `unexpected external request: ${url}`);
+      requests.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        id: 'chatcmpl-hourly', object: 'chat.completion', created: 1, model: 'fixture-model',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'A fixture time check.' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    await generateHourlyTime({
+      context, showWelcome,
+      persona: { name: 'Tom', soul: "Reads the weather like he's looked out the window", scriptLength: 'extended' },
+      recap: 'Earlier: a sunny spring Saturday.', recentOpeners: ['Just gone noon'],
+    });
+    assert.equal(requests.length, 1);
+    const messages = requests[0].messages;
+    return {
+      system: messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n'),
+      user: messages.filter((m) => m.role === 'user').map((m) => m.content).join('\n'),
+    };
+  } finally {
+    globalThis.fetch = realFetch;
+    await settings.update({ llm: originalLlm });
+  }
+}
+
+const hourlyContext = {
+  clock: { ...clockAt(12, 0), spokenHour: 'noon', display: '12:00 pm', isWeekend: true },
+  date: { dayLabel: 'Saturday', dayOfMonth: 3, monthLabel: 'October', season: 'spring' },
+  activeShow: { name: 'Equinox Top 100 UK & Australia Tunes' },
+};
+
+test('production hourly checks override weather-inviting persona instructions', async () => {
+  const { system } = await captureHourly({ ...hourlyContext,
+    weather: { condition: 'stormy', temp: 13, location: 'Melbourne' },
+  });
+  assert.match(system, /For this hourly time check, do not mention weather or outdoor conditions/);
+  assert.ok(system.includes("Reads the weather like he's looked out the window"));
+  assert.ok(system.indexOf('For this hourly time check') > system.indexOf("Reads the weather like he's looked out the window"));
+});
+
+// The same ban applies whether weather is known, unavailable, or missing entirely.
+for (const condition of ['stormy', 'rainy', 'clear', 'unknown', 'absent', 'null']) {
+  test(`hourly ${condition} context keeps weather off the prompt and preserves continuity`, async () => {
+    const context = condition === 'null' ? null : {
+      ...hourlyContext,
+      ...(condition === 'absent' ? {} : { weather: { condition, temp: 13, location: 'Melbourne' } }),
+    };
+    const { system, user } = await captureHourly(context, true);
+    assert.match(system, /For this hourly time check, do not mention weather or outdoor conditions/);
+    assert.match(system, /Do not infer them from persona instructions, the day, season, daypart, daylight or darkness, or recent speech\/recap/);
+    assert.match(system, /overrides persona and tone instructions/);
+    assert.match(system, /dedicated weather segment/);
+    assert.doesNotMatch(user, /Weather in |stormy|rainy|clear|unknown|13 degrees|Melbourne/);
+    assert.match(user, /2-3 sentences/);
+    assert.match(user, /do not repeat phrasing or topics/);
+    assert.match(user, /Earlier: a sunny spring Saturday/);
+    assert.match(user, /Do not start your line with any of these openers/);
+    assert.match(user, /"Just gone noon…"/);
+    if (context) {
+      const said = user.match(/The time to announce is "([^"]+)"/)?.[1];
+      assert.ok(said && hourlyContext.clock.spokenTimeOptions.includes(said));
+      assert.match(user, /say exactly that time/);
+      assert.match(user, /never a different time/);
+      assert.match(user, /The schedule is now in "Equinox Top 100 UK & Australia Tunes"/);
+      assert.match(user, /you may add one short, natural welcome/);
+      assert.match(user, /Do not .*claim the show began at a particular time/);
+      assert.doesNotMatch(user, /first spoken segment|newly started show/);
+    } else {
+      assert.match(user, /Say the time in natural spoken words/);
+      assert.doesNotMatch(user, /first spoken segment/);
+    }
+  });
+}
+
+test('hourly show welcome requires both the flag and a named active show', async () => {
+  const ordinary = await captureHourly(hourlyContext);
+  assert.doesNotMatch(ordinary.user, /The schedule is now in|natural welcome/);
+  const unnamed = await captureHourly({ ...hourlyContext, activeShow: {} }, true);
+  assert.doesNotMatch(unnamed.user, /The schedule is now in|natural welcome/);
+});
+
+test('dedicated weather context still includes known conditions and excludes unknown', () => {
+  assert.deepEqual(buildContextLines({ weather: { condition: 'stormy', temp: 13, location: 'Melbourne' } },
+    { contextFields: ['weather'] }), ['Weather in Melbourne: stormy, 13 degrees Celsius']);
+  assert.deepEqual(buildContextLines({ weather: { condition: 'unknown', temp: 13, location: 'Melbourne' } },
+    { contextFields: ['weather'] }), []);
+});
+
+after(() => {
+  rmSync(stateDir, { recursive: true, force: true });
+  if (originalStateDir === undefined) delete process.env.STATE_DIR;
+  else process.env.STATE_DIR = originalStateDir;
 });

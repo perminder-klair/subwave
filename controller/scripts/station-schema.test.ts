@@ -6,12 +6,13 @@
 //
 // Run: npx tsx scripts/station-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-station-schema-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-station-schema-'));
 
 const {
   MAX_STATIONS,
@@ -183,7 +184,7 @@ test('route: rename validates the same way', () => {
 // --- the chokepoint: manager runs the schema too ----------------------------
 
 const withRoot = async (fn: (root: string) => Promise<void> | void) => {
-  const root = mkdtempSync(join(tmpdir(), 'subwave-station-schema-root-'));
+  const root = createTempDir(join(tmpdir(), 'subwave-station-schema-root-'));
   try {
     await fn(root);
   } finally {

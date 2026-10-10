@@ -1,10 +1,6 @@
 'use client';
-// "Play sample" for the TTS pickers: POST /settings/tts/preview → a WAV blob.
-// The endpoint bypasses the on-air persona AND the silent fallback, so an
-// unavailable engine returns a real error here rather than quietly playing Piper.
-// Gain (dB) is a playout-time mix trim, so only voice + speed are auditioned, and
-// a sample is discarded as stale the moment either changes.
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+// Previews bypass silent engine fallback and audition voice and speed, excluding playout gain. Discard samples when preview settings change.
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { Btn } from '../ui';
 import {
@@ -17,12 +13,16 @@ import {
   AudioPlayerTimeRange,
 } from '../../ai-elements/audio-player';
 import { fetchPreviewSample } from './previewApi';
+import { correctionsKey as correctionsDependency } from './correctionsKey';
 
 interface VoicePreviewButtonProps {
   engine: string;
   voice: string;
   cloudProvider?: string;
   cloudModel?: string;
+  // Gemini's own model id — the UNSAVED dropdown choice, so the sample
+  // auditions what is on screen rather than the saved station model.
+  geminiModel?: string;
   // Final saved-control rate to audition (server bounds-clamps to 0.5–2.0×);
   // current programme pacing is deliberately excluded from stable previews.
   speed?: number;
@@ -31,6 +31,7 @@ interface VoicePreviewButtonProps {
   // Persona's free-text on-air language ("Turkish", "Türkçe") — the server
   // renders the sample sentence in this language when it recognizes it.
   language?: string;
+  voiceStyle?: string;
   // Explicit sample text (overrides the default/localized sentence).
   text?: string;
   // Unsaved corrections override — tests rules that haven't been saved yet.
@@ -56,7 +57,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -74,13 +75,23 @@ export function VoicePreviewButton({
   // Unmounting mid-sample must abort synthesis and revoke the object URL.
   useEffect(() => () => discardSample(), [discardSample]);
 
-  // The player must never replay the old voice under a new label. voiceSettings is
-  // deliberately absent from the deps: it's an unstable inline object at the call site.
+  // Invalidate samples when any rendered-audio input changes. Use scalar voice settings and a
+  // content-stable corrections key to avoid resets from fresh object identities.
+  // tests/voice-preview-invalidation.test.ts checks the dependency list against the request
+  // payload.
+  const correctionsKey = useMemo(() => correctionsDependency(corrections), [corrections]);
   useEffect(() => {
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, speed, lang, language, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [
+    engine, voice, cloudProvider, cloudModel, geminiModel, voiceStyle,
+    speed, lang, language, text, correctionsKey,
+    voiceSettings?.voiceStability, voiceSettings?.voiceStyle,
+    voiceSettings?.voiceSimilarityBoost, voiceSettings?.voiceUseSpeakerBoost,
+    fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency,
+    discardSample,
+  ]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
@@ -93,7 +104,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings },
+        { engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, text, corrections, voiceSettings, fishSettings },
         ac.signal,
       );
       if (ac.signal.aborted) return;

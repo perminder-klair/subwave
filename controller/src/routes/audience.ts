@@ -2,13 +2,37 @@
 // from the player; GET /audience is the admin rollup for the Stats page.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import { unverifiedCfIp, clientIp } from '../middleware/ratelimit.js';
+import { unverifiedCfIp, clientIp, LIMITER_MAX_KEYS } from '../middleware/ratelimit.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 import * as audience from '../broadcast/audience.js';
 import { resolveListenerCountry } from '../broadcast/listener-country.js';
 import { lookupCountry } from '../broadcast/geoip.js';
+import { rememberBeaconCountry } from '../broadcast/beacon-countries.js';
 import * as settings from '../settings.js';
 
 export const router = express.Router();
+
+// The player sends one beacon per page load, so a client past this is not a
+// listener. Over the limit the beacon is still answered 204 — just not recorded.
+export const BEACON_WINDOW_MS = 60_000;
+export const BEACON_PER_WINDOW = 20;
+const beaconHistory = new BoundedKeyMap<number[]>({
+  maxKeys: LIMITER_MAX_KEYS,
+  isLive: (hits, now) => hits.some(t => now - t < BEACON_WINDOW_MS),
+});
+
+export function beaconAllowed(key: string, now = Date.now()): boolean {
+  const hits = (beaconHistory.get(key) || []).filter(t => now - t < BEACON_WINDOW_MS);
+  if (hits.length >= BEACON_PER_WINDOW) return false;
+  hits.push(now);
+  beaconHistory.set(key, hits, now);
+  return true;
+}
+
+// Test seam.
+export function resetBeaconLimiter(): void {
+  beaconHistory.clear();
+}
 
 router.post('/beacon', (req, res) => {
   // Analytics must never break a listener — swallow everything, always 204.
@@ -18,6 +42,11 @@ router.post('/beacon', (req, res) => {
     // is off — a forgery only skews a rollup. Never reuse this ordering for
     // anything that throttles or locks out; clientIp() stays the gated one.
     const ip = unverifiedCfIp(req) || clientIp(req);
+    // The one exception, and why it is safe: this limit only damps a single
+    // client's repeats, and it keys on the same identity the dedupe below does.
+    // Keyed on clientIp() alone it would cap a tunnelled station, where every
+    // visitor shares one address, at BEACON_PER_WINDOW page loads station-wide.
+    if (!beaconAllowed(ip)) return res.status(204).end();
     // The country is a fail-open CHAIN (#1485), not one header. Read live so an
     // admin edit applies without a restart, and defensively so a settings read
     // can never break a listener's first page load.
@@ -25,14 +54,20 @@ router.post('/beacon', (req, res) => {
     try {
       countryHeader = String((settings.get() as any)?.stream?.countryHeader || '');
     } catch { /* fall through to the header/GeoIP links */ }
+    const country = resolveListenerCountry({
+      headers: req.headers as Record<string, unknown>,
+      ip,
+      countryHeader,
+      geoipLookup: lookupCountry,
+    });
+    // For the Dash Listeners table's Country column. Keyed on clientIp(), the
+    // left-most X-Forwarded-For, NOT the CF hint above: that is the address
+    // Icecast's trusted-proxy rule records for the same listener, so the two
+    // line up. Memory only (see beacon-countries.ts).
+    rememberBeaconCountry(clientIp(req), country);
     audience.record({
       ip,
-      country: resolveListenerCountry({
-        headers: req.headers as Record<string, unknown>,
-        ip,
-        countryHeader,
-        geoipLookup: lookupCountry,
-      }),
+      country,
       referrer: typeof body.referrer === 'string' ? body.referrer.slice(0, 500) : undefined,
       utmSource: typeof body.utmSource === 'string' ? body.utmSource.slice(0, 60) : undefined,
       path: typeof body.path === 'string' ? body.path.slice(0, 200) : undefined,

@@ -1584,6 +1584,70 @@ def personas(page):
 
 
 @check
+def gemini_persona_style(page):
+    """Save/reload delivery style and audition unsaved edits through both controls."""
+    import copy
+    before = json.loads(api("/settings"))["values"]
+    personas = copy.deepcopy(before["personas"])
+    speaker = next(p for p in personas if p["name"] == "Wren")
+    speaker["tts"].update({"engine": "gemini", "voice": "Puck"})
+    speaker["voiceStyle"] = "Warm and unhurried."
+    previews = []
+
+    def sample(route):
+        previews.append(route.request.post_data_json)
+        route.fulfill(status=200, content_type="audio/wav", body=preview_wav(seconds=1))
+
+    page.route("**/settings/tts/preview", sample)
+    try:
+        api_write("POST", "/settings", {"personas": personas})
+        page.goto(f"{WEB}/admin/personas")
+        page.get_by_role("button", name="Edit Wren").click()
+        dialog = page.get_by_role("dialog")
+        style = dialog.get_by_label("Delivery style")
+        assert style.input_value() == "Warm and unhurried."
+        assert style.get_attribute("maxlength") == "300"
+        style.evaluate("el => el.removeAttribute('maxlength')")
+        style.fill("x" * 301)
+        wait_for_invalid(page, style)
+        assert_aria(page, style)
+        assert dialog.get_by_role("button", name="Save persona").is_disabled()
+        style.fill("Dry and understated.")
+        with page.expect_response("**/settings/tts/preview"):
+            dialog.get_by_role("button", name="Play sample", exact=True).click()
+        assert previews[-1]["voiceStyle"] == "Dry and understated."
+        assert next(p for p in json.loads(api("/settings"))["values"]["personas"]
+                    if p["id"] == speaker["id"])["voiceStyle"] == "Warm and unhurried."
+
+        # The picker has its own preview path, which must carry the same edit.
+        dialog.get_by_role("button", name=re.compile("^Puck")).click()
+        with page.expect_response("**/settings/tts/preview"):
+            page.get_by_role("option", name=re.compile("Puck")).get_by_role("button", name="Play preview").click()
+        assert len(previews) == 2
+        assert previews[-1]["voiceStyle"] == "Dry and understated."
+        page.keyboard.press("Escape")
+        dialog.get_by_role("button", name="Save persona").click()
+        dialog.wait_for(state="detached")
+        saved = json.loads(api("/settings"))["values"]["personas"]
+        assert next(p for p in saved if p["id"] == speaker["id"])["voiceStyle"] == "Dry and understated."
+        page.reload()
+        page.get_by_role("button", name="Edit Wren").click()
+        assert page.get_by_label("Delivery style").input_value() == "Dry and understated."
+
+        # Inheritance must expose the style when the station resolves to Gemini.
+        inherited = next(p for p in saved if p["id"] == speaker["id"])
+        inherited["tts"].update({"engine": "inherit", "voice": ""})
+        api_write("POST", "/settings", {"personas": saved, "tts": {"defaultEngine": "gemini"}})
+        page.reload()
+        page.get_by_role("button", name="Edit Wren").click()
+        assert page.get_by_label("Delivery style").input_value() == "Dry and understated."
+    finally:
+        page.unroute("**/settings/tts/preview", sample)
+        api_write("POST", "/settings", {"personas": before["personas"],
+                  "tts": {"defaultEngine": before["tts"]["defaultEngine"]}})
+
+
+@check
 def persona_preview_rate(page):
     """A persona preview auditions engine speed × persona speed.
 
@@ -1847,7 +1911,7 @@ def shows(page):
         dialog = page.get_by_role("dialog")
         dialog.wait_for()
 
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         wait_for_invalid(page, host_field)
         assert_aria(page, host_field)
         assert_field_error(page, host_field, "must reference an existing persona")
@@ -1884,7 +1948,7 @@ def shows(page):
 
         # Host defaults to the roster's first persona; pin it explicitly so the
         # guest-overlap scenario below is deterministic regardless of roster order.
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         host_field.click()
         page.get_by_role("option", name="Marlowe").click()
 

@@ -5,6 +5,7 @@ import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
 import { analysisFailureExclusion } from './tracks.js';
+import { deleteFacetRows } from './facets.js';
 
 // Phase one of a calibrated pass: raw cosines only, since the per-mood
 // baselines need the whole library on disk first. A crash between phases leaves
@@ -238,6 +239,15 @@ export function trackCount(): number {
   }).n;
 }
 
+// How many track rows a prune against `liveIds` would delete (music/prune-policy.ts
+// decides whether it may).
+export function countMissingTracks(liveIds: ReadonlySet<string>): number {
+  const all = requireDb().prepare('SELECT id FROM tracks').all() as Array<{ id: string }>;
+  let n = 0;
+  for (const r of all) if (!liveIds.has(r.id)) n += 1;
+  return n;
+}
+
 // Drop track rows (and vectors) for ids no longer in Navidrome. `liveIds` must
 // come from a COMPLETE walk of subsonic.iterateAllSongs(): a partial set deletes
 // live tags. Returns rows deleted.
@@ -254,6 +264,7 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
       delTrack.run(id);
       delVec.run(id);
       delAudioVec.run(id);
+      deleteFacetRows(id);
     }
   });
   runPrune(orphans);

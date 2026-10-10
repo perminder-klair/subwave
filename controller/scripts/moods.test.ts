@@ -12,9 +12,6 @@ import {
   moodPromptFor,
   moodScheduleFor,
   weatherMoodFor,
-  validateMoodsStrict,
-  validateMoodScheduleStrict,
-  validateWeatherMoodsStrict,
   assertNoOrphanMoods,
   MOOD_DEFAULTS,
   PERIOD_MOOD_DEFAULTS,
@@ -22,6 +19,8 @@ import {
   MOOD_PERIODS,
   WEATHER_CONDITIONS,
 } from '../src/settings.js';
+
+import { parseSettingsPatchKey, SETTINGS_PATCH_SHAPE_ONLY } from '../src/settings/patch-registry.js';
 
 // ── vocabulary ───────────────────────────────────────────────────────────────
 
@@ -63,75 +62,76 @@ for (const cond of WEATHER_CONDITIONS) {
 }
 assert.equal(weatherMoodFor('cloudy'), '', 'cloudy has no mood steer by default');
 
-// ── validateMoodsStrict ──────────────────────────────────────────────────────
+// ── moods patch validation ──────────────────────────────────────────────────────
 
 // Valid list round-trips, normalising the id (lowercase, spaces/punct → dashes)
 // and keeping the CLAP prompt.
 assert.deepEqual(
-  validateMoodsStrict([{ name: 'Chill Vibes!', clapPrompt: 'soft downtempo' }]),
+  parseSettingsPatchKey('moods', [{ name: 'Chill Vibes!', clapPrompt: 'soft downtempo' }]),
   [{ name: 'chill-vibes', clapPrompt: 'soft downtempo' }],
   'name normalises to a kebab id; prompt preserved',
 );
 // A missing/blank prompt is allowed (falls back to `${name} music` at read time).
 assert.deepEqual(
-  validateMoodsStrict([{ name: 'mellow' }]),
+  parseSettingsPatchKey('moods', [{ name: 'mellow' }]),
   [{ name: 'mellow', clapPrompt: '' }],
   'clapPrompt is optional',
 );
 // Unknown keys are stripped (rebuilt objects).
 assert.deepEqual(
-  validateMoodsStrict([{ name: 'x', clapPrompt: 'y', bogus: 1 }]),
+  parseSettingsPatchKey('moods', [{ name: 'x', clapPrompt: 'y', bogus: 1 }]),
   [{ name: 'x', clapPrompt: 'y' }],
   'unknown keys stripped',
 );
-assert.throws(() => validateMoodsStrict([]), /at least one/, 'empty vocabulary rejected');
-assert.throws(() => validateMoodsStrict('nope' as any), /must be an array/, 'non-array rejected');
+assert.throws(() => parseSettingsPatchKey('moods', []), /at least one/, 'empty vocabulary rejected');
+assert.throws(() => parseSettingsPatchKey('moods', 'nope'), /must be an array/, 'non-array rejected');
 assert.throws(
-  () => validateMoodsStrict([{ name: 'a' }, { name: 'A' }]),
+  () => parseSettingsPatchKey('moods', [{ name: 'a' }, { name: 'A' }]),
   /duplicate/,
   'duplicate names (after normalise) rejected',
 );
 assert.throws(
-  () => validateMoodsStrict([{ name: '' }]),
+  () => parseSettingsPatchKey('moods', [{ name: '' }]),
   /must be 1-/,
   'empty name rejected',
 );
 assert.throws(
-  () => validateMoodsStrict(Array.from({ length: 41 }, (_, i) => ({ name: `m${i}` }))),
+  () => parseSettingsPatchKey('moods', Array.from({ length: 41 }, (_, i) => ({ name: `m${i}` }))),
   /at most/,
   'over the 40-entry cap rejected',
 );
 
-// ── validateMoodScheduleStrict ───────────────────────────────────────────────
+// ── moodSchedule patch validation ───────────────────────────────────────────────
 
 const NAMES = ['energetic', 'calm', 'focus', 'evening', 'night', 'morning', 'driving', 'reflective'];
+const moodContext = { ...SETTINGS_PATCH_SHAPE_ONLY, moodNames: NAMES };
 const fullSchedule = Object.fromEntries(MOOD_PERIODS.map((p) => [p, PERIOD_MOOD_DEFAULTS[p]]));
 assert.deepEqual(
-  validateMoodScheduleStrict(fullSchedule, NAMES),
+  parseSettingsPatchKey('moodSchedule', fullSchedule, moodContext),
   fullSchedule,
   'a complete schedule of known moods round-trips',
 );
 assert.throws(
-  () => validateMoodScheduleStrict({ ...fullSchedule, 'drive-time': 'banana' }, NAMES),
+  () => parseSettingsPatchKey('moodSchedule', { ...fullSchedule, 'drive-time': 'banana' }, moodContext),
   /moodSchedule\.drive-time/,
   'a slot pointing at an unknown mood is rejected, naming the slot',
 );
 assert.throws(
-  () => validateMoodScheduleStrict([] as any, NAMES),
+  () => parseSettingsPatchKey('moodSchedule', [], moodContext),
   /must be an object/,
   'non-object schedule rejected',
 );
 
-// ── validateWeatherMoodsStrict ───────────────────────────────────────────────
+// ── weatherMoods patch validation ───────────────────────────────────────────────
 
 // '' (no steer) is allowed; missing conditions default to '' — so a partial map fills out.
-const weatherOut = validateWeatherMoodsStrict({ clear: 'energetic', rainy: '' }, NAMES);
+const weatherOut = parseSettingsPatchKey<Record<string, string>>('weatherMoods', { clear: 'energetic', rainy: '' }, moodContext);
 assert.equal(weatherOut.clear, 'energetic', 'known mood kept');
 assert.equal(weatherOut.rainy, '', 'blank = no steer kept');
 assert.equal(weatherOut.stormy, '', 'omitted condition defaults to no steer');
 assert.equal(Object.keys(weatherOut).length, WEATHER_CONDITIONS.length, 'all conditions present');
 assert.throws(
-  () => validateWeatherMoodsStrict({ clear: 'banana' }, NAMES),
+  () => parseSettingsPatchKey<Record<string, string>>('weatherMoods', { clear: 'banana' }, moodContext),
   /weatherMoods\.clear/,
   'a condition pointing at an unknown mood is rejected',
 );

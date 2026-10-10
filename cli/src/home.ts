@@ -112,13 +112,3 @@ export function isCloneMode(home: string): boolean {
     existsSync(resolve(home, 'web', 'package.json'))
   );
 }
-
-export function requireCloneMode(home: string, commandName: string): void {
-  if (isCloneMode(home)) return;
-  process.stderr.write(
-    `\`subwave ${commandName}\` needs the cloned repo (controller/, web/, scripts/).\n` +
-    `Current SUBWAVE_HOME=${home} looks like a standalone install.\n` +
-    'Clone the repo with `git clone https://github.com/perminder-klair/subwave.git` to use this command.\n',
-  );
-  process.exit(2);
-}

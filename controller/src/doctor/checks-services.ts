@@ -19,7 +19,7 @@ import {
   providerName,
   activeModelLabel,
 } from '../llm/provider.js';
-import { recentCalls } from '../llm/log.js';
+import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
 import type { Finding, StationSettings } from './types.js';
 import { classifyModel, isSchemaFailure } from './util.js';
 
@@ -66,6 +66,18 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       out.push({ label: 'fallback', status: 'skip', detail: 'none configured (optional)' });
     }
   } catch { /* fallback is best-effort */ }
+
+  // Reachability cannot diagnose a provider whose generation slot is stuck.
+  // Keep this finding independent of probes and cached/LLM-generated reviews.
+  const generation = generationHealthSnapshot();
+  out.push({
+    label: 'generation health',
+    status: generation.status === 'fail' ? 'fail' : generation.status === 'idle' ? 'skip' : 'ok',
+    detail: `${generation.inFlightCount} client-observed in-flight generation(s) · oldest age ${generation.oldestInFlightAgeMs == null ? 'none' : `${Math.floor(generation.oldestInFlightAgeMs)}ms`} · ${generation.status} · process-local, not provider queue depth`,
+    hint: generation.status === 'fail'
+      ? 'An observed generation is stale or recently timed out. Check the provider and requestTimeoutMs; client abort does not guarantee release of the remote inference slot. /doctor/llm has live target details.'
+      : generation.status === 'idle' ? 'No observed generation failure; endpoint capacity is not measured.' : undefined,
+  });
 
   // Recent error rate from the in-memory ring.
   const recent = recentCalls.slice(0, 20);

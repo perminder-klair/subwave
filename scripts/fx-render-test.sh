@@ -13,9 +13,20 @@
 #       Phase 1 — render the a→b transition with the production envelope logic
 #       (mirrored from radio.liq) and print an RMS-over-time table. Default
 #       renders every variant.
+#   scripts/fx-render-test.sh xchain
+#       Regression checks for distinct tracks, repeated files/jingles and
+#       metadata replay; every transition must buffer its outgoing stamp.
 #   scripts/fx-render-test.sh loopcheck
 #       Regression check — fail if Loop's capture-pass level differs from the
 #       plain transition by more than 1 dB on deterministic pink noise.
+#   scripts/fx-render-test.sh loopgaps
+#       Regression check — fail if Loop drops out at a repeat: any 5 ms window
+#       more than 6 dB under its neighbours on a steady 1 kHz tone, for an
+#       on-grid and an off-grid bar (a comb never keeps its first frame).
+#   scripts/fx-render-test.sh jingleseam
+#       Regression check — on A -> jingle -> B, B's entry gesture must stand
+#       down on the jingle's seam yet still arm on a direct A -> B seam. Lifts
+#       the arming lines, the jingle mark and the cross stamps from radio.liq.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -148,6 +159,7 @@ blend_on   = mode == "blend"
 dissolve_on = mode == "dissolve"
 chop_on    = mode == "chop"
 loop_on    = mode == "loop"
+loop_bar   = float_of_string(default=2.0, environment.get(default="2.0", "BAR"))
 
 q = request.queue(id="q")
 q.push(request.create("/work/ra.wav"))
@@ -166,20 +178,6 @@ def t(a, b) =
     else
       fade.out(duration=d, a.source)
     end
-  a_src =
-    if blend_on then
-      ha_src = a_src
-      def blend_hp() =
-        e = source.elapsed(ha_src)
-        e = if e < 0. then 0. else e end
-        t_end = 0.65 * d
-        x = if e >= t_end then 1.0 else e / t_end end
-        sxx = 3.0 * x * x - 2.0 * x * x * x
-        30.0 * pow(1800.0 / 30.0, sxx)
-      end
-      blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_src)
-      add(normalize=false, [a_src, amplify(-1., blend_low)])
-    else a_src end
   a_src =
     if sweep_on then
       sweep_src = a_src
@@ -226,6 +224,20 @@ def t(a, b) =
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
       amplify(sweep_gain, add(normalize=false,
         [amplify(0.30, a_src), amplify(0.75, swept)]))
+    else a_src end
+  a_src =
+    if blend_on then
+      ha_src = a_src
+      def blend_hp() =
+        e = source.elapsed(ha_src)
+        e = if e < 0. then 0. else e end
+        t_end = 0.65 * d
+        x = if e >= t_end then 1.0 else e / t_end end
+        sxx = 3.0 * x * x - 2.0 * x * x * x
+        30.0 * pow(1800.0 / 30.0, sxx)
+      end
+      blend_low = filter.rc(frequency=blend_hp, mode="low", wetness=1., a_src)
+      add(normalize=false, [a_src, amplify(-1., blend_low)])
     else a_src end
   a_src =
     if washout_on then
@@ -275,7 +287,7 @@ def t(a, b) =
         x = if e >= t_on then 1.0 else e / t_on end
         3.0 * x * x - 2.0 * x * x * x
       end
-      washed = comb(delay=0.28, feedback=wash_fb, a_src)
+      washed = comb(delay=0.30, feedback=wash_fb, a_src)   # radio.liq's default tap
       washed = filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet,
                  filter.rc(frequency=tail_cut, mode="low", wetness=tail_wet, washed))
       amplify(wash_gain, washed)
@@ -344,13 +356,15 @@ def t(a, b) =
       add(normalize=false, [a_src, amplify(diss_gain, washed)])
     else a_src end
   # CHOP — keep in lockstep with radio.liq's chop block: compressed clock
-  # dd=min(d,10), accelerating gate (beat → eighths → sixteenth stutter),
-  # duty shrink, floor decay, 12 ms smoothstep edges, engage ramp, master
-  # release. Fixed p=0.5 here (the harness has no BPM).
+  # dd=min(d,10) shared with the incoming fade, accelerating gate (beat →
+  # eighths → sixteenth stutter), duty shrink, floor decay, smoothstep edges
+  # (frame-stepped on air), engage ramp, master release. Fixed p=0.5 here (the
+  # harness has no BPM). d=12 here, so the render exercises the d > 10 case.
+  chop_dd = if d > 10. then 10. else d end
   a_src =
     if chop_on then
       p = 0.5
-      dd = if d > 10. then 10. else d end
+      dd = chop_dd
       chop_src = a_src
       def chop_gain() =
         e = source.elapsed(chop_src)
@@ -417,20 +431,20 @@ def t(a, b) =
   # bar multiple), a hard dry gate after the capture pass, ride-out darkening
   # lowpass, and a complementary output ride leaving headroom for the incoming
   # fade. feedback=0.0 makes each delayed copy unity; the non-overlapping bar
-  # slots need no global makeup. Fixed bar=2.0 here (no BPM stamp).
+  # slots need no global makeup. The bar is snapped to the frame grid and the
+  # dry gate held one extra frame, because a comb never keeps its first frame
+  # (radio.liq FRAME RULES). BAR defaults to 2.0 (no BPM stamp here).
   a_src =
     if loop_on then
-      bar = 2.0
+      bar = loop_bar
+      fd = frame.duration()
+      bar = fd * float_of_int(int_of_float(bar / fd + 0.5))
+      log("RENDER: loop bar=#{bar}")
       loop_src = a_src
       def loop_dry() =
         e = source.elapsed(loop_src)
         e = if e < 0. then 0. else e end
-        edge = 0.012
-        if e < bar - edge then 1.0
-        elsif e < bar then
-          x = (e - (bar - edge)) / edge
-          1.0 - (3.0 * x * x - 2.0 * x * x * x)
-        else 0.0 end
+        if e < bar + 0.5 * fd then 1.0 else 0.0 end
       end
       def loop_cut() =
         e = source.elapsed(loop_src)
@@ -462,7 +476,8 @@ def t(a, b) =
                  filter.rc(frequency=loop_cut, mode="low", wetness=loop_wet, looped))
       amplify(loop_gain, looped)
     else a_src end
-  b_src = fade.in(duration=d, b.source)
+  b_fade = if chop_on then chop_dd else d end
+  b_src = fade.in(duration=b_fade, b.source)
   b_src =
     if blend_on then
       bin_src = b_src
@@ -535,7 +550,7 @@ LIQ
   esac
   for m in $modes; do
     echo "== render: $m =="
-    liq render.liq -e MODE="$m" -e OUT="render-$m.wav" | grep -Ei "RENDER:|error|early computation" || true
+    liq render.liq -e MODE="$m" -e BAR="${BAR:-2.0}" -e OUT="render-$m.wav" | grep -Ei "RENDER:|error|early computation" || true
     echo "--- RMS over time ($m) — transition region ---"
     rms_table "$WORK/render-$m.wav" 2>/dev/null | sed -n '90,140p' || true
     echo "wav: $WORK/render-$m.wav"
@@ -602,10 +617,188 @@ LIQ
   echo "XDUR PASS — the outgoing track owns its stamped end-of-track buffer"
 }
 
+xchain() {
+  # Do cross's buffers follow each track's OWN stamp along a chain? Two tracks
+  # (xdur) cannot see it: the 2.4.5 lag only shows from the third transition on,
+  # where each tail used to be sized by the stamp of the track two back. Five
+  # tones with distinct stamps run through the OLD wiring (raw
+  # liq_cross_duration) and the NEW one (cross_stamps + strip_cross_stamps,
+  # lifted verbatim from radio.liq so the harness cannot drift from the mixer).
+  # Repeated files are new airings, while injected metadata repeats within an
+  # airing must retain its original incoming stamp. Unstamped jingles use the
+  # station default. Expected durations come from the input, not the rewrite.
+  local f
+  for f in 1 2 3 4 5; do
+    [ -f "$WORK/x$f.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=$((220 + f * 110)):duration=30" -af volume=-12dB -ar 44100 -ac 2 "$WORK/x$f.wav"
+  done
+  awk '/^cross_prev_end = ref/{on=1} /^# BUFFER SIZING/{on=0} on' "$HERE/../liquidsoap/radio.liq" > "$WORK/xchain-stamps.liq"
+  grep -q "def strip_cross_stamps" "$WORK/xchain-stamps.liq" \
+    || { echo "XCHAIN FAIL — could not lift cross_stamps/strip_cross_stamps out of radio.liq"; return 1; }
+  cat > "$WORK/xchain.liq" <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 3
+crossfade_duration = ref(5.0)
+mode = environment.get(default="new", "MODE")
+scenario = environment.get(default="distinct", "SCENARIO")
+q = request.queue(id="q")
+repeated = scenario == "repeated-file" or scenario == "repeated-jingle"
+jingles = scenario == "repeated-jingle"
+tracks = [
+  ("x1", "/work/x1.wav", "4"),
+  ("x2", "/work/x2.wav", if jingles then "" else "9" end),
+  ("x3", if repeated then "/work/x2.wav" else "/work/x3.wav" end,
+         if jingles then "" else "3" end),
+  ("x4", "/work/x4.wav", "7"),
+  ("x5", "/work/x5.wav", "6")
+]
+list.iter(fun ((title, fname, stamp)) -> begin
+  expected = if stamp == "" then string(crossfade_duration()) else stamp end
+  uri = 'annotate:title="#{title}",liq_cross_duration="#{stamp}",expected_cross="#{expected}":#{fname}'
+  ignore(q.push(request.create(uri)))
+end, tracks)
+if scenario == "metadata-replay" then
+  q.on_position(position=1., synchronous=true, fun (_, m) -> begin
+    log("XCHAIN REPLAY: #{m['title']}")
+    q.insert_metadata(new_track=false, m)
+  end)
+end
+%include "/work/xchain-stamps.liq"
+def t(a, b) =
+  key = if mode == "new" then "liq_cross_end_duration" else "liq_cross_duration" end
+  stamp = float_of_string(default=crossfade_duration(), a.metadata[key])
+  expected = float_of_string(default=crossfade_duration(), a.metadata["expected_cross"])
+  ra = source.remaining(a.source)
+  rb = source.remaining(b.source)
+  if b.metadata["title"] != "" then
+    log("XCHAIN: #{a.metadata['title']} -> #{b.metadata['title']} expected=#{expected} stamp=#{stamp} a_buf=#{ra} b_buf=#{rb}")
+  end
+  d = if mode == "new" then min(ra, rb) else stamp end
+  out = add(normalize=false, [fade.out(duration=d, initial_metadata=a.metadata, a.source),
+                              fade.in(duration=d, initial_metadata=b.metadata, b.source)])
+  if mode == "new" then strip_cross_stamps(out) else out end
+end
+music = if mode == "new" then metadata.map(update=true, strip=true, cross_stamps, q) else q end
+music = cross(duration=crossfade_duration(), persist_override=true, t, music)
+output.file(%wav, fallible=true, "/work/xchain-#{scenario}-#{mode}.wav", music)
+clock.assign_new(sync="none", [music])
+thread.run(delay=25., fun() -> shutdown())
+LIQ
+  local scenario m log bad=0
+  for scenario in distinct repeated-file repeated-jingle metadata-replay; do
+    for m in old new; do
+      # The old distinct chain is the reference for the original buffer lag.
+      [ "$m" = new ] || [ "$scenario" = distinct ] || continue
+      echo "== $scenario ($m)"
+      log=$(liq xchain.liq -e MODE=$m -e SCENARIO=$scenario) || { echo "$log"; return 1; }
+      echo "$log" | grep -E "XCHAIN:|XCHAIN REPLAY:|rror" || true
+      if [ "$m" = new ]; then
+        # Buffers sit one 0.02 s frame under the stamp at most.
+        echo "$log" | grep "XCHAIN:" | awk '{
+          for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] }
+          if (v["stamp"] != v["expected"] || v["a_buf"] < v["expected"] - 0.05 || v["a_buf"] > v["expected"] + 0.05 || v["b_buf"] < v["expected"] - 0.05 || v["b_buf"] > v["expected"] + 0.05) bad++
+          n++
+        } END { exit !(n == 4 && bad == 0) }' || bad=1
+        if [ "$scenario" = metadata-replay ]; then
+          [ "$(echo "$log" | grep -c 'XCHAIN REPLAY:')" = 5 ] || bad=1
+        fi
+      fi
+    done
+  done
+  [ "$bad" = 0 ] || { echo "XCHAIN FAIL — a transition did not buffer its outgoing track's own stamp"; return 1; }
+  echo "XCHAIN PASS — every transition buffers its outgoing stamp on both sides"
+}
+
+loopgaps() {
+  # A steady tone makes every repeat seam visible: a clean tape loop holds a
+  # flat envelope (only the slow ride-out), a dropout reads as a hole. ra.wav
+  # is 50s and cross() buffers its final 12s, so the transition starts at 38s;
+  # the window stops at 80% of d, before the ride-out has taken the level down.
+  ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=100" -af volume=-12dB \
+    -ar 44100 -ac 2 "$WORK/loopgaps-a.wav"
+  ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 45 "$WORK/loopgaps-b.wav"
+  local bar holes bad=0
+  for bar in 2.0 1.87; do
+    BAR="$bar" render "$WORK/loopgaps-a.wav" "$WORK/loopgaps-b.wav" loop >/dev/null
+    holes=$(ffprobe -v error -f lavfi \
+      "amovie=$WORK/render-loop.wav,atrim=start=38:end=47.6,asetnsamples=n=220:p=0,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level" \
+      -show_entries frame_tags=lavfi.astats.Overall.RMS_level -of csv=p=0 2>/dev/null \
+      | awk '{ v[NR] = ($0 ~ /inf/) ? -200 : $0 + 0 }
+             END {
+               n = 0
+               for (i = 11; i <= NR - 10; i++) {
+                 m = -999
+                 for (j = i - 10; j <= i + 10; j++) if (v[j] > m) m = v[j]
+                 if (v[i] < m - 6) n++
+               }
+               print n
+             }')
+    printf 'Loop bar=%s: %s window(s) of 5 ms more than 6 dB under their neighbours\n' "$bar" "$holes"
+    [ "$holes" = 0 ] || bad=1
+  done
+  [ "$bad" = 0 ] || { echo "LOOPGAPS FAIL — the loop drops out at a repeat seam"; return 1; }
+  echo "LOOPGAPS PASS — every repeat seam is gapless"
+}
+
+jingleseam() {
+  # A stinger sits upstream of cross, so on A -> J -> B the J -> B seam reads
+  # B's entry flag. The arming lines, the jingle mark and the cross-stamp
+  # rewrite are LIFTED from radio.liq so the harness cannot drift from the
+  # mixer; each seam logs what it armed.
+  gen_tones
+  awk '/^cross_prev_end = ref/{on=1} /^# BUFFER SIZING/{on=0} on' "$HERE/../liquidsoap/radio.liq" > "$WORK/jseam-stamps.liq"
+  grep -E '^  (boundary_fading|jingle_out|washing|looping|sweeping|dissolving|chopping|blending) = ' \
+    "$HERE/../liquidsoap/radio.liq" > "$WORK/jseam-arming.liq"
+  local mark
+  mark=$(grep -m1 -oE 'metadata\.map\(update=true, fun \(_\) -> \[\("subwave_jingle", "true"\)\]' "$HERE/../liquidsoap/radio.liq")
+  [ "$(wc -l < "$WORK/jseam-arming.liq")" = 8 ] && [ -n "$mark" ] && grep -q "def cross_stamps" "$WORK/jseam-stamps.liq" \
+    || { echo "JINGLESEAM FAIL — could not lift the arming lines / jingle mark / cross stamps from radio.liq"; return 1; }
+  {
+    cat <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 3
+crossfade_duration = ref(3.0)
+scenario = environment.get(default="jingle", "SCENARIO")
+# single() resolves a static file before the clock starts; a request.queue
+# resolves asynchronously and `sequence` skips one that is not ready yet,
+# which reorders the seams from run to run.
+sa = once(single('annotate:title="A":/work/a.wav'))
+sb = once(single('annotate:title="B",liq_sweep="true":/work/b.wav'))
+sj = once(single('annotate:title="J":/work/a.wav'))
+LIQ
+    echo "jingle = ${mark}, sj)"
+    cat <<'LIQ'
+music = if scenario == "jingle" then sequence([sa, jingle, sb]) else sequence([sa, sb]) end
+%include "/work/jseam-stamps.liq"
+def t(a, b) =
+%include "/work/jseam-arming.liq"
+  log("JSEAM: #{a.metadata['title']} -> #{b.metadata['title']} jingle_out=#{jingle_out} sweeping=#{sweeping} chopping=#{chopping} dissolving=#{dissolving} blending=#{blending}")
+  d = min(source.remaining(a.source), source.remaining(b.source))
+  add(normalize=false, [fade.out(duration=d, a.source), fade.in(duration=d, b.source)])
+end
+music = metadata.map(update=true, strip=true, cross_stamps, music)
+music = cross(duration=crossfade_duration(), persist_override=true, t, music)
+output.file(%wav, fallible=true, on_stop=shutdown, "/work/jseam.wav", music)
+clock.assign_new(sync="none", [music])
+LIQ
+  } > "$WORK/jseam.liq"
+  local log_j log_d
+  log_j=$(liq jseam.liq -e SCENARIO=jingle) || { echo "$log_j"; return 1; }
+  log_d=$(liq jseam.liq -e SCENARIO=direct) || { echo "$log_d"; return 1; }
+  echo "$log_j" "$log_d" | grep -E "JSEAM:|rror" | grep -v "loading cache" || true
+  grep -q "JSEAM: A -> J jingle_out=false sweeping=false" <<<"$log_j" \
+    && grep -q "JSEAM: J -> B jingle_out=true sweeping=false chopping=false dissolving=false blending=false" <<<"$log_j" \
+    && grep -q "JSEAM: A -> B jingle_out=false sweeping=true" <<<"$log_d" \
+    || { echo "JINGLESEAM FAIL — an entry gesture fired on the jingle's seam, or stopped arming on a direct one"; return 1; }
+  echo "JINGLESEAM PASS — the jingle's seam is a plain fade; the direct seam still arms B's sweep"
+}
+
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   loopcheck) loopcheck ;;
+  loopgaps) loopgaps ;;
+  jingleseam) jingleseam ;;
   xdur)   xdur ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | xdur"; exit 2 ;;
+  xchain) xchain ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | xdur | xchain"; exit 2 ;;
 esac

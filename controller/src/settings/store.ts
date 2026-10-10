@@ -138,7 +138,10 @@ export function getRedacted() {
     clone.tts.cloud.compatApiKey = s.tts?.cloud?.compatApiKey ? 'set' : '';
   }
   if (clone.search) clone.search.apiKey = s.search?.apiKey ? 'set' : '';
-  if (clone.embedding) clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
+  if (clone.embedding) {
+    clone.embedding.apiKey = s.embedding?.apiKey ? 'set' : '';
+    clone.embedding.headers = maskHeaderValues(s.embedding?.headers);
+  }
   if (Array.isArray(clone.webhooks)) {
     for (let i = 0; i < clone.webhooks.length; i++) {
       clone.webhooks[i].authHeader = s.webhooks?.[i]?.authHeader ? 'set' : '';
@@ -178,4 +181,3 @@ export function minTrackSeconds(s: { crossfadeDuration?: unknown } | null | unde
   const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
   return Math.max(30, Math.ceil(2 * cross));
 }
-

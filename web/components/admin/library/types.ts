@@ -1,5 +1,6 @@
  
 import type { TaggerState, LibraryStatsLite, BudgetMode } from '../LibraryTaggingPanel';
+import type { TransitionDrop } from '../../../lib/transitionStats';
 
 export interface Track {
   id: string;
@@ -153,6 +154,15 @@ export interface PlayEntry {
   requestedBy: string | null;
   showId: string | null;
   showName: string | null;
+  // The seam record. `transition` is the label of the seam INTO this track as
+  // the controller armed it ('Normal', 'Washout + Sweep', 'Stem blend', …);
+  // `transitionAsk` is the DJ's own ask on the pick; `transitionDrops` are the
+  // effects it asked for that did not air, each with a MixDropReason code. All
+  // three are null on rows written before the record existed. Optional so an
+  // older controller that omits them reads the same as null.
+  transition?: string | null;
+  transitionAsk?: string | null;
+  transitionDrops?: TransitionDrop[] | null;
 }
 
 export interface SettingsResponse {

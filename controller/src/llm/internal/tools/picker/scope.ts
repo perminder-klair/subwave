@@ -1,23 +1,19 @@
-// The picker's per-pick scope + the context every discovery tool runs against.
-//
-// Scope is ONE value on purpose: every constraint a pick runs under travels from
-// pickViaAgent (broadcast/dj-agent.ts) to the tools as a single `PickerScope`
-// that is never destructured into per-field lists along the way. A lock named in
-// one list and forgotten in another is neither a type error nor a crash — it
-// falls through to a null default and stops being enforced on the agent path
-// while the pool picker still honours it (#1300 FR 13, vocalLock). Adding a lock
-// means adding a field here; do not reintroduce a per-field hand-off.
+// Pass one PickerScope from pickViaAgent to every tool. Field-by-field handoffs
+// previously dropped vocalLock silently (#1300 FR 13); add constraints to this shape.
 
 import * as library from '../../../../music/library.js';
 import * as embeddings from '../../../../music/embeddings.js';
 import { filterPickerCandidates } from '../../../../music/recency.js';
 import { applyStrictLocks, type VocalMode } from '../../../../music/show-filter.js';
+import { applyKnownTrackCeiling } from '../../../../music/track-duration.js';
 import { applyTrackFloor } from '../../../../music/track-floor.js';
 import { freshnessBiasedOrder } from '../../../../music/airing.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../../../util/pick-seed.js';
 import { slim } from './slim.js';
+import { intersectEpisodeSource, type ArtistEpisodeSource } from '../../../../music/episode-source.js';
 
 export interface PickerScope {
+  episodeSource: ArtistEpisodeSource | null;
   recentIds: Set<string>;
   // lowercased "title|artist" — backfilled entries lack ids
   recentKeys: Set<string>;
@@ -45,6 +41,7 @@ export interface PickerScope {
   // HARD here; the pool picker never-starves on the same floor behind it.
   // null = no floor, and not set on the request path.
   minTrackSec: number | null;
+  maxTrackSec: number | null;
   // Union of a strict playlist-anchored show's pinned Navidrome playlists; every
   // tool's candidates are intersected with it, HARD with no never-starve to
   // off-playlist, because a playlist is an exact set and showPlaylistTracks is
@@ -68,6 +65,7 @@ export interface PickerScope {
 // Every field defaults to "no constraint". Spread over a partial so there is
 // exactly one place a new field's default lives.
 const NO_SCOPE: PickerScope = {
+  episodeSource: null,
   recentIds: new Set(),
   recentKeys: new Set(),
   hardRecentIds: new Set(),
@@ -78,6 +76,7 @@ const NO_SCOPE: PickerScope = {
   energyLock: null,
   vocalLock: null,
   minTrackSec: null,
+  maxTrackSec: null,
   playlistLock: null,
   playlistTracks: null,
   excludedIds: null,
@@ -118,7 +117,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   const {
     recentIds, recentKeys, hardRecentIds, hardRecentKeys,
     genreLock, eraLock, moodLock, energyLock, vocalLock,
-    minTrackSec, playlistLock, excludedIds,
+    minTrackSec, maxTrackSec, playlistLock, excludedIds,
   } = scope;
 
   const seen = new Map<string, any>();
@@ -153,12 +152,14 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // top-60 must not reach the model in similarity order, or the cap of 8 pins
     // the same neighbours every pick. Randomness stays dominant; with no play
     // history this is a plain shuffle.
-    let pool = applyStrictLocks(freshnessBiasedOrder((list || []) as any[], library.lastAiredInfo(), Date.now()), {
+    const items: any[] = Array.isArray(list) ? list : [];
+    let pool = applyStrictLocks(freshnessBiasedOrder(intersectEpisodeSource(items, scope.episodeSource), library.lastAiredInfo(), Date.now()), {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
     }, { starve: true });
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a
     // pinned playlist's own 40-second interlude drops too — the floor is about
     // what the station will AIR, not which source a track came from.
+    pool = applyKnownTrackCeiling(pool, maxTrackSec);
     pool = applyTrackFloor(pool, minTrackSec, { starve: true });
     if (playlistLock) pool = pool.filter((s: any) => s?.id && playlistLock.has(s.id));
     // Blocklisted playlists drop AFTER the playlist lock, so exclusion overrides
@@ -171,7 +172,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
       hardRecentIds,
       hardRecentKeys,
       seenIds: new Set(seen.keys()),
-      maxPerArtist: opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
+      maxPerArtist: scope.episodeSource ? Infinity : opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
       cap,
     });
     const out: any[] = [];
@@ -188,7 +189,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // distinguish "nothing matches" from "matches exist but were all filtered" —
   // opposite next moves. A strict lock is anything that can drop a candidate the
   // source DID return, so all of them count here, not just recency.
-  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock || excludedIds || minTrackSec);
+  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock || excludedIds || minTrackSec || maxTrackSec);
   // The seed clause rides here as well as on the schema field (#1247): this is
   // the message in context at the moment the model fails, and "never invent a
   // song id" is satisfied by echoing the on-air seed. Wording from

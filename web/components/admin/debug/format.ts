@@ -23,6 +23,11 @@ export function fmtListeners(icecast: DebugIcecast | undefined): string {
   return 'up';
 }
 
+export function fmtListenerPeak(icecast: DebugIcecast | undefined): string {
+  if (!icecast || icecast.error || icecast.listener_peak == null) return '—';
+  return `sum of mount peaks ${icecast.listener_peak}`;
+}
+
 export function kindTone(k?: string): string {
   switch (k) {
     case 'error':

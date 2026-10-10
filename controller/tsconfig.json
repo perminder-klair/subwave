@@ -22,6 +22,6 @@
     "noImplicitAny": false,
     "useUnknownInCatchVariables": false
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "scripts/*.test.ts", "scripts/run-tests.ts", "scripts/live-provider-smoke.ts", "scripts/test-utils/**/*.ts"],
   "exclude": ["node_modules"]
 }

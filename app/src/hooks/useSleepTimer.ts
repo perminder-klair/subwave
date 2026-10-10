@@ -1,10 +1,5 @@
-// Sleep timer: tune out after a listener-chosen interval.
-//
-// The countdown is a wall-clock deadline and deliberately NOT gated on the app
-// being foregrounded. While audio plays the JS thread stays alive (iOS
-// background-audio mode / Android foreground service) so the 1s interval keeps
-// ticking, and because the check compares Date.now() against the deadline a
-// suspended stretch can only delay the stop, never stretch the timer.
+// Keep the timer running during background audio. A wall-clock deadline
+// lets a suspended JS thread catch up without extending the chosen duration.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 

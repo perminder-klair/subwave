@@ -1,8 +1,5 @@
 'use client';
 
-// Personas editor. One persona is active at a time (a scheduled Show can
-// override who is on air for its hour); '' = the built-in default prompt.
-// Everything POSTs to /settings and applies live, no mixer restart.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
 import { useQueryClient } from '@tanstack/react-query';
@@ -214,8 +211,9 @@ export default function PersonasPanel() {
     appendPersonaField({
       id: newId, name: 'New persona', tagline: '',
       frequency: 'moderate', scriptLength: 'concise', djMode: false, linkStyle: 'natural',
-      humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
+      humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '', musicLean: '',
       language: '',
+      voiceStyle: '',
       avatar: '',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
       skills: (data?.skills?.catalog || []).map(s => s.name),
@@ -458,7 +456,9 @@ export default function PersonasPanel() {
             localColour: p.localColour,
             warmth: p.warmth,
             soul: p.soul.trim(),
+            musicLean: p.musicLean.trim(),
             language: p.language.trim(),
+            voiceStyle: p.voiceStyle?.trim() || '',
             avatar: p.avatar || '',
             tts: {
               engine: p.tts.engine,

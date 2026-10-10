@@ -1,10 +1,5 @@
 'use client';
 
-// The on-air + health card at the top of /admin/dash: a now-playing title row
-// over a status strip of four instruments. All colour comes from theme tokens.
-// The meters animate via a single critically-damped (zeta~1) rAF loop that
-// writes straight to the DOM. Structure + state styling live in globals.css
-// under `.admin-root .hs-*`. Collapses under prefers-reduced-motion.
 import { useEffect, useRef } from 'react';
 import type { NowPlayingTrack } from '../../lib/types';
 import { Btn } from './ui';
@@ -288,9 +283,6 @@ export default function StationHeader({
         </div>
       </div>
 
-      {/* Four instruments at 140-196px can't sit in one 390px row, so on a phone
-          the flex rail becomes a 2-up grid. The `!` utilities are required
-          because the `.hs-*` rules in globals.css are unlayered. */}
       <div className="hs-strip !grid !grid-cols-2 sm:!flex">
         <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
@@ -299,8 +291,6 @@ export default function StationHeader({
             </div>
           </div>
           <svg ref={listenersSvg} className="hs-gauge" />
-          {/* Readouts wrap on a phone so the trailing peak/redline figure drops
-              to its own line instead of being clipped. */}
           <div className="hs-read flex-wrap sm:flex-nowrap">
             <span className="hs-v" ref={listenersV}>
               0
@@ -317,8 +307,6 @@ export default function StationHeader({
             <div className="hs-lbl">
               <span className="idx">02</span>DJ&nbsp;Latency
             </div>
-            {/* The head's sub-label is nowrap and would squeeze the instrument
-                name to an ellipsis in a half-width cell. */}
             <div className="hs-sub hidden sm:block" ref={zone}>
               nominal
             </div>

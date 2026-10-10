@@ -1,11 +1,5 @@
-// Zero-shot audio mood scoring: cosine between a mood description embedded by
-// CLAP's text tower and a track's stored audio vector (both live in the same
-// 512-d space). One analyzer round-trip embeds the vocabulary; the rest is
-// in-process dot products. Results land in tracks.audio_moods, which songsByMood
-// blends with the LLM's metadata-derived tags at retrieval time.
-//
-// Everything degrades to a no-op — no vectors, no backend, a lean backend
-// without the text tower, or a mid-pass failure all log and skip.
+// Score stored audio vectors against CLAP mood text vectors and blend scores with metadata
+// tags at retrieval. Missing vectors, backend capability, or failed requests log and skip.
 
 import crypto from 'node:crypto';
 import * as db from './library-db.js';

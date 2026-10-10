@@ -38,7 +38,7 @@ import { setRawDebugStderrMirror } from '../llm/log.js';
 import { TAGGER_CONTRACT_VERSION } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
-import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
+import { reportProgress, reportCatalogueReady, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 import { phaseEmbed } from './tag-library/embed.js';
@@ -263,10 +263,12 @@ async function main() {
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
-    const { pruned } = await adoptAndPrune(liveIds);
+    const { pruned, held } = await adoptAndPrune(liveIds, { confirmMassPrune: flags.confirmPrune });
+    if (held) logEvent('warning', held.message);
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
+    reportCatalogueReady(walked);
   }
   lap('walk');
 
