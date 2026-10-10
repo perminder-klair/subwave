@@ -91,6 +91,23 @@ Failed or deferred state migration keeps automatic recovery retryable.
 
 - **Navidrome 0.64 ID adoption (#1255, #1699)**: every authoritative library walk calls `id-rotation.adoptAndPrune` before deleting orphans. A track is adopted only if its canonical ID is present in the live walk. Derived columns, vectors and play attribution move in one SQLite transaction, which also inserts the confirmed map into `id_rotation_journal` (schema 26). Never publish the only copy of that map after committing adoption: a stopped child would delete the old rows and lose the map. The controller replays journal entries through blocklist, likes, recipes and settings; each replay must persist even when a previous failed write already changed its cache. Likes and blocklist saves share one ordered writer per store, including ordinary/debounced saves: atomic rename alone lets an older in-flight snapshot overwrite migrated IDs after the journal has been acknowledged. A failed save rejects its caller without poisoning the writer queue. Boot can read the journal before the library/vector handle opens. Stem-directory moves are replayable and best-effort. Playlist IDs require a live-index match; an unavailable index keeps the map and suppresses post-tag sync. Only successfully persisted mappings are acknowledged, and acknowledgement deletes just the consumed snapshot so a concurrent adoption survives. Legacy `id-rotation.json` handoffs remain readable; malformed/unreadable handoffs hold sync. Recovery tests exercise process exit after DB commit, transaction rollback, later-batch preservation, and failures in all four state stores. Already-pruned derived data requires a pre-migration backup. A failed Liquidsoap handoff may start this walk automatically only when `id-rotation-recovery.ts` proves the stored ID is absent and its deterministic canonical image resolves live; a generic fetch failure or canonical fixed point never starts maintenance. The detector and the maintenance child are both single-flight. A successful tag/reconcile run refreshes `auto.m3u` only after the rotation journal has settled, so the fallback cannot keep serving the pre-migration IDs until its hourly rebuild.
 
+## Targeted acoustic analysis
+
+Facet rows describe retained measurements even after a failed retry. Their
+`attempts` mirror the track's consecutive failure count on every status, so
+`needs` and `outdated` stop selecting head-only or older measurements after three
+failures. Explicit `failed` and `all` runs can retry them. Clearing failure
+history resets attempts on retained rows too. The open-time derivation stamp
+upgrades existing rows without promoting their measurement versions.
+
+A vocal row's `head-only` reason comes from its current columns, including on
+upgrade. Tail reasons such as `capped-download` describe the measuring pass and
+survive unrelated writes and resynchronization. Head-only vocal work requires
+confirmed `tailVocalAvailable()` support through the shared capability policy;
+unknown support still allows missing head vocals but never widens tail backfill.
+Targeted runs that disable vocals preserve stored tail vocal ranges, including
+an instrumental `[]`, without marking the carried measurement fresh.
+
 ## Prepared artist episodes
 
 `broadcast/show-preparation.ts` owns `state/show-preparations.json`. Its key is a

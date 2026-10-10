@@ -5,6 +5,7 @@ import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
 import { analysisFailureExclusion } from './tracks.js';
+import { deleteFacetRows } from './facets.js';
 
 // Phase one of a calibrated pass: raw cosines only, since the per-mood
 // baselines need the whole library on disk first. A crash between phases leaves
@@ -263,6 +264,7 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
       delTrack.run(id);
       delVec.run(id);
       delAudioVec.run(id);
+      deleteFacetRows(id);
     }
   });
   runPrune(orphans);
