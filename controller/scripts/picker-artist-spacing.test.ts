@@ -17,6 +17,7 @@ const { queue } = await import('../src/broadcast/queue.js');
 const { pickViaPool, clearPoolCache } = await import('../src/music/picker.js');
 const { clearPlaylistCache } = await import('../src/music/show-playlist.js');
 const { artistRootKey, filterPickerCandidates, trackKey } = await import('../src/music/recency.js');
+const { runArtistGuard } = await import('../src/broadcast/dj-agent/artist-guard.js');
 
 type Song = { id: string; title: string; artist: string; duration: number };
 const song = (id: string, artist: string): Song => ({ id, title: id, artist, duration: 240 });
@@ -219,6 +220,42 @@ test('hard track recency and artist-rescue exclusions survive spacing relaxation
   assert.equal(await pick(24, q, [repeat], 'choose', [], { avoidArtist: 'Jimi Hendrix' }), null);
   assert.equal(modelCalls, 0);
 });
+
+for (const window of [0, 5]) {
+  test(`pool rescue excludes the actual anchor through recency relaxation at window ${window}`, async () => {
+    const { q } = snapshot();
+    const anchor = song('anchor', 'Pixies');
+    const rejected = song('rejected', 'Pixies • Black Francis');
+    const repeat = song('repeat', 'Pixies • Kim Deal');
+    q.current = { track: anchor };
+    q._recentPlays = [{ ...song('other-kate-track', fresh.artist), endedAt: new Date().toISOString() }];
+    let rescues = 0;
+    const result = await runArtistGuard({
+      song: rejected, object: { id: rejected.id }, pickAnchor: anchor,
+      seen: new Map([[rejected.id, rejected], [repeat.id, repeat]]),
+      recentRoots: q.neighbourArtistRoots(window), window,
+      repick: async () => { assert.fail('no other-artist candidate was surfaced'); },
+      poolRescue: async (avoidArtist, avoidAnchorArtist) => {
+        rescues++;
+        assert.equal(avoidArtist, rejected.artist);
+        assert.equal(avoidAnchorArtist, anchor.artist);
+        const selected = await pick(window, q, [repeat, fresh], 'fail', [], { avoidArtist, avoidAnchorArtist });
+        assert.equal(selected?.song.id, fresh.id, 'model failure fallback still excludes the anchor');
+        for (const candidates of offered) assert.deepEqual(candidates.map(s => s.id), [fresh.id]);
+        return 'queued';
+      },
+      log: () => {}, logEvent: () => {},
+    });
+    assert.equal(result.kind, 'rescued');
+    assert.equal(rescues, 1);
+    assert.equal(modelCalls, 2, 'only the existing SDK recovery attempts');
+
+    assert.equal(await pick(window, q, [repeat], 'choose', [], {
+      avoidArtist: rejected.artist, avoidAnchorArtist: anchor.artist,
+    }), null, 'an all-anchor pool stays empty through every relaxation stage');
+    assert.equal(modelCalls, 0);
+  });
+}
 
 // Combined #1705/#1739 regression: a fresh artist prohibited by the length
 // ceiling must not prevent spacing from relaxing to an eligible recent artist.
