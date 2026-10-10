@@ -105,18 +105,14 @@ LEGACY_ENV="$MAIN/controller/.env"
 ROOT_ENV="$WORKTREE/.env"
 if [ -f "$LEGACY_ENV" ]; then
   touch "$ROOT_ENV"
-  added=()
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in ''|'#'*|ICECAST_*) continue ;; esac
-    key="${line%%=*}"
-    [ "$key" = "$line" ] && continue
-    grep -q "^${key}=" "$ROOT_ENV" && continue
-    [ ${#added[@]} -eq 0 ] && printf '\n# Folded in from the main checkout'"'"'s legacy controller/.env by prep-worktree.sh\n' >> "$ROOT_ENV"
-    printf '%s\n' "$line" >> "$ROOT_ENV"
-    added+=("$key")
-  done < "$LEGACY_ENV"
-  if [ ${#added[@]} -gt 0 ]; then
-    echo "[prep] folded legacy controller/.env into .env: ${added[*]}"
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  # Compare against the ORIGINAL root keys, not the growing destination.
+  # Keep every eligible legacy assignment in order so Compose still resolves
+  # duplicate keys and interpolation itself. Never source or re-quote values.
+  merged="$(awk -f "$SCRIPT_DIR/merge-env.awk" "$ROOT_ENV" "$LEGACY_ENV")"
+  if [ -n "$merged" ]; then
+    printf '\n# Folded in from the main checkout'"'"'s legacy controller/.env by prep-worktree.sh\n%s\n' "$merged" >> "$ROOT_ENV"
+    echo "[prep] folded legacy controller/.env into .env (root wins, ICECAST_* skipped)"
   else
     echo "[prep] keep   .env — already has every key from legacy controller/.env"
   fi
