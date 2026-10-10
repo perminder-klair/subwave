@@ -263,6 +263,40 @@ async def test_single_worker_recycle_queues_instead_of_failing():
     assert await asyncio.wait_for(task, 1) == {"ok": True}
 
 
+async def test_lean_request_starts_the_recycle_clock():
+    """A bpm/key pass loads no models but leaves its scratch resident, so it
+    must arm the idle recycle; it must not read as model use on /health."""
+
+    class Stdin:
+        def write(self, data): pass
+        async def drain(self): pass
+
+    class Proc:
+        returncode = None
+        stdin = Stdin()
+
+    worker = server.StdioWorker("analyze-1", "python", "worker.py")
+    worker.proc = Proc()
+    worker.ready = True
+
+    async def reply():
+        return {"ok": True, "bpm": 120}
+
+    worker._await_message = reply
+    assert worker.last_use is None
+    await worker.request({"path": "/tmp/a.mp3"})
+    assert worker.last_use is not None
+    assert worker.last_heavy is None and not worker.models_resident
+    # The loop's own question, asked the way recycle_loop asks it: used, then
+    # left alone for the window.
+    assert not worker._idle_expired(3600)
+    worker.last_use -= 3601
+    assert worker._idle_expired(3600), "a lean request never made the worker recyclable"
+    await worker._reset()
+    assert worker.last_use is None, "a fresh worker has nothing to reclaim"
+    assert not worker._idle_expired(0), "a worker that served nothing was offered for recycling"
+
+
 async def test_no_worker_ready_and_none_recycling_fails_fast():
     """Boot and crash still fail fast — blocking there would help no one."""
     down = LifecycleWorker("analyze-1")
@@ -336,6 +370,7 @@ async def main():
     await test_unavailable_selection_retries_another_ready_worker()
     await test_unavailable_worker_skipped()
     await test_single_worker_recycle_queues_instead_of_failing()
+    await test_lean_request_starts_the_recycle_clock()
     await test_no_worker_ready_and_none_recycling_fails_fast()
     await test_capability_aggregation_is_conservative()
     await test_latched_capability_error_does_not_fan_out()
