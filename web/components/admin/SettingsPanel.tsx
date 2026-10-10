@@ -1244,9 +1244,10 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                       Cap on how far a quiet track is turned up (0 = level down only). Boost is
                       also limited by each track&rsquo;s own measured peak headroom, so raising
                       this won&rsquo;t distort dynamic material; very quiet, dynamic masters
-                      simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
-                      far as needed. Applies from the next queued track; no restart, tracks need
-                      acoustic analysis (Library → Analyze).
+                      simply can&rsquo;t reach the target cleanly. A track whose peak is unknown
+                      is not turned up at all. Loud tracks are turned down as far as needed.
+                      Applies from the next queued track; no restart, tracks need acoustic
+                      analysis (Library → Analyze).
                     </div>
                   </div>
                 </div>
