@@ -15,7 +15,7 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary } from '../music/recency.js';
+import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
 import { showNoRepeatGuard } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
@@ -518,9 +518,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       playlistResolved: !!playlistTracks?.length,
       reason,
     }),
-    poolRescue: (avoidArtist) => pickViaPool(
+    poolRescue: (avoidArtist, avoidAnchorArtist) => pickViaPool(
       queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint,
-      { avoidArtist },
+      { avoidArtist, avoidAnchorArtist },
     ),
     log: (line) => queue.log('picker', line),
     logEvent,
@@ -572,6 +572,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       seen: extras.seen,
       recentAlbums: queue.recentAlbumKeys(albumHours),
       avoidArtistRoots: neighbourRoots,
+      // A successful artist re-pick must survive the softer album guard, even
+      // when its recent-artist preference is waived or the window is off.
+      avoidAnchorRoot: guarded.kind === 'repicked' ? artistRootKey(pickAnchor || {}) : '',
       // The run's `seen` values are the MODEL's projection and carry no
       // compilation flags (adding them would put them in a re-pick prompt), so
       // the key is resolved against the library — the same resolver the pool
@@ -753,7 +756,7 @@ function boundarySpeechContext(ctx: any, boundaryAt: unknown) {
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
-async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
+async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the pick-cycle anchor. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
