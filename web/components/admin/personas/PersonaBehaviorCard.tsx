@@ -75,8 +75,8 @@ export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps
                 ref={identLines.field.ref}
               />
               <FieldDescription {...identAria.descriptionProps}>
-                One complete ID per line. Up to {PERSONA_IDENT_LINES_LIMIT} lines,
-                {PERSONA_IDENT_LINE_MAX} characters each. Blank lines are ignored when saved.
+                One complete ID per line. Up to {PERSONA_IDENT_LINES_LIMIT} lines,{' '}
+                {PERSONA_IDENT_LINE_MAX} characters each. Blank lines are ignored when saved.{' '}
                 {identMode.field.value === 'verbatim'
                   ? 'With no lines, IDs remain improvised.'
                   : 'These lines are unused in Improvise mode.'}
