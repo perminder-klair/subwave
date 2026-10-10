@@ -347,6 +347,39 @@ async def test_path_contract():
     }], worker_calls
 
 
+async def test_facet_contract():
+    """A facets request is forwarded verbatim and answered in the facet shape;
+    a request without facets keeps the flat shape (old controllers)."""
+    worker_calls = []
+    facet_answer = {
+        "ok": True,
+        "facets": {"tail": {"status": "unmeasurable", "reason": "capped-download"}},
+        "source": {"kind": "path", "duration_s": 200.0, "complete": False, "predecoded": True},
+    }
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return facet_answer
+
+    server.analyzer_pool.request = worker_request
+    with tempfile.NamedTemporaryFile() as audio:
+        result = await server.analyze(
+            server.AnalyzeRequest(path=audio.name, complete=False, facets=["tail"])
+        )
+    assert worker_calls == [{"id": "1", "path": audio.name, "complete": False, "facets": ["tail"]}], worker_calls
+    assert result == {"ok": True, "facets": facet_answer["facets"], "source": facet_answer["source"]}, result
+
+    # Model bookkeeping follows the facets named, not the env defaults.
+    assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False
+    assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "ok"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "unavailable"}}}) is False
+    # A failed cache publication still used Demucs. Model loading failures
+    # answer unavailable and must not be mistaken for resident models.
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "failed", "reason": "cache write failed"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "unavailable"}}}) is False
+
+
 def test_concurrency_env_validation():
     old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")
     try:
@@ -375,6 +408,7 @@ async def main():
     await test_capability_aggregation_is_conservative()
     await test_latched_capability_error_does_not_fan_out()
     await test_path_contract()
+    await test_facet_contract()
 
 
 asyncio.run(main())

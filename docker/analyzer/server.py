@@ -11,7 +11,8 @@ over the wire: the worker reads tracks from a stream URL or a path on the
 shared /var/sub-wave volume.
 
 Endpoints:
-  GET  /health   → {ok, engines, analyze_loaded, analyze_audio_capable, analyze_vocal_capable}
+  GET  /health   → {ok, engines, analyze_loaded, analyze_audio_capable, analyze_vocal_capable,
+                     analyze_facets_capable, …}
   POST /analyze  → {ok, bpm, key, intro_ms, confidence, ...}
 """
 
@@ -354,10 +355,30 @@ class StdioWorker:
             return True
         if payload.get("op"):
             return False
+        facets = payload.get("facets")
+        if isinstance(facets, list):
+            # A facet request loads exactly the models its facets name.
+            return any(f in ("clap", "vocal", "stems") for f in facets)
         return bool(
             payload.get("embed") or payload.get("vocal") or payload.get("stems_dir")
             or EMBED_DEFAULT or VOCAL_DEFAULT
         )
+
+    @staticmethod
+    def _used_models(msg: dict[str, Any]) -> bool:
+        """Whether a response proves model use (flat or facet shape)."""
+        if any(k in msg for k in ("audio_embedding", "vocal_ranges", "stems_cached")):
+            return True
+        facets = msg.get("facets")
+        if isinstance(facets, dict):
+            return any(
+                # Failed model facets reached a loaded model too, including
+                # a stems cache publication error after successful separation.
+                # Missing/failed model loads answer unavailable instead.
+                isinstance(facets.get(f), dict) and facets[f].get("status") in ("ok", "failed")
+                for f in ("clap", "vocal", "stems")
+            )
+        return False
 
     async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         async with self.lock:
@@ -380,7 +401,7 @@ class StdioWorker:
             # not read as "models resident".
             if self._wants_models(payload) and (
                 (payload.get("texts") is not None and msg.get("ok"))
-                or any(k in msg for k in ("audio_embedding", "vocal_ranges", "stems_cached"))
+                or self._used_models(msg)
             ):
                 self.last_heavy = time.monotonic()
                 self.models_resident = True
@@ -638,6 +659,10 @@ async def health():
         "analyze_text_capable": analyzer_pool.capability(
             "text_embedding_capable", "audio_embedding"
         ),
+        # Per-facet requests ({"facets": [...]}) — a worker-version signal:
+        # older workers never emit the key, so this stays None and the
+        # controller keeps sending flat requests to them.
+        "analyze_facets_capable": analyzer_pool.capability("facets_capable", "facets"),
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
@@ -685,6 +710,11 @@ class AnalyzeRequest(BaseModel):
     # CLAP backfill for a track whose baseline analysis is already current.
     # Skips every non-embedding feature in the worker.
     embedding_only: bool = False
+    # Per-facet request: compute ONLY these facets (head, loudness, tail,
+    # clap, vocal, stems) and answer {"facets": {...}, "source": {...}}.
+    # Absent = the flat response above, unchanged. embed / vocal /
+    # embedding_only are ignored when this is set: the facets say it all.
+    facets: list[str] | None = None
 
 
 @app.post("/analyze")
@@ -719,9 +749,14 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_require_marker"] = req.stems_require_marker
     if req.embedding_only:
         payload["embedding_only"] = True
+    facets = getattr(req, "facets", None)
+    if facets is not None:
+        payload["facets"] = facets
     msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
+    if facets is not None:
+        return {"ok": True, "facets": msg.get("facets") or {}, "source": msg.get("source")}
     out: dict[str, Any] = {
         "ok": True,
         "bpm": msg.get("bpm"),
