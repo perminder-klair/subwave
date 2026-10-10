@@ -355,13 +355,16 @@ class StdioWorker:
 
     @staticmethod
     def _used_models(msg: dict[str, Any]) -> bool:
-        """Whether a response carries model-derived output (flat or facet shape)."""
+        """Whether a response proves model use (flat or facet shape)."""
         if any(k in msg for k in ("audio_embedding", "vocal_ranges", "stems_cached")):
             return True
         facets = msg.get("facets")
         if isinstance(facets, dict):
             return any(
-                isinstance(facets.get(f), dict) and facets[f].get("status") == "ok"
+                # Failed model facets reached a loaded model too, including
+                # a stems cache publication error after successful separation.
+                # Missing/failed model loads answer unavailable instead.
+                isinstance(facets.get(f), dict) and facets[f].get("status") in ("ok", "failed")
                 for f in ("clap", "vocal", "stems")
             )
         return False

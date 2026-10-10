@@ -1960,14 +1960,16 @@ def _path_loader(librosa, path):
     return load
 
 
-def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False):
+def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
     """Demucs over the head window: vocal ranges (+ head stems when
     `stems_dir`). Returns (vocal_ranges | None, stems_cached | None).
     Best-effort exactly like the code it was lifted from: a failure logs and
     leaves vocal_ranges None; a stem write failure reports stems_cached False.
     With `stems_require_marker` the marker is re-checked right before the
     write (the share can drop out during a long separation): no marker, no
-    write and stems_cached stays None, so the track is not stamped."""
+    write and stems_cached stays None, so the track is not stamped.
+    Facet callers may collect cache_errors without losing successful vocals
+    or changing the flat caller's best-effort return values."""
     import numpy as np
 
     vocal_ranges = None
@@ -1985,20 +1987,23 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
                 except Exception as e:  # noqa: BLE001 — cache is best-effort
                     log(f"stem cache write (head) failed: {e}")
                     stems_cached = False
+                    if cache_errors is not None:
+                        cache_errors.append(e)
     except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
         log(f"vocal activity failed: {e}")
         vocal_ranges = None
     return vocal_ranges, stems_cached
 
 
-def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False):
+def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
     """Demucs over the outro window: writes ABSOLUTE `outro["vocalRanges"]`
     ([] = analysed instrumental tail) and the tail stems + tail-meta when
     `stems_dir`. Only call with an outro computed from a proven tail.
     TAIL_VOCAL_MIN_LOUD (see its definition) guards against separation bleed
     on a fading outro. Returns True when the tail vocals were measured.
     With `stems_require_marker` the marker is re-checked before the tail stems
-    and again before the tail meta, as in demucs_head."""
+    and again before the tail meta, as in demucs_head. cache_errors collects
+    publication failures separately from the successful vocal measurement."""
     import numpy as np
 
     try:
@@ -2019,6 +2024,8 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
                     write_tail_meta(stems_dir, tail_offset, duration_s)
             except Exception as e:  # noqa: BLE001 — cache is best-effort
                 log(f"stem cache write (tail) failed: {e}")
+                if cache_errors is not None:
+                    cache_errors.append(e)
         shift_ms = tail_offset * 1000.0
         outro["vocalRanges"] = [
             {
@@ -2452,10 +2459,15 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
     # downmix, loudness off the real channels (issue #998).
     y_src = y = sr = None
     if wanted & {"head", "loudness"}:
-        y_src, sr = source.load(librosa, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
-        y = librosa.to_mono(y_src) if y_src is not None else None
-        if y is None or len(y) == 0:
-            raise RuntimeError("decoded empty audio")
+        try:
+            y_src, sr = source.load(librosa, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
+            y = librosa.to_mono(y_src) if y_src is not None else None
+            if y is None or len(y) == 0:
+                raise RuntimeError("decoded empty audio")
+        except Exception as e:  # noqa: BLE001 — independent windows may still decode
+            for name in ("head", "loudness"):
+                if name in wanted:
+                    out[name] = _failed(e)
 
     # Tail: needed for the tail facet itself and to gate the Demucs tail pass.
     outro = None
@@ -2475,7 +2487,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
                     tail_reason = "silent-tail-window"
         except Exception as e:  # noqa: BLE001 — contained to the tail facet
             log(f"tail facet failed: {e}")
-            out["tail"] = _failed(e)
+            if "tail" in wanted:
+                out["tail"] = _failed(e)
 
     vocal_ranges = None
     if wanted & {"vocal", "stems"}:
@@ -2491,13 +2504,15 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
             share_ok = stems_dir_to_write(stem_target, stems_require_marker) is not None
             if not share_ok:
                 stem_target = None
+            cache_errors = []
             vocal_ranges, stems_cached = demucs_head(
-                detector, load, librosa, stem_target, stems_require_marker
+                detector, load, librosa, stem_target, stems_require_marker, cache_errors=cache_errors
             )
             tail_vocals = False
             if outro is not None and "startMs" in outro:
                 tail_vocals = demucs_tail(
-                    detector, load, librosa, source.duration_s, outro, stem_target, stems_require_marker
+                    detector, load, librosa, source.duration_s, outro, stem_target, stems_require_marker,
+                    cache_errors=cache_errors,
                 )
             if stem_target and stems_dir_to_write(stem_target, stems_require_marker) is None:
                 share_ok = False
@@ -2516,6 +2531,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
                     out["stems"] = _unavailable(
                         f"stems root has no {STEMS_MARKER} marker (share not mounted here?)"
                     )
+                elif cache_errors:
+                    out["stems"] = _failed(cache_errors[0])
                 elif stems_cached is None:
                     out["stems"] = _failed("separation failed (see analyzer log)")
                 else:
@@ -2533,7 +2550,7 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
                     lifted["tail_start_ms"] = data.pop("tail_start_ms")
             out["tail"] = _ok({**lifted, **({"outro": data} if data else {})})
 
-    if "head" in wanted:
+    if "head" in wanted and "head" not in out:
         try:
             head = facet_head(y, sr, librosa)
             # Same preference as analyze(): a measured first vocal range is a
@@ -2544,7 +2561,7 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
         except Exception as e:  # noqa: BLE001
             out["head"] = _failed(e)
 
-    if "loudness" in wanted:
+    if "loudness" in wanted and "loudness" not in out:
         try:
             loud = facet_loudness(y_src, sr)
             out["loudness"] = _ok(loud) if loud else _unmeasurable("no-loudness-meter")
@@ -2567,8 +2584,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
 
 def analyze_facet_request(librosa, req):
     """The worker's facet entry point: parse, open the source, compute, close.
-    Raises FacetRequestError for a malformed request; any other exception
-    (fetch / decode failure) fails the whole request like analyze() does."""
+    Raises FacetRequestError for a malformed request. Fetch / source-open
+    failures fail the request; window failures stay inside their facets."""
     facets = parse_facets(req.get("facets"))
     source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"))
     try:

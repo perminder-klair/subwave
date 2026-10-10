@@ -340,6 +340,10 @@ async def test_facet_contract():
     assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
     assert server.StdioWorker._used_models({"facets": {"clap": {"status": "ok"}}}) is True
     assert server.StdioWorker._used_models({"facets": {"clap": {"status": "unavailable"}}}) is False
+    # A failed cache publication still used Demucs. Model loading failures
+    # answer unavailable and must not be mistaken for resident models.
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "failed", "reason": "cache write failed"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "unavailable"}}}) is False
 
 
 def test_concurrency_env_validation():

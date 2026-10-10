@@ -24,6 +24,10 @@
 
 import os
 import sys
+import tempfile
+import types
+from pathlib import Path
+from unittest.mock import patch
 
 try:
     import numpy as np
@@ -336,6 +340,129 @@ def t_a_facet_failure_stays_in_its_facet():
     assert out["loudness"] == {"status": "failed", "reason": "loudness meter exploded"}, out
 
 
+def t_head_decode_failure_keeps_independent_facets():
+    class Source(FakeSource):
+        def load(self, *args, **kwargs):
+            if empty:
+                return np.zeros((2, 0), dtype=np.float32), SR
+            raise OSError("head decoder failed")
+
+    y = np.concatenate([tone(12.0), silence(8.0)])
+    for empty in (False, True):
+        for requested in (["head"], ["loudness"], ["head", "loudness"]):
+            src = Source(tail=(y, SR, 180.0))
+            with Patched(get_embedder=lambda force=False: Batched(),
+                         facet_head=no_decode, facet_loudness=no_decode,
+                         measure_loudness=fixed_loudness, log=lambda *_a: None):
+                out = aw.analyze_facets(FakeLibrosa, src, [*requested, "tail", "clap"])
+            assert set(out) == set(requested) | {"tail", "clap"}, out
+            for name in requested:
+                assert out[name] == {"status": "failed", "reason": "decoded empty audio" if empty else "head decoder failed"}, out
+            assert out["tail"]["status"] == out["clap"]["status"] == "ok", out
+
+
+def t_tail_dependency_failure_returns_only_requested_facets():
+    class Source(FakeSource):
+        def tail(self, librosa):
+            raise OSError("tail decoder failed")
+
+    class Detector:
+        def separate(self, y):
+            return {"vocals": y}
+
+        def detect(self, *_args, **_kwargs):
+            return []
+
+    for requested in (["vocal"], ["stems"], ["vocal", "stems"], ["vocal", "tail"]):
+        with Patched(get_vocal_detector=lambda force=False: Detector(), log=lambda *_a: None):
+            out = aw.analyze_facets(FakeLibrosa, Source(), requested)
+        assert set(out) == set(requested), out
+        if "vocal" in requested:
+            assert out["vocal"] == {"status": "ok", "data": {"vocal_ranges": []}}, out
+        if "tail" in requested:
+            assert out["tail"] == {"status": "failed", "reason": "tail decoder failed"}, out
+
+
+def _cache_publication(stage, flat=False):
+    # Replace only the codec; write_stems/write_tail_meta still publish through
+    # real files and os.replace. A directory at the final name makes rename
+    # fail deterministically, even for root, without relying on chmod.
+    soundfile = types.ModuleType("soundfile")
+    soundfile.write = lambda path, *_a, **_kw: Path(path).write_bytes(b"encoded stem")
+
+    class Detector:
+        def separate(self, y):
+            return {name: y for name in ("drums", "bass", "other", "vocals")}
+
+        def detect(self, *_args, **_kwargs):
+            return [{"startMs": 1000, "endMs": 3000}]
+
+    class Source(FakeSource):
+        def load(self, librosa, sr, mono, offset=0.0, duration=None):
+            return np.ones((2, 1024), dtype=np.float32), sr
+
+    class Librosa(FakeLibrosa):
+        @staticmethod
+        def get_duration(path):
+            return 200.0
+
+    with tempfile.TemporaryDirectory(prefix="subwave-facet-publication-") as root:
+        dest = Path(root) / "track-1"
+        dest.mkdir()
+        (Path(root) / aw.STEMS_MARKER).write_text("{}\n")
+        if stage is not None:
+            name = "tail-meta.json" if stage == "tail-meta" else f"{stage}-drums.flac"
+            (dest / name).mkdir()
+        src = Source(tail="capped-download")
+        with patch.dict(sys.modules, {"soundfile": soundfile}), Patched(
+            get_vocal_detector=lambda force=False: Detector(), get_embedder=lambda force=False: None,
+            facet_tail=lambda *_a: {"startMs": 190000, "ending": "cold"},
+            ensure_fast_decode=lambda path, **_kw: (path, None),
+            load_audio=lambda librosa, path, **kw: src.load(librosa, **kw),
+            analyze_outro=lambda *_a: {"startMs": 190000, "ending": "cold"},
+            facet_head=lambda *_a: {"bpm": 120.0, "key": "Am", "intro_ms": 0, "confidence": 1.0},
+            measure_loudness=fixed_loudness, log=lambda *_a: None,
+        ):
+            if flat:
+                out = aw.analyze(Librosa, path="unused.flac", complete=True, vocal=True,
+                                 stems_dir=str(dest), stems_require_marker=True)
+            else:
+                src._tail = (np.ones(10), SR, 180.0)
+                out = aw.analyze_facets(Librosa, src, ["vocal", "stems"],
+                                        stems_dir=str(dest), stems_require_marker=True)
+        return out, sorted(p.name for p in dest.iterdir() if p.is_file())
+
+
+def t_stem_publication_error_preserves_vocals(stage):
+    out, files = _cache_publication(stage)
+    assert out["stems"]["status"] == "failed", out
+    assert out["stems"]["reason"], out
+    assert set(out) == {"vocal", "stems"}, out
+    assert out["vocal"] == {"status": "ok", "data": {
+        "vocal_ranges": [{"startMs": 1000, "endMs": 3000}],
+        "tail_vocal_ranges": [{"startMs": 181000, "endMs": 183000}],
+    }}, out
+    if stage == "tail-meta":
+        assert "tail-meta.json" not in files, files
+        assert all(f"tail-{name}.flac" in files for name in ("drums", "bass", "other", "vocals")), files
+
+
+def t_stem_publication_success():
+    out, files = _cache_publication(None)
+    assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
+    assert all(f"{window}-{name}.flac" in files for window in ("head", "tail")
+               for name in ("drums", "bass", "other", "vocals")), files
+    assert "tail-meta.json" in files, files
+
+
+def t_flat_publication_errors_keep_best_effort_outcomes():
+    for stage in ("head", "tail", "tail-meta"):
+        out, _files = _cache_publication(stage, flat=True)
+        assert out["stems_cached"] is (stage != "head"), out
+        assert out["vocal_ranges"] == [{"startMs": 1000, "endMs": 3000}], out
+        assert out["outro"]["vocalRanges"] == [{"startMs": 181000, "endMs": 183000}], out
+
+
 def _stems_marker_run(mark, lose_after=None):
     """vocal + stems with stems_require_marker against a real temp root.
     lose_after: separation call count after which the marker disappears
@@ -411,6 +538,13 @@ test("an unmeasurable tail says why", t_tail_reports_why_it_is_unmeasurable)
 test("a measured tail lifts the silence fields like the flat response", t_tail_ok_lifts_silence_fields_like_the_flat_response)
 test("FileSource refuses to prove the end of a capped or unprovable file", t_file_source_tail_gates)
 test("a failure in one facet does not fail the others", t_a_facet_failure_stays_in_its_facet)
+test("a head decode failure keeps independent tail/CLAP facets", t_head_decode_failure_keeps_independent_facets)
+test("a tail dependency failure returns only requested facets", t_tail_dependency_failure_returns_only_requested_facets)
+for stage in ("head", "tail", "tail-meta"):
+    test(f"{stage} publication errors fail stems and preserve vocals",
+         lambda stage=stage: t_stem_publication_error_preserves_vocals(stage))
+test("successful stem publication keeps the cache outcome", t_stem_publication_success)
+test("flat stem publication errors keep best-effort outcomes", t_flat_publication_errors_keep_best_effort_outcomes)
 test("vocal + stems share one separation; tail ranges are absolute", t_vocal_and_stems_share_one_separation_and_shift_tail_ranges)
 test("stems facet, marked root: stems written", t_stems_facet_marked_root_writes)
 test("stems facet, unmarked root: unavailable, nothing written, vocal still ok",
