@@ -53,6 +53,22 @@ export interface RegisterToolsOptions {
   requestPollBudgetMs?: number;
 }
 
+/**
+ * Wraps every tool's output shape. The SDK publishes a zod output schema with
+ * `$schema: draft-07` (its zod v4 path hard-codes that target), and an MCP
+ * client that validates structured output with a JSON Schema 2020-12-only
+ * validator refuses the whole tool over that one line ("unsupported
+ * dialect"). Clearing it through zod metadata publishes the schema with no
+ * dialect, so each client reads it in its own default, draft-07 or 2020-12.
+ * Declaring 2020-12 instead would break the draft-07 clients the same way.
+ * That is safe only while these shapes use nothing the two dialects read
+ * differently (tuples, `definitions`/`$defs`, `dependencies`);
+ * `scripts/mcp-output-schema.test.ts` pins both halves.
+ */
+function output<T extends z.ZodRawShape>(shape: T) {
+  return z.object(shape).meta({ $schema: undefined });
+}
+
 /** Shared output shape for the request tools — mirrors GET /request/:id. */
 const REQUEST_OUTPUT = {
   requestId: z.string(),
@@ -103,7 +119,7 @@ export function registerSubwaveTools(
         "Call this first when other tools fail — it separates 'stack is down' from " +
         "'endpoint-specific problem'.",
       inputSchema: {},
-      outputSchema: { onAir: z.boolean() },
+      outputSchema: output({ onAir: z.boolean() }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     () =>
@@ -243,7 +259,7 @@ export function registerSubwaveTools(
           .optional()
           .describe("Name to credit the request to on-air. Defaults to 'anon'."),
       },
-      outputSchema: REQUEST_OUTPUT,
+      outputSchema: output(REQUEST_OUTPUT),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ request, requester }) =>
@@ -276,7 +292,7 @@ export function registerSubwaveTools(
       inputSchema: {
         requestId: z.string().min(1).describe("The requestId from subwave_request_song."),
       },
-      outputSchema: REQUEST_OUTPUT,
+      outputSchema: output(REQUEST_OUTPUT),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ requestId }) =>
@@ -382,11 +398,11 @@ export function registerSubwaveTools(
         year: z.number().optional(),
         genre: z.string().optional(),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         track: z.object({ title: z.string(), artist: z.string().nullable() }),
         queuePosition: z.number(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (track) =>
@@ -430,7 +446,7 @@ export function registerSubwaveTools(
         limit: z.number().int().optional().describe("Artist blocks only; default 10, max 30."),
         order: z.enum(["natural", "shuffle"]).optional().describe("Albums are refused 'shuffle'."),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         kind: z.enum(["album", "artist"]),
         blockId: z.string(),
@@ -449,7 +465,7 @@ export function registerSubwaveTools(
         runsPastShowChange: z
           .object({ at: z.string(), show: z.string().nullable(), bySec: z.number() })
           .nullable(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     (body) =>
@@ -489,7 +505,7 @@ export function registerSubwaveTools(
         "override, since every listener hears the same broadcast. ADMIN endpoint. Use " +
         "sparingly and deliberately; there is intentionally no listener-facing skip.",
       inputSchema: {},
-      outputSchema: { ok: z.boolean() },
+      outputSchema: output({ ok: z.boolean() }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     () =>
@@ -542,13 +558,13 @@ export function registerSubwaveTools(
               "whoosh, drum-roll). Omit for voice only.",
           ),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         mode: z.enum(["raw", "styled"]),
         kind: z.string(),
         spoken: z.string(),
         sfx: z.string().nullable().optional(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ message, mode, placement, sfx }) =>
@@ -592,7 +608,7 @@ export function registerSubwaveTools(
           ])
           .describe("Which scripted segment to fire."),
       },
-      outputSchema: { ok: z.boolean(), type: z.string(), spoken: z.string() },
+      outputSchema: output({ ok: z.boolean(), type: z.string(), spoken: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ type }) =>
@@ -644,11 +660,11 @@ export function registerSubwaveTools(
       inputSchema: {
         name: z.string().min(1).describe("Skill name from subwave_list_skills, e.g. 'weather'."),
       },
-      outputSchema: {
+      outputSchema: output({
         ok: z.boolean(),
         name: z.string(),
         spoken: z.string().nullable(),
-      },
+      }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ name }) =>
@@ -707,7 +723,7 @@ export function registerSubwaveTools(
           .min(1)
           .describe("Effect name, e.g. 'airhorn'. List valid names with subwave_list_sfx."),
       },
-      outputSchema: { ok: z.boolean(), name: z.string() },
+      outputSchema: output({ ok: z.boolean(), name: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ name }) =>
@@ -766,7 +782,7 @@ export function registerSubwaveTools(
           .min(1)
           .describe("Jingle filename, e.g. 'jingle_a1b2c3d4.wav'. List valid ones with subwave_list_jingles."),
       },
-      outputSchema: { ok: z.boolean(), filename: z.string() },
+      outputSchema: output({ ok: z.boolean(), filename: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     ({ filename }) =>
@@ -792,7 +808,7 @@ export function registerSubwaveTools(
         "library changes or a mood shift; it does not affect the current track or the " +
         "request queue.",
       inputSchema: {},
-      outputSchema: { ok: z.boolean() },
+      outputSchema: output({ ok: z.boolean() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
     () =>
