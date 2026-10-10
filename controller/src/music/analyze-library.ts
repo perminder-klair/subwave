@@ -116,6 +116,7 @@ async function buildFacetPlan(args: string[], limit: number | undefined): Promis
     capabilities: {
       clap: available ? analyzer.audioEmbeddingAvailable() : null,
       demucs: available ? analyzer.vocalActivityAvailable() : null,
+      tailVocal: available ? analyzer.tailVocalAvailable() : null,
     },
     limit,
   });

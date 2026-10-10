@@ -7,6 +7,9 @@ import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, T
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { resolveEraYear } from '../era-year.js';
+import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
+
+export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
 export function getTrack(id: string): TrackRecord | null {
   const row = requireDb()
@@ -370,6 +373,9 @@ interface TrackAnalysisWrite {
   // null keeps the existing value (COALESCE): a pass that couldn't reach the
   // tail must not wipe a complete pass's measurement.
   outro?: TrackOutro | null;
+  // A targeted run that disables vocals must keep the outro's separate vocal
+  // measurement, just as COALESCE keeps the head vocal ranges.
+  preserveTailVocal?: boolean;
   // Edge dead air (ms). The head is measurable on every pass and overwrites;
   // the tail follows the outro's COALESCE rule.
   leadSilenceMs?: number | null;
@@ -388,6 +394,15 @@ interface TrackAnalysisWrite {
 export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   const d = requireDb();
   d.transaction(() => {
+  let outro = a.outro;
+  let carriedTailVocal = false;
+  if (a.preserveTailVocal && outro && outro.vocalRanges == null) {
+    const prior = getTrack(id)?.outro?.vocalRanges;
+    if (prior != null) {
+      outro = { ...outro, vocalRanges: prior };
+      carriedTailVocal = true;
+    }
+  }
   d
     .prepare(
       `UPDATE tracks SET
@@ -437,7 +452,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
-      a.outro != null ? JSON.stringify(a.outro) : null,
+      outro != null ? JSON.stringify(outro) : null,
       Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
@@ -451,7 +466,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
   // (`tried`), while a tail kept from an earlier pass is not re-promoted.
   const fresh: Facet[] = ['head', 'loudness'];
   if (a.outro != null || Number.isFinite(a.tailSilenceMs as number)) fresh.push('tail');
-  if (a.vocalRanges != null) fresh.push('vocal');
+  if (a.vocalRanges != null && !carriedTailVocal) fresh.push('vocal');
   if (a.stemsAttempted) fresh.push('stems');
   syncTrackFacets(id, {
     fresh,
@@ -460,18 +475,6 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
   });
   })();
-}
-
-// Consecutive failures after which a track drops out of every analysis scope.
-// Three, not one: a single failure is usually transient.
-export const MAX_ANALYSIS_FAILURES = 3;
-
-// The exclusion every analysis scope query shares: a scope that forgets it
-// re-attempts dead tracks forever. `alias` is the tracks-table alias for
-// joining queries; it goes on the column, not the COALESCE around it.
-export function analysisFailureExclusion(alias = ''): string {
-  const col = alias ? `${alias}.analyze_fail_count` : 'analyze_fail_count';
-  return `COALESCE(${col}, 0) < ${MAX_ANALYSIS_FAILURES}`;
 }
 
 // Never analysed, or analysed by an older ANALYSIS_VERSION, minus the ones

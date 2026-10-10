@@ -20,8 +20,8 @@
 //
 // Status: 'ok' = measured; 'unmeasurable' = attempted, and this version can't
 // measure it for this file (terminal until the version is bumped); 'failed' =
-// the track's analysis failed, `attempts` mirrors analyze_fail_count. No row =
-// never attempted.
+// the track's analysis failed without a retained measurement. On every status,
+// `attempts` mirrors analyze_fail_count. No row = never attempted.
 //
 // The table lives OUTSIDE the PRAGMA user_version chain on purpose: it is
 // created idempotently on every open (like track_audio_vectors), so it never
@@ -33,6 +33,7 @@
 
 import type Database from 'better-sqlite3';
 import { ANALYSIS_VERSION, requireDb } from './handle.js';
+import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
 export const FACETS = ['head', 'loudness', 'tail', 'clap', 'vocal', 'stems'] as const;
 export type Facet = (typeof FACETS)[number];
@@ -50,9 +51,7 @@ export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
   stems: 1,
 };
 
-// Same limit as analyze_fail_count (tracks.ts MAX_ANALYSIS_FAILURES); kept as
-// its own constant so this module only depends on handle.ts.
-export const FACET_MAX_ATTEMPTS = 3;
+export const FACET_MAX_ATTEMPTS = MAX_ANALYSIS_FAILURES;
 
 // Where the analysed audio came from, as far as the controller knows.
 export type FacetSource = 'seed' | 'full' | 'capped' | 'unknown' | 'url' | 'analyzer';
@@ -102,10 +101,13 @@ export function deriveFacetRows(
   opts: DeriveOpts = {},
 ): DerivedFacet[] {
   const out: DerivedFacet[] = [];
+  // A failed retry can keep a valid older measurement. Its status describes
+  // that measurement; attempts still reflect the track's failure history.
+  const fails = row.analyze_fail_count ?? 0;
   const ok = (facet: Facet, reason: string | null = null, version = FACET_VERSIONS[facet]) =>
-    out.push({ facet, status: 'ok', version, reason, attempts: 0 });
+    out.push({ facet, status: 'ok', version, reason, attempts: fails });
   const unmeasurable = (facet: Facet, reason: string) =>
-    out.push({ facet, status: 'unmeasurable', version: FACET_VERSIONS[facet], reason, attempts: 0 });
+    out.push({ facet, status: 'unmeasurable', version: FACET_VERSIONS[facet], reason, attempts: fails });
 
   // The head pass is what stamps analysis_version; an older stamp means the
   // head features predate the current shape and are due again.
@@ -133,7 +135,6 @@ export function deriveFacetRows(
   if (row.has_stems) ok('stems');
 
   // A failed analysis counts against every facet it would have produced.
-  const fails = row.analyze_fail_count ?? 0;
   if (fails > 0) {
     const have = new Set(out.map(r => r.facet));
     for (const facet of FACETS) {
@@ -212,8 +213,10 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     const isFresh = fresh.has(r.facet) || (tried.has(r.facet) && r.status === 'unmeasurable');
     // An unmeasurable/ok row's reason describes the pass that measured it
     // ('capped-download' vs 'tail-not-measured'); a re-sync that didn't
-    // re-measure the facet keeps it. A failure's reason is the latest error.
-    if (!isFresh && prev && prev.status === r.status && r.status !== 'failed') r.reason = prev.reason;
+    // re-measure the facet keeps it. Vocal reasons describe the current
+    // columns instead, so a previously lost tail cannot retain a stale null
+    // reason. A failure's reason is the latest error.
+    if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal') r.reason = prev.reason;
     const version =
       isFresh || !prev || prev.status !== r.status ? r.version : Math.min(prev.version, r.version);
     // 'seed' is reserved for rows the seed wrote; a live write that creates a
@@ -240,7 +243,10 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
 // The versions the stored rows were derived under. A change to either one
 // re-derives the table on the next open.
 export function facetDerivationStamp(): string {
-  return JSON.stringify({ analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  // Revision 1 mirrors failure counts on kept measurements and repairs vocal
+  // reasons from the columns. Re-derive earlier tables once, without promoting
+  // their measurement versions.
+  return JSON.stringify({ revision: 1, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {
@@ -291,7 +297,7 @@ export function ensureFacetStatus(d: Database.Database): number {
     if (readFacetStamp(d) === facetDerivationStamp()) return 0;
     const t0 = Date.now();
     const n = resyncAllFacets(d);
-    console.log(`[library-db] track_facet_status re-derived for ${n} tracks (analysis/facet versions changed, ${Date.now() - t0} ms)`);
+    console.log(`[library-db] track_facet_status re-derived for ${n} tracks (facet derivation changed, ${Date.now() - t0} ms)`);
     return 0;
   }
   let seeded = 0;
@@ -364,8 +370,9 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
   const d = requireDb();
   d.prepare(
     `DELETE FROM track_facet_status
-      WHERE facet IN (${facets.map(() => '?').join(',')}) OR status = 'failed'`,
+      WHERE facet IN (${facets.map(() => '?').join(',')})`,
   ).run(...facets);
+  clearFacetFailures();
   // A kept vocal row was "head-only" because the outro lacked tail vocals; the
   // outro is gone now, so the same rule (deriveFacetRows) no longer holds it due.
   if (opts.keepVocal) {
@@ -381,6 +388,9 @@ export function clearFacetFailures(id?: string): void {
   const d = requireDb();
   if (id) d.prepare(`DELETE FROM track_facet_status WHERE status = 'failed' AND track_id = ?`).run(id);
   else d.prepare(`DELETE FROM track_facet_status WHERE status = 'failed'`).run();
+  const reset = 'UPDATE track_facet_status SET attempts = 0 WHERE attempts > 0';
+  if (id) d.prepare(`${reset} AND track_id = ?`).run(id);
+  else d.prepare(reset).run();
 }
 
 // Tracks with work for `facet`: never attempted, measured by an older version,
@@ -389,12 +399,13 @@ export function facetNeedsIds(facet: Facet, limit?: number): string[] {
   const sql =
     `SELECT t.id FROM tracks t
        LEFT JOIN track_facet_status s ON s.track_id = t.id AND s.facet = ?
-      WHERE s.track_id IS NULL
+      WHERE (s.track_id IS NULL
          OR s.version < ?
-         OR (s.status = 'failed' AND s.attempts < ?)
+         OR s.status = 'failed')
+        AND ${analysisFailureExclusion('t')}
       ORDER BY t.id` + (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   return (
-    requireDb().prepare(sql).all(facet, FACET_VERSIONS[facet], FACET_MAX_ATTEMPTS) as Array<{ id: string }>
+    requireDb().prepare(sql).all(facet, FACET_VERSIONS[facet]) as Array<{ id: string }>
   ).map(r => r.id);
 }
 
@@ -419,13 +430,13 @@ export function facetCounts(): FacetCount[] {
        SUM(status = 'unmeasurable') AS unmeasurable,
        SUM(status = 'failed')       AS failed,
        SUM(version < ?)             AS outdated,
-       SUM(version < ? OR (status = 'failed' AND attempts < ?)) AS dueRows,
+       SUM(attempts < ? AND (version < ? OR status = 'failed')) AS dueRows,
        COUNT(*)                     AS rows
      FROM track_facet_status WHERE facet = ?`,
   );
   return FACETS.map((facet) => {
     const v = FACET_VERSIONS[facet];
-    const r = stmt.get(v, v, FACET_MAX_ATTEMPTS, facet) as Record<string, number | null>;
+    const r = stmt.get(v, FACET_MAX_ATTEMPTS, v, facet) as Record<string, number | null>;
     const rows = r.rows ?? 0;
     const missing = total - rows;
     return {

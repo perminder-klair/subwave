@@ -20,6 +20,7 @@ import {
   backfillDecision,
   failureCountsAgainstTrack,
   SYSTEMIC_FAILURE_RUN,
+  tailVocalBackfillAvailable,
 } from './analyze-capability.js';
 import { probeListenerCount } from '../broadcast/listeners.js';
 import type { AcousticsPlan, WorkRequest } from './acoustics-plan.js';
@@ -285,7 +286,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // ranges. Tail widening also re-targets tracks whose outro predates tail vocal
   // detection, only on an explicit `=== true` — old sidecars never report the
   // flag and a stale image must keep the head-only scope.
-  const includeTailMissing = analyzer.tailVocalAvailable() === true;
+  const includeTailMissing = tailVocalBackfillAvailable(analyzer.tailVocalAvailable());
   if (vocalBackfill && !reAnalyzeScope && !plan) {
     const seen = new Set(ids);
     const vocalIds = db.needsVocalIds(cap, includeTailMissing).filter(id => !seen.has(id));
@@ -584,6 +585,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
+          preserveTailVocal: want != null && !want.vocal,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,

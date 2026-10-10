@@ -32,7 +32,7 @@ async function main() {
         `${pad(c.failed, 7)} ${pad(c.missing, 8)} ${pad(c.needs, 8)}`,
     );
   }
-  console.log(`(${counts[0]?.total ?? 0} tracks; "needs" = missing + outdated + failed under ${db.FACET_MAX_ATTEMPTS} attempts)`);
+  console.log(`(${counts[0]?.total ?? 0} tracks; "needs" = missing/outdated/failed under ${db.FACET_MAX_ATTEMPTS} consecutive failures)`);
 
   if (!args.includes('--check')) return;
 

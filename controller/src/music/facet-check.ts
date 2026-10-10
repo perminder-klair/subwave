@@ -41,7 +41,7 @@ export interface FacetCheckReport {
 }
 
 const label = (r: { status: string; attempts: number } | undefined) =>
-  !r ? '-' : r.status === 'failed' ? `failed×${r.attempts}` : r.status;
+  !r ? '-' : r.attempts > 0 ? `${r.status}×${r.attempts}` : r.status;
 
 export function checkFacets(sample = 10): FacetCheckReport {
   const d = db.requireDb();

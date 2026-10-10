@@ -11,11 +11,11 @@
 
 import {
   FACETS,
-  FACET_MAX_ATTEMPTS,
   FACET_VERSIONS,
   type Facet,
   type FacetCell,
 } from './library-db/facets.js';
+import { analysisRetryAllowed, tailVocalBackfillAvailable } from './analyze-capability.js';
 
 export type { FacetCell };
 
@@ -28,8 +28,9 @@ export type TrackFacets = ReadonlyMap<Facet, FacetCell>;
 //   missing       never attempted
 //   unmeasurable  attempted and not measurable at this version (optionally
 //                 only rows whose reason contains `reason`)
-//   failed        failed, INCLUDING tracks past the retry limit (explicit retry)
-//   outdated      measured by an older facet version
+//   failed        a failed pass, including a kept measurement and exhausted
+//                 retries (explicit retry)
+//   outdated      measured by an older facet version, under the retry limit
 //   all           every track in scope (force a redo)
 export type WhereKind = 'needs' | 'missing' | 'unmeasurable' | 'failed' | 'outdated' | 'all';
 export const WHERE_KINDS: readonly WhereKind[] = ['needs', 'missing', 'unmeasurable', 'failed', 'outdated', 'all'];
@@ -43,6 +44,8 @@ export interface PlanCapabilities {
   // null = unknown (analyzer not probed / too old to say): planned, flagged.
   clap: boolean | null;
   demucs: boolean | null;
+  // Tail-only vocal backfill requires positive support, unlike missing heads.
+  tailVocal: boolean | null;
 }
 
 export interface PlanInput {
@@ -68,7 +71,7 @@ export interface WorkItem {
   request: WorkRequest;
 }
 
-export type SkipReason = 'no-clap' | 'no-demucs' | 'limit';
+export type SkipReason = 'no-clap' | 'no-demucs' | 'no-tail-vocal' | 'limit';
 
 export interface FacetPlanCount {
   facet: Facet;
@@ -97,21 +100,21 @@ export function matchesWhere(cell: FacetCell | undefined, facet: Facet, where: W
     case 'missing':
       return !cell;
     case 'outdated':
-      return !!cell && cell.version < current;
+      return !!cell && analysisRetryAllowed(cell.attempts) && cell.version < current;
     case 'failed':
-      return !!cell && cell.status === 'failed';
+      return !!cell && cell.attempts > 0;
     case 'unmeasurable':
-      return (
+      return analysisRetryAllowed(cell?.attempts ?? 0) && (
         !!cell &&
         cell.status === 'unmeasurable' &&
         (!where.reason || (cell.reason ?? '').toLowerCase().includes(where.reason.toLowerCase()))
       );
     case 'needs':
     default:
-      return (
+      return analysisRetryAllowed(cell?.attempts ?? 0) && (
         !cell ||
         cell.version < current ||
-        (cell.status === 'failed' && cell.attempts < FACET_MAX_ATTEMPTS)
+        cell.status === 'failed'
       );
   }
 }
@@ -140,9 +143,11 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
     const c = counts.get(f)!;
     c.skipped[why] = (c.skipped[why] ?? 0) + 1;
   };
-  const unavailable = (f: Facet): SkipReason | null => {
+  const unavailable = (f: Facet, cell: FacetCell | undefined): SkipReason | null => {
     if (f === 'clap' && input.capabilities.clap === false) return 'no-clap';
     if ((f === 'vocal' || f === 'stems') && input.capabilities.demucs === false) return 'no-demucs';
+    if (f === 'vocal' && cell?.reason === 'head-only' &&
+      !tailVocalBackfillAvailable(input.capabilities.tailVocal)) return 'no-tail-vocal';
     return null;
   };
 
@@ -155,7 +160,7 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
     for (const f of facets) {
       if (!matchesWhere(state.get(f), f, input.where)) continue;
       counts.get(f)!.matched += 1;
-      const why = unavailable(f);
+      const why = unavailable(f, state.get(f));
       if (why) {
         skip(f, why);
         continue;

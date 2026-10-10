@@ -110,7 +110,7 @@ async function main() {
   sql().prepare(`UPDATE track_facet_status SET version = 0 WHERE track_id = 'e' AND facet = 'tail'`).run();
 
   const ids = db.allTrackIdsOrdered();
-  const plan = (facets: string, where?: string, caps = { clap: true as boolean | null, demucs: false as boolean | null }, limit?: number) => {
+  const plan = (facets: string, where?: string, caps = { clap: true as boolean | null, demucs: false as boolean | null, tailVocal: true as boolean | null }, limit?: number) => {
     const f = P.parseFacets(facets);
     return P.planAcoustics({ ids, facets: f, where: P.parseWhere(where), state: db.loadFacetState(f), capabilities: caps, limit });
   };
@@ -120,7 +120,7 @@ async function main() {
 
   await test('--where needs agrees with facetNeedsIds for every facet', () => {
     for (const f of db.FACETS) {
-      const p = plan(f, undefined, { clap: true, demucs: true });
+      const p = plan(f, undefined, { clap: true, demucs: true, tailVocal: true });
       assert.deepEqual(planned(p), db.facetNeedsIds(f), f);
     }
   });
@@ -142,11 +142,11 @@ async function main() {
   });
 
   await test('a facet the analyzer cannot produce is skipped and counted', () => {
-    const p = plan('vocal', 'missing', { clap: true, demucs: false });
+    const p = plan('vocal', 'missing', { clap: true, demucs: false, tailVocal: true });
     assert.equal(p.items.length, 0);
     // d already has a (failed) vocal row, so 4 tracks are missing it.
     assert.equal(p.byFacet[0].skipped['no-demucs'], 4);
-    const unknown = plan('vocal', 'missing', { clap: true, demucs: null });
+    const unknown = plan('vocal', 'missing', { clap: true, demucs: null, tailVocal: null });
     assert.equal(unknown.items.length, 4, 'unknown capability still plans');
     assert.ok(unknown.warnings.some((w) => w.includes('Demucs capability unknown')));
   });
@@ -186,7 +186,7 @@ async function main() {
     requests.length = 0;
     const p = P.planAcoustics({
       ids, facets: ['clap'], where: { kind: 'missing' }, state: db.loadFacetState(['clap']),
-      capabilities: { clap: true, demucs: false },
+      capabilities: { clap: true, demucs: false, tailVocal: true },
     });
     const stats = await runAnalysisPass({ plan: p });
     assert.equal(stats.scope, 2);
@@ -234,7 +234,7 @@ async function main() {
       db.upsertTrackMeta('t7', { title: 't7', artist: 'A', album: 'B', duration: 214 });
       db.upsertTrackAnalysis('t7', { bpm: 128, musicalKey: 'G', loudnessLufs: -8, source: 'capped' });
       const p = P.planAcoustics({ ids: ['t7'], facets: ['tail'], where: { kind: 'unmeasurable' },
-        state: db.loadFacetState(['tail']), capabilities: { clap: true, demucs: true } });
+        state: db.loadFacetState(['tail']), capabilities: { clap: true, demucs: true, tailVocal: true } });
       assert.equal(p.items.length, 1);
       assert.ok(!p.items[0].request.stems, 'a tail plan asks for no stems');
       const before = stemCacheStore._cacheWalksForTests();
@@ -265,7 +265,7 @@ async function main() {
       sql().prepare(`UPDATE tracks SET stems_at = 1 WHERE id = 'a'`).run();
       db.upsertTrackMeta('t9', { title: 't9', artist: 'A', album: 'B', duration: 214 });
       const p = P.planAcoustics({ ids: ['t9'], facets: ['stems'], where: { kind: 'all' },
-        state: db.loadFacetState(['stems']), capabilities: { clap: true, demucs: true } });
+        state: db.loadFacetState(['stems']), capabilities: { clap: true, demucs: true, tailVocal: true } });
       assert.equal(p.items.length, 1);
       assert.ok(p.items[0].request.stems, 'a stems plan asks for stems');
       requests.length = 0;
