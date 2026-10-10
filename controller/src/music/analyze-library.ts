@@ -22,7 +22,9 @@
 //   --ids a,b,c          restrict to these track ids
 //   --ids-file PATH      …or to the ids in a file (one per line, # comments)
 //   --limit N            cap the number of tracks planned
-//   --dry-run            print the plan and exit: no lock, no analysis, no writes
+//   --dry-run            print the plan and exit: no lock and no analysis. Opening
+//                        the DB may still create, seed or re-derive the facet
+//                        status table, as any open does.
 //
 //   e.g. npm run analyze -- --facets clap --where failed --dry-run
 //        npm run analyze -- --facets tail --where unmeasurable:capped --limit 200

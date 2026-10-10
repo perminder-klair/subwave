@@ -25,7 +25,11 @@
 //
 // The table lives OUTSIDE the PRAGMA user_version chain on purpose: it is
 // created idempotently on every open (like track_audio_vectors), so it never
-// takes a migration number from upstream's sequence.
+// takes a migration number from upstream's sequence. A one-row companion,
+// track_facet_meta, records the ANALYSIS_VERSION and FACET_VERSIONS the rows
+// were last derived under; when either constant changes, the next open
+// re-derives every track (ensureFacetStatus), because head/loudness/tail are
+// read off analysis_version and would otherwise drift without any write.
 
 import type Database from 'better-sqlite3';
 import { ANALYSIS_VERSION, requireDb } from './handle.js';
@@ -160,6 +164,13 @@ export interface SyncOpts extends DeriveOpts {
   // Any other facet keeps the version it was measured at, so a re-sync never
   // promotes old data past a version bump.
   fresh?: readonly Facet[];
+  // Facets this write ATTEMPTED without necessarily storing a result (a tail
+  // the pass decoded but could not measure, or could not reach on a capped
+  // download). When the derived status is 'unmeasurable' the attempt itself is
+  // the answer at the current version, so it counts as fresh; when it is 'ok'
+  // (an earlier measurement kept by COALESCE) the row keeps its own version.
+  // Without this a version bump never settles for a still-unmeasurable track.
+  tried?: readonly Facet[];
   source?: FacetSource;
 }
 
@@ -186,6 +197,7 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
       .all(id) as StoredFacet[]).map(r => [r.facet, r]),
   );
   const fresh = new Set(opts.fresh ?? []);
+  const tried = new Set(opts.tried ?? []);
   const now = new Date().toISOString();
   const upsert = d.prepare(
     `INSERT INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at)
@@ -197,14 +209,16 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
   for (const r of derived) {
     const prev = stored.get(r.facet);
     stored.delete(r.facet);
-    const isFresh = fresh.has(r.facet);
+    const isFresh = fresh.has(r.facet) || (tried.has(r.facet) && r.status === 'unmeasurable');
     // An unmeasurable/ok row's reason describes the pass that measured it
     // ('capped-download' vs 'tail-not-measured'); a re-sync that didn't
     // re-measure the facet keeps it. A failure's reason is the latest error.
     if (!isFresh && prev && prev.status === r.status && r.status !== 'failed') r.reason = prev.reason;
     const version =
       isFresh || !prev || prev.status !== r.status ? r.version : Math.min(prev.version, r.version);
-    const source = isFresh ? (opts.source ?? 'unknown') : (prev?.source ?? opts.source ?? 'seed');
+    // 'seed' is reserved for rows the seed wrote; a live write that creates a
+    // row without measuring it (a failure, a re-derive) records what it knows.
+    const source = isFresh ? (opts.source ?? 'unknown') : (prev?.source ?? opts.source ?? null);
     if (
       prev &&
       !isFresh &&
@@ -223,16 +237,61 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
   for (const facet of stored.keys()) del.run(id, facet);
 }
 
-// Create the table if absent and seed it from the columns the first time.
-// Idempotent; called on every open from migrate(). Returns rows seeded (0 when
-// the table already existed).
+// The versions the stored rows were derived under. A change to either one
+// re-derives the table on the next open.
+export function facetDerivationStamp(): string {
+  return JSON.stringify({ analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+}
+
+function readFacetStamp(d: Database.Database): string | null {
+  const row = d.prepare('SELECT stamp FROM track_facet_meta WHERE pk = 1').get() as { stamp: string } | undefined;
+  return row?.stamp ?? null;
+}
+
+function writeFacetStamp(d: Database.Database): void {
+  d.prepare(
+    `INSERT INTO track_facet_meta (pk, stamp) VALUES (1, ?)
+     ON CONFLICT(pk) DO UPDATE SET stamp = excluded.stamp`,
+  ).run(facetDerivationStamp());
+}
+
+// Re-derive every track's rows through the same path a live write uses, so
+// reasons, sources and per-facet versions survive (a drop-and-reseed would
+// lose them). Rows whose track is gone are dropped first. Returns tracks synced.
+export function resyncAllFacets(d: Database.Database): number {
+  let synced = 0;
+  d.transaction(() => {
+    d.prepare('DELETE FROM track_facet_status WHERE track_id NOT IN (SELECT id FROM tracks)').run();
+    const ids = (d.prepare('SELECT id FROM tracks').all() as Array<{ id: string }>).map(r => r.id);
+    for (const id of ids) {
+      syncTrackFacetsOn(d, id, {});
+      synced += 1;
+    }
+    writeFacetStamp(d);
+  })();
+  return synced;
+}
+
+// Create the table if absent and seed it from the columns the first time; on
+// an existing table, re-derive it when ANALYSIS_VERSION or FACET_VERSIONS have
+// changed since it was last derived. Idempotent; called on every open from
+// migrate(). Returns rows seeded (0 when the table already existed).
 export function ensureFacetStatus(d: Database.Database): number {
+  d.exec(`CREATE TABLE IF NOT EXISTS track_facet_meta (
+    pk    INTEGER PRIMARY KEY CHECK (pk = 1),
+    stamp TEXT NOT NULL
+  )`);
   const exists = d
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_facet_status'`)
     .get();
   if (exists) {
-    // Self-heal rows whose track is gone (a delete path that predates this table).
-    d.prepare('DELETE FROM track_facet_status WHERE track_id NOT IN (SELECT id FROM tracks)').run();
+    // An unchanged stamp means every row is still derived under the current
+    // versions: nothing to do, and no per-open scan of the table. A missing
+    // stamp (a table created before the meta row existed) re-derives once.
+    if (readFacetStamp(d) === facetDerivationStamp()) return 0;
+    const t0 = Date.now();
+    const n = resyncAllFacets(d);
+    console.log(`[library-db] track_facet_status re-derived for ${n} tracks (analysis/facet versions changed, ${Date.now() - t0} ms)`);
     return 0;
   }
   let seeded = 0;
@@ -275,6 +334,7 @@ export function ensureFacetStatus(d: Database.Database): number {
         seeded += 1;
       }
     }
+    writeFacetStamp(d);
   })();
   console.log(`[library-db] track_facet_status created and seeded (${seeded} rows)`);
   return seeded;

@@ -981,6 +981,9 @@ export async function analyzePathWithUrlFallback(
   songId: string,
   localPath: string,
   opts: AnalyzeRequestOpts = {},
+  // Told when the URL input was used instead, so the caller records where the
+  // analysed audio really came from (facet source 'url', not the local copy's).
+  onUrlFallback?: () => void,
 ): Promise<AnalysisResult> {
   try {
     return await analyzePath(localPath, opts);
@@ -997,6 +1000,7 @@ export async function analyzePathWithUrlFallback(
     delete urlOpts.complete;
     delete urlOpts.stems_dir;
     delete urlOpts.stems_require_marker;
+    onUrlFallback?.();
     return analyze(songId, urlOpts);
   }
 }

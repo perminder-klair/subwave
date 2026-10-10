@@ -9,7 +9,11 @@
 //   - each facet's "needs work" set equals the legacy scope query it will
 //     replace (checkFacets compares them), including the failure limit;
 //   - a capped download records the tail as unmeasurable with its reason, and a
-//     tail kept by COALESCE keeps the version it was measured at.
+//     tail kept by COALESCE keeps the version it was measured at;
+//   - a facet version bump SETTLES: a pass that still cannot measure the tail
+//     records that at the new version instead of leaving the track due forever;
+//   - a change to ANALYSIS_VERSION or FACET_VERSIONS re-derives the stored rows
+//     on the next open (track_facet_meta), with no write needed to trigger it.
 //
 // Runs a REAL better-sqlite3 DB against a temp STATE_DIR (set before
 // library-db is imported), same shape as analysis-failure.test.ts.
@@ -137,12 +141,24 @@ async function main() {
     assert.equal(after, before);
   });
 
-  await test('orphan rows are cleaned on open', async () => {
+  await test('the seed records the versions it derived under', () => {
+    const m = db.requireDb().prepare('SELECT stamp FROM track_facet_meta WHERE pk = 1').get() as { stamp: string };
+    assert.equal(m?.stamp, db.facetDerivationStamp());
+  });
+
+  await test('orphan rows are cleaned when the table is re-derived, not on every open', async () => {
     db.requireDb().prepare(
       `INSERT INTO track_facet_status (track_id, facet, version, status, at) VALUES ('ghost', 'head', 1, 'ok', 'x')`).run();
     db.close();
     await db.open({ embeddingDim: 8, adoptStoredDim: true });
+    // Unchanged versions: an open is a single meta read, no table scan.
+    assert.ok(db.requireDb().prepare(`SELECT 1 FROM track_facet_status WHERE track_id = 'ghost'`).get());
+    // A missing stamp (a table from before the meta row) re-derives once.
+    db.requireDb().prepare('DELETE FROM track_facet_meta').run();
+    db.close();
+    await db.open({ embeddingDim: 8, adoptStoredDim: true });
     assert.equal(db.requireDb().prepare(`SELECT 1 FROM track_facet_status WHERE track_id = 'ghost'`).get(), undefined);
+    assertConsistent();
   });
 
   console.log('live writes:');
@@ -188,6 +204,50 @@ async function main() {
     assert.equal(rows('fresh').tail.version, db.FACET_VERSIONS.tail);
   });
 
+  await test('a tail version bump settles for a track whose tail is still unmeasurable', () => {
+    db.upsertTrackMeta('notail', { title: 'notail', artist: 'A', album: 'B', duration: 240 });
+    db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full' });
+    assert.equal(rows('notail').tail.status, 'unmeasurable');
+    // Simulate FACET_VERSIONS.tail being bumped past the stored row.
+    d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
+      .run(db.FACET_VERSIONS.tail - 1);
+    assert.ok(db.facetNeedsIds('tail').includes('notail'));
+    // The retry still cannot measure the tail: that answer is the new version's.
+    db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'full' });
+    const t = rows('notail').tail;
+    assert.deepEqual([t.status, t.version, t.reason, t.source],
+      ['unmeasurable', db.FACET_VERSIONS.tail, 'tail-not-measured', 'full']);
+    assert.ok(!db.facetNeedsIds('tail').includes('notail'), 'a settled tail must leave the needs scope');
+    // Same for a capped retry: terminal, with the capped reason.
+    d.prepare(`UPDATE track_facet_status SET version = ? WHERE track_id = 'notail' AND facet = 'tail'`)
+      .run(db.FACET_VERSIONS.tail - 1);
+    db.upsertTrackAnalysis('notail', { bpm: 110, musicalKey: 'G', loudnessLufs: -11, source: 'capped' });
+    assert.deepEqual([rows('notail').tail.version, rows('notail').tail.reason], [db.FACET_VERSIONS.tail, 'capped-download']);
+    assertConsistent();
+  });
+
+  await test('a changed ANALYSIS_VERSION re-derives the table on open, with no write', async () => {
+    // 'fresh' is analysed at the current version with an ok head and tail.
+    assert.equal(rows('fresh').head.status, 'ok');
+    // Simulate a code bump: the track's stamp is now stale, and the table was
+    // last derived under different versions.
+    d.prepare('UPDATE tracks SET analysis_version = ? WHERE id = ?').run(db.ANALYSIS_VERSION - 1, 'fresh');
+    d.prepare(`UPDATE track_facet_meta SET stamp = '{"analysis":0}'`).run();
+    db.close();
+    await db.open({ embeddingDim: 8, adoptStoredDim: true });
+    assert.equal(rows('fresh').head, undefined, 'a stale head must lose its ok row');
+    assert.ok(db.facetNeedsIds('head').includes('fresh'));
+    assert.equal(rows('fresh').tail.status, 'ok', 'columns still hold the tail');
+    const m = db.requireDb().prepare('SELECT stamp FROM track_facet_meta WHERE pk = 1').get() as { stamp: string };
+    assert.equal(m.stamp, db.facetDerivationStamp());
+    assertConsistent();
+    // Put it back for the tests below.
+    db.upsertTrackAnalysis('fresh', {
+      bpm: 128, musicalKey: 'F', source: 'full',
+      outro: { startMs: 220_000, ending: 'cold' } as never, tailSilenceMs: 500, tailStartMs: 239_500,
+    });
+  });
+
   await test('a CLAP-only write marks the clap facet', () => {
     db.upsertTrackMeta('clapless', { title: 'c', artist: 'A', album: 'B', duration: 100 });
     assert.ok(db.facetNeedsIds('clap').includes('clapless'));
@@ -201,6 +261,7 @@ async function main() {
     db.upsertTrackMeta('bad', { title: 'bad', artist: 'A', album: 'B', duration: 100 });
     for (let i = 0; i < db.MAX_ANALYSIS_FAILURES; i++) db.recordAnalysisFailure('bad', 'not audio');
     assert.equal(brief('bad').head, `failed×${db.MAX_ANALYSIS_FAILURES}`);
+    assert.equal(rows('bad').head.source, null, "'seed' is only for rows the seed wrote");
     for (const f of ['head', 'clap', 'vocal', 'stems'] as const) {
       assert.ok(!db.facetNeedsIds(f).includes('bad'), `${f} still targets a dead track`);
     }

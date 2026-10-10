@@ -446,13 +446,16 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
     );
   // Mirror into track_facet_status in the same transaction. Only what this
   // pass actually measured is "fresh"; a tail/vocal kept by COALESCE keeps the
-  // version it was measured at.
+  // version it was measured at. Every analysis pass decodes for the tail, so a
+  // tail it could not measure is still an answer at the current version
+  // (`tried`), while a tail kept from an earlier pass is not re-promoted.
   const fresh: Facet[] = ['head', 'loudness'];
   if (a.outro != null || Number.isFinite(a.tailSilenceMs as number)) fresh.push('tail');
   if (a.vocalRanges != null) fresh.push('vocal');
   if (a.stemsAttempted) fresh.push('stems');
   syncTrackFacets(id, {
     fresh,
+    tried: ['tail'],
     source: a.source ?? 'unknown',
     tailReason: a.source === 'capped' ? 'capped-download' : undefined,
   });
@@ -504,11 +507,14 @@ export function recordAnalysisFailure(id: string, error: string): void {
 export function clearAnalysisFailures(id?: string): number {
   const d = requireDb();
   const set = `analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`;
-  const res = id
-    ? d.prepare(`UPDATE tracks SET ${set} WHERE id = ?`).run(id)
-    : d.prepare(`UPDATE tracks SET ${set} WHERE analyze_fail_count IS NOT NULL`).run();
-  clearFacetFailures(id);
-  return res.changes;
+  // One transaction with its facet mirror, like every other write here.
+  return d.transaction(() => {
+    const res = id
+      ? d.prepare(`UPDATE tracks SET ${set} WHERE id = ?`).run(id)
+      : d.prepare(`UPDATE tracks SET ${set} WHERE analyze_fail_count IS NOT NULL`).run();
+    clearFacetFailures(id);
+    return res.changes;
+  })();
 }
 
 // How many tracks are out of scope for having failed too often (coverage badge).
@@ -566,6 +572,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   const d = requireDb();
   const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
+  d.transaction(() => {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
@@ -581,6 +588,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   // above are derived from them.
   d.prepare('DELETE FROM track_audio_vectors').run();
   clearFacetRows(opts);
+  })();
 }
 
 export function upsertTrackVector(
