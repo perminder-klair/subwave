@@ -4,6 +4,7 @@
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
@@ -320,9 +321,58 @@ function estimateSpeechMs(text: string): number {
   return Math.ceil((words / 2.3) * 1000);
 }
 
-// Bytes a clip may carry after its last frame (an ID3v1 or APE tag) before the
-// walk below is taken to have lost the stream rather than reached its end.
+// Keep trailer parsing bounded, but size alone is never evidence of metadata.
 const MP3_TRAILER_MAX_BYTES = 4096;
+
+function hasValidMp3Trailer(buf: Buffer, off: number): boolean {
+  let end = buf.length;
+  if (end - off > MP3_TRAILER_MAX_BYTES) return false;
+  // ID3v1/1.1 has no length field: its signature and fixed 128-byte extent
+  // must occupy the end of the file, with no junk between it and the audio.
+  if (end - off >= 128 && buf.toString('latin1', end - 128, end - 125) === 'TAG') end -= 128;
+  if (end === off) return true;
+  if (end - off < 32) return false;
+
+  const footer = end - 32;
+  if (buf.toString('latin1', footer, footer + 8) !== 'APETAGEX') return false;
+  const version = buf.readUInt32LE(footer + 8);
+  const size = buf.readUInt32LE(footer + 12);
+  const count = buf.readUInt32LE(footer + 16);
+  const flags = buf.readUInt32LE(footer + 20);
+  if ((version !== 1000 && version !== 2000) || size < 32 || size > end - off
+      || (flags !== 0 && flags !== 0x80000000)
+      || (version === 1000 && flags !== 0)
+      || buf.subarray(footer + 24, end).some(byte => byte !== 0)) return false;
+
+  // APE's size includes the footer and items, but excludes its optional
+  // header. Both records must agree, and every item must fit before the footer.
+  let item = end - size;
+  if (flags === 0x80000000) {
+    if (item - 32 !== off
+        || !buf.subarray(off, off + 20).equals(buf.subarray(footer, footer + 20))
+        || buf.readUInt32LE(off + 20) !== 0xa0000000
+        || buf.subarray(off + 24, off + 32).some(byte => byte !== 0)) return false;
+  } else if (item !== off) return false;
+  const keys = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    if (item + 8 > footer) return false;
+    const valueSize = buf.readUInt32LE(item);
+    const itemFlags = buf.readUInt32LE(item + 4);
+    if ((itemFlags & ~7) !== 0 || (itemFlags & 6) === 6) return false;
+    item += 8;
+    const keyEnd = buf.indexOf(0, item);
+    if (keyEnd < item || keyEnd >= footer) return false;
+    const key = buf.toString('latin1', item, keyEnd);
+    if (!/^[\x20-\x7e]{2,255}$/.test(key) || ['OggS', 'TAG', 'ID3', 'MP+'].includes(key)) return false;
+    const folded = key.toLowerCase();
+    if (keys.has(folded)) return false;
+    keys.add(folded);
+    const valueStart = keyEnd + 1;
+    item = valueStart + valueSize;
+    if (item > footer || ((itemFlags & 6) !== 2 && !isUtf8(buf.subarray(valueStart, item)))) return false;
+  }
+  return item === footer;
+}
 
 // Duration of an mp3 clip (ElevenLabs, Fish, openai-compatible) without
 // decoding it: walk the frame headers and add up what each frame holds. That
@@ -342,7 +392,7 @@ function mp3DurationMs(path: string): number | null {
       frames += 1;
       off += frame.length;
     }
-    if (frames < 2 || buf.length - off > MP3_TRAILER_MAX_BYTES) return null;
+    if (frames < 2 || !hasValidMp3Trailer(buf, off)) return null;
     return Math.ceil(seconds * 1000);
   } catch {
     return null;

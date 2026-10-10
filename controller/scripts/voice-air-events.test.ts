@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AddressInfo } from 'node:net';
@@ -20,7 +20,7 @@ const {
   awaitVoiceAir,
   resetVoiceMarkers,
 } = await import('../src/broadcast/queue/voice-marker.js');
-const { voiceUri, clipDurationMs, speechDurationMs, VOICE_LEADIN_MS, HANDOFF_TO_AIR_MS, airInEstimate } =
+const { airVoice, voiceUri, clipDurationMs, speechDurationMs, VOICE_LEADIN_MS, HANDOFF_TO_AIR_MS, airInEstimate } =
   await import('../src/broadcast/queue/voice-io.js');
 const { notifySpoken, notifyQueued } = await import('../src/broadcast/voice-events.js');
 // settings.js does not re-export the cache seam.
@@ -127,7 +127,7 @@ const MPEG2_24KHZ_64K = { header: [0xff, 0xf3, 0x84, 0xc4], length: 192, seconds
 type Mp3Frame = typeof STEREO_128K;
 
 // Writes the frames back to back and returns the audio length in ms.
-function writeMp3(path: string, frames: Mp3Frame[], { id3Bytes = 0, tail = 0 }: { id3Bytes?: number; tail?: number } = {}): number {
+function writeMp3(path: string, frames: Mp3Frame[], { id3Bytes = 0, tail = 0 }: { id3Bytes?: number; tail?: number | Buffer } = {}): number {
   const id3 = Buffer.alloc(id3Bytes ? 10 + id3Bytes : 0);
   if (id3Bytes) {
     id3.write('ID3', 0, 'ascii');
@@ -141,12 +141,39 @@ function writeMp3(path: string, frames: Mp3Frame[], { id3Bytes = 0, tail = 0 }: 
     b.set(f.header, 0);
     return b;
   });
-  writeFileSync(path, Buffer.concat([id3, ...body, Buffer.alloc(tail, 0x41)]));
+  writeFileSync(path, Buffer.concat([id3, ...body, typeof tail === 'number' ? Buffer.alloc(tail, 0x41) : tail]));
   return Math.ceil(frames.reduce((sum, f) => sum + f.seconds, 0) * 1000);
 }
 
 const FIVE_WORDS = 'one two three four five';
 const ESTIMATE_MS = Math.ceil((5 / 2.3) * 1000);
+
+function id3v1Tag(): Buffer {
+  const tag = Buffer.alloc(128);
+  tag.write('TAG');
+  tag.write('Radio', 3);
+  tag[127] = 255;
+  return tag;
+}
+
+function apeTag(withHeader = false, key = 'Title', value = Buffer.from('Radio'), itemFlags = 0): Buffer {
+  const keyBytes = Buffer.from(`${key}\0`, 'latin1');
+  const entry = Buffer.alloc(8 + keyBytes.length + value.length);
+  entry.writeUInt32LE(value.length, 0);
+  entry.writeUInt32LE(itemFlags, 4);
+  keyBytes.copy(entry, 8);
+  value.copy(entry, 8 + keyBytes.length);
+  const footer = Buffer.alloc(32);
+  footer.write('APETAGEX');
+  footer.writeUInt32LE(2000, 8);
+  footer.writeUInt32LE(entry.length + 32, 12);
+  footer.writeUInt32LE(1, 16);
+  if (!withHeader) return Buffer.concat([entry, footer]);
+  footer.writeUInt32LE(0x80000000, 20);
+  const header = Buffer.from(footer);
+  header.writeUInt32LE(0xa0000000, 20);
+  return Buffer.concat([header, entry, footer]);
+}
 
 test('a cloud mp3 is measured, not guessed from its word count', () => {
   const mp3 = join(STATE, 'clip.mp3');
@@ -155,8 +182,112 @@ test('a cloud mp3 is measured, not guessed from its word count', () => {
     const exact = writeMp3(mp3, Array(400).fill(frame));
     assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact, name);
   }
-  const tagged = writeMp3(mp3, Array(383).fill(MONO_128K), { id3Bytes: 6000, tail: 128 });
-  assert.equal(clipDurationMs(mp3, FIVE_WORDS), tagged, 'an ID3v2 tag and a trailing ID3v1-sized tag are skipped');
+  const tagged = writeMp3(mp3, Array(383).fill(MONO_128K), { id3Bytes: 6000, tail: id3v1Tag() });
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), tagged, 'an ID3v2 tag and a complete trailing ID3v1 tag are skipped');
+});
+
+test('only complete trailing tags preserve the measured mp3 duration', () => {
+  const mp3 = join(STATE, 'tagged.mp3');
+  for (const tail of [
+    id3v1Tag(), apeTag(), apeTag(true), Buffer.concat([apeTag(true), id3v1Tag()]),
+    apeTag(false, 'A=B'), apeTag(false, 'Cover Art', Buffer.from([0xff, 0]), 3),
+  ]) {
+    const exact = writeMp3(mp3, Array(100).fill(MONO_128K), { tail });
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), exact);
+  }
+});
+
+test('a short unread suffix cannot hide corrupt or truncated mp3 audio', () => {
+  const mp3 = join(STATE, 'bad-tail.mp3');
+  writeMp3(mp3, Array(40).fill(MONO_128K));
+  const audio = readFileSync(mp3);
+  const broken = Buffer.from(audio);
+  broken[32 * MONO_128K.length] = 0;
+  const tails = [
+    Buffer.from([0]), Buffer.alloc(128, 0x41), Buffer.alloc(4096),
+    id3v1Tag().subarray(0, 127), Buffer.concat([id3v1Tag(), Buffer.from([0])]),
+    Buffer.concat([Buffer.from([0]), id3v1Tag()]),
+    Buffer.concat([id3v1Tag(), audio.subarray(0, MONO_128K.length)]),
+  ];
+  for (const tail of tails) {
+    writeFileSync(mp3, Buffer.concat([audio, tail]));
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS);
+  }
+  writeFileSync(mp3, broken);
+  assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'corruption before playable final frames');
+  for (const missing of [1, MONO_128K.length - 3]) {
+    const partial = audio.subarray(0, audio.length - missing);
+    for (const tail of [Buffer.alloc(0), id3v1Tag()]) {
+      writeFileSync(mp3, Buffer.concat([partial, tail]));
+      assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS, 'partial final frame');
+    }
+  }
+});
+
+test('an APE signature alone cannot turn unread audio into metadata', () => {
+  const mp3 = join(STATE, 'bad-ape.mp3');
+  const valid = apeTag(true);
+  const malformed = [valid.subarray(0, valid.length - 1), Buffer.concat([Buffer.from([0]), valid])];
+  for (const key of ['OggS', 'TAG', 'ID3', 'MP+', 'A', 'Bad\x80Key']) malformed.push(apeTag(false, key));
+  malformed.push(apeTag(false, 'Title', Buffer.from([0xff])));
+  const item = valid.subarray(32, valid.length - 32);
+  const duplicateFooter = Buffer.from(valid.subarray(valid.length - 32));
+  duplicateFooter.writeUInt32LE(item.length * 2 + 32, 12);
+  duplicateFooter.writeUInt32LE(2, 16);
+  duplicateFooter.writeUInt32LE(0, 20);
+  malformed.push(Buffer.concat([item, item, duplicateFooter]));
+  const footer = valid.length - 32;
+  for (const [offset, value] of [
+    [8, 1000], [12, 0], [16, 0], [20, 0], [24, 1], [32, 1000], [36, 6],
+    [footer + 8, 3000], [footer + 12, 32], [footer + 16, 2],
+    [footer + 20, 0xe0000000], [footer + 24, 1],
+  ]) {
+    const bad = Buffer.from(valid);
+    bad.writeUInt32LE(value, offset);
+    malformed.push(bad);
+  }
+  const extraAudio = Buffer.alloc(MONO_128K.length);
+  extraAudio.set(MONO_128K.header);
+  malformed.push(Buffer.concat([Buffer.from([0]), extraAudio, valid]));
+  for (const tail of malformed) {
+    writeMp3(mp3, Array(100).fill(MONO_128K), { tail });
+    assert.equal(clipDurationMs(mp3, FIVE_WORDS), ESTIMATE_MS);
+  }
+});
+
+test('lost sync near EOF cannot release the other voice channel during the first clip', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
+  clearMarker();
+  const mp3 = join(STATE, 'low-bitrate.mp3');
+  const lowRate = { header: [0xff, 0xf3, 0x10, 0xc0], length: 26, seconds: 576 / 22050 };
+  const fullMs = writeMp3(mp3, Array(383).fill(lowRate));
+  const audio = readFileSync(mp3);
+  // Almost four seconds of playable audio remain after a one-byte sync loss,
+  // but the old reader mistook that suffix for a tag and released at ~7.7s.
+  const breakAt = 240 * lowRate.length;
+  writeFileSync(mp3, Buffer.concat([audio.subarray(0, breakAt), Buffer.from([0]), audio.subarray(breakAt)]));
+  const text = Array(30).fill('word').join(' ');
+  const first = await airVoice(config.liquidsoap.sayFile, mp3, text);
+  unlinkSync(config.liquidsoap.sayFile);
+  const wav = join(STATE, 'next.wav');
+  writeWav(wav, 800, 8000);
+  let handedOver = false;
+  const second = airVoice(config.liquidsoap.introFile, wav, 'next').then(handoff => {
+    handedOver = true;
+    return handoff;
+  });
+  try {
+    t.mock.timers.tick(fullMs);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(handedOver, false, 'the intro channel is still excluded through the full audio window');
+    assert.equal(first.clipMs, Math.ceil((30 / 2.3) * 1000));
+  } finally {
+    t.mock.timers.tick(20_000);
+    await second;
+    unlinkSync(config.liquidsoap.introFile);
+    t.mock.timers.tick(2_000);
+    await new Promise(resolve => setImmediate(resolve));
+  }
 });
 
 test('a variable-bitrate mp3 is never measured short', () => {
