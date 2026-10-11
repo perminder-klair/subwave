@@ -1,5 +1,5 @@
 ---
-name: subwave-discord-release
+name: subwave-social-release
 description: Draft a SUB/WAVE release announcement for Discord, Reddit or X from a release PR, tag, or version number. Use this skill whenever the user wants to "write a Discord announcement / post", "announce the release", "post the release on Reddit", "draft a tweet / X thread about vX.Y.Z", "tell the community about vX.Y.Z", or hands you a release-please PR / release tag and asks for community or social copy. The skill knows the house voice (radio-themed, warm, no em-dashes), how to pull the changelog from GitHub, how to translate conventional-commit lines into benefits each audience will notice, and each channel's format. It outputs ready-to-paste text; it does NOT post anywhere.
 ---
 

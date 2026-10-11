@@ -38,7 +38,7 @@ Notes on the parts:
 Every post must fit in **280 weighted characters**. X counts any `https://` URL as 23 and counts emoji and most symbols outside Latin (`•`, `→`, `📻`) as 2, so a character count from your head is wrong. Write each post to its own file in the scratchpad and run:
 
 ```bash
-python3 -I .claude/skills/subwave-discord-release/x-count.py 1.txt 2.txt 3.txt
+python3 -I .claude/skills/subwave-social-release/x-count.py 1.txt 2.txt 3.txt
 ```
 
 Every post reads `OK` before you deliver. The counter errs slightly high on joined emoji sequences, which keeps it on the safe side. Write links with `https://` so it counts them as X does.
