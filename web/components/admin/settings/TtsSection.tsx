@@ -482,6 +482,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
+  // Google key for the Gemini provider card. Same single credential the LLM
+  // section uses (GOOGLE_GENERATIVE_AI_API_KEY) — never the key pool, which
+  // has its own UI and its own PR.
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [geminiKeyTest, setGeminiKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
+  const [geminiKeyTesting, setGeminiKeyTesting] = useState(false);
   // Compat servers don't use the OPENAI/ELEVENLABS env keys — their optional bearer
   // is settings.tts.cloud.compatApiKey, so it rides the settings payload.
   const [compatKeyInput, setCompatKeyInput] = useState('');
@@ -576,6 +582,31 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       setCloudKeyTesting(false);
     }
   };
+  const testGeminiKey = async () => {
+    const hasTyped = !!geminiKeyInput.trim();
+    if (!hasTyped && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY']) return;
+    setGeminiKeyTesting(true);
+    setGeminiKeyTest(null);
+    try {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: 'GOOGLE_GENERATIVE_AI_API_KEY', value: geminiKeyInput.trim() }),
+      });
+      const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
+      setGeminiKeyTest(j);
+      if (j.ok && hasTyped) {
+        const saved = await saveKey('GOOGLE_GENERATIVE_AI_API_KEY', geminiKeyInput);
+        if (saved) { notify.ok('Key verified and saved'); setGeminiKeyInput(''); refresh(); }
+      } else if (j.ok) {
+        notify.ok('Key verified (on file)');
+      }
+    } catch (e) {
+      setGeminiKeyTest({ ok: false, message: errorMessage(e), latencyMs: 0 });
+    } finally {
+      setGeminiKeyTesting(false);
+    }
+  };
   // The engine grid is fed by the CONTROLLER's tts.engines, which is ENGINES and
   // therefore includes gemini. Gemini is a PROVIDER card here, so it is filtered
   // out at the point of use rather than removed from the shared list — that list
@@ -605,6 +636,11 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // process secret, so an empty undiscovered Fish voice would fail the settings
     // write before the key became usable.
     let managedKeySaved = false;
+    if (geminiKeyInput.trim()) {
+      const geminiKeySaved = await saveKey('GOOGLE_GENERATIVE_AI_API_KEY', geminiKeyInput);
+      if (!geminiKeySaved) return;
+      setGeminiKeyInput('');
+    }
     if (!isCompat && cloudKeyInput.trim()) {
       const cloudKeyVar = envKeyForCloudProvider(form.tts.cloud.provider);
       managedKeySaved = await saveKey(cloudKeyVar, cloudKeyInput);
@@ -1162,6 +1198,26 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   both. A gateway or compatibility-server bearer is not a substitute:
                   Google rejects one with <code>API_KEY_INVALID</code>.
                 </div>
+                <div className="mt-2 flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={geminiKeyInput}
+                    placeholder={data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'] ? '•••••• (on file)' : (KEY_HINTS['GOOGLE_GENERATIVE_AI_API_KEY'] ?? '')}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setGeminiKeyInput(e.target.value)}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={testGeminiKey}
+                    disabled={geminiKeyTesting || (!geminiKeyInput.trim() && !data.env?.['GOOGLE_GENERATIVE_AI_API_KEY'])}
+                  >
+                    {geminiKeyTesting ? 'Testing…' : 'Test key'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Stored in <code>state/secrets.env</code> — the same single key the Gemini LLM uses, not the key pool. Takes effect after a controller restart. Leave blank to keep the existing key.
+                </div>
+                {geminiKeyTest && <KeyTestResult result={geminiKeyTest} />}
                 {geminiAvail === false && (
                   <div className="mt-2 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
                     Gemini TTS can&apos;t speak right now — no Google key. Add it under
@@ -1676,7 +1732,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         // Both key boxes are component-local — the panel diffs FormState and
         // cannot see them, so a pasted key alone would leave the section
         // "clean" and unmount the very button that saves it.
-        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim())}
+        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim() || geminiKeyInput.trim())}
       />
     </>
   );

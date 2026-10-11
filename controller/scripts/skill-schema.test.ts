@@ -238,6 +238,7 @@ test('skillFieldsFrom renames context → contextFields and carries the rest', (
     requiresKey: 'MOON_KEY',
     tags: ['nightly'],
     brief: 'say something',
+    voice: null,
   });
 });
 

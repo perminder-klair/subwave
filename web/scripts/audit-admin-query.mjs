@@ -185,6 +185,10 @@ const allowed = new Map([
   ])],
   ['skills/SkillEditModal.tsx', new Map([
     ['skill-export', { callee: 'adminResponse', method: 'GET', path: /^\/dj\/skills\/\$\{\}\/export$/ }],
+    // Voice-list snapshot for the skill-voice picker: a one-shot GET on mount,
+    // feeding EngineVoiceFields' per-engine lists (same slice the persona
+    // editor reads from its parent — this modal has no settings-owning parent).
+    ['skill-voice-data', { callee: 'adminJson', method: 'GET', path: /^\/settings$/ }],
   ])],
 ]);
 const used = new Map([...allowed].map(([file]) => [file, new Set()]));

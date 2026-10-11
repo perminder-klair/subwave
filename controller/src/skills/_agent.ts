@@ -188,6 +188,37 @@ function frequencyFloorMs(freq: string) {
   return 15 * 60 * 1000; // moderate
 }
 
+// A skill's own TTS voice override (SKILL.md voiceEngine/voiceId/voiceProvider).
+// Returns the speaker with its tts slot replaced for this clip only.
+// `overridden` is false (and persona untouched) when the skill carries no
+// override — the segment airs in the on-air DJ's voice. Applies even with no
+// speaker (Run now passes none): the override brings its own tts slot.
+// Co-hosted skills never reach here: each line speaks in its own roster
+// persona's voice. Exported for scripts/skill-voice.test.ts.
+export function skillVoiceFor(cap, speaker) {
+  const v = cap?.voice;
+  if (!v || !v.engine) return { persona: speaker, overridden: false };
+  const base = speaker || {};
+  const baseTts = (base.tts && typeof base.tts === 'object' ? base.tts : {});
+  return {
+    persona: {
+      ...base,
+      tts: {
+        ...baseTts,
+        engine: v.engine,
+        voice: typeof v.voice === 'string' ? v.voice : '',
+        cloudProvider:
+          (typeof v.cloudProvider === 'string' && v.cloudProvider) ||
+          (typeof baseTts.cloudProvider === 'string' && baseTts.cloudProvider) ||
+          'openai',
+        gainDb: typeof baseTts.gainDb === 'number' ? baseTts.gainDb : 0,
+        speed: typeof baseTts.speed === 'number' ? baseTts.speed : 1,
+      },
+    },
+    overridden: true,
+  };
+}
+
 // Capabilities on offer this tick: enabled, owned by the on-air persona,
 // off-cooldown, and in-window.
 function availableCapabilities(ctx, now: Date) {
@@ -551,9 +582,11 @@ export async function agenticTick(ctx) {
     }
 
     // The speaker's id rides in meta so session.windowMessages names a guest's
-    // turn as theirs rather than the host's own words.
+    // turn as theirs rather than the host's own words. A skill voice override
+    // replaces the speaker's tts slot for this clip only.
+    const voiced = skillVoiceFor(cap, speaker);
     const delivery = await queue.announce(seg.text.trim(), seg.kind, {
-      persona: speaker,
+      persona: voiced.persona,
       meta: { personaId: speaker?.id, personaName: speaker?.name },
       pauseTalkEligible: true,
       sfx: selectedSfx,
@@ -818,10 +851,14 @@ export async function runCapability(
   }
 
   // A rotated speaker rides through announce so voice and session attribution
-  // agree (windowMessages names foreign speakers by meta id).
-  const delivery = await queue.announce(text, cap.kind, (persona || automaticHostSpeech)
+  // agree (windowMessages names foreign speakers by meta id). A skill voice
+  // override replaces the speaker's tts slot for this clip only — and applies
+  // even with no speaker (Run now passes none), since it brings its own slot.
+  const slotVoiced = skillVoiceFor(cap, speaker);
+  const withPersona = persona || automaticHostSpeech || slotVoiced.overridden;
+  const delivery = await queue.announce(text, cap.kind, withPersona
     ? {
-        persona: speaker,
+        persona: slotVoiced.persona,
         meta: { personaId: speaker?.id, personaName: speaker?.name },
         pauseTalkEligible,
         sfx: selectedSfx,

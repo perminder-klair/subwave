@@ -74,6 +74,10 @@ const validImperativeFixtures = {
   'skills/SkillEditModal.tsx': `export async function run(adminFetch, id) {
   // admin-query-imperative: skill-export
   return adminResponse(adminFetch, \`/dj/skills/\${id}/export\`);
+}
+export async function voiceData(adminFetch) {
+  // admin-query-imperative: skill-voice-data
+  return adminJson(adminFetch, '/settings');
 }\n`,
 };
 

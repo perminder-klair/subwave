@@ -70,6 +70,7 @@ import {
   SKILL_TAG_RE,
   TAGS_PER_SKILL_LIMIT,
   normalizeSkillTags,
+  normalizeSkillVoice,
 } from '../schemas/skill.js';
 
 // Shipped built-in TEMPLATE store, resolved relative to this module so it works
@@ -380,6 +381,10 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     contextFields: parseContextFields(data.context ?? data.contextFields),
     // Freeform organisation tags for the admin skill list.
     tags: parseTags(data.tags),
+    // The skill's own TTS voice override, or null for the on-air DJ's voice.
+    // Lenient by design (normalizeSkillVoice): a hand-edited bad engine reads
+    // as no override; the admin form refuses the same value loudly.
+    voice: normalizeSkillVoice(data as Record<string, unknown>),
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).
     config: data,
