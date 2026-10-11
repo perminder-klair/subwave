@@ -9,6 +9,7 @@ import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.js';
+import { invalidatePool, poolConfigured, poolKeyProblem, poolSize, poolStatus } from '../../util/google-key-pool.js';
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
@@ -22,8 +23,24 @@ import { queue } from '../../broadcast/queue.js';
 import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { generateText } from 'ai';
+import { briefLlmError } from './llm.js';
+import {
+  bumpPoolRevision,
+  entryId,
+  GOOGLE_KEYS_ENV,
+  GOOGLE_KEY_ENV,
+  GOOGLE_POOL_MAX,
+  poolEntries,
+  poolKeys,
+  poolRevision,
+  sanitizeName,
+  serializePool,
+  withPoolLock,
+} from '../../util/google-key-pool.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
-import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { saveSecretsWithinLock, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
@@ -187,7 +204,22 @@ router.get('/settings', requireAdmin, async (req, res) => {
         ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
         FISH_API_KEY: !!process.env.FISH_API_KEY,
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,
-        GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY,
+        // True when EITHER variable holds a Google credential. Reporting only the
+        // literal singular var made a pool-only station claim no key was on file,
+        // which disabled the admin field's Test button against a working key.
+        GOOGLE_GENERATIVE_AI_API_KEY: !!process.env.GOOGLE_GENERATIVE_AI_API_KEY || poolConfigured(),
+        // Google key POOL state. Fingerprints and hold timers only — no key
+        // material ever crosses this boundary. `count` drives the UI's
+        // single-key vs pooled-key rendering.
+        GOOGLE_KEY_POOL: {
+          count: poolSize(),
+          // Bumped by every mutation so the UI can tell "someone else changed
+          // the pool" from "my change landed" — the difference between a stale
+          // row and a fresh one, and the reason a click can be refused instead
+          // of hitting the wrong credential.
+          revision: poolRevision(),
+          keys: poolStatus(),
+        },
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
@@ -255,11 +287,298 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     if (Object.keys(patch).length === 0) {
       return res.json({ saved: [] });
     }
-    await saveSecrets(patch);
-    res.json({ saved: Object.keys(patch) });
+    // A patch naming either Google variable is a POOL MUTATION, and this route
+    // takes the same lock as the pool endpoints for EVERY patch — not only a
+    // pool one. `saveSecrets` rewrites the whole file, so an unrelated key save
+    // and a pool mutation are the same read-modify-write of the same bytes; a
+    // lock that only the pool-touching half took left exactly the losing case
+    // unprotected (two unrelated keys saved concurrently lost one, 20 runs in 20,
+    // both answering 200).
+    //
+    // The whole body is inside the lock, INCLUDING the memo drop. Dropping it
+    // after the write released would let the next writer read the pre-write pool
+    // from the cache and write that stale list back — the same lost update one
+    // step later.
+    const touchesPool = GOOGLE_KEYS_ENV in patch || GOOGLE_KEY_ENV in patch;
+    const write = async () => {
+      // saveSecretsWithinLock, because the lock is already held here.
+      await saveSecretsWithinLock(patch);
+      // saveSecrets writes process.env, but the Google pool memoizes its parsed
+      // key list for a couple of seconds. Drop that memo here so the field's
+      // "takes effect immediately" is true rather than nearly true — this is the
+      // single writer for secrets, so this is the only place it can go stale.
+      if (touchesPool) {
+        invalidatePool();
+        bumpPoolRevision();
+      }
+      return Object.keys(patch);
+    };
+    res.json({ saved: await withPoolLock(write) });
   } catch (err: unknown) {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
+  }
+});
+
+// ── Google key pool maintenance ────────────────────────────────────────────
+//
+// Keys are addressed by an OPAQUE ID (`entryId`, a hash of the key), never by
+// index and never by value. The client is never sent key material, so it
+// cannot name a credential by value either — which is the point: an id cannot
+// be reconstructed into a key, and it survives a reorder or a rename.
+//
+// Indexes looked equivalent and were not. A range check passes when the index
+// is stale but still in bounds, so "remove index 0" issued after another client
+// reordered the pool destroyed a DIFFERENT credential and answered HTTP 200.
+// The id makes that request either hit the intended key or find nothing.
+//
+// Every mutation runs inside `withPoolLock` and returns the pool REVISION it
+// produced. The lock stops two concurrent handlers from each writing a list
+// derived from the same read (four concurrent adds previously returned
+// `count: 2` four times while persisting one credential); the revision lets a
+// client detect that someone else changed the pool between its render and its
+// click, which the lock cannot prevent because the other change may be
+// seconds old.
+router.post('/settings/google-key-pool/remove', requireAdmin, async (req, res) => {
+  const { id } = (req.body || {}) as { id?: unknown };
+  if (typeof id !== 'string' || !id) {
+    return res.status(400).json({ error: 'id is required' });
+  }
+  try {
+    const out = await withPoolLock(async () => {
+      const entries = poolEntries();
+      const at = entries.findIndex(e => entryId(e.key) === id);
+      // A stale id is a 409, not a silent success: the key the operator clicked
+      // is gone, and reporting "removed" would hide a credential that is
+      // still configured and still being used.
+      if (at === -1) return { conflict: true as const };
+      const next = entries.filter((_, i) => i !== at);
+      // An emptied pool clears BOTH vars: leaving the legacy single-key var set
+      // would silently resurrect the key the operator just removed.
+      if (next.length) {
+        await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+      } else {
+        await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: '', [GOOGLE_KEY_ENV]: '' });
+        delete process.env[GOOGLE_KEYS_ENV];
+        delete process.env[GOOGLE_KEY_ENV];
+      }
+      invalidatePool();
+      bumpPoolRevision();
+      return { count: next.length };
+    });
+    if ('conflict' in out) {
+      return res.status(409).json({ error: 'that key is no longer in the pool', revision: poolRevision() });
+    }
+    res.json({ ok: true, count: out.count, revision: poolRevision() });
+  } catch (err) {
+    console.error('[settings/google-key-pool/remove]', err);
+    res.status(500).json({ error: 'Failed to update the key pool' });
+  }
+});
+
+// Add a key. Its OWN endpoint because the generic `/settings/secrets` writer
+// REPLACES the value it is given, and the client cannot construct the new
+// list — it is never sent the key values, by design. Sending only the new key
+// through that route therefore replaced the whole pool on every add, leaving
+// the operator with whichever key they typed last.
+//
+// A duplicate is refused rather than added, since parsePool dedupes on read and
+// the UI would otherwise show a phantom slot.
+router.post('/settings/google-key-pool/add', requireAdmin, async (req, res) => {
+  const { key, name } = (req.body || {}) as { key?: unknown; name?: unknown };
+  const trimmed = String(key ?? '').trim();
+  // Reserved separators are refused, not repaired. `parsePool` splits on a comma
+  // and takes the first colon as the key/name boundary, so a pasted key carrying
+  // either persists as something the operator did not ask for — a comma as a
+  // SECOND credential, a colon as a truncated key that 401s forever. Length and
+  // emptiness were already checked; this is the same check for the two characters
+  // the format cannot represent.
+  const problem = poolKeyProblem(trimmed);
+  if (problem) return res.status(400).json({ error: problem });
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  try {
+    const out = await withPoolLock(async () => {
+      const entries = poolEntries().map(e => ({ ...e }));
+      if (entries.some(e => e.key === trimmed)) {
+        return { duplicate: true as const };
+      }
+      if (entries.length >= GOOGLE_POOL_MAX) {
+        return { full: true as const };
+      }
+      entries.push({ key: trimmed, name: sanitizeName(name ?? '') });
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+      invalidatePool();
+      bumpPoolRevision();
+      return { count: entries.length };
+    });
+    if ('duplicate' in out) {
+      return res.status(409).json({ error: 'that key is already in the pool', revision: poolRevision() });
+    }
+    if ('full' in out) {
+      return res.status(400).json({ error: `the pool is capped at ${GOOGLE_POOL_MAX} keys` });
+    }
+    res.json({ ok: true, count: out.count, revision: poolRevision() });
+  } catch (err) {
+    console.error('[settings/google-key-pool/add]', err);
+    res.status(500).json({ error: 'Failed to add the key' });
+  }
+});
+
+// Reorder the pool. The ORDER is the feature — free keys belong first so the
+// paid key at the end absorbs only what the free tiers can't — so reordering
+// has to exist rather than being fixed at insertion time.
+//
+// `id`/`beforeId` rather than from/to indices for the same reason as remove:
+// an index pair is a pair of stale references the moment anything moves, and a
+// move is exactly when an operator has two tabs open.
+router.post('/settings/google-key-pool/move', requireAdmin, async (req, res) => {
+  const { id, to } = (req.body || {}) as { id?: unknown; to?: unknown };
+  if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'id is required' });
+  if (!Number.isInteger(to) || (to as number) < 0) {
+    return res.status(400).json({ error: 'to must be a non-negative integer' });
+  }
+  try {
+    const out = await withPoolLock(async () => {
+      const entries = poolEntries();
+      const from = entries.findIndex(e => entryId(e.key) === id);
+      if (from === -1) return { conflict: true as const };
+      const clamped = Math.min(to as number, entries.length - 1);
+      const next = [...entries];
+      const [moved] = next.splice(from, 1);
+      next.splice(clamped, 0, moved);
+      if (next.every((e, i) => e.key === entries[i].key)) {
+        return { count: entries.length };
+      }
+      // Serialised from ENTRIES, not keys — a reorder that rewrote the pool from
+      // bare keys would strip every label the operator just typed.
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(next) });
+      invalidatePool();
+      bumpPoolRevision();
+      return { count: next.length };
+    });
+    if ('conflict' in out) {
+      return res.status(409).json({ error: 'that key is no longer in the pool', revision: poolRevision() });
+    }
+    res.json({ ok: true, count: out.count, revision: poolRevision() });
+  } catch (err) {
+    console.error('[settings/google-key-pool/move]', err);
+    res.status(500).json({ error: 'Failed to reorder the key pool' });
+  }
+});
+
+// Label one key. The name lives inline in the same variable as the key
+// (`key:name`) rather than in a parallel array indexed by position, which is
+// the shape that silently reattaches labels to the wrong credentials the first
+// time a key is removed or moved.
+router.post('/settings/google-key-pool/rename', requireAdmin, async (req, res) => {
+  const { id, name } = (req.body || {}) as { id?: unknown; name?: unknown };
+  if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'id is required' });
+  if (name != null && typeof name !== 'string') {
+    return res.status(400).json({ error: 'name must be a string' });
+  }
+  try {
+    const out = await withPoolLock(async () => {
+      const entries = poolEntries().map(e => ({ ...e }));
+      const at = entries.findIndex(e => entryId(e.key) === id);
+      if (at === -1) return { conflict: true as const };
+      const clean = sanitizeName(name ?? '');
+      entries[at].name = clean;
+      await saveSecretsWithinLock({ [GOOGLE_KEYS_ENV]: serializePool(entries) });
+      invalidatePool();
+      bumpPoolRevision();
+      // The STORED name, not the submitted one: sanitising can change what the
+      // operator typed (a comma is a separator, so it becomes a space), and
+      // echoing back their raw input would leave the UI showing something the
+      // pool does not contain.
+      return { name: clean };
+    });
+    if ('conflict' in out) {
+      return res.status(409).json({ error: 'that key is no longer in the pool', revision: poolRevision() });
+    }
+    res.json({ ok: true, name: out.name, revision: poolRevision() });
+  } catch (err) {
+    console.error('[settings/google-key-pool/rename]', err);
+    res.status(500).json({ error: 'Failed to rename the key' });
+  }
+});
+
+// A model this key can actually SERVE. Availability is per-key AND per-project,
+// and the listing is not trustworthy on its own: Google still advertises
+// `gemini-2.5-flash` as generateContent-capable on keys where calling it 404s
+// with "no longer available". Picking from the list therefore reports a
+// perfectly good key as broken — worse than no test, because the operator's
+// conclusion would be false. So we build a short ordered preference from what the
+// key advertises, newest first, and actually CALL them until one answers.
+const GOOGLE_FLASH_FALLBACK = 'gemini-3.5-flash-lite';
+
+async function probeCandidates(key: string, configured?: string | null): Promise<string[]> {
+  const wanted = configured?.trim();
+  const out: string[] = [];
+  if (wanted) out.push(wanted);
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=${encodeURIComponent(key)}`, {
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (r.ok) {
+      const data = (await r.json()) as { models?: { name?: string; supportedGenerationMethods?: string[] }[] };
+      const ids = (data.models || [])
+        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => String(m.name || '').replace(/^models\//, ''))
+        .filter(Boolean);
+      // Newest first — the listing comes back oldest-first, and the retired
+      // models are the old ones.
+      const flash = ids
+        .filter(id => /flash/.test(id) && !/preview|tts|native-audio|image/.test(id))
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+      out.push(...flash);
+    }
+  } catch { /* fall through to the fallback */ }
+  out.push(GOOGLE_FLASH_FALLBACK);
+  return [...new Set(out)].slice(0, 4);
+}
+
+// Test ONE pooled key against the real API. Goes through the same provider
+// path the station uses, but pins the key so a held key can be checked without
+// disturbing the rotation state.
+router.post('/settings/google-key-pool/test', requireAdmin, async (req, res) => {
+  const { id } = (req.body || {}) as { id?: unknown };
+  if (typeof id !== 'string' || !id) return res.status(400).json({ error: 'id is required' });
+  // By id, not index: an index is a position in a list the operator is looking
+  // at, and testing whatever moved into that slot answers a question they did
+  // not ask.
+  const key = poolKeys().find(k => entryId(k) === id);
+  if (!key) return res.status(409).json({ error: 'that key is no longer in the pool', revision: poolRevision() });
+  try {
+    const llm = settings.get().llm || {};
+    const candidates = await probeCandidates(key, llm.provider === 'google' ? llm.model : undefined);
+    let lastErr: unknown = new Error(`No servable model (tried: ${candidates.join(', ')})`);
+    for (const model of candidates) {
+      try {
+        const m = createGoogleGenerativeAI({ apiKey: key })(model);
+        await generateText({
+          model: m,
+          prompt: 'Reply with the single word OK.',
+          maxOutputTokens: 32,
+          abortSignal: AbortSignal.timeout(15_000),
+        });
+        res.json({ ok: true, message: `Key responded (${model})` });
+        return;
+      } catch (err) {
+        lastErr = err;
+        // 401/403/429 say something about the KEY, so trying another model
+        // cannot help — stop and report that instead.
+        const msg = String((err as any)?.message || '');
+        if (/\b(401|403|429)\b|API_KEY_INVALID|PERMISSION_DENIED|RESOURCE_EXHAUSTED/.test(msg)) break;
+      }
+    }
+    // 502, not 200: the editor's post() treats any 2xx as success and never
+    // reads this body, so a plain 200 here reported "Key N responded" for a key
+    // that had just been rejected. The message still rides along for the UI.
+    res.status(502).json({ ok: false, message: briefLlmError(lastErr) });
+  } catch (err) {
+    res.status(502).json({ ok: false, message: briefLlmError(err) });
   }
 });
 

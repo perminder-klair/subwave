@@ -475,7 +475,8 @@ function HeavyEngineSetupGuide({ engine, buildArg }: { engine: 'Chatterbox' | 'P
 
 interface TtsSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
-  refresh: () => Promise<void>;
+  /** The refetch outcome is returned by the caller but unused here. */
+  refresh: () => void;
 }
 
 export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {

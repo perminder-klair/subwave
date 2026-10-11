@@ -12,6 +12,18 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createHash } from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
+import {
+  currentKey,
+  currentKeyOrHead,
+  fingerprint,
+  getLastFailure,
+  GOOGLE_KEY_ENV,
+  poolConfigured,
+  poolEpoch,
+  recordLastFailure,
+  reportKeyFailure,
+  reportKeySuccess,
+} from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
 
@@ -62,6 +74,166 @@ export function debugFetch(url: any, init: any) {
     } catch { /* capture must never break a model call */ }
   }
   return fetch(url, init);
+}
+
+/**
+ * The Google transport, and where key rotation happens.
+ *
+ * Two jobs, in this order:
+ *
+ *  1. Stamp `x-goog-api-key` with whichever pooled key is currently live, so
+ *     ONE cached client serves the whole pool. The alternative — rebuilding the
+ *     provider per key — invalidates the client cache on every rotation and
+ *     drops the per-provider headers captured at construction.
+ *
+ *  2. Rotate ON a quota 429: park the exhausted key for as long as Google
+ *     asked, then re-issue the same request with the next key.
+ *
+ * Rotating here rather than in withTransientRetry is deliberate. In the retry
+ * layer a 429 would either sleep on the key that just refused (burning the
+ * agent deadline on a key whose quota is gone until tomorrow) or escalate
+ * straight to the backup leg, skipping the nine other keys entirely. Doing it
+ * at the transport means the SDK's own retry budget never observes the 429,
+ * `withTransientRetry` and `withFailover` are untouched, and rotation composes
+ * with the existing dead-air fallbacks for free.
+ *
+ * Safe to re-send: every request through here is a model generation (LLM
+ * prompt or TTS render), both idempotent, so a repeat costs tokens and nothing
+ * else. Bounded by the pool — each recursion parks a key, so the depth is the
+ * pool size and `currentKey()` returning the same key ends it.
+ *
+ * With no pool configured this is exactly the SDK's own transport, so an
+ * unconfigured station is byte-identical to before.
+ */
+/**
+ * The `apiKey` to hand `createGoogleGenerativeAI` at CONSTRUCTION time.
+ *
+ * This exists because the SDK resolves a missing `apiKey` from the environment
+ * variable `GOOGLE_GENERATIVE_AI_API_KEY` and throws `LoadAPIKeyError` if that
+ * is also unset — it never looks at the pool. Passing `apiKey` only when
+ * `cfg.apiKey` was set therefore broke the exact configuration the feature is
+ * for: a pool-only station (no singular variable at all) failed every chat
+ * generation and every embedding with ZERO fetch calls, so the pooled
+ * transport never ran. googleKeyFetch re-stamps the real per-request key on
+ * every call, so the value given here is only what the constructor requires —
+ * but it must be a real configured credential, not a placeholder, because a
+ * placeholder would be sent as the key whenever the pool has nothing live.
+ */
+export function googleApiKeyForSdk(cfg: any): string | undefined {
+  // Order matters, and the pool is consulted for TWO different reasons, so the
+  // two middle entries are not interchangeable.
+  //
+  // `cfg.apiKey` first: it is the operator's explicitly configured single key,
+  // and it is the only credential a legacy station has.
+  //
+  // Then the pool, and here the distinction is the whole fix. `currentKey()` is
+  // the LIVE key, and it is deliberately empty when every key is held. Falling
+  // straight through to the legacy variable in that state meant a pool-only
+  // station — no singular variable at all — had nothing to construct a client
+  // with, so `createGoogleGenerativeAI` threw LoadAPIKeyError and every
+  // generation failed while the pool was merely WAITING. That is the
+  // "creating a client while every key is held leaves it failing" case: the
+  // station's ability to recover was gated on a client that could not be built,
+  // so nothing ever reached the code that would have noticed the hold lapsed.
+  // `currentKeyOrHead()` hands back a real configured credential instead, which
+  // the per-request transport re-stamps the moment a live key exists again — so
+  // the hold becomes a wait rather than a failure.
+  //
+  // The legacy variable stays last: it is the only credential a station with no
+  // pool has, and `undefined` here is what lets the SDK read it itself exactly as
+  // it always did.
+  return cfg.apiKey || currentKey() || currentKeyOrHead() || process.env[GOOGLE_KEY_ENV] || undefined;
+}
+
+export async function googleKeyFetch(url: any, init?: any): Promise<Response> {
+  // Explicit pool configuration is what arms rotation. A legacy single-key
+  // station is NOT a one-key pool: it keeps the plain transport, so an
+  // unhinted 429 parks nothing and every call retries as it always did.
+  if (!poolConfigured()) return debugFetch(url, init);
+  return rotateGoogle(url, init, new Set());
+}
+
+/**
+ * One call's rotation, bounded by the POOL SIZE and by nothing else.
+ *
+ * `attempted` is request-local and is what actually terminates this. The
+ * previous version re-derived eligibility from shared holds on every recursion,
+ * and a hold shorter than the request that follows it expired mid-call, so the
+ * key that had just failed came back as eligible and was retried — two keys and
+ * a 10ms hint gave A,B,A,B,A,B… with no stop. Holds are shared state whose
+ * lifetime has nothing to do with this call, so they cannot bound this call.
+ * The bound is also capped at the pool size, so a pool mutated mid-call (an
+ * operator adding a key) cannot extend the recursion past a sane depth either.
+ */
+async function rotateGoogle(url: any, init: any, attempted: Set<string>): Promise<Response> {
+  const key = currentKey(attempted);
+  if (!key) {
+    // Every key has been tried on THIS call. Answer from the last real failure
+    // instead of spending another request on a credential we have just been
+    // told is dead — while carrying enough of that failure for
+    // withTransientRetry / withFailover to classify it and escalate to the
+    // backup leg.
+    const prior = getLastFailure();
+    console.log('[google] every pooled key is exhausted for this call — replaying the last quota failure without a request');
+    const headers = new Headers(prior?.headers || {});
+    if (!headers.has('retry-after')) headers.set('retry-after', '60');
+    return new Response(
+      prior?.body ?? '{"error":{"code":"quota_exceeded","message":"every pooled key is exhausted"}}',
+      { status: prior?.status ?? 429, statusText: prior?.statusText ?? 'Too Many Requests', headers },
+    );
+  }
+  attempted.add(key);
+
+  const headers = new Headers(init?.headers || {});
+  headers.set('x-goog-api-key', key);
+  const res = await debugFetch(url, { ...init, headers });
+
+  // Only a 2xx ends this call, and only a 2xx clears the key's history.
+  //
+  // A key that genuinely answered is demonstrably not exhausted, so its hold and
+  // strike count go and the next failure starts from the short interval again.
+  // Without that the escalation ladder ratchets on failures separated by any
+  // number of successes, and a key that recovered stayed pinned at the ceiling.
+  //
+  // The condition used to be "not a 429 and not a 401", on the reasoning that
+  // anything else means the key is fine. That is false for most of what is left.
+  // A 503 is Google being briefly overloaded and a 403 is this key's project
+  // refusing the request — neither says the QUOTA came back, and both arrive on
+  // a key that is frequently already parked. Treating them as success wiped the
+  // hold, zeroed the escalation strikes and dropped the pool's recorded failure,
+  // so a pool whose keys were all still exhausted reported itself healthy, and the
+  // next real 429 restarted the ladder from the bottom. The evidence about the
+  // pool must survive anything that is not an answer.
+  //
+  // 429 and 401 are the two statuses that mean something about the CREDENTIAL, so
+  // they park and rotate below; 402 and the generation-blocked codes return
+  // untouched, which is right — they are not key problems and another key would
+  // refuse the same input.
+  if (res.status >= 200 && res.status < 300) {
+    reportKeySuccess(key);
+    return res;
+  }
+  if (res.status !== 429 && res.status !== 401) {
+    // Not a success, and not a credential verdict. Hand the response back with
+    // the key's history exactly as it was.
+    return res;
+  }
+
+  const body = await res.text().catch(() => '');
+  // Record the HEADERS too, not just the body. The replayed response is what
+  // the retry/failover layers classify, and `Retry-After` is one of the things
+  // they read: dropping it changed a 429's timing classification between the
+  // first attempt and the replay, which could prevent the backup leg from ever
+  // being selected.
+  recordLastFailure(res.status, res.statusText, body, res.headers);
+  const heldMs = reportKeyFailure(key, body);
+  const next = currentKey(attempted);
+  if (!next) {
+    console.log(`[google] every pooled key failed on this call — returning the ${res.status} upstream`);
+    return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  console.log(`[google] key ${fingerprint(key)} held for ${Math.round(heldMs / 1000)}s — retrying with ${fingerprint(next)}`);
+  return rotateGoogle(url, init, attempted);
 }
 
 // llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
@@ -266,8 +438,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
+  // The POOL EPOCH is part of the signature, for the google provider only.
+  //
+  // Every other field here is operator configuration, so a cache hit provably
+  // describes the settings it was built from. The Google pool was not in that
+  // set, which is the hole: `createGoogleGenerativeAI` captures its `apiKey` at
+  // CONSTRUCTION, so a client built while key A was live kept sending A after A
+  // was removed — invisibly, because googleKeyFetch re-stamps the header on every
+  // request and the cached value only surfaces once the pool stops re-stamping
+  // (an emptied pool falls through to the SDK's own transport, which uses the
+  // construction value). Keying on the epoch means every pool write yields a
+  // different client, so a cached client can never outlive the pool it came from.
+  // Scoped to google so an unrelated provider's client is not rebuilt when the
+  // operator edits a Google key.
   const apiKey = pinnedApiKey(cfg);
-  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
+  const poolSig = cfg.provider === 'google' ? `|gp${poolEpoch()}` : '';
+  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}${poolSig}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -294,7 +480,12 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'google': {
-      const provider = createGoogleGenerativeAI({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      // googleKeyFetch, not debugFetch: the key is re-stamped per request from
+      // the pool, which is what lets a 429 rotate credentials without
+      // rebuilding this cached client. The construction apiKey is only what the
+      // SDK demands before it will build a client at all — see googleApiKeyForSdk
+      // for why omitting it broke pool-only stations entirely.
+      const provider = createGoogleGenerativeAI({ fetch: googleKeyFetch, apiKey: googleApiKeyForSdk(cfg) });
       model = provider(id);
       break;
     }
@@ -358,6 +549,23 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
 
   clientCache.set(sig, model);
   return model;
+}
+
+/**
+ * Test seam: forget every built client.
+ *
+ * The cache is module-level and outlives any single test, so a test that builds
+ * a Google client can be handed the one an EARLIER test built — same
+ * configuration, same signature — and then assert against a client whose
+ * construction it never triggered. That is how "a client can be built while every
+ * key is held" passed against the broken code: the cached client short-circuited
+ * `googleApiKeyForSdk` entirely, so the branch under test was never reached.
+ *
+ * A distinct model id would dodge it too, but invisibly and only for that test.
+ * Clearing the cache states the precondition outright.
+ */
+export function __clearClientCacheForTest(): void {
+  clientCache.clear();
 }
 
 // Log-friendly label for the active model, used by record() and /debug.

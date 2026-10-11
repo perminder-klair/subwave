@@ -153,7 +153,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     setLocalDirty(prev => (!!prev[id] === dirty ? prev : { ...prev, [id]: dirty }));
   }, []);
 
-  const refresh = async () => { await settingsQuery.refetch(); };
+  // RETURNS the refetch result rather than discarding it. `refetch` resolves with
+  // `{ isError: true }` on failure instead of throwing, and the key-pool editor
+  // reads that outcome to decide whether its rows may be unlocked — a discarded
+  // result is indistinguishable from a successful one.
+  const refresh = async () => settingsQuery.refetch();
 
   const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
   const busy = commandBusy || saveMutation.isPending;
