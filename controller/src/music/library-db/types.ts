@@ -202,7 +202,7 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
-  // 'instrumental' = empty vocal-ranges array, 'vocal' = at least one range. NULL
+  // Shared lyric-vocal duration classification. NULL
   // matches neither, so the facet only covers analysed tracks.
   vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;

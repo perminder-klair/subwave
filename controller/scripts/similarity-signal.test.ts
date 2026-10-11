@@ -81,7 +81,8 @@ async function main() {
     // [] is a MEASUREMENT (Demucs found no vocals); null is its absence. And
     // "vocal" on ~80% of a library would be shared noise, so it stays silent.
     assert.deepEqual(soundDescriptors({ vocalRanges: [] }), ['instrumental']);
-    assert.deepEqual(soundDescriptors({ vocalRanges: [{ startMs: 0, endMs: 1000 }] }), []);
+    assert.deepEqual(soundDescriptors({ vocalRanges: [{ startMs: 0, endMs: 1000 }] }), ['instrumental']);
+    assert.deepEqual(soundDescriptors({ vocalRanges: [{ startMs: 0, endMs: 5000 }] }), []);
     assert.deepEqual(soundDescriptors({ vocalRanges: null }), []);
   });
 

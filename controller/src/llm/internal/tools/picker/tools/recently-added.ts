@@ -5,17 +5,17 @@ import { definePickerTool } from '../defs.js';
 
 export default definePickerTool({
   name: 'recentlyAdded',
-  build: ({ collect, emptyResult }) => tool({
+  build: ({ collect, candidateLimit, emptyResult }) => tool({
     description: 'A sample of tracks from recently-added albums — "new in the crates". Takes no seed, so results are unrelated to what is on air: reach for it when the set has earned a reset, not when holding a flow.',
     inputSchema: z.object({}),
     execute: async () => {
       try {
-        const albums = await subsonic.getRecentlyAddedAlbums({ size: 8 });
-        const newest = albums.slice(0, 5);
+        const albums = await subsonic.getRecentlyAddedAlbums({ size: candidateLimit(8) });
+        const newest = albums.slice(0, candidateLimit(5));
         const out: any[] = [];
         let failed = 0;
         for (const a of newest) {
-          try { out.push(...(await subsonic.getAlbum(a.id)).slice(0, 3)); } catch { failed++; }
+          try { out.push(...(await subsonic.getAlbum(a.id)).slice(0, candidateLimit(3))); } catch { failed++; }
         }
         // Every album fetch failing is a music-server fault, not an empty
         // shelf — say so rather than answer [] (a bare [] draws a fabricated id).

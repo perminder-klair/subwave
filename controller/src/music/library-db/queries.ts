@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseVocalRangesJson } from '../lyric-vocal.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
@@ -226,17 +227,12 @@ export function candidateFilterTracks(): Array<{
     moods: string | null;
     audio_moods: string | null;
     energy: EnergyValue;
-    vocal_range_count: number | null;
+    vocal_ranges_json: string | null;
     duration_sec: number | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    CASE
-      WHEN vocal_ranges_json IS NULL THEN NULL
-      WHEN json_valid(vocal_ranges_json) AND json_type(vocal_ranges_json) = 'array'
-        THEN json_array_length(vocal_ranges_json)
-      ELSE NULL
-    END AS vocal_range_count
+    vocal_ranges_json
     FROM tracks`).all() as CandidateFilterRow[];
   return rows.map((row) => ({
     id: row.id,
@@ -253,11 +249,8 @@ export function candidateFilterTracks(): Array<{
     moods: row.moods ? safeParseArray(row.moods) : [],
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
-    // The show filter reads only the tri-state (null unmeasured / [] instrumental
-    // / non-empty vocal), so carry presence rather than the spans.
-    vocalRanges: row.vocal_range_count == null
-      ? null
-      : row.vocal_range_count === 0 ? [] : [{}],
+    // Preserve the measured spans: classification now depends on duration.
+    vocalRanges: parseVocalRangesJson(row.vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
   }));
 }

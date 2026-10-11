@@ -6,6 +6,7 @@
 
 import * as subsonic from '../../../../music/subsonic.js';
 import * as library from '../../../../music/library.js';
+import { isInstrumental } from '../../../../music/lyric-vocal.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';
 import { resolveEraYear } from '../../../../music/show-filter.js';
@@ -52,10 +53,10 @@ export function slim(s: any) {
   // `duration`, library `durationSec`), so it's present even for an un-tagged
   // Subsonic track whose library lookup came back empty.
   const durationSec = durationSeconds(s) ?? durationSeconds(rec);
-  // vocalRanges: [] = no vocal regions (instrumental), null/undefined = not
+  // vocalRanges: classify measured sung duration; null/undefined = not
   // computed (unknown — omit rather than guess "has vocals").
   const vocalRanges = Array.isArray(s.vocalRanges) ? s.vocalRanges : rec?.vocalRanges;
-  const instrumental = Array.isArray(vocalRanges) ? vocalRanges.length === 0 : null;
+  const instrumental = isInstrumental(vocalRanges);
   // realBpm: a non-positive bpm means unknown — never emitted, never allowed
   // to mask the analyzed value.
   const bpm = library.realBpm(rec?.bpm) ?? library.realBpm(s.bpm);

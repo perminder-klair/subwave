@@ -14,7 +14,7 @@ const ARTIST_RETRY_MAX_WORDS = 6;
 
 export default definePickerTool({
   name: 'searchLibrary',
-  build: ({ collect, emptyResult, knnExclude }) => tool({
+  build: ({ collect, candidateLimit, emptyResult, knnExclude }) => tool({
     description: 'Search the library for something NAMED — an artist, a song title, or a real genre word (e.g. "jazz", "punjabi"). Falls back to vibe search when nothing matches literally, so "punjabi r&b romantic" also works. Not for browsing by feel: a mood, an energy or "something like what\'s on now" belongs to tracksByMood, tracksByEnergy and the similarity tools, which read the station\'s own tagging instead of guessing from text.',
     inputSchema: z.object({
       query: z.string().max(QUERY_MAX_CHARS).describe('an artist name, song title, genre, or vibe'),
@@ -46,7 +46,7 @@ export default definePickerTool({
         // abortSignal is the agent's per-tool timeout. It rides every Navidrome
         // call below, and each step checks it, so a run that has moved on stops
         // here instead of finishing its searches in the background.
-        const PAGE = 25;
+        const PAGE = candidateLimit(25);
         const songOffset = Math.floor(Math.random() * 3) * PAGE;
         let page = await subsonic.searchPage(query, { songCount: PAGE, songOffset, signal: abortSignal });
         if (page.rawCount < PAGE && songOffset > 0) {
@@ -59,7 +59,7 @@ export default definePickerTool({
         // a name-shaped query: the resolver searches once per word.
         if (songs.length === 0 && query.trim().split(/\s+/).length <= ARTIST_RETRY_MAX_WORDS) {
           const artist = await subsonic.resolveArtist(query, { signal: abortSignal });
-          if (artist && !abortSignal?.aborted) songs = (await subsonic.searchPage(artist.name, { songCount: 25, signal: abortSignal })).songs;
+          if (artist && !abortSignal?.aborted) songs = (await subsonic.searchPage(artist.name, { songCount: PAGE, signal: abortSignal })).songs;
         }
         if (abortSignal?.aborted) return toolDeadlineResult('searchLibrary');
         const out = collect(songs);
@@ -80,7 +80,7 @@ export default definePickerTool({
           await library.load();
           const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode(), { abortSignal });
           if (vec) {
-            const sem = collect(library.tracksByVector(vec, 20, { excludeIds: knnExclude }));
+            const sem = collect(library.tracksByVector(vec, candidateLimit(20), { excludeIds: knnExclude }));
             if (sem.length > 0) return filteredNote ? { tracks: sem, note: filteredNote } : sem;
           }
         }
