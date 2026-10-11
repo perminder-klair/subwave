@@ -353,6 +353,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
+- **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 - **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
