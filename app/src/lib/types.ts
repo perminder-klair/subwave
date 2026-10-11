@@ -159,8 +159,14 @@ export interface QueueEntry {
   album?: string;
   subsonic_id?: string;
   requestedBy?: string;
-  /** ISO timestamp present on history entries. */
+  /** ISO timestamp on older payloads; the live controller sends the three
+   *  below instead. All are live-edge. */
   t?: string;
+  /** When the track started airing; set once it reaches the air. */
+  startedAt?: string;
+  endedAt?: string;
+  /** When it joined the queue — earlier than it aired, often by minutes. */
+  queuedAt?: string;
   [key: string]: unknown;
 }
 
@@ -207,17 +213,11 @@ export interface LikeStatus {
   count?: number;
 }
 
-export interface DjLogEntry {
-  t?: string;
-  text?: string;
-  [key: string]: unknown;
-}
-
-/** `/state` response. */
+/** `/state` response. The booth log (`djLog`) is operator diagnostics and is
+ *  not part of this public read; older controllers still send it. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
-  djLog: DjLogEntry[];
   /** The on-air track, stamped at the LIVE EDGE. The authoritative start time,
    *  as opposed to when this client first saw the track. Shifted into
    *  listener-time before display (#1114). */
@@ -226,6 +226,11 @@ export interface StationState {
   locale?: StationLocale;
   /** Station-wide listener-player UI toggles (from GET /state). */
   ui?: { boothBuddy?: boolean };
+  /** Private-station locks (#478) — booleans only, never the password.
+   *  `privatePlayer` hides the player until the station password is given;
+   *  `listenerAuth` makes every stream mount demand it. Absent on an older
+   *  controller = fully public. */
+  privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
 }
 
 /** A single turn in the live DJ session. After a hard roll, GET /session
@@ -235,6 +240,8 @@ export interface StationState {
  *  `{ at, show, persona, fromShow, fromSessionId }` (#1690). */
 export type SessionRole = 'segment' | 'dj' | 'track' | 'system' | string;
 
+/** Spoken turns also carry `meta.airedAt` (the live-edge moment the words
+ *  began, #1382) and `meta.durationMs` (the clip's length, #1848). */
 export interface SessionTurn {
   t?: string | number;
   role?: SessionRole;

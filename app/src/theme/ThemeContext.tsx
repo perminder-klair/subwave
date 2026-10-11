@@ -8,13 +8,20 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import { View } from 'react-native';
 import { useStation } from '@/config/StationContext';
+import { useAppActive } from '@/hooks/useAppActive';
+import { pollAsync } from '@/lib/poll';
 import type { Theme, ThemeMode } from '@/lib/types';
 
 const OVERRIDE_KEY = 'subwave.theme.override.v1';
+
+// Matches the web ThemeProvider. `active` is the effective theme, so an on-air
+// show's own theme takes over at the show change on the next read.
+const THEME_POLL_MS = 30_000;
 
 export interface ResolvedColors {
   bg: string;
@@ -102,23 +109,27 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     AsyncStorage.getItem(OVERRIDE_KEY).then((v) => setOverrideState(v || null));
   }, []);
 
+  // Foreground only. The Live Activity bakes the accent in and restarts on a
+  // change, and iOS cannot start one from the background, so a flip while the
+  // phone is locked would end the card. A change made meanwhile lands on return.
+  const appActive = useAppActive();
+  // An unchanged registry keeps its identity, or every poll would re-render the
+  // whole themed tree through new colour objects.
+  const themesSigRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!api) return;
-    let alive = true;
-    api
-      .themes()
-      .then((payload) => {
-        if (!alive) return;
-        setThemes(payload.themes || []);
-        setActiveId(payload.active || null);
-      })
-      .catch(() => {
-        /* keep defaults */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [api]);
+    if (!api || !appActive) return;
+    return pollAsync(async (signal) => {
+      const payload = await api.themes(signal);
+      if (signal.aborted) return;
+      const list = payload.themes || [];
+      const sig = JSON.stringify(list);
+      if (sig !== themesSigRef.current) {
+        themesSigRef.current = sig;
+        setThemes(list);
+      }
+      setActiveId(payload.active || null);
+    }, THEME_POLL_MS);
+  }, [api, appActive]);
 
   const setOverride = useCallback((id: string | null) => {
     setOverrideState(id);

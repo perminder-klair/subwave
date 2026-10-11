@@ -172,6 +172,56 @@ export function artistRootKey(song: CandidateLike | string): string {
   return root || base;
 }
 
+// Do two artist MATCHING keys (artistRootKey) name the same act, or does one
+// credit contain the other as a delimited act? Separator-agnostic on purpose:
+// music servers join several credited artists with whatever their scanner or
+// tagger chose (Navidrome " • ", " / ", "; ", ", " …), so no list of
+// separators can be complete. Instead any character that cannot be part of a
+// name counts as a boundary between acts: everything except letters, digits,
+// whitespace and the marks names carry: apostrophe, period, hyphen, and the
+// "&"/"+" that sit inside band names ("Sly & the Family Stone", "Florence +
+// the Machine") and that artistRootKey's lead split already handles.
+//
+//   "pixies"  vs "pixies • black francis"  → true   (delimited by "•")
+//   "pixies"  vs "black francis / pixies"  → true   (delimited by "/")
+//   "air"     vs "air supply"              → false  (only a space: one name)
+//   "sly"     vs "sly & the family stone"  → false  ("&" is part of the name)
+//   "simon"   vs "paul simon"              → false
+//
+// A spacing key, never an identity or block key: a wrong answer can only
+// over-match, which every caller reads as "pick someone else". Not for the
+// blocklist, which is a HARD filter with no never-starve behind it.
+const NAME_CHAR = /[\p{L}\p{N}\s'.\-&+]/u;
+
+function delimitedAt(text: string, from: number, step: 1 | -1): boolean {
+  // Walk away from the match over spaces; the first other character decides.
+  for (let i = from; i >= 0 && i < text.length; i += step) {
+    const ch = text[i]!;
+    if (/\s/u.test(ch)) continue;
+    return !NAME_CHAR.test(ch);
+  }
+  return true; // reached the edge of the credit
+}
+
+export function artistCreditsOverlap(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  for (let i = long.indexOf(short); i !== -1; i = long.indexOf(short, i + 1)) {
+    if (delimitedAt(long, i - 1, -1) && delimitedAt(long, i + short.length, 1)) return true;
+  }
+  return false;
+}
+
+// artistCreditsOverlap against a set of keys (queue.neighbourArtistRoots): an
+// exact hit first, the scan only when there is none.
+export function artistRootIn(root: string, roots: Iterable<string>): boolean {
+  if (!root) return false;
+  if (roots instanceof Set && roots.has(root)) return true;
+  for (const r of roots) if (artistCreditsOverlap(root, r)) return true;
+  return false;
+}
+
 // Every act CREDITED on a track, in credit order — the opposite question to
 // artistRootKey, which asks who LEADS the credit:
 //
@@ -407,9 +457,9 @@ export function filterPickerCandidates<T extends CandidateLike>(
       // stage (#1187); an empty set makes it a no-op. Matched on BOTH the raw
       // and the lead-artist key (#1251), or "Marvin Gaye & Tammi Terrell" would
       // answer a block on "Marvin Gaye".
-      if (key && (blockedArtists.has(key) || blockedArtists.has(artistRootKey(song)))) continue;
+      if (key && (blockedArtists.has(key) || artistRootIn(artistRootKey(song), blockedArtists))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
-      if (mode.recentArtists && recentArtistRoots.has(artistRootKey(song))) continue;
+      if (mode.recentArtists && artistRootIn(artistRootKey(song), recentArtistRoots)) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;
         if (count >= maxPerArtist) continue;

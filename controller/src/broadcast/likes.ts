@@ -93,7 +93,11 @@ async function flush(): Promise<void> {
   }
 }
 
-export async function load(): Promise<void> {
+// `readOnly` is for a process that only READS the store — the tagger child
+// (music/seed-selector.ts) filtering stars. It never mints and flushes a fresh
+// secret: this file has one writer, the controller, and a second process
+// writing `{ secret, likes: [] }` over it could discard likes recorded since.
+export async function load({ readOnly = false }: { readOnly?: boolean } = {}): Promise<void> {
   if (loaded) return;
   if (loadPromise) return loadPromise;
   loadPromise = (async () => {
@@ -111,7 +115,7 @@ export async function load(): Promise<void> {
     } catch {
       /* corrupt file — start fresh, the next flush overwrites it */
     }
-    if (!secret) {
+    if (!secret && !readOnly) {
       secret = randomBytes(24).toString('hex');
       scheduleFlush(); // persist the fresh secret even before the first like
     }
@@ -355,6 +359,30 @@ export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean
   return ` Listener favourites — the most-liked tracks on this station recently: ${favs
     .map((f) => `"${f.track.title}" by ${f.track.artist || 'unknown'} (${f.count})`)
     .join('; ')}. Treat these as a strong preference signal when they fit the moment — but keep variety, never loop the same favourites back-to-back.`;
+}
+
+// The starred list as OPERATOR curation. A listener like is mirrored to a
+// Navidrome star (`likes.starInNavidrome`), so getStarred() alone cannot tell the
+// operator's hand from one anonymous tap — and every consumer that presents
+// stars as "the operator's favourites" would be letting listener signal steer
+// picks with `influenceDj` off. Same gate as favouritesClause: with listener
+// influence on, a liked star is welcome; otherwise a star whose only likes are
+// listener likes is dropped, while one with an operator heart, or with no like
+// record at all (starred in Navidrome by hand), stays. The store must be loaded
+// (load()) for the filter to see anything.
+export function operatorStarred<T extends { id?: unknown }>(
+  songs: T[] | null | undefined,
+  cfg: { enabled?: boolean; influenceDj?: boolean } | null | undefined,
+): T[] {
+  const list = Array.isArray(songs) ? songs : [];
+  if (cfg?.enabled && cfg?.influenceDj) return [...list];
+  const listenerOnly = new Set<string>();
+  const operator = new Set<string>();
+  for (const r of records) (isOperator(r) ? operator : listenerOnly).add(r.songId);
+  return list.filter((s) => {
+    const id = String(s?.id ?? '');
+    return !listenerOnly.has(id) || operator.has(id);
+  });
 }
 
 // Listener key truncated to a short handle: enough to spot "same listener",

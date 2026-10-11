@@ -10,6 +10,25 @@ type AnalysisDimension = 'audio' | 'vocal' | 'stem';
 // runs the worker as a child of the controller.
 type AnalysisBackend = 'sidecar' | 'local' | string | null;
 
+// Consecutive failures after which a track leaves automatic analysis scopes.
+// A single failure is usually transient; explicit retries can bypass this.
+export const MAX_ANALYSIS_FAILURES = 3;
+
+export function analysisRetryAllowed(attempts: number): boolean {
+  return attempts < MAX_ANALYSIS_FAILURES;
+}
+
+// SQL counterpart for scopes that read the legacy tracks columns.
+export function analysisFailureExclusion(alias = ''): string {
+  const col = alias ? `${alias}.analyze_fail_count` : 'analyze_fail_count';
+  return `COALESCE(${col}, 0) < ${MAX_ANALYSIS_FAILURES}`;
+}
+
+// Older sidecars can measure head vocals without knowing how to measure tails.
+export function tailVocalBackfillAvailable(capable: boolean | null): boolean {
+  return capable === true;
+}
+
 export interface CapabilityInputs {
   dimension: AnalysisDimension;
   // The operator wants this dimension (env force or the admin toggle).

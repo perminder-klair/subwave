@@ -245,7 +245,11 @@ export function songsByMood(mood: string | null | undefined): any[] {
 
   const seen = new Set(exact.map(s => s.id));
   const widened = [...exact];
-  for (const neighbour of MOOD_NEIGHBOURS[mood] || []) {
+  // Own keys only: the mood is free text (a model's tool argument, a request
+  // match), and on a plain object literal "constructor" or "toString" would
+  // read an inherited member here and throw on iteration.
+  const neighbours = Object.hasOwn(MOOD_NEIGHBOURS, mood) ? MOOD_NEIGHBOURS[mood] : [];
+  for (const neighbour of neighbours) {
     for (const row of blocklist.rejectBlocked(db.songsByMood(neighbour))) {
       if (seen.has(row.id)) continue;
       widened.push(row);

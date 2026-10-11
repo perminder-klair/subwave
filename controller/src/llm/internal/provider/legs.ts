@@ -2,8 +2,8 @@
 // error eligibility; see core/failover.ts and discussion #320.
 
 import * as settings from '../../../settings.js';
-import { languageModel, resolveModelId, ollamaBaseUrl, llmCfg } from './registry.js';
-import { discoveryStepsFor, DISCOVERY_STEPS_MIN } from './capabilities.js';
+import { languageModel, resolveModelId, ollamaBaseUrl, chatBaseUrl, llmCfg } from './registry.js';
+import { capabilitiesFor, discoveryStepsFor, DISCOVERY_STEPS_MIN } from './capabilities.js';
 
 export interface Leg {
   cfg: any;       // the resolved llm config for this leg
@@ -88,16 +88,21 @@ export function promptDiscoverySteps(): number {
 // rather than after a batch of connect timeouts. Any HTTP answer — even 401/404
 // — means the host is up; only a connection/DNS/timeout failure is "down". Cloud
 // providers can't be cheaply probed and are assumed reachable; an outage there
-// surfaces mid-run and the consumer is dropped then.
+// surfaces mid-run and the consumer is dropped then. Which providers are
+// probed, and how, is a capability fact (`reachabilityProbe`).
 export async function probeLegReachable(leg: Leg, timeoutMs = 3000): Promise<boolean> {
   const cfg = leg?.cfg;
   if (!cfg) return false;
   let url: string;
-  if (cfg.provider === 'ollama') {
+  const probe = capabilitiesFor(cfg.provider).reachabilityProbe;
+  if (probe === 'ollama-version') {
     url = `${ollamaBaseUrl(cfg).replace(/\/$/, '')}/api/version`;
-  } else if (cfg.provider === 'openai-compatible') {
-    if (!cfg.baseUrl) return false;
-    url = `${cfg.baseUrl.replace(/\/$/, '')}/models`;
+  } else if (probe === 'openai-models') {
+    // chatBaseUrl resolves the server the leg actually talks to, locca's
+    // default included.
+    const base = chatBaseUrl(cfg);
+    if (!base) return false;
+    url = `${base.replace(/\/$/, '')}/models`;
   } else {
     // Hosted provider — no cheap local probe; assume up.
     return true;

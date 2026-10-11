@@ -4,6 +4,7 @@
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { randomUUID } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { copyFile, rm } from 'node:fs/promises';
 import { DB_PATH, getDb, getEmbeddingDim, requireDb, setHandle } from './handle.js';
 import { invalidateStats } from './stats.js';
@@ -106,11 +107,18 @@ export async function restoreFromFile(srcPath: string): Promise<void> {
 
 // Delete the DB and sidecars so the next open() recreates an empty schema.
 // Irreversible short of a backup restore. Caller reopens.
+//
+// Synchronous on purpose: between close() and the last unlink, any lazy
+// library.load() (a track start's recordPlay, a request, a picker tool) finds no
+// handle and reopens DB_PATH. With awaited unlinks it could reopen the OLD file
+// just before it was removed, and keep serving the wiped data from a deleted
+// inode, or create a fresh file beside a stale -wal that is then unlinked under
+// it. Without a yield, a reopen can only ever find the new, empty file.
 export async function reset(): Promise<void> {
   close();
-  await rm(DB_PATH, { force: true });
-  await rm(`${DB_PATH}-wal`, { force: true });
-  await rm(`${DB_PATH}-shm`, { force: true });
+  rmSync(DB_PATH, { force: true });
+  rmSync(`${DB_PATH}-wal`, { force: true });
+  rmSync(`${DB_PATH}-shm`, { force: true });
 }
 
 

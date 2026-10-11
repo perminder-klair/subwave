@@ -121,6 +121,17 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
   }
 });
 
+// The non-blank fields of a normalised credentials block. saveSetupConfig
+// spreads its patch over the stored block, so a blank that reached it would
+// overwrite a saved value rather than leave it alone.
+function providedNavidromeFields(nv: { url: string; user: string; pass: string }) {
+  const out: { url?: string; user?: string; pass?: string } = {};
+  if (nv.url) out.url = nv.url;
+  if (nv.user) out.user = nv.user;
+  if (nv.pass) out.pass = nv.pass;
+  return out;
+}
+
 // Every block is optional; the wizard sends only what it collected. navidrome
 // goes to state/setup-config.json, apiKeys to state/secrets.env, the rest through
 // settings.update(). Only the navidrome block affects needsSetup().
@@ -134,13 +145,16 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     if (fishIssue) throw new Error(fishIssue);
 
     // Wizard-managed overlay only; never mutates the live env. Unlike the probe,
-    // save does not require the fields (skipping Navidrome is supported).
+    // save does not require the fields (skipping Navidrome is supported). A blank
+    // field is "not provided", never "clear": the web wizard sends an empty block
+    // when the step is skipped, and a re-run must not wipe stored credentials.
     if (b.navidrome && typeof b.navidrome === 'object') {
-      await saveSetupConfig({
-        navidrome: normalizeNavidromeCredentials(b.navidrome),
-      });
-      applyNavidromeToLiveConfig(b.navidrome);
-      clearSetupConfigCache();
+      const nv = providedNavidromeFields(normalizeNavidromeCredentials(b.navidrome));
+      if (Object.keys(nv).length) {
+        await saveSetupConfig({ navidrome: nv });
+        applyNavidromeToLiveConfig(nv);
+        clearSetupConfigCache();
+      }
     }
 
     // state/secrets.env (0600), also set on process.env for immediate use.

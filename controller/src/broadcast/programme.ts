@@ -367,7 +367,22 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   const idx = hourIndex ?? episodeSpan(now).index;
   const feature = planFeature(plan, idx);
   const topic = feature?.topic || show.topic || `the heart of "${show.name}"`;
-  const kind = String(show.segmentSkill || '').trim() || feature?.kind || null;
+  const pinned = String(show.segmentSkill || '').trim() || null;
+  let kind = pinned || feature?.kind || null;
+  // A producer-chosen kind is re-checked against the menu the producer is
+  // offered (featureKindMenu: enabled, ready, host-owned, cohost-eligible), at
+  // air time: the plan lives in session.json for the whole episode, so a skill
+  // the operator disabled mid-show must not still air at the next feature beat.
+  // The show's own pinned segmentSkill is the operator's choice and is not
+  // second-guessed here.
+  if (kind && !pinned) {
+    const roster = settings.getOnAirRoster(now);
+    const menu = featureKindMenu(roster.host, roster.guests.length > 0, preparationSkillAt(ctx));
+    if (!menu.some((k) => k.kind === kind)) {
+      queue.log('scheduler', `Programme feature capability "${kind}" is not on this show's capability menu (disabled, not ready, or not the host's) — airing straight talk instead`);
+      kind = null;
+    }
+  }
 
   return withTrace({ kind: 'programme-feature', show: show.name, capability: kind || 'talk' }, async () => {
     let speaker = settings.pickOnAirSpeaker(now);

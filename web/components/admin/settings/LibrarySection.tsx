@@ -540,7 +540,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 onChange={rows => setForm(f => ({ ...f, embedding: { ...f.embedding, headers: rows } }))} />
               <div className="field-hint">
                 Leave empty to use the chat connection&apos;s headers when embeddings
-                use the same provider. For a separate Azure embedding resource,
+                use the same provider and server. For a separate Azure embedding resource,
                 add its <code>api-key</code> here. Values are hidden after saving.
               </div>
             </div>

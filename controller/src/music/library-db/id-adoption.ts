@@ -3,6 +3,7 @@
 // #5824.
 
 import { requireDb } from './handle.js';
+import { moveFacetRows, syncTrackFacets } from './facets.js';
 import { canonicalId } from '../id-canonical.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
@@ -225,6 +226,10 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
       movePlays.run(neu, old);
       journal.run(old, neu);
       delTrack.run(old);
+      // Facet rows follow the merged columns: carry the old id's rows where the
+      // new id has none, then re-derive from what the carry left on the row.
+      moveFacetRows(old, neu);
+      syncTrackFacets(neu);
       applied.push([old, neu]);
     }
   });

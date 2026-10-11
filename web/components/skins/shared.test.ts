@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   boothLines,
+  entryTime,
   foldBpm,
   isPowered,
   lastVoiceLine,
@@ -102,4 +103,19 @@ test('a tempo folds by octaves into its band, never onto the edge', () => {
   assert.equal(foldBpm(null, 70, 150), 92);
   assert.equal(foldBpm(Infinity, 70, 150), 92);
   assert.equal(foldBpm(-4, 70, 150), 92);
+});
+
+// Played-list clocks (#1848): GET /state history entries carry startedAt and
+// need not carry `t` or queuedAt, so a `t`-then-queuedAt read rendered nothing.
+test('entryTime reads when an entry aired, falling back for older payloads', () => {
+  const started = '2026-10-09T12:03:00.000Z';
+  const queued = '2026-10-09T11:58:00.000Z';
+  const oldT = '2026-10-09T12:02:59.000Z';
+  assert.equal(entryTime({ startedAt: started }), started, 'the live controller shape');
+  assert.equal(entryTime({ startedAt: started, queuedAt: queued }), started, 'aired, not queued');
+  assert.equal(entryTime({ t: oldT, queuedAt: queued }), oldT);
+  assert.equal(entryTime({ queuedAt: queued }), queued);
+  assert.equal(entryTime({ startedAt: 'garbage', queuedAt: queued }), queued);
+  assert.equal(entryTime({}), undefined);
+  assert.equal(entryTime(null), undefined);
 });

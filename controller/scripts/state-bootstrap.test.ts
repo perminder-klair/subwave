@@ -216,6 +216,37 @@ for (const s of SUPERVISORS) {
     assert.match(r.out, /WARNING/i, `not surfaced as a warning: ${r.out}`);
     for (const d of SUBDIRS) assert.ok(existsSync(join(dir, d)), `${d} skipped`);
   });
+
+  // 7. The state ROOT is 1777, not 777. It holds root's icecast-secrets.env
+  //    and is shared with containers running as other uids; in a world-
+  //    writable dir WITHOUT the sticky bit any of them can rename or replace
+  //    that file. Sticky keeps every uid able to create files (the point of
+  //    the chmod) while only an owner can replace one. A single-station
+  //    install passes the root as both arguments, so the second, plain-777
+  //    prepare of the same path must not strip the bit again.
+  check('a single-station root is sticky and still world-writable', () => {
+    const { root, dir } = scratch();
+    const r = bootstrap(s.path, s.lib, root, dir);
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    assert.equal(r.out.trim(), '', `expected silence, got: ${r.out}`);
+    assert.equal(statSync(root).mode & 0o7777, 0o1777, `root mode ${(statSync(root).mode & 0o7777).toString(8)}`);
+    // Subdirs keep plain 777: only the root holds install-level files, and
+    // the sidecars' own working dirs are not this change's to tighten.
+    for (const d of SUBDIRS) {
+      assert.equal(statSync(join(dir, d)).mode & 0o7777, 0o777, `${d} mode changed`);
+    }
+  });
+
+  // 8. Multi-station: the station dir is not the root, gets plain 777, and
+  //    the root keeps its sticky bit.
+  check('a station dir gets 777 while the root stays sticky', () => {
+    const { root } = scratch();
+    const dir = join(root, 'stations', 'second');
+    const r = bootstrap(s.path, s.lib, root, dir);
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    assert.equal(statSync(root).mode & 0o7777, 0o1777, 'root lost its sticky bit');
+    assert.equal(statSync(dir).mode & 0o7777, 0o777, `station dir mode ${(statSync(dir).mode & 0o7777).toString(8)}`);
+  });
 }
 
 rmSync(tmp, { recursive: true, force: true });

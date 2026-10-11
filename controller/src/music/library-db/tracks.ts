@@ -2,10 +2,14 @@
 // The write path every ingest pass (tagger, analyzer, enricher) goes through.
 
 import { ANALYSIS_VERSION, AUDIO_EMBEDDING_DIM, SQL_HAS_MOODS, TAGGER_VERSION, getEmbeddingDim, requireDb } from './handle.js';
+import { clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet, type FacetSource } from './facets.js';
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
 import { resolveEraYear } from '../era-year.js';
+import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
+
+export { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
 export function getTrack(id: string): TrackRecord | null {
   const row = requireDb()
@@ -369,6 +373,9 @@ interface TrackAnalysisWrite {
   // null keeps the existing value (COALESCE): a pass that couldn't reach the
   // tail must not wipe a complete pass's measurement.
   outro?: TrackOutro | null;
+  // A targeted run that disables vocals must keep the outro's separate vocal
+  // measurement, just as COALESCE keeps the head vocal ranges.
+  preserveTailVocal?: boolean;
   // Edge dead air (ms). The head is measurable on every pass and overwrites;
   // the tail follows the outro's COALESCE rule.
   leadSilenceMs?: number | null;
@@ -377,12 +384,26 @@ interface TrackAnalysisWrite {
   // true stamps stems_at so the backfill scope drops the track. Pass true for a
   // MISS too: the stamp records the attempt, not disk presence (migration 17).
   stemsAttempted?: boolean;
+  // Where the audio came from — recorded on the facet rows this write
+  // measures, and how an unmeasured tail is explained. Omitted = 'unknown'.
+  source?: FacetSource;
 }
 
 // Stamps ANALYSIS_VERSION so resumable runs skip analysed rows and a bump
 // re-targets stale ones. UPDATE on an existing meta row.
 export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
-  requireDb()
+  const d = requireDb();
+  d.transaction(() => {
+  let outro = a.outro;
+  let carriedTailVocal = false;
+  if (a.preserveTailVocal && outro && outro.vocalRanges == null) {
+    const prior = getTrack(id)?.outro?.vocalRanges;
+    if (prior != null) {
+      outro = { ...outro, vocalRanges: prior };
+      carriedTailVocal = true;
+    }
+  }
+  d
     .prepare(
       `UPDATE tracks SET
         bpm                 = ?,
@@ -431,25 +452,29 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
       Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
-      a.outro != null ? JSON.stringify(a.outro) : null,
+      outro != null ? JSON.stringify(outro) : null,
       Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
     );
-}
-
-// Consecutive failures after which a track drops out of every analysis scope.
-// Three, not one: a single failure is usually transient.
-export const MAX_ANALYSIS_FAILURES = 3;
-
-// The exclusion every analysis scope query shares: a scope that forgets it
-// re-attempts dead tracks forever. `alias` is the tracks-table alias for
-// joining queries; it goes on the column, not the COALESCE around it.
-export function analysisFailureExclusion(alias = ''): string {
-  const col = alias ? `${alias}.analyze_fail_count` : 'analyze_fail_count';
-  return `COALESCE(${col}, 0) < ${MAX_ANALYSIS_FAILURES}`;
+  // Mirror into track_facet_status in the same transaction. Only what this
+  // pass actually measured is "fresh"; a tail/vocal kept by COALESCE keeps the
+  // version it was measured at. Every analysis pass decodes for the tail, so a
+  // tail it could not measure is still an answer at the current version
+  // (`tried`), while a tail kept from an earlier pass is not re-promoted.
+  const fresh: Facet[] = ['head', 'loudness'];
+  if (a.outro != null || Number.isFinite(a.tailSilenceMs as number)) fresh.push('tail');
+  if (a.vocalRanges != null && !carriedTailVocal) fresh.push('vocal');
+  if (a.stemsAttempted) fresh.push('stems');
+  syncTrackFacets(id, {
+    fresh,
+    tried: ['tail'],
+    source: a.source ?? 'unknown',
+    tailReason: a.source === 'capped' ? 'capped-download' : undefined,
+  });
+  })();
 }
 
 // Never analysed, or analysed by an older ANALYSIS_VERSION, minus the ones
@@ -466,15 +491,18 @@ export function needsAnalysisIds(limit?: number): string[] {
 
 // Stamp a failed attempt; `error` is trimmed for the admin panel.
 export function recordAnalysisFailure(id: string, error: string): void {
-  requireDb()
-    .prepare(
+  const d = requireDb();
+  d.transaction(() => {
+    d.prepare(
       `UPDATE tracks SET
          analyze_error      = ?,
          analyze_failed_at  = ?,
          analyze_fail_count = COALESCE(analyze_fail_count, 0) + 1
        WHERE id = ?`,
-    )
-    .run((error || 'analysis failed').slice(0, 500), new Date().toISOString(), id);
+    ).run((error || 'analysis failed').slice(0, 500), new Date().toISOString(), id);
+    // Every facet the track still lacks becomes 'failed' with this count.
+    syncTrackFacets(id);
+  })();
 }
 
 // Forget the failure history for one track (or all, id omitted) so the next pass
@@ -482,10 +510,14 @@ export function recordAnalysisFailure(id: string, error: string): void {
 export function clearAnalysisFailures(id?: string): number {
   const d = requireDb();
   const set = `analyze_error = NULL, analyze_failed_at = NULL, analyze_fail_count = NULL`;
-  const res = id
-    ? d.prepare(`UPDATE tracks SET ${set} WHERE id = ?`).run(id)
-    : d.prepare(`UPDATE tracks SET ${set} WHERE analyze_fail_count IS NOT NULL`).run();
-  return res.changes;
+  // One transaction with its facet mirror, like every other write here.
+  return d.transaction(() => {
+    const res = id
+      ? d.prepare(`UPDATE tracks SET ${set} WHERE id = ?`).run(id)
+      : d.prepare(`UPDATE tracks SET ${set} WHERE analyze_fail_count IS NOT NULL`).run();
+    clearFacetFailures(id);
+    return res.changes;
+  })();
 }
 
 // How many tracks are out of scope for having failed too often (coverage badge).
@@ -543,6 +575,7 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   const d = requireDb();
   const vocalCol = opts.keepVocal ? '' : ' vocal_ranges_json = NULL,';
   const stemsCol = opts.clearStems ? ' stems_at = NULL,' : '';
+  d.transaction(() => {
   d.prepare(
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
@@ -557,6 +590,8 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
   // CLAP vectors are written in the same pass, and the audio moods cleared
   // above are derived from them.
   d.prepare('DELETE FROM track_audio_vectors').run();
+  clearFacetRows(opts);
+  })();
 }
 
 export function upsertTrackVector(
@@ -620,6 +655,9 @@ export function upsertTrackAudioVector(id: string, vector: number[] | Float32Arr
     vector instanceof Float32Array ? vector.buffer : new Float32Array(vector).buffer,
   );
   const d = requireDb();
-  d.prepare(`DELETE FROM track_audio_vectors WHERE id = ?`).run(id);
-  d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+  d.transaction(() => {
+    d.prepare(`DELETE FROM track_audio_vectors WHERE id = ?`).run(id);
+    d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+    syncTrackFacets(id, { fresh: ['clap'], source: 'analyzer' });
+  })();
 }

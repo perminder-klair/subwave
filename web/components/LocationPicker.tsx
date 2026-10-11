@@ -4,12 +4,12 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { Input } from './ui/input';
 import { cn } from '@/lib/cn';
+import { useAdminAuth } from '@/lib/adminAuth';
 
 // Shared by the admin Station tab and the onboarding wizard. Talks to the
-// controller's unauthenticated GET /geocode proxy (Open-Meteo). Manual
+// controller's admin-only GET /geocode proxy (Open-Meteo); both hosts run
+// signed in, so the shared admin store's credentials ride along. Manual
 // coordinate entry stays available as a fallback for offline boxes.
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 export interface GeocodeResult {
   name: string;
@@ -64,6 +64,7 @@ export function LocationPicker({
   const latErrId = useId();
   const lngErrId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
+  const { adminFetch } = useAdminAuth();
 
   const rounded = variant === 'onboarding' ? 'rounded' : '';
 
@@ -79,7 +80,7 @@ export function LocationPicker({
     setLoading(true);
     const ctrl = new AbortController();
     const timer = setTimeout(() => {
-      fetch(`${API_URL}/geocode?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
+      adminFetch(`/geocode?q=${encodeURIComponent(q)}`, { signal: ctrl.signal })
         .then(r => {
           if (!r.ok) throw new Error('geocode failed');
           return r.json() as Promise<{ results?: GeocodeResult[] }>;
@@ -103,7 +104,7 @@ export function LocationPicker({
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [query]);
+  }, [query, adminFetch]);
 
   useEffect(() => {
     if (!open) return;

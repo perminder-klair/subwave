@@ -897,6 +897,23 @@ export function windowMessages() {
   return out;
 }
 
+// Every listener request text inside the same WINDOW_TURNS slice
+// windowMessages() hands the agents — the echo guards' horizon, so it can never
+// be shorter than what the model can quote. Read from the request event turn as
+// soon as it is posted, before the request resolves. A turn written before
+// `meta.requestText` existed falls back to its whole line, which still contains
+// the request.
+export function windowRequestTexts(): string[] {
+  if (!_session) return [];
+  const out: string[] = [];
+  for (const m of _session.messages.slice(-WINDOW_TURNS)) {
+    if (m.role !== 'event' || m.kind !== 'request') continue;
+    const text = typeof m.meta?.requestText === 'string' ? m.meta.requestText : m.text;
+    if (text) out.push(text);
+  }
+  return out;
+}
+
 function sessionRunContinues(stored: Session, at: Date): boolean {
   return showRunContinues({
     key: stored.key,

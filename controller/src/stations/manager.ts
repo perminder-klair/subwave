@@ -114,7 +114,8 @@ function clearCopiedPlaylistIds(dir: string): void {
       delete show.playlistIds;
       delete show.excludedPlaylistIds;
     }
-    writeFileAtomicSync(path, JSON.stringify(data, null, 2));
+    // settings.json carries inline credentials; keep it owner-only.
+    writeFileAtomicSync(path, JSON.stringify(data, null, 2), name === 'settings.json' ? { mode: 0o600 } : {});
   }
 }
 

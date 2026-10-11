@@ -1,5 +1,5 @@
 import { Text, View } from 'react-native';
-import { relTime } from '@/lib/format';
+import { playedAt, relTime } from '@/lib/format';
 import type { QueueEntry } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
@@ -60,23 +60,28 @@ export default function TimelineDrawer({ upcoming, history }: TimelineDrawerProp
       {hasHistory ? (
         <View>
           <SectionLabel>Played</SectionLabel>
-          {history!.map((t, i) => (
-            <View
-              key={`h-${i}`}
-              className="flex-row items-baseline justify-between"
-              style={{ gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
-            >
-              <View className="flex-1">
-                <Text className="font-body text-ink" style={{ fontSize: 14 }} numberOfLines={1}>{t.title}</Text>
-                <Text className="font-body text-muted" style={{ fontSize: 11 }} numberOfLines={1}>{t.artist}</Text>
+          {history!.map((t, i) => {
+            // Live-edge, like the web skins' history clocks: the listener's
+            // ~22s buffer is below this label's resolution.
+            const at = playedAt(t);
+            return (
+              <View
+                key={`h-${i}`}
+                className="flex-row items-baseline justify-between"
+                style={{ gap: 12, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
+              >
+                <View className="flex-1">
+                  <Text className="font-body text-ink" style={{ fontSize: 14 }} numberOfLines={1}>{t.title}</Text>
+                  <Text className="font-body text-muted" style={{ fontSize: 11 }} numberOfLines={1}>{t.artist}</Text>
+                </View>
+                {at ? (
+                  <Text className="font-mono text-muted" style={{ fontSize: 10, letterSpacing: 1 }}>
+                    {relTime(at)} ago
+                  </Text>
+                ) : null}
               </View>
-              {t.t ? (
-                <Text className="font-mono text-muted" style={{ fontSize: 10, letterSpacing: 1 }}>
-                  {relTime(t.t)} ago
-                </Text>
-              ) : null}
-            </View>
-          ))}
+            );
+          })}
         </View>
       ) : null}
     </View>

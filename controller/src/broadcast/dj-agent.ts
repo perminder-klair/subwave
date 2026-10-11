@@ -15,7 +15,7 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary } from '../music/recency.js';
+import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
 import { showNoRepeatGuard } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
@@ -518,9 +518,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       playlistResolved: !!playlistTracks?.length,
       reason,
     }),
-    poolRescue: (avoidArtist) => pickViaPool(
+    poolRescue: (avoidArtist, avoidAnchorArtist) => pickViaPool(
       queue, ctx, { wantLink, pickAnchor, showAt }, rankTarget, audioWaypoint,
-      { avoidArtist },
+      { avoidArtist, avoidAnchorArtist },
     ),
     log: (line) => queue.log('picker', line),
     logEvent,
@@ -572,6 +572,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
       seen: extras.seen,
       recentAlbums: queue.recentAlbumKeys(albumHours),
       avoidArtistRoots: neighbourRoots,
+      // A successful artist re-pick must survive the softer album guard, even
+      // when its recent-artist preference is waived or the window is off.
+      avoidAnchorRoot: guarded.kind === 'repicked' ? artistRootKey(pickAnchor || {}) : '',
       // The run's `seen` values are the MODEL's projection and carry no
       // compilation flags (adding them would put them in a re-pick prompt), so
       // the key is resolved against the library — the same resolver the pool
@@ -753,7 +756,7 @@ function boundarySpeechContext(ctx: any, boundaryAt: unknown) {
 // answer sends the guard back to its own same-artist pick, and only 'empty'
 // means the pool truly held no other artist — the relaxation event says which
 // (#1187).
-async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
+async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null }, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null } = {}): Promise<'queued' | 'empty' | 'collision'> {
   // A DJ-mode mini-run (feature 4) anchors the pool re-rank to the run's
   // tempo/key target instead of the pick-cycle anchor. null → today's behaviour.
   // A sonic journey (Phase 2) additionally anchors the audio-KNN source to the
@@ -1103,6 +1106,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const last = messages[messages.length - 1];
     if (last && last.role === 'user') last.content += '\n' + tail;
     else messages.push({ role: 'user', content: tail });
+    // The echo guards' horizon is this run's whole window, not only THIS
+    // request: other listeners' request lines are in `messages` verbatim, and a
+    // line that reads one of them out is the same failure. Captured with the
+    // window so a request posted mid-run can't widen it past what was seen.
+    const echoTexts = [text, ...session.windowRequestTexts()];
 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
@@ -1132,7 +1140,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // session turn later `windowMessages()` calls condition on, so an unguarded
     // echo poisons future generations even though it never reaches tts.speak.
     if (object?.kind === 'chat' && !object?.id && typeof object?.ack === 'string' && object.ack.trim()) {
-      const screened = screenAck(object.ack, text, 'Heard you loud and clear.');
+      const screened = screenAck(object.ack, echoTexts, 'Heard you loud and clear.');
       if (screened.guard) queue.log('request-guard', `agent chat ack echoed request text — replaced`);
       session.appendTurn({ role: 'dj', kind: 'request', text: screened.ack, meta: { requester, toolCalls } });
       return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
@@ -1205,7 +1213,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // Echo guard (A2): a script that reads the request back is regenerated
     // with the request text withheld — it can't echo what it never saw.
     const rawIntro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
-    const guarded = await guardIntro(rawIntro || null, text, () => dj.generateIntro({
+    const guarded = await guardIntro(rawIntro || null, echoTexts, () => dj.generateIntro({
       track: trackFields(song), context: null, requestedBy: requester,
       persona: requestSpeech.persona,
     }));
@@ -1217,7 +1225,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // is never falsy and a downstream `||` is unreachable. Threading it in here
     // means the listener gets the named line in both cases the fallback covers
     // — the model wrote nothing, and the model echoed their own text back.
-    const screened = screenAck(object.ack, text, isNamedRequester(requester)
+    const screened = screenAck(object.ack, echoTexts, isNamedRequester(requester)
       ? `Coming up for you, ${requester}.`
       : 'Coming up for you.');
     if (screened.guard) queue.log('request-guard', `agent ack echoed request text — replaced`);
