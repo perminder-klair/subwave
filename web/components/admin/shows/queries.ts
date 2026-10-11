@@ -186,6 +186,7 @@ export function usePlaylistPositionQuery(adminFetch: AdminFetch, showId: string,
     key: showKeys.playlistPosition(showId),
     adminFetch,
     enabled,
+    refetchInterval: 5000,
     request: (fetcher, signal) => adminJson<PlaylistPosition>(
       fetcher, `/shows/${encodeURIComponent(showId)}/playlist-position`, undefined, signal,
     ),

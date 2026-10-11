@@ -12,7 +12,7 @@
 
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { createSerialFileWriter } from '../util/atomic-file.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   playlistCursorStoreSchema,
   PLAYLIST_CURSOR_STORE_MAX,
@@ -25,9 +25,17 @@ export function createPlaylistCursorStore({ file, knownShowIds }: {
   // next write — DELETE /shows/:id has no hook into this store.
   knownShowIds: () => Iterable<string>;
 }) {
-  const writeStore = createSerialFileWriter(file);
   let cursors = new Map<string, PlaylistCursor>();
   let loaded: Promise<void> | null = null;
+  let pendingMutation = Promise.resolve();
+
+  // Order the whole mutation, including mkdir, so an earlier operation cannot
+  // submit an old snapshot after a later reset or commit has reached disk.
+  const mutate = <T>(operation: () => Promise<T>): Promise<T> => {
+    const next = pendingMutation.then(operation);
+    pendingMutation = next.then(() => undefined, () => undefined);
+    return next;
+  };
 
   const load = () => loaded ??= (async () => {
     try {
@@ -47,7 +55,7 @@ export function createPlaylistCursorStore({ file, knownShowIds }: {
     const kept = [...next].filter(([id]) => known.has(id)).slice(-PLAYLIST_CURSOR_STORE_MAX);
     cursors = new Map(kept);
     await mkdir(dirname(file), { recursive: true });
-    await writeStore(JSON.stringify({ version: 1, cursors: Object.fromEntries(kept) }, null, 2));
+    await writeFileAtomic(file, JSON.stringify({ version: 1, cursors: Object.fromEntries(kept) }, null, 2));
   };
 
   return {
@@ -56,22 +64,26 @@ export function createPlaylistCursorStore({ file, knownShowIds }: {
       await load();
       return cursors.get(showId) ?? null;
     },
-    async commit(showId: string, cursor: PlaylistCursor): Promise<void> {
-      await load();
-      const next = new Map(cursors);
-      // Re-insert so the newest cursor sits last and survives the cap.
-      next.delete(showId);
-      next.set(showId, cursor);
-      await persist(next);
+    commit(showId: string, cursor: PlaylistCursor): Promise<void> {
+      return mutate(async () => {
+        await load();
+        const next = new Map(cursors);
+        // Re-insert so the newest cursor sits last and survives the cap.
+        next.delete(showId);
+        next.set(showId, cursor);
+        await persist(next);
+      });
     },
     // Back to the top: the next pick is the first eligible track.
-    async reset(showId: string): Promise<boolean> {
-      await load();
-      if (!cursors.has(showId)) return false;
-      const next = new Map(cursors);
-      next.delete(showId);
-      await persist(next);
-      return true;
+    reset(showId: string): Promise<boolean> {
+      return mutate(async () => {
+        await load();
+        if (!cursors.has(showId)) return false;
+        const next = new Map(cursors);
+        next.delete(showId);
+        await persist(next);
+        return true;
+      });
     },
   };
 }
