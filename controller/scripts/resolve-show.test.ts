@@ -46,6 +46,7 @@ const settings = {
       filtersStrict: true,
       playlistIds: ['pl-anchor-1', 'pl-anchor-2'],
       playlistStrict: true,
+      playlistInOrder: true,
       excludedPlaylistIds: ['pl-blocked'],
     },
   ],
@@ -64,6 +65,11 @@ await test('carries the playlist anchor (ids + strict toggle)', () => {
   const show = resolveActiveShow(at, settings as any)!;
   assert.deepEqual(show.playlistIds, ['pl-anchor-1', 'pl-anchor-2']);
   assert.equal(show.playlistStrict, true);
+});
+
+await test('carries playlistInOrder — the running-order switch the pick branch reads (#779)', () => {
+  const show = resolveActiveShow(at, settings as any)!;
+  assert.equal(show.playlistInOrder, true);
 });
 
 await test('carries excludedPlaylistIds — the blocklist the pick paths read (#779 no-op regression)', () => {

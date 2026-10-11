@@ -17,6 +17,8 @@ import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
 import { showNoRepeatGuard } from '../music/show-recency.js';
+import { isInOrderShow } from '../music/playlist-order.js';
+import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
 import { runAlbumGuard } from './dj-agent/album-guard.js';
@@ -769,6 +771,19 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
     queue.log('picker', 'pool produced no pick');
     return 'empty';
   }
+  return enqueueSelected(queue, ctx, result, { wantLink, pickAnchor, showAt });
+}
+
+// The link + enqueue half of a pick whose track is already chosen: the pool
+// fallback above and the in-order walk (pickInOrder) both end here, so a chosen
+// track gets the same link, the same clock rules and the same session turn
+// whichever way it was chosen. 'collision' = push() refused it (dedup or
+// blocklist); nothing was queued and no turn was written.
+async function enqueueSelected(
+  queue, ctx,
+  result: { song: any; reason?: string | null; source?: string | null; transition?: string | null },
+  { wantLink, pickAnchor, showAt = null }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null },
+): Promise<'queued' | 'collision'> {
   // Build the between-track link BEFORE enqueueing so it can ride on the queued
   // item and air when the pick starts. It back-announces the captured
   // `pickAnchor` and leads into the pick — that track is the selection's
@@ -874,6 +889,68 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   return 'queued';
 }
 
+// Play in order (show.playlistInOrder, music/playlist-order.ts): the next anchor
+// track in the show's own running order, chosen with no model call. Returns
+// false — and runTrackEvent runs today's paths untouched — whenever the walk
+// cannot answer: not an in-order show, an anchor that will not resolve, an
+// artist episode in charge of this airing, or nothing eligible. The station
+// keeps making sound either way.
+//
+// Deliberately NOT applied: artist spacing, the album cooldown, the no-repeat
+// windows and the Leanings review — the operator's order wins, as it does for a
+// queued album. Still applied: the blocklist (getPlaylist, then push), the
+// show's own hard filters (airableAnchorTracks) and push()'s duplicate guard.
+//
+// Resolved at `showAt`, the pick's look-ahead clock, like both other paths: a
+// pick made inside the incoming show's window walks the INCOMING show.
+async function pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt = null, eventText }: { wantLink: boolean; pickAnchor?: any; showAt?: Date | null; eventText: string }): Promise<boolean> {
+  const show = settings.resolveActiveShow(showAt ?? undefined);
+  if (!isInOrderShow(show)) return false;
+  ctx = await prepareEpisodeContext(ctx);
+  if (showPreparation.read({ context: ctx }).music) {
+    noteInOrderStandDown(queue, show, 'an artist episode is steering this airing');
+    return false;
+  }
+  const next = await resolveInOrderNext(show, { busyIds: queue.queuedIds() });
+  for (const warning of next.warnings) queue.log('picker', `Show "${show.name}": ${warning}`);
+  if (!next.ok) {
+    noteInOrderStandDown(queue, show, next.reason);
+    return false;
+  }
+  inOrderStandDowns.delete(show.id);
+  session.appendTurn({ role: 'event', kind: 'pick', text: eventText, meta: {} });
+  const position = `${next.index + 1} of ${next.total}`;
+  const outcome = await enqueueSelected(queue, ctx, {
+    song: next.track,
+    reason: `Next in the show's running order (${position})`,
+    source: 'show-playlist-order',
+    transition: null,
+  }, { wantLink, pickAnchor, showAt });
+  // Committed on a collision too: a track push() refused past the busy-id
+  // pre-check (a seasonal blocklist rule turning, a live length-cap change)
+  // must not be retried on every pick. auto.m3u covers this one slot, as it
+  // does for the pool path's collision.
+  try {
+    await commitInOrderPick(show.id, next.track, next.index, next.sig);
+  } catch (err) {
+    queue.log('error', `in-order position for "${show.name}" not saved: ${(err as Error).message}`);
+  }
+  if (outcome === 'collision') {
+    queue.log('picker', `in-order pick "${next.track.title}" (${position}) refused by the queue — stepping past it`);
+  }
+  return true;
+}
+
+// Why each in-order show last stood aside, so the booth log says it once per
+// cause rather than on every track. Cleared by the next in-order pick.
+const inOrderStandDowns = new Map<string, string>();
+
+function noteInOrderStandDown(queue, show: any, reason: string) {
+  if (inOrderStandDowns.get(show.id) === reason) return;
+  inOrderStandDowns.set(show.id, reason);
+  queue.log('picker', `show "${show.name}" is set to play in order, but ${reason} — picking normally until that changes`);
+}
+
 // The per-pick effects nudge on the event turn. Compact on purpose: the full
 // per-effect coaching is effectsGuidance() in the system prompt — this only
 // keeps the vocabulary and the deliberate-choice reminder fresh in the newest
@@ -938,6 +1015,22 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     const anchorPriorTrack = explicitPickAnchor ? (anchorPrior ?? null) : (queue.history[0]?.track ?? null);
     await library.load();
     const predecessor = predecessorContext(pickAnchor);
+    const eventText = explicitPickAnchor
+      ? `Pick-cycle anchor: "${pickAnchor?.title}" by ${pickAnchor?.artist}`
+        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
+        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
+        + '. This queued track is the intended predecessor for this selection. Pick the track intended to follow that anchor.'
+      : `Now playing "${pickAnchor?.title}" by ${pickAnchor?.artist}`
+        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
+        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
+        + '. Pick the track to play next.';
+
+    // Play in order (show.playlistInOrder): the show's running order replaces
+    // selection outright — no agent, no pool, and no mini-run or journey
+    // steering, which is why it runs before advanceRun. Only the link still
+    // costs a model call. False means it stood aside and today's paths run.
+    if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) return;
+
     const djMode = !!settings.getEffectivePersona()?.djMode;
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
@@ -999,15 +1092,6 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
       && Math.random() < EXPLORE_SEED_PROBABILITY
       ? ' Exploration nudge: include deepCuts in your discovery round this pick — surface something the station has never aired (or hasn\'t in weeks) and give it real consideration when it can fit the moment.'
       : '';
-    const eventText = explicitPickAnchor
-      ? `Pick-cycle anchor: "${pickAnchor?.title}" by ${pickAnchor?.artist}`
-        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
-        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
-        + '. This queued track is the intended predecessor for this selection. Pick the track intended to follow that anchor.'
-      : `Now playing "${pickAnchor?.title}" by ${pickAnchor?.artist}`
-        + (pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '')
-        + (anchorPriorTrack ? ` (after "${anchorPriorTrack.title}" by ${anchorPriorTrack.artist})` : '')
-        + '. Pick the track to play next.';
     const promptSuffix = `${predecessorPrompt(predecessor)}${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
     session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,

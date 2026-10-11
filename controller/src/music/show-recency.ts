@@ -34,6 +34,45 @@ export type ShowNoRepeatGuard = {
   exhaustive: boolean;
 };
 
+// What of a strict anchor can actually AIR: the show's strict locks (never-
+// starve, as the pool picker applies them), the known length ceiling, the
+// minimum-length floor, and the excluded playlists. ORDER-PRESERVING — every
+// step is a filter — so the in-order walk (music/playlist-order.ts) walks the
+// same set this guard counts. Two copies of "can this anchor track air" is how
+// the rotation size and the running order would come to disagree.
+export function airableAnchorTracks<T extends ShowTrack>(
+  playlistTracks: T[],
+  {
+    show,
+    excludedIds,
+    resolvedGenres,
+    minTrackSec,
+    maxTrackSec,
+  }: {
+    show: RecencyShow;
+    excludedIds: Set<string> | null;
+    resolvedGenres?: string[];
+    minTrackSec?: number | null;
+    maxTrackSec?: number | null;
+  },
+): T[] {
+  const filtered = show?.filtersStrict
+    ? applyStrictLocks(playlistTracks, {
+        genres: resolvedGenres ?? show.genres ?? [],
+        eras: show.eras ?? [],
+        moods: show.moods ?? [],
+        energies: show.energies ?? [],
+        vocals: (show.vocals === 'instrumental' || show.vocals === 'vocal'
+          ? show.vocals
+          : '') as VocalMode,
+      }, { starve: false })
+    : playlistTracks;
+  // Hard, unlike the pool picker's never-starve use of the same floor: what can
+  // air, not a pool that must not empty. Nothing left = nothing airable.
+  const airable = applyTrackFloor(applyKnownTrackCeiling(filtered, maxTrackSec), minTrackSec ?? null, { starve: true });
+  return airable.filter(track => !!track?.id && !excludedIds?.has(track.id));
+}
+
 export function showNoRepeatGuard(
   configuredN: number | null | undefined,
   libraryTotal: number | null | undefined,
@@ -69,26 +108,12 @@ export function showNoRepeatGuard(
     return { window: effectiveNoRepeatWindow(configuredN, libraryTotal), exhaustive: false };
   }
 
-  const filtered = show.filtersStrict
-    ? applyStrictLocks(playlistTracks, {
-        genres: resolvedGenres ?? show.genres ?? [],
-        eras: show.eras ?? [],
-        moods: show.moods ?? [],
-        energies: show.energies ?? [],
-        vocals: (show.vocals === 'instrumental' || show.vocals === 'vocal'
-          ? show.vocals
-          : '') as VocalMode,
-      }, { starve: false })
-    : playlistTracks;
-  // Hard, unlike the pool picker's never-starve use of the same floor: a count of
-  // what can air, not a pool that must not empty. Nothing left = zero window.
-  const airable = applyTrackFloor(applyKnownTrackCeiling(filtered, maxTrackSec), minTrackSec ?? null, { starve: true });
+  const airable = airableAnchorTracks(playlistTracks, { show, excludedIds, resolvedGenres, minTrackSec, maxTrackSec });
 
   // Count audible identities, not Subsonic rows: duplicate rips with different
   // ids consume one slot in the real rotation and must not inflate its capacity.
   const identities = new Set<string>();
   for (const track of airable) {
-    if (!track?.id || excludedIds?.has(track.id)) continue;
     identities.add(track.title ? `key:${trackKey(track)}` : `id:${track.id}`);
   }
 

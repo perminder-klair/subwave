@@ -162,9 +162,12 @@ function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key:
 // (show.filtersStrict) filters discovery sources too. Lists are OR within an
 // attribute, AND across them (#929); empty list = no constraint.
 type ShowFilter = { moods: string[]; genres: string[]; eras: YearRange[]; energies: string[]; vocals: VocalMode; strict?: boolean } | null;
-type StrictGenreResolution = { genres: string[]; warnings: string[] };
+export type StrictGenreResolution = { genres: string[]; warnings: string[] };
 
-async function resolveStrictGenres(showFilter: ShowFilter): Promise<StrictGenreResolution> {
+// Exported for the in-order walk (music/playlist-order-next.ts), which needs the
+// same free-text → library-tag resolution to apply the same strict genre lock.
+// Reads only `strict` and `genres`, hence the narrow parameter.
+export async function resolveStrictGenres(showFilter: Pick<NonNullable<ShowFilter>, 'genres' | 'strict'> | null): Promise<StrictGenreResolution> {
   const genres: string[] = [];
   const warnings: string[] = [];
   if (!showFilter?.strict || !showFilter.genres.length) return { genres, warnings };
