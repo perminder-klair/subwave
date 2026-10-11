@@ -28,7 +28,7 @@ tool checks `provider_type` on the first page and refuses if it isn't `navidrome
 | `key` + `scale` | `musical_key` | converted to Camelot (e.g. A minor → `8A`) |
 | `energy` | `energy` | bucketed to `low` / `medium` / `high` |
 | `mood_vector` + `other_features` | `moods` (JSON array) | static translation to SUB/WAVE's 17-mood vocab (see `map.mjs`); genre/decade tags don't produce moods |
-| top genre tag from `mood_vector` | `genre` | only fills an empty genre |
+| top genre tag from `mood_vector` | `genres` (JSON array) | only fills an empty genre list; the scalar `genre` column is generated from it |
 
 ### What does NOT transfer (still needs `npm run analyze`)
 
@@ -47,10 +47,22 @@ won't redo them.
 
 ## Setup
 
+The tool is **not** shipped inside any SUB/WAVE container image — run it on the
+host (or any machine with Node ≥ 18) that can see your `state/` directory. With the
+default docker compose install that is the `state/` folder next to
+`docker-compose.yml` (or wherever `STATE_DIR` in `.env` points), which is
+bind-mounted into the controller at `/var/sub-wave`.
+
 ```bash
-cd tools/audiomuse-import
+git clone https://github.com/perminder-klair/subwave.git subwave-src
+cd subwave-src/tools/audiomuse-import
 npm install
+AUDIOMUSE_URL=http://your-audiomuse:8000 node import.mjs \
+  --library-db /path/to/your/subwave/state/library.db
 ```
+
+The clone is only for the tool; it does not need to be the checkout your station
+runs from.
 
 ## Usage
 
@@ -87,7 +99,8 @@ pass at the same time is tidier.
 
 ## Notes & safety
 
-- **Requires `library.db` schema ≥ v2** (the migration with `bpm`/`musical_key`).
+- **Requires `library.db` schema ≥ v16** (the migration that moved genres to the
+  `genres` JSON array and made `genre` a generated column).
   If lower, the tool refuses and asks you to boot the controller once to migrate.
   It never runs migrations itself — `controller/src/music/library-db.ts` owns the
   schema; this tool only writes columns it defines.

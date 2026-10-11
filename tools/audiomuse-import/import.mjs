@@ -20,10 +20,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Column-set version this tool writes against; matches TAGGER_VERSION in
 // controller/src/music/library-db.ts, so imported moods count as current tags.
 // MIN_USER_VERSION is the earliest schema carrying every column written here
-// (bpm/musical_key land in v2, hence the floor); below it, refuse and tell the
-// user to boot the controller once to migrate.
+// (v16 moved genre storage to the `genres` JSON array and made `genre` a
+// GENERATED column, which rejects writes); below it, refuse and tell the user
+// to boot the controller once to migrate.
 const TAGGER_VERSION = 3;
-const MIN_USER_VERSION = 2;
+const MIN_USER_VERSION = 16;
 
 function parseArgs(argv) {
   const args = { concurrency: 8, moodCutoff: 0.4 };
@@ -127,9 +128,9 @@ function makeWriter(db) {
     `SELECT bpm, musical_key, moods FROM tracks WHERE id = ?`,
   );
   const insertStmt = db.prepare(
-    `INSERT INTO tracks (id, title, artist, album, year, genre, bpm, musical_key,
+    `INSERT INTO tracks (id, title, artist, album, year, genres, bpm, musical_key,
         moods, energy, source, tagger_version, tagged_at)
-     VALUES (@id, @title, @artist, @album, @year, @genre, @bpm, @musicalKey,
+     VALUES (@id, @title, @artist, @album, @year, @genres, @bpm, @musicalKey,
         @moods, @energy, 'manual', @taggerVersion, @now)`,
   );
 
@@ -145,7 +146,7 @@ function makeWriter(db) {
         artist: meta.artist ?? null,
         album: meta.album ?? null,
         year: Number.isFinite(meta.year) ? meta.year : null,
-        genre: mapped.genre ?? null,
+        genres: mapped.genre != null ? JSON.stringify([mapped.genre]) : null,
         bpm: mapped.bpm,
         musicalKey: mapped.musicalKey,
         moods: moodsJson,
@@ -185,10 +186,11 @@ function makeWriter(db) {
         params.energy = mapped.energy;
       }
     }
-    // Genre only fills a truly empty genre.
+    // Genre only fills a truly empty genre list. Write `genres`, never `genre`:
+    // the scalar is GENERATED from genres[0] and SQLite rejects writes to it.
     if (mapped.genre != null) {
-      sets.push('genre = COALESCE(genre, @genre)');
-      params.genre = mapped.genre;
+      sets.push("genres = CASE WHEN genres IS NULL OR genres = '[]' THEN @genres ELSE genres END");
+      params.genres = JSON.stringify([mapped.genre]);
     }
 
     if (!sets.length) return 'skipped';
