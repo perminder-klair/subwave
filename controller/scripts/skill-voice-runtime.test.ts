@@ -120,7 +120,7 @@ const template = settings.get().personas[0];
 const HOST = { ...template, id: 'p_host', name: 'Host', skills: ['voiced-solo', 'plain-solo', 'voiced-duo'], frequency: 'aggressive' };
 // A distinct tts slot per persona, so "the override reached TTS" is visible as a
 // change of engine rather than a coincidence.
-const withTts = (p: Record<string, unknown>, tts: Record<string, unknown>) => ({ ...p, tts });
+const withTts = <T extends Record<string, unknown>>(p: T, tts: Record<string, unknown>): T & { tts: Record<string, unknown> } => ({ ...p, tts });
 const H = withTts(HOST, { engine: 'piper', voice: '', cloudProvider: 'openai' });
 const G = withTts({ ...template, id: 'p_guest', name: 'Guest', skills: H.skills, frequency: 'aggressive' },
   { engine: 'kokoro', voice: 'af_heart', cloudProvider: 'openai' });

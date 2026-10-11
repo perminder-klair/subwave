@@ -29,7 +29,6 @@ import {
   SKILL_VOICE_ENGINES,
   SKILL_VOICE_PROVIDERS,
   builtinSkillFileSchema,
-  customSkillFileSchema,
   normalizeSkillVoice,
   skillFieldsFrom,
 } from '../src/schemas/skill.js';
