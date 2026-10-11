@@ -41,14 +41,14 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       detail: `${providerName()} · ${activeModelLabel()}${ok ? ' · reachable' : ' · unreachable'}`,
       hint: ok
         ? undefined
-        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM.',
+        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM provider.',
     });
   } catch (err) {
     out.push({
       label: 'provider',
       status: 'fail',
       detail: err?.message || 'not configured',
-      hint: 'Pick a provider + model in Settings → LLM.',
+      hint: 'Pick a provider + model in Settings → LLM provider.',
     });
   }
 
@@ -112,7 +112,7 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       status: schemaFails.length >= 3 ? 'fail' : 'warn',
       detail: `${schemaFails.length} schema-validation failure(s)${kinds.length ? ` · ${kinds.join(', ')}` : ''}`,
       hint:
-        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning reasoning OFF — “thinking” output can corrupt the JSON.',
+        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM provider to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning Chain-of-thought OFF in Settings → LLM provider — “thinking” output can corrupt the JSON.',
     });
   }
 
@@ -126,14 +126,14 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       label: 'model class',
       status: 'warn',
       detail: `${activeModelLabel()} looks code-specialised`,
-      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM.',
+      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM provider.',
     });
   } else if (cls.sizeB !== null && cls.sizeB < 11 && s?.llm?.pickerAgent !== false) {
     out.push({
       label: 'model class',
       status: 'warn',
       detail: `~${cls.sizeB}B model with the agentic picker on`,
-      hint: 'The agentic picker wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or turn the agentic picker OFF (Settings → LLM) to use the simpler, more forgiving pool picker.',
+      hint: 'The agentic picker wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or turn the agentic picker OFF (Settings → LLM provider) to use the simpler, more forgiving pool picker.',
     });
   }
 
@@ -180,7 +180,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
     detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
     hint: p.ok
       ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+      : 'The picker has no music source without Navidrome. Check the URL / username / password in Settings → Music source, and that Navidrome is up.',
   });
 
   // Recent call error rate across all endpoints.
@@ -233,7 +233,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
       status: flag ? 'warn' : 'ok',
       detail: `${adv.provider}:${adv.model}${flag ? ' · heavy for a local host' : ''}`,
       hint: flag
-        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
+        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding server → Model to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
         : undefined,
     });
   } catch { /* embedding cfg unavailable — skip silently */ }
@@ -342,7 +342,7 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
     hint:
       unavailable.length === 0
         ? undefined
-        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available one in Settings.',
+        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available Engine in Settings → TTS voice.',
   });
 
   // Is the current persona's voice silently routing through a fallback?

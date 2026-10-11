@@ -28,7 +28,7 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
       label: 'web search',
       status: 'warn',
       detail: `${provider} selected but no API key`,
-      hint: 'Artist-news segments can\'t fetch. Add a Tavily key (SEARCH_API_KEY) or switch to DuckDuckGo (keyless) in Settings → Search.',
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo (keyless).',
     });
     return out;
   }
@@ -116,8 +116,8 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         out.push({
           label: 'budget soft tier',
           status: 'warn',
-          detail: `soft tier disabled (softPct ${b.softPct})`,
-          hint: 'With no soft tier the DJ jumps straight from full service to silent at the cap. Set Settings → LLM → budget soft % to ~80 so it first drops to the cheap pool picker and mutes optional segments, warning you before it hits the wall.',
+          detail: `soft tier disabled (Soft threshold ${b.softPct}%)`,
+          hint: 'With no soft tier the DJ jumps straight from full service to silent at the cap. Set Settings → LLM provider → Soft threshold (%) to ~80 so it first drops to the cheap pool picker and mutes optional segments, warning you before it hits the wall.',
         });
       }
       // Project today's exhaustion from the burn rate so far (UTC day).
@@ -137,9 +137,9 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
             : `${fmtTokens(b.usedToday)}/${fmtTokens(b.cap)} used today (${pct}%)${willExhaust ? ` · on track to hit the cap ~${hitHour}:00 UTC` : ''}`,
         hint:
           b.mode === 'hard'
-            ? 'No model calls until UTC midnight (listener requests still run if exempt). Raise Settings → LLM → daily token cap, or turn on pause-when-empty so idle hours don’t burn the budget.'
+            ? 'No model calls until UTC midnight (listener requests still run if exempt). Raise Settings → LLM provider → Daily token cap, or turn on Pause DJ when empty so idle hours don’t burn the budget.'
             : willExhaust
-              ? 'At the current rate the DJ drops to the cheap picker (soft), then goes silent (hard) before the day ends. Raise the cap, enable pause-when-empty, or ease off reasoning / the agentic picker to slow the burn.'
+              ? 'At the current rate the DJ drops to the cheap picker (soft), then goes silent (hard) before the day ends. Raise the cap, enable Pause DJ when empty, or ease off reasoning / the agentic picker to slow the burn.'
               : undefined,
       });
     }
@@ -164,7 +164,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         detail: `p90 model latency ${(p90 / 1000).toFixed(1)}s vs ${Math.round(deadlineMs / 1000)}s deadline`,
         hint:
           ratio >= 0.8
-            ? 'Recent calls are running close to (or past) the agent deadline, so the agentic picker is probably timing out into the pool fallback on many tracks — you lose the session-aware picks you’re paying for. Raise Settings → LLM → agent deadline, or switch to a faster/smaller model (or turn reasoning OFF).'
+            ? 'Recent calls are running close to (or past) the agent deadline, so the agentic picker is probably timing out into the pool fallback on many tracks — you lose the session-aware picks you’re paying for. Raise Settings → LLM provider → Agent deadline (seconds), or switch to a faster/smaller model (or turn reasoning OFF).'
             : undefined,
       });
     }
@@ -177,8 +177,8 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
       out.push({
         label: 'context window',
         status: 'warn',
-        detail: `numCtx ${nc} — tight for the agentic picker`,
-        hint: 'The agentic picker sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back to the pool. Raise Settings → LLM → context window to ≥8192 (16384 is the default), or turn the agentic picker off.',
+        detail: `Context window ${nc} — tight for the agentic picker`,
+        hint: 'The agentic picker sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back to the pool. Raise Settings → LLM provider → Context window (num_ctx) to ≥8192 (16384 is the default), or turn the agentic picker off.',
       });
     }
   }
@@ -193,7 +193,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'reasoning vs structured output',
         status: 'warn',
         detail: `reasoning ON with ${schemaFails} recent schema failure(s)`,
-        hint: 'Chain-of-thought output is a common cause of malformed structured JSON (the picker, request matcher, tagger and this report all need strict JSON). Try turning Settings → LLM → reasoning OFF and re-checking — most local models emit cleaner JSON without it.',
+        hint: 'Chain-of-thought output is a common cause of malformed structured JSON (the picker, request matcher, tagger and this report all need strict JSON). Try turning Settings → LLM provider → Chain-of-thought OFF and re-checking — most local models emit cleaner JSON without it.',
       });
     }
   }
@@ -205,8 +205,8 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
       out.push({
         label: 'max response size',
         status: 'warn',
-        detail: `maxOutputTokens ${mo} — low for the agentic picker`,
-        hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM → max response size at 0 (strategy default) unless a small-context local model specifically needs it.',
+        detail: `Max response size ${mo} tokens — low for the agentic picker`,
+        hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM provider → Max response size (tokens) at 0 (strategy default) unless a small-context local model specifically needs it.',
       });
     }
   }
@@ -220,7 +220,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'request web-resolve',
         status: 'warn',
         detail: 'on, but web search isn’t ready',
-        hint: 'Resolving described track requests ("that song from the film") needs a working web search. Configure it in Settings → Search, or turn Settings → LLM → request web-resolve off.',
+        hint: 'Resolving described track requests ("that song from the film") needs a working web search. Configure it in Settings → Web search, or turn Settings → LLM provider → Resolve described requests via web off.',
       });
     }
   }
@@ -334,7 +334,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
           detail: `only ${cached.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} tracks have stems on disk` +
             (attempted > cached ? ` (${attempted.toLocaleString('en-GB')} attempted)` : ''),
           hint: holds < total
-            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise audio.stemCacheGb in Settings → Transitions to cover more of the library, then let the analysis pass backfill the rest.`
+            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Transitions to cover more of the library, then let the analysis pass backfill the rest.`
             : 'Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade until the backfill catches up. Run the analysis pass (it now targets tracks with no cached stems) and this fills in over a few runs.',
         });
       }
@@ -346,7 +346,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'stem transitions',
         status: 'warn',
         detail: 'stem blends are on but pair-drain scheduling is off',
-        hint: 'transitions.stemBlends needs transitions.pairDrain — a blend can only be inserted at a pair-aware drain. Re-enable pairDrain or turn stem blends off.',
+        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Danger zone → Stem transitions.',
       });
     }
   } catch { /* analyzer unavailable — skip */ }
@@ -374,7 +374,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
       detail: `${encoderCount} encoder${encoderCount === 1 ? '' : 's'} (mp3${extra.length ? ' + ' + extra.join(' + ') : ''}) · ${cores} cores, load ${load1.toFixed(2)}`,
       hint:
         heavy && pressured
-          ? 'Each extra stream mount and the hourly archive is a continuous encoder, and this host is already loaded for its core count. The hourly archive is the single biggest cost — disable mounts you don’t use (Settings → Broadcast) to free CPU for the DJ and TTS.'
+          ? 'Each extra stream mount and the hourly archive is a continuous encoder, and this host is already loaded for its core count. The hourly archive is the single biggest cost — disable mounts you don’t use (Settings → Danger zone; hourly recording is in Settings → Archives) to free CPU for the DJ and TTS.'
           : undefined,
     });
   } catch { /* resources unavailable — skip encoder check */ }

@@ -60,7 +60,8 @@ const REVIEW_SYSTEM = [
   '"Tuning" section and the settings snapshot spell out the current knob values — use them to spot',
   'settings that fight each other or the hardware, and say plainly which knob to change and to what.',
   'Interpret the findings for a non-expert operator: what is fine, what needs attention, what to do',
-  'first. Be concrete and brief — keep the swagger to a light seasoning, no fluff, don\'t restate',
+  'first. Name settings by their admin labels and navigation from the knowledge base, never internal property paths.',
+  'Be concrete and brief — keep the swagger to a light seasoning, no fluff, don\'t restate',
   'every finding. Prioritise anything that takes the station off air or starves the DJ (stream',
   'offline, Navidrome unreachable, LLM unreachable) above cosmetic warnings. Where it fits, nudge',
   'the operator toward good hygiene like taking a backup. If everything is healthy, say so plainly',
@@ -149,12 +150,12 @@ function renderSettingsSnapshot(): string {
 
   return [
     '## Current settings (tune these against the findings + host resources)',
-    `- LLM: ${providerName()} · ${activeModelLabel()} · pickerAgent ${llm.pickerAgent === false ? 'OFF' : 'ON'} · reasoning ${llm.reasoning ? 'ON' : 'OFF'} · agentDeadline ${Math.round(Number(llm.agentTimeoutMs || 0) / 1000)}s · numCtx ${llm.numCtx ?? 'n/a'} · toolChoice ${llm.toolChoice || 'required'} · maxOutputTokens ${llm.maxOutputTokens || 'default'}`,
-    `- Budget: ${budget} · exemptRequests ${llm.exemptRequests === false ? 'OFF' : 'ON'} · pauseWhenEmpty ${llm.pauseWhenEmpty ? 'ON' : 'OFF'}`,
-    `- Picking: noRepeatWindow ${llm.noRepeatWindow ?? 'n/a'} · requestWebResolve ${llm.requestWebResolve ? 'ON' : 'OFF'}`,
+    `- LLM: ${providerName()} · ${activeModelLabel()} · Agentic picker ${llm.pickerAgent === false ? 'OFF' : 'ON'} · Chain-of-thought ${llm.reasoning ? 'ON' : 'OFF'} · Agent deadline ${Math.round(Number(llm.agentTimeoutMs || 0) / 1000)}s · Context window ${llm.numCtx ?? 'n/a'} · Tool choice ${llm.toolChoice || 'required'} · Max response size ${llm.maxOutputTokens || 'default'}`,
+    `- Budget: ${budget} · Always answer requests ${llm.exemptRequests === false ? 'OFF' : 'ON'} · Pause DJ when empty ${llm.pauseWhenEmpty ? 'ON' : 'OFF'}`,
+    `- Picking: No-repeat window ${llm.noRepeatWindow ?? 'n/a'} · Resolve described requests via web ${llm.requestWebResolve ? 'ON' : 'OFF'}`,
     `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} (${s?.jingleRotate === 'controller' ? 'controller' : 'mixer'}) · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
     `- Voice: default TTS ${s?.tts?.defaultEngine || 'piper'}`,
-    `- Analysis: audio.embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · vocalActivity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
+    `- Analysis: Audio embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · Vocal activity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
     `- Search: ${s?.search?.provider || 'duckduckgo'}`,
   ].join('\n');
 }
