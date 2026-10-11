@@ -34,7 +34,7 @@ test('every descriptor has a valid type + non-empty label/key', () => {
   for (const t of THEME_TOKENS) {
     assert.ok(t.key.startsWith('--'), `key ${t.key} must start with --`);
     assert.ok(t.label.length > 0, `${t.key} needs a label`);
-    assert.ok(['color', 'font', 'grain'].includes(t.type), `${t.key} bad type`);
+    assert.ok(['color', 'font', 'grain', 'image'].includes(t.type), `${t.key} bad type`);
   }
 });
 
@@ -57,6 +57,7 @@ test('tokenType resolves known keys and rejects unknown', () => {
   assert.equal(tokenType('--bg'), 'color');
   assert.equal(tokenType('--display-font'), 'font');
   assert.equal(tokenType('--grain'), 'grain');
+  assert.equal(tokenType('--bg-image'), 'image');
   assert.equal(tokenType('--nope'), undefined);
 });
 
@@ -85,6 +86,30 @@ test('mono font token accepts only curated mono ids', () => {
 test('display + mono font sets validate disjointly', () => {
   assert.ok(!isValidTokenValue('--display-font', 'jetbrains'), 'mono id rejected for display token');
   assert.ok(!isValidTokenValue('--mono-font', 'fraunces'), 'display id rejected for mono token');
+});
+
+test('background image accepts none, theme assets and https URLs only', () => {
+  for (const v of [
+    'none',
+    'url("/theme-assets/sky.jpg")',
+    "url('/theme-assets/sky.webp')",
+    'url(/theme-assets/sky.png)',
+    'url("https://example.com/bg.jpg")',
+  ]) assert.ok(isValidTokenValue('--bg-image', v), `bg-image ${v}`);
+  for (const v of [
+    'url("http://example.com/bg.jpg")',
+    "url('http://example.com/bg.jpg')",
+    'url(http://example.com/bg.jpg)',
+    'url("HTTP://example.com/bg.jpg")',
+    'url("//example.com/bg.jpg")',
+    'url("javascript:alert(1)")',
+    'url("data:image/png;base64,AAAA")',
+    'url("/theme-assets/../settings.json")',
+    'url("/etc/passwd")',
+    'url("https://x/a.jpg\')',
+    'url("https://x/a.jpg"); color: red',
+    '',
+  ]) assert.ok(!isValidTokenValue('--bg-image', v), `bg-image ${v} rejected`);
 });
 
 test('grain token accepts [0,1] numbers only', () => {

@@ -34,3 +34,9 @@ export function audioUpload(field: string, maxBytes = AUDIO_MAX_BYTES): RequestH
 export function zipUpload(field: string, maxBytes = ZIP_MAX_BYTES): RequestHandler {
   return singleUpload(field, maxBytes);
 }
+
+// A theme background image (routes/settings/station.ts). The cap is enforced
+// here while streaming; saveThemeAsset() re-checks the decoded bytes.
+export function imageUpload(field: string, maxBytes: number): RequestHandler {
+  return singleUpload(field, maxBytes);
+}

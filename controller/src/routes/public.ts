@@ -20,7 +20,7 @@ import { getSetupStatusSync } from '../setup/firstRun.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
 import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
-import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
+import { listThemesAnnotated, DEFAULT_THEME_ID, themeAssetMime, themeAssetsDir } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
@@ -652,6 +652,40 @@ router.get('/themes', async (req, res) => {
     res.json({ ...provenance, themes });
   } catch (err) {
     publicError(res, '/themes', err);
+  }
+});
+
+// Static images for a custom theme's --bg-image token. An operator uploads one
+// from the theme editor (admin POST /themes/assets) or drops a jpg/png/webp/gif
+// into ${STATE_DIR}/themes/ next to their theme JSON, and the token references
+// it as url("/theme-assets/<filename>"); the web shell resolves that path
+// against the controller's API base (web/lib/theme.ts). Public and
+// unauthenticated: the listener player paints this via a plain CSS
+// background-image, so an admin-gated route would leave every listener with a
+// broken background. Filename is allowlisted (no traversal, no dotfiles,
+// extension must be a recognised image type) — see themes.ts themeAssetMime
+// and theme-tokens.ts IMAGE_VAL_RE for the matching token-value validator.
+router.get('/theme-assets/:file', async (req, res) => {
+  const file = String(req.params.file || '');
+  const mime = themeAssetMime(file);
+  if (!mime) return res.status(400).end();
+  try {
+    // Same folder the theme JSONs load from — the ACTIVE station's state dir,
+    // not STATE_ROOT, so multi-station installs serve their own images.
+    const path = join(themeAssetsDir(), file);
+    const st = await stat(path);
+    // ETag over filename + mtime: a replacement upload keeps the same name.
+    const etag = `"${createHash('sha1').update(`${file}:${st.mtimeMs}`).digest('hex').slice(0, 16)}"`;
+    res.setHeader('ETag', etag);
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+    res.setHeader('Content-Type', mime);
+    // Short TTL: unlike a persona avatar (rewritten by the app with a fresh
+    // ETag), an operator may overwrite this file by hand without changing its
+    // name, so a long-lived cache would hide the update.
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(await readFile(path));
+  } catch {
+    res.status(404).end();
   }
 });
 

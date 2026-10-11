@@ -12,7 +12,12 @@ import {
   listThemesAnnotated,
   saveUserTheme,
   deleteUserTheme,
+  listThemeAssets,
+  saveThemeAsset,
+  deleteThemeAsset,
+  THEME_ASSET_MAX_BYTES,
 } from '../../themes.js';
+import { imageUpload } from '../../middleware/upload.js';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
@@ -54,6 +59,45 @@ router.post('/auto-pick', requireAdmin, express.json(), (req, res) => {
   if (typeof req.body?.on === 'boolean') queue.autoPick = req.body.on;
   queue.log('scheduler', `auto-pick ${queue.autoPick ? 'enabled' : 'disabled'}`);
   res.json({ autoPick: queue.autoPick });
+});
+
+// Background images for the theme editor's `--bg-image` picker. They live in
+// ${STATE_DIR}/themes/ next to the theme JSONs (see themes.ts) and are served
+// publicly at /theme-assets/<name>. Registered before /themes/:id so the
+// literal "assets" segment is never read as a theme id.
+router.get('/themes/assets', requireAdmin, async (_req, res) => {
+  try {
+    res.json({ assets: await listThemeAssets() });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Multipart, field "file": the global 600 KB JSON parser would refuse a photo
+// sent as a data URL, and multer streams the upload against the byte cap.
+router.post(
+  '/themes/assets',
+  requireAdmin,
+  imageUpload('file', THEME_ASSET_MAX_BYTES),
+  async (req, res) => {
+    try {
+      const file = (req as express.Request & { file?: { originalname: string; buffer: Buffer } }).file;
+      if (!file) return res.status(400).json({ error: 'no file uploaded (multipart field "file")' });
+      const asset = await saveThemeAsset(file.originalname, file.buffer);
+      res.json({ ok: true, asset, assets: await listThemeAssets() });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  },
+);
+
+router.delete('/themes/assets/:file', requireAdmin, async (req, res) => {
+  try {
+    await deleteThemeAsset(String(req.params.file || ''));
+    res.json({ ok: true, assets: await listThemeAssets() });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // Re-scans ${STATE_DIR}/themes/ so a hand-dropped JSON is picked up without a

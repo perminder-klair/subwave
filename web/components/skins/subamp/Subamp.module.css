@@ -65,7 +65,15 @@
    INVERTED on dark ones. The scrollbar rules inherit down to every scroll
    region in the skin (webkit rules cover WebKit/Blink). */
 .shell {
-  background: color-mix(in oklab, var(--bg) 88%, var(--ink));
+  /* Split from the `background` shorthand (was: background: <the color-mix
+     below>) so the operator's --bg-image (theme-tokens.ts) can layer in as
+     background-image without the shorthand resetting it back to none. Same
+     rendered result when no image is set. */
+  background-color: color-mix(in oklab, var(--bg) 88%, var(--ink));
+  background-image: var(--bg-image, none);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar) transparent;
 }

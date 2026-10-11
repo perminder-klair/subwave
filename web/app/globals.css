@@ -110,6 +110,12 @@
     --grain-color: 0.4 0.35 0.3; /* feColorMatrix RGB triplet for paper grain */
     --grain-alpha: 0.4;
     --grain-blend: multiply;
+    /* Themeable player background image (theme-tokens.ts `--bg-image`, type
+       'image'). "none" by default; a theme sets it to url("/theme-assets/…")
+       or an https:// URL. Mode-agnostic on purpose — unlike --grain, an
+       operator's background doesn't flip with light/dark, so there's no
+       dark-block redeclaration below. */
+    --bg-image: none;
     color-scheme: light;
 
     /* shadcn/ui token bridge onto the palette above. --bg/--ink/--muted/--overlay
@@ -314,6 +320,24 @@ body::after {
 }
 :root[data-theme="dark"] body::after {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.45  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* Operator background image, player only. `.sw-player-shell` is the shell's
+   full-viewport root (components/player/PlayerShell.tsx) — the one place
+   that owns the player's "root frame" per the skin contract, so every skin
+   inherits this for free without touching its own markup. Tailwind's `bg-bg`
+   utility on the same element sets only `background-color`, so layering
+   `background-image` here can't get clobbered by the `background` shorthand.
+   Sits UNDER a skin's own translucent panels/washes and under the paper-grain
+   `body::after` above (still glazes over it — turn --grain down per-theme for
+   a crisper image). Showcase embeds (`contained`) intentionally don't get
+   this class, and their root resets --bg-image to none (player/shellClass.ts)
+   so a skin that paints the token itself stays plain there too. */
+.sw-player-shell {
+    background-image: var(--bg-image, none);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
 }
 
 /* Ink-tinted scrollbars used inside drawers and any internal scroll areas. */

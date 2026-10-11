@@ -25,6 +25,7 @@ import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/Sk
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
 import { StationPasswordGate, useStationAuth } from './StationGate';
+import { shellClass } from './shellClass';
 
 export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
@@ -139,6 +140,9 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           // full-page shells only; showcase embeds never set/clear the attr.
           contained ? 'absolute' : 'sw-player-shell fixed',
           'inset-0 overflow-hidden bg-bg text-ink',
+          // Showcases reset --bg-image so no skin paints this station's
+          // background inside another station's frame (shellClass.ts).
+          shellClass(contained),
         )}
       >
         {hideFace ? (

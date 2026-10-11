@@ -101,6 +101,19 @@ Each file:
 
 Allowed token keys: ${THEME_TOKEN_KEYS.join(', ')}.
 
+**Background image.** Upload one from the admin theme editor (*background
+image* field), or drop a jpg/jpeg/png/webp/gif into this same folder and point
+\`--bg-image\` at it:
+
+\`\`\`json
+"--bg-image": "url(\\"/theme-assets/skyline.jpg\\")"
+\`\`\`
+
+An \`https://\` URL works too: \`"url(\\"https://example.com/bg.jpg\\")"\`. Leaving
+it unset (or \`"none"\`) paints no image — the player falls back to the flat
+\`--bg\` colour. The image sits under the player's own panels and under the
+paper-grain texture, so turn \`--grain\` down for a crisper picture.
+
 \`id\` should match the filename (\`my-theme.json\` → \`id: "my-theme"\`) and may
 only contain lowercase letters, digits, and dashes. Built-in ids
 (${[...BUILTIN_IDS].join(', ')}) are reserved — files claiming those ids are skipped.
@@ -117,6 +130,133 @@ controller restart.
 
 function userThemesDir(): string {
   return join(config.stateDir, 'themes');
+}
+
+// ---------------------------------------------------------------------------
+// Theme assets — background images for the `--bg-image` token, stored next to
+// the theme JSONs in the same folder (so a hand-dropped file and an admin
+// upload land in one place, and multi-station mode keeps them per station).
+// Served publicly by routes/public.ts at /theme-assets/<name>; written and
+// listed by the admin routes in routes/settings/station.ts.
+// ---------------------------------------------------------------------------
+
+export function themeAssetsDir(): string {
+  return userThemesDir();
+}
+
+// Leading alphanumeric, no path separators, no dotfiles. `..` is refused
+// separately so "a..b.png" can't be read as a traversal attempt either.
+export const THEME_ASSET_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/;
+
+export const THEME_ASSET_MIME: Record<string, string> = {
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+};
+
+// Background photos are bigger than a 512px avatar; 8 MB covers a sharp
+// full-HD JPEG/WebP without inviting multi-megapixel originals.
+export const THEME_ASSET_MAX_BYTES = 8 * 1024 * 1024;
+
+// The mime a served asset name maps to, or null when the name is not an
+// allowed asset (bad characters, traversal, unknown extension).
+export function themeAssetMime(name: string): string | null {
+  const file = String(name || '');
+  if (file.includes('..') || !THEME_ASSET_NAME_RE.test(file)) return null;
+  const dot = file.lastIndexOf('.');
+  if (dot < 1) return null;
+  return THEME_ASSET_MIME[file.slice(dot).toLowerCase()] ?? null;
+}
+
+// The browser-supplied type and extension are easy to fake, so the decoded
+// bytes decide what was uploaded.
+export function sniffThemeImage(buf: Buffer): { mime: string; ext: string } | null {
+  if (buf.length < 12) return null;
+  if (
+    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
+    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+  ) return { mime: 'image/png', ext: 'png' };
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return { mime: 'image/jpeg', ext: 'jpg' };
+  if (
+    buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 &&
+    buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50
+  ) return { mime: 'image/webp', ext: 'webp' };
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x38) {
+    return { mime: 'image/gif', ext: 'gif' };
+  }
+  return null;
+}
+
+// Turn an uploaded file's original name into a safe asset name with the
+// SNIFFED extension: "My Skyline (2).JPEG" → "my-skyline-2.jpg".
+export function themeAssetName(originalName: string, ext: string): string {
+  const base = String(originalName || '')
+    .replace(/\.[^.]*$/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '');
+  return `${base || 'background'}.${ext}`;
+}
+
+export interface ThemeAsset {
+  name: string;
+  size: number;
+  mtime: string;
+}
+
+export async function listThemeAssets(): Promise<ThemeAsset[]> {
+  const dir = themeAssetsDir();
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return [];
+  }
+  const out: ThemeAsset[] = [];
+  for (const name of names.sort()) {
+    if (!themeAssetMime(name)) continue;
+    try {
+      const st = await fs.stat(join(dir, name));
+      if (!st.isFile()) continue;
+      out.push({ name, size: st.size, mtime: new Date(st.mtimeMs).toISOString() });
+    } catch {
+      // Vanished between readdir and stat — skip it.
+    }
+  }
+  return out;
+}
+
+// Write an uploaded background image. Same name replaces the file (the public
+// route's ETag is keyed on mtime, so listeners pick the new one up).
+export async function saveThemeAsset(originalName: string, buf: Buffer): Promise<ThemeAsset> {
+  if (!buf?.length) throw new Error('the uploaded file is empty');
+  if (buf.length > THEME_ASSET_MAX_BYTES) {
+    throw new Error(`image too large (max ${Math.round(THEME_ASSET_MAX_BYTES / (1024 * 1024))} MB)`);
+  }
+  const sniffed = sniffThemeImage(buf);
+  if (!sniffed) throw new Error('not a JPEG, PNG, WebP or GIF image');
+  const name = themeAssetName(originalName, sniffed.ext);
+  const dir = themeAssetsDir();
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(join(dir, name), buf);
+  const st = await fs.stat(join(dir, name));
+  return { name, size: st.size, mtime: new Date(st.mtimeMs).toISOString() };
+}
+
+// Remove an uploaded image. Themes still pointing at it fall back to the flat
+// --bg colour (the public route answers 404).
+export async function deleteThemeAsset(name: string): Promise<void> {
+  if (!themeAssetMime(name)) throw new Error('invalid image name');
+  try {
+    await fs.unlink(join(themeAssetsDir(), name));
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') throw new Error(`no image "${name}"`);
+    throw err;
+  }
 }
 
 let userCache: { themes: Theme[]; loadedAt: number } | null = null;
