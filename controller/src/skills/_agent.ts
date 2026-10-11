@@ -21,7 +21,7 @@ import * as session from '../broadcast/session.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
-import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocationGrounding } from '../llm/dj.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
@@ -226,11 +226,12 @@ function availableCapabilities(ctx, now: Date) {
 // tool exploration are conveyed through the AI SDK's own channels (tool and
 // schema field descriptions, the done tool, the buildSituation() user message),
 // same principle as pickSystem.
-function directorSystem(persona, caps, freq: string, sfxCatalog) {
+export function directorSystem(persona, caps, freq: string, sfxCatalog) {
   const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
 
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
@@ -364,6 +365,7 @@ export function simpleSegmentSchema() {
 
 export function simpleSystem(persona, cap, freq: string, sfxCatalog) {
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay silent. You are NOT choosing music. ${stationTone(freq)}
 
@@ -628,6 +630,7 @@ export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: {
     ? 'write it from the source data you were given, and nothing else. If that data is empty, or turns out to be about something other than what this segment covers, set "air" to false and say nothing — standing down is the right answer, and a fabricated line is far worse than no segment. Never fill the gap from memory, from what you said earlier in the show, or from what sounds plausible.'
     : 'you must produce a line, silence is not an option.';
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are NOT choosing music.
 

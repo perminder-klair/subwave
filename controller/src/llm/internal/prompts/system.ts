@@ -6,6 +6,7 @@ import * as settings from '../../../settings.js';
 import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
 import { resolveCloudModelForPersona, resolveCloudProviderForPersona } from '../speech/cloud-speech.js';
 import { cloudExpressionCueFamily } from '../core/pure.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Paralinguistic tags Chatterbox renders as actual non-verbal sounds. Every
 // other engine (piper, kokoro, cloud) reads `[laugh]` aloud as the word
@@ -57,7 +58,7 @@ export function djSystem(
     // The broad on-air location, never the precise weather label — this is the
     // string the DJ speaks as "broadcasting from {location}".
     location: settings.resolveOnAirLocation(s),
-  }) + settings.onAirRosterClause(persona);
+  }) + settings.onAirRosterClause(persona) + '\n\n' + onAirLocationGrounding();
   // Resolved, not raw: a persona on the 'inherit' sentinel has no engine of its
   // own, so asking the slot directly reads "pinned to something that is not
   // chatterbox" and drops the hint on a station whose default IS chatterbox —

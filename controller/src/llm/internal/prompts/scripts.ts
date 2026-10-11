@@ -6,6 +6,7 @@
 import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
+import { onAirLocationGrounding } from './grounding.js';
 import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
@@ -429,7 +430,7 @@ export function announceFallbackPrompt({ artist, form, persona }: {
 
 function announceFallbackSystem(speaker: unknown): string {
   return 'You are a radio continuity writer. Follow the announce-only contract exactly; do not turn it into DJ commentary.'
-    + settings.languageDirective(speaker);
+    + settings.languageDirective(speaker) + '\n\n' + onAirLocationGrounding();
 }
 
 export async function generateLink(args: any) {

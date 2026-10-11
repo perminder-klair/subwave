@@ -58,6 +58,7 @@ function lastWireRequest(): WireRequest {
 
 function assertAnnounceOnlyContract(request: WireRequest) {
   const wire = JSON.stringify(request.messages ?? []);
+  assert.match(wire, /LOCATION GROUNDING/);
   assert.match(wire, /This is/);
   assert.match(wire, /Next up/);
   assert.doesNotMatch(wire, /Give a brief spoken introduction/,
@@ -97,4 +98,17 @@ test('CJK announce fallback sends a constrained announce-only romanisation task'
     },
   });
   assertAnnounceOnlyContract(lastWireRequest());
+});
+
+test('natural links carry the shared location guard once on the model request', async () => {
+  await settings.update({ weather: { onAirLocation: 'Leeds', locationName: 'Private weather label' } });
+  requests.length = 0;
+  await generateLink({
+    current: { title: 'A Song', artist: 'An Artist' },
+    persona: { name: 'Nova', soul: 'warm and direct', linkStyle: 'natural' },
+  });
+  const wire = JSON.stringify(lastWireRequest().messages);
+  assert.equal(wire.split('LOCATION GROUNDING:').length - 1, 1);
+  assert.match(wire, /Leeds/);
+  assert.doesNotMatch(wire, /Private weather label/);
 });
