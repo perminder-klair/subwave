@@ -36,6 +36,11 @@ async function main() {
   const stemCache = await import('../src/music/stem-cache.js');
   const stemsRoot = join(stateDir, 'stems');
 
+  // Dirs made by hand, not by an analysis pass: the usage snapshot only learns
+  // about them at its next full walk, so every change here drops it
+  // (stem-cache.ts; the snapshot itself is pinned by stem-cache-snapshot.test.ts).
+  const forgetSnapshot = () => rmSync(join(stateDir, 'stem-cache-usage.json'), { force: true });
+  const resetCache = () => { rmSync(stemsRoot, { recursive: true, force: true }); forgetSnapshot(); };
   // One track dir with a single payload file at a controlled size + mtime.
   // ageSec orders the LRU: bigger = older = evicted first.
   const makeDir = (id: string, bytes: number, ageSec: number) => {
@@ -45,9 +50,9 @@ async function main() {
     writeFileSync(f, Buffer.alloc(bytes));
     const t = (Date.now() - ageSec * 1000) / 1000;
     utimesSync(f, t, t);
+    forgetSnapshot();
     return dir;
   };
-  const resetCache = () => rmSync(stemsRoot, { recursive: true, force: true });
 
   console.log('estimateTrackBytes (measured average vs cold-start guess):');
 
@@ -124,7 +129,9 @@ async function main() {
 
   await test('a cache inside its budget is a no-op', async () => {
     const res = await stemCache.sweep(25 * MB);
-    assert.deepEqual(res, { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 });
+    // The previous sweep's walk left a usage snapshot inside this budget, so
+    // nothing is walked either.
+    assert.deepEqual(res, { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0, skipped: 'snapshot' });
   });
 
   await test('failed deletes are counted and the shortfall reported, not swallowed', async () => {

@@ -8,7 +8,8 @@
 // Python environment. A box without python3 still skips cleanly (exit 0).
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +27,8 @@ const SUITES = [
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
   'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
   'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
+  'analyzer_facets_test.py', // facet functions are pure; path wrappers = decode + facet
+  'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });
@@ -39,7 +42,7 @@ const pythonEnv = { ...process.env };
 let depsDir: string | null = null;
 const numpyProbe = spawnSync('python3', ['-c', 'import numpy'], { stdio: 'ignore' });
 if (numpyProbe.status !== 0) {
-  depsDir = mkdtempSync(join(tmpdir(), 'subwave-python-test-deps-'));
+  depsDir = createTempDir(join(tmpdir(), 'subwave-python-test-deps-'));
   console.log(`— installing test dependency numpy==${NUMPY_VERSION}`);
   const install = spawnSync(
     'python3',

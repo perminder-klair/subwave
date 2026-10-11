@@ -1,3 +1,6 @@
+import { z } from 'zod';
+import { preparationTrackSchema } from '../../schemas/show-preparation.js';
+import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
@@ -257,4 +260,22 @@ export function candidateFilterTracks(): Array<{
       : row.vocal_range_count === 0 ? [] : [{}],
     durationSec: row.duration_sec ?? null,
   }));
+}
+
+export function tracksByArtistId(artistId: string) {
+  const ids = z.array(z.object({ id: z.string() })).parse(requireDb().prepare('SELECT id FROM tracks WHERE artist_id = ?').all(artistId));
+  return ids.flatMap(({ id }) => {
+    const track = getTrack(id);
+    if (!track) return [];
+    const parsed = preparationTrackSchema.safeParse(track);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
+
+export function artistIdentities(minTracks: number) {
+  return z.array(z.object({ id: z.string(), name: z.string() })).parse(requireDb().prepare(`
+    SELECT artist_id AS id, MIN(artist) AS name FROM tracks
+    WHERE artist_id IS NOT NULL AND artist IS NOT NULL
+    GROUP BY artist_id HAVING COUNT(DISTINCT LOWER(COALESCE(title, id)) || '|' || LOWER(artist)) >= ?
+  `).all(minTracks));
 }

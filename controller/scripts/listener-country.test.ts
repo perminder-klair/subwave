@@ -27,14 +27,15 @@
 // vanishes on restart, with nothing in the logs.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
 // STATE_DIR is redirected before the first config-derived import, so
 // settings.load()/update() touch nothing real.
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-listener-country-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-listener-country-'));
 process.env.STATE_DIR = stateRoot;
 
 const {

@@ -264,7 +264,7 @@ export default function FestivalsSection() {
     const pending = pendingSettingsRef.current;
     if (!pending || (loaded && form.formState.isDirty)) return;
     const j = pending.data;
-    // validateFestivalsStrict normalises on every save, so trust the shape here.
+    // The settings schema normalises festivals on every save.
     const vals = j?.values?.festivals;
     const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
     form.reset({ festivals: sortFestivals(loadedList) });
@@ -390,6 +390,7 @@ export default function FestivalsSection() {
         >
           {watchedFestivals.length === 0 ? (
             <EmptyState
+              art="calendar"
               title="Nothing on the calendar yet"
               description="Add your first date to get started."
             />

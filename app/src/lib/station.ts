@@ -1,7 +1,5 @@
-// Persisted multi-station config: `{ activeStation, recents[] }` in
-// AsyncStorage, with HTTP Basic Auth credentials in the platform keychain
-// instead. The featured station is seeded from app.json
-// `extra.featuredStation`, not stored here.
+// Station URLs and recents live in AsyncStorage; credentials live in the
+// platform keychain. app.json extra.featuredStation supplies the featured station.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -12,20 +10,24 @@ import {
   splitStationAddress,
   type StationCredentials,
 } from './station-credentials';
+import { createStationPasswordStore } from './station-password';
 import { forgetStoredStation } from './station-store';
 
 const KEY = 'subwave.stations.v1';
 const RECENTS_CAP = 8;
-const credentialVault = createCredentialVault({
-  getItemAsync: (key) =>
+const secureStorage = {
+  getItemAsync: (key: string) =>
     SecureStore.getItemAsync(key, {
       keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
     }),
-  setItemAsync: (key, value) =>
+  setItemAsync: (key: string, value: string) =>
     SecureStore.setItemAsync(key, value, {
       keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY,
     }),
-});
+};
+const credentialVault = createCredentialVault(secureStorage);
+// The private-station password (#478) — kept apart from the proxy login.
+const stationPasswords = createStationPasswordStore(secureStorage);
 
 export interface StationRef {
   url: string;
@@ -84,6 +86,18 @@ export async function loadStationCredentials(
   return credentialVault.get(split.base);
 }
 
+export async function loadStationPassword(rawUrl: string): Promise<string | null> {
+  return stationPasswords.get(splitStationAddress(rawUrl).base);
+}
+
+export async function saveStationPassword(rawUrl: string, password: string): Promise<void> {
+  await stationPasswords.set(splitStationAddress(rawUrl).base, password);
+}
+
+export async function clearStationPassword(rawUrl: string): Promise<void> {
+  await stationPasswords.remove(splitStationAddress(rawUrl).base);
+}
+
 async function persist(store: StationStore): Promise<void> {
   try {
     await AsyncStorage.setItem(KEY, JSON.stringify(store));
@@ -117,7 +131,10 @@ export async function setActiveStation(
 export async function removeRecent(url: string): Promise<StationStore> {
   return forgetStoredStation(url, {
     load: loadStations,
-    removeCredential: (base) => credentialVault.remove(base),
+    removeCredential: async (base) => {
+      await credentialVault.remove(base);
+      await stationPasswords.remove(base);
+    },
     persist,
   });
 }

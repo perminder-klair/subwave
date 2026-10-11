@@ -39,6 +39,10 @@ interface CandidateFilterState {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;
   recentArtists?: Set<string>;
+  // Configured slot spacing, using the SAME lead-artist keys and queue snapshot
+  // as the agent guard. Separate from raw recentArtists so identity/dedup keys
+  // and discovery-tool callers keep their existing semantics. Relaxable.
+  recentArtistRoots?: Set<string>;
   // Album cooldown (#1485 FR 3) — albumKey()s heard inside picker.albumHours,
   // from queue.recentAlbumKeys(). Relaxable, and the FIRST guard the cascade
   // drops (longest memory, so its loss costs least on a starved pool). Empty =
@@ -166,6 +170,56 @@ export function artistRootKey(song: CandidateLike | string): string {
   root = ARTIST_ROOT_ALIASES.get(root) ?? root;
 
   return root || base;
+}
+
+// Do two artist MATCHING keys (artistRootKey) name the same act, or does one
+// credit contain the other as a delimited act? Separator-agnostic on purpose:
+// music servers join several credited artists with whatever their scanner or
+// tagger chose (Navidrome " • ", " / ", "; ", ", " …), so no list of
+// separators can be complete. Instead any character that cannot be part of a
+// name counts as a boundary between acts: everything except letters, digits,
+// whitespace and the marks names carry: apostrophe, period, hyphen, and the
+// "&"/"+" that sit inside band names ("Sly & the Family Stone", "Florence +
+// the Machine") and that artistRootKey's lead split already handles.
+//
+//   "pixies"  vs "pixies • black francis"  → true   (delimited by "•")
+//   "pixies"  vs "black francis / pixies"  → true   (delimited by "/")
+//   "air"     vs "air supply"              → false  (only a space: one name)
+//   "sly"     vs "sly & the family stone"  → false  ("&" is part of the name)
+//   "simon"   vs "paul simon"              → false
+//
+// A spacing key, never an identity or block key: a wrong answer can only
+// over-match, which every caller reads as "pick someone else". Not for the
+// blocklist, which is a HARD filter with no never-starve behind it.
+const NAME_CHAR = /[\p{L}\p{N}\s'.\-&+]/u;
+
+function delimitedAt(text: string, from: number, step: 1 | -1): boolean {
+  // Walk away from the match over spaces; the first other character decides.
+  for (let i = from; i >= 0 && i < text.length; i += step) {
+    const ch = text[i]!;
+    if (/\s/u.test(ch)) continue;
+    return !NAME_CHAR.test(ch);
+  }
+  return true; // reached the edge of the credit
+}
+
+export function artistCreditsOverlap(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  for (let i = long.indexOf(short); i !== -1; i = long.indexOf(short, i + 1)) {
+    if (delimitedAt(long, i - 1, -1) && delimitedAt(long, i + short.length, 1)) return true;
+  }
+  return false;
+}
+
+// artistCreditsOverlap against a set of keys (queue.neighbourArtistRoots): an
+// exact hit first, the scan only when there is none.
+export function artistRootIn(root: string, roots: Iterable<string>): boolean {
+  if (!root) return false;
+  if (roots instanceof Set && roots.has(root)) return true;
+  for (const r of roots) if (artistCreditsOverlap(root, r)) return true;
+  return false;
 }
 
 // Every act CREDITED on a track, in credit order — the opposite question to
@@ -338,6 +392,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
     recentIds = new Set<string>(),
     recentKeys = new Set<string>(),
     recentArtists = new Set<string>(),
+    recentArtistRoots = new Set<string>(),
     recentAlbums = new Set<string>(),
     albumKeyOf = albumKey,
     hardRecentIds = new Set<string>(),
@@ -350,11 +405,9 @@ export function filterPickerCandidates<T extends CandidateLike>(
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
-  // Neither track-length bound is applied here. The CAP (#447) is an on-air
-  // cue_out cut, so an over-length track stays eligible; filtering it here
-  // would only starve the pool. The FLOOR (#1573) does remove candidates, but
-  // its posture differs per pick path, so it lives in music/track-floor.ts and
-  // each call site applies it just before this one.
+  // Duration policy is applied BEFORE this relaxation cascade: the legacy
+  // cut mode does not filter; exclude's hard ceiling must never be rescued.
+  // The floor's posture differs per path and remains in track-floor.ts.
   const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields
@@ -404,8 +457,9 @@ export function filterPickerCandidates<T extends CandidateLike>(
       // stage (#1187); an empty set makes it a no-op. Matched on BOTH the raw
       // and the lead-artist key (#1251), or "Marvin Gaye & Tammi Terrell" would
       // answer a block on "Marvin Gaye".
-      if (key && (blockedArtists.has(key) || blockedArtists.has(artistRootKey(song)))) continue;
+      if (key && (blockedArtists.has(key) || artistRootIn(artistRootKey(song), blockedArtists))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
+      if (mode.recentArtists && artistRootIn(artistRootKey(song), recentArtistRoots)) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;
         if (count >= maxPerArtist) continue;

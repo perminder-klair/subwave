@@ -1,8 +1,3 @@
-// Representative colours from the cover art, for the player's soft background
-// tint. RN has no canvas, so this uses react-native-image-colors (UIImageColors
-// on iOS, Palette on Android). Any failure resolves to nulls and the caller
-// skips the tint.
-
 import { useEffect, useState } from 'react';
 import { getColors } from 'react-native-image-colors';
 
@@ -25,7 +20,6 @@ export function useCoverColors(coverSrc: string | null): CoverColors {
     getColors(coverSrc, { cache: true, key: coverSrc, quality: 'low' })
       .then((res) => {
         if (cancelled) return;
-        // The result shape differs per platform; pick a vivid + a calm colour.
         if (res.platform === 'ios') {
           setColors({ vibrant: res.primary, average: res.secondary });
         } else if (res.platform === 'android') {

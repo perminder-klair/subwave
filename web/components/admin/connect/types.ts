@@ -1,4 +1,3 @@
-// Client mirror of the controller's connect catalog shapes (src/connect/catalog.ts)
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 

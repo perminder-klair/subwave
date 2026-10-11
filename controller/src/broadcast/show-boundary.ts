@@ -1,13 +1,10 @@
-// Show-boundary fade policy (#1574): whether an autonomous pick that would run
-// past the next show change is cut there, and where. The cut rides the existing
-// #447 `liq_cue_out` stamp (earliest-wins in subsonic.getAnnotatedUri) — never a
-// second cue writer, since the cap, the silence trim and a stem blend all cut the
-// same tail. The scan takes `minuteAt`/`keyAt` so it stays pure; the impure
-// wrappers are at the bottom.
+// Fold show-boundary cuts into the existing earliest-wins cue_out alongside caps, silence
+// trim, and stem blends. Clock/key inputs keep the scan pure. #1574, #447.
 
 import { zonedParts } from '../time.js';
 import { absoluteOffsetSec } from '../music/silence-trim.js';
 import * as settings from '../settings.js';
+import { takeoverShowId } from '../schemas/schedule.js';
 
 // How far past its show's end a track may run before the cut is armed. Not an
 // operator dial: the switch means "don't spill", not "cut on the dot".
@@ -82,13 +79,8 @@ export interface BoundaryCut {
 }
 
 /**
- * Where to cue this track out so it ends at the show boundary, or null to leave
- * it alone.
- *
- * The offset is ABSOLUTE (the shape `liq_cue_out` carries), so a head-trimmed
- * track's cut is measured from byte zero; the played-to-absolute shift belongs to
- * `music/silence-trim.ts`. `startMs` is the pick's EXPECTED air time, never "now"
- * — the drain's own clock would cut by however long the pick waits in dj_queue.
+ * Return an absolute cue-out offset or null. startMs is expected air time, and silence-trim
+ * owns the conversion from played time to byte-zero offsets.
  */
 export function resolveBoundaryCueSec(input: {
   startMs: number;
@@ -127,6 +119,46 @@ export function resolveBoundaryCueSec(input: {
 export function showKeyAt(ms: number): string {
   const show = settings.resolveActiveShow(new Date(ms));
   return show?.id ? `show:${show.id}` : 'default';
+}
+
+/** A takeover owns a separate episode even when it pins the scheduled show. */
+export function showTakeoverStartedAt(ms: number): number | null {
+  const ov = settings.getScheduleOverride(ms);
+  return ov && ms >= ov.startedAt && takeoverShowId(ov) ? ov.startedAt : null;
+}
+
+/** Whether two contexts belong to one uninterrupted show run. The key alone
+ *  cannot distinguish next week's airing or a new takeover of the same show.
+ *  Save the takeover start with the session: an expired/replaced override may
+ *  already have been removed from settings by the time recovery runs.
+ *  Legacy sessions infer it from the override still available at their anchor. */
+export function showRunContinues(input: {
+  key: string;
+  fromMs: number;
+  toMs: number;
+  takeoverStartedAt?: number | null;
+}): boolean {
+  const { key, fromMs, toMs } = input;
+  if (!key.startsWith('show:')) return true;
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return false;
+  const takeover = input.takeoverStartedAt === undefined
+    ? showTakeoverStartedAt(fromMs) : input.takeoverStartedAt;
+  if (takeover !== showTakeoverStartedAt(toMs) || showKeyAt(toMs) !== key) return false;
+  if (takeover !== null) return true;
+  if (showKeyAt(fromMs) !== key) return false;
+  const ov = settings.get()?.scheduleOverride;
+  // The grid repeats weekly. Eight days includes a full week even over a DST
+  // change, while bounding recovery after a months-long outage. Override edges
+  // are checked separately over the entire interval.
+  // Recovery can describe a moment just before a saved look-ahead context.
+  const scanFrom = Math.min(fromMs, toMs);
+  const scanTo = Math.max(fromMs, toMs);
+  const horizonMs = Math.min(scanTo - scanFrom, 8 * 24 * 3600_000);
+  if (ov && [ov.startedAt, ov.expiresAt].some(ms => ms > scanFrom && ms <= scanTo)) return false;
+  return nextShowChangeMs({
+    fromMs: scanFrom, horizonMs, keyAt: showKeyAt,
+    minuteAt: ms => zonedParts(new Date(ms)).minute,
+  }) === null;
 }
 
 /** Per-show `fadeAtShowEnd` (null = inherit) over the station default; absent at

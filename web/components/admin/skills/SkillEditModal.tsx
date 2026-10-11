@@ -1,10 +1,6 @@
 'use client';
 
-// Skill Edit Card -- the segment-sheet editor, shown as a modal over
-// /admin/skills. Creates a custom skill (POST /dj/skills) or edits a custom or
-// built-in one (PUT /dj/skills/:id/file). The controller is the validation gate.
-// The on/off toggle and Run now are LIVE operator actions and take no part in
-// the Save/dirty flow, which only writes the SKILL.md file fields.
+// Enable and Run now act immediately; Save writes the skill file.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -37,6 +33,7 @@ import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { Switch } from '@/components/ui/switch';
 import { EngineVoiceFields, type EngineVoiceData } from '../tts/EngineVoiceFields';
+import PendingToolReview from './PendingToolReview';
 import {
   skillKeys,
   useSkillFileQuery,
@@ -146,6 +143,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [custom, setCustom] = useState(mode === 'create' ? true : !!skill?.custom);
   const [configFields, setConfigFields] = useState<SkillConfigField[]>([]);
   const [hasTool, setHasTool] = useState(false);
+  const [toolPending, setToolPending] = useState(false);
   const [cronInvalid, setCronInvalid] = useState(false);
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
 
@@ -214,6 +212,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setCustom(!!j.custom);
     setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
     setHasTool(!!j.hasTool);
+    setToolPending(!!j.toolPending);
     setCronInvalid(!!j.cronInvalid);
     setDefaults(j.defaults || null);
     setKnownContext(
@@ -510,6 +509,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       context: contextValue.join(', '),
       window: windowValue === 'commute' ? 'commute' : '',
       cohosts: cohostsValue ? 'true' : '',
+      // The form's feed fields are plain inputs, which GitHub prefills by id.
+      feed: config.feed,
+      'feed-max-items': config.feedMaxItems,
     });
     window.open(url, '_blank', 'noopener,noreferrer');
   };
@@ -636,7 +638,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
           label: '↗ Share to community',
           onClick: shareToCommunity,
           title: 'Open a prefilled GitHub issue to share this skill with the community',
-          hidden: !(isEdit && custom && !hasTool),
+          hidden: !(isEdit && custom && !hasTool && !toolPending),
         },
       ]}
       primary={[
@@ -738,7 +740,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
             </div>
 
-            {/* Cron timer — optional dedicated schedule that fires the skill immediately */}
             <div className="sw-section">
               <div style={sectionLabel}>CRON TIMER — FIRE ON A FIXED SCHEDULE</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
@@ -1105,6 +1106,21 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 <span style={{ fontSize: 10, letterSpacing: '0.2em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>DJ VOICE · IN CHARACTER</span>
                 <span style={{ fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{briefValue.length} CHARS</span>
               </div>
+              {isEdit && toolPending && (
+                <PendingToolReview
+                  slug={kind}
+                  fileId={fileId}
+                  onResolved={async () => {
+                    // Only the tool flags: the brief may hold unsaved edits.
+                    const refreshed = await fileQuery.refetch();
+                    if (refreshed.data) {
+                      setHasTool(!!refreshed.data.hasTool);
+                      setToolPending(!!refreshed.data.toolPending);
+                      setConfigFields(Array.isArray(refreshed.data.configFields) ? refreshed.data.configFields : []);
+                    }
+                  }}
+                />
+              )}
               {hasTool && (
                 <div style={{ marginTop: 14, border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', borderLeft: '3px solid var(--accent)', padding: '12px 14px', fontSize: 12, lineHeight: 1.6, color: 'var(--muted)' }}>
                   A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. It isn&apos;t editable here; edit it on disk in <code>state/skills/{kind}/</code>, then Rescan.{custom ? ' Deleting the skill removes it too.' : ' Use ↺ Reset to default to restore the shipped version.'}

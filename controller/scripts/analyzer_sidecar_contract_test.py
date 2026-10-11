@@ -263,6 +263,40 @@ async def test_single_worker_recycle_queues_instead_of_failing():
     assert await asyncio.wait_for(task, 1) == {"ok": True}
 
 
+async def test_lean_request_starts_the_recycle_clock():
+    """A bpm/key pass loads no models but leaves its scratch resident, so it
+    must arm the idle recycle; it must not read as model use on /health."""
+
+    class Stdin:
+        def write(self, data): pass
+        async def drain(self): pass
+
+    class Proc:
+        returncode = None
+        stdin = Stdin()
+
+    worker = server.StdioWorker("analyze-1", "python", "worker.py")
+    worker.proc = Proc()
+    worker.ready = True
+
+    async def reply():
+        return {"ok": True, "bpm": 120}
+
+    worker._await_message = reply
+    assert worker.last_use is None
+    await worker.request({"path": "/tmp/a.mp3"})
+    assert worker.last_use is not None
+    assert worker.last_heavy is None and not worker.models_resident
+    # The loop's own question, asked the way recycle_loop asks it: used, then
+    # left alone for the window.
+    assert not worker._idle_expired(3600)
+    worker.last_use -= 3601
+    assert worker._idle_expired(3600), "a lean request never made the worker recyclable"
+    await worker._reset()
+    assert worker.last_use is None, "a fresh worker has nothing to reclaim"
+    assert not worker._idle_expired(0), "a worker that served nothing was offered for recycling"
+
+
 async def test_no_worker_ready_and_none_recycling_fails_fast():
     """Boot and crash still fail fast — blocking there would help no one."""
     down = LifecycleWorker("analyze-1")
@@ -302,6 +336,49 @@ async def test_path_contract():
     assert result["ok"] is True, result
     assert worker_calls == [{"id": "1", "path": audio.name}], worker_calls
 
+    # The stems marker flag reaches the worker with the stems dir it guards.
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, stems_dir="/stems/t1", stems_require_marker=True,
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "stems_dir": "/stems/t1", "stems_require_marker": True,
+    }], worker_calls
+
+
+async def test_facet_contract():
+    """A facets request is forwarded verbatim and answered in the facet shape;
+    a request without facets keeps the flat shape (old controllers)."""
+    worker_calls = []
+    facet_answer = {
+        "ok": True,
+        "facets": {"tail": {"status": "unmeasurable", "reason": "capped-download"}},
+        "source": {"kind": "path", "duration_s": 200.0, "complete": False, "predecoded": True},
+    }
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return facet_answer
+
+    server.analyzer_pool.request = worker_request
+    with tempfile.NamedTemporaryFile() as audio:
+        result = await server.analyze(
+            server.AnalyzeRequest(path=audio.name, complete=False, facets=["tail"])
+        )
+    assert worker_calls == [{"id": "1", "path": audio.name, "complete": False, "facets": ["tail"]}], worker_calls
+    assert result == {"ok": True, "facets": facet_answer["facets"], "source": facet_answer["source"]}, result
+
+    # Model bookkeeping follows the facets named, not the env defaults.
+    assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False
+    assert server.StdioWorker._wants_models({"facets": ["clap"]}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "ok"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"clap": {"status": "unavailable"}}}) is False
+    # A failed cache publication still used Demucs. Model loading failures
+    # answer unavailable and must not be mistaken for resident models.
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "failed", "reason": "cache write failed"}}}) is True
+    assert server.StdioWorker._used_models({"facets": {"stems": {"status": "unavailable"}}}) is False
+
 
 def test_concurrency_env_validation():
     old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")
@@ -326,10 +403,12 @@ async def main():
     await test_unavailable_selection_retries_another_ready_worker()
     await test_unavailable_worker_skipped()
     await test_single_worker_recycle_queues_instead_of_failing()
+    await test_lean_request_starts_the_recycle_clock()
     await test_no_worker_ready_and_none_recycling_fails_fast()
     await test_capability_aggregation_is_conservative()
     await test_latched_capability_error_does_not_fan_out()
     await test_path_contract()
+    await test_facet_contract()
 
 
 asyncio.run(main())

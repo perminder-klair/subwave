@@ -25,7 +25,7 @@ Every split-service proxy must apply these rules in this order:
 
 | Public path | Upstream | Path sent upstream | Required handling |
 |---|---|---|---|
-| `/api/listener-auth` | none | none | Return 404 or otherwise deny it before the general API rule. Icecast calls this password callback over the private Compose network; it must not be public. |
+| `/api/listener-auth` and anything starting with it | none | none | Return 404 or otherwise deny it before the general API rule. Match it as a case-insensitive prefix: the controller also answers `/listener-auth/` and any case variant, so an exact-path rule leaves those routed. Icecast calls this password callback over the private Compose network; it must not be public. |
 | `/stream*` | Icecast on `:7702` | unchanged | Disable response buffering, caching, and compression. Match the prefix so optional Opus, FLAC, and AAC mounts work without another proxy edit. |
 | `/listen.pls`, `/listen.m3u` | Controller on `:7701` | unchanged | These tune-in files are controller routes, not Icecast routes. |
 | `/api/*` | Controller on `:7701` | strip `/api` | `/api/health` must reach the controller as `/health`. Keep streaming responses such as diagnosis events unbuffered. |
@@ -62,7 +62,9 @@ proxy_set_header X-Forwarded-For $remote_addr;
 proxy_set_header X-Forwarded-Proto $scheme;
 
 # Icecast's private URL-auth callback. This must win over location /api/.
-location = /api/listener-auth {
+# A case-insensitive regex prefix, not `location =`: the controller also
+# answers a trailing slash and any case, which an exact match lets through.
+location ~* ^/api/listener-auth {
     return 404;
 }
 
@@ -147,7 +149,7 @@ proxy_set_header X-Real-IP $remote_addr;
 proxy_set_header X-Forwarded-For $remote_addr;
 proxy_set_header X-Forwarded-Proto $scheme;
 
-location = /api/listener-auth {
+location ~* ^/api/listener-auth {
     return 404;
 }
 
@@ -241,7 +243,9 @@ services:
       traefik.docker.network: proxy
       # Route the private callback to Next.js, where it is a guaranteed 404.
       # Priority 100 makes this rule win over the controller's /api prefix.
-      traefik.http.routers.subwave-auth-block.rule: "Host(`radio.example.com`) && Path(`/api/listener-auth`)"
+      # A case-insensitive prefix (Traefik v3 PathRegexp): the controller also
+      # answers a trailing slash and any case, which Path() would let through.
+      traefik.http.routers.subwave-auth-block.rule: "Host(`radio.example.com`) && PathRegexp(`(?i)^/api/listener-auth`)"
       traefik.http.routers.subwave-auth-block.entrypoints: websecure
       traefik.http.routers.subwave-auth-block.tls: "true"
       traefik.http.routers.subwave-auth-block.tls.certresolver: letsencrypt
@@ -484,13 +488,16 @@ curl -fsS "$BASE/api/health"
 curl -fsS "$BASE/listen.pls"
 curl -fsS "$BASE/listen.m3u"
 
-# The private Icecast callback must not reach the controller: expect 404/403.
-AUTH_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
-  -X POST "$BASE/api/listener-auth")
-case "$AUTH_STATUS" in
-  403|404) ;;
-  *) echo "listener-auth is public (HTTP $AUTH_STATUS)" >&2; exit 1 ;;
-esac
+# The private Icecast callback must not reach the controller: expect 404/403
+# for the exact path, a trailing slash and a case variant alike.
+for AUTH_PATH in /api/listener-auth /api/listener-auth/ /api/Listener-Auth; do
+  AUTH_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST "$BASE$AUTH_PATH")
+  case "$AUTH_STATUS" in
+    403|404) ;;
+    *) echo "$AUTH_PATH is public (HTTP $AUTH_STATUS)" >&2; exit 1 ;;
+  esac
+done
 
 # Check the stream headers, then confirm a bounded GET receives audio bytes.
 curl -fsSI "$BASE/stream.mp3" | grep -i '^content-type:'

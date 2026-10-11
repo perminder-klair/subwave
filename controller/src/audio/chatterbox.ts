@@ -1,9 +1,5 @@
-// Chatterbox TTS client, two modes. Sidecar (config.ttsHeavy.url set): speak()
-// POSTs to the subwave-tts-heavy container and isAvailable() reads a cached
-// /health probe. Local spawn (--build-arg WITH_CHATTERBOX=1):
-// chatterbox_worker.py stays resident, one JSON request per line over stdio.
-// The dispatcher treats both identically: speak() returns a WAV path,
-// isAvailable() a boolean.
+// TTS_HEAVY_URL selects the sidecar; otherwise keep a local JSON-lines worker resident.
+// Both modes return a WAV path and expose a boolean availability check.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';

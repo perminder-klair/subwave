@@ -1,7 +1,5 @@
 'use client';
 
-// The enable/disable/backfill lifecycle for CLAP + Demucs deliberately lives on
-// the panel's coverage rows instead, next to the meters it changes.
 
 import { useEffect, useState } from 'react';
 import { Play, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
@@ -170,8 +168,6 @@ export default function LibraryTaggingModal(p: Props) {
         ))}
       </div>
 
-      {/* p-3 on phones: the Modal body already carries px-5, so the nested p-5
-          left ~275px of usable width inside a 358px dialog. */}
       <div className="flex flex-col gap-4 p-3 sm:p-5">
         {tab !== 'reset' && budgetWarn && (
           <div className="flex items-start gap-2 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] leading-[1.5] text-ink">
@@ -267,7 +263,6 @@ export default function LibraryTaggingModal(p: Props) {
                 {passAllSelected ? 'Clear all' : 'Select all'}
               </button>
             </div>
-            {/* ordered to mirror the Run pipeline: enrich → embed → tag → analyse */}
             <div className="grid gap-2.5">
               <Pass on={!!passes.reEnrich} onClick={() => togglePass('reEnrich')} name="Re-enrich metadata" tag="network"
                 hint="Re-fetch Last.fm tags + lyrics for tracks you've already enriched. External API calls — slow on a big library." />

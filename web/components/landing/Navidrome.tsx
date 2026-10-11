@@ -52,7 +52,6 @@ export default function Navidrome() {
         </div>
 
         <div className="bs-navidrome-diagram" aria-hidden="true">
-          {/* Stylized "pipe" diagram: your music → SUB/WAVE → listeners */}
           <div className="bs-pipe-card">
             <div className="bs-pipe-tag">YOUR HOMELAB</div>
             <div className="bs-pipe-row">

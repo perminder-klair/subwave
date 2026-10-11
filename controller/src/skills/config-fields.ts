@@ -1,20 +1,6 @@
-// Operator-editable config fields a skill declares for ITSELF.
-//
-// A skill's tool.mjs may export `configFields` — a flat
-// `{ key: { type, label, … } }` map describing the knobs the operator should be
-// able to set from /admin/skills. The values live in the skill's own SKILL.md
-// frontmatter, which the loader already hands the tool as its 4th argument
-// (`config`), so a declared field is readable by the tool with no extra wiring.
-//
-// This exists because the News feed field used to be gated on a hardcoded
-// `kind === 'news'` string in routes/dj.ts. Export a news skill, rename it, and
-// re-import: the tool still read `config.feed`, but nothing in the UI would set
-// one — so a second news source was impossible (issue #1300, bug 11). The
-// declaration rides in tool.mjs, which a duplicate copies verbatim, so a renamed
-// skill keeps its knobs by construction. Any skill can now carry settings; none
-// of them need a route or a form field of their own.
-//
-// Everything here is pure — the unit-test seam is scripts/skill-config-fields.test.ts.
+// tool.mjs declares configFields; values live in SKILL.md frontmatter and arrive
+// as the tool's config argument. Derive forms from these fields, not skill names
+// (#1300 bug 11). Pure rules are pinned by scripts/skill-config-fields.test.ts.
 
 // Frontmatter keys writeSkillFile EMITS from its own typed fields. Two jobs:
 // a skill may not redeclare one as a config field (the line would be written

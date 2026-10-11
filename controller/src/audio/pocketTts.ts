@@ -1,11 +1,5 @@
-// PocketTTS client, two modes. Sidecar (config.ttsHeavy.url set): speak() POSTs
-// to the subwave-tts-heavy container and isAvailable() reads a cached /health
-// probe. Local spawn (--build-arg WITH_POCKETTTS=1): pocket_tts_worker.py stays
-// resident, one JSON request per line over stdio.
-//
-// Voice selection: a built-in id (alba, anna, …) plays the curated voice; a
-// `.wav` filename triggers zero-shot cloning against config.voices.dir, with a
-// fallback read of the legacy chatterbox-voices/ (#213).
+// TTS_HEAVY_URL selects the sidecar; otherwise keep a local JSON-lines worker resident.
+// A .wav voice clones from config.voices.dir, with legacy chatterbox-voices fallback (#213).
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';

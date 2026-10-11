@@ -5,6 +5,9 @@
 
 import type { TrackOutro, TrackKeyRange } from '../../music/library-db.js';
 import type { HostSpeechStamp } from '../session.js';
+import type { ClipSeamCues } from '../stem-seam.js';
+import type { TransitionEffect } from '../../settings/vocab.js';
+import type { MixDropReason } from '../../schemas/transitions.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -56,7 +59,21 @@ export interface Track {
   // its ending is a cut rather than its own. radio.liq reads liq_show_fade off
   // the OUTGOING track and suppresses the exit gestures above.
   showFade?: boolean;
+  // The durable seam record (library.db plays.transition_*): the DJ's ask on
+  // this pick before any strip, and every armed gesture a strip took back.
+  // Rides the track so it survives queue.json across a restart; written to
+  // the play row when the track airs. Never annotated to Liquidsoap.
+  transitionAsk?: TransitionEffect | 'normal';
+  mixDrops?: MixDrop[];
   [k: string]: unknown;
+}
+
+// One armed gesture that did not reach air, and why. `auto` marks the
+// length-cap washout, which the controller armed rather than the DJ.
+export interface MixDrop {
+  effect: TransitionEffect;
+  reason: MixDropReason;
+  auto?: true;
 }
 
 // One entry in the queue. `upcoming` holds these before play; `current` and
@@ -120,6 +137,9 @@ export interface QueueItem {
   // session — even when the same persona hosts both shows.
   introSessionKey?: string | null;
   aiPicked?: boolean;
+  // Picker's padded show forecast, independent of whether its link spoke a
+  // clock. Persisted so selection checks follow that show's live length limit.
+  selectionShowAt?: number | null;
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   // Epoch ms of the air moment this item's link was WRITTEN against — stamped
   // only when the generator actually handed the model a clock to speak
@@ -172,8 +192,14 @@ export interface QueueItem {
   // behind its own URI). `stemSeam`/`stemCueInSec` ride the INCOMING item:
   // its entry-side effects are stripped at its own drain (the seam INTO it
   // is pre-rendered) and it cues in past the head the clip already played.
-  stemBlend?: { clipPath: string; blendStartSec: number; inCueSec: number } | null;
+  stemBlend?: ClipSeamCues & {
+    clipPath: string;
+    // Persist the provisional exit so restart recovery can undo it exactly.
+    originalExit?: Pick<Track, 'washout' | 'washoutAuto' | 'washoutDelay' | 'loop' | 'loopBar' | 'crossSec'>;
+  } | null;
   stemSeam?: boolean;
+  // Outgoing music already committed an early ending into this clip/track.
+  lengthPolicyCommitted?: boolean;
   stemCueInSec?: number;
 }
 

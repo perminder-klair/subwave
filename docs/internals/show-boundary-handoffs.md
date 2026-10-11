@@ -54,10 +54,11 @@ or co-host exchange.
 3. Prepare one atomic outgoing-sign-off/incoming-greeting pair without rolling
    the live session early.
 4. With normal talk placement, air that pair during the final track. With
-   **Talk only between tracks**, render it during the final track but hold it
-   for the first real track seam at or after the scheduled boundary. If no
-   eligible seam arrives within two minutes, release that same rendered pair
-   through the light-duck intro channel rather than waiting without bound.
+   **Talk only between tracks**, prefer the first real track seam at or after
+   the scheduled boundary. That preference has one absolute two-minute
+   deadline: if the pair is already rendered, release it through the light-duck
+   intro channel; if it has not started rendering because the final track is
+   still live, generate and duck it over that track instead.
 5. After the handoff is claimed, suppress ordinary outgoing-presenter speech.
 6. At the real changeover, activate the incoming session and roster; its first
    track then starts under the new show's identity. There is no mandatory
@@ -70,9 +71,22 @@ identity; only the corresponding `now-playing.json` transition authorises the
 pair. `airIntro()` is awaited to the handoff-write boundary first, which puts the
 final track's own line ahead of the handoff on the shared voice serialiser.
 
+The pick forecast may look one attribution window beyond a track's expected
+start, but it is capped at one such window beyond the next real show boundary;
+it cannot accumulate through a run of picks into the following programme. A
+handoff is stricter still: its anchor's expected end must reach that boundary.
+When a track-start cycle arms its own current track, it re-checks that anchor in
+the same cycle because the normal start-marker pass has already occurred.
+
 The boundary must be driven by confirmed playback state where possible. A
 queued URI is only handed to Liquidsoap, not proof that a listener has reached
 the corresponding on-air moment.
+
+The generation deadline still waits for the current track's complete intro
+publication and rechecks that track and the pending handoff after context
+loading. It only changes placement for an eligible pair. It cannot confirm or
+replace a final-track anchor, and its timer does not keep the controller process
+alive during shutdown.
 
 If the recorded final track remains unconfirmed six minutes after the scheduled
 boundary, the next confirmed music start may replace its identity, including an
@@ -102,6 +116,12 @@ while that intro is pending, the old runner yields to the newer track.
   missing or invalid manifest/audio leaves the session record eligible for the
   established regeneration path. Only the final line's stream-edge marker
   settles the complete pair as aired.
+- The same absolute deadline also covers an **unrendered** durable handoff.
+  This prevents a long final track from postponing generation until a seam many
+  minutes into the incoming show. At expiry the normal immediate voice path is
+  used, so the pair is ducked over the current track; pending-state checks and
+  the handoff runner's claim keep a late seam or a concurrent trigger from
+  duplicating it.
 - If the wall-clock session roll wins the race with the final-track marker, the
   armed record transfers to the incoming session and generic roll/drain hooks
   still leave it for the confirmed-track runner.
@@ -109,6 +129,11 @@ while that intro is pending, the old runner yields to the newer track.
   starts with clean prompt memory. If the incoming show is a programme, its plan
   is prepared onto the boundary record and transferred at the real roll so the
   greeting carries the incoming angle and durably replaces the standalone intro.
+- Episode research for the outgoing half is saved on the session and copied into
+  the handoff record. Both ordinary post-roll and armed handoffs recover that
+  source snapshot after restart. Preparing an incoming occurrence cannot replace
+  the live outgoing snapshot. A legacy record without source data omits it rather
+  than reconstructing the outgoing episode from a roll timestamp.
 - Handoff suppression applies only inside the scheduled-talk scope. Manual
   operator speech remains immediate, and listener-request intros remain governed
   by their request/session rules rather than by the handoff lifecycle.
@@ -131,10 +156,12 @@ Tests should cover at least:
 
 - a normal show transition with an outgoing linked intro;
 - a handoff that would previously have fired early due to look-ahead;
+- a long forecast capped at the next boundary and an anchor that ends before it;
 - no outgoing ordinary speech after the handoff;
 - a host/guest role reversal between adjacent shows;
 - no schedule-fact repetition outside an optional integration's cadence allowance;
 - a real seam before the two-minute bound, and light-duck fallback when no seam arrives;
+- a long final track where no handoff has rendered by the deadline;
 - a controller restart that preserves the rendered pair and its original deadline;
 
 ## Resolved live finding — 8 September 2026

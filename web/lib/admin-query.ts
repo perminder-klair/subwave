@@ -11,6 +11,7 @@ import {
   type UseQueryResult,
 } from '@tanstack/react-query';
 import { errorMessage, notify } from './notify';
+import { runAdminRead } from './admin-read';
 
 export type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
@@ -42,7 +43,16 @@ export async function adminResponse(
     await Promise.resolve();
     signal.throwIfAborted();
   }
-  const response = await adminFetch(path, { ...init, ...(signal ? { signal } : {}) });
+  let response: Response;
+  try {
+    response = await adminFetch(path, { ...init, ...(signal ? { signal } : {}) });
+  } catch (error) {
+    if ((signal ?? init?.signal)?.aborted) throw (signal ?? init?.signal)?.reason;
+    if (error instanceof TypeError) {
+      throw new Error('Could not reach the controller. Check the station address and your connection, then retry.', { cause: error });
+    }
+    throw error;
+  }
   if (response.ok) return response;
 
   const body = await response.json().catch(() => ({})) as { error?: unknown; message?: unknown };
@@ -95,7 +105,10 @@ export function useQueryErrorToast(error: unknown, enabled: boolean): void {
 export function useAdminQuery<T>(opts: AdminQueryOpts<T>): UseQueryResult<T> {
   const query = useQuery({
     queryKey: opts.key,
-    queryFn: ({ signal }) => opts.request(opts.adminFetch, signal),
+    queryFn: ({ signal }) => runAdminRead({
+      signal,
+      request: requestSignal => opts.request(opts.adminFetch, requestSignal),
+    }),
     enabled: opts.enabled ?? true,
     ...(opts.staleTime !== undefined ? { staleTime: opts.staleTime } : {}),
     ...(opts.refetchInterval !== undefined ? { refetchInterval: opts.refetchInterval } : {}),

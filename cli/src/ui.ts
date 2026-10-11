@@ -85,10 +85,6 @@ export function setMenuMode(on: boolean): void {
   if (on) installEscHandler();
 }
 
-export function isMenuMode(): boolean {
-  return menuMode;
-}
-
 // A cancel inside the menu loop means "go back"; anywhere else it means exit.
 export function exitIfCancelled<T>(value: T | symbol, opts: { backOnCancel?: boolean } = {}): T {
   const { backOnCancel = true } = opts;
@@ -119,11 +115,6 @@ export function header(text: string): void {
   const padLen = Math.max(0, 60 - text.length);
   console.log();
   console.log(pc.bold(accent('━━ ' + text + ' ' + '━'.repeat(padLen))));
-}
-
-export function section(text: string): void {
-  console.log();
-  console.log(pc.bold(text));
 }
 
 // Glyphs match locca's, so operator muscle memory transfers.

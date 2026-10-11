@@ -1,11 +1,5 @@
-// Google Cast session state as a Player facade: with no session it is the
-// local player untouched; while connected, tune/stop/volume/status re-target
-// the Cast device and local playback stays torn down. Handoff is
-// bidirectional.
-//
-// A station whose stream needs an Authorization header (#764) can't cast — the
-// Cast device fetches the URL itself — so `castable` is false and the facade
-// stays local.
+// Cast fetches the URL itself and cannot send our Authorization header.
+// Authenticated stations stay on local playback.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {

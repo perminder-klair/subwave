@@ -1,10 +1,5 @@
-// Listener likes (#991) — the heart button's HTTP surface.
-//
-// A like optionally mirrors to Navidrome as a Subsonic star
-// (settings.likes.starInNavidrome), fire-and-forget. Deleting likes here does
-// NOT unstar — that is the operator's catalogue data. The ONE exception is the
-// operator un-heart when no likes remain: their own toggle, and the "none
-// remain" guard is what stops a star earned by listener likes being discarded.
+// Mirroring likes to Navidrome is fire-and-forget (#991). Deleting likes must not unstar
+// operator catalogue data; only their own un-heart with no remaining likes may do so.
 
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
@@ -13,7 +8,8 @@ import * as subsonic from '../music/subsonic.js';
 import * as db from '../music/library-db.js';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
-import { clientIp } from '../middleware/ratelimit.js';
+import { clientIp, LIMITER_MAX_KEYS } from '../middleware/ratelimit.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 
 export const router = express.Router();
 
@@ -21,9 +17,13 @@ export const router = express.Router();
 // listener's request quota. The store's per-airing dedup is the real ceiling.
 const LIKE_COOLDOWN_MS = 2_000;
 const LIKE_HOURLY_CAP = 60;
-const likeHistory = new Map<string, { last: number; hits: number[] }>();
+const likeHistory = new BoundedKeyMap<{ last: number; hits: number[] }>({
+  maxKeys: LIMITER_MAX_KEYS,
+  // `last` is always the newest hit, so it alone says whether the record binds.
+  isLive: (rec, now) => now - rec.last < 3_600_000,
+});
 
-function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
+export function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
   const now = Date.now();
   const oneHourAgo = now - 3_600_000;
   const rec = likeHistory.get(ip) || { last: 0, hits: [] };
@@ -36,13 +36,13 @@ function checkLikeLimit(ip: string): { ok: boolean; retryAfter?: number } {
   }
   rec.last = now;
   rec.hits.push(now);
-  likeHistory.set(ip, rec);
-  if (likeHistory.size > 2000) {
-    for (const [k, v] of likeHistory) {
-      if (!v.hits.length && now - v.last > 3_600_000) likeHistory.delete(k);
-    }
-  }
+  likeHistory.set(ip, rec, now);
   return { ok: true };
+}
+
+// Test seam.
+export function likeLimiterKeyCount(): number {
+  return likeHistory.size;
 }
 
 // Prefers the queue's own current item (full Subsonic song) over the

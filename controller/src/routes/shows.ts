@@ -80,6 +80,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     banter: cs.banter,
     programme: cs.programme,
     segmentSkill: cs.segmentSkill,
+    preparationSkill: cs.preparationSkill,
     moods: cs.moods,
     themeId: '',
     genres: cs.genres,

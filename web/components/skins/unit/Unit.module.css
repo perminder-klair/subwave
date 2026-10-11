@@ -1,12 +1,5 @@
-/* The hardware palette derives from the theme tokens (--bg / --ink / --muted /
-   --accent) via color-mix, with white highlights and black shadows layered on
-   top. The display glass and its dot-matrix readout are deliberately off-token
-   (fixed near-black/warm-white, self-lit hardware); only their accent lines
-   follow the theme. Everything that moves is a co-located keyframe idling at
-   `paused` until `.playing` lands, so a tuned-out unit sits still and
-   html.lite's global keyframe kill stops the whole panel for free. The meter
-   bars are the one hybrid: real spectrum when the Web Audio analyser attaches
-   (`.live`, from UnitSkin's Bars), keyframe fallback when it can't. */
+/* The display uses fixed hardware colours. Meter bars use the Web Audio analyser when available and
+   CSS keyframes otherwise. */
 
 @keyframes unit-bar {
   0%, 100% { transform: scaleY(0.28); }
@@ -22,12 +15,9 @@
 
 .chassis {
   --u-line: color-mix(in srgb, var(--ink) 34%, transparent);
-  /* Key-face lettering: paper dimmed toward ink (≈ #ded8cc on the default
-     light theme). */
   --u-keytext: color-mix(in oklab, var(--bg) 87%, var(--ink));
   --u-keytext-dim: color-mix(in srgb, var(--u-keytext) 60%, transparent);
-  /* Cover-art tint, overridden from JS (useCoverColors) while art is on air;
-     the default resolves every tinted formula back to plain metal. */
+  /* JS overrides --u-tint from cover art; the default is plain metal. */
   --u-tint: color-mix(in oklab, var(--bg) 90%, var(--ink));
   border: 1px solid var(--ink);
   background: linear-gradient(
@@ -49,8 +39,7 @@
   }
 }
 
-/* Deliberately white in every theme (a highlight, not a token). Kept faint —
-   at full strength the pinstripes read as glare on dark chassis. */
+/* Keep white highlights faint to avoid glare on dark themes. */
 .striation {
   opacity: 0.12;
   background-image: repeating-linear-gradient(
@@ -69,9 +58,7 @@
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
-/* .grille paints the base perforation, .grilleArt lays the on-air cover over
-   it masked to the SAME dot grid, .grilleShade holds the recess shadows above
-   the art. All three masks must stay on one 9px pitch. */
+/* Keep grille, artwork, and shade masks on the same 9px pitch. */
 .grille {
   border: 1px solid var(--u-line);
   background-color: color-mix(
@@ -86,7 +73,6 @@
   );
   background-size: 9px 9px;
 }
-/* Same dot mask as the art layer so all holes read one size. */
 .grilleWash {
   background-image: var(--u-cover);
   background-size: cover;
@@ -98,15 +84,11 @@
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   mask-size: 9px 9px;
 }
-/* The mask + filter live on this full-bleed layer so the halftone grid stays
-   aligned with the base perforation; the artwork paints in the square box
-   below, never cropped. */
+/* Apply the mask to the full-width layer to align with the base perforation. Fit artwork inside the square child. */
 .grilleArt {
   display: flex;
   justify-content: center;
   filter: blur(1px) saturate(1.15);
-  /* Art dots run larger than the base perforation (3.4px vs 2.1px) on the
-     same 9px pitch, so the sleeve reads while staying a dot grid. */
   -webkit-mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   -webkit-mask-size: 9px 9px;
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
@@ -116,8 +98,7 @@
   height: 100%;
   max-width: 100%;
   aspect-ratio: 1;
-  /* The multiplied dark wash keeps every hole darker than the metal field, so
-     bright artwork can't dissolve the perforation. */
+  /* Darken bright covers so the perforation remains visible. */
   background-image:
     linear-gradient(rgba(23, 21, 15, 0.25), rgba(23, 21, 15, 0.25)),
     var(--u-cover);

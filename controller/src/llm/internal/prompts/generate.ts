@@ -1,10 +1,5 @@
-// Create-form auto-fill — turns a free-text description ("a late-night jazz host
-// with a dry wit", "a Sunday-morning gospel show", "a warm sepia newspaper
-// theme") into a draft persona / show / theme the admin UI pre-fills for review.
-// Same structured-output path as matchRequest (djObject → Zod), so it rides the
-// operator's configured station LLM with no extra keys. The schemas are
-// constrained to the SAME enums the settings/theme validators enforce, so a
-// generated draft round-trips through Save without surprises.
+// Draft schemas use the same enums as settings/theme validators so generated
+// values can pass Save. Generation uses the configured station LLM.
 
 import { z } from 'zod';
 import { FREQUENCIES, SCRIPT_LENGTHS, moodVocab, SHOW_ENERGY, SHOW_TOPIC_MAX, SOUL_MAX } from '../../../settings.js';

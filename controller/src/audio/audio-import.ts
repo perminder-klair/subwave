@@ -1,9 +1,5 @@
-// Shared helpers for operator-imported audio (jingles + sound effects).
-// Imports go through ffmpeg so the library stays uniform with the generated
-// assets (jingles WAV, effects MP3); ffmpeg also validates the upload by exiting
-// non-zero on undecodable audio. Without ffmpeg (a bare-host dev box) the raw
-// bytes are stored under their original extension instead; preview routes pick
-// the content type off the extension either way.
+// ffmpeg validates and normalizes uploads to WAV jingles or MP3 effects.
+// Without ffmpeg, preserve raw bytes and their original extension for previews.
 
 import { spawn } from 'node:child_process';
 import { writeFile, mkdir, unlink } from 'node:fs/promises';

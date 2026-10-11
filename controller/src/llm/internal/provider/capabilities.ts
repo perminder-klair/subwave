@@ -1,16 +1,7 @@
-// Per-provider capability descriptors: the single place per-provider quirks
-// live, so strategy code has no `provider ===` branches. Translates the
-// user-facing `llm.reasoning` toggle into each provider's thinking control and
-// declares the structural traits the strategy layer keys off.
-//
-// Pure — every function is a function of the passed `cfg` only, so the mappings
-// are unit-pinned (controller/scripts/llm-pure.test.ts).
-//
-// Thinking control rides AI SDK 7's top-level `reasoning` call option. Never mix
-// it with providerOptions: the SDK does not merge the two and reasoning-related
-// providerOptions silently win. Providers with no per-call channel (OpenRouter,
-// and the body-injection openai-compatible/locca path) return undefined here and
-// keep their construction-time wiring in registry.ts.
+// Keep provider quirks here; strategy code uses capabilities rather than provider branches.
+// AI SDK reasoning and reasoning-related providerOptions do not merge; the latter win.
+// OpenRouter/compat/locca use construction-time controls in registry.ts instead.
+// Pure cfg mappings are pinned by controller/scripts/llm-pure.test.ts.
 
 interface ThinkingArgs {
   modelId: string;
@@ -51,6 +42,25 @@ export interface ProviderCapabilities {
   // derived as discoverySteps + 1, so a run always makes exactly one forced-done
   // attempt before the recovery cascade. Extra done steps make compliance worse.
   discoverySteps?: number;
+  // Where this provider's EMBEDDING leg sends requests, relative to its chat
+  // leg — which decides whether the chat key may follow it there.
+  //   'vendor'     — the vendor's own fixed endpoint serves both legs.
+  //   'configured' — an operator-set server; the same service only when both
+  //                  legs resolve to the same base URL.
+  //   absent       — never the chat leg's service (anthropic embeds via OpenAI;
+  //                  ollama takes no key; deepseek/gateway have no embeddings).
+  embeddingEndpoint?: 'vendor' | 'configured';
+  // Env var holding this provider's key, declared only where a builder must
+  // read it itself: the createOpenAI transport on another vendor's endpoint
+  // would otherwise look up OPENAI_API_KEY. A key read here is captured at
+  // construction, so it has to key the client cache (registry.pinnedApiKey).
+  apiKeyEnv?: string;
+  // How legs.probeLegReachable checks this provider's host is up, for a
+  // provider that runs on the operator's own box:
+  //   'ollama-version' — GET <ollama base>/api/version
+  //   'openai-models'  — GET <chat base url>/models (llama.cpp, vLLM, LM Studio)
+  // Absent = a hosted provider with no cheap probe, assumed reachable.
+  reachabilityProbe?: 'ollama-version' | 'openai-models';
 }
 
 // Floor is the historical global value and what every forced-tool provider keeps.
@@ -66,6 +76,22 @@ const NATIVE_DISCOVERY_STEPS = 3;
 
 const NONE = (): ReasoningLevel | undefined => undefined;
 
+// Claude generations whose thinking cannot be switched off: Sonnet 5.5, Opus
+// 5.5 and the Fable/Mythos 5 line 400 on `thinking:{type:"disabled"}`, and
+// 5.5/5.1 additionally 400 on forced tool use (`tool_choice` any/tool —
+// "tool_choice: type "tool" and "any" are not supported for this model"). Fable
+// 5.0 still accepts tool_choice, but forced tools need thinking off, which it
+// cannot do — so one predicate covers both consequences: never send 'none',
+// never force a tool. Matched on the model id rather than the provider, because
+// these ids reach us through the native provider, OpenRouter/gateway
+// (`anthropic/claude-sonnet-5.5`) and OpenAI-compatible proxies alike.
+// Separators may be `-` or `.` (gateways spell versions with dots).
+const THINKING_MANDATORY_CLAUDE_RE = /claude-(?:(?:opus|sonnet)-5[-.]5|(?:fable|mythos)-5)\b/i;
+
+export function thinkingMandatoryModel(modelId: string): boolean {
+  return THINKING_MANDATORY_CLAUDE_RE.test(String(modelId || ''));
+}
+
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
@@ -76,6 +102,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // thinking. Never emit a level string: 'medium' → think:'medium', which 400s
     // models that only accept a boolean.
     reasoningLevel: ({ reasoning }) => (reasoning ? undefined : 'none'),
+    reachabilityProbe: 'ollama-version',
   },
   openai: {
     objectStrategy: 'native',
@@ -90,6 +117,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
         ? (reasoning ? 'medium' : /^gpt-5\.\d/i.test(modelId) ? 'none' : 'minimal')
         : undefined,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
   },
   // openai-compatible and locca serve the same local GGUF model class as ollama:
   // under native Output.object they emit a schema-valid object without exploring,
@@ -102,20 +130,31 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // so the top-level param stays unset and the knobs ride the body.
     samplingViaBody: true,
     reasoningLevel: NONE,
+    embeddingEndpoint: 'configured',
+    reachabilityProbe: 'openai-models',
   },
+  // locca is the self-hosted llama.cpp transport (same builder as
+  // openai-compatible, its own default base URL), so it is probed like one.
   locca: {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     samplingViaBody: true,
     reasoningLevel: NONE,
+    embeddingEndpoint: 'configured',
+    reachabilityProbe: 'openai-models',
   },
   anthropic: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
     // Extended thinking is off by default; 'medium' opts in. 'none' is required
     // on forced-tool legs because Claude rejects toolChoice while thinking.
-    reasoningLevel: ({ reasoning, forceNoThink }) =>
-      (reasoning && !forceNoThink ? 'medium' : 'none'),
+    // Thinking-mandatory generations 400 on 'none' and never get a forced tool
+    // (forcedToolChoice), so their floor is 'minimal' — adaptive thinking at
+    // effort low, the cheapest setting they accept.
+    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
+      if (thinkingMandatoryModel(modelId)) return reasoning ? 'medium' : 'minimal';
+      return reasoning && !forceNoThink ? 'medium' : 'none';
+    },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
   google: {
@@ -129,6 +168,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: ({ modelId, reasoning }) =>
       (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
   },
   deepseek: {
     objectStrategy: 'native',
@@ -149,6 +189,8 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: NONE,
     reasoningConstructionOnly: true,
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
+    apiKeyEnv: 'OPENROUTER_API_KEY',
   },
   // Requesty is built via createOpenAI, so the level resolves through the openai
   // code path as reasoning_effort. Suppressed when reasoning is off or on a
@@ -160,15 +202,20 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? undefined : 'minimal'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
+    apiKeyEnv: 'REQUESTY_API_KEY',
   },
   // The gateway serializes the top-level level to whatever vendor the
   // `provider/model` id resolves to. Gemma downstreams are the exception, same
-  // 400 as the google entry (#1044), so omit the param for them.
+  // 400 as the google entry (#1044), so omit the param for them. A
+  // thinking-mandatory Claude downstream gets 'minimal' instead of 'none'.
   gateway: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    reasoningLevel: ({ modelId, reasoning, forceNoThink }) =>
-      ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
+    reasoningLevel: ({ modelId, reasoning, forceNoThink }) => {
+      if ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId)) return undefined;
+      return thinkingMandatoryModel(modelId) ? 'minimal' : 'none';
+    },
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
 };
@@ -185,9 +232,19 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
   return (provider && CAPS[provider]) || DEFAULT_CAPS;
 }
 
+// Hosted OpenAI-compatible APIs can provide native structured output and do not
+// understand llama.cpp's chat_template_kwargs / repeat_penalty extensions.
+// The historical local mode remains the default for existing stations.
+function capabilitiesForCfg(cfg: any): ProviderCapabilities {
+  if (cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted') {
+    return DEFAULT_CAPS;
+  }
+  return capabilitiesFor(cfg?.provider);
+}
+
 // True when the active provider needs the tool-call structured-output path.
 export function needsToolCallObject(cfg: any): boolean {
-  return capabilitiesFor(cfg?.provider).objectStrategy === 'tool';
+  return capabilitiesForCfg(cfg).objectStrategy === 'tool';
 }
 
 // Free discovery steps this leg gets before `done` is forced.
@@ -206,7 +263,8 @@ export function discoveryStepsFor(cfg: any): number {
   if (Number.isFinite(override as number) && (override as number) > 0) {
     return clampDiscoverySteps(override as number);
   }
-  const declared = capabilitiesFor(cfg?.provider).discoverySteps;
+  const declared = cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted'
+    ? NATIVE_DISCOVERY_STEPS : capabilitiesForCfg(cfg).discoverySteps;
   if (!Number.isFinite(declared as number)) return DISCOVERY_STEPS_MIN;
   return clampDiscoverySteps(declared as number);
 }
@@ -235,8 +293,14 @@ export function runDiscoverySteps(cfg: any, followProvider: boolean): number {
 // in the guided-decoding backend 'required' engages (#570). On 'auto' the
 // done-tool harness keeps its activeTools pinning, and misses fall through to
 // the stateless pool picker. Any value other than 'auto' means 'required'.
+//
+// A thinking-mandatory Claude model is 'auto' whatever the setting says: it
+// 400s on a forced tool, and on an OpenAI-compatible proxy 'required' arrives
+// as tool_choice:any. With one tool visible and EMIT_ANSWER_INSTRUCTION the
+// model still answers through it.
 export function forcedToolChoice(cfg: any): 'required' | 'auto' {
-  return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
+  if (cfg?.toolChoice === 'auto' || thinkingMandatoryModel(cfg?.model)) return 'auto';
+  return 'required';
 }
 
 // Per-call safety thresholds for the native `google` provider, as ai-sdk
@@ -267,7 +331,7 @@ export function googleSafetyOptions(cfg: any): Record<string, unknown> {
 // when the provider dropped it. Currently false everywhere; kept as the
 // chokepoint for when the Ollama per-call channel is restored.
 export function repeatPenaltyApplies(cfg: any): boolean {
-  return capabilitiesFor(cfg?.provider).repeatPenaltyApplies;
+  return capabilitiesForCfg(cfg).repeatPenaltyApplies;
 }
 
 // The repeat_penalty a body-injection provider will send this leg, or null.
@@ -275,7 +339,7 @@ export function repeatPenaltyApplies(cfg: any): boolean {
 // dropped and the tool-loop agent can run away repeating a token block until the
 // output cap, never emitting `done`. 1.0 or below is a no-op and is skipped.
 export function appliedRepeatPenalty(cfg: any): number | null {
-  if (!capabilitiesFor(cfg?.provider).samplingViaBody) return null;
+  if (!capabilitiesForCfg(cfg).samplingViaBody) return null;
   const rp = Number(cfg?.repeatPenalty);
   return Number.isFinite(rp) && rp > 1.0 ? rp : null;
 }
@@ -317,9 +381,35 @@ export function reasoningFor(
   cfg: any,
   { forceNoThink = false }: { forceNoThink?: boolean } = {},
 ): ReasoningLevel | undefined {
-  return capabilitiesFor(cfg?.provider).reasoningLevel({
+  return capabilitiesForCfg(cfg).reasoningLevel({
     modelId: cfg?.model || '',
     reasoning: cfg?.reasoning === true,
     forceNoThink,
   });
+}
+
+const trimBaseUrl = (u: unknown): string => String(u || '').trim().replace(/\/+$/, '');
+
+// May the embedding leg reuse the chat leg's credentials (inline key, custom
+// headers)? Only when it talks to the same service: the same provider, and for
+// an operator-configured server the same resolved base URL. A credential that
+// follows the provider id alone reaches whichever server the embedding leg
+// points at — another vendor's API, or a separate self-hosted box. Callers pass
+// RESOLVED base URLs (registry.chatBaseUrl / embedding.embeddingBaseUrl), so a
+// blank field and its default compare as the same server.
+export function embeddingSharesChatCredential(
+  chat: { provider?: string; baseUrl?: string },
+  embed: { provider?: string; baseUrl?: string },
+): boolean {
+  if (!embed.provider || embed.provider !== chat.provider) return false;
+  switch (capabilitiesFor(embed.provider).embeddingEndpoint) {
+    case 'vendor':
+      return true;
+    case 'configured': {
+      const a = trimBaseUrl(chat.baseUrl);
+      return !!a && a === trimBaseUrl(embed.baseUrl);
+    }
+    default:
+      return false;
+  }
 }

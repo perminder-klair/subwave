@@ -16,6 +16,7 @@ import { Terminal, TerminalContent } from '../ai-elements/terminal';
 import { BudgetMeter } from './debug/BudgetMeter';
 import { StateTree } from './debug/StateTree';
 import { DjContext } from './debug/DjContext';
+import { PlaybackFailures } from './debug/PlaybackFailures';
 import { LlmCalls } from './debug/LlmCalls';
 import { MountsTable } from './debug/MountsTable';
 import { SessionChat } from './debug/SessionChat';
@@ -184,8 +185,6 @@ export default function DebugPanel() {
             </Terminal>
           </Card>
 
-          {/* One card, not two: voice/ is just a directory in the state dir, and
-              it is expanded by default so the DJ voice WAVs stay one glance away. */}
           <Card title="State dir" sub="read-only · lazy">
             <ScrollArea className="max-h-[480px]">
               <StateTree />
@@ -265,6 +264,10 @@ export default function DebugPanel() {
           </Card>
         </>
       )}
+
+      {/* Outside the data block on purpose: it has its own on-demand query, so
+          it stays usable while /debug is down. With data it sits under DJ log. */}
+      <PlaybackFailures timezone={data?.timezone} locale={data?.locale} />
     </div>
   );
 }

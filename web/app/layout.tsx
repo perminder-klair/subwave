@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil_One, Courier_Prime, Overpass_Mono } from 'next/font/google';
+import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil, Courier_Prime, Overpass_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
@@ -62,10 +62,11 @@ const chakraPetch = Chakra_Petch({
   variable: '--font-chakra-petch',
 });
 
-const sairaStencilOne = Saira_Stencil_One({
+const sairaStencilOne = Saira_Stencil({
   subsets: ['latin'],
   weight: '400',
   display: 'swap',
+  adjustFontFallback: false,
   variable: '--font-saira-stencil-one',
 });
 
@@ -190,22 +191,16 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
     >
       <head>
-        {/* Apply stored theme before paint to avoid a flash of the wrong
-            palette. Static constant from lib/theme, no untrusted input. */}
+        {/* Apply cached theme before paint. The script contains no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
-        {/* Resolve low-power "lite" mode before paint so a pinned kiosk never
-            flashes the heavy build. Static constant from lib/lite. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
 
-        {/* Hide the player shell before paint when this browser resolves to a
-            non-default skin. Static constant from lib/skin. */}
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         <JsonLd data={SITE_JSONLD} />
 
-        {/* Absolute share-card image tags -- see the metadata comment above for
-            why these bypass the Metadata API. */}
+        {/* Explicit image tags work around the Metadata API issue described above. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -219,8 +214,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <ThemeProvider>
             <ServiceWorkerRegister />
             {children}
-            {/* Mounted once at the root so every route has somewhere for
-                `notify()` to appear. Per-shell mounts duplicate the toaster. */}
+            {/* Keep one root toaster to avoid duplicate notifications. */}
             <Toaster />
           </ThemeProvider>
         </MotionProvider>

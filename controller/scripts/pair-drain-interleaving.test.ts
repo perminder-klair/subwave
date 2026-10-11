@@ -126,7 +126,11 @@ before(async () => {
     q.senderBusy = false;
   }
 
-  const queueOrder = queue.upcoming.map((item) => item.track.id);
+  const queueOrder = queue.upcoming.map((item) => {
+    assert.equal(typeof item.track.id, 'string');
+    assert.ok(typeof item.track.id === 'string');
+    return item.track.id;
+  });
   const guardLine = queue.djLog.find((entry) =>
     entry.kind === 'picker' && entry.message.includes('artist "Bill Evans"'));
 

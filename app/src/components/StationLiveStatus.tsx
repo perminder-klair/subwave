@@ -1,7 +1,3 @@
-// Per-station live indicator for the Discover list: probe /api/now-playing and
-// show an ON AIR dot with the current track, or a muted "offline". Each row
-// probes independently and lazily; failures are swallowed.
-
 import { useEffect, useState } from 'react';
 import { Text, View } from 'react-native';
 import LiveDot from '@/components/LiveDot';

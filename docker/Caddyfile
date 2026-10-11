@@ -61,7 +61,10 @@
 	# Icecast calls the controller directly over the compose network, so the
 	# edge never needs it; exposed through /api/* it is an unthrottled password
 	# oracle for the shared privacy.password that POST /station-auth throttles.
-	handle /api/listener-auth {
+	# A PREFIX, not the exact path: the controller's router also answers a
+	# trailing slash, so an exact match leaves `/api/listener-auth/` routed.
+	# Caddy's path matcher is case-insensitive, which covers case variants.
+	handle /api/listener-auth* {
 		respond 404
 	}
 

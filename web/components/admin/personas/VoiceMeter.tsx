@@ -1,6 +1,4 @@
 'use client';
-// LED output-trim meter (±12 dB). Pointer-draggable AND keyboard-operable
-// (role="slider"), so it keeps the accessibility the native range input had.
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,

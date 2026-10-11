@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { AdminReadTimeoutError, runAdminRead } from './admin-read';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 const STORAGE_KEY = 'subwave_admin_auth';
@@ -104,12 +105,17 @@ export function useAdminAuth(): AdminAuth {
     const token = encode(`${user}:${pass}`);
     let r: Response;
     try {
-      r = await fetch(`${API_URL}/admin-auth`, {
-        cache: 'no-store',
-        headers: { Authorization: `Basic ${token}` },
+      r = await runAdminRead({
+        signal: new AbortController().signal,
+        request: signal => fetch(`${API_URL}/admin-auth`, {
+          cache: 'no-store', signal,
+          headers: { Authorization: `Basic ${token}` },
+        }),
       });
-    } catch {
-      return { ok: false, error: 'could not reach the controller' };
+    } catch (error) {
+      return { ok: false, error: error instanceof AdminReadTimeoutError
+        ? error.message
+        : 'Could not reach the controller. Check the station address and your connection, then retry.' };
     }
     if (r.status === 401) return { ok: false, error: 'wrong username or password' };
     if (!r.ok) return { ok: false, error: `controller error (${r.status})` };

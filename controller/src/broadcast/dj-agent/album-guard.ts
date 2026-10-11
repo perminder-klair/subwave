@@ -1,12 +1,7 @@
-// Album cooldown policy on the agent path — pure, unit-pinned (#1485 FR 3).
-// Enforced at the point of choice over the run's own candidates, since the
-// discovery tools carry no album filter (#618).
-//
-// It is the SOFTEST guard in the sequence: no pool rescue ever, and a failed
-// re-pick keeps the original pick — a preference must never cost the station a
-// slot. Runs AFTER the artist guard, on whatever pick that left standing.
+// Apply album cooldown after the artist guard. A failed re-pick retains the original; this
+// preference never triggers pool rescue or loses a slot. #1485 FR 3, #618.
 
-import { artistRootKey, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootIn, artistRootKey, type CandidateLike } from '../../music/recency.js';
 
 // How a candidate's album key is resolved. Caller-supplied so every lookup
 // stays at the call site; in production `music/album-facts.albumKeyFor`.
@@ -23,23 +18,19 @@ export interface AlbumAlternativePool<T> {
   starved: boolean;
 }
 
-// The candidate set for an album re-pick. `recentAlbums` already contains the
-// rejected pick's own album. An empty albumKey (untitled, untagged, exempt
-// compilation) is never dropped: absence of a name is not evidence of a repeat.
-//
-// `avoidArtistRoots` is the artist guard's window, so an album re-pick can't
-// hand back the artist that guard just stepped around. It is a preference: when
-// every fresh-album alternative is a neighbouring artist the unnarrowed set
-// comes back (`starved`) rather than emptying the pool.
+// Album re-picks preserve unknown/exempt album keys. Narrow by the artist guard's window,
+// restoring fresh-album alternatives on starvation without undoing an avoided anchor.
 export function alternativeAlbumCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   recentAlbums: Set<string>,
   albumKeyOf: AlbumKeyOf<T>,
   avoidArtistRoots: Set<string> = new Set(),
+  avoidAnchorRoot = '',
 ): AlbumAlternativePool<T> {
   const base = [...seen].filter(([, s]) => {
     const key = albumKeyOf(s);
-    return !key || !recentAlbums.has(key);
+    return (!key || !recentAlbums.has(key))
+      && !artistCreditsOverlap(artistRootKey(s), avoidAnchorRoot);
   });
   if (!base.length || !avoidArtistRoots.size) {
     return { alt: new Map(base), dropped: 0, starved: false };
@@ -47,7 +38,7 @@ export function alternativeAlbumCandidates<T extends CandidateLike>(
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !avoidArtistRoots.has(root);
+    return !root || !artistRootIn(root, avoidArtistRoots);
   });
   if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
 
@@ -73,6 +64,8 @@ export interface AlbumGuardDeps<T> {
   recentAlbums: Set<string>;
   /** queue.neighbourArtistRoots(window). */
   avoidArtistRoots: Set<string>;
+  /** Preserve a successful artist re-pick's anchor exclusion. Not relaxable. */
+  avoidAnchorRoot?: string;
   albumKeyOf: AlbumKeyOf<T>;
   /** settings.picker.albumHours, carried only for the log text. */
   hours: number;
@@ -87,7 +80,7 @@ export interface AlbumGuardDeps<T> {
 export async function runAlbumGuard<T extends CandidateLike>(
   deps: AlbumGuardDeps<T>,
 ): Promise<AlbumGuardOutcome<T>> {
-  const { song, seen, recentAlbums, avoidArtistRoots, albumKeyOf, hours, repick, log, logEvent } = deps;
+  const { song, seen, recentAlbums, avoidArtistRoots, avoidAnchorRoot = '', albumKeyOf, hours, repick, log, logEvent } = deps;
 
   const key = albumKeyOf(song);
   // '' covers exemptions and the untagged: a compilation keys as nothing on
@@ -95,7 +88,7 @@ export async function runAlbumGuard<T extends CandidateLike>(
   if (!key || !recentAlbums.has(key)) return { kind: 'none' };
 
   const { alt, dropped, starved } = alternativeAlbumCandidates<T>(
-    seen, recentAlbums, albumKeyOf, avoidArtistRoots,
+    seen, recentAlbums, albumKeyOf, avoidArtistRoots, avoidAnchorRoot,
   );
 
   if (!alt.size) {
@@ -113,7 +106,7 @@ export async function runAlbumGuard<T extends CandidateLike>(
   // Resolved out of `alt`, not the full `seen`, so the re-pick can only land
   // on something it was offered.
   const altSong = repicked?.id ? alt.get(repicked.id) : null;
-  if (altSong && repicked) {
+  if (altSong && repicked && !artistCreditsOverlap(artistRootKey(altSong), avoidAnchorRoot)) {
     logEvent('pick.albumGuard', {
       relaxed: false, from: song.album, to: altSong.album,
       candidates: alt.size, artistSkipped: dropped, artistStarved: starved, hours,

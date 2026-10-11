@@ -172,8 +172,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
     <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
-        {/* Always rendered: without artwork the slot would collapse and jump
-            the text column left (see .v3-cover-placeholder). */}
+        {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
         <button
           ref={coverRef}
           type="button"
@@ -196,8 +195,6 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             className="-inset-[220px] -z-10"
           />
           <div className="v3-cover-glitch relative h-full w-full overflow-hidden rounded-sm border border-line">
-            {/* Sits under the art, so a failed image load (the img hides itself
-                onError) falls back to it too. */}
             <span className="v3-cover-placeholder" aria-hidden="true" />
             {showArt && (
               <AnimatePresence mode="popLayout" initial={false}>
@@ -270,8 +267,6 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             >
               {live ? (
                 <>
-                  {/* Clamped so a very long title can't eat the bounded region
-                      and squeeze out the DJ line (the h1 flavour of #576). */}
                   <h1 className="v3-title m-0 line-clamp-2 text-ink" title={nowPlaying?.title}>
                     {nowPlaying?.title}
                   </h1>
@@ -307,7 +302,6 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
         <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
       )}
 
-      {/* Needs a known duration to time the window. */}
       <AnimatePresence>
         {live && upNext?.title && duration > 0 && remaining <= UP_NEXT_WINDOW_S && (
           <m.button

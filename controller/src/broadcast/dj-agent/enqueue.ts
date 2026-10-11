@@ -9,7 +9,6 @@ import * as subsonic from '../../music/subsonic.js';
 import * as dj from '../../llm/dj.js';
 import { stripThinking } from '../../llm/sdk.js';
 import { recordPick } from '../../llm/log.js';
-import * as requestLog from '../request-log.js';
 import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
@@ -66,7 +65,7 @@ export function trackFields(song) {
 // drop short-circuits, and a trim only ever shortens to a prefix, which cannot
 // turn a no-hit into a hit.
 export function dropEchoedLink(link: string | null, queue: any): string | null {
-  if (!link || !echoesRecentRequest(link, requestLog.recentRequests)) return link;
+  if (!link || !echoesRecentRequest(link, session.windowRequestTexts())) return link;
   queue.log('request-guard', `pick link echoed recent listener request text — link dropped`);
   return null;
 }
@@ -113,7 +112,7 @@ export async function enqueuePick(
   link: string | null = null,
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
-  { linkClockAt = null, introPersona = null, hostSpeech = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null } = {},
+  { linkClockAt = null, introPersona = null, hostSpeech = null, showAt = null }: { linkClockAt?: Date | null; introPersona?: Persona | null; hostSpeech?: HostSpeechStamp | null; showAt?: Date | null } = {},
 ): Promise<number> {
   // Single chokepoint for the intro budget: every pick path funnels its link
   // through here, so a new caller can't skip it. Near-idempotent for callers
@@ -150,6 +149,7 @@ export async function enqueuePick(
     aiPicked: true,
     linkPrev,
     linkClockAt,
+    selectionShowAt: showAt,
   });
   if (pos === -2) {
     // Never-play blocklist refused the pick (library-db candidates can slip

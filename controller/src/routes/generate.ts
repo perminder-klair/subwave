@@ -1,6 +1,4 @@
-// Admin-gated "describe it → draft it" endpoints: a free-text description in, a
-// draft persona/show/theme out. Nothing is persisted here — the operator saves
-// through the normal /settings (or /themes) path.
+// Generation returns drafts only; persist through /settings or /themes after review.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as dj from '../llm/dj.js';

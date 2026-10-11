@@ -55,7 +55,10 @@ test('speakExchange refuses any roster that is not ALL gemini', async () => {
 test('a single non-gemini line is enough to refuse the whole exchange', async () => {
   // One voice short of the cap, and only one of the two is gemini.
   await assert.rejects(
-    () => speakExchange([persona('gemini', 'Puck'), persona('cloud', 'alloy')], { kind: 'banter' }),
+    () => speakExchange([
+      { persona: persona('gemini', 'Puck'), text: 'First line.' },
+      { persona: persona('cloud', 'alloy'), text: 'Second line.' },
+    ], { kind: 'banter' }),
     /only supports an all-gemini exchange/,
   );
 });

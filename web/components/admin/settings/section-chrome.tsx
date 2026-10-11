@@ -1,10 +1,5 @@
 'use client';
 
-// The chrome SettingsPanel wraps around the active section: the sticky save bar
-// and the Advanced disclosure. Both are owned by the panel (the bar is sticky
-// against its scroll container, search must be able to open a disclosure) but
-// authored inside the section; the bar portals out of the section's tree, so a
-// section keeps its own save closure, note and error scoping.
 
 import {
   Children,

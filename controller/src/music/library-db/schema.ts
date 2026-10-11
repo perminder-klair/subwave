@@ -2,6 +2,7 @@
 
 import Database from 'better-sqlite3';
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { ensureFacetStatus } from './facets.js';
 
 // Returns the dim track_vectors is actually created at (stored dim when
 // `adoptStoredDim`, else `embeddingDim`) — the live schema dim.
@@ -438,6 +439,21 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     }).immediate();
   }
 
+  if (userVersion < 28) {
+    // The durable seam record (#1829): how each play came in (`transition`, a
+    // seam label), the DJ's ask on the pick (`transition_ask`) and the armed
+    // gestures a strip took back (`transition_drops`, JSON [{effect, reason}]).
+    // Nullable and additive: rows before this carry NULL, and an older
+    // controller's explicit-column INSERT never names them. Only the missing
+    // columns are added — a database whose user_version was wound back below
+    // this step (a downgrade, a hand repair) still has them, and ADD COLUMN on
+    // an existing column throws.
+    const have = new Set((d.prepare('PRAGMA table_info(plays)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = ['transition', 'transition_ask', 'transition_drops'].filter(c => !have.has(c));
+    if (add.length) runDdl(d, add.map(c => `ALTER TABLE plays ADD COLUMN ${c} TEXT;`).join('\n'));
+    d.pragma('user_version = 28');
+  }
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
@@ -507,6 +523,12 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
         `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
     );
   }
+
+  // Per-facet analysis status. Deliberately outside the user_version chain:
+  // created (and seeded from the columns above) on the first open that lacks
+  // it, so it never takes a number from upstream's migration sequence. Runs
+  // last because the seed reads track_audio_vectors.
+  ensureFacetStatus(d);
   return effectiveDim;
 }
 

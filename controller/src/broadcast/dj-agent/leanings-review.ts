@@ -1,0 +1,475 @@
+// Controller-owned proof that Musical Leanings changed an Agentic pick.
+//
+// The review model can propose a replacement, but it cannot certify its own
+// influence. A replacement only counts when it differs from the Leanings-blind
+// preliminary pick, remains the final choice after the station guards, and is
+// actually accepted by the queue.
+
+import { bpmCompat, keyCompat } from '../../music/mix.js';
+
+export type AgenticTrackRef = {
+  id: string;
+  title: string | null;
+  artist: string | null;
+};
+
+export type AgenticLeaningsReviewOutcome = 'not-run' | 'kept' | 'replaced' | 'invalid' | 'failed';
+
+export type AgenticLeaningsReviewRejection =
+  | 'unknown-candidate'
+  | 'missing-leanings-basis'
+  | 'basis-not-in-leanings'
+  | 'basis-not-supported-by-candidate'
+  | 'not-flow-tie'
+  | 'weak-musical-reason';
+
+export type AgenticPickResolution = {
+  preliminary?: AgenticTrackRef;
+  leaningsReview?: {
+    outcome: AgenticLeaningsReviewOutcome;
+    replacementId: string | null;
+    track?: AgenticTrackRef | null;
+    leaningsBasis?: string | null;
+    baselineId?: string | null;
+    reviewedSelectedId?: string | null;
+    candidateIds?: string[];
+    leaningsOptions?: string[];
+    leaningsSources?: AgenticLeaningsOption[];
+    leaningsSource?: 'host' | 'guest';
+    proposedReplacementId?: string | null;
+    rejectionReason?: AgenticLeaningsReviewRejection | null;
+  };
+  guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+  final?: AgenticTrackRef;
+  reason?: string | null;
+  queued?: boolean;
+  usedMusicalLeanings?: boolean;
+};
+
+export function agenticTrackRef(song: { id: unknown; title?: unknown; artist?: unknown }): AgenticTrackRef {
+  return {
+    id: String(song.id),
+    title: typeof song.title === 'string' ? song.title : null,
+    artist: typeof song.artist === 'string' ? song.artist : null,
+  };
+}
+
+function identityComparable(value: unknown): string {
+  return String(value ?? '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/\bfeaturing\b/g, 'feat').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function trimDanglingEnding(value: string): string {
+  return value.replace(/\s*[,;:]\s*(?:and|or|but)?\s*$/i, '').replace(/\s+(?:and|or|but)\s*$/i, '').trim();
+}
+
+// Agentic reasons are verified against the final track at the queue boundary.
+// This keeps useful model variation while preventing a guard replacement from
+// inheriting another track's explanation or Shortlist-specific wording.
+export function agenticSelectionReason(track: any, reason: unknown): string {
+  const titleRaw = typeof track?.title === 'string' ? track.title.trim() : '';
+  const artistRaw = typeof track?.artist === 'string' ? track.artist.trim() : '';
+  const title = identityComparable(titleRaw);
+  const artist = identityComparable(artistRaw);
+  const note = identityComparable(reason);
+  if (note && (!title || note.includes(title)) && (!artist || note.includes(artist))) return String(reason).trim();
+
+  const raw = typeof reason === 'string' ? trimDanglingEnding(reason.replace(/\s+/g, ' ')) : '';
+  if (raw && titleRaw && artistRaw && artist && !note.includes(title)) {
+    const remainder = raw.replace(new RegExp(`^${escapeRegExp(artistRaw)}\\s*[-—,:]?\\s*`, 'i'), '').trim();
+    if (/^(?:fits|works|brings|keeps|matches|follows|continues|adds|carries|suits|makes|offers)\b/i.test(remainder)) {
+      return `“${titleRaw}” by ${artistRaw} — ${/[.!?]$/.test(remainder) ? remainder : `${remainder}.`}`;
+    }
+  }
+  const credited = titleRaw && artistRaw ? `“${titleRaw}” by ${artistRaw}` : titleRaw ? `“${titleRaw}”` : artistRaw ? `A track by ${artistRaw}` : '';
+  return credited ? `${credited} offers a strong musical fit with the current flow.` : 'Selected for its strong musical fit with the current flow.';
+}
+
+const QUEUE_LANGUAGE = /\b(?:next\s+up|up\s+next|coming\s+up|we(?:'|’)re\s+playing|we\s+have)\b/i;
+const LEANINGS_REFERENCE = /\b(?:reflecting\b.*\btaste\s+for|(?:musical\s+)?leanings?|broad\s+alternative\s+taste|(?:dj|host)(?:['’]s)?\s+(?:musical\s+)?(?:taste|tastes|preference|preferences|favo(?:u)?rites?)|(?:my|his|her|their)\s+(?:musical\s+)?(?:taste|tastes|preference|preferences)|[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}['’](?:s)?\s+(?:musical\s+)?(?:taste|tastes|preference|preferences|favo(?:u)?rites?))\b/i;
+
+function usableAgenticReason(reason: unknown, song: { artist?: unknown; title?: unknown }): string {
+  const note = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
+  if (note.length >= 24 && !QUEUE_LANGUAGE.test(note) && note !== '[selection note unavailable]') return note;
+  const artist = typeof song.artist === 'string' && song.artist.trim() ? song.artist.trim() : 'This artist';
+  const title = typeof song.title === 'string' && song.title.trim() ? song.title.trim() : 'this track';
+  return `${artist} — ${title}: selected for its fit with the current musical flow.`;
+}
+
+export function agenticDiscoverySelectionReason(track: any, reason: unknown): string {
+  const raw = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
+  const looksLikeNamedIdentity = /[“”"]|\b[\p{Lu}][\p{L}’'-]+(?:\s+[\p{Lu}][\p{L}’'-]+)+\b/u.test(raw);
+  if (raw.length >= 24 && !QUEUE_LANGUAGE.test(raw) && !looksLikeNamedIdentity) {
+    const title = typeof track?.title === 'string' ? track.title.trim() : '';
+    const artist = typeof track?.artist === 'string' ? track.artist.trim() : '';
+    const credited = title && artist ? `“${title}” by ${artist}` : title ? `“${title}”` : artist ? `A track by ${artist}` : '';
+    if (credited) return `${credited} — ${/[.!?]$/.test(raw) ? raw : `${raw}.`}`;
+  }
+  return agenticSelectionReason(track, reason);
+}
+
+export function agenticReasonMentionsLeanings(reason: unknown): boolean {
+  return LEANINGS_REFERENCE.test(String(reason ?? ''));
+}
+
+export function leaningsBlindPickReason(reason: unknown, song: { artist?: unknown; title?: unknown }): string {
+  return agenticReasonMentionsLeanings(reason) ? usableAgenticReason('', song) : String(reason ?? '');
+}
+
+export function verifiedAgenticReason(reason: unknown, usedMusicalLeanings: boolean, song: { artist?: unknown; title?: unknown }): string {
+  return usableAgenticReason(usedMusicalLeanings ? reason : leaningsBlindPickReason(reason, song), song);
+}
+
+function comparable(value: unknown): string {
+  return typeof value === 'string'
+    ? value.normalize('NFKD').toLocaleLowerCase('en-GB').replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/\s+/g, ' ')
+    : '';
+}
+
+const LEANINGS_TRIGGER = /\b(?:leans?(?:\s+strongly)?\s+towards?|(?:strongly\s+)?favou?rs?|enjoys?|values?|prefers?|loves?|(?:is|are)\s+receptive\s+to|(?:is|are)\s+curious\s+about|tastes?\s+spanning|preferences?\s+include|move(?:s)?\s+between)\b/i;
+const TRAILING_CONTEXT = /\b(?:when|while|rather\s+than|without|if|over\s+extremes)\b.*$/i;
+const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'records', 'material', 'sounds']);
+
+function cleanLeaningsPhrase(value: string): string | null {
+  const phrase = value
+    .replace(TRAILING_CONTEXT, '')
+    .replace(/^(?:and|or|towards?|to|for|with|the|a|an)\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[,;:\s]+|[,;:\s]+$/g, '')
+    .trim();
+  if (phrase.length < 2 || phrase.length > 100) return null;
+  const words = phrase.split(/\s+/);
+  if (words.length > 10) return null;
+  if (words.length === 1 && UNHELPFUL_SINGLE_WORDS.has(phrase.toLocaleLowerCase('en-GB'))) return null;
+  return phrase;
+}
+
+export type AgenticLeaningsOption = {
+  phrase: string;
+  source: 'host' | 'guest';
+  ownerName: string | null;
+};
+
+function phrasesFromSource(source: string): string[] {
+  const phrases: string[] = [];
+  for (const rawSentence of source.split(/[.!?;]+/)) {
+    const sentence = rawSentence.trim();
+    const trigger = LEANINGS_TRIGGER.exec(sentence);
+    if (!trigger) continue;
+    const preference = sentence.slice(trigger.index + trigger[0].length).trim();
+    for (const rawPart of preference.split(/\s*,\s*|\s+and\s+|\s+alongside\s+|\s+across\s+/i)) {
+      const phrase = cleanLeaningsPhrase(rawPart);
+      if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
+    }
+  }
+  if (phrases.length === 0) {
+    for (const rawPart of source.split(/[.!?;,]+|\s+and\s+/i)) {
+      const phrase = cleanLeaningsPhrase(rawPart);
+      if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
+    }
+  }
+  return phrases;
+}
+
+export function agenticLeaningsSources(editorialLeanings: {
+  host?: string | null;
+  guest?: { guest?: { name: string }; musicalLeanings?: string | null } | null;
+} | null, hostName: string | null = null): AgenticLeaningsOption[] {
+  const sources: AgenticLeaningsOption[] = [];
+  const add = (text: string | null | undefined, source: 'host' | 'guest', ownerName: string | null) => {
+    if (!text?.trim()) return;
+    for (const phrase of phrasesFromSource(text).slice(0, 16)) {
+      if (!sources.some((item) => comparable(item.phrase) === comparable(phrase))) sources.push({ phrase, source, ownerName });
+    }
+  };
+  add(editorialLeanings?.host, 'host', hostName);
+  add(editorialLeanings?.guest?.musicalLeanings, 'guest', editorialLeanings?.guest?.guest?.name ?? null);
+  return sources;
+}
+
+export function agenticLeaningsPhrases(editorialLeanings: Parameters<typeof agenticLeaningsSources>[0]): string[] {
+  return agenticLeaningsSources(editorialLeanings).map(({ phrase }) => phrase);
+}
+
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  return typeof value === 'string' ? value.split(',') : [];
+}
+
+function energyDistance(left: unknown, right: unknown): number {
+  const levels = new Map([['low', 0], ['medium', 1], ['high', 2]]);
+  const a = levels.get(String(left ?? '').toLocaleLowerCase('en-GB'));
+  const b = levels.get(String(right ?? '').toLocaleLowerCase('en-GB'));
+  if (a === undefined || b === undefined) return 0;
+  return a === b ? 2 : Math.abs(a - b) === 1 ? 0.5 : 0;
+}
+
+function overlapScore(left: unknown, right: unknown): number {
+  const a = new Set(stringList(left).map(comparable).filter(Boolean));
+  const b = new Set(stringList(right).map(comparable).filter(Boolean));
+  return [...a].some((value) => b.has(value)) ? 1 : 0;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function ordinarySimilarity(baseline: any, candidate: any): number {
+  return energyDistance(baseline?.energy, candidate?.energy)
+    + 1.5 * overlapScore(baseline?.moods, candidate?.moods)
+    + 0.75 * overlapScore(baseline?.genre, candidate?.genre)
+    + 1.5 * bpmCompat(finiteNumber(baseline?.bpm), finiteNumber(candidate?.bpm))
+    + keyCompat(typeof baseline?.key === 'string' ? baseline.key : null, typeof candidate?.key === 'string' ? candidate.key : null)
+    + (baseline?.instrumental === candidate?.instrumental && baseline?.instrumental != null ? 0.25 : 0);
+}
+
+const METADATA_GENERIC_WORDS = new Set(['music', 'track', 'tracks', 'record', 'records', 'material', 'sounds']);
+
+function exactLeaningsMetadataMatches(candidate: any, leaningsOptions: string[]): string[] {
+  const metadata = comparable([candidate?.genre, ...stringList(candidate?.moods), ...stringList(candidate?.lastfm_tags)].filter(Boolean).join(' '));
+  const metadataWords = new Set(metadata.split(' ').filter(Boolean));
+  return leaningsOptions.filter((option) => {
+    const phrase = comparable(option);
+    if (!phrase) return false;
+    if (` ${metadata} `.includes(` ${phrase} `)) return true;
+    const meaningful = phrase.split(' ').filter((word) => !METADATA_GENERIC_WORDS.has(word));
+    return meaningful.length > 0 && meaningful.every((word) => metadataWords.has(word));
+  });
+}
+
+function exactLeaningsMetadataScore(candidate: any, leaningsOptions: string[]): number {
+  return exactLeaningsMetadataMatches(candidate, leaningsOptions).reduce(
+    (score, phrase) => score + Math.min(3, comparable(phrase).split(' ').length),
+    0,
+  );
+}
+
+// Host preferences win whenever the baseline or a viable challenger supports
+// them. A guest can nudge only a choice the host's supplied evidence cannot settle.
+export function eligibleAgenticLeanings(baseline: any, candidates: any[], sources: AgenticLeaningsOption[]): AgenticLeaningsOption[] {
+  const host = sources.filter(({ source }) => source === 'host');
+  const hostPhrases = host.map(({ phrase }) => phrase);
+  const hostSupported = [baseline, ...candidates].some((candidate) =>
+    (String(candidate?.id) === String(baseline?.id) || ordinarySimilarity(baseline, candidate) >= 2.5)
+    && exactLeaningsMetadataMatches(candidate, hostPhrases).length > 0);
+  return hostSupported ? host : sources;
+}
+
+export function selectAgenticReviewCandidates(baseline: any, candidates: any[], leaningsOptions: string[] = [], limit = 6): any[] {
+  if (!baseline?.id) return [];
+  const baselineId = String(baseline.id);
+  const ranked = candidates
+    .filter((candidate) => candidate?.id && String(candidate.id) !== baselineId)
+    .map((candidate) => ({
+      candidate,
+      ordinaryScore: ordinarySimilarity(baseline, candidate),
+      leaningsScore: exactLeaningsMetadataScore(candidate, leaningsOptions),
+    }));
+  const ordinaryRanked = [...ranked]
+    .sort((left, right) => right.ordinaryScore - left.ordinaryScore || String(left.candidate.id).localeCompare(String(right.candidate.id)));
+  const selected = ordinaryRanked.slice(0, Math.min(3, Math.max(1, limit - 1)));
+  const selectedIds = new Set(selected.map(({ candidate }) => String(candidate.id)));
+  const evidenceRanked = ranked
+    .filter(({ candidate, leaningsScore }) => leaningsScore > 0 && !selectedIds.has(String(candidate.id)))
+    .sort((left, right) => right.leaningsScore - left.leaningsScore || right.ordinaryScore - left.ordinaryScore || String(left.candidate.id).localeCompare(String(right.candidate.id)));
+  for (const item of evidenceRanked) {
+    if (selected.length >= limit - 1) break;
+    selected.push(item);
+    selectedIds.add(String(item.candidate.id));
+  }
+  for (const item of ordinaryRanked) {
+    if (selected.length >= limit - 1) break;
+    if (!selectedIds.has(String(item.candidate.id))) selected.push(item);
+  }
+  const alternatives = selected
+    .sort((left, right) => right.ordinaryScore - left.ordinaryScore || String(left.candidate.id).localeCompare(String(right.candidate.id)))
+    .map(({ candidate }) => candidate);
+  return [baseline, ...alternatives];
+}
+
+export function compactAgenticReviewCandidate(track: any, leaningsOptions: string[] = [], baseline: any = null): Record<string, unknown> {
+  const leaningsMatches = exactLeaningsMetadataMatches(track, leaningsOptions);
+  const similarity = baseline?.id ? ordinarySimilarity(baseline, track) : null;
+  const flowCloseness = baseline?.id && String(track?.id) === String(baseline.id)
+    ? 'baseline'
+    : similarity != null
+      ? similarity >= 4 ? 'close' : similarity >= 2.5 ? 'possible' : 'weak'
+      : undefined;
+  return Object.fromEntries(Object.entries({
+    id: track?.id,
+    title: track?.title,
+    artist: track?.artist,
+    year: track?.year,
+    genre: track?.genre,
+    moods: track?.moods,
+    energy: track?.energy,
+    instrumental: track?.instrumental,
+    bpm: track?.bpm,
+    key: track?.key,
+    unaired: track?.unaired,
+    play_count: track?.play_count,
+    last_played_days_ago: track?.last_played_days_ago,
+    leaningsMatches: leaningsMatches.length ? leaningsMatches : undefined,
+    flowCloseness,
+  }).filter(([, value]) => value !== undefined && value !== null));
+}
+
+export function validateAgenticLeaningsReplacement({
+  musicalReason,
+  leaningsBasis,
+  musicalLeanings,
+  allowedLeanings,
+  supportedLeanings,
+  flowCloseness,
+}: {
+  musicalReason: unknown;
+  leaningsBasis: unknown;
+  musicalLeanings: unknown;
+  allowedLeanings: string[];
+  supportedLeanings: string[];
+  flowCloseness: unknown;
+}): { valid: true; basis: string } | { valid: false; reason: AgenticLeaningsReviewRejection } {
+  const rawBasis = typeof leaningsBasis === 'string' ? leaningsBasis.trim().replace(/\s+/g, ' ') : '';
+  const basis = comparable(rawBasis);
+  const allowedBasis = allowedLeanings.find((option) => comparable(option) === basis);
+  if (!basis || !allowedBasis) {
+    return { valid: false, reason: 'missing-leanings-basis' };
+  }
+  if (!comparable(musicalLeanings).includes(basis)) {
+    return { valid: false, reason: 'basis-not-in-leanings' };
+  }
+  if (!supportedLeanings.some((option) => comparable(option) === basis)) {
+    return { valid: false, reason: 'basis-not-supported-by-candidate' };
+  }
+  if (flowCloseness !== 'close' && flowCloseness !== 'possible') {
+    return { valid: false, reason: 'not-flow-tie' };
+  }
+  const reason = typeof musicalReason === 'string' ? musicalReason.replace(/\s+/g, ' ').trim() : '';
+  if (reason.length < 16) return { valid: false, reason: 'weak-musical-reason' };
+  return { valid: true, basis: allowedBasis };
+}
+
+export function agenticLeaningsSelectionReason({
+  replacement,
+  djName,
+  leaningsOwnerName,
+  basis,
+  musicalReason,
+}: {
+  replacement: { title?: unknown; artist?: unknown };
+  djName: unknown;
+  leaningsOwnerName?: string | null;
+  basis: string;
+  musicalReason: unknown;
+}): string {
+  const title = typeof replacement.title === 'string' ? replacement.title.trim() : 'this track';
+  const artist = typeof replacement.artist === 'string' ? replacement.artist.trim() : 'the selected artist';
+  const presenter = typeof djName === 'string' && djName.trim() ? djName.trim() : 'The DJ';
+  const owner = leaningsOwnerName?.trim() || presenter;
+  const possessive = /s$/i.test(owner) ? `${owner}’` : `${owner}’s`;
+  let detail = typeof musicalReason === 'string'
+    ? musicalReason.replace(/\s+/g, ' ').trim().replace(/[.!?]+$/, '')
+    : 'its musical character brings a natural change of colour to the sequence';
+  const escapedArtist = artist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const titleVariants = [...new Set([
+    title,
+    title.replace(/_/g, ' '),
+    title.replace(/\s*\([^)]*\)\s*$/, '').trim(),
+    title.replace(/_/g, ' ').replace(/\s*\([^)]*\)\s*$/, '').trim(),
+  ].filter((value) => value && value !== 'this track'))]
+    .sort((left, right) => right.length - left.length);
+
+  for (const identity of titleVariants) {
+    const escapedIdentity = identity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const quotedIdentity = `[“”"'‘’]?${escapedIdentity}[“”"'‘’]?`;
+    const leadingTrait = new RegExp(`^The\\s+(.{2,100}?)\\s+of\\s+${quotedIdentity}(?:\\s+by\\s+${escapedArtist})?(?=\\s|[,.;]|$)`, 'iu');
+    const match = leadingTrait.exec(detail);
+    if (match) {
+      const trait = match[1]
+        .replace(new RegExp(`^${escapedArtist}(?:[’']s)?\\s*`, 'iu'), '')
+        .replace(/^the\s+/iu, '')
+        .trim();
+      detail = `Its ${trait || 'musical character'}${detail.slice(match[0].length)}`;
+      break;
+    }
+  }
+
+  detail = detail
+    .replace(new RegExp(`^${escapedArtist}(?:[’']s)?\\s+`, 'iu'), 'Its ')
+    .replace(/^The\s+[^,.]{2,80}?\s+of\s+this\s+(?:piece|track|song)(?=\s|[,.;]|$)/iu, (value) => `Its ${value.replace(/^The\s+/iu, '').replace(/\s+of\s+this\s+(?:piece|track|song)$/iu, '')}`)
+    .replace(/^This\s+(?:piece|track|song)\s+/iu, 'It ')
+    .replace(/^The\s+/iu, 'Its ');
+
+  for (const identity of titleVariants) {
+    const escapedIdentity = identity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    detail = detail.replace(new RegExp(`[“"'‘]${escapedIdentity}[”"'’]`, 'giu'), 'the track');
+    if (identity.length >= 6 && /\s/.test(identity)) {
+      detail = detail.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapedIdentity}(?![\\p{L}\\p{N}])`, 'giu'), 'the track');
+    }
+  }
+
+  const escapedBasis = basis.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  detail = detail
+    .replace(new RegExp(`\\b${escapedBasis}\\s+leanings?\\b`, 'giu'), 'distinctive character')
+    .replace(new RegExp(`\\b${escapedBasis}\\s+sound\\b`, 'giu'), 'distinctive sound')
+    .replace(/,?\s*complementing the baseline\b/giu, ' while keeping the sequence coherent')
+    .replace(/\bcomplements the (?:\w+[ -])?baseline with a ([^,.;]+)/giu, 'brings a $1 without breaking the sequence')
+    .replace(/\bcomplements the (?:low|medium|high)[ -]energy and moods? of the current flow\b/giu, 'keeps the sequence moving naturally')
+    .replace(/\bcomplements the current flow\b/giu, 'keeps the sequence moving naturally')
+    .replace(/\bcomplement the current flow\b/giu, 'keep the sequence moving naturally')
+    .replace(/\b(?:the )?baseline\b/giu, 'the surrounding sequence')
+    .replace(/\b(?:the )?preliminary (?:choice|pick)\b/giu, 'the surrounding sequence')
+    .replace(/\b(?:the )?challenger\b/giu, 'the track')
+    .replace(/\bcurrent flow\b/giu, 'current sequence')
+    .replace(/\b([\p{L}-]+(?:\s+and\s+[\p{L}-]+)?)\s+moods?,\s*(?:low|medium|high) energy,\s*and\s*\d+(?:\.\d+)?\s*BPM\b/giu,
+      (_value, qualities: string) => `${qualities.replace(/\s+and\s+/giu, ', ')} character and steady pulse`)
+    .replace(/\b(\d+(?:\.\d+)?)\s*BPM\b/giu, 'a steady pulse')
+    .replace(/\ba low energy\b/giu, 'an unhurried feel')
+    .replace(/\bthe low energy\b/giu, 'the unhurried feel')
+    .replace(/\blow energy\b/giu, 'unhurried feel')
+    .replace(/\ba medium energy\b/giu, 'a measured lift')
+    .replace(/\bthe medium energy\b/giu, 'the measured lift')
+    .replace(/\bmedium energy\b/giu, 'measured lift')
+    .replace(/\ba high energy\b/giu, 'an energetic character')
+    .replace(/\bthe high energy\b/giu, 'the energetic character')
+    .replace(/\bhigh energy\b/giu, 'energetic character')
+    .replace(/\bmoods\b/giu, 'character')
+    .replace(/\b(high-energy|low-energy|calm|reflective|energetic)\s+(celebratory|reflective|energetic|calm)\s+(atmosphere|character|mood|feel)\b/giu, '$1, $2 $3')
+    .replace(/,?\s*perfect for relaxation\b/giu, '')
+    .replace(/\bthe track\s+by\s+the selected artist\b/giu, 'it')
+    .replace(/\s+([,.;])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[,:;\s]+$/, '')
+    .trim();
+  if (!detail || detail === '[musical reason unavailable]' || detail.length < 16) {
+    detail = 'its musical character brings a natural change of colour to the sequence';
+  }
+  if (detail) detail = detail[0].toLocaleLowerCase('en-GB') + detail.slice(1);
+  return `${presenter} chose “${title}” by ${artist}; ${detail}, reflecting ${possessive} taste for ${basis}.`;
+}
+
+export function resolveAgenticLeaningsUsage({
+  hasLeanings,
+  preliminaryId,
+  replacementId,
+  finalId,
+  queued,
+}: {
+  hasLeanings: boolean;
+  preliminaryId: string | null;
+  replacementId: string | null;
+  finalId: string | null;
+  queued: boolean;
+}): boolean {
+  return hasLeanings
+    && !!preliminaryId
+    && !!replacementId
+    && replacementId !== preliminaryId
+    && finalId === replacementId
+    && queued;
+}

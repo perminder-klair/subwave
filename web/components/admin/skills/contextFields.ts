@@ -1,6 +1,3 @@
-// Shared "right now" context-field vocabulary for the Skills admin (#471).
-//
-// The vocabulary itself comes from the mirrored skill schema.
 import { CONTEXT_FIELDS, type ContextField } from '@/lib/schemas.generated';
 
 // Human labels for the chips. Typed as an EXHAUSTIVE record, so adding a field

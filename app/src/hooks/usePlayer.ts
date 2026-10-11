@@ -1,7 +1,3 @@
-// Tune-in state, status, volume and the stall watchdog, backed by
-// react-native-track-player. Base URL comes from StationContext; the stream
-// format is validated upstream by useStreamFormat.
-
 import { useCallback, useEffect, useRef, useState } from 'react';
 import TrackPlayer, {
   Event,

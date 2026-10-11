@@ -1,26 +1,6 @@
 'use client';
 
-// Browses Google's Extended Voice Library — the ~2,000 prebuilt voices BEYOND
-// the 30 featured ones the persona card lists as presets.
-//
-// WHY A DISCLOSURE, NOT AN ALWAYS-OPEN PICKER
-// -------------------------------------------
-// The Personas page renders one of these per persona — twelve on a typical
-// station — and each one would otherwise fire its own catalogue request on
-// mount. So it is closed by default and fetches on first expand. The same
-// reasoning keeps the request out of the station Voice panel's initial paint.
-//
-// WHY FILTERS AND NOT FREE TEXT FOR GENDER / ACCENT
-// --------------------------------------------------
-// Google is explicit: "Do not try to change immutable speaker traits in style:
-// avoid putting age, gender, names, or permanent accent changes in
-// speech_metadata.style. Instead, pick a regional voice from the Extended Voice
-// Library." The accent comes from the VOICE, so the only honest control is a
-// filter over real voices. The dropdown values are the distinct values Google
-// actually served in the current page — derived, never a restated list. That
-// matters concretely: there is no "Australian" accent to offer, because en-AU
-// voices are labelled "Sydney English", and a hardcoded vocabulary would have
-// offered a filter that returns nothing.
+// Fetch the voice catalogue on expansion. Google's speaker traits come from the selected voice, so derive accent and gender filters from the catalogue.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Input } from '../../ui/input';
@@ -170,16 +150,8 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
   const [gender, setGender] = useState<string>(ANY);
   const [pitch, setPitch] = useState<string>(ANY);
   const [accent, setAccent] = useState<string>(ANY);
-  // The controls are DRAFT until Apply. Typing must not re-query per keystroke,
-  // and — the reason they are separate at all — a cursor from one applied set
-  // must never be combined with another. Both fall out of the query owning the
-  // cursor: it is one cache entry per applied filter set, so a stale one is not
-  // merely hidden, it is unreachable.
-  // First open DEFERS to the station's saved libraryLanguage rather than
-  // overriding it. The old default was "every language", which meant opening the
-  // browser silently ignored whatever default the operator had configured — the
-  // setting read as broken, because its effect was invisible until the control was
-  // touched and re-applied.
+  // Keep draft controls separate until Apply. Each applied filter set owns its query cursor. Omit
+  // language initially so the station default applies.
   const [appliedInput, setAppliedInput] = useState<LibraryInput>({});
 
   const library = useGeminiLibraryQuery(adminFetch, appliedInput, open);
@@ -296,10 +268,7 @@ export function GeminiVoiceLibrary({ adminFetch, value, onChange, speed, sampleL
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        {/* Language is the one control with two distinct non-filter states, so it
-            * cannot use the shared `filter` helper: "Station default" omits the
-            * parameter and "Every language" sends `any`, and offering only the
-            * latter is what made the saved default unreachable. */}
+        {/* Station default omits the language parameter; every language sends 'any'. */}
         <div className="field">
           <Label>Language</Label>
           <Select value={language} onValueChange={setLanguage}>

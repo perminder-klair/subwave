@@ -114,7 +114,7 @@ test('picker.ts uncaps MAX_PER_ARTIST for a strict playlist, after the inPl narr
   );
   // Order is load-bearing: uncapping above the `inPl` narrowing would uncap
   // the raw discovery pool.
-  const narrowAt = picker.indexOf('const inPl = pool.filter(');
+  const narrowAt = picker.indexOf('const inPl = selectionPool.filter(');
   assert.ok(narrowAt > 0, 'no strict-playlist narrowing found in picker.ts');
   assert.ok(
     narrowAt < picker.indexOf(m![0]),
@@ -153,7 +153,7 @@ test('scheduler.ts keeps the cap on every discovery source', () => {
 test('scope.ts uncaps the agent tools under a playlistLock', () => {
   // The agent path is the DEFAULT picker; collect() applies playlistLock as a
   // hard intersection above this filter.
-  const m = scope.match(/^\s*maxPerArtist: opts\.maxPerArtist.*$/m);
+  const m = scope.match(/^\s*maxPerArtist:.*opts\.maxPerArtist.*$/m);
   assert.ok(m, 'no maxPerArtist default found in scope.ts collect()');
   assert.ok(
     /playlistLock\s*\?\s*Infinity/.test(m![0]),

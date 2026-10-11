@@ -1,15 +1,6 @@
-// The shared voice-clone reference folder: state/voices/ plus the legacy
-// pre-#213 state/chatterbox-voices/. Chatterbox and PocketTTS clone from the
-// WAVs here (a persona's `tts.voice` is one of these filenames) and custom Piper
-// .onnx voices live alongside them.
-//
-// SINGLE scanner of those directories. Two entry points on purpose: GET
-// /settings hits the listing path on every 3s admin poll, so scan() stays
-// readdir+stat and never spawns a subprocess; only list() probes durations.
-//
-// No JSON sidecar (unlike broadcast/sfx.ts): the folder is operator-writable by
-// hand, and a sidecar would carry no entry for a hand-dropped file. Durations
-// are memoised on size+mtime instead.
+// Reference voices live in state/voices and legacy state/chatterbox-voices (#213).
+// The /settings poll uses scan(), which never spawns subprocesses; list() probes durations.
+// Cache durations by size+mtime so hand-added or replaced files remain visible.
 
 import { readdir, stat, unlink, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -21,13 +12,11 @@ import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio, probeDurationSec,
 } from './audio-import.js';
 
-// Advisory band for a reference clip: too short may not clone stably, too long
-// only slows every render. Advisory ONLY, nothing truncates or refuses on it.
+// Reference length advice never truncates or rejects a clip.
 export const ADVISORY_MIN_SEC = 4;
 export const ADVISORY_MAX_SEC = 20;
 
-// Canonical stored form. Both workers resample internally, so mono 24 kHz is a
-// safe common denominator that keeps files small.
+// Both workers resample internally; mono 24 kHz is the common stored format.
 const TARGET_SAMPLE_RATE = 24_000;
 const TARGET_CHANNELS = 1;
 
@@ -58,9 +47,7 @@ export function voiceWarning(durationSec: number | null | undefined): VoiceWarni
   return null;
 }
 
-// The on-disk filename for an operator-supplied name. Always `.wav`: scan()
-// filters on it and the workers need real WAV bytes. A typed audio extension is
-// stripped first so "morgan.wav" doesn't become "morgan-wav.wav".
+// Strip typed extensions before adding .wav; scans and workers require real WAV files.
 export function voiceFileName(name: string): string {
   const raw = String(name || '').trim();
   const stem = isAcceptedAudio(raw) ? baseName(raw) : raw;
@@ -91,9 +78,7 @@ async function scanDir(dir: string, legacy: boolean): Promise<VoiceFile[]> {
   return out;
 }
 
-// readdir + stat only: GET /settings hits this on every admin poll, so keep it
-// subprocess-free. Canonical dir wins on a filename clash, matching
-// chatterbox.resolveReferenceWav().
+// The /settings poll must stay subprocess-free; canonical files beat legacy name clashes.
 export async function scan(): Promise<VoiceFile[]> {
   const [primary, legacy] = await Promise.all([
     scanDir(config.voices.dir, false),
@@ -109,15 +94,12 @@ export async function scan(): Promise<VoiceFile[]> {
   return merged.sort((a, b) => a.file.localeCompare(b.file));
 }
 
-// Memo key: size AND mtime, so replacing a file in place re-probes rather than
-// showing a stale length forever.
+// Reprobe when size or mtime changes, including in-place replacements.
 export function durationMemoKey(entry: VoiceFile): string {
   return `${entry.path}:${entry.size}:${entry.mtimeMs}`;
 }
 
 const durationMemo = new Map<string, number | null>();
-// Bounded so a long-lived controller can't grow it without limit; a full clear
-// is cheap on a folder this size.
 const MEMO_MAX = 200;
 
 async function durationOf(entry: VoiceFile): Promise<number | null> {
@@ -130,8 +112,7 @@ async function durationOf(entry: VoiceFile): Promise<number | null> {
   return measured;
 }
 
-// scan() plus measured durations. Admin-facing only: never call this from the
-// /settings listing path.
+// Only list() probes durations; never call it from the /settings poll.
 export async function list(): Promise<VoiceEntry[]> {
   const files = await scan();
   const out: VoiceEntry[] = [];
@@ -148,9 +129,7 @@ export async function list(): Promise<VoiceEntry[]> {
   return out;
 }
 
-// Look up a caller-supplied filename. Never builds a path from the input: it
-// basenames, rejects anything that changed under basename, then requires the
-// name to be in the real scan. Both admin :file routes go through here.
+// Reject basename changes, then require membership in the actual scan before opening files.
 export async function resolve(file: string): Promise<VoiceFile | null> {
   const raw = String(file || '');
   if (!raw) return null;
@@ -159,12 +138,8 @@ export async function resolve(file: string): Promise<VoiceFile | null> {
   return files.find(e => e.file === raw) || null;
 }
 
-// Import an operator-supplied clip as a reference voice, transcoded to the
-// canonical mono 24 kHz WAV, which also validates the upload (ffmpeg exits
-// non-zero on undecodable audio). Unlike sfx.importAudio there is no raw-bytes
-// fallback: the .wav extension is load-bearing twice (scan() filters on it, the
-// workers need real WAV bytes), so without ffmpeg a .wav passes through and
-// anything else is refused.
+// Validate/transcode uploads to mono 24 kHz WAV. Without ffmpeg, accept only WAV;
+// a renamed non-WAV would pass the filename scan but fail the cloning workers.
 export async function importVoice(
   buffer: Buffer,
   { name, originalName = '' }: { name: string; originalName?: string },
@@ -174,8 +149,7 @@ export async function importVoice(
   if (originalName && !isAcceptedAudio(originalName)) {
     throw new Error(`Unsupported audio type: ${originalName}`);
   }
-  // Refuse a clash rather than clobber: the filename IS the reference a persona
-  // holds, so overwriting would silently swap its voice.
+  // A persona stores this filename; overwriting would silently change its voice.
   if (await resolve(file)) {
     throw new Error(`a voice named "${file}" already exists — delete it first`);
   }
@@ -200,7 +174,6 @@ export async function importVoice(
     );
   }
 
-  // Length is advisory: measure it, report it, never act on it.
   const durationSec = await probeDurationSec(outPath);
   const s = await stat(outPath);
   return {

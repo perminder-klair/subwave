@@ -1911,7 +1911,7 @@ def shows(page):
         dialog = page.get_by_role("dialog")
         dialog.wait_for()
 
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         wait_for_invalid(page, host_field)
         assert_aria(page, host_field)
         assert_field_error(page, host_field, "must reference an existing persona")
@@ -1948,7 +1948,7 @@ def shows(page):
 
         # Host defaults to the roster's first persona; pin it explicitly so the
         # guest-overlap scenario below is deterministic regardless of roster order.
-        host_field = dialog.get_by_label("persona owner")
+        host_field = dialog.get_by_role("combobox", name="Host", exact=True)
         host_field.click()
         page.get_by_role("option", name="Marlowe").click()
 

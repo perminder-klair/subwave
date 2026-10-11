@@ -1,12 +1,11 @@
-// Weekly schedule: day tabs (default today) plus collapsed show blocks with
-// persona avatars.
-
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import ExpandableText from '@/components/ExpandableText';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
 import { normalizeStationLocale, type StationLocale } from '@/lib/format';
+import { onNowShow, personaBlurbs, personaById } from '@/lib/schedule';
 import type {
   ActiveShow,
   ScheduleShow,
@@ -22,8 +21,7 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-// Hour label in the station's locale (#475). en-US compacts to "11pm" because
-// the 92px time gutter can't fit a full AM/PM range.
+// Compact en-US hours to fit the 92px time gutter.
 function fmtHour(hour: number, locale: StationLocale): string {
   if (locale === 'en-US') {
     const h = hour % 24;
@@ -38,9 +36,7 @@ function fmtHourRange(start: number, end: number, locale: StationLocale): string
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// Day-of-week (0=Sun) and hour (0-23) in the station's IANA timezone, so the
-// "now" highlight matches the station clock. Falls back to device-local when
-// no tz is set or Hermes' Intl lacks timeZone support.
+// Use station-local day/hour; fall back when Hermes lacks timeZone support.
 function tzNow(now: Date, tz?: string | null): { day: number; hour: number } {
   if (tz) {
     try {
@@ -69,7 +65,7 @@ interface Slot {
 }
 
 function collapseSlots(
-  dayGrid: Array<string | null>,
+  dayGrid: (string | null)[],
   shows: ScheduleShow[],
   personas: SchedulePersona[],
 ): Slot[] {
@@ -89,6 +85,170 @@ function collapseSlots(
   return out;
 }
 
+/** A DJ's name. With something published to say about them it is a control
+ *  that opens their tagline (and soul, when the station publishes souls);
+ *  with nothing, plain text, so there is never a control that opens nothing. */
+function PersonaName({
+  name,
+  expandable,
+  open,
+  onToggle,
+  className,
+  style,
+  numberOfLines,
+  controlStyle,
+}: {
+  name: string;
+  expandable: boolean;
+  open: boolean;
+  onToggle: () => void;
+  className?: string;
+  style?: StyleProp<TextStyle>;
+  numberOfLines?: number;
+  /** Layout for the control when it is one. */
+  controlStyle?: StyleProp<ViewStyle>;
+}) {
+  if (!expandable) {
+    return <Text className={className} style={style} numberOfLines={numberOfLines}>{name}</Text>;
+  }
+  return (
+    <Pressable
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open }}
+      accessibilityLabel={`${name}, about this DJ`}
+      hitSlop={6}
+      style={controlStyle}
+    >
+      <Text
+        className={className}
+        style={[style, { textDecorationLine: 'underline', textDecorationStyle: 'dotted' }]}
+        numberOfLines={numberOfLines}
+      >
+        {name}
+      </Text>
+    </Pressable>
+  );
+}
+
+function PersonaPanel({ blurbs }: { blurbs: string[] }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ marginTop: 6, gap: 6, paddingLeft: 10, borderLeftWidth: 1, borderLeftColor: colors.softBorder }}>
+      {blurbs.map((b, i) => (
+        // A published soul is a system prompt and can run long.
+        <ExpandableText key={i} text={b} lines={4} className="font-body text-muted" style={{ fontSize: 12, lineHeight: 18 }} />
+      ))}
+    </View>
+  );
+}
+
+function OnNowCard({
+  activeShow,
+  show,
+  host,
+}: {
+  activeShow: ActiveShow;
+  /** The schedule entry for the on-air show, when one matches. */
+  show: ScheduleShow | null;
+  host: SchedulePersona | null;
+}) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const hostName = host?.name || activeShow.persona?.name || '';
+  const blurbs = personaBlurbs(host);
+  // Guest co-hosts are known only for the live show.
+  const guestNames = (activeShow.guests || []).map((g) => g?.name).filter(Boolean);
+  return (
+    <View style={{ borderWidth: 1, borderColor: colors.accent, padding: 12, marginBottom: 16 }}>
+      <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 3, marginBottom: 4 }}>ON NOW</Text>
+      <Text className="font-body-semibold text-ink" style={{ fontSize: 16 }}>{activeShow.name}</Text>
+      {hostName || guestNames.length ? (
+        <View className="flex-row flex-wrap mt-0.5" style={{ alignItems: 'baseline' }}>
+          <Text className="font-body text-muted" style={{ fontSize: 12 }}>with </Text>
+          {hostName ? (
+            <PersonaName
+              name={hostName}
+              expandable={blurbs.length > 0}
+              open={open}
+              onToggle={() => setOpen((v) => !v)}
+              className="font-body text-muted"
+              style={{ fontSize: 12 }}
+            />
+          ) : null}
+          {guestNames.length ? (
+            <Text className="font-body text-muted" style={{ fontSize: 12 }}>
+              {hostName ? ' & ' : ''}{guestNames.join(' & ')}
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+      {open ? <PersonaPanel blurbs={blurbs} /> : null}
+      {show?.topic ? (
+        <View style={{ marginTop: 8 }}>
+          <ExpandableText text={show.topic} lines={3} className="font-body text-muted" style={{ fontSize: 12, lineHeight: 18 }} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function SlotRow({ slot, isNow, locale, api }: { slot: Slot; isNow: boolean; locale: StationLocale; api: StationApi }) {
+  const { colors } = useTheme();
+  const [open, setOpen] = useState(false);
+  const blurbs = personaBlurbs(slot.persona);
+  return (
+    <View
+      className="flex-row items-start"
+      style={{
+        gap: 12,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.softBorder,
+        opacity: slot.show ? 1 : 0.5,
+      }}
+    >
+      <Text className="font-mono" style={{ fontSize: 11, width: 92, paddingTop: 2, color: isNow ? colors.accent : colors.muted }}>
+        {fmtHourRange(slot.hour, slot.endHour, locale)}
+      </Text>
+      {slot.persona?.avatar ? (
+        <Image
+          source={{ uri: api.avatar(slot.persona.avatar) }}
+          style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.field }}
+          contentFit="cover"
+        />
+      ) : null}
+      <View className="flex-1">
+        <Text className="font-body-medium text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
+          {slot.show?.name || 'Autopilot'}
+        </Text>
+        {slot.persona?.name ? (
+          <PersonaName
+            name={slot.persona.name}
+            expandable={blurbs.length > 0}
+            open={open}
+            onToggle={() => setOpen((v) => !v)}
+            className="font-body text-muted"
+            style={{ fontSize: 11 }}
+            numberOfLines={1}
+            // Hug the name so the tap target is the name, but truncate at the row.
+            controlStyle={{ alignSelf: 'flex-start', maxWidth: '100%' }}
+          />
+        ) : null}
+        {open ? <PersonaPanel blurbs={blurbs} /> : null}
+        {slot.show?.topic ? (
+          <View style={{ marginTop: 4 }}>
+            <ExpandableText text={slot.show.topic} lines={2} className="font-body text-muted" style={{ fontSize: 11, lineHeight: 16 }} />
+          </View>
+        ) : null}
+      </View>
+      {isNow ? (
+        <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 2, paddingTop: 3 }}>NOW</Text>
+      ) : null}
+    </View>
+  );
+}
+
 export interface ScheduleDrawerProps {
   api: StationApi;
   activeShow: ActiveShow | null;
@@ -100,8 +260,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const appActive = useAppActive();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // null until a day tab is tapped; until then the view follows the station's
-  // own "today".
+  // Null follows the station day until the listener picks a tab.
   const [pickedDay, setPickedDay] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
   const location = context?.weather?.location ?? null;
@@ -133,17 +292,17 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const day = pickedDay ?? todayTz;
   const locale = normalizeStationLocale(data.locale);
 
-  // Host plus guest co-hosts this hour (#866). Guests are only known for the
-  // LIVE show; upcoming slots stay host-only.
-  const onNowNames = [
-    activeShow?.persona?.name,
-    ...(activeShow?.guests || []).map((g) => g?.name),
-  ].filter(Boolean);
-
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
-  // Wrapped because Hermes' Intl timeZone support is narrower than a browser's;
-  // falls back to the viewer's local time.
+  const gridShowId = data.schedule?.[todayTz]?.[currentHour] ?? null;
+  const onNow = onNowShow(
+    activeShow,
+    (data.shows || []).find((s) => s.id === gridShowId) ?? null,
+    data.shows,
+  );
+  const onNowHost = personaById(data.personas, activeShow?.persona?.id);
+
+  // Hermes may lack Intl timeZone support; fall back to device-local time.
   let time: string;
   try {
     time = new Intl.DateTimeFormat(locale, {
@@ -181,17 +340,8 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
       </View>
 
       {activeShow?.name ? (
-        <View
-          style={{ borderWidth: 1, borderColor: colors.accent, padding: 12, marginBottom: 16 }}
-        >
-          <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 3, marginBottom: 4 }}>ON NOW</Text>
-          <Text className="font-body-semibold text-ink" style={{ fontSize: 16 }}>{activeShow.name}</Text>
-          {onNowNames.length ? (
-            <Text className="font-body text-muted mt-0.5" style={{ fontSize: 12 }}>
-              with {onNowNames.join(' & ')}
-            </Text>
-          ) : null}
-        </View>
+        // Keyed on the show so an open disclosure does not carry across the hour.
+        <OnNowCard key={activeShow.name} activeShow={activeShow} show={onNow} host={onNowHost} />
       ) : null}
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-3">
@@ -226,47 +376,16 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
         </View>
       </ScrollView>
 
-      {slots.map((slot) => {
-        const isNow = day === todayTz && currentHour >= slot.hour && currentHour <= slot.endHour;
-        const range = fmtHourRange(slot.hour, slot.endHour, locale);
-        return (
-          <View
-            key={slot.hour}
-            className="flex-row items-center"
-            style={{
-              gap: 12,
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.softBorder,
-              opacity: slot.show ? 1 : 0.5,
-            }}
-          >
-            <Text className="font-mono" style={{ fontSize: 11, width: 92, color: isNow ? colors.accent : colors.muted }}>
-              {range}
-            </Text>
-            {slot.persona?.avatar ? (
-              <Image
-                source={{ uri: api.avatar(slot.persona.avatar) }}
-                style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.field }}
-                contentFit="cover"
-              />
-            ) : null}
-            <View className="flex-1">
-              <Text className="font-body-medium text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
-                {slot.show?.name || 'Autopilot'}
-              </Text>
-              {slot.persona?.name ? (
-                <Text className="font-body text-muted" style={{ fontSize: 11 }} numberOfLines={1}>
-                  {slot.persona.name}
-                </Text>
-              ) : null}
-            </View>
-            {isNow ? (
-              <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 2 }}>NOW</Text>
-            ) : null}
-          </View>
-        );
-      })}
+      {slots.map((slot) => (
+        // Day in the key, so an open disclosure does not follow a day switch.
+        <SlotRow
+          key={`${day}-${slot.hour}`}
+          slot={slot}
+          isNow={day === todayTz && currentHour >= slot.hour && currentHour <= slot.endHour}
+          locale={locale}
+          api={api}
+        />
+      ))}
     </View>
   );
 }

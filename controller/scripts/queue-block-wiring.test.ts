@@ -16,7 +16,7 @@
 // Run: npm test -- queue-block-wiring
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import { queue } from '../src/broadcast/queue.js';
 import { queueBlockSchema, QUEUE_BLOCK_MAX_TRACKS } from '../src/schemas/dj.js';
 import { formatWait, requestWaitClause, REQUEST_WAIT_NOTICE_SEC } from '../src/broadcast/queue/pure.js';
@@ -37,6 +37,11 @@ const err = (body: unknown): string => {
   assert.equal(r.success, false, 'expected this body to be refused');
   return r.success ? '' : r.error.issues[0].message;
 };
+
+// Forecast comparisons need the same clock before and after changing a delay.
+beforeEach((t) => {
+  if ('mock' in t) t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 9, 7) });
+});
 
 // ── the schema ─────────────────────────────────────────────────────────────
 

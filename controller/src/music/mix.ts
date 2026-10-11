@@ -80,6 +80,12 @@ export const LOUDNESS_PEAK_CEILING_DBFS = -1;
 
 // dB gain toward the target, clamped. null when the track has no loudness
 // measurement (→ unity gain). Rounded to 0.1 dB.
+//
+// A BOOST needs a known peak. Without one the headroom is unknown, and the
+// boost cap alone lets a quiet-reading track go up by the whole maxBoostDb
+// (12 dB at most) straight into the bus limiter, which is how a ReplayGain tag
+// with no trackPeak, or a measurement with no peak_db, came to air distorted.
+// So an unknown peak holds the boost at 0 dB; cuts never need one.
 export function gainForLoudness(
   lufs: number | null | undefined,
   opts: { peakDb?: number | null; targetLufs?: number | null; maxBoostDb?: number | null } = {},
@@ -96,14 +102,20 @@ export function gainForLoudness(
   const raw = target - lufs;
   let gain: number;
   if (raw > 0) {
-    gain = Math.min(raw, maxBoost);
-    if (typeof opts.peakDb === 'number' && Number.isFinite(opts.peakDb)) {
-      gain = Math.min(gain, Math.max(0, LOUDNESS_PEAK_CEILING_DBFS - opts.peakDb));
-    }
+    gain = boostNeedsPeak(raw, opts.peakDb)
+      ? 0
+      : Math.min(raw, maxBoost, Math.max(0, LOUDNESS_PEAK_CEILING_DBFS - (opts.peakDb as number)));
   } else {
     gain = Math.max(raw, -LOUDNESS_CUT_CLAMP_DB);
   }
   return Math.round(gain * 10) / 10;
+}
+
+// True when this gain would be a boost held back only because the peak is
+// unknown — the case gainForLoudness answers with 0 dB. Exported so a caller
+// can say why a quiet track was left where it was.
+export function boostNeedsPeak(rawGainDb: number, peakDb: number | null | undefined): boolean {
+  return rawGainDb > 0 && !(typeof peakDb === 'number' && Number.isFinite(peakDb));
 }
 
 // ReplayGain 2.0 reference level (EBU R128). A tag's trackGain is the dB offset
@@ -388,10 +400,12 @@ export function loopCrossSecondsFor(a: Analysis, maxSec: number | null = null): 
 // Whether the measured pair supports the effect the agent proposed. Un-analysed
 // tracks pass. The grid:
 //   blend    rhythmic, for COMPATIBLE pairs
-//   washout  rhythmic exit (always allowed; the caller's cooldown rations it)
+//   washout  rhythmic exit (always allowed; the queue's anti-streak ledger
+//            rations it — there is no cooldown)
 //   sweep    dramatic textural move across a clash
 //   dissolve smooth textural move across a clash (reverb wash, hides the seam)
 //   chop     percussive move across a clash (crossfader cut, on the beat)
+//   loop     exit loop (always allowed here; the queue needs its own tempo)
 export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop', cur: Analysis, next: Analysis): boolean {
   if (kind === 'washout') return true;
   // Editorial like the washout. The queue separately requires the flagged

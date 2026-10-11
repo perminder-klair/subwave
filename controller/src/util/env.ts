@@ -1,11 +1,5 @@
-// Typed env-var readers: the one place a raw `process.env` string becomes a
-// number, URL or bounded value. Never use `parseInt(process.env.X || '…')` —
-// it yields NaN and the NaN travels.
-//
-// The posture is WARN AND FALL BACK, never throw: a station must not refuse to
-// boot over one malformed convenience var. A genuinely load-bearing var keeps
-// its own explicit check at its call site. Issues collect in `envIssues` so
-// startup can repeat them into the booth log.
+// Malformed convenience vars warn and fall back; they must not stop boot.
+// Required vars keep explicit call-site checks. envIssues feeds the startup booth log.
 
 import { z } from 'zod';
 
@@ -28,14 +22,13 @@ function note(name: string, value: string, problem: string, usedInstead: unknown
   console.warn(`[env] ${name}="${value}" ${problem} — using ${String(usedInstead)} instead`);
 }
 
-// ABSENT and EMPTY both mean "not set" (`ANALYZE_PYTHON=` is an ordinary compose
-// line); a value present but unparseable warns and falls back.
-function read<T>(name: string, schema: z.ZodType<T>, fallback: T): T {
+// Absent/empty means unset; malformed nonempty values warn and fall back.
+function read<T>(name: string, schema: z.ZodType<T>, fallback: T, reportIssue = true): T {
   const raw = process.env[name];
   if (raw == null || raw.trim() === '') return fallback;
   const parsed = schema.safeParse(raw.trim());
   if (parsed.success) return parsed.data;
-  note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
+  if (reportIssue) note(name, raw, parsed.error.issues[0]?.message || 'is not valid', fallback);
   return fallback;
 }
 
@@ -71,10 +64,9 @@ export function envFloat(name: string, fallback: number, opts: NumOptions = {}):
 }
 
 /** An http(s) URL var; a bare host or non-http scheme is rejected. */
-export function envUrl(name: string, fallback: string): string {
-  // One check, not `z.url().refine(…)`: zod runs every check even after one
-  // fails, so the refine would see unparseable input and `new URL()` would throw
-  // straight out, breaking the never-throw contract.
+export function envUrl(name: string, fallback: string, { reportIssue = true } = {}): string {
+  // A refine can run after URL parsing fails and throw from new URL().
+  // Use one check to preserve the never-throw contract.
   const schema = z.string().refine((u) => {
     try {
       return /^https?:$/.test(new URL(u).protocol);
@@ -82,7 +74,7 @@ export function envUrl(name: string, fallback: string): string {
       return false;
     }
   }, 'is not an http(s) URL');
-  return read(name, schema, fallback);
+  return read(name, schema, fallback, reportIssue);
 }
 
 /** A plain string var; nothing to fail, so it never warns. */

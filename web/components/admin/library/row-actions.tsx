@@ -1,9 +1,5 @@
 'use client';
 
-// The heart and the never-play menu, lifted out of TrackTable so the Play
-// history rows offer the same two actions (#1600). Both are pure presentational
-// pieces taking an explicit Track: history rows are PlayEntry, so their caller
-// composes one from the air-time snapshot before rendering these.
 
 import { useRef, useState } from 'react';
 import { Ban, Heart, ListPlus } from 'lucide-react';
@@ -49,7 +45,6 @@ export function HeartButton({ track, like, busy, onToggle, className }: {
       {busy ? '…' : (
         <span className="inline-flex items-center gap-1">
           <Heart size={12} className={cn(like.liked && 'fill-vermilion text-vermilion')} />
-          {/* Count is every like on the song; the fill is the operator's own. */}
           {like.count > 0 && <span className="mono-num text-[10px]">{countLabel(like.count)}</span>}
         </span>
       )}

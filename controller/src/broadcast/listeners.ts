@@ -1,15 +1,6 @@
-// Icecast listener-count monitor: polls both broadcast mounts on an interval
-// and caches the count so the DJ gates don't each hit Icecast.
-//
-// The count never keys on IP (a proxy collapses everyone onto one address, a NAT
-// hides several listeners behind one). Every non-Safari socket is a listener;
-// Safari/AppleCoreMedia opens two sockets per client and they are paired by
-// user-agent + connect time off the admin feed (/admin/listclients). The public
-// status-json.xsl supplies online/bitrate and the fallback sum when admin is
-// unavailable.
-//
-// Fail-open: an unreachable Icecast reads null and djCallsAllowed() treats the
-// station as occupied, so a stats outage never silences the DJ.
+// Count sockets, never IPs. Pair Safari/AppleCoreMedia sockets by user agent and connection
+// time from the admin feed; public status supplies the fallback sum. Unknown counts leave DJ
+// calls enabled.
 
 import { appendFile, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -44,12 +35,9 @@ let lastStatus: StreamStatus = {
   channels: null,
 };
 
-// Consecutive failed status polls before the last reading stops being trusted
-// (both cached `online` and the gated count). Under the limit we hold the last
-// known values so a transient stats timeout doesn't tear down a healthy
-// listener (#461) or release the idle pause (#1256); at or above it a genuinely
-// unreachable Icecast surfaces as offline/unknown. 4 polls ≈ 1 min at the 15s
-// cadence, ≈20s while the idle monitor forces 5s polls.
+// Trust the last reading through transient failures; sustained failure marks Icecast
+// offline/unknown. Four failures take about one minute normally or 20 seconds under idle
+// polling. #461, #1256.
 const STALE_STATUS_LIMIT = 4;
 
 // Deadline on the Icecast status fetch. Must stay inside the idle monitor's 5s
@@ -214,12 +202,9 @@ export async function refresh() {
   return fetchCount();
 }
 
-// One-shot probe for out-of-process callers (the analysis quiet gate, #1099,
-// runs in the tagger child which has no monitor loop). Skips the history append
-// — the server process is the only writer of that JSONL — and bypasses the
-// single-flight guard, which would drop the skip-history flag. Returns the
-// GATED count: the quiet gate fails open the OPPOSITE way, so a blip would
-// start a heavy DSP pass while somebody is listening (#1256).
+// Probe listener count for maintenance children without appending history, whose sole writer
+// is the controller. Return the gated count so transient failures do not start heavy analysis
+// during listening. #1099, #1256.
 export async function probeListenerCount(): Promise<number | null> {
   await pollCount(false);
   return gatedListenerCount();

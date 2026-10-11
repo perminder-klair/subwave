@@ -2,12 +2,12 @@
 // chokepoint), normalizeShows (lenient load) and the POST /shows middleware.
 // Accept-vs-reject and the returned shape are the contract; wording is not.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(path.join(tmpdir(), 'subwave-show-schema-'));
+process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-show-schema-'));
 
 const { validateShowsStrict } = await import('../src/settings/validate.js');
 const { normalizeShows } = await import('../src/settings/normalize.js');
@@ -389,4 +389,14 @@ test('a show with no tags round-trips byte-identically apart from the empty list
   const [loaded] = normalizeShows([{ name: 'Breakfast', personaId: 'p_host' }], personaIds);
   assert.deepEqual(loaded.tags, []);
   assert.deepEqual(strict().tags, loaded.tags);
+});
+
+test('preparation references survive strict saves and lenient loads; duplicate feature usage is refused on save', () => {
+  assert.equal(strict({ preparationSkill: ' random-artist-pick ' }).preparationSkill, 'random-artist-pick');
+  assert.equal(strict({ preparationSkill: null }).preparationSkill, '');
+  assert.throws(() => strict({ preparationSkill: 'pick', segmentSkill: 'pick', programme: true }), /segmentSkill/);
+  const [loaded] = normalizeShows([show({ preparationSkill: 'pick', segmentSkill: 'pick' })], personaIds);
+  assert.ok(loaded, 'a hand-edited conflicting feature must not delete the entire show');
+  assert.equal(loaded.preparationSkill, 'pick');
+  assert.equal(loaded.segmentSkill, '');
 });

@@ -1,14 +1,11 @@
-// Runtime API client, and the only place that knows the controller's URL
-// shape. The base is resolved at runtime from StationContext (the app is
-// multi-station) and is the station's site root: the API is mounted under
-// `/api` and Icecast at `/stream.mp3` on the same origin, per docker/Caddyfile.
+// The runtime station base is the site root, with /api and stream mounts
+// on the same origin (docker/Caddyfile).
 
 import { mountFor, type StreamFormat } from './streamFormat';
+import { stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
 import {
-  authorizationFor,
   normalizeStationBase,
   resolveStationConnection,
-  splitStationAddress,
   type StationCredentials,
 } from './station-credentials';
 import type {
@@ -65,6 +62,9 @@ export interface StationApi {
   likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon; all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
+  /** Check a private-station password against `POST /station-auth` (#478),
+   *  which fails closed and is rate-limited. Never throws. */
+  checkStationAuth(password: string): Promise<StationAuthResult>;
   /** Absolute URL for an album cover. */
   cover(subsonicId: string): string;
   /** Absolute URL for a persona avatar. The controller emits
@@ -72,7 +72,9 @@ export interface StationApi {
   avatar(path: string): string;
   /** The Icecast mount for `format`, defaulting to the MP3 floor. Callers gate
    *  a non-MP3 format on platform + station support first. Carries no embedded
-   *  credentials; see streamHeaders(). */
+   *  login (see streamHeaders()), but does carry the private-station password
+   *  as `?auth=` when one is saved — read at call time, so unlocking a station
+   *  never has to rebuild this client. */
   streamUrl(format?: StreamFormat): string;
   /** `{ Authorization: 'Basic …' }` when the station has credentials, else
    *  undefined. iOS AVPlayer ignores URL userinfo, so the credential must
@@ -86,22 +88,7 @@ export function normalizeBase(raw: string): string {
   return normalizeStationBase(raw);
 }
 
-/** Split a normalized base into a credential-free base URL and, if it carried
- *  `user:pass@` userinfo, an `Authorization: Basic` header value. */
-export function splitCredentials(rawBase: string): {
-  base: string;
-  authorization: string | null;
-} {
-  const split = splitStationAddress(rawBase);
-  return {
-    base: split.base,
-    authorization: split.credentials ? authorizationFor(split.credentials) : null,
-  };
-}
-
-// Hard timeout on every call so a hung origin can't stall the 5s feed poll.
-// Composed by hand with any caller signal: RN's fetch polyfill has no
-// AbortSignal.timeout/any.
+// Compose timeouts manually: RN fetch lacks AbortSignal.timeout and any.
 const FETCH_TIMEOUT_MS = 8000;
 
 function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
@@ -128,11 +115,11 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 export function createApi(
   rawBase: string,
   credentials?: StationCredentials | null,
+  stationPassword: () => string | null = () => null,
 ): StationApi {
   const connection = resolveStationConnection(rawBase, credentials);
-  // The persisted/displayed base stays credential-free; URL userinfo is
-  // reconstructed only inside this live client for the fetch/Image paths, and
-  // AVPlayer gets the explicit header below (#764/#1300).
+  // Persist credential-free bases. Reconstruct userinfo only for fetch/Image;
+  // AVPlayer needs an explicit header (#764/#1300).
   const { base: cleanBase, requestBase, authorization } = connection;
   const streamAuthHeaders: Record<string, string> | undefined = authorization
     ? { Authorization: authorization }
@@ -156,8 +143,7 @@ export function createApi(
     schedule: (signal) => getJson<SchedulePayload>(api('/schedule'), signal),
     dj: (signal) => getJson<DjPublic>(api('/dj'), signal),
     themes: (signal) => getJson<ThemesPayload>(api('/themes'), signal),
-    // A non-2xx response resolves false, but a network/TLS error or timeout
-    // throws: useSignal relies on the throw to detect a dead link.
+    // useSignal relies on network/TLS/timeout errors throwing; HTTP failures return false.
     health: async (signal) => {
       const r = await probeHealth(signal);
       if (r.ok) return true;
@@ -182,6 +168,18 @@ export function createApi(
         /* best-effort analytics */
       }
     },
+    checkStationAuth: async (password) => {
+      try {
+        const res = await fetchWithTimeout(api('/station-auth'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        return stationAuthResult(res.status);
+      } catch {
+        return stationAuthResult(null);
+      }
+    },
     pollRequest: async (id) => {
       const res = await fetchWithTimeout(api(`/request/${encodeURIComponent(id)}`));
       if (res.status === 404) return { success: false, status: 'unknown' };
@@ -194,7 +192,6 @@ export function createApi(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ songId }),
         });
-        // Error statuses carry a JSON body too — surface it, don't throw.
         return (await res.json()) as LikeResult;
       } catch {
         return null;
@@ -214,7 +211,7 @@ export function createApi(
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: (format = 'mp3') => `${cleanBase}${mountFor(format)}`,
+    streamUrl: (format = 'mp3') => withStreamAuth(`${cleanBase}${mountFor(format)}`, stationPassword()),
     streamHeaders: () => streamAuthHeaders,
   };
 }

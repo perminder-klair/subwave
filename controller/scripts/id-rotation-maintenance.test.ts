@@ -116,7 +116,7 @@ globalThis.fetch = (input, init) => {
   for (const id of [OLD, OLD_B]) {
     db.upsertTrackMeta(id, { title: id === OLD ? 'Memory Bank' : 'Song B', artist: 'Jethro Tull' });
     db.upsertTrackTags(id, { moods: ['warm'], energy: 'medium', source: 'manual', confidence: 1 });
-    db.upsertTrackVector(id, [1, 2, 3, 4, 5, 6, 7, 8]);
+    db.upsertTrackVector(id, [1, 2, 3, 4, 5, 6, 7, 8], db.resolvedEraYearForTrack(id));
   }
   const playlist = await import('../src/music/show-playlist.js');
   if (mode === 'inflight') {

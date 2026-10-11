@@ -83,7 +83,7 @@ async function main() {
     // A populated 768-d index: three tracks, each embedded.
     await db.open({ embeddingDim: 768, reseed: false });
     for (const id of ['a', 'b', 'c']) {
-      db.upsertTrackMeta(id, { title: id, artist: 'x', album: 'y', year: 2020, genre: 'z' });
+      db.upsertTrackMeta(id, { title: id, artist: 'x', album: 'y', year: 2020, genres: ['z'] });
       db.upsertTrackVector(id, vec(768), db.resolvedEraYearForTrack(id));
     }
     assert.equal(db.embeddedIds().length, 3);
@@ -109,9 +109,9 @@ async function main() {
     await db.open({ embeddingDim: 1024, adoptStoredDim: true });
     // Legacy write (no mode) — reads back null, which resolveIndexTextMode
     // treats as 'plain' on a populated index.
-    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024);
+    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024, null, 1);
     assert.equal(db.getEmbeddingMeta()?.textMode, null);
-    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024, 'prefixed');
+    db.setEmbeddingMeta('ollama:nomic-embed-text', 1024, 'prefixed', 1);
     assert.equal(db.getEmbeddingMeta()?.textMode, 'prefixed');
     db.close();
   });

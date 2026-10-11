@@ -116,6 +116,18 @@ naturally bursty around decisions and quiet between them.
   back-to-back, so persistent repetition is rarely the agent ignoring
   instructions — it is the *candidate pool being too narrow* to obey them.
   Trace it back to pool breadth in the Navidrome section.
+- **Transitions.** Printed only when the controller keeps the seam record.
+  "Seams armed" is how each track came in, as the controller armed it.
+  "After jingle/bed/break" means something played between the two songs and
+  owned that seam. "DJ asked for" is the model's choice before any strip.
+  "Dropped" pairs each lost effect with a reason code.
+  - **`pair-fit` dominating:** the model is choosing effects the measured pair
+    does not support. The coaching and the data disagree.
+  - **`variety` dominating:** the model is stuck on one favourite effect.
+  - **`switched-off`:** the operator turned an effect off that the model still
+    asks for.
+  - **`jingle-seam`:** chosen effects lost to a jingle placed between the songs.
+  - **Asks almost all `normal`:** effects are offered but not used.
 
 ### Health & anomalies
 

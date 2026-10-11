@@ -149,6 +149,43 @@ export function usageOf(
   return { input, output, total };
 }
 
+// Every billed provider call inside one per-leg attempt, summed as it ENDS
+// rather than read off a result afterwards. A result only exists for a call
+// that returned: a declined forced tool, an unparseable object, a step cap
+// hit mid-exploration, a later leg's throw or a transient retry all leave
+// billed calls with no result to read, and the daily token cap
+// (telemetry/log.ts record()) only counts what reaches the record. Each
+// generateText/ToolLoopAgent in the attempt registers `onLanguageModelCallEnd`;
+// `usage()` is the success figure and `attachTo(err)` puts the same sum on a
+// throw, where failureDiagnostics reads it. One meter per leg attempt, so a
+// failover's backup leg records its own spend and nothing is counted twice.
+export interface UsageMeter {
+  readonly onLanguageModelCallEnd: (event: { usage?: TokenUsage }) => void;
+  usage(): { input: number; output: number; total: number };
+  attachTo(err: unknown): void;
+}
+
+export function createUsageMeter(): UsageMeter {
+  const sum = { input: 0, output: 0, total: 0 };
+  return {
+    onLanguageModelCallEnd: (event) => {
+      const u = usageOf({ usage: event?.usage });
+      sum.input += u.input;
+      sum.output += u.output;
+      sum.total += u.total;
+    },
+    usage: () => ({ ...sum }),
+    attachTo(err) {
+      // A metered zero says nothing, so it never overwrites usage an error
+      // already carried; otherwise the meter saw every call the error did.
+      if (!err || typeof err !== 'object' || sum.total <= 0) return;
+      try {
+        (err as ErrorLike).usage = { inputTokens: sum.input, outputTokens: sum.output, totalTokens: sum.total };
+      } catch { /* A frozen error keeps whatever it carried. */ }
+    },
+  };
+}
+
 // Per-step performance stats aggregated for /debug, in ms. undefined when the
 // result carries none, so the record omits the field.
 export function perfOf(result: any): { modelMs: number; stepMs: number; toolMs?: Record<string, number>; tokensPerSec?: number } | undefined {
@@ -244,6 +281,22 @@ export function isGenerationControlError(err: ErrorLike | null | undefined): boo
   return isProviderRequestTimeout(err) || err?.code === 'GENERATION_CANCELLED' || err?.name === 'AgentDeadlineError';
 }
 
+// A local parse failure — JSON.parse's SyntaxError, a schema's ZodError — is
+// built from the MODEL'S OWN output, and V8 quotes that output in the message
+// ('Unexpected token \'F\', "Forbidden..." is not valid JSON'). So every
+// message-reading branch below sees an empty message for one: a reply that
+// happens to say "Forbidden", "quota" or "503" is not a provider verdict.
+// Status and code checks are unaffected (these errors carry neither).
+function isLocalParseError(err: ErrorLike | null | undefined): boolean {
+  return err?.name === 'SyntaxError' || err?.name === 'ZodError';
+}
+function providerMessage(err: ErrorLike): string {
+  if (isLocalParseError(err)) return '';
+  const own = String(err.message || '');
+  if (own) return own;
+  return isLocalParseError(err.cause) ? '' : String(err.cause?.message || '');
+}
+
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -263,7 +316,7 @@ export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (typeof code === 'string' && TRANSIENT_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
   if (name === 'AbortError' || name === 'TimeoutError') return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (/\b(408|425|429|500|502|503|504)\b/.test(msg)) return true;
   if (/socket hang up|fetch failed|network.*(error|timeout)/i.test(msg)) return true;
   return false;
@@ -284,7 +337,7 @@ export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
   if (name === 'AbortError' || name === 'TimeoutError') return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (/fetch failed|socket hang up|getaddrinfo|connect ECONNREFUSED|connect ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
     return true;
   }
@@ -333,7 +386,7 @@ export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   return MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg);
 }
 
@@ -347,7 +400,7 @@ export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
   // A bare 429 is deliberately NOT enough — only one whose message names a
   // quota, via QUOTA_RE below.
   if (status === 402) return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (AUTH_RE.test(msg)) return true;
   if (QUOTA_RE.test(msg)) return true;
   // Monthly cap: by code first, message second.
@@ -365,7 +418,7 @@ export function isUpstreamOverloaded(err: ErrorLike | null | undefined): boolean
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
@@ -379,7 +432,7 @@ export function isRateLimited(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   const is429 = status === 429 || (status == null && /\b429\b/.test(msg));
   if (!is429) return false;
   const headers = err.responseHeaders ?? err.cause?.responseHeaders;

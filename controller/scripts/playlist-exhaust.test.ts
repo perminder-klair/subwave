@@ -281,7 +281,7 @@ test('both pick paths resolve the floor before they size the window', () => {
     assert.ok(guardAt > 0, `${file} must go through the shared show policy`);
     assert.ok(floorAt > 0 && floorAt < guardAt,
       `${file} must resolve effectiveMinTrackSec before sizing the no-repeat window`);
-    assert.match(source, /minTrackSec,?\s*\n?\s*\}/,
+    assert.match(source, /minTrackSec,?\s*maxTrackSec,?\s*\}/,
       `${file} must hand the floor to the guard`);
   }
 });

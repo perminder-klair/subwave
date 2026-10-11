@@ -1,10 +1,6 @@
-// Which theme level decided the theme on screen, published on the wire (#1300
-// bug 12). The on-air show's themeId outranks settings.theme.active; a browser's
-// own localStorage override is resolved client-side and not modelled here.
-//
-// The public contract: `active` keeps its old value in every case, a show wins
-// ONLY if its themeId still resolves to a known theme, and `activeShow` is null
-// rather than absent when the station default wins.
+// A valid show theme overrides the station default (#1300 bug 12).
+// Keep active's existing contract and use activeShow:null when the default wins.
+// Browser overrides remain client-side.
 
 /** The subset of a resolved show this read touches. */
 interface ActiveShowLike {

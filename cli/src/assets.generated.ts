@@ -379,7 +379,7 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 #
 # The web image is baked for same-origin /api + /stream.mp3, so point your proxy
 # at ONE hostname and replicate docker/Caddyfile's route table:
-#   /api/listener-auth → 404 / deny         (do this one FIRST — see below)
+#   /api/listener-auth*      → 404 / deny   (do this one FIRST — see below)
 #   /stream*                 → host:\${ICECAST_PORT}      (keep path; disable buffering)
 #   /listen.pls /listen.m3u  → host:\${CONTROLLER_PORT}   (keep path)
 #   /api/*                   → host:\${CONTROLLER_PORT}   (strip the /api prefix)
@@ -390,7 +390,9 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the
 # internet a password oracle (#478). Icecast reaches the controller directly
-# over the compose network and never needs it through the proxy.
+# over the compose network and never needs it through the proxy. Block it as a
+# case-insensitive PREFIX — the controller also answers a trailing slash and
+# any case, so an exact-path rule leaves variants routed.
 #
 # State persists in <repo>/state (override with STATE_DIR); bind mount, so
 # \`docker compose down -v\` won't touch it.
@@ -1183,6 +1185,8 @@ SITE_URL=
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
 # only if you want env to win (12-factor / CI / GitOps style deploys).
+# Navidrome env overrides apply only to single-station installs. With station
+# profiles, configure each connection through onboarding or admin settings.
 # NAVIDROME_URL=http://host.docker.internal:4533
 # NAVIDROME_USER=
 # NAVIDROME_PASS=
@@ -1289,9 +1293,11 @@ SITE_URL=
 #                         # search loads them once and they'd otherwise sit in
 #                         # RAM/swap forever; the longer window keeps the cold
 #                         # reload off interactive sound searches).
-# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds of no heavy use before the
-#                         # whole worker process is recycled (default 3600;
-#                         # 0 = never). The model release above hands back the
+# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds without any request before
+#                         # the whole worker process is recycled (default 3600;
+#                         # 0 = never). A plain bpm/key pass counts too: it
+#                         # loads no models but leaves the same scratch
+#                         # resident. The model release above hands back the
 #                         # weights; the recycle also reclaims the ~1GB of
 #                         # librosa/numba/torch scratch — and on cuda the CUDA
 #                         # context — that survive it. Next request re-pays the
@@ -1400,4 +1406,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.13.0`; // x-release-please-version
+export const CLI_VERSION = `1.19.0`; // x-release-please-version

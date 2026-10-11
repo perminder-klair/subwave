@@ -211,7 +211,7 @@ test('every refresh stamps what the file now holds', () => {
   );
   const inner = scheduler.slice(scheduler.indexOf('async function refreshAutoPlaylistInner'));
   const stamp = inner.indexOf('autoPlaylistBuild.built(show)');
-  const write = inner.indexOf('writeFileAtomic(config.liquidsoap.autoPlaylist');
+  const write = inner.indexOf('writeFileAtomicSync(config.liquidsoap.autoPlaylist');
   assert.ok(write >= 0 && stamp > write, 'the stamp records a build that LANDED — it comes after the write');
 });
 
@@ -263,4 +263,12 @@ test('deferred show refresh rolls back rather than reporting success', () => {
   const hook = scheduler.slice(scheduler.indexOf('export async function refreshAutoPlaylistOnShowChange'), scheduler.indexOf('async function refreshAutoPlaylistInner'));
   assert.match(hook, /refreshAutoPlaylist\(\{ automatic: true \}\)/);
   assert.match(hook, /result === 'deferred'[\s\S]*?rollback\(\);[\s\S]*?return false/);
+});
+
+test('an artist preparation becoming ready or a new occurrence requires a fallback rebuild', () => {
+  const ready = { ...FAULTLINE, preparationIdentity: 'occurrence:ready:artist-a' };
+  const tracker = createShowBuildTracker(); tracker.built(ready);
+  assert.equal(tracker.needsRebuild({ ...ready }), false);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'occurrence:degraded:' }), true);
+  assert.equal(tracker.needsRebuild({ ...ready, preparationIdentity: 'next:ready:artist-a' }), true);
 });

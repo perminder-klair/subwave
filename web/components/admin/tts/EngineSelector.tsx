@@ -1,7 +1,4 @@
 'use client';
-// Radio-card grid for picking a TTS engine, shared by the Personas voice card and
-// the Settings voice tab. The status badge makes availability visible before a
-// selection. Tailwind-only, no inline styles (issue #50).
 import { cn } from '../../../lib/cn';
 import {
   ENGINE_META, engineStatus, type EngineAvailability, type EngineStatusOpts,
@@ -53,9 +50,6 @@ export function EngineSelector({
                   : 'border-ink bg-transparent hover:bg-[var(--ink-softer)]',
               )}
             >
-              {/* Title row — dot + name only, full card width. The status badge
-                  moved to the bottom row so it never crowds long engine names
-                  (CHATTERBOX / POCKETTTS), matching the LLM ProviderSelector. */}
               <div className="flex items-center gap-1.5">
                 <span
                   className={cn(
@@ -72,7 +66,6 @@ export function EngineSelector({
                   {meta?.label || id}
                 </span>
               </div>
-              {/* Bottom row — blurb on the left, status badge pinned bottom-right. */}
               <div className="flex items-end justify-between gap-2">
                 <span className="min-w-0 text-[9px] leading-[1.4] text-muted">{meta?.blurb}</span>
                 {status.label && (
@@ -92,9 +85,7 @@ export function EngineSelector({
           );
         })}
       </div>
-      {/* Enable hint for the selected engine. The live region stays mounted
-          (content toggles) so screen readers reliably announce it — a region
-          inserted on demand can miss its first announcement. */}
+      {/* Keep the live region mounted so its first announcement is read. */}
       <p
         role="status"
         className={cn(

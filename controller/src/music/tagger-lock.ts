@@ -1,9 +1,5 @@
-// Cross-restart lock for the background tagger + analyzer runs. The tagger child
-// is detached, so a controller restart orphans a live worker while in-memory state
-// resets to idle; the pidfile on the shared state dir is the only handle that
-// survives, and so is the source of truth for both the controller spawn path and
-// the standalone CLIs. Two writers on the library DB is the failure it prevents.
-// Imports config only, so the CLI entry points don't pull in the broadcast layer.
+// The detached maintenance worker outlives controller restarts. Share its durable pidfile
+// between controller and CLI entry points to prevent concurrent library writers.
 
 import { readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { config } from '../config.js';

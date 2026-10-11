@@ -1,7 +1,3 @@
-// Pure show helpers: hydration and the payload / table-row projections.
-// Validation lives in ShowsPanel/ShowEditor via the shared schema; what stays
-// here is what the schema does not express — tolerance for a half-finished show
-// and showPayload's "only means something with" conditionals.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
@@ -49,6 +45,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
+    preparationSkill: m.preparationSkill ?? '',
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
@@ -124,6 +121,7 @@ export function showPayload(s: Show) {
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
+    preparationSkill: s.preparationSkill || '',
     // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
   };

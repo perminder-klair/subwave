@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after, type TestContext } from 'node:test';
 import { z } from 'zod';
+import type { MockLanguageModelV3 } from 'ai/test';
 
 const previousStateDir = process.env.STATE_DIR;
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-strategy-failover-'));
@@ -40,13 +41,16 @@ function configure(t: TestContext, provider: string, backup = true) {
   return { primary: primaryLeg(), backup: fallbackLeg() };
 }
 
-function response(text: string, toolName?: string) {
+function response(text: string, toolName?: string): Awaited<ReturnType<MockLanguageModelV3['doGenerate']>> {
   return {
     content: toolName
       ? [{ type: 'tool-call', toolCallId: 'answer', toolName, input: text }]
       : [{ type: 'text', text }],
     finishReason: { unified: toolName ? 'tool-calls' : 'stop', raw: 'stop' },
-    usage: { inputTokens: { total: 1 }, outputTokens: { total: 1 } },
+    usage: {
+      inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+      outputTokens: { total: 1, text: 1, reasoning: 0 },
+    },
     warnings: [],
   };
 }
@@ -57,7 +61,7 @@ function mockGeneration(t: TestContext, leg: ReturnType<typeof primaryLeg>, gene
   }
 }
 
-function nativeAgentAnswer() {
+function nativeAgentAnswer(): ReturnType<typeof response> {
   const result = response(JSON.stringify(answer));
   // Native output must include discovery to be accepted by the actual agent.
   return { ...result, content: [...result.content,
@@ -167,4 +171,37 @@ test('a permanent error during agent terminal recovery reaches the backup withou
   const failure = recentCalls.find((call) => call.model === 'ollama:strategy-primary');
   assert.equal(failure?.error, error.message);
   assert.equal(failure?.via, 'ai-sdk:agent:terminal:failover→openai:strategy-backup');
+});
+
+test('tool-choice refusal preserves executed discovery and usage through terminal recovery', async t => {
+  const { primary } = configure(t, 'ollama', false);
+  let calls = 0;
+  let executions = 0;
+  let terminalPrompt = '';
+  const candidate = { name: 'verified-candidate-123' };
+  for (const model of new Set([primary.model, primary.noThinkModel])) {
+    t.mock.method(model, 'doGenerate', async options => {
+      calls++;
+      if (calls === 1) return response('{}', 'sample');
+      if (calls < 4) return response('I decline to call done.');
+      terminalPrompt = JSON.stringify(options.prompt);
+      return response(JSON.stringify(candidate), 'emit');
+    });
+  }
+  const result = await djAgent({
+    system: 'Choose a discovered candidate',
+    messages: [{ role: 'user', content: 'Choose' }],
+    tools: { sample: {
+      inputSchema: z.object({}),
+      execute: async () => { executions++; return [candidate]; },
+    } },
+    schema,
+  });
+  assert.deepEqual(result.object, candidate);
+  assert.equal(executions, 1, 'completed discovery must not execute again during recovery');
+  assert.equal(calls, 4, 'one discovery, one main refusal, one recovery refusal, one terminal call');
+  assert.ok(terminalPrompt.includes(candidate.name), 'the terminal prompt must carry the actual discovery result');
+  assert.deepEqual(result.toolCalls, [{ name: 'sample', args: {}, result: [candidate] }]);
+  assert.deepEqual(recentCalls[0].usage, { input: 4, output: 4, total: 8 });
+  assert.equal(recentCalls[0].via, 'ai-sdk:agent:terminal');
 });

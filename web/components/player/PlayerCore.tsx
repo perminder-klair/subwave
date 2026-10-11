@@ -1,13 +1,7 @@
 'use client';
 
-// The headless player core -- the per-station singletons every skin shares,
-// split into three contexts by update cadence:
-//   feed    -- the /now-playing + /state + /session snapshot, 5s cadence.
-//   audio   -- tune state, volume, signal meter; user gestures and the 5s probe.
-//   actions -- permanently-stable callbacks, bridged through refs since
-//              usePlayer recreates its closures per render.
-// The provider also runs the OS media session (including the persona-avatar
-// swap while the DJ is talking). The <audio> element is rendered by the shell.
+// Split feed, audio, and actions contexts by update cadence. Ref-backed actions stay stable; the
+// shell owns the audio element.
 
 import {
   createContext,
@@ -46,6 +40,8 @@ export interface PlayerAudio {
 
 export interface PlayerActions {
   tune: () => void;
+  play: () => void;
+  pause: () => void;
   stop: () => void;
   toggleMute: () => void;
   setVolume: Dispatch<SetStateAction<number>>;
@@ -92,10 +88,13 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
     audioRef,
     attachAudio,
     tunedIn,
+    playbackState,
     status,
     volume,
     setVolume,
     tune,
+    play,
+    pause,
     stop,
     toggleMute,
     muted,
@@ -109,15 +108,21 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // usePlayer's tune/stop/toggleMute close over per-render state, so bridge
   // through refs and create the actions context value exactly once.
   const tuneRef = useRef(tune);
+  const playRef = useRef(play);
+  const pauseRef = useRef(pause);
   const stopRef = useRef(stop);
   const muteRef = useRef(toggleMute);
   tuneRef.current = tune;
+  playRef.current = play;
+  pauseRef.current = pause;
   stopRef.current = stop;
   muteRef.current = toggleMute;
 
   const actions = useMemo<PlayerActions>(
     () => ({
       tune: () => tuneRef.current(),
+      play: () => playRef.current(),
+      pause: () => pauseRef.current(),
       stop: () => stopRef.current(),
       toggleMute: () => muteRef.current(),
       setVolume,
@@ -159,11 +164,13 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // Wire OS-level media controls. No onSkip on the public listener: a stray
   // AirPods double-tap shouldn't skip the song for everyone.
   useMediaSession({
-    tunedIn,
+    playbackState,
     nowPlaying: feed.nowPlaying,
-    audioRef,
-    onTune: actions.tune,
+    onPlay: actions.play,
+    onPause: actions.pause,
+    onStop: actions.stop,
     boothFeed: feed.session.messages,
+    leadMs: feed.leadMs,
     personaAvatarUrl,
     personaName,
   });
@@ -173,15 +180,15 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // into every feed consumer.
   const {
     nowPlaying, context, dj, activeShow, listeners, streamOnline,
-    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
+    llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs,
   } = feed;
   const feedValue = useMemo<StationFeed>(
     () => ({
       nowPlaying, context, dj, activeShow, listeners, streamOnline,
-      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale,
+      llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs,
     }),
     [nowPlaying, context, dj, activeShow, listeners, streamOnline,
-     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale],
+     llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs],
   );
 
   const { latencyMs, quality } = signal;

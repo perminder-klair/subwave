@@ -27,7 +27,7 @@ export const KEY_HINTS: Record<string, string> = {
   ELEVENLABS_API_KEY: 'el_...',
   // Fish keys have no documented prefix — point at where to mint one instead.
   FISH_API_KEY: 'key from fish.audio/app/api-keys',
-  EMBEDDING_API_KEY: 'optional — defaults to chat key',
+  EMBEDDING_API_KEY: 'optional — defaults to the same provider’s chat key',
 };
 
 export interface WeatherCfg {
@@ -64,21 +64,6 @@ export interface CloudTtsCfg {
   // send time (settings/compat-params.ts).
   compatParams: { key: string; value: string }[];
 }
-
-// The single client-side copy, read by both form hydration and the dirty-check.
-// Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
-export const ELEVENLABS_VS_DEFAULTS = {
-  voiceStability: 0.5,
-  voiceStyle: 0,
-  voiceSimilarityBoost: 0.75,
-  voiceUseSpeakerBoost: true,
-} as const;
-
-export const FISH_TTS_DEFAULTS = {
-  temperature: 0.7,
-  topP: 0.7,
-  latency: 'normal' as const,
-};
 
 export interface TtsFallbackForm {
   enabled: boolean;
@@ -130,15 +115,6 @@ export interface LlmHeaderRow {
 }
 
 /**
- * Wire map -> editor rows. Order is the stored order, so the list renders the
- * way the operator left it.
- */
-export function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
-  if (!raw || typeof raw !== 'object') return [];
-  return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
-}
-
-/**
  * Editor rows -> the map the controller stores. A row with no name is a row
  * still being typed and is dropped rather than sent; a LATER row wins a name
  * collision, matching what the operator sees last in the list.
@@ -162,6 +138,7 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  compatibleMode: 'local' | 'hosted';
   reasoning: boolean;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
@@ -175,6 +152,7 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
+  compatibleMode: 'local' | 'hosted';
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -212,6 +190,7 @@ export interface EmbeddingForm {
   provider: string;          // empty → follow llm.provider
   model: string;             // empty → sensible default per provider
   providerBaseUrls: Record<string, string>; // per-provider embedding server URLs; empty → inherit llm
+  headers: LlmHeaderRow[];
   ollamaUrl: string;         // dedicated embedding server URL (ollama); empty → inherit llm
   seedCount: string;         // '0' = auto
   knnNeighbours: string;
@@ -349,6 +328,7 @@ export interface DuckingForm {
 
 export interface DjBehaviourForm {
   showWelcome: boolean;
+  previewNextShow: boolean;
   sameHostAcknowledgement: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
@@ -361,6 +341,7 @@ export interface DjBehaviourForm {
  *  strings so a temporarily blank number input survives until Save. */
 export interface DjBehaviourValues {
   showWelcome?: boolean;
+  previewNextShow?: boolean;
   sameHostAcknowledgement?: boolean;
   extendedSleeveNotes?: boolean;
   releaseYearMentions?: 'regular' | 'occasional' | 'rare';
@@ -373,6 +354,7 @@ export interface FormState {
   crossfadeDuration: string;
   ducking: DuckingForm;
   maxTrackSeconds: string;
+  maxTrackLengthMode: 'cut' | 'exclude';
   /** Station default for the show-boundary fade (#1574). A show's own
    *  tri-state overrides it; this level is only ever on or off. */
   fadeAtShowEnd: boolean;
@@ -424,6 +406,7 @@ export interface SettingsData {
     crossfadeDuration?: number;
     ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
+    maxTrackLengthMode?: 'cut' | 'exclude';
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
     /** Scheduled backups (#1570). No FormState entry and no settings section —
@@ -509,6 +492,7 @@ export interface SettingsData {
       enabled?: boolean;
       provider?: string;
       model?: string;
+      headers?: Record<string, string>;
       baseUrl?: string;
       ollamaUrl?: string;
       seedCount?: number;
@@ -759,12 +743,6 @@ interface SaveBarProps {
   dirty?: boolean;
 }
 
-/**
- * Filter a fieldErrors map down to the paths a given save owns.
- *
- * Exported so a section can reuse the same scoping rule if it renders an error
- * somewhere other than its save bar.
- */
 export function ownedFieldErrors(
   errors: SettingsFieldErrors | undefined,
   ownedKeys: readonly string[] | undefined,
@@ -775,24 +753,8 @@ export function ownedFieldErrors(
   );
 }
 
-/**
- * Success/failure goes through the global toaster; a VALIDATION failure also
- * lands here, beside the button that caused it. These sections save a whole
- * block at once, so several fields can fail one click — and each message
- * already names its own dotted field, so grouping them loses nothing.
- *
- * The bar is authored HERE, at the end of the section it saves, but renders in
- * SettingsPanel's one sticky bar via a portal. Keeping the component in the
- * section's tree is what lets each save keep its own closure, note and error
- * scoping — nothing had to be lifted, and a section with two independent saves
- * (Scrobbling: Last.fm and ListenBrainz are separate services) simply portals
- * two rows.
- *
- * No portal target means nothing is unsaved, and the bar renders nothing —
- * which is also why the bar carries NOTHING but the save. A "Test" button next
- * to it would disappear the moment the section went clean, i.e. exactly when a
- * saved connection is worth testing. Non-save actions belong in the card.
- */
+/** Portal section-owned saves into the sticky bar to retain their closures and field-error scope.
+ * Clean sections have no portal target, so keep Test and other non-save actions in their cards. */
 export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirty }: SaveBarProps) {
   const { saveSlot } = useSectionChrome();
   // Only a section whose state does not ride FormState passes `dirty`; for the
@@ -811,14 +773,8 @@ export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirt
           ))}
         </div>
       )}
-      {/* min-w-0 + break-words: notes carry unbroken values (an
-          `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
-          flex item's min-content and push the bar past a phone viewport. */}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
-      {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        {/* whileTap fires before the network call, so the commit is felt before
-            the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>

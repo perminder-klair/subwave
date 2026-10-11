@@ -14,7 +14,7 @@
 // Run: `tsx scripts/airing.test.ts` (folded into `npm run test`).
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,7 +29,7 @@ function test(name: string, fn: () => void | Promise<void>) {
 const DAY = 24 * 60 * 60 * 1000;
 
 async function main() {
-  const stateDir = mkdtempSync(join(tmpdir(), 'subwave-airing-'));
+  const stateDir = createTempDir(join(tmpdir(), 'subwave-airing-'));
   process.env.STATE_DIR = stateDir;
 
   const airing = await import('../src/music/airing.js');

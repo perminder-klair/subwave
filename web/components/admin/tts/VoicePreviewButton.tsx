@@ -1,10 +1,6 @@
 'use client';
-// "Play sample" for the TTS pickers: POST /settings/tts/preview → a WAV blob.
-// The endpoint bypasses the on-air persona AND the silent fallback, so an
-// unavailable engine returns a real error here rather than quietly playing Piper.
-// Gain (dB) is a playout-time mix trim, so only voice + speed are auditioned, and
-// a sample is discarded as stale the moment either changes.
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+// Previews bypass silent engine fallback and audition voice and speed, excluding playout gain. Discard samples when preview settings change.
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { Btn } from '../ui';
 import {
@@ -17,6 +13,7 @@ import {
   AudioPlayerTimeRange,
 } from '../../ai-elements/audio-player';
 import { fetchPreviewSample } from './previewApi';
+import { correctionsKey as correctionsDependency } from './correctionsKey';
 
 interface VoicePreviewButtonProps {
   engine: string;
@@ -78,13 +75,23 @@ export function VoicePreviewButton({
   // Unmounting mid-sample must abort synthesis and revoke the object URL.
   useEffect(() => () => discardSample(), [discardSample]);
 
-  // The player must never replay the old voice under a new label. voiceSettings is
-  // deliberately absent from the deps: it's an unstable inline object at the call site.
+  // Invalidate samples when any rendered-audio input changes. Use scalar voice settings and a
+  // content-stable corrections key to avoid resets from fresh object identities.
+  // tests/voice-preview-invalidation.test.ts checks the dependency list against the request
+  // payload.
+  const correctionsKey = useMemo(() => correctionsDependency(corrections), [corrections]);
   useEffect(() => {
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, cloudModel, geminiModel, speed, lang, language, voiceStyle, fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency, discardSample]);
+  }, [
+    engine, voice, cloudProvider, cloudModel, geminiModel, voiceStyle,
+    speed, lang, language, text, correctionsKey,
+    voiceSettings?.voiceStability, voiceSettings?.voiceStyle,
+    voiceSettings?.voiceSimilarityBoost, voiceSettings?.voiceUseSpeakerBoost,
+    fishSettings?.temperature, fishSettings?.topP, fishSettings?.latency,
+    discardSample,
+  ]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.

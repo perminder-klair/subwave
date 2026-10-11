@@ -86,7 +86,7 @@ test('outcomes are reported in input order even when jobs settle out of order', 
   jobs[2].resolve('third');
   jobs[1].reject(new Error('second failed'));
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(reported, [], 'later outcomes wait for the first source item');
+  assert.equal(reported.length, 0, 'later outcomes wait for the first source item');
 
   jobs[0].resolve('first');
   await dispatch;

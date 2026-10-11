@@ -191,7 +191,6 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
         </div>
       )}
 
-      {/* URL wraps to its own line on a phone; sharing the Send row leaves it ~200px. */}
       <div className="flex flex-wrap items-center gap-3">
         <Btn sm tone={endpoint.mutatesAir ? 'danger' : 'solid'} onClick={send} disabled={sending}>
           {sending ? 'Sending…' : `Send ${endpoint.method}`}

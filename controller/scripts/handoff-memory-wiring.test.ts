@@ -73,6 +73,17 @@ function restorePromptSettingsAfter(t: TestContext) {
   });
 }
 
+// Recovery now verifies show continuity against the station grid. These
+// handoff fixtures must schedule the incoming show they put in the context.
+async function scheduleIncoming() {
+  const week: Record<number, string[]> = {};
+  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  await settings.update({
+    shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', programme: true, personaId: GIGI.id }],
+    schedule: week,
+  });
+}
+
 // Records what each generator was handed. Neither returns anything the test
 // asserts on — the arguments ARE the assertion.
 function generators() {
@@ -81,7 +92,7 @@ function generators() {
     recentOpeners: string[];
     personaOut: string;
     personaIn: string;
-    showOut: string | null;
+    showOut?: string | null;
     showIn: string | null;
     episodeAngle?: string | null;
     context: any;
@@ -508,12 +519,14 @@ test('the station clock switch still withholds boundary numerals after normaliza
   }
 });
 
-test('a queued final-track handoff survives a controller restart for re-rendering', async () => {
+test('a queued final-track handoff survives a controller restart for re-rendering', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
   await settings.update({ activePersonaId: GIGI.id } as never);
   const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
+  await scheduleIncoming();
   assert.equal(session.armBoundaryHandoff(incoming), true);
   const storedBoundaryAt = t0;
   (session.getSession() as any).boundaryHandoff.boundaryAt = storedBoundaryAt;
@@ -567,12 +580,14 @@ test('a refused final-track handoff remains armed for retry', async () => {
   assert.ok(session.pendingHandoff(), 'the handoff remains available to the next eligible seam');
 });
 
-test('an armed handoff survives a restart that crosses the boundary', async () => {
+test('an armed handoff survives a restart that crosses the boundary', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
   await settings.update({ activePersonaId: GIGI.id } as never);
   const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
+  await scheduleIncoming();
   assert.equal(session.armBoundaryHandoff(incoming, {
     id: 'final-track', title: 'Last Song', artist: 'Wren',
   }), true);
@@ -585,12 +600,14 @@ test('an armed handoff survives a restart that crosses the boundary', async () =
     'the incoming session can still render a handoff that was only armed before restart');
 });
 
-test('an aired boundary handoff survives a restart without reopening the incoming show', async () => {
+test('an aired boundary handoff survives a restart without reopening the incoming show', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
   await settings.update({ activePersonaId: GIGI.id } as never);
   const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
+  await scheduleIncoming();
   assert.equal(session.armBoundaryHandoff(incoming), true);
   session.attachBoundaryProgramme({
     status: 'ok', plan: { angle: 'Already introduced angle' }, beats: {}, introAiredAt: null,
@@ -618,12 +635,14 @@ test('an aired boundary handoff survives a restart without reopening the incomin
   assert.equal(duplicateIntros, 0);
 });
 
-test('an armed handoff waits for confirmed playback of its final outgoing track', async () => {
+test('an armed handoff waits for confirmed playback of its final outgoing track', async (t) => {
+  restorePromptSettingsAfter(t);
   await settings.update({ personas: [WREN, GIGI], activePersonaId: WREN.id } as never);
   const t0 = Date.now();
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, t0));
   await settings.update({ activePersonaId: GIGI.id } as never);
   const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, t0 + 60_000);
+  await scheduleIncoming();
   const finalTrack = { id: 'final-track', title: 'Last Song', artist: 'Wren' };
   assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
 

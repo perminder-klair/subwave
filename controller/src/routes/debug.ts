@@ -1,6 +1,7 @@
 // Admin-gated GET /debug — everything-at-a-glance for the debug UI.
 import express from 'express';
-import { readFile, readdir } from 'node:fs/promises';
+import { readPlaybackFailures } from '../observability/playback-failures.js';
+import { readFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { config } from '../config.js';
 import * as dj from '../llm/dj.js';
@@ -38,6 +39,8 @@ import { publicOrigin } from './public.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
 import { icecastDebugSnapshot, type IcecastSource, type IcecastStats } from './debug-icecast.js';
+import { createSessionArchiveReader } from '../util/session-archives.js';
+import { sessionArchivePageQuery } from '../schemas/session-archives.js';
 
 export const router = express.Router();
 
@@ -75,6 +78,18 @@ router.get('/debug', requireAdmin, async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err?.message || String(err) });
   }
+});
+
+// The booth log on its own, for operator clients (the MCP station-state tool)
+// that want the newest lines without the whole /debug snapshot. GET /state
+// carried these 50 lines until it became a public projection; this is the
+// admin-gated home for the same slice.
+router.get('/debug/dj-log', requireAdmin, (req, res) => {
+  res.json({
+    djLog: queue.djLog.slice(0, 50),
+    djLogCount: queue.djLog.length,
+    timezone: getStationTimezone(),
+  });
 });
 
 async function buildDebugSnapshot(req: express.Request): Promise<any> {
@@ -299,27 +314,14 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
 }
 
 // Archived sessions in state/sessions/, newest first; the live one is in /debug.
+const readSessionArchives = createSessionArchiveReader(config.session.dir);
 router.get('/sessions', requireAdmin, async (req, res) => {
+  const page = sessionArchivePageQuery.safeParse(req.query);
+  if (!page.success) return res.status(400).json({ error: 'invalid session pagination' });
   try {
-    let names: string[] = [];
-    try {
-      names = (await readdir(config.session.dir)).filter((n: string) => n.endsWith('.json'));
-    } catch { names = []; }
-    const entries: any[] = await Promise.all(names.map(async (name: string) => {
-      try {
-        const s = JSON.parse(await readFile(`${config.session.dir}/${name}`, 'utf8'));
-        return {
-          id: s.id, kind: s.kind, key: s.key,
-          startedAt: s.startedAt, endedAt: s.endedAt,
-          show: s.show?.name || null,
-          persona: s.persona?.name || null,
-          turns: Array.isArray(s.messages) ? s.messages.length : 0,
-        };
-      } catch { return null; }
-    }));
-    res.json({
-      sessions: entries.filter(Boolean).sort((a: any, b: any) => (b.startedAt || '').localeCompare(a.startedAt || '')),
-    });
+    const sessions = await readSessionArchives();
+    const { limit, offset } = page.data;
+    res.json({ sessions: sessions.slice(offset, limit === undefined ? undefined : offset + limit) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -371,3 +373,25 @@ router.post('/debug/subsonic/reset', requireAdmin, (req, res) => {
   subsonicLog.reset();
   res.json({ ok: true });
 });
+
+// Explicit historical scans, deliberately separate from the fast /debug poll.
+for (const exportRows of [false, true]) {
+  router.get(`/debug/playback-failures${exportRows ? '/export' : ''}`,
+    (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); },
+    requireAdmin, async (_req, res) => {
+      try {
+        const history = await readPlaybackFailures({ stationDir: config.stateDir });
+        if (!exportRows) { res.json(history); return; }
+        res.setHeader('Content-Type', 'application/x-ndjson');
+        res.setHeader('Content-Disposition', `attachment; filename="subwave-playback-failures-${new Date().toISOString().replace(/[:.]/g, '-')}.ndjson"`);
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, X-History-Retention-Days, X-History-Limit, X-History-Truncated, X-History-Warnings');
+        res.setHeader('X-History-Retention-Days', String(history.retentionDays));
+        res.setHeader('X-History-Limit', '1000');
+        res.setHeader('X-History-Truncated', String(history.truncated));
+        res.setHeader('X-History-Warnings', String(history.warnings.length));
+        res.send(history.failures.map(row => JSON.stringify(row) + '\n').join(''));
+      } catch {
+        res.status(500).json({ error: 'Failure history could not be read.' });
+      }
+    });
+}

@@ -2,7 +2,7 @@
 // "first hour": Docker alive, stack up, controller answering, Icecast serving,
 // state dirs writable.
 
-import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { detectCompose, isProdEnv, streamUrlFor, webBaseFor, type ComposeStatus } from './compose.ts';
 import { dockerDaemonOk, composeExec } from './docker.ts';
@@ -509,18 +509,4 @@ function isWritable(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-// Unused today — kept for the planned watch dashboard.
-export function newestSessionFile(): { id: string; mtime: number } | null {
-  const dir = resolve(getStateDir(), 'sessions');
-  if (!existsSync(dir)) return null;
-  const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
-  if (files.length === 0) return null;
-  let best: { id: string; mtime: number } | null = null;
-  for (const f of files) {
-    const m = statSync(resolve(dir, f)).mtimeMs;
-    if (!best || m > best.mtime) best = { id: f.replace(/\.json$/, ''), mtime: m };
-  }
-  return best;
 }

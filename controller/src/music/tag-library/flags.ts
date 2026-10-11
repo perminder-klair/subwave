@@ -6,9 +6,8 @@ import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { adoptAndPrune } from '../id-rotation.js';
-import { config } from '../../config.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
-import { loadSetupConfig } from '../../setup/config.js';
+import { loadNavidromeConfig } from '../../setup/config.js';
 import { reportProgress, reportCatalogueReady } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
@@ -45,6 +44,8 @@ interface CliFlags {
   skipTag: boolean;
   // Walk Navidrome but don't prune orphaned rows (a normal run prunes).
   noPrune: boolean;
+  // Confirms a prune music/prune-policy.ts would hold as a mass removal.
+  confirmPrune: boolean;
   // Per-run override of the Phase 5 Demucs vocal-activity backfill. Neither
   // flag falls back to settings.audio.vocalActivity / ANALYZE_VOCAL_ACTIVITY.
   vocal: boolean;
@@ -80,6 +81,7 @@ export function parseFlags(): CliFlags {
     reconcileOnly: args.includes('--reconcile-only'),
     skipTag: args.includes('--skip-tag'),
     noPrune: args.includes('--no-prune'),
+    confirmPrune: args.includes('--confirm-prune'),
     vocal: args.includes('--vocal'),
     noVocal: args.includes('--no-vocal'),
     rescan: args.includes('--rescan'),
@@ -174,8 +176,16 @@ export async function reconcileOnly() {
   const { walked, liveIds } = await walkNavidrome();
   let adopted = 0;
   let pruned = 0;
+  let heldMessage = '';
   if (walked > 0) {
-    ({ adopted, pruned } = await adoptAndPrune(liveIds));
+    let held;
+    ({ adopted, pruned, held } = await adoptAndPrune(liveIds, {
+      confirmMassPrune: process.argv.includes('--confirm-prune'),
+    }));
+    if (held) {
+      heldMessage = held.message;
+      logEvent('warning', held.message);
+    }
     console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
     reportCatalogueReady(walked);
     const resolved = await backfillOriginalYears(pendingOriginalYearIds(false), false, 4);
@@ -187,6 +197,7 @@ export async function reconcileOnly() {
   const parts = [
     adopted > 0 ? `Re-linked ${adopted} track${adopted === 1 ? '' : 's'} after a Navidrome ID migration` : '',
     pruned > 0 ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome` : '',
+    heldMessage ? 'Removal of missing tracks on hold (see the log)' : '',
   ].filter(Boolean);
   reportProgress({
     phase: 'done',
@@ -207,13 +218,7 @@ export async function applyWizardOverlay() {
     console.error('[secrets] load failed:', err.message);
   }
   try {
-    const sc = await loadSetupConfig();
-    if (sc.navidrome) {
-      if (!process.env.NAVIDROME_URL && sc.navidrome.url) config.navidrome.url = sc.navidrome.url;
-      if (!process.env.NAVIDROME_USER && sc.navidrome.user) config.navidrome.user = sc.navidrome.user;
-      if (!process.env.NAVIDROME_PASS && sc.navidrome.pass)
-        config.navidrome.password = sc.navidrome.pass;
-    }
+    await loadNavidromeConfig();
   } catch (err: any) {
     console.error('[setup-config] load failed:', err.message);
   }

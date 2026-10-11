@@ -1,30 +1,27 @@
-// The "DJ is on the mic" window as a boolean, closing itself on a timer. The
-// rule lives in lib/voice-turn.ts; this is just its state machine.
-
-import { useEffect, useMemo, useState } from 'react';
-import { TALKING_LINGER_MS, lastVoiceTurnTime } from '@/lib/voice-turn';
+import { useEffect, useState } from 'react';
+import { talkingState } from '@/lib/voice-turn';
 import type { SessionTurn } from '@/lib/types';
 
-export function useTalking(boothFeed: SessionTurn[] | undefined): boolean {
+/** True while the DJ's latest line is being heard by THIS listener. `leadMs`
+ *  is the listener's buffer behind the live edge (useStationFeed). */
+export function useTalking(boothFeed: SessionTurn[] | undefined, leadMs: number): boolean {
   const [talking, setTalking] = useState(false);
-  const lastVoiceTs = useMemo(() => lastVoiceTurnTime(boothFeed), [boothFeed]);
 
   useEffect(() => {
-    if (lastVoiceTs == null) {
-      setTalking(false);
-      return;
-    }
-    // Measured from the turn's own stamp, not from now: a poll can land a
-    // 20s-old link, and an already-expired one must never open the window.
-    const remaining = TALKING_LINGER_MS - (Date.now() - lastVoiceTs);
-    if (remaining <= 0) {
-      setTalking(false);
-      return;
-    }
-    setTalking(true);
-    const id = setTimeout(() => setTalking(false), remaining);
-    return () => clearTimeout(id);
-  }, [lastVoiceTs]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // Re-evaluated on its own timer, so the window opens and closes on time
+    // rather than on the next poll.
+    const apply = () => {
+      const now = Date.now();
+      const { talking: next, nextChangeMs } = talkingState(boothFeed, leadMs, now);
+      setTalking(next);
+      timer = nextChangeMs == null ? null : setTimeout(apply, Math.max(0, nextChangeMs - now));
+    };
+    apply();
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [boothFeed, leadMs]);
 
   return talking;
 }

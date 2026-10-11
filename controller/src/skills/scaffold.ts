@@ -1,28 +1,13 @@
-// Seed the shipped built-in skills into state/skills/<kind>/ as full, editable
-// skills — both SKILL.md AND tool.mjs.
-//
-// On boot we copy each built-in out of its read-only template
-// (src/skills/builtins/<kind>/, the source of truth) into state/skills/<kind>/.
-// From then on the operator owns those files: edit the brief in /admin/skills,
-// or the tool.mjs on disk + Rescan, exactly like a custom skill. The loader
-// (skills/loader.js) then scans state/skills as the single load root — built-ins
-// are no longer special at load time, just pre-installed.
-//
-// Idempotent: an existing file is never clobbered, so hand-edits survive a
-// restart. A MISSING file is restored — which is also how a deleted built-in
-// folder heals on the next boot (the delete posture is disable-only). Writes are
-// best-effort — a failure is logged, never fatal to boot.
-//
-// `resetBuiltinSkill()` is the opposite: it force-overwrites both files from the
-// template, restoring the as-shipped skill (and pulling in a newer image's
-// tool.mjs). It backs the admin "Reset to default" button.
+// Seed missing SKILL.md/tool.mjs files from builtins into state/skills.
+// Preserve existing operator edits and log write failures without stopping boot.
+// resetBuiltinSkill explicitly overwrites both files with shipped defaults.
 
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { SEEDED_KINDS, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
+import { SEEDED_KINDS, PENDING_TOOL_FILE, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
 import { preservedFrontmatter } from './config-fields.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
@@ -244,5 +229,7 @@ export async function resetBuiltinSkill(kind: string): Promise<void> {
       queue.log('scheduler', `[skills] reset removed the state-only "${kind}" tool.mjs — the shipped skill has none`);
     } catch { /* no tool.mjs to remove — the normal case */ }
   }
+  // Reset means the shipped shape, so code waiting for review goes too.
+  await rm(join(dir, PENDING_TOOL_FILE), { force: true });
   queue.log('scheduler', `[skills] reset built-in "${kind}" to shipped default`);
 }

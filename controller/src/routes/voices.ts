@@ -9,7 +9,8 @@ import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
 import { voiceImportSchema } from '../schemas/imaging.js';
-import { audioContentType, hasFfmpeg } from '../audio/audio-import.js';
+import { hasFfmpeg } from '../audio/audio-import.js';
+import { sendAudioFile } from '../util/audio-response.js';
 
 export const router = express.Router();
 
@@ -63,7 +64,7 @@ router.get('/voices/:file/audio', requireAdmin, async (req, res) => {
   try {
     const entry = await voices.resolve(req.params.file);
     if (!entry) return res.status(404).json({ error: 'unknown voice' });
-    res.type(audioContentType(entry.path)).sendFile(entry.path);
+    sendAudioFile(res, entry.path);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

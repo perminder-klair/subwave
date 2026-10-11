@@ -20,13 +20,16 @@ export default definePickerTool({
     inputSchema: z.object({
       query: z.string().min(3).describe('a description of how the music should sound'),
     }),
-    execute: async ({ query }) => {
+    execute: async ({ query }, { abortSignal }: { abortSignal?: AbortSignal }) => {
       try {
         await library.load();
         // Short deadline: this runs mid-pick, and a bulk analysis pass may
         // hold the backend's single-threaded worker — better to come back
         // empty (the agent falls through to other tools) than stall the DJ.
-        const vecs = await analyzer.embedTexts([query.trim()], { timeoutMs: 20_000 });
+        // The tool's own abortSignal (the agent's 10s per-tool timeout) is the
+        // real ceiling, so no cold retry: a second attempt could never fit
+        // inside it, and it would keep the worker busy after the pick moved on.
+        const vecs = await analyzer.embedTexts([query.trim()], { timeoutMs: 8_000, coldRetry: false, signal: abortSignal });
         if (!vecs || !vecs[0]) {
           return { error: 'sound search unavailable right now — use tracksByMood, searchByLyrics or similarSongs' };
         }

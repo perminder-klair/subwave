@@ -1,7 +1,4 @@
 'use client';
-// Engine picker + voice selector + sample button for any
-// `{engine, voice, cloudProvider}` slot: a persona (`personas[].tts`) or the
-// station-wide TTS fallback (`settings.tts.fallback`).
 import type { ChangeEvent, ReactNode } from 'react';
 import Link from 'next/link';
 import type { VoiceOption } from '../personas/types';
@@ -233,10 +230,6 @@ export function EngineVoiceFields({
         <div className="field-hint mb-4 max-w-[70ch]">{inheritNote}</div>
       )}
 
-      {/* The cloud-key alarm renders inside the cloud block below, which an
-          inheriting slot never shows — so repeat it here. A persona following a
-          station whose cloud voice has no key is exactly the one the warning is
-          for, and it is the shipped default for the whole seed roster. */}
       {inheriting && effective.engine === 'cloud' && cloudIssue && (
         <div role="alert" className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
           {cloudIssue}
@@ -472,9 +465,6 @@ export function EngineVoiceFields({
                 {cloudIssue}
               </div>
             )}
-            {/* Provider and voice each get their own row: the provider grid is
-                four cards wide, and a voice id picked before the provider is
-                settled is a voice id that gets thrown away. */}
             <div className="grid gap-4">
               <div className="field">
                 <Label>Cloud provider</Label>

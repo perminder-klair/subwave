@@ -1,14 +1,5 @@
-// Composes the fixed announce-mode link line in code; the model is only asked
-// whether to speak. Both picker paths compose here so the listener hears one
-// continuous alternation.
-//
-// PURE — the alternation is derived from the line that last AIRED (handed in by
-// the caller), never from a composition-time counter: several paths compose a
-// link without airing it, and a counter left the next aired line repeating the
-// form the listener just heard.
-
-// The composed frame is English; a persona bound to another language has to go
-// through the model. Unset means English.
+// Alternate using the last aired line, not composed lines that may be dropped. Non-English
+// personas use the model.
 const ENGLISH_LANGUAGE = /^english$/i;
 
 // A composed line interpolates the artist tag verbatim, so a name in one of

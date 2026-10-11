@@ -15,6 +15,7 @@ const INHERIT = { engine: PERSONA_TTS_INHERIT, cloudProvider: 'openai', voice: '
 
 test('inherit → piper keeps the persona voice (the seed roster stays three voices)', () => {
   const out = resolvePersonaVoiceSlot(INHERIT, { defaultEngine: 'piper' });
+  assert.ok(out);
   assert.equal(out.engine, 'piper');
   // Byte-identical to the old pinned-piper seed.
   assert.equal(out.voice, 'bm_george');
@@ -25,6 +26,7 @@ test('inherit → piper keeps the persona voice (the seed roster stays three voi
 test('inherit → kokoro keeps the persona voice: one id-space with piper', () => {
   // piper and kokoro are the only pair sharing an id-space (#454).
   const out = resolvePersonaVoiceSlot(INHERIT, { defaultEngine: 'kokoro' });
+  assert.ok(out);
   assert.equal(out.engine, 'kokoro');
   assert.equal(out.voice, 'bm_george');
 });
@@ -34,6 +36,7 @@ test('inherit → chatterbox / pocket-tts DROPS the persona voice', () => {
   // carried piper id fails every synth. Empty means "use your own default".
   for (const engine of ['chatterbox', 'pocket-tts']) {
     const out = resolvePersonaVoiceSlot(INHERIT, { defaultEngine: engine });
+    assert.ok(out);
     assert.equal(out.engine, engine, engine);
     assert.equal(out.voice, '', engine);
     // The per-persona dials are not per-engine and survive regardless.
@@ -48,6 +51,7 @@ test('every engine an inherit slot can resolve to accepts the voice it is handed
   for (const defaultEngine of ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'remote']) {
     const out = resolvePersonaVoiceSlot(INHERIT, { defaultEngine });
     const parsed = ttsVoiceSlotSchema('tts').safeParse(out);
+    assert.ok(out);
     assert.equal(parsed.success, true, `${defaultEngine}: ${parsed.error?.issues[0]?.message}`);
   }
   const cloud = resolvePersonaVoiceSlot(INHERIT, {
@@ -62,6 +66,7 @@ test('inherit → cloud takes the STATION provider, model voice and drops the pe
     defaultEngine: 'cloud',
     cloud: { provider: 'openai-compatible', voice: 'dj-brain-default' },
   });
+  assert.ok(out);
   assert.equal(out.engine, 'cloud');
   assert.equal(out.cloudProvider, 'openai-compatible');
   // A Piper voice id must never reach a cloud provider.
@@ -74,11 +79,13 @@ test('inherit → cloud with no station voice sends NO voice, never the persona 
     defaultEngine: 'cloud',
     cloud: { provider: 'openai-compatible' },
   });
+  assert.ok(out);
   assert.equal(out.voice, '', 'empty lets the server pick its own default');
 });
 
 test('inherit → remote drops the persona voice too (server-specific id space)', () => {
   const out = resolvePersonaVoiceSlot(INHERIT, { defaultEngine: 'remote' });
+  assert.ok(out);
   assert.equal(out.engine, 'remote');
   assert.equal(out.voice, '');
 });
@@ -87,6 +94,7 @@ test('a PINNED engine is returned untouched — inherit changes nothing for it',
   const pinned = { engine: 'cloud', cloudProvider: 'elevenlabs', voice: 'Rachel', gainDb: 0, speed: 1 };
   // Station default is piper, and the pin still wins.
   const out = resolvePersonaVoiceSlot(pinned, { defaultEngine: 'piper', cloud: { provider: 'openai' } });
+  assert.ok(out);
   assert.deepEqual(out, pinned);
 });
 
@@ -103,6 +111,7 @@ test('null in, null out — the global-voice kinds carry no persona', () => {
 test('an unreadable station default falls to the piper floor, not to nothing', () => {
   for (const station of [null, undefined, {}, { defaultEngine: '' }, { defaultEngine: 42 }]) {
     const out = resolvePersonaVoiceSlot(INHERIT, station as never);
+    assert.ok(out);
     assert.equal(out.engine, 'piper', JSON.stringify(station));
     assert.equal(out.voice, 'bm_george', JSON.stringify(station));
   }

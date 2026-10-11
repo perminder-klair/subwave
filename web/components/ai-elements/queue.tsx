@@ -187,8 +187,7 @@ export const QueueList = ({
   ...props
 }: QueueListProps) => (
   <ScrollArea className={cn("mt-2 -mb-1", className)} {...props}>
-    {/* Height is themeable from the call site via the --queue-max-h custom
-        property (e.g. className="[--queue-max-h:26rem]" on QueueList). */}
+    {/* Callers can override --queue-max-h on QueueList. */}
     <div className="max-h-[var(--queue-max-h,10rem)] pr-4">
       <ul>{children}</ul>
     </div>

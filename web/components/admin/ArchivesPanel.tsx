@@ -1,7 +1,6 @@
 'use client';
 
-// No playback controls: these MP3s are an hour long each and the browser audio
-// element doesn't seek well into them.
+// Browser audio seeking is unreliable in these hour-long MP3s.
 
 import { useMemo, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -154,6 +153,7 @@ export default function ArchivesPanel() {
       {byDate.length === 0 && (
         <Card>
           <EmptyState
+            art="tapes"
             title="No recordings yet"
             description={
               <>

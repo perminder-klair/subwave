@@ -6,7 +6,8 @@
 import assert from 'node:assert/strict';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -14,7 +15,7 @@ import test from 'node:test';
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import of
 // anything config-derived, so settings.load() touches nothing real — hence the
 // dynamic imports below (same pattern as scripts/archive-retention.test.ts).
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-compat-params-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-compat-params-'));
 process.env.STATE_DIR = stateRoot;
 
 const {

@@ -138,17 +138,16 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/state',
-        summary: 'Queue, history & DJ log',
+        summary: 'Queue & history',
         description:
-          'The upcoming queue, recent play history, and the DJ booth log (last 50 ' +
-          'entries), plus the active theme id and station timezone. Polled by the ' +
-          'web player every 5s alongside /now-playing.',
+          'The upcoming queue and recent play history, plus the active theme id and ' +
+          'station timezone. Polled by the web player every 5s alongside /now-playing. ' +
+          'The DJ booth log is operator diagnostics and is not part of this read.',
         auth: 'none',
         responseExample: {
           current: { title: 'Midnight City', artist: 'M83', source: 'auto', startedAt: 1720000000000 },
           upcoming: [{ title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto' }],
           history: [{ title: 'Nightcall', artist: 'Kavinsky' }],
-          djLog: [{ t: 1720000000000, kind: 'pick', text: 'picked Open Eye Signal' }],
           autoPick: true,
           autoLink: true,
           theme: { active: 'midnight' },

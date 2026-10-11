@@ -1,19 +1,6 @@
-// The country each recent POST /beacon resolved, keyed by the client IP, so the
-// admin Dash Listeners table can show a country beside an Icecast connection.
-//
-// Icecast's listclients hands over an IP and nothing else. The beacon is the one
-// request that carries the edge's country headers (`cf-ipcountry`, the operator's
-// `stream.countryHeader`), so without this a station behind Cloudflare with no
-// GeoIP database could name a country on the Stats page and never beside the
-// listener it came from.
-//
-// MEMORY ONLY, never written to disk. audience.ts promises a raw IP is never
-// stored, and that promise is about persistence: this map dies with the process,
-// entries age out after BEACON_COUNTRY_TTL_MS, and the size is capped. The admin
-// table already shows the same raw IPs live from Icecast.
-//
-// Advisory: the result only decorates an admin-gated table and gates nothing, so
-// a forged beacon costs one wrong label, never an access decision.
+// Cache beacon-resolved countries by IP for the admin Icecast table. This bounded, expiring
+// map stays in memory; raw IPs never reach disk. Countries are advisory and never authorize
+// access.
 
 import { normalizeLookupIp } from './geoip.js';
 

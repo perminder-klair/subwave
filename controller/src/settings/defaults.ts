@@ -57,10 +57,11 @@ export const DEFAULTS = {
   // time, weather, request intros); `intro` is the light talk-over duck
   // (intro.txt: between-track links) that leaves the song audible underneath.
   ducking: { voice: 0.22, intro: 0.30 },
-  // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
+  // Station-wide maximum on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  maxTrackLengthMode: 'cut',
   // Fade a long track out at the next show change instead of letting it spill
   // into the following show (#1574). Off by default, and a show's own
   // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
@@ -95,11 +96,9 @@ export const DEFAULTS = {
     // whole connection, so /now-playing publishes it as stream.bufferSeconds and
     // players subtract it to line titles up with the audio in someone's ears (#1114).
     bufferSeconds: 22,
-    // ICY (out-of-band) titles on the Ogg mounts. ON by default: most clients
-    // read the in-band Ogg comment once at connect and then freeze on that title
-    // (#1052). foobar2000 is the exception — it parses chained-Ogg tags correctly
-    // and the ICY channel breaks its Ogg-FLAC metadata — hence a toggle.
-    // MP3/AAC always use ICY and are unaffected.
+    // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
+    // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep
+    // this key and its default for stored-settings and Opus compatibility.
     oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts): after idleAfterMinutes with zero
     // listeners the mounts keep serving silence but the music chain stops being
@@ -247,6 +246,11 @@ export const DEFAULTS = {
   // scheduled show change. Off preserves the established terse time check.
   djBehaviour: {
     showWelcome: false,
+    // The optional final-quarter-hour programme preview is independent of the
+    // presenter handoff. Keep the established preview on for existing stations;
+    // operators who prefer the handoff to be the only acknowledgement can turn
+    // it off in DJ Behaviour → Show changes.
+    previewNextShow: true,
     sameHostAcknowledgement: false,
     extendedSleeveNotes: false,
     releaseYearMentions: 'regular',
@@ -407,6 +411,7 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
+    compatibleMode: 'local' as 'local' | 'hosted',
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -453,6 +458,10 @@ export const DEFAULTS = {
     // over the session chat history. Off: the stateless pool picker runs instead,
     // still inside a session and still logged.
     pickerAgent: true,
+    // Guest preferences are a deliberately optional, secondary programming
+    // input. Keep them off for upgrades and new stations: a blank host field
+    // must mean no Musical Leanings are sent to the picker.
+    guestMusicalLeanings: false,
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.
@@ -523,6 +532,7 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
+      compatibleMode: 'local' as 'local' | 'hosted',
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
@@ -554,6 +564,7 @@ export const DEFAULTS = {
     baseUrl: '',          // deprecated single slot — migration source only
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty → inherit settings.llm.apiKey
+    headers: {} as Record<string, string>, // embedding-only headers; empty → inherit matching chat leg
     seedCount: 0,         // 0 → auto (autoSeedCount: ~4% of the library, 200–2500)
     // Confidence is topSim x coverage — a product of two sub-1 terms (see
     // tag-propagator.ts) — so the original 0.6 gates rejected even strong matches

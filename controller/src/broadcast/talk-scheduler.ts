@@ -1,20 +1,6 @@
-// Talk-slot scheduler: which scheduled spoken segment may take the listener's
-// ear this minute (#1500). One slot table, one `* * * * *` tick.
-//
-// This module owns DISPATCH only. Every eligibility question (frequency rung,
-// listeners, budget, clock switch, roster, programme state) still resolves
-// through its own policy module at fire time, via the injected `eligible`
-// resolver; a second copy of one of those checks here is the bug.
-//
-// Two rules the old per-kind crons could not express:
-//   - One talker per minute. Priority decides; the loser WAITS inside its own
-//     window rather than losing the slot (#310, #1419).
-//   - In-flight talk counts, but never past a row's last chance. A boundary-
-//     deferred clip has not aired, so getLastTalkBreakAt() cannot see it
-//     (#1419); the resulting hold is bounded at both ends (#1539).
-//
-// Pure and I/O-free so scripts/talk-scheduler.test.ts can walk an hour minute by
-// minute.
+// Dispatch one talker per minute from one slot table. Eligibility stays in the injected policy
+// resolver; losing rows retry within their windows. Pending clips count as talk, with bounded
+// holds for finite windows. #1500, #310, #1419, #1539, scripts/talk-scheduler.test.ts.
 
 import {
   BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS,
@@ -29,17 +15,8 @@ import type { PendingTalk } from './queue/kinds.js';
 
 export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id' | 'segment' | 'jingle';
 
-// `jingle` is the one row that is not SPEECH. It is here because the table is
-// where every claim on the listener's ear is arbitrated, and a stinger takes
-// the seam exactly the way an ident does — which is the whole of #1619: while
-// Liquidsoap drew the rotate itself, the planner could only find out
-// afterwards, through the `jingle-playing.json` hold, and a link written for
-// the next boundary landed right behind it.
-
-// Which clock a row's placement is a fact about. Do not collapse the two: slot
-// minutes are PROCESS time (they must agree with when the cron fires), while
-// programme beats are a STATION-zone fact and station zones sit at :30/:45
-// offsets where a fixed process minute would land mid-show.
+// Jingles claim the same talk table as speech. Slot minutes follow the process clock;
+// programme beats follow the station zone, including half-hour offsets. #1619.
 export type TalkClock = 'process' | 'station';
 
 // How a fired row reaches air. Per-row and never unified away; idents defer to a
@@ -47,12 +24,8 @@ export type TalkClock = 'process' | 'station';
 // (#1485, broadcast/talk-air.ts) reads every row as 'next-track'.
 export type TalkAir = 'immediate' | 'next-track';
 
-// 'slot' owns scheduled minutes: it yields only to a row that is actually
-// FIRING, and logs when it is held. 'fill' is opportunistic: it stands down
-// silently whenever any slot row WANTS the minute (firing or waiting). The
-// asymmetry is deliberate — a slot row yielding to a merely-open row would let
-// that row sit on its window starving everything beneath it, while a fill row
-// cannot be starved because another chance is one stride away.
+// Slot rows yield only to firing rows and log holds. Fill rows yield silently to any slot
+// wanting the minute, including one waiting.
 export type TalkRole = 'slot' | 'fill';
 
 export type TalkSlot = {
@@ -92,13 +65,8 @@ export type TalkSlot = {
 // gaps are shorter than banter's five because an ident or time check is seconds
 // long.
 export const TALK_SLOTS: readonly TalkSlot[] = [
-  // Programme beats: the mid-hour feature and the final-hour outro (the show's
-  // sign-off), placed on the station clock by programme.dueBeat(); gating lives
-  // in programme.ts. Leads the table because it is the one row that CANNOT
-  // retry — this row samples dueBeat's window once, so a yielded beat is lost.
-  // `handover.offsetMinutes` (#1576) MOVES the outro window and never resizes
-  // it: one stride wide, aligned to a multiple of the stride, which is why the
-  // stride below is the imported constant rather than a literal.
+  // Programme beats lead because a held sampled beat cannot retry. Outro offsets move the
+  // station-clock window without changing its shared stride. #1576.
   {
     kind: 'programme',
     opens: 'external',
@@ -172,44 +140,10 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     stride: 5,
     oneFirePerSlot: true,
   },
-  // The automatic jingle rotate (#1619) — the row that is not speech.
-  //
-  // ROLE. It is the table's SECOND fill row, and the choice is the same
-  // argument the segment director's is, not a weaker version of it. A fill row
-  // is one with "no scheduled chance to lose", and that is exactly what a
-  // rotate is: its due-ness is a COUNT of track boundaries
-  // (queue.rotateJingleTracksSince()), which keeps counting while the row
-  // waits, so a minute given away costs nothing but a minute. Making it a slot
-  // row would be wrong twice — it would suppress the director on every minute
-  // the jingle is merely waiting, and every hold would log `missed` about a
-  // chance that was never lost, since an `opens: 'any'` row's window is one
-  // minute wide and `canRetry` is therefore false on all of them.
-  //
-  // What the issue asked for — "the segment director stands down for it the way
-  // it does for an ident" — is what one talker per minute already does between
-  // two fill rows: the higher-priority plan takes the minute and the other one
-  // waits. It does not need to be a slot to get that.
-  //
-  // PRIORITY. Last, by the table's own principle: among rows that can retry,
-  // fewer remaining chances outranks more. The director is offered twelve
-  // minutes an hour; this row is offered sixty. So on a contested minute the
-  // director speaks and the jingle takes one of its other fifty-nine.
-  //
-  // GAP. Three minutes, the short segments' figure, and it is the half of the
-  // #310 collision this row can actually answer: a stinger must not land on the
-  // back of a break that has just finished. The other half — talk landing on
-  // the back of the STINGER — is not this row's to enforce and stays where it
-  // already lives, in the `jingle-playing.json` hold (#997, #1258, #1468) and
-  // radio.liq's own `voice_until` gate on the priority queue, which is why that
-  // guard survives this change untouched. Note the gap is one-directional for a
-  // second reason too: a jingle is not talk, so it never appears in
-  // queue.getLastTalkBreakAt().
-  //
-  // AIR. 'immediate' describes the HANDOFF, which is all the controller does
-  // here — the write to jingle-now.txt happens now and Liquidsoap's
-  // jingle_now_queue, a track-sensitive fallback gated on voice and beds,
-  // places the clip at the next safe boundary. Claiming 'next-track' would say
-  // the controller is deferring something it is not.
+  // A due jingle is a retriable count, so use a fill row with last priority. Its quiet gap
+  // follows speech; jingle markers protect the reverse direction. Immediate describes
+  // publication to jingle-now.txt; Liquidsoap chooses the safe boundary. #1619, #310, #997,
+  // #1258, #1468.
   {
     kind: 'jingle',
     opens: 'any',
@@ -391,48 +325,17 @@ function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk
   return pendingVoiceValidForMs(pending.queuedAt, nowMs) > windowRemainingMs;
 }
 
-// Whether a rendered clip waiting for a boundary holds this row this minute.
-// Two rules, because the switch changes what the clip is to the row.
-//
-// OFF (#1419 + #1539): the clip is unheard talk, so it counts against the QUIET
-// GAP only, bounded at both ends so a hold never costs a row its window.
-//
-// ON (#1485 FR 5b): the clip is a RESOURCE, not a courtesy. Every row now
-// defers, and `queue._pendingVoice` keeps exactly ONE deferred segment — a
-// second one replaces the first — so a row firing while a clip waits would not
-// stack a break, it would silently delete a rendered segment that has already
-// been paid for in tokens and TTS. That is cancel, not postpone. So the hold
-// applies to every row regardless of `minGapMs`, and it is NOT released on the
-// window's last minute the way the gap-shaped hold is: the last-minute release
-// exists to trade a stacked break for a lost slot, and with the constraint on
-// the trade is not available — taking the minute costs the other segment
-// instead. A row held out of its whole window logs `missed`, which is the
-// honest report, and the boundary the clip is waiting for is usually a track
-// away. Gating the SECOND segment here rather than queueing it in the queue is
-// also gate-before-generation: a postponed row writes no script at all.
-//
-// One row is covered by that ON rule for a reason that does not apply to it:
-// the jingle rotate (#1619) never writes `_pendingVoice` — it hands a clip that
-// is already on disk to `jingle-now.txt` — so firing it could not delete a
-// rendered segment. For that row the hold is COURTESY, not resource protection:
-// don't stack a stinger in front of a segment that is about to air. Keeping it
-// costs nothing (the count keeps counting, the next minute is another chance)
-// and dropping the row out of the rule would be the collision the table was
-// asked to arbitrate, so the rule stays uniform and this note stays here.
+// Without between-tracks mode, pending speech holds gap-gated rows only within the
+// finite-window bounds. With it, hold every row through its last chance to protect the one
+// pending slot. Jingles also wait to avoid preceding the reserved speech. #1419, #1539, #1485
+// FR 5b, #1619.
 function pendingHolds(
   row: TalkSlot, slot: string, minute: number, pending: PendingTalk, p: TalkTickInput,
 ): boolean {
   if (p.betweenTracksOnly) return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
   if (row.minGapMs === 0) return false;
-  // A row with no scheduled minutes ('any') cannot lose a chance by waiting —
-  // the next tick it is sampled on is another one. The #1539 bound exists
-  // ONLY to stop a hold turning a postpone into a cancel on a row with a
-  // finite window, and there is nothing here to cancel, so the hold is
-  // unbounded and the row simply waits for the clip to reach air. The bounded
-  // form would be strictly wrong for such a row: every minute is its own
-  // one-minute window, so `canRetry` is false on all of them and the row would
-  // never be held at all — which for the jingle rotate (#1619) is exactly the
-  // collision the table was asked to arbitrate.
+  // Rows opening every minute cannot lose a finite chance, so pending speech holds them until it
+  // airs. Finite-window retry bounds would never hold these rows. #1539, #1619.
   if (row.opens === 'any') return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
   return canRetry(row, slot, minute)
     && pendingOutlivesWindow(row, slot, pending, p.now.getTime());
@@ -478,13 +381,8 @@ export function talkTickPlan(p: TalkTickInput): TalkPlan[] {
     return found;
   };
 
-  // Slot rows first; fill rows are only PLANNED if no slot row wanted the
-  // minute — firing OR waiting, since a filler that speaks resets the quiet gap
-  // and pushes the waiting row's retry out. "Wants the minute" is deliberately
-  // narrower than "has an open window": with ten-minute windows the slot rows
-  // cover 50 of 60 minutes, so deferring to open windows would switch the
-  // director off rather than stand it down. Two passes rather than a filter, so
-  // a contested minute never consults the filler's own gates.
+  // Plan slots first and consult fill gates only if no slot is firing or waiting. An open but
+  // already-fired or ineligible slot does not claim the minute.
   const out = planOf('slot');
   if (!out.length) out.push(...planOf('fill'));
   // Stable: equal priorities keep table order.

@@ -1,7 +1,4 @@
 'use client';
-// Full-screen editor for the focused persona. `control`+`index` thread straight
-// down to the cards that bind real fields; `persona` stays as a read-only live
-// snapshot for display-only reads (title, share link, on-air/default pills).
 import { useState, type RefObject } from 'react';
 import type { Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse, SkillCatalogEntry } from './types';
@@ -133,8 +130,6 @@ export function PersonaEditor({
                       ? <span className="text-[var(--danger)]">fix the system-prompt library</span>
                       : 'changes apply on the next spoken line · no mixer restart'}
               </span>
-              {/* Standing state, not an action — rides the status row so the
-                  transport stays a row of verbs. */}
               {persona.id === onAirPersonaId && <Pill tone="accent" className="text-[8px]">on air</Pill>}
               {persona.id === activePersonaId && <Pill className="text-[8px]">default</Pill>}
             </>
