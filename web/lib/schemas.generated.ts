@@ -758,6 +758,11 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// Station IDs can use operator-written lines instead of improvising.
+export const PERSONA_IDENT_MODES = ['improvise', 'verbatim'] as const;
+export const PERSONA_IDENT_LINES_LIMIT = 20;
+export const PERSONA_IDENT_LINE_MAX = 300;
+
 // 'natural' (default) is the ordinary between-track link; 'announce' is exactly
 // "This is <artist>." Absent/invalid → 'natural', so an upgrade is unchanged.
 export const PERSONA_LINK_STYLES = [
@@ -1111,6 +1116,8 @@ export interface PersonaParsed {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   djMode: boolean;
   linkStyle: string;
   humour: number;
@@ -1202,6 +1209,24 @@ export const personaSchema = z
         })
         .default('concise'),
     ),
+    identMode: z.preprocess(
+      personaNullToUndefined,
+      z.enum(PERSONA_IDENT_MODES, {
+        error: `identMode must be one of: ${PERSONA_IDENT_MODES.join(', ')}`,
+      }).default('improvise'),
+    ),
+    identLines: z.preprocess(
+      personaNullToUndefined,
+      z.array(z.string({ error: 'identLines must contain strings' }), {
+        error: 'identLines must be an array of strings',
+      })
+        .transform(items => items.map(line => line.trim()).filter(Boolean))
+        .refine(items => items.length <= PERSONA_IDENT_LINES_LIMIT,
+          `identLines must be at most ${PERSONA_IDENT_LINES_LIMIT} lines`)
+        .refine(items => items.every(line => line.length <= PERSONA_IDENT_LINE_MAX),
+          `identLines must be at most ${PERSONA_IDENT_LINE_MAX} chars per line`)
+        .default([]),
+    ),
     // Absent → false. Present must be a real boolean (unlike a show's `=== true`
     // booleans): the strict path has always refused a non-boolean here.
     djMode: z.preprocess(
@@ -1281,6 +1306,8 @@ export const personaSchema = z
       tagline: p.tagline,
       frequency: p.frequency,
       scriptLength: p.scriptLength,
+      identMode: p.identMode,
+      identLines: p.identLines,
       djMode: p.djMode,
       linkStyle: p.linkStyle,
       humour: p.humour,
@@ -1340,6 +1367,14 @@ export function repairPersonaForLoad(
       raw.scriptLength as string,
     )
       ? raw.scriptLength
+      : undefined,
+    identMode: (PERSONA_IDENT_MODES as readonly string[]).includes(raw.identMode as string)
+      ? raw.identMode
+      : undefined,
+    identLines: Array.isArray(raw.identLines)
+      ? raw.identLines.filter((line): line is string => typeof line === 'string')
+          .map(line => line.trim().slice(0, PERSONA_IDENT_LINE_MAX)).filter(Boolean)
+          .slice(0, PERSONA_IDENT_LINES_LIMIT)
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
     linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)

@@ -29,6 +29,8 @@ const {
   PERSONA_DIAL_NEUTRAL,
   PERSONA_FREQUENCIES,
   PERSONA_ID_RE,
+  PERSONA_IDENT_LINES_LIMIT,
+  PERSONA_IDENT_LINE_MAX,
   PERSONA_LIMIT,
   PERSONA_MUSIC_LEAN_MAX,
   PERSONA_NAME_MAX,
@@ -121,6 +123,8 @@ test('a minimal persona parses and fills every default', () => {
   assert.equal(p.musicLean, '');
   assert.equal(p.language, '');
   assert.equal(p.scriptLength, 'concise');
+  assert.equal(p.identMode, 'improvise');
+  assert.deepEqual(p.identLines, []);
   assert.equal(p.djMode, false);
   assert.equal(p.avatar, '');
   assert.equal(p.skills, null);
@@ -573,6 +577,8 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     tagline: 'late nights',
     frequency: 'chatty',
     scriptLength: 'extended',
+    identMode: 'verbatim',
+    identLines: ['This is our station.', 'Stay with us.'],
     djMode: true,
     linkStyle: 'natural',
     humour: 8,
@@ -643,4 +649,42 @@ test('an untagged persona loads and saves identically — the upgrade is a no-op
   // Absent is NOT a stand-in for "all tags" the way an absent `skills` is for
   // "all skills" — a persona that carries no tags carries no tags.
   assert.notEqual(saved.tags, null);
+});
+
+
+test('station ID mode is strict on save and legacy data keeps improvising', () => {
+  for (const identMode of ['improvise', 'verbatim']) {
+    assert.equal(validate.validatePersonasStrict([{ ...base(), identMode }])[0].identMode, identMode);
+  }
+  assert.throws(() => validate.validatePersonasStrict([{ ...base(), identMode: 'fixed' }]), /identMode/);
+  assert.equal(normalize.normalizePersona({ ...base(), identMode: 'fixed' })!.identMode, 'improvise');
+  assert.equal(normalize.normalizePersona(base())!.identMode, 'improvise');
+  for (const p of vocab.SEED_PERSONAS) {
+    assert.equal(p.identMode, 'improvise');
+    assert.deepEqual(p.identLines, []);
+  }
+});
+
+test('station ID lines trim and ignore blanks without changing their words or order', () => {
+  const raw = { ...base(), identMode: 'verbatim', identLines: ['  Hello, radio.  ', '', '  ', 'Stay tuned!'] };
+  const [p] = validate.validatePersonasStrict([raw]);
+  assert.deepEqual(p.identLines, ['Hello, radio.', 'Stay tuned!']);
+  assert.deepEqual(normalize.normalizePersona(p), { ...p });
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: null }).identLines, []);
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: [] }).identLines, []);
+});
+
+test('station ID line limits reject unsafe saves and repair malformed stored data', () => {
+  const maxLine = 'x'.repeat(PERSONA_IDENT_LINE_MAX);
+  const lines = Array.from({ length: PERSONA_IDENT_LINES_LIMIT }, () => maxLine);
+  assert.deepEqual(personaSchema.parse({ ...base(), identLines: [...lines, ' '] }).identLines, lines);
+  for (const identLines of [false, 'one line', [42], [...lines, 'one more'], [maxLine + 'x']]) {
+    assert.throws(() => validate.validatePersonasStrict([{ ...base(), identLines }]), /identLines/);
+  }
+  const repaired = normalize.normalizePersona({
+    ...base(), identMode: 'verbatim', identLines: [null, '', '  ', ...lines.map(line => ' ' + line + 'extra ')],
+  })!;
+  assert.deepEqual(repaired.identLines, lines);
+  assert.equal(repaired.identMode, 'verbatim');
+  assert.deepEqual(normalize.normalizePersona({ ...base(), identLines: 'junk' })!.identLines, []);
 });

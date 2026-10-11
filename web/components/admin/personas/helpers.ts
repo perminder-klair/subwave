@@ -38,6 +38,8 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     tagline: p?.tagline ?? '',
     frequency: p?.frequency ?? 'moderate',
     scriptLength: p?.scriptLength ?? 'concise',
+    identMode: p?.identMode === 'verbatim' ? 'verbatim' : 'improvise',
+    identLines: Array.isArray(p?.identLines) ? p.identLines : [],
     djMode: p?.djMode === true,
     linkStyle: p?.linkStyle === 'announce' ? 'announce' : 'natural',
     humour: typeof p?.humour === 'number' ? p.humour : DIAL_NEUTRAL,

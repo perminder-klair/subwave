@@ -11,6 +11,8 @@ const persona: Persona = {
   tagline: 'After dark',
   frequency: 'moderate',
   scriptLength: 'concise',
+  identMode: 'improvise',
+  identLines: [],
   djMode: false,
   linkStyle: 'natural',
   humour: 5,
