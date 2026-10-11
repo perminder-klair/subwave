@@ -8,6 +8,7 @@ import {
   eventTurnSummary,
   isCarriedTurn,
   isShowBoundary,
+  speechMs,
   turnClass,
   turnText,
   type TurnDisplayClass,
@@ -147,12 +148,9 @@ export function lastVoiceLine(messages: SessionTurn[]): BoothLine | null {
   return null;
 }
 
-/** Rough spoken length of a line at broadcast pace (~2.6 words a second) plus
- *  a breath, clamped to something a link or segment actually runs. */
-export function speechMs(text: string): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.min(45_000, Math.max(3_000, Math.round((words / 2.6) * 1000) + 1_200));
-}
+// Lives in lib/sessionFeed beside talkingState, which the lock screen uses;
+// re-exported so skins keep importing it from here.
+export { speechMs };
 
 // A turn is stamped near the live edge and the listener sits at most
 // MAX_LEAD_SECONDS behind it, so a line older than that plus its own length
@@ -174,16 +172,18 @@ export function voiceOnAirMs(
   return dur;
 }
 
-/** Timestamp of a queue/history entry. The live controller stamps history
- *  with `queuedAt`; `t` is the documented field on older payloads — accept
- *  either so clocks render on both. */
+/** When a queue/history entry aired: `startedAt` (queue.snapshot stamps it
+ *  once the track reaches the air), else `t` from older payloads, else
+ *  `queuedAt` — which is earlier than the airing, often by minutes, and which
+ *  live history entries need not carry at all. undefined when none parses. */
 export function entryTime(
   e: { t?: string; [k: string]: unknown } | null | undefined,
 ): string | undefined {
   if (!e) return undefined;
-  if (typeof e.t === 'string') return e.t;
-  const q = e['queuedAt'];
-  return typeof q === 'string' ? q : undefined;
+  for (const v of [e['startedAt'], e.t, e['queuedAt']]) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) return v;
+  }
+  return undefined;
 }
 
 /** HH:MM in the station's zone for a turn/history timestamp, '--:--' when

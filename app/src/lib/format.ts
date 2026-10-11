@@ -60,6 +60,20 @@ export function fmtClockMinute(
   }
 }
 
+/** When a history entry aired: `startedAt`, else the older `t`, else
+ *  `queuedAt` as a last resort. null when none parses. The web's entryTime
+ *  reads only `t` then `queuedAt`; `startedAt` is the truer "played at". */
+export function playedAt(e: {
+  t?: unknown;
+  startedAt?: unknown;
+  queuedAt?: unknown;
+} | null | undefined): string | null {
+  for (const v of [e?.startedAt, e?.t, e?.queuedAt]) {
+    if (typeof v === 'string' && Number.isFinite(Date.parse(v))) return v;
+  }
+  return null;
+}
+
 export function relTime(t: string | number | Date): string {
   const diff = (Date.now() - new Date(t).getTime()) / 1000;
   if (diff < 60) return `${Math.max(1, Math.floor(diff))}s`;

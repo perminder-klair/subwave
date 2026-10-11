@@ -452,8 +452,11 @@ alone.
 > **Security.** A `tool.mjs` runs operator-supplied code inside the controller
 > container, and `services` lets it spend your search-provider quota and read
 > your library — the same trust model as a locally-installed Claude Code skill.
-> Only drop in code you've read and trust. (Skills you add stay disabled until
-> you enable them in `/admin/skills`.)
+> Only drop in code you've read and trust. A `tool.mjs` you place on disk
+> yourself is loaded on the next scan whether or not the skill is enabled —
+> enabling only decides whether it airs. Code that arrives from somewhere else
+> (an [imported zip](#zip-export--import) or a [restored backup](#restoring-a-backup))
+> is held back until you review it.
 
 ## Editing the built-in skills
 
@@ -516,9 +519,15 @@ there (or in `/admin/skills`), not in `.env`.
 ## Lifecycle
 
 - **Discovered but disabled.** A freshly dropped skill shows up in
-  `/admin/skills` toggled **off**. It cannot air — autonomously or otherwise —
-  until you enable it there. Merely dropping a folder never puts unreviewed
-  content (or code) on air.
+  `/admin/skills` toggled **off**. It cannot air autonomously until you enable
+  it there. Merely dropping a folder never puts unreviewed content on air —
+  but a hand-placed `tool.mjs` is still *loaded* (its module code runs) on
+  every scan, so only put code there you've read.
+- **Held for review.** A `tool.mjs` that came in a zip import or a backup
+  restore is written as `tool.mjs.pending`, which the loader never imports.
+  The skill shows **code to review** and can't air until you open it with
+  **Edit**, read the source, and choose **trust and load** (renames it to
+  `tool.mjs` and loads it) or **Discard code**.
 - **Loaded at boot**, and on demand via the **Rescan state/skills** button on
   the admin Skills page (`POST /api/dj/skills/rescan`). Rescan picks up new
   folders and edits to `SKILL.md` / `tool.mjs` without a controller restart.
@@ -574,12 +583,37 @@ For a direct operator-to-operator handoff, the skill edit sheet has **↓ Export
 (`POST /api/dj/skills/import`) takes it back in, deriving the slug from the
 bundle's `name:`.
 
-> **A zip may carry code.** Unlike the reviewed catalog, an imported `.zip` can
-> include a `tool.mjs` — a direct action on your own box, the same trust as
-> dropping a folder in by hand or restoring a backup. Imports arrive **disabled**;
-> when the bundle has a tool, the response flags it so the UI can warn you before
-> you enable it. (Hardened against zip-slip; 5 MB upload cap, only `SKILL.md` +
-> `tool.mjs` are extracted. Reserved names and re-imports are rejected.)
+> **A zip may carry code, and none of it runs on import.** Unlike the reviewed
+> catalog, an imported `.zip` can include a `tool.mjs`. The skill arrives
+> **disabled**, and the tool is written as `tool.mjs.pending` — not loaded, not
+> evaluated, its `ready()` never called. The skill shows **code to review**
+> until you open its edit sheet, read the source and either **trust and load**
+> it or **Discard code**. Trusting sends back the SHA-256 of the source you were
+> shown, so a file that changed in between is refused rather than loaded
+> unread. (Hardened against zip-slip; 5 MB upload cap, 8 MB uncompressed, only
+> `SKILL.md` + `tool.mjs` are extracted. Reserved names and re-imports are
+> rejected. A `name:` with capitals, such as `My-Skill`, installs as
+> `my-skill`, and the `name:` line is rewritten to match.)
+
+The review is also an API, for scripting it:
+
+| Route | |
+| --- | --- |
+| `GET /api/dj/skills/:slug/tool/pending` | `{ source, sha256, bytes }` of the held code |
+| `POST /api/dj/skills/:slug/tool/trust` | body `{ "sha256": "…" }` — renames it to `tool.mjs` and reloads; `409` if the file changed since you read it |
+| `DELETE /api/dj/skills/:slug/tool/pending` | discards it without loading it |
+
+### Restoring a backup
+
+A station backup carries `state/skills/`, and a restore puts each skill's
+`SKILL.md` back (replacing the one on disk — restoring means replacing).
+Code is treated like an import: a `tool.mjs` that is byte-identical to the one
+already live, or to the template a built-in ships in this image, is written as
+is; any other is held as `tool.mjs.pending` for review, and a skill that
+already had trusted code keeps running it until you trust the new one. Only
+`SKILL.md` and `tool.mjs` are restored from a skill folder; a folder whose
+name isn't a valid skill slug, or that shadows a reserved name, is skipped.
+The restore response lists what was skipped and which skills wait for review.
 
 ## Prepare an artist spotlight show
 

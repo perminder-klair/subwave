@@ -3,7 +3,7 @@
 // this module owns which candidates a re-pick may choose from and whether the
 // guard fires at all, so both are testable without a model call.
 
-import { artistRootKey, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootIn, artistRootKey, type CandidateLike } from '../../music/recency.js';
 
 // Re-exported so the guard's tests read its comparison key from here rather
 // than reaching past into music/recency.
@@ -33,8 +33,8 @@ export function artistGuardCause(
   recentRoots: Set<string> = new Set(),
 ): ArtistGuardCause {
   if (!pickRoot) return null;
-  if (anchorRoot && pickRoot === anchorRoot) return 'onair';
-  return recentRoots.has(pickRoot) ? 'recent' : null;
+  if (anchorRoot && artistCreditsOverlap(pickRoot, anchorRoot)) return 'onair';
+  return artistRootIn(pickRoot, recentRoots) ? 'recent' : null;
 }
 
 export interface AlternativePool<T> {
@@ -49,22 +49,27 @@ export interface AlternativePool<T> {
 }
 
 // The candidate set for a guard re-pick. `avoidRoot` is the rejected pick's own
-// artist key; `recentRoots` is the surrounding queue/history snapshot.
+// artist key; `anchorRoot` also stays excluded on an anchor match. Overlap is
+// not transitive: two different combined credits can both name the anchor.
+// `recentRoots` is the surrounding queue/history snapshot.
 // Candidates with no artist are never dropped.
+function alternativeArtist(song: CandidateLike, avoidRoot: string, anchorRoot: string): boolean {
+  const root = artistRootKey(song);
+  return !artistCreditsOverlap(root, avoidRoot) && !artistCreditsOverlap(root, anchorRoot);
+}
+
 export function alternativeCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   avoidRoot: string,
   recentRoots: Set<string> = new Set(),
+  anchorRoot = '',
 ): AlternativePool<T> {
-  const base = [...seen].filter(([, s]) => {
-    const root = artistRootKey(s);
-    return !root || root !== avoidRoot;
-  });
+  const base = [...seen].filter(([, s]) => alternativeArtist(s, avoidRoot, anchorRoot));
   if (!base.length || !recentRoots.size) return { alt: new Map(base), dropped: 0, starved: false };
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !recentRoots.has(root);
+    return !root || !artistRootIn(root, recentRoots);
   });
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
@@ -110,8 +115,9 @@ export interface ArtistGuardDeps<T> {
     reason: string,
   ) => Promise<({ id?: string | null } & Record<string, unknown>) | null>;
   // The fallback pool asked for a pick that is NOT this artist. Only ever
-  // called on the pick-anchor cause — see the note at its call site.
-  poolRescue: (avoidArtist: string) => Promise<'queued' | 'empty' | 'collision'>;
+  // called on the pick-anchor cause. Both credits stay excluded through the
+  // pool's recency relaxation, since overlap is not transitive.
+  poolRescue: (avoidArtist: string, avoidAnchorArtist: string) => Promise<'queued' | 'empty' | 'collision'>;
   log: (line: string) => void;
   logEvent: (name: string, payload: Record<string, unknown>) => void;
 }
@@ -122,10 +128,12 @@ export async function runArtistGuard<T extends CandidateLike>(
   const { song, pickAnchor, seen, recentRoots, window, repick, poolRescue, log, logEvent } = deps;
 
   const pickRoot = artistRootKey(song);
-  const cause = artistGuardCause(pickRoot, artistRootKey(pickAnchor || {}), recentRoots);
+  const anchorRoot = artistRootKey(pickAnchor || {});
+  const cause = artistGuardCause(pickRoot, anchorRoot, recentRoots);
   if (!cause) return { kind: 'none' };
 
-  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots);
+  const avoidAnchorRoot = cause === 'onair' ? anchorRoot : '';
+  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots, avoidAnchorRoot);
   const label = cause === 'onair' ? 'pick-anchor artist' : 'recently-played artist';
   const telemetry = {
     cause,
@@ -148,13 +156,13 @@ export async function runArtistGuard<T extends CandidateLike>(
     const repicked = await repick(
       alt,
       cause === 'onair'
-        ? `The track you chose is by ${song.artist}, the artist on the track this pick cycle is anchored to. Avoid repeating that anchor artist; choose a DIFFERENT artist from the candidates above.`
+        ? `The track you chose is by ${song.artist}, overlapping the ${pickAnchor?.artist} credit this pick cycle is anchored to. Avoid repeating that anchor artist; choose a DIFFERENT artist from the candidates above.`
         : `The track you chose is by ${song.artist}, who has already played in the last few slots — space artists out across the show. Choose a DIFFERENT artist from the candidates above.`,
     );
     // Resolved from `alt`, not the full `seen`, so the re-pick can only land on
     // something it was offered even if the schema ever loosens.
     const altSong = repicked?.id ? alt.get(repicked.id) : null;
-    if (altSong && repicked) {
+    if (altSong && repicked && alternativeArtist(altSong, pickRoot, avoidAnchorRoot)) {
       logEvent('pick.artistGuard', { ...telemetry, relaxed: false, from: song.artist, to: altSong.artist, candidates: alt.size, recencySkipped: dropped, recencyStarved: starved, window });
       log(`${label} "${song.artist}" avoided — re-picked "${altSong.title}" by ${altSong.artist} from ${alt.size} other-artist candidate(s)${dropped ? `, ${dropped} more skipped as recently-played artists` : ''}${starved ? ' (every alternative was recently played — recency window waived)' : ''}`);
       return { kind: 'repicked', object: repicked, song: altSong };
@@ -177,7 +185,7 @@ export async function runArtistGuard<T extends CandidateLike>(
   // so 'queued' means the slot is filled and the caller is done. A pool pick
   // that dedups against something already queued reports 'collision' and falls
   // through to the relaxation below rather than dropping the slot.
-  const rescued = await poolRescue(song.artist || '');
+  const rescued = await poolRescue(song.artist || '', pickAnchor?.artist || '');
   const runWasThin = alt.size
     ? `re-pick from ${alt.size} other-artist candidate(s) didn't land`
     : 'every agent candidate was that artist';

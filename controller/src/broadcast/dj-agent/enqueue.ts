@@ -9,7 +9,6 @@ import * as subsonic from '../../music/subsonic.js';
 import * as dj from '../../llm/dj.js';
 import { stripThinking } from '../../llm/sdk.js';
 import { recordPick } from '../../llm/log.js';
-import * as requestLog from '../request-log.js';
 import { echoesRecentRequest } from '../../util/request-guard.js';
 import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale, stripSpeakerLabel } from '../../audio/speech-text.js';
@@ -66,7 +65,7 @@ export function trackFields(song) {
 // drop short-circuits, and a trim only ever shortens to a prefix, which cannot
 // turn a no-hit into a hit.
 export function dropEchoedLink(link: string | null, queue: any): string | null {
-  if (!link || !echoesRecentRequest(link, requestLog.recentRequests)) return link;
+  if (!link || !echoesRecentRequest(link, session.windowRequestTexts())) return link;
   queue.log('request-guard', `pick link echoed recent listener request text — link dropped`);
   return null;
 }

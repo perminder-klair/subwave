@@ -69,6 +69,8 @@ export interface SkillFileResponse {
   window?: 'any' | 'commute';
   requiresKey?: string;
   hasTool?: boolean;
+  // A tool.mjs that arrived by import/restore and has not been trusted yet.
+  toolPending?: boolean;
   tags?: string[];
   brief?: string;
   defaults?: SkillDefaults | null;
@@ -87,7 +89,16 @@ export const skillKeys = {
   roster: () => settingsKeys.detail(),
   files: () => ['skills', 'file'] as const,
   file: (id: string) => ['skills', 'file', id] as const,
+  pendingTool: (id: string) => ['skills', 'pending-tool', id] as const,
 };
+
+// The quarantined tool.mjs, as the controller will hash it on trust.
+export interface PendingToolResponse {
+  slug: string;
+  source: string;
+  sha256: string;
+  bytes: number;
+}
 
 export function installedSkillsOf(response: SkillsResponse): Skill[] {
   return Array.isArray(response.skills) ? response.skills : [];
@@ -137,6 +148,18 @@ export function useSkillFileQuery(adminFetch: AdminFetch, id: string, enabled: b
     enabled: enabled && Boolean(id),
     request: (fetcher, signal) => adminJson<SkillFileResponse>(
       fetcher, `/dj/skills/${encodeURIComponent(id)}/file`, undefined, signal,
+    ),
+    toastOnError: false,
+  });
+}
+
+export function usePendingToolQuery(adminFetch: AdminFetch, id: string, enabled: boolean) {
+  return useAdminQuery<PendingToolResponse>({
+    key: skillKeys.pendingTool(id),
+    adminFetch,
+    enabled: enabled && Boolean(id),
+    request: (fetcher, signal) => adminJson<PendingToolResponse>(
+      fetcher, `/dj/skills/${encodeURIComponent(id)}/tool/pending`, undefined, signal,
     ),
     toastOnError: false,
   });

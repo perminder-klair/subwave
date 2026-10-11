@@ -80,6 +80,8 @@ test('two Gemini speakers retain gain and attribution, and only the final marker
   assert.deepEqual(turns.map(m => m.meta?.personaId), [outgoing.id, incoming.id]);
   assert.deepEqual(turns.map(m => m.text), ['Goodbye.', 'Hello.']);
   assert.deepEqual(turns.map(m => m.meta?.airedAt), [new Date(at).toISOString(), new Date(at + 30_000).toISOString()]);
+  // The clip length rides on the turn so a player knows when the words end (#1848).
+  assert.deepEqual(turns.map(m => m.meta?.durationMs), [30_000, 30_000]);
 });
 
 test('a deferred Gemini handoff holds individual speakers and final-line settlement', async t => {

@@ -19,6 +19,7 @@ import { currentStarve } from '../broadcast/music-starve.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { clockDisplay, getStationTimezone, zonedParts } from '../time.js';
 import { composeBoothFeed } from '../broadcast/booth-carry.js';
+import { publicQueueState, publicSessionTurn } from '../util/public-feed.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
@@ -28,7 +29,8 @@ import { resolveSilenceTrim } from '../music/silence-trim.js';
 import { playableDurationSec } from '../broadcast/drain-policy.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
+import { requireAdminUi } from '../middleware/auth.js';
+import { forwardedByProxy, listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
 import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import {
@@ -57,7 +59,8 @@ const TRANSPARENT_PNG = Buffer.from(
 );
 
 // Public handlers must not reflect internal error text (state-dir paths, upstream
-// URLs); detail goes to the booth log. Admin routes still reflect err.message.
+// URLs); detail goes to the admin-only booth log. Admin routes still reflect
+// err.message.
 function publicError(res: express.Response, route: string, err: unknown): void {
   const detail = err instanceof Error ? err.message : String(err);
   queue.log('error', `${route} failed: ${detail}`);
@@ -76,15 +79,25 @@ function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
+// A bare host[:port] — DNS name, IPv4 or bracketed IPv6. Anything else in a
+// Host header is not an origin this station could be serving from.
+const HOST_RE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
 // Origin for tune-in URLs. SITE_URL wins (canonical, immune to a spoofed Host);
-// unset, fall back to how the listener reached us so LAN deployments resolve.
+// unset, fall back to the Host the request arrived on so LAN deployments
+// resolve. X-Forwarded-Host is deliberately NOT read: every shipped proxy
+// recipe forwards the public Host unchanged (Caddy and Traefik by default, the
+// nginx recipe via `proxy_set_header Host $host`), while X-Forwarded-Host is a
+// client-suppliable header an edge may pass through verbatim and leave out of
+// its cache key. The scheme may still come from X-Forwarded-Proto — TLS ends at
+// the edge — but only as http/https.
 export function publicOrigin(req: express.Request): string {
   const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
   if (fromEnv) return fromEnv;
-  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const proto = xfProto || req.protocol || 'http';
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  return host ? `${proto}://${host}` : `http://localhost`;
+  const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const proto = xfProto === 'https' || xfProto === 'http' ? xfProto : (req.protocol === 'https' ? 'https' : 'http');
+  const host = String(req.headers.host || '').trim();
+  return HOST_RE.test(host) ? `${proto}://${host}` : `http://localhost`;
 }
 
 // Proxy Subsonic cover art so browsers get MediaSession artwork without the
@@ -300,6 +313,13 @@ function listenMounts(req: express.Request) {
   return { station, entries };
 }
 
+// The body names an origin taken from the request when SITE_URL is unset, and
+// .pls/.m3u are on common CDN cache-by-extension lists, so a shared cache must
+// never keep one response for every listener.
+function noStoreTuneIn(res: express.Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 // With listener auth on, these would hand out credential-less URLs Icecast
 // rejects, so refuse; operators share credentialed URLs by hand.
 function tuneInFilesBlocked(res: express.Response): boolean {
@@ -309,6 +329,7 @@ function tuneInFilesBlocked(res: express.Response): boolean {
 }
 
 router.get('/listen.pls', (req, res) => {
+  noStoreTuneIn(res);
   if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
@@ -323,6 +344,7 @@ router.get('/listen.pls', (req, res) => {
 });
 
 router.get('/listen.m3u', (req, res) => {
+  noStoreTuneIn(res);
   if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['#EXTM3U'];
@@ -422,9 +444,10 @@ router.get('/personas', async (req, res) => {
   }
 });
 
-// Queue + history + DJ log.
+// Queue + history. The booth log stays off this read: it is operator
+// diagnostics (admin: /debug, /debug/dj-log). Allowlist in util/public-feed.ts.
 router.get('/state', (req, res) => {
-  const snap = queue.snapshot();
+  const snap = publicQueueState(queue.snapshot());
   // `theme.active` rides along so pollers learn the effective theme changed
   // without refetching tokens; an on-air show's override wins over the default.
   const s = settings.get();
@@ -448,7 +471,7 @@ router.get('/state', (req, res) => {
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
     },
-    // For rendering djLog timestamps in station-local time (#418).
+    // For rendering timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
     // Private-station flags (#478): booleans only, never the password.
@@ -469,8 +492,19 @@ router.get('/state', (req, res) => {
 // /station-auth instead. Not rate-limited per IP because the caller is always
 // Icecast and one bucket would throttle every listener; failures are damped
 // in-handler below instead (successes are never delayed).
+// A call carrying forwarding headers came through the public edge, not from
+// Icecast, so it gets the same 404 the edge's deny rule answers — before any
+// password is compared. Icecast's own calls carry none, so its fail-OPEN
+// decision below is unchanged.
 router.post(
   '/listener-auth',
+  (req, res, next) => {
+    if (forwardedByProxy(req.headers)) {
+      res.status(404).send('Not Found\n');
+      return;
+    }
+    next();
+  },
   express.urlencoded({ extended: false, limit: '10kb' }),
   async (req, res) => {
     await settings.load();
@@ -627,7 +661,8 @@ router.get('/themes', async (req, res) => {
 // while after a hard roll the outgoing show's tail (`meta.carried`) and a
 // `kind: 'show-boundary'` separator lead the feed, so a passive display does
 // not go blank at a show boundary (#1690). Display only; `session` still
-// describes the live session alone.
+// describes the live session alone. Each turn's meta is reduced to what a
+// booth renders (util/public-feed.ts); agent tool trails stay internal.
 router.get('/session', (req, res) => {
   const s = session.getSession();
   if (!s) return res.json({ session: null, messages: [] });
@@ -642,7 +677,7 @@ router.get('/session', (req, res) => {
     messages: composeBoothFeed(s, Date.now(), (at) => {
       const p = zonedParts(new Date(at));
       return clockDisplay(p.hour, p.minute, settings.get().locale === 'en-US');
-    }).slice(-120),
+    }).slice(-120).map(publicSessionTurn),
   });
 });
 
@@ -678,10 +713,17 @@ router.get('/shows/community', async (req, res) => {
 });
 
 // Place-name lookup proxied over Open-Meteo's keyless geocoding API (the
-// controller owns all external IO). Unauthenticated because onboarding runs
-// pre-auth. 502 on upstream failure so the client can fall back to manual entry.
-router.get('/geocode', async (req, res) => {
+// controller owns all external IO). Admin-only: its two callers (the admin
+// Station tab and the onboarding wizard) both run signed in, and Open-Meteo
+// meters by source IP, so an open proxy here spends the same allowance the
+// station's own forecast fetch needs. requireAdminUi, not requireAdmin: the
+// web sign-in handles a 401, so no native Basic dialog. A place name is
+// short; a longer query is refused rather than forwarded. 502 on upstream
+// failure so the client can fall back to manual entry.
+const GEOCODE_QUERY_MAX = 100;
+router.get('/geocode', requireAdminUi, async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : '';
+  if (q.length > GEOCODE_QUERY_MAX) return res.status(400).json({ error: 'query too long' });
   try {
     const results = await geocodePlace(q);
     res.json({ results });

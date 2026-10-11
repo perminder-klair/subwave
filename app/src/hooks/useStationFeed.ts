@@ -1,11 +1,13 @@
-// Poll all endpoints every 5s in the foreground; only /now-playing every
-// 30s during background playback. Preserve unchanged payload identities.
+// Poll all endpoints every 5s in the foreground; only /now-playing and
+// /session every 30s during background playback. Preserve unchanged payload
+// identities.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
 import { pollAsync } from '@/lib/poll';
 import { DEFAULT_STATION_LOCALE, type StationLocale } from '@/lib/format';
+import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
 import type {
   ActiveShow,
   DjState,
@@ -30,7 +32,12 @@ export interface StationFeed {
   /** Cumulative since-boot LLM token total. */
   llmTokens: number | null;
   state: StationState;
+  /** Spoken turns stamped with `meta.airedAt` are held until this listener
+   *  can hear them (#1382); unstamped turns pass straight through. */
   session: SessionPayload;
+  /** How far this listener sits behind the live edge, in ms: the station's
+   *  stream.bufferSeconds clamped to 0–60s, 0 before the first payload. */
+  leadMs: number;
   elapsed: number;
   progress: number;
   /** Epoch ms when the on-display track became audible to this listener: the
@@ -44,7 +51,7 @@ export interface StationFeed {
   locale: StationLocale;
 }
 
-const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
+const EMPTY_STATE: StationState = { upcoming: [], history: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 // Consecutive offline polls required before believing it (#463/#466) —
 // PlayerScreen stops playback on offline, so a transient blip must not count.
@@ -78,9 +85,15 @@ export function useStationFeed(
   // listener's buffer until the audio catches up.
   const lastTrackKeyRef = useRef<string | null>(null);
   // Listener buffer depth in ms (stream.bufferSeconds); 0 until the first
-  // payload, which degrades to live-edge behaviour.
+  // payload, which degrades to live-edge behaviour. The ref serves the poll
+  // and hold timers; the state is for consumers.
   const leadMsRef = useRef(0);
+  const [leadMs, setLeadMs] = useState(0);
   const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Same hold for the DJ's spoken lines (#1382): raw /session payload in a ref,
+  // its audible subset in `session`.
+  const rawSessionRef = useRef<SessionPayload>(EMPTY_SESSION);
+  const voiceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Per-field payload signatures: skip the setState, keeping the previous
   // object identity, when a poll returns identical data.
@@ -90,6 +103,27 @@ export function useStationFeed(
     if (sigRef.current[key] === sig) return;
     sigRef.current[key] = sig;
     set(value);
+  }, []);
+
+  // Re-derive the audible turns and re-arm for the next one, so a held line
+  // lands on time rather than on the poll grid. Not owned by the poll effect:
+  // that re-runs on every foreground/background flip, and a line held when the
+  // app backgrounds must still land behind the lock screen.
+  const applySession = useCallback(() => {
+    const run = () => {
+      const raw = rawSessionRef.current;
+      const now = Date.now();
+      const { visible, nextChangeMs } = splitAudibleTurns(raw.messages, leadMsRef.current, now);
+      setIfChanged('session', { session: raw.session, messages: visible }, setSession);
+      if (voiceTimerRef.current) clearTimeout(voiceTimerRef.current);
+      voiceTimerRef.current =
+        nextChangeMs == null ? null : setTimeout(run, Math.max(0, nextChangeMs - now));
+    };
+    run();
+  }, [setIfChanged]);
+
+  useEffect(() => () => {
+    if (voiceTimerRef.current) clearTimeout(voiceTimerRef.current);
   }, []);
 
   // On station switch, drop the previous station's data (stale signatures would
@@ -107,9 +141,16 @@ export function useStationFeed(
     // clock with a foreign start time.
     lastTrackKeyRef.current = null;
     leadMsRef.current = 0;
+    setLeadMs(0);
     if (promoteTimerRef.current) {
       clearTimeout(promoteTimerRef.current);
       promoteTimerRef.current = null;
+    }
+    // Likewise a held line from the old station must not land on the new one.
+    rawSessionRef.current = EMPTY_SESSION;
+    if (voiceTimerRef.current) {
+      clearTimeout(voiceTimerRef.current);
+      voiceTimerRef.current = null;
     }
     setNowPlaying(null);
     setContext(null);
@@ -132,14 +173,15 @@ export function useStationFeed(
     if (background && !backgroundPoll) return;
 
     // `current` is /state's live-edge view, absent on the background poll (which
-    // fetches /now-playing only) and on a failed /state leg.
+    // skips /state) and on a failed /state leg.
     const applyNowPlaying = (npRes: NowPlayingResponse, current?: StationState['current']) => {
       const np = npRes.nowPlaying;
       // Buffer depth first; everything below is measured against it. Clamped to
       // 0-60s so a bad value can't park the clock in the far future.
       const bufSec = npRes.stream?.bufferSeconds;
       if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
-        leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
+        leadMsRef.current = Math.min(Math.max(bufSec, 0), MAX_LEAD_SECONDS) * 1000;
+        setLeadMs(leadMsRef.current);
       }
       const trackKey = np ? `${np.title}\0${np.artist}` : null;
 
@@ -199,15 +241,21 @@ export function useStationFeed(
       if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
     };
 
+    const applySessionPayload = (se: PromiseSettledResult<SessionPayload>) => {
+      if (se.status === 'fulfilled' && se.value && Array.isArray(se.value.messages)) {
+        rawSessionRef.current = se.value;
+        applySession();
+      }
+    };
+
     const tick = async (signal: AbortSignal) => {
       if (background) {
-        // Lock-screen metadata only — no point feeding UI nobody can see.
-        try {
-          const npRes = await api.nowPlaying(signal);
-          if (!signal.aborted) applyNowPlaying(npRes);
-        } catch {
-          /* transient — next tick retries */
-        }
+        // Only what the lock screen and Live Activity show: the track, and the
+        // booth feed their "DJ on the mic" swap reads (~5KB gzipped a poll).
+        const [np, se] = await Promise.allSettled([api.nowPlaying(signal), api.session(signal)]);
+        if (signal.aborted) return;
+        if (np.status === 'fulfilled') applyNowPlaying(np.value);
+        applySessionPayload(se);
         return;
       }
       // Keep successful endpoint results when another request fails.
@@ -223,9 +271,7 @@ export function useStationFeed(
         applyNowPlaying(np.value, st.status === 'fulfilled' ? st.value?.current : undefined);
       }
       if (st.status === 'fulfilled') setIfChanged('state', st.value, setState);
-      if (se.status === 'fulfilled' && se.value && Array.isArray(se.value.messages)) {
-        setIfChanged('session', se.value, setSession);
-      }
+      applySessionPayload(se);
     };
     const stopPolling = pollAsync(tick, background ? 30000 : 5000);
     return () => {
@@ -238,7 +284,7 @@ export function useStationFeed(
         promoteTimerRef.current = null;
       }
     };
-  }, [api, appActive, backgroundPoll, setIfChanged]);
+  }, [api, appActive, backgroundPoll, setIfChanged, applySession]);
 
   useEffect(() => {
     if (!appActive) return;
@@ -268,6 +314,7 @@ export function useStationFeed(
     llmTokens,
     state,
     session,
+    leadMs,
     elapsed,
     progress,
     trackStartedAt,

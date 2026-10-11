@@ -6,7 +6,7 @@
 
 import type { ToolSet } from 'ai';
 import { buildPickerContext, pickerScope, type PickerScope } from './scope.js';
-import type { PickerToolModule } from './defs.js';
+import { withToolDeadline, type PickerToolModule } from './defs.js';
 
 import searchLibrary from './tools/search-library.js';
 import similarSongs from './tools/similar-songs.js';
@@ -63,7 +63,7 @@ export function buildPickerTools(scope: Partial<PickerScope> = {}): { tools: Too
   const tools: ToolSet = {};
   for (const mod of PICKER_TOOLS) {
     if (mod.available && !mod.available(ctx)) continue;
-    tools[mod.name] = mod.build(ctx);
+    tools[mod.name] = withToolDeadline(mod.name, mod.build(ctx));
   }
   return { tools, seen: ctx.seen };
 }

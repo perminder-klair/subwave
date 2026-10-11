@@ -9,6 +9,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { createHash } from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
@@ -16,7 +17,26 @@ import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatory
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
+// A credential is keyed by its fingerprint (credentialSig), never verbatim.
 const clientCache = new Map();
+
+// Short one-way fingerprint of a credential for a cache signature: a rotated key
+// builds a fresh client, while the Map never holds the key itself. '' when unset.
+export function credentialSig(key: string): string {
+  if (!key) return '';
+  return createHash('sha256').update(key).digest('hex').slice(0, 16);
+}
+
+// The key a builder hands the SDK, and therefore captures at construction: the
+// inline key, else the provider's declared env var (capabilities apiKeyEnv).
+// Every other provider is built WITHOUT an explicit key when the inline one is
+// blank, and its SDK reads its own env var per request, so nothing is pinned.
+export function pinnedApiKey(cfg: any): string {
+  const inline = typeof cfg?.apiKey === 'string' ? cfg.apiKey : '';
+  if (inline) return inline;
+  const env = capabilitiesFor(cfg?.provider).apiKeyEnv;
+  return (env && process.env[env]) || '';
+}
 
 export function llmCfg() {
   const llm = settings.get().llm
@@ -145,6 +165,12 @@ export function loccaBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_BASE_URL;
 }
 
+// The server a chat leg actually talks to, as the builder resolves it. Shared by
+// the cache signature and the embedding leg's credential-sharing check.
+export function chatBaseUrl(cfg: any): string {
+  return cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
+}
+
 // locca runs embeddings on a separate server (`locca embed`, port 8090) — a
 // chat llama.cpp server can't also serve embeddings, so this default is
 // distinct from the chat one. settings.embedding.baseUrl overrides.
@@ -206,11 +232,12 @@ export function customHeaders(cfg: any): Record<string, string> | undefined {
 // Cache-signature form of the header map: key-order stable, '' when empty.
 // Headers are captured at CONSTRUCTION (like repeat_penalty and num_ctx), so
 // they must key the cache or an edit — or a failover to a leg with different
-// headers — keeps hitting the old client until restart.
+// headers — keeps hitting the old client until restart. Fingerprinted, because
+// a header value can be a credential.
 export function headersSig(cfg: any): string {
   const h = customHeaders(cfg);
   if (!h) return '';
-  return Object.keys(h).sort().map((k) => `${k}=${h[k]}`).join(',');
+  return credentialSig(JSON.stringify(Object.keys(h).sort().map((k) => [k, h[k]])));
 }
 
 // Ollama falls back to the env-configured model; cloud providers must name a
@@ -228,7 +255,7 @@ export function resolveModelId(cfg: any): string {
 // An explicit cfg (the fallback leg) shares the same cache.
 export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
-  const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
+  const baseUrlSig = chatBaseUrl(cfg);
   // Two provider families can't suppress thinking per-call, so a forced-tool leg
   // needs its own instance: OpenRouter fixes reasoning at model build, and
   // openai-compatible/locca bind the body wrapper at construction. Everyone else
@@ -239,7 +266,8 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     && !(cfg.provider === 'openai-compatible' && cfg.compatibleMode === 'hosted');
   // repeat_penalty and num_ctx are captured at construction, so both key the
   // cache or an edit reads as ignored until the controller restarts (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
+  const apiKey = pinnedApiKey(cfg);
+  const sig = `${cfg.provider}|${id}|k${credentialSig(apiKey)}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}|cm${cfg.compatibleMode || 'local'}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -298,7 +326,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // only makes sense for self-hosted llama.cpp/vLLM. A real key is required.
       const provider = createOpenAI({
         baseURL: DEFAULT_REQUESTY_BASE_URL,
-        apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
+        apiKey: apiKey || 'unused',
         name: 'requesty',
         fetch: debugFetch,
       });

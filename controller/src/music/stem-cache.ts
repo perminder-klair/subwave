@@ -274,9 +274,17 @@ async function measureDir(dir: string): Promise<{ dir: string; bytes: number; mt
   }
 }
 
+// Walks of the cache root since start (scanDirs + cachedTrackIdSet). Tests
+// read it to pin which paths walk the cache: on a NAS a full walk takes minutes.
+let cacheWalks = 0;
+export function _cacheWalksForTests(): number {
+  return cacheWalks;
+}
+
 // One walk of the cache root -> per-dir bytes + newest mtime, shared by the
 // sweep and the usage report. ENOENT-tolerant: the analyzer may be writing.
 async function scanDirs(): Promise<Array<{ dir: string; bytes: number; mtimeMs: number }>> {
+  cacheWalks += 1;
   let entries: string[];
   const root = stemsRoot();
   try {
@@ -485,6 +493,7 @@ export async function cachedTrackCount(): Promise<number> {
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis
 // pass snapshots this to tell a rewrite from net-new growth (stemWriteDecision).
 export async function cachedTrackIdSet(): Promise<Set<string>> {
+  cacheWalks += 1;
   try {
     return new Set((await readdir(stemsRoot())).filter(n => n !== STEMS_MARKER));
   } catch {

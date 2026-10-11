@@ -291,3 +291,40 @@ export async function adopt(
   await rewritePlaylist(Object.keys(meta.items));
   return { filename: name, text: meta.items[name].text };
 }
+
+/**
+ * Replace the sidecar with the one a station backup carried, and regenerate
+ * jingles.m3u from it. Backs the restore in routes/backup.ts, which used to
+ * write both files verbatim.
+ *
+ * The playlist is never taken from the archive: every line of it is a request
+ * Liquidsoap reloads on watch, and the only lines this module ever writes are
+ * `<jingle dir>/<sidecar key>`. So the sidecar is the thing restored, each key
+ * answers to the same isAdoptableName a bundled jingle does, and the playlist
+ * is rebuilt from what survived — which also re-roots the absolute paths at
+ * THIS station's state dir rather than the one the backup was taken on.
+ * A key that fails is dropped and named, never repaired.
+ */
+export async function restoreMeta(raw: unknown): Promise<{ kept: number; dropped: string[] }> {
+  const items = (raw as any)?.items;
+  if (!items || typeof items !== 'object' || Array.isArray(items)) {
+    throw new Error('jingles.json is not a jingle sidecar');
+  }
+  const next: Record<string, any> = {};
+  const dropped: string[] = [];
+  for (const [name, info] of Object.entries(items as Record<string, any>)) {
+    if (!isAdoptableName(name) || !info || typeof info !== 'object' || Array.isArray(info)) {
+      dropped.push(name);
+      continue;
+    }
+    next[name] = {
+      text: typeof info.text === 'string' ? info.text : '',
+      ...(typeof info.createdAt === 'string' ? { createdAt: info.createdAt } : {}),
+      builtin: info.builtin === true,
+      ...(typeof info.source === 'string' ? { source: info.source } : {}),
+    };
+  }
+  await saveMeta({ items: next });
+  await rewritePlaylist(Object.keys(next));
+  return { kept: Object.keys(next).length, dropped };
+}

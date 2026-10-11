@@ -2483,15 +2483,23 @@ class Queue {
       // confirms that it reached listeners. A multi-line handoff settles on
       // its final line only.
       if (kind === 'handoff' && settlesHandoff) session.markHandoffAired();
+      // The clip's length rides along so a player can tell when the words end
+      // (the app's lock-screen "on the mic" window, #1848) — the same figure
+      // notifySpoken publishes below.
+      const durationMs = Number.isFinite(handoff.clipMs) && handoff.clipMs > 0
+        ? Math.round(handoff.clipMs)
+        : null;
       session.appendTurn({
         role: 'segment',
         kind,
         text: safeText,
         // Live-edge, so a LISTENER-facing consumer adds stream.bufferSeconds
         // (#1114). Absent when unmeasured, never zeroed.
-        meta: airedAt != null
-          ? { ...meta, airedAt: new Date(airedAt).toISOString() }
-          : meta,
+        meta: {
+          ...meta,
+          ...(airedAt != null ? { airedAt: new Date(airedAt).toISOString() } : {}),
+          ...(durationMs != null ? { durationMs } : {}),
+        },
       });
       notifySpoken({
         voiceId: handoff.voiceId,

@@ -12,8 +12,9 @@ either lock requires a password first.
 
 Swaps the public web pages (`/`, `/listen`) for a password prompt. Type the
 station password and the player appears as normal; the browser remembers it.
-`/admin` and `/onboarding` keep working (the admin console keeps its own
-separate sign-in). Applies live — no restart.
+The SUB/WAVE app shows the same prompt in place of its player. `/admin` and
+`/onboarding` keep working (the admin console keeps its own separate sign-in).
+Applies live — no restart.
 
 This only hides the interface. The now-playing JSON endpoints stay public
 (the player and admin dash rely on them), and the stream URL still works —
@@ -45,10 +46,15 @@ every listener connect, so:
 > that guards the private player. Icecast always calls the controller directly
 > over the internal network, so the endpoint never needs to be reachable from
 > the internet. The bundled Caddy config returns 404 for
-> `/api/listener-auth`; if you use `docker-compose.byo.yml` with your own
-> Traefik/nginx/Caddy, block that path too. The controller slows repeated
-> failed attempts as a backstop (correct passwords are never delayed), but
-> not exposing the path at all is the real protection.
+> `/api/listener-auth` and everything under it; if you use
+> `docker-compose.byo.yml` with your own Traefik/nginx/Caddy, block that path
+> too — as a case-insensitive prefix, since the controller also answers a
+> trailing slash and any case
+> ([recipes](reverse-proxy.md#the-route-contract)). As backstops, the
+> controller refuses any call carrying a proxy's forwarding headers
+> (`X-Forwarded-For` and the like — Icecast's own call has none) and slows
+> repeated failed attempts (correct passwords are never delayed), but not
+> exposing the path at all is the real protection.
 
 ### Tuning in with a password
 
@@ -61,9 +67,13 @@ every listener connect, so:
   (any username works; only the password is checked).
 - **Anything that can't do userinfo URLs** — append the token instead:
   `https://your-station.example/stream.mp3?auth=PASSWORD`.
-- **Native app** — open **Station login** under the address and enter any
-  username plus the stream password. The app sends them as a stream
-  `Authorization` header automatically.
+- **SUB/WAVE app** — asks for the password when it opens a station with
+  either lock on, checks it with the station, and keeps it in the device's
+  secure storage (separate from any **Station login**). Like the web player it
+  rides the stream as `?auth=`, so Google Cast works too. A listener who had
+  followed earlier advice and typed the stream password into **Station login**
+  is recognised and not asked again. If the password is later rotated, the app
+  asks again the next time the station is opened, or once playback stalls.
 
 While the password is on, `/listen.pls` and `/listen.m3u` return 403 — they
 would otherwise hand out credential-less URLs that no longer play.
@@ -108,7 +118,8 @@ Three things to know:
   asks before it sends the login over cleartext.
 - **Google Cast is unavailable** for a station with a saved login (the cast
   button doesn't appear). A Chromecast fetches the stream itself, and it has no
-  way to send the header — this applies to SUB/WAVE's own stream password too.
+  way to send the header. SUB/WAVE's own stream password is not affected:
+  entered at the app's private-station prompt, it rides the stream URL.
 - **Special characters need no percent-encoding in the fields.** Type the real
   username and password, including `@` or `:`.
 
@@ -124,7 +135,7 @@ listener the stream without handing them the console.
 ## Known limits
 
 - One shared password for both locks; rotating it logs every listener out
-  (web listeners get re-prompted automatically).
+  (web and app listeners get re-prompted automatically).
 - Metadata endpoints (`/api/now-playing`, `/api/state`) stay public.
 - The landing broadsheet (`/landing`) is not gated — it exists to market a
   station, which is at odds with private mode; leave `SUBWAVE_HOMEPAGE=player`

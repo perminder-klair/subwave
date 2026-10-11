@@ -23,11 +23,13 @@ export default definePickerTool({
     inputSchema: z.object({
       query: z.string().min(3),
     }),
-    execute: async ({ query }) => {
+    execute: async ({ query }, { abortSignal }: { abortSignal?: AbortSignal }) => {
       try {
         if (!embeddings.isAvailable()) return { error: 'embeddings not configured — set settings.embedding.enabled / provider' };
         await library.load();
-        const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode());
+        // abortSignal is the agent's per-tool timeout: it cancels the provider
+        // call (and the SDK's own retries) rather than letting it run on.
+        const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode(), { abortSignal });
         if (!vec) return { error: 'embedding query failed' };
         const list = library.tracksByVector(vec, 60, { excludeIds: knnExclude });
         const out = collect(list);

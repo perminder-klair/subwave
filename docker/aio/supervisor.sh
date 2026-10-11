@@ -65,12 +65,13 @@ state_writable_by_others() {
 
 state_prepare_dir() {
 	local p=$1
+	local mode=${2:-777}
 	mkdir -p "$p" 2>/dev/null || true
 	if [ ! -d "$p" ]; then
 		state_warn "state dir $p could not be created — a read-only or unwritable mount; the station boots, but anything writing there will fail"
 		return 0
 	fi
-	chmod 777 "$p" 2>/dev/null || true
+	chmod "$mode" "$p" 2>/dev/null || true
 	if [ ! -w "$p" ] || ! state_writable_by_others "$p"; then
 		state_warn "state dir $p is mode $(stat -c %a "$p" 2>/dev/null || echo '?') and chmod could not change it — the controller and analyzer write there as other uids; chown/chmod it on the host"
 	fi
@@ -93,8 +94,13 @@ bootstrap_state_dirs() {
 	local root=$1
 	local dir=$2
 	local sub
-	state_prepare_dir "$root"
-	state_prepare_dir "$dir"
+	# The root is 1777, not 777 — see the entrypoint: the sticky bit keeps
+	# every uid able to create files there, but only a file's owner can
+	# rename or delete it, so no other uid can replace icecast-secrets.env.
+	state_prepare_dir "$root" 1777
+	# A single-station install serves from the root itself; a second plain
+	# 777 would strip the sticky bit again.
+	[ "$dir" = "$root" ] || state_prepare_dir "$dir"
 	# stems + transitions are the analyzer's, and the only two dirs worth
 	# relocating to a bigger disk — a bind mount there lands root-owned 755,
 	# which the analyzer cannot write without this chmod.
@@ -357,37 +363,151 @@ warn_if_analyzer_replicas_ignored() {
 }
 
 # ---------------------------------------------------------------------------
-# Resolve the ICECAST_*_PASSWORD values. Precedence: env override > persisted
-# secrets file > freshly generated. Written back for operator visibility + the
-# documented rotate path; exported for liquidsoap.
-# ---------------------------------------------------------------------------
-init_secrets() {
-	local ENV_SRC="${ICECAST_SOURCE_PASSWORD:-}"
-	local ENV_ADM="${ICECAST_ADMIN_PASSWORD:-}"
-	local ENV_REL="${ICECAST_RELAY_PASSWORD:-}"
+# Icecast passwords (state/icecast-secrets.env). Precedence: env override >
+# persisted file > freshly generated hex.
+#
+# The file is DATA, never sourced: only the three known keys are read, and
+# every value, whether it came from the env or the file, must pass
+# icecast_secret_valid before it is used. Each one is written back to the file,
+# spliced into icecast.xml by sed (where `|`, `&` and `\` are special, and `<`
+# and `&` are special again in XML) and read again by the controller's regex
+# (broadcast/listeners.ts), so a character any of those three would reinterpret
+# is refused, not escaped. A refused value is named in a warning and resolution
+# falls through to the next source: never fatal, same rule as the bootstrap.
+#
+# The file is trusted only when it is a regular file (not a symlink) owned by
+# the uid this script writes as. The state root is shared with containers that
+# run as other uids; anything else is ignored with a warning and replaced by
+# write_icecast_secrets.
+#
+# docker/broadcast-entrypoint.sh carries the same functions and the same
+# messages; scripts/icecast-secrets.test.ts drives both from one table.
+ICECAST_SECRET_CHARS='A-Z a-z 0-9 . _ ~ + = @ ! % ^ * , : / ? # -'
 
-	if [ -f "$SECRETS" ]; then
-		# shellcheck disable=SC1090
-		. "$SECRETS"
+icecast_secret_valid() {
+	case "$1" in
+		''|*[!A-Za-z0-9._~+=@!%^*,:/?#-]*) return 1 ;;
+	esac
+	return 0
+}
+
+# The uid this script's own files land as next to $1. Normally `id -u`, but a
+# root-squashed NFS export or a user-namespaced runtime maps it, and a file this
+# script wrote must still be recognised as its own. Falls back to `id -u` when
+# the dir cannot be written.
+icecast_secrets_owner() {
+	local probe uid=''
+	probe=$(mktemp "$1.XXXXXX" 2>/dev/null) || probe=''
+	if [ -n "$probe" ]; then
+		uid=$(stat -c %u "$probe" 2>/dev/null || true)
+		rm -f "$probe" 2>/dev/null || true
 	fi
+	[ -n "$uid" ] || uid=$(id -u)
+	echo "$uid"
+}
 
-	[ -n "$ENV_SRC" ] && ICECAST_SOURCE_PASSWORD="$ENV_SRC"
-	[ -n "$ENV_ADM" ] && ICECAST_ADMIN_PASSWORD="$ENV_ADM"
-	[ -n "$ENV_REL" ] && ICECAST_RELAY_PASSWORD="$ENV_REL"
+# Reads $1 into _ICS_SOURCE / _ICS_ADMIN / _ICS_RELAY, each empty when absent
+# or refused.
+read_icecast_secrets_file() {
+	local file=$1 line key val owner want
+	_ICS_SOURCE='' _ICS_ADMIN='' _ICS_RELAY=''
+	if [ -L "$file" ]; then
+		state_warn "ignoring $file — it is a symlink, not a file this script wrote; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+		return 0
+	fi
+	[ -e "$file" ] || return 0
+	if [ ! -f "$file" ] || [ ! -r "$file" ]; then
+		state_warn "ignoring $file — not a readable regular file; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+		return 0
+	fi
+	owner=$(stat -c %u "$file" 2>/dev/null || echo '?')
+	want=$(icecast_secrets_owner "$file")
+	if [ "$owner" != "$want" ]; then
+		state_warn "ignoring $file — owned by uid $owner, not uid $want which writes it; the Icecast passwords will be regenerated unless ICECAST_*_PASSWORD is set"
+		return 0
+	fi
+	while IFS= read -r line || [ -n "$line" ]; do
+		line=${line%$'\r'}
+		key=${line%%=*}
+		[ "$key" != "$line" ] || continue
+		val=${line#*=}
+		case "$key" in
+			ICECAST_SOURCE_PASSWORD|ICECAST_ADMIN_PASSWORD|ICECAST_RELAY_PASSWORD) ;;
+			*) continue ;;
+		esac
+		# A hand edit may quote the value; the controller strips one pair too.
+		case "$val" in
+			\"*\") val=${val#\"}; val=${val%\"} ;;
+			\'*\') val=${val#\'}; val=${val%\'} ;;
+		esac
+		if ! icecast_secret_valid "$val"; then
+			state_warn "ignoring $key in $file — it holds a character outside [$ICECAST_SECRET_CHARS]; it will be replaced"
+			continue
+		fi
+		case "$key" in
+			ICECAST_SOURCE_PASSWORD) _ICS_SOURCE=$val ;;
+			ICECAST_ADMIN_PASSWORD) _ICS_ADMIN=$val ;;
+			ICECAST_RELAY_PASSWORD) _ICS_RELAY=$val ;;
+		esac
+	done < "$file" || true
+	return 0
+}
 
-	[ -z "${ICECAST_SOURCE_PASSWORD:-}" ] && ICECAST_SOURCE_PASSWORD="$(openssl rand -hex 16)"
-	[ -z "${ICECAST_ADMIN_PASSWORD:-}"  ] && ICECAST_ADMIN_PASSWORD="$(openssl rand -hex 16)"
-	[ -z "${ICECAST_RELAY_PASSWORD:-}"  ] && ICECAST_RELAY_PASSWORD="$(openssl rand -hex 16)"
+# Sets and exports ICECAST_SOURCE/ADMIN/RELAY_PASSWORD from the env, then $1,
+# then openssl.
+resolve_icecast_secrets() {
+	local file=$1 part name fileval val
+	read_icecast_secrets_file "$file"
+	for part in SOURCE ADMIN RELAY; do
+		name=ICECAST_${part}_PASSWORD
+		fileval=_ICS_$part
+		val=${!name:-}
+		if [ -n "$val" ] && ! icecast_secret_valid "$val"; then
+			state_warn "ignoring $name from the environment — it holds a character outside [$ICECAST_SECRET_CHARS], which icecast.xml cannot carry safely; using the persisted or a generated password instead"
+			val=''
+		fi
+		[ -n "$val" ] || val=${!fileval}
+		[ -n "$val" ] || val=$(openssl rand -hex 16)
+		printf -v "$name" '%s' "$val"
+		export "${name?}"
+	done
+	return 0
+}
 
-	cat > "$SECRETS" <<-EOF
-		ICECAST_SOURCE_PASSWORD=$ICECAST_SOURCE_PASSWORD
-		ICECAST_ADMIN_PASSWORD=$ICECAST_ADMIN_PASSWORD
-		ICECAST_RELAY_PASSWORD=$ICECAST_RELAY_PASSWORD
-	EOF
-	# 0600 — passwords, read only by root (all in-container readers are root).
-	chmod 600 "$SECRETS"
+# Written back for operator visibility + the documented "delete + restart to
+# rotate" path. Through a fresh mktemp file and a rename, so the write never
+# follows whatever sits at $1 (the rename replaces a symlink, it does not write
+# through it). 0600: only root reads it (this script, and the controller off the
+# shared mount in broadcast/listeners.ts). A failed write warns, never aborts.
+write_icecast_secrets() {
+	local file=$1 tmp
+	tmp=$(mktemp "$file.XXXXXX" 2>/dev/null) || tmp=''
+	if [ -n "$tmp" ] \
+		&& printf 'ICECAST_SOURCE_PASSWORD=%s\nICECAST_ADMIN_PASSWORD=%s\nICECAST_RELAY_PASSWORD=%s\n' \
+			"$ICECAST_SOURCE_PASSWORD" "$ICECAST_ADMIN_PASSWORD" "$ICECAST_RELAY_PASSWORD" > "$tmp" 2>/dev/null \
+		&& chmod 600 "$tmp" 2>/dev/null \
+		&& mv -fT "$tmp" "$file" 2>/dev/null; then
+		return 0
+	fi
+	[ -z "$tmp" ] || rm -f "$tmp" 2>/dev/null || true
+	state_warn "could not write $file — the station runs on these Icecast passwords, but they will change on the next restart"
+	return 0
+}
 
-	export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
+# Escapes $1 for an XML attribute value. The replacements are quoted so bash
+# 5.2's patsub_replacement does not read `&` as "the matched text".
+xml_escape() {
+	local s=$1
+	s=${s//'&'/'&amp;'}
+	s=${s//'<'/'&lt;'}
+	s=${s//'>'/'&gt;'}
+	s=${s//'"'/'&quot;'}
+	printf '%s' "$s"
+}
+
+init_secrets() {
+	resolve_icecast_secrets "$SECRETS"
+	write_icecast_secrets "$SECRETS"
 	# Liquidsoap connects over loopback; radio.liq reads ICECAST_HOST.
 	export ICECAST_HOST=localhost
 }
@@ -595,6 +715,10 @@ render_icecast() {
 	# controller runs in-process here, so the callback goes over loopback.
 	local FLAG=$STATE_DIR/icecast_listener_auth.txt
 	local AUTH_URL="${LISTENER_AUTH_URL:-http://localhost:7701/listener-auth}"
+	# Escaped once: it lands inside an XML attribute, and a query string's `&`
+	# is legitimate in a URL but not in icecast.xml.
+	local AUTH_URL_XML
+	AUTH_URL_XML=$(xml_escape "$AUTH_URL")
 	local LISTENER_AUTH=false
 	if [ "$(cat "$FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
 		LISTENER_AUTH=true
@@ -619,7 +743,7 @@ render_icecast() {
 			echo "        <queue-size>$_queue</queue-size>"
 			if [ "$LISTENER_AUTH" = true ]; then
 				echo '        <authentication type="url">'
-				echo "            <option name=\"listener_add\" value=\"$AUTH_URL\"/>"
+				echo "            <option name=\"listener_add\" value=\"$AUTH_URL_XML\"/>"
 				echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
 				echo '        </authentication>'
 			fi
@@ -676,8 +800,10 @@ run_broadcast() {
 	resolve_state_dir
 
 	# Bootstrap the resolved station dir's subdirs (the root case is covered
-	# by init_state at boot; a non-root station dir needs its own here).
-	bootstrap_state_dirs "$STATE_DIR" "$STATE_DIR"
+	# by init_state at boot; a non-root station dir needs its own here). The
+	# root is passed as the root so a station dir gets 777, not the root's
+	# 1777, exactly as the entrypoint does.
+	bootstrap_state_dirs "$STATE_ROOT" "$STATE_DIR"
 
 	render_icecast
 	log "starting icecast2"

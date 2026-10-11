@@ -175,10 +175,12 @@ export function formatTrackText(
   return lines.join('\n');
 }
 
-export async function embedTexts(texts: string[]): Promise<number[][]> {
+// `abortSignal` is the caller's deadline (a picker tool's), passed to the SDK so
+// an abort also stops its built-in retries.
+export async function embedTexts(texts: string[], { abortSignal }: { abortSignal?: AbortSignal } = {}): Promise<number[][]> {
   if (texts.length === 0) return [];
   const model = embeddingModel();
-  const { embeddings } = await embedMany({ model, values: texts });
+  const { embeddings } = await embedMany({ model, values: texts, ...(abortSignal ? { abortSignal } : {}) });
   if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
     throw new Error(
       `embedMany returned ${embeddings?.length ?? 'no'} vectors for ${texts.length} texts`,
@@ -262,8 +264,9 @@ export function embedDocTexts(texts: string[], mode: IndexTextMode): Promise<num
 export async function embedQueryText(
   text: string,
   indexMode: IndexTextMode,
+  { abortSignal }: { abortSignal?: AbortSignal } = {},
 ): Promise<number[] | null> {
-  const [vec] = await embedTexts([applyQueryPrefix(text, indexMode)]);
+  const [vec] = await embedTexts([applyQueryPrefix(text, indexMode)], { abortSignal });
   return vec ?? null;
 }
 

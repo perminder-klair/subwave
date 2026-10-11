@@ -11,7 +11,15 @@ export { WEBHOOK_EVENTS, type WebhookEvent };
 
 const TIMEOUT_MS = 5000;
 
-async function postOne(hook: Webhook, body: string) {
+// What a delivery came to. `error` is a short reason built only from the HTTP
+// status or a system error code: it is shown to the operator by the Test
+// button, and a fetch error's message can carry the hook URL (and any token in
+// its query string).
+export type DeliveryResult =
+  | { ok: true; status: number }
+  | { ok: false; status?: number; error: string };
+
+async function postOne(hook: Webhook, body: string): Promise<DeliveryResult> {
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -26,10 +34,24 @@ async function postOne(hook: Webhook, body: string) {
     });
     if (!r.ok) {
       console.warn(`[webhook] ${hook.url} → ${r.status}`);
+      return { ok: false, status: r.status, error: `endpoint answered HTTP ${r.status}` };
     }
+    return { ok: true, status: r.status };
   } catch (err: any) {
     console.warn(`[webhook] ${hook.url} failed: ${err.message}`);
+    return { ok: false, error: deliveryErrorReason(err) };
   }
+}
+
+export function deliveryErrorReason(err: any): string {
+  if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
+    return `no answer within ${TIMEOUT_MS / 1000}s`;
+  }
+  const code = err?.cause?.code ?? err?.code;
+  if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(code)) {
+    return `could not connect (${code})`;
+  }
+  return 'request failed';
 }
 
 // Non-blocking.
@@ -54,9 +76,10 @@ export function notify(event: WebhookEvent, payload: Record<string, unknown>) {
 }
 
 // Admin "Test" button. Bypasses the event subscription list so a fresh hook can
-// be checked before its events are switched on.
-export async function fireTest(hook: Webhook) {
-  await postOne(hook, JSON.stringify({
+// be checked before its events are switched on. Unlike notify(), it reports the
+// outcome: this button is the operator's only way to confirm a hook works.
+export async function fireTest(hook: Webhook): Promise<DeliveryResult> {
+  return postOne(hook, JSON.stringify({
     event: 'test',
     t: new Date().toISOString(),
     note: 'sub-wave webhook test fire',

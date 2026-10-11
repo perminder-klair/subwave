@@ -1,13 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { talkingState } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
-
-// How long after the last spoken turn the DJ avatar stays on the lock screen:
-// typical voice-segment length plus a tail. Longer segments extend it anyway
-// because each new turn resets the timer.
-const TALKING_LINGER_MS = 15_000;
 
 export interface UseMediaSessionParams {
   playbackState: MediaSessionPlaybackState;
@@ -19,50 +15,15 @@ export interface UseMediaSessionParams {
   /** Booth-feed messages, most recent last; the tail decides whether the DJ is
    *  talking now. Omitting it means the persona avatar is never swapped in. */
   boothFeed?: SessionTurn[];
+  /** This listener's buffer behind the live edge (useStationFeed.leadMs): the
+   *  talking window opens when the line is HEARD, not when it was stamped. */
+  leadMs?: number;
   /** Public avatar URL for the on-air persona. Swapped into the MediaSession
    *  artwork while the DJ is talking; otherwise the track cover wins. */
   personaAvatarUrl?: string | null;
   /** On-air host name, shown as the metadata "artist" while the DJ is talking so
    *  the lock screen doesn't pretend Track Artist is speaking. */
   personaName?: string | null;
-}
-
-// Turn kinds that map to "the DJ is on the mic". Tracks and request acks share
-// the booth-feed channel but aren't voiced over the music bus, so they must not
-// trigger the avatar swap.
-const VOICE_TURN_KINDS = new Set([
-  'voice',
-  'segment',
-  'link',
-  'intro',
-  'station-id',
-  'weather',
-  'hourly',
-  'say',
-]);
-
-function isVoiceTurn(turn: SessionTurn | undefined): boolean {
-  if (!turn) return false;
-  const kind = (turn.kind || '').toLowerCase();
-  if (VOICE_TURN_KINDS.has(kind)) return true;
-  const role = (turn.role || '').toLowerCase();
-  return role === 'voice' || role === 'segment';
-}
-
-function lastVoiceTurnTime(feed: SessionTurn[] | undefined): number | null {
-  if (!feed?.length) return null;
-  // Only voice turns near the tail matter for "is the DJ talking now".
-  for (let i = feed.length - 1; i >= 0; i--) {
-    const turn = feed[i];
-    if (!isVoiceTurn(turn)) continue;
-    const t = typeof turn?.t === 'number'
-      ? turn.t
-      : typeof turn?.t === 'string'
-        ? Date.parse(turn.t)
-        : NaN;
-    return Number.isFinite(t) ? t : null;
-  }
-  return null;
 }
 
 // OS controls use explicit player commands so repeated commands are idempotent. Leave seeking unset
@@ -75,29 +36,28 @@ export function useMediaSession({
   onStop,
   onSkip,
   boothFeed,
+  leadMs = 0,
   personaAvatarUrl,
   personaName,
 }: UseMediaSessionParams): void {
   const client = useStationClient();
-  // True for TALKING_LINGER_MS after the most recent voice turn. Held in state
-  // rather than derived so a setTimeout can flip it off with no feed update.
+  // True while one of the DJ's lines is being heard (talkingState). Held in
+  // state and re-evaluated on its own timer, so the window opens and closes on
+  // time with no feed update.
   const [talking, setTalking] = useState(false);
-  const lastVoiceTs = useMemo(() => lastVoiceTurnTime(boothFeed), [boothFeed]);
-
   useEffect(() => {
-    if (lastVoiceTs == null) {
-      setTalking(false);
-      return;
-    }
-    const remaining = TALKING_LINGER_MS - (Date.now() - lastVoiceTs);
-    if (remaining <= 0) {
-      setTalking(false);
-      return;
-    }
-    setTalking(true);
-    const id = window.setTimeout(() => setTalking(false), remaining);
-    return () => window.clearTimeout(id);
-  }, [lastVoiceTs]);
+    let timer: number | null = null;
+    const apply = () => {
+      const now = Date.now();
+      const { talking: next, nextChangeMs } = talkingState(boothFeed, leadMs, now);
+      setTalking(next);
+      timer = nextChangeMs == null ? null : window.setTimeout(apply, Math.max(0, nextChangeMs - now));
+    };
+    apply();
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+    };
+  }, [boothFeed, leadMs]);
   // The browser renders the lock-screen play/pause glyph from this, so it stays
   // correct even while the <audio> readyState is still loading.
   useEffect(() => {

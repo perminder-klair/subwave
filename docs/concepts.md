@@ -222,8 +222,8 @@ turning either one on asks for the same password.
 
 | | Private player | Stream password |
 | --- | --- | --- |
-| **Hides** | The web pages (`/`, `/listen`) | The audio itself, on every mount |
-| **Enforced by** | The web UI | Icecast, via a callback to the controller |
+| **Hides** | The web pages (`/`, `/listen`) and the app's player | The audio itself, on every mount |
+| **Enforced by** | The web UI and the app | Icecast, via a callback to the controller |
 | **Applies** | Live | Enabling/disabling needs a mixer restart; password changes are live |
 | **Stops** `curl /stream.mp3` | **No** | Yes |
 

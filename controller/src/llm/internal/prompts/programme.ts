@@ -162,13 +162,33 @@ export async function generateProgrammePlan({
     `\nWrite the plan — exactly ${featureCount} feature${featureCount > 1 ? 's' : ''}, in air order.`,
   ].filter(Boolean);
 
-  return djObject({
+  const plan = await djObject({
     system,
     prompt: promptLines.join('\n'),
     schema: planSchema(featureCount),
     temperature: 0.9,
     kind: 'generateProgrammePlan',
   });
+  return narrowPlanKinds(plan, skillKinds.map((k: { kind: string }) => k.kind), pinnedKind);
+}
+
+// The schema takes any string for `kind`, so a producer can name a capability
+// it was never offered — a built-in word like "news" is an easy guess for a
+// small model. Anything outside the menu (or the pinned kind) becomes null,
+// i.e. straight talk. broadcast/programme.ts runFeature re-checks at air time,
+// because the plan outlives the menu it was built from.
+export function narrowPlanKinds<T extends { features?: { kind?: string | null }[] }>(
+  plan: T,
+  offered: string[],
+  pinnedKind: string | null = null,
+): T {
+  if (!plan || !Array.isArray(plan.features)) return plan;
+  const allowed = new Set(pinnedKind ? [pinnedKind] : offered);
+  return {
+    ...plan,
+    features: plan.features.map((f) =>
+      (f?.kind != null && !allowed.has(f.kind) ? { ...f, kind: null } : f)),
+  };
 }
 
 // ---------------------------------------------------------------------------

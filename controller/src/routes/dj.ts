@@ -28,6 +28,17 @@ import {
 import { validateBody } from '../middleware/validate.js';
 import { firstMessage } from '../util/zod-error.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
+import {
+  SKILL_BUNDLE_MAX_BYTES,
+  SKILL_BUNDLE_MAX_ENTRIES,
+  discardPendingTool,
+  hasPendingTool,
+  quarantineTool,
+  readPendingTool,
+  trustPendingTool,
+  withSkillName,
+} from '../skills/install.js';
+import { isSafeZipEntry, readZipEntryCapped } from '../util/zip-entry.js';
 import { coerceConfigValues, readConfigValues, type SkillConfigField } from '../skills/config-fields.js';
 import { mapPool } from '../util/async-pool.js';
 import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
@@ -234,16 +245,11 @@ router.get('/dj/skills/:slug/export', requireAdmin, async (req, res) => {
   }
 });
 
-// Zip-slip guard: no absolute paths, no '..' (mirrors backup.ts isSafeEntry).
-function isSafeZipEntry(entryName: string): boolean {
-  const n = entryName.replace(/\\/g, '/');
-  if (n.startsWith('/') || /^[a-zA-Z]:/.test(n)) return false;
-  return !n.split('/').includes('..');
-}
-
 // Install a skill from an uploaded .zip. Slug comes from SKILL.md `name:`, not
 // the zip filename. Only SKILL.md + tool.mjs are extracted, zip-slip checked and
-// size/entry capped; the skill arrives DISABLED and `hasTool` flags a code drop.
+// size/entry capped; the skill arrives DISABLED. A tool.mjs is written as
+// tool.mjs.pending — the loader never imports that name, so no code from the
+// bundle runs until the operator reads it and trusts it (POST …/tool/trust).
 router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, res) => {
   const file = (req as { file?: { buffer?: Buffer } }).file;
   if (!file?.buffer?.length) return res.status(400).json({ error: 'expected a .zip file in the "file" field' });
@@ -252,10 +258,10 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
   try { zip = new AdmZip(file.buffer); } catch { return res.status(400).json({ error: 'not a valid zip file' }); }
 
   const entries = zip.getEntries();
-  if (entries.length > 20) return res.status(400).json({ error: 'zip has too many files for a skill bundle' });
+  if (entries.length > SKILL_BUNDLE_MAX_ENTRIES) return res.status(400).json({ error: 'zip has too many files for a skill bundle' });
   // Zip-bomb guard: reject if the uncompressed total is implausible for a skill.
   const totalRaw = entries.reduce((n, e) => n + (e.header?.size || 0), 0);
-  if (totalRaw > 8 * 1024 * 1024) return res.status(400).json({ error: 'skill bundle is too large uncompressed' });
+  if (totalRaw > SKILL_BUNDLE_MAX_BYTES) return res.status(400).json({ error: 'skill bundle is too large uncompressed' });
 
   // Accept only SKILL.md + tool.mjs (by basename), anywhere safe in the archive.
   let skillMdEntry: AdmZip.IZipEntry | null = null;
@@ -269,26 +275,93 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
   }
   if (!skillMdEntry) return res.status(400).json({ error: 'zip has no SKILL.md — not a skill bundle' });
 
-  const skillMd = skillMdEntry.getData().toString('utf8');
-  const { data, body } = parseFrontmatter(skillMd);
+  const skillMdData = readZipEntryCapped(skillMdEntry, SKILL_BUNDLE_MAX_BYTES);
+  const toolData = toolEntry ? readZipEntryCapped(toolEntry, SKILL_BUNDLE_MAX_BYTES) : null;
+  if (!skillMdData || (toolEntry && !toolData)) return res.status(400).json({ error: 'skill bundle is too large uncompressed' });
+  const { data, body } = parseFrontmatter(skillMdData.toString('utf8'));
   const slug = (data.name || '').trim().toLowerCase();
   if (!SLUG_RE.test(slug)) return res.status(400).json({ error: 'SKILL.md has no valid "name:" — cannot determine the skill slug' });
   if (RESERVED_KINDS.has(slug)) return res.status(400).json({ error: `"${slug}" is reserved — it shadows a built-in capability` });
   if (!body.trim()) return res.status(400).json({ error: 'SKILL.md has an empty brief' });
+  // The loader takes the kind from `name:` and refuses anything but a lowercase
+  // slug, so the file has to say what the folder says or the skill never loads.
+  const skillMd = withSkillName(skillMdData.toString('utf8'), slug);
+  if (skillMd == null) return res.status(400).json({ error: `SKILL.md "name:" must be a lowercase slug such as "${slug}"` });
   if (await skillFileExists(slug)) return res.status(409).json({ error: `a skill named "${slug}" is already installed` });
 
+  const dir = join(SKILLS_DIR, slug);
   try {
-    const dir = join(SKILLS_DIR, slug);
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, 'SKILL.md'), skillMd, 'utf8');
-    const hasTool = !!toolEntry;
-    if (toolEntry) await writeFile(join(dir, 'tool.mjs'), toolEntry.getData());
+    const hasTool = !!toolData;
+    if (toolData) await quarantineTool(slug, toolData);
     await loadSkills();
+    // Answering "Imported" for a folder the loader refused leaves a skill that
+    // never appears and a name that 409s on every retry.
+    if (!loadedCapabilities().some(c => c.kind === slug)) {
+      await rm(dir, { recursive: true, force: true });
+      await loadSkills();
+      return res.status(400).json({ error: `"${slug}" could not be loaded — check the station log for why` });
+    }
     syncSkillCrons();
-    queue.log('scheduler', `[skills] imported "${slug}" from zip${hasTool ? ' (with tool.mjs)' : ''} via admin UI (disabled)`);
-    res.json({ skills: skillCatalog(), slug, hasTool });
+    queue.log('scheduler', `[skills] imported "${slug}" from zip${hasTool ? ' (tool.mjs held for review)' : ''} via admin UI (disabled)`);
+    res.json({ skills: skillCatalog(), slug, hasTool, toolPending: hasTool });
   } catch (err) {
     queue.log('error', `POST /dj/skills/import failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The quarantined tool.mjs of an imported/restored skill, as text, so the
+// operator can read it before trusting it. `sha256` goes back with the trust.
+router.get('/dj/skills/:slug/tool/pending', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  try {
+    const pending = await readPendingTool(slug);
+    if (!pending) return res.status(404).json({ error: `"${slug}" has no tool.mjs awaiting review` });
+    res.json({ slug, ...pending });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Trust the reviewed code: rename tool.mjs.pending → tool.mjs and reload. The
+// first moment any of it runs. Refused when the file is no longer the one the
+// operator was shown.
+router.post('/dj/skills/:slug/tool/trust', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  const digest = typeof req.body?.sha256 === 'string' ? req.body.sha256.trim().toLowerCase() : '';
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    return res.status(400).json({ error: 'sha256 of the reviewed tool.mjs is required — read it first (GET …/tool/pending)' });
+  }
+  try {
+    const outcome = await trustPendingTool(slug, digest);
+    if (outcome === 'missing') return res.status(404).json({ error: `"${slug}" has no tool.mjs awaiting review` });
+    if (outcome === 'changed') return res.status(409).json({ error: 'the pending tool.mjs changed since you read it — review it again' });
+    await loadSkills();
+    syncSkillCrons();
+    queue.log('scheduler', `[skills] "${slug}" tool.mjs trusted via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err) {
+    queue.log('error', `POST /dj/skills/${slug}/tool/trust failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Throw the quarantined code away without ever loading it.
+router.delete('/dj/skills/:slug/tool/pending', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  if (!SLUG_RE.test(slug)) return res.status(400).json({ error: `invalid skill name: ${slug}` });
+  try {
+    if (!(await discardPendingTool(slug))) return res.status(404).json({ error: `"${slug}" has no tool.mjs awaiting review` });
+    await loadSkills();
+    syncSkillCrons();
+    queue.log('scheduler', `[skills] "${slug}" pending tool.mjs discarded via admin UI`);
+    res.json({ skills: skillCatalog() });
+  } catch (err) {
+    queue.log('error', `DELETE /dj/skills/${slug}/tool/pending failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -372,6 +445,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         tags: parseTags(data.tags),
         brief: body || cat?.description || '',
         hasTool: await skillHasTool(kind),
+        toolPending: await hasPendingTool(kind),
         defaults,
       });
     } catch {
@@ -390,6 +464,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         tags: cat?.tags || [],
         brief: cat?.description || '',
         hasTool: await skillHasTool(kind),
+        toolPending: await hasPendingTool(kind),
         defaults,
       });
     }
@@ -420,6 +495,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
       tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
+      toolPending: await hasPendingTool(kind),
       brief: body || '',
     });
   } catch {

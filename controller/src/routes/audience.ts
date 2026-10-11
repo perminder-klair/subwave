@@ -2,7 +2,8 @@
 // from the player; GET /audience is the admin rollup for the Stats page.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import { unverifiedCfIp, clientIp } from '../middleware/ratelimit.js';
+import { unverifiedCfIp, clientIp, LIMITER_MAX_KEYS } from '../middleware/ratelimit.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 import * as audience from '../broadcast/audience.js';
 import { resolveListenerCountry } from '../broadcast/listener-country.js';
 import { lookupCountry } from '../broadcast/geoip.js';
@@ -10,6 +11,28 @@ import { rememberBeaconCountry } from '../broadcast/beacon-countries.js';
 import * as settings from '../settings.js';
 
 export const router = express.Router();
+
+// The player sends one beacon per page load, so a client past this is not a
+// listener. Over the limit the beacon is still answered 204 — just not recorded.
+export const BEACON_WINDOW_MS = 60_000;
+export const BEACON_PER_WINDOW = 20;
+const beaconHistory = new BoundedKeyMap<number[]>({
+  maxKeys: LIMITER_MAX_KEYS,
+  isLive: (hits, now) => hits.some(t => now - t < BEACON_WINDOW_MS),
+});
+
+export function beaconAllowed(key: string, now = Date.now()): boolean {
+  const hits = (beaconHistory.get(key) || []).filter(t => now - t < BEACON_WINDOW_MS);
+  if (hits.length >= BEACON_PER_WINDOW) return false;
+  hits.push(now);
+  beaconHistory.set(key, hits, now);
+  return true;
+}
+
+// Test seam.
+export function resetBeaconLimiter(): void {
+  beaconHistory.clear();
+}
 
 router.post('/beacon', (req, res) => {
   // Analytics must never break a listener — swallow everything, always 204.
@@ -19,6 +42,11 @@ router.post('/beacon', (req, res) => {
     // is off — a forgery only skews a rollup. Never reuse this ordering for
     // anything that throttles or locks out; clientIp() stays the gated one.
     const ip = unverifiedCfIp(req) || clientIp(req);
+    // The one exception, and why it is safe: this limit only damps a single
+    // client's repeats, and it keys on the same identity the dedupe below does.
+    // Keyed on clientIp() alone it would cap a tunnelled station, where every
+    // visitor shares one address, at BEACON_PER_WINDOW page loads station-wide.
+    if (!beaconAllowed(ip)) return res.status(204).end();
     // The country is a fail-open CHAIN (#1485), not one header. Read live so an
     // admin edit applies without a restart, and defensively so a settings read
     // can never break a listener's first page load.

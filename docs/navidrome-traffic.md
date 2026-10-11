@@ -24,7 +24,7 @@ There are two independent empty-room settings, both off by default:
 The idle monitor polls **Icecast**, not Navidrome, every five seconds while
 paused so it can detect a new listener. A sustained Icecast status failure
 releases the pause to keep the station available. Check `streamIdle` on
-`GET /state` and the booth's pause/resume lines to establish whether the
+`GET /state` and the booth log's pause/resume lines (admin → Debug) to establish whether the
 programme actually stayed idle. A running broadcast is expected to fetch
 tracks even if its DJ is asleep. For scale, four-minute tracks played
 continuously would mean about 2,520 tracks a week, before crossfades,

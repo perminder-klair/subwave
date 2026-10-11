@@ -8,8 +8,8 @@ import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
 import { z } from 'zod';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError } from '../core/pure.js';
-import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
+import { stripThinking, extractJson, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
+import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage, UsageMeter } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
@@ -27,42 +27,43 @@ interface AgentGenerateResult {
   totalUsage?: TokenUsage;
   steps?: StepLike[];
   staticToolCalls?: ToolCallLike[];
+  // Final step only — ai@7 builds each step's response.messages from that
+  // step's content alone. The whole run's trail is `responseMessages`.
   response?: { messages?: ModelMessage[] };
+  responseMessages?: ModelMessage[];
 }
 interface AgentLike {
   generate(options: { messages: ModelMessage[]; abortSignal?: AbortSignal }): Promise<AgentGenerateResult>;
 }
 
 // The SDK throws before completing a step when a model declines a required
-// tool. Preserve completed discovery, the declining text and all billed usage
-// so the existing done-only/terminal recovery gets the same evidence as before.
-function createAgentAttempt() {
+// tool. Preserve completed discovery and the declining text so the existing
+// done-only/terminal recovery gets the same evidence as before. Billed usage
+// goes to the leg's shared meter, which outlives the throw.
+function createAgentAttempt(meter: UsageMeter) {
   const steps: StepLike[] = [];
+  // Appended per step: each step's response.messages holds that step alone,
+  // and recovery needs every discovery call and result, not just the last.
   let responseMessages: ModelMessage[] = [];
-  const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const callbacks = {
     onStepEnd: event => {
       steps.push(event);
-      responseMessages = event.response.messages;
+      responseMessages = [...responseMessages, ...event.response.messages];
     },
-    onLanguageModelCallEnd: event => {
-      const usage = usageOf({ usage: event.usage });
-      totalUsage.inputTokens += usage.input;
-      totalUsage.outputTokens += usage.output;
-      totalUsage.totalTokens += usage.total;
-    },
+    onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
   } satisfies Pick<ToolLoopAgentSettings<never, ToolSet>, 'onStepEnd' | 'onLanguageModelCallEnd'>;
   return {
     callbacks,
     declined(err: ToolChoiceViolationError): AgentGenerateResult {
       const text = err.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+      const messages: ModelMessage[] = [...responseMessages, { role: 'assistant', content: text }];
       return {
         text,
         finishReason: err.finishReason,
-        totalUsage,
         steps: [...steps, { toolCalls: [] }],
         staticToolCalls: [],
-        response: { messages: [...responseMessages, { role: 'assistant', content: text }] },
+        response: { messages },
+        responseMessages: messages,
       };
     },
   };
@@ -234,36 +235,29 @@ export async function djAgent({
       let lastVia = 'ai-sdk:agent';
       // One shared wall-clock ceiling for every attempt below.
       const deadlineAt = timeoutMs ? Date.now() + timeoutMs : undefined;
+      // Tokens billed across EVERY leg below, counted as each provider call
+      // ends — including legs that throw, decline or hit their step cap, which
+      // leave no result to read usage from. This sum is what telemetry/log.ts
+      // records, on success and (attached to the error) on failure, and what
+      // the daily token cap counts against.
+      const meter = createUsageMeter();
       try {
         // No discovery tools + a model that ignores JSON mode: no loop to run,
         // and ToolLoopAgent + Output.object would throw NoObjectGeneratedError.
         if (plan === 'object-via-tool') {
           lastVia = 'ai-sdk:tool';
-          const { object, usage, perf, warnings } = await runDeadlinedCall(deadlineAt, kind, 'agent object',
-            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal }));
+          const { object, perf, warnings } = await runDeadlinedCall(deadlineAt, kind, 'agent object',
+            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal, meter }));
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
             sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-            usage,
+            usage: meter.usage(),
             perf,
             warnings,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2), ...telemetry },
           };
         }
-
-        // Tokens spent across EVERY leg below. Each is a separate billable call
-        // and `result` is reassigned between them, so a single usageOf(result)
-        // at the end would count only the last one. This sum is what
-        // telemetry/log.ts records and what the daily token cap counts against.
-        let spentUsage = { input: 0, output: 0, total: 0 };
-        const addUsage = (u: { input: number; output: number; total: number }) => {
-          spentUsage = {
-            input: spentUsage.input + u.input,
-            output: spentUsage.output + u.output,
-            total: spentUsage.total + u.total,
-          };
-        };
 
         // Native-first structured output. A miss falls through to the done-tool
         // path below; lastVia stays ':native' so the record attributes there.
@@ -287,6 +281,9 @@ export async function djAgent({
               // free text still reasons.
               reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema: schema! }),
+              // A run that ends on its step cap mid-exploration makes `output`
+              // throw after every step was billed; count each call as it ends.
+              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
             } as any);
             const nr = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
             const nObj = nr.output;
@@ -307,14 +304,13 @@ export async function djAgent({
                 value: { object: nObj, steps: nSteps, toolCalls },
                 via: lastVia,
                 sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-                usage: usageOf(nr),
+                usage: meter.usage(),
                 perf: perfOf(nr),
                 warnings: warningsOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
             console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
-            addUsage(usageOf(nr));
           } catch (e) {
             if (isGenerationControlError(e) || isModelUnavailable(e)) throw e;
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
@@ -338,7 +334,7 @@ export async function djAgent({
         // Ungated runs keep the caller's value.
         const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
 
-        const mainAttempt = createAgentAttempt();
+        const mainAttempt = createAgentAttempt(meter);
         const agent = new ToolLoopAgent({
           ...mainAttempt.callbacks,
           // useDoneTool legs force tool calls → no-think model; the schema-only
@@ -360,7 +356,6 @@ export async function djAgent({
         } as any);
         let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages, mainAttempt);
         let steps = result.steps?.length ?? 0;
-        addUsage(usageOf(result));
 
         // The trail belongs to the MAIN run: `result` is reassigned by the
         // done-only recovery below, so reading it off the final result loses it
@@ -399,13 +394,13 @@ export async function djAgent({
           console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
           recordAgentRetry();
           lastVia = 'ai-sdk:agent:recovery';
-          const priorMessages = result.response?.messages || [];
+          // The whole run's trail, never `response.messages` (final step only).
+          const priorMessages = result.responseMessages || result.response?.messages || [];
           const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
-          const recoveryAttempt = createAgentAttempt();
+          const recoveryAttempt = createAgentAttempt(meter);
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
           steps = result.steps?.length ?? 0;
-          addUsage(usageOf(result));
           captureTrail(result);
           noteIfDeclined('recovery', result);
 
@@ -423,10 +418,9 @@ export async function djAgent({
               const prompt = renderTerminalPrompt(messages, discoveryTrail);
               const t = await runDeadlinedCall(deadlineAt, kind, 'agent terminal collapse',
                 (signal) => objectViaToolCall(leg, {
-                  system, prompt, schema, temperature, maxOutputTokens, signal,
+                  system, prompt, schema, temperature, maxOutputTokens, signal, meter,
                 }));
               terminalObject = t.object;
-              addUsage(t.usage);
               terminalPrompt = prompt;
               // A real model call the record should count.
               steps += 1;
@@ -463,9 +457,7 @@ export async function djAgent({
               const err = new Error('agent did not call the done tool before stopping') as AgentFailureError;
               err.text = declinedAttempts.length ? declinedAttempts.join('\n\n') : (result.text || '');
               err.finishReason = result.finishReason;
-              // Spend across every leg, in the raw TokenUsage shape
-              // failureDiagnostics feeds to usageOf.
-              err.usage = { inputTokens: spentUsage.input, outputTokens: spentUsage.output, totalTokens: spentUsage.total };
+              // Spend across every leg is attached by the catch below.
               err.steps = result.steps;
               throw err;
             }
@@ -482,7 +474,7 @@ export async function djAgent({
           value: { object, steps, toolCalls },
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-          usage: spentUsage,
+          usage: meter.usage(),
           perf: perfOf(result),
           warnings: warningsOf(result),
           // Full and untruncated. When the collapse answered, the flattened
@@ -496,8 +488,11 @@ export async function djAgent({
         };
       } catch (err) {
         // Attribute to the path actually attempted; withFailover writes the
-        // record and decides whether this failure tries the backup.
+        // record and decides whether this failure tries the backup. The spend
+        // rides on the error whatever threw — a deadline, a provider error in
+        // a later leg, or the salvage miss — so the record still counts it.
         (err as { __via?: string }).__via = lastVia;
+        meter.attachTo(err);
         throw err;
       }
     },

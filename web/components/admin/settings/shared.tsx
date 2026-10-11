@@ -27,7 +27,7 @@ export const KEY_HINTS: Record<string, string> = {
   ELEVENLABS_API_KEY: 'el_...',
   // Fish keys have no documented prefix — point at where to mint one instead.
   FISH_API_KEY: 'key from fish.audio/app/api-keys',
-  EMBEDDING_API_KEY: 'optional — defaults to chat key',
+  EMBEDDING_API_KEY: 'optional — defaults to the same provider’s chat key',
 };
 
 export interface WeatherCfg {

@@ -96,6 +96,27 @@ test('when every fresh album is also a recent artist, the artist exclusion is wa
   assert.equal(starved, true, 'overruled, not a no-op');
 });
 
+for (const window of [0, 5]) {
+  test(`album recency rescue preserves a successful artist re-pick's anchor at window ${window}`, async () => {
+    const repeat: Cand = { id: 'p', title: 'Mr. Grieves', artist: 'Pixies • Kim Deal', album: 'Doolittle' };
+    const recentRoots = window ? rootsOf('Pixies', clash.artist) : new Set<string>();
+    const { alt, starved } = alternativeAlbumCandidates(
+      seenOf(repeat, clash), albumsOf(kidA1), albumKey, recentRoots, artistRootKey('Pixies'),
+    );
+    assert.deepEqual([...alt.keys()], [clash.id]);
+    assert.equal(starved, window > 0, 'the unrelated recent artist can still be restored');
+
+    const h = harness();
+    const out = await runAlbumGuard({
+      song: kidA2, object: { id: kidA2.id }, seen: seenOf(kidA2, repeat),
+      recentAlbums: albumsOf(kidA1), avoidArtistRoots: recentRoots,
+      avoidAnchorRoot: artistRootKey('Pixies'), albumKeyOf: albumKey, hours: 6, ...h.deps,
+    });
+    assert.equal(out.kind, 'kept', 'keep the artist-safe pick when only the anchor has another album');
+    assert.equal(h.calls.repick, 0);
+  });
+}
+
 // ── the guard ──────────────────────────────────────────────────────────────
 
 test('a fresh album is not guarded, and costs nothing', async () => {

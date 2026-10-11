@@ -10,6 +10,8 @@ import * as subsonic from './subsonic.js';
 import * as library from './library.js';
 import * as embeddings from './embeddings.js';
 import * as analyzer from './analyzer.js';
+import * as likes from '../broadcast/likes.js';
+import * as settings from '../settings.js';
 import { djObject } from '../llm/sdk.js';
 import {
   mergePools,
@@ -229,7 +231,11 @@ export async function buildCandidatePool(
   // Fillers when the pool is thin, so a small library stays usable.
   let pool = mergePools(pools);
   if (pool.length < 30) {
-    pools.push(normMany(await subsonic.getStarred().catch(() => []), 'starred', 0.4));
+    // Operator curation only (likes.operatorStarred, gated on likes.influenceDj):
+    // a star a listener like left behind is not the operator's pick. The random
+    // filler beside it is what keeps a small library usable either way.
+    await likes.load();
+    pools.push(normMany(likes.operatorStarred(await subsonic.getStarred().catch((): any[] => []), settings.get()?.likes), 'starred', 0.4));
     const era = eraSpan(knobs.eras);
     pools.push(normMany(
       await subsonic.getRandomSongs({

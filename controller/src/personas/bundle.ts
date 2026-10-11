@@ -35,6 +35,7 @@ import { personaSchema } from '../schemas/persona.js';
 import { validatePersonasStrict } from '../settings/validate.js';
 import { installPersona, personaSlotError, type PersonaInstallResult } from './install.js';
 import { migrateImportedPersona } from './import-migration.js';
+import { readZipEntryCapped } from '../util/zip-entry.js';
 import {
   BUNDLE_JINGLE_DIR,
   BUNDLE_MANIFEST_ENTRY,
@@ -42,6 +43,7 @@ import {
   BUNDLE_VOICE_DIR,
   JINGLE_TEXT_MAX,
   MAX_BUNDLE_JINGLES,
+  MAX_BUNDLE_JSON_BYTES,
   PERSONA_BUNDLE_FORMAT,
   PERSONA_BUNDLE_VERSION,
   bundleMemberName,
@@ -194,9 +196,12 @@ async function applyPersonaBundleLocked(body: Buffer): Promise<BundleImportResul
   if (!manifestEntry) {
     return fail(400, 'missing manifest.json — not a SUB/WAVE persona bundle');
   }
+  // Bounded by DECLARED size before anything is inflated — see MAX_BUNDLE_JSON_BYTES.
+  const manifestData = readZipEntryCapped(manifestEntry, MAX_BUNDLE_JSON_BYTES);
+  if (!manifestData) return fail(400, 'manifest.json is too large for a persona bundle');
   let manifest: any;
   try {
-    manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
+    manifest = JSON.parse(manifestData.toString('utf8'));
   } catch {
     return fail(400, 'corrupt manifest.json');
   }
@@ -213,9 +218,11 @@ async function applyPersonaBundleLocked(body: Buffer): Promise<BundleImportResul
 
   const personaEntry = zip.getEntry(BUNDLE_PERSONA_ENTRY);
   if (!personaEntry) return fail(400, 'missing persona.json');
+  const personaData = readZipEntryCapped(personaEntry, MAX_BUNDLE_JSON_BYTES);
+  if (!personaData) return fail(400, 'persona.json is too large for a persona bundle');
   let raw: any;
   try {
-    raw = JSON.parse(personaEntry.getData().toString('utf8'));
+    raw = JSON.parse(personaData.toString('utf8'));
   } catch {
     return fail(400, 'corrupt persona.json');
   }

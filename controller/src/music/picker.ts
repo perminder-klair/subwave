@@ -12,7 +12,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
-import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, trackKey } from './recency.js';
+import { artistRootIn, artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, trackKey } from './recency.js';
 import { albumKeyFor } from './album-facts.js';
 import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
@@ -498,16 +498,28 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
-  // 8. Fallback if the pool is still thin — starred + random.
+  // 8. Fallback if the pool is still thin — starred + random. Starred means the
+  // operator's curation (likes.operatorStarred, gated on likes.influenceDj): a
+  // star a listener like left behind does not earn the slot. It is still
+  // music, though, so it comes back as the last filler when nothing else did —
+  // this pool is never-starve scope, and the filter must not be what empties it.
   if (pool.length < 8) {
+    let listenerStarred: any[] = [];
     try {
       const starred = await subsonic.getStarred();
-      add('starred', sampleFresh(shuffle(starred), recentIds, 4));
+      await likes.load();
+      const curated = likes.operatorStarred(starred, settings.get()?.likes);
+      const curatedIds = new Set(curated.map((s: any) => s?.id));
+      listenerStarred = starred.filter((s: any) => !curatedIds.has(s?.id));
+      add('starred', sampleFresh(shuffle(curated), recentIds, 4));
     } catch {}
     try {
       const random = await subsonic.getRandomSongs({ size: 10 });
       add('random', sampleFresh(random, recentIds, 4));
     } catch {}
+    if (!pool.length && listenerStarred.length) {
+      add('starred', sampleFresh(shuffle(listenerStarred), recentIds, 4));
+    }
   }
 
   }
@@ -614,9 +626,9 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 }
 
 // Build a candidate pool, ask the LLM to choose one; null when it can't.
-// `opts.avoidArtist` (#1187) is a hard block held through the whole starvation
-// cascade, set only by the agent path's back-to-back artist guard.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null } = {}) {
+// Guard-rescue artist exclusions (#1187) hold through the whole starvation
+// cascade. Preserve the anchor as well as the rejected credit.
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null } = {}) {
   await library.load();
   ctx = await prepareEpisodeContext(ctx);
   const episodeSource = showPreparation.read({ context: ctx }).music;
@@ -679,9 +691,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
   }
   const blockedArtists = new Set<string>();
-  if (opts.avoidArtist) {
-    // Lead-artist key (#1251): a collab the act fronts is the same repeat.
-    const key = artistRootKey({ artist: opts.avoidArtist });
+  for (const artist of [opts.avoidArtist, opts.avoidAnchorArtist]) {
+    // Preserve both the rejected credit and the actual anchor. Matching one
+    // combined credit does not imply matching another that shares its act.
+    const key = artistRootKey({ artist });
     if (key) blockedArtists.add(key);
   }
   const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtistRoots, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, { minTrackSec, maxTrackSec }, noRepeat.exhaustive, excludedIds, episodeSource);
@@ -692,13 +705,14 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     : rawCandidates;
 
   if (candidates.length === 0) {
-    queue.log('picker', opts.avoidArtist
-      ? `no candidates available excluding "${opts.avoidArtist}", skipping LLM pick`
+    const avoided = [opts.avoidArtist, opts.avoidAnchorArtist].filter(Boolean).join('", "');
+    queue.log('picker', avoided
+      ? `no candidates available excluding "${avoided}", skipping LLM pick`
       : 'no candidates available, skipping LLM pick');
     return null;
   }
 
-  if (candidates.some(c => recentArtistRoots.has(artistRootKey(c)))) {
+  if (candidates.some(c => artistRootIn(artistRootKey(c), recentArtistRoots))) {
     queue.log('picker', `artist spacing relaxed (window ${varietyWindow} slots): no candidate survived spacing with the active selection rules; keeping music available`);
     logEvent('pick.artistSpacingRelaxed', {
       agent: 'pool', basis: 'recent-window', window: varietyWindow,

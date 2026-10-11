@@ -70,7 +70,7 @@ intent-shaped tools.
 |---|---|---|---|
 | `subwave_health` | `GET /health` | none | no |
 | `subwave_now_playing` | `GET /now-playing` | none | no |
-| `subwave_station_state` | `GET /state` | none | no |
+| `subwave_station_state` | `GET /state` (+ `GET /debug/dj-log` with admin creds) | none (booth log: admin) | no |
 | `subwave_schedule` | `GET /schedule` | none | no |
 | `subwave_session` | `GET /session` | none | no |
 | `subwave_request_song` | `POST /request` + `GET /request/:id` | none | queues a track |
@@ -93,7 +93,9 @@ intent-shaped tools.
 
 All read-only passthroughs. `now-playing` returns the current track, station
 context (time, weather, dominant mood), and live listener counts; `state`
-returns the upcoming queue, recent history, and the DJ booth log; `schedule`
+returns the upcoming queue and recent history, plus the DJ booth log when the
+connection carries admin credentials (the log is operator diagnostics, so the
+public `GET /state` no longer serves it); `schedule`
 the personas, shows, and weekly grid (in the station's timezone); `session`
 the DJ's live session identity and recent transcript turns (for up to 30
 minutes after a show change these lead with the previous show's last few

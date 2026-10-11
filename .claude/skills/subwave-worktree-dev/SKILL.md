@@ -27,9 +27,9 @@ a worktree checkout:
 
 | File | Why the stack needs it |
 |---|---|
-| `.env` | Root `.env` — `ADMIN_USER` / `ADMIN_PASS` / `SITE_URL`. Dev compose references it as `./.env`; compose refuses to start without it. |
-| `controller/.env` | Dev compose declares `env_file: ./controller/.env` — controller container won't start without it. Navidrome + Ollama config. |
-| `web/.env.local` | Dev API/stream URL overrides (`NEXT_PUBLIC_API_URL` etc.). Without it the web UI defaults to same-origin `/api` and cannot reach the controller. |
+| `.env` | Root `.env` — the controller's **only** `env_file` in dev compose (`./.env`), and compose's substitution source. `ADMIN_USER` / `ADMIN_PASS` / `SITE_URL`, plus `NAVIDROME_*` and LLM/TTS keys. Compose refuses to start without it. |
+| `controller/.env` | **Legacy — nothing reads it.** Older checkouts still keep `NAVIDROME_*` and API keys here; the script folds any key it has into the worktree's root `.env` (root wins, `ICECAST_*` skipped). Without that, the station boots with `needsSetup: true` and "could not reach http://navidrome:4533". |
+| `web/.env.local` | Dev API/stream URL overrides (`NEXT_PUBLIC_API_URL` etc.). Without it the web UI defaults to same-origin `/api` and cannot reach the controller. Copied from main if present, otherwise written against `$SUBWAVE_DEV_HOST` (default `localhost`). |
 | `docker/.env` | Compose variable substitution (legacy — harmless to copy). |
 | `state/setup-config.json` | Navidrome creds the wizard saved on main. Without this the controller reports `needsSetup: true` and the player redirects to `/onboarding` on every load. |
 | `state/secrets.env` | Cloud LLM / TTS API keys (if main has any). Sourced into the controller's `process.env` on boot. |
@@ -108,6 +108,17 @@ Flags: `--reset-state` wipes and re-scaffolds `state/` (use when the user wants
 a clean slate); `--skip-npm` skips the dependency install (use when
 `node_modules` is already good). The script is idempotent — re-running it only
 fills in what is missing, never overwrites a file the worktree already has.
+
+If the user opens the player from another device (e.g. over Tailscale), pass
+that host as `SUBWAVE_DEV_HOST=<ip>` so a scaffolded `web/.env.local` points
+there, and start the web server with `SUBWAVE_DEV_ORIGINS=<ip> npm run dev` —
+Next dev blocks `/_next/*` for non-localhost origins otherwise.
+
+If `/state` still reports `needsSetup: true` after boot, the root `.env` has no
+`NAVIDROME_*` and main had no `state/setup-config.json` — that is a fresh
+station headed for `/onboarding`, not a fault. Add the creds to the worktree's
+root `.env` and `docker compose -f docker-compose.dev.yml up -d controller`
+(env_file changes need a recreate, not a restart).
 
 ### Step 3 — Start the stack from the worktree
 

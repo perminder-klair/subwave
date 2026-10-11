@@ -486,3 +486,32 @@ test('a jingle text from the manifest is bounded like every operator string', as
   const stored = (outcome as any).jingles[0];
   assert.equal(sidecar.items[stored].text.length, pure.JINGLE_TEXT_MAX);
 });
+
+test('persona.json and manifest.json are capped before they are inflated', async () => {
+  // Both are read into memory and parsed. Padding with whitespace keeps each
+  // one VALID JSON, so only the size cap can refuse it.
+  const pad = ' '.repeat(pure.MAX_BUNDLE_JSON_BYTES);
+  const before = stateSnapshot();
+
+  const fatPersona = new AdmZip(bundleOf({ name: 'Fat Persona' }));
+  fatPersona.updateFile('persona.json', Buffer.from(
+    fatPersona.getEntry('persona.json')!.getData().toString('utf8') + pad,
+  ));
+  const p = await applyPersonaBundle(fatPersona.toBuffer());
+  assert.equal(p.ok, false);
+  assert.match((p as any).error, /persona\.json is too large/);
+
+  const fatManifest = new AdmZip(bundleOf({ name: 'Fat Manifest' }));
+  fatManifest.updateFile('manifest.json', Buffer.from(
+    fatManifest.getEntry('manifest.json')!.getData().toString('utf8') + pad,
+  ));
+  const m = await applyPersonaBundle(fatManifest.toBuffer());
+  assert.equal(m.ok, false);
+  assert.match((m as any).error, /manifest\.json is too large/);
+  assert.equal(stateSnapshot(), before);
+
+  // The DECLARED size decides, so an over-cap member is never inflated at all.
+  const { readZipEntryCapped } = await import('../src/util/zip-entry.js');
+  const lying = { header: { size: pure.MAX_BUNDLE_JSON_BYTES + 1 }, getData: () => { throw new Error('inflated'); } };
+  assert.equal(readZipEntryCapped(lying as any, pure.MAX_BUNDLE_JSON_BYTES), null);
+});
