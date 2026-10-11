@@ -142,19 +142,20 @@ ENV KOKORO_MODEL=/opt/kokoro/models/kokoro-v1.0.onnx \
 # controller/scripts below) is the single source of truth.
 #
 # CLAP + Demucs are OFF by default (lean image); `subwave-aio-heavy` bakes
-# them, and `subwave-aio-cuda` (#1186) adds cu124 torch — WITH_CUDA implies the
+# them, and `subwave-aio-cuda` (#1186) adds cu128 torch — WITH_CUDA implies the
 # heavy tier (CUDA torch alone would be dead weight), and the worker still
 # picks its device (ANALYZE_DEVICE=auto), so it degrades to CPU on a driverless
 # host. See docs/unraid.md.
 #
 # Pins mirror docker/Dockerfile.analyzer — keep the two in lockstep. This venv
 # runs on the system python3 (trixie → 3.13, unlike the analyzer image's 3.11);
-# torch 2.6.0 publishes cp313 wheels on both indexes, so the shared pin holds.
+# torch/torchaudio 2.7.1 publish cp313 wheels on both cpu and cu128 indexes;
+# cu128 includes Blackwell (sm_120) kernels (#1340, #1738).
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
 ARG WITH_CUDA=0
 RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
-    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu124"; fi && \
+    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu128"; fi && \
     python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
@@ -164,7 +165,7 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
+        torch==2.7.1 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
     fi && \
     if [ "$WITH_DEMUCS" = "1" ]; then \
@@ -175,8 +176,8 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
         --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
-        torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
-      /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \
+        torch==2.7.1 torchaudio==2.7.1 demucs==4.0.1 diffq==0.2.4 && \
+      /opt/analyzer/venv/bin/python -c "import torch, torchaudio, demucs, diffq" && \
       apt-get purge -y gcc libc6-dev python3-dev && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* ; \
     fi && \
     find /opt/analyzer/venv -depth -type d -name __pycache__ -exec rm -rf {} +
@@ -185,6 +186,9 @@ RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
 # ANALYZE_WORKER defaults to /app/scripts/analyze_worker.py (copied below).
 ENV ANALYZE_PYTHON=/opt/analyzer/venv/bin/python \
     HF_HOME=/var/sub-wave/hf-cache
+# Expose analyzer pip for maintenance while system python3 keeps precedence.
+# Kokoro and analyzer workers still use their explicit *_PYTHON paths.
+ENV PATH=$PATH:/opt/analyzer/venv/bin
 
 # --- Controller app ---------------------------------------------------------
 WORKDIR /app

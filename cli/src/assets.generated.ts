@@ -1016,7 +1016,7 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer â
 #   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 #   (BYO hosts: swap in docker-compose.byo.yml.)
 #
-# Requirements: NVIDIA driver + Container Toolkit only (cu124 wheels vendor the
+# Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
 # when torch sees a GPU, else cpu with a warning â€” a misconfigured host
 # degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping

@@ -202,8 +202,10 @@ The next `docker compose up -d` removes it and it stays gone. This is a Compose
 setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
-run, layer the `docker-compose.analyzer-gpu.yml` overlay:
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The CUDA
+images use torch/torchaudio 2.7.1 with CUDA 12.8 wheels, including support for
+RTX 50-series Blackwell GPUs. For a one-off run, layer the
+`docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
