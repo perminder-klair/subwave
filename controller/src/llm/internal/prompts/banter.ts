@@ -34,7 +34,9 @@ function castBlock(host: any, guests: any[]): string {
 export function banterSystem({ host, guests, show = null }: any): string {
   const showClause = show?.name ? ` of "${show.name}"` : '';
   const lang = String(host?.language || '').trim() || 'English';
-  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
+  // Primary language only (see personaLanguages): a guest's line is spoken
+  // and scrubbed as the GUEST, who may not share the host's second script.
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective({ language: lang })}`;
   return `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
 
 The cast (persona id — name (role): voice notes):
