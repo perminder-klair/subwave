@@ -109,7 +109,7 @@ services:
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
       # Acoustic-analysis sidecar (default-on below). Probed, then local venv.
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below): every station plays through it by default.
       - MUSIC_ROUTER_URL=${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's `user:`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=${ROUTER_UID:-1000}
@@ -145,12 +145,13 @@ services:
       start_period: 20s
 
   # -------------------------------------------------------------------------
-  # ROUTER — music sources beyond Navidrome (#692)
+  # ROUTER — the station's music sources (#692)
   # -------------------------------------------------------------------------
-  # Idle until Admin → Settings → Music source selects it. Dev runs `tsx watch`
-  # against bind-mounted source, like the controller. To develop SUB/WAVE with
-  # no music server at all, pick "Demo library" in the onboarding wizard (or
-  # set ROUTER_SOURCE=mock here for a router that serves it before setup).
+  # Every station plays through it by default (Admin → Music sources). Dev runs
+  # `tsx watch` against bind-mounted source, like the controller. To develop
+  # SUB/WAVE with no music server at all, set SUBWAVE_DEV_PLUGINS=1 on the
+  # controller to list the "Demo library" source (hidden from operators), or
+  # set ROUTER_SOURCE=mock here for a router that serves it before setup.
   # Bound to loopback only, for poking it with curl; mounts only state/router.
   router:
     image: ghcr.io/perminder-klair/subwave-router:${SUBWAVE_VERSION:-latest}

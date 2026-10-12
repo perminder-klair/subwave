@@ -25,6 +25,8 @@ const { config } = await import('../src/config.js');
 
 after(() => rmSync(stateRoot, { recursive: true, force: true }));
 
+const NO_NAV = { url: '', user: '', password: '' };
+
 const jellyfin = {
   name: 'jellyfin',
   label: 'Jellyfin',
@@ -37,6 +39,7 @@ const jellyfin = {
   envLocked: [] as string[],
   error: null,
   capabilities: null,
+  devOnly: false,
   config: [
     { key: 'url', label: 'Server URL', type: 'url' as const, required: true },
     { key: 'apiKey', label: 'API key', type: 'secret' as const, required: true },
@@ -44,14 +47,35 @@ const jellyfin = {
   ],
 };
 
-test('an absent or damaged selection is direct Navidrome', () => {
-  assert.deepEqual(ms.readSelection({}), { mode: 'navidrome', merge: false, sources: [] });
-  assert.deepEqual(ms.readSelection(null), { mode: 'navidrome', merge: false, sources: [] });
-  assert.equal(ms.readSelection({ music: { mode: 'spotify' } }).mode, 'navidrome');
-  assert.equal(ms.readSelection({ music: 'garbage' }).mode, 'navidrome');
+test('an absent or damaged selection is the router serving the station\'s own Navidrome', () => {
+  const dflt = { mode: 'router', merge: false, sources: [{ plugin: 'navidrome', config: {}, rawIds: true }] };
+  assert.deepEqual(ms.readSelection({}), dflt);
+  assert.deepEqual(ms.readSelection(null), dflt);
+  assert.deepEqual(ms.readSelection({ music: { mode: 'spotify' } }), dflt);
+  assert.deepEqual(ms.readSelection({ music: 'garbage' }), dflt);
+  assert.deepEqual(ms.readSelection({ music: { mode: 'router', sources: [] } }), dflt, 'a router selection with nothing in it');
   const sel = ms.readSelection({ music: { mode: 'router', sources: [{ plugin: 'jellyfin', config: { url: 'http://jf' } }] } });
   assert.equal(sel.mode, 'router');
   assert.equal(sel.sources[0]!.plugin, 'jellyfin');
+  // Direct mode is still a choice.
+  assert.equal(ms.readSelection({ music: { mode: 'navidrome' } }).mode, 'navidrome');
+  // The navidrome source plays the station connection; settings an older save stored are ignored.
+  const old = ms.readSelection({ music: { mode: 'router', sources: [{ plugin: 'navidrome', config: { url: 'http://elsewhere', password: 'x' }, rawIds: true }] } });
+  assert.deepEqual(old.sources[0]!.config, {});
+});
+
+test('the station\'s Navidrome behind the router is the same library as a direct connection', () => {
+  const identity = schema.musicSelectionIdentity;
+  const behind = ms.readSelection({});
+  assert.equal(identity(behind), 'navidrome', 'the default publishes the ids a direct connection did');
+  assert.equal(identity({ mode: 'navidrome', sources: [] }), 'navidrome');
+  assert.notEqual(identity({ mode: 'router', sources: [{ plugin: 'navidrome', config: {}, rawIds: false }] }), 'navidrome', 'namespaced ids are a different library');
+  assert.notEqual(identity({ mode: 'router', merge: true, sources: [...behind.sources, { plugin: 'jellyfin', config: { url: 'http://jf' } }] }), 'navidrome');
+  assert.deepEqual(
+    ms.stationSources(behind.sources, { url: 'http://nd', user: 'u', password: 'p' }),
+    [{ plugin: 'navidrome', rawIds: true, config: { url: 'http://nd', user: 'u', password: 'p' } }],
+    'the router is handed the station connection',
+  );
 });
 
 test('a save refuses selections that cannot play', () => {
@@ -158,7 +182,7 @@ test('the built-in manifests mark which settings change ids', async () => {
 
 test('router config.json: generated credentials, 0600, kept across writes, idle in navidrome mode', async () => {
   assert.equal(ms.readRouterAuth(), null);
-  const auth = await ms.writeRouterConfig({ mode: 'navidrome', merge: false, sources: [{ plugin: 'mock', config: {} }] });
+  const auth = await ms.writeRouterConfig({ mode: 'navidrome', merge: false, sources: [{ plugin: 'mock', config: {} }] }, NO_NAV);
   assert.equal(auth.user, 'subwave');
   assert.ok(auth.pass.length >= 32);
   const file = join(stateRoot, 'router', 'config.json');
@@ -166,49 +190,51 @@ test('router config.json: generated credentials, 0600, kept across writes, idle 
   const written = JSON.parse(readFileSync(file, 'utf8'));
   assert.deepEqual(written.sources, [], 'navidrome mode leaves the router idle');
   assert.ok(existsSync(join(stateRoot, 'router', 'plugins')), 'the plugin drop folder exists');
-  const again = await ms.writeRouterConfig({ mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] });
+  const again = await ms.writeRouterConfig({ mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] }, NO_NAV);
   assert.deepEqual(again, auth, 'credentials are stable');
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')).sources, [{ plugin: 'mock', config: {} }]);
   const stamp = statSync(file).mtimeMs;
   await new Promise((ok) => setTimeout(ok, 20));
-  await ms.writeRouterConfig({ mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] });
+  await ms.writeRouterConfig({ mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] }, NO_NAV);
   assert.equal(statSync(file).mtimeMs, stamp, 'an unchanged selection does not touch the file the router polls');
 });
 
 test('the live connection and the first-run gate follow the mode', async () => {
-  // Fresh station, no music at all.
+  // Fresh station: the default plays its Navidrome through the router, so it
+  // needs that Navidrome connection before it is set up.
   assert.equal((await firstRun.getSetupStatus()).needsSetup, true);
 
-  // Direct Navidrome, complete.
   await setupConfig.saveSetupConfig({ navidrome: { url: 'http://nd:4533', user: 'u', pass: 'p' } });
+  await setupConfig.syncRouterConfig();
   await setupConfig.loadNavidromeConfig();
-  assert.equal(config.navidrome.url, 'http://nd:4533');
-  let status = await firstRun.getSetupStatus();
-  assert.equal(status.needsSetup, false);
-  assert.equal(status.musicMode, 'navidrome');
-
-  // Router mode: the connection points at the router with its own credentials,
-  // and the Navidrome block stays on file.
-  await setupConfig.saveSetupConfig({ music: { mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] } });
-  await setupConfig.loadNavidromeConfig();
+  // Behind the router: the live connection is the router, with its own
+  // credentials, and the router is handed the station's Navidrome.
   const auth = ms.readRouterAuth()!;
   assert.equal(config.navidrome.url, 'http://router.test:4534');
   assert.equal(config.navidrome.user, auth.user);
   assert.equal(config.navidrome.password, auth.pass);
-  status = await firstRun.getSetupStatus();
+  const routed = JSON.parse(readFileSync(join(stateRoot, 'router', 'config.json'), 'utf8'));
+  assert.deepEqual(routed.sources, [{ plugin: 'navidrome', config: { url: 'http://nd:4533', user: 'u', password: 'p' }, rawIds: true }]);
+  let status = await firstRun.getSetupStatus();
   assert.equal(status.needsSetup, false);
   assert.equal(status.musicMode, 'router');
+  assert.equal(status.navidromeSource, 'setup-config');
   assert.equal(firstRun.getSetupStatusSync().needsSetup, false);
+
+  // Another source: set up without Navidrome, which stays on file.
+  await setupConfig.saveSetupConfig({ music: { mode: 'router', merge: false, sources: [{ plugin: 'mock', config: {} }] } });
+  await setupConfig.loadNavidromeConfig();
+  assert.equal(config.navidrome.url, 'http://router.test:4534');
+  assert.equal((await firstRun.getSetupStatus()).needsSetup, false);
   assert.equal((await setupConfig.loadSetupConfig()).navidrome?.url, 'http://nd:4533');
 
-  // Router mode with no source is not set up, whatever Navidrome says.
-  await setupConfig.saveSetupConfig({ music: { mode: 'router', merge: false, sources: [] } });
-  assert.equal((await firstRun.getSetupStatus()).needsSetup, true);
-
-  // Back to Navidrome: the stored connection is live again.
+  // Direct mode: the stored connection is live.
   await setupConfig.saveSetupConfig({ music: { mode: 'navidrome', merge: false, sources: [] } });
   await setupConfig.loadNavidromeConfig();
   assert.equal(config.navidrome.url, 'http://nd:4533');
+  status = await firstRun.getSetupStatus();
+  assert.equal(status.needsSetup, false);
+  assert.equal(status.musicMode, 'navidrome');
 });
 
 test('a source switch leaves a marker the next walk reads', async () => {

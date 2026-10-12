@@ -162,6 +162,8 @@ export interface HostSource {
   randomSongs(size: number, filter: RandomSongsFilter): Promise<SubSong[]>;
   search(query: string, limits: SearchLimits): Promise<{ artists: SubArtist[]; albums: SubAlbum[]; songs: SubSong[] }>;
   similarSongs(id: string, count: number): Promise<SubSong[]>;
+  /** Audio-based neighbours (getSonicSimilarTracks); empty when the source has none. */
+  sonicSimilar(id: string, count: number): Promise<SubSong[]>;
   topSongs(artistName: string, count: number): Promise<SubSong[]>;
 
   starred(): Promise<Map<string, string>>;

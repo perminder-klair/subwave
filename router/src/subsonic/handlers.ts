@@ -270,10 +270,13 @@ export const handlers: Record<string, Handler> = {
     const id = qs(req, 'id');
     if (!id) return respondError(req, res, src.name, 10, "Required parameter 'id' is missing");
     const withStar = await starDecorator(src);
-    // The plugin returns neighbours in order; the extension wants a score per
-    // match, so a descending one is synthesised from the rank. Nothing in the
-    // controller thresholds on it.
-    const sonicMatch = (await src.similarSongs(id, cap(qi(req, 'count', 20)))).map((song, i) => ({
+    // Its own op, never getSimilarSongs2's under another name: the controller
+    // weighs the two as separate picker signals (wrap.ts keeps the older
+    // flag-only plugins answering from similarSongs). The plugin returns
+    // neighbours in order; the extension wants a score per match, so a
+    // descending one is synthesised from the rank. Nothing in the controller
+    // thresholds on it.
+    const sonicMatch = (await src.sonicSimilar(id, cap(qi(req, 'count', 20)))).map((song, i) => ({
       entry: withStar(song),
       similarity: Math.max(0.05, Math.round((0.95 - i * 0.03) * 100) / 100),
     }));

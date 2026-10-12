@@ -18,6 +18,7 @@ import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startFailoverMonitor } from './music/source-failover.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -58,8 +59,7 @@ import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
-import { loadNavidromeConfig, loadSetupConfig } from './setup/config.js';
-import { readSelection, writeRouterConfig } from './setup/music-source.js';
+import { loadNavidromeConfig, syncRouterConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
 import * as library from './music/library.js';
 
@@ -177,12 +177,12 @@ app.listen(config.server.port, async (err?: Error) => {
     console.error('[secrets] load failed:', err.message);
   }
 
-  // The music router's config.json — its credentials and this station's
-  // source selection (#692). Written before the connection load below, which
-  // reads the credentials back in router mode. The router idles in navidrome
-  // mode, so on a default install this only provisions its credentials.
+  // The music router's config.json — its credentials, this station's source
+  // selection and the station's Navidrome connection its navidrome source
+  // plays (#692). Written before the connection load below, which reads the
+  // credentials back. The router is the default path; in direct mode it idles.
   try {
-    await writeRouterConfig(readSelection(await loadSetupConfig()));
+    await syncRouterConfig();
   } catch (err: any) {
     console.error('[music-source] router config write failed:', err.message);
   }
@@ -324,6 +324,8 @@ app.listen(config.server.port, async (err?: Error) => {
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
+  // Behind the router by default: play Navidrome directly while it is down.
+  startFailoverMonitor();
   jingles
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));

@@ -92,9 +92,9 @@ const navidromeStepSchema = z.object({
   pass: z.string(),
 });
 
-// Step 1 is "where the music comes from": Navidrome directly (the default, the
-// form below), or the SUB/WAVE music router serving Jellyfin, Plex, an
-// installed plugin or the demo library (#692).
+// Step 1 is "where the music comes from": the station's Navidrome (the
+// default, the form below — played through the SUB/WAVE music router), or
+// another source the router serves: Jellyfin, Plex or an installed plugin (#692).
 export function NavidromeStep({ w }: { w: WizardController }) {
   // Follows the wizard's music mode — which opens on what the station plays
   // from once that loads — until the operator picks a side here.
@@ -151,7 +151,8 @@ function RouterSourceStep({ w, onMode }: { w: WizardController; onMode: (m: 'nav
           setRouterError(j.routerError || `controller returned HTTP ${r.status}`);
           return;
         }
-        const usable = selectablePlugins(j.router.plugins);
+        // Navidrome is the other choice on this step, with its own form.
+        const usable = selectablePlugins(j.router.plugins).filter((p) => p.name !== 'navidrome');
         setPlugins(usable);
         setSource((s) => (s.plugin ? s : blankSource(usable.find((p) => p.name === 'jellyfin') ?? usable[0])));
       } catch (err: unknown) {

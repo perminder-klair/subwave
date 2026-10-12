@@ -27,7 +27,7 @@ Artist and album come from the folder names, track number and title from the fil
    ```
 
    then `docker compose up -d router`.
-3. Admin → Settings → Music source → **Rescan plugins**, choose **Music folder**, set *Folder* to `/music`, **Test connection**, save.
+3. Admin → Music sources → Plugins → **Rescan plugins**, then on the Sources tab pick **Music folder** (as the source, or added beside Navidrome), set *Folder* to `/music`, **Test connection**, save.
 
 ## Check it
 

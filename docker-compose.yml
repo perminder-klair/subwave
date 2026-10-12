@@ -139,7 +139,7 @@ services:
       # Acoustic-analysis sidecar (default-on below). Probed first, then a
       # local venv; falls through to NULL analysis. See music/analyzer.ts.
       - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
-      # The music router (below). Only used when Settings → Music source selects it.
+      # The music router (below): every station plays through it by default.
       - MUSIC_ROUTER_URL=${MUSIC_ROUTER_URL:-http://router:4534}
       # The router's uid (see the router service's `user:`); the controller hands it state/router/config.json and data/.
       - ROUTER_UID=${ROUTER_UID:-1000}
@@ -165,12 +165,14 @@ services:
       start_period: 20s
 
   # -------------------------------------------------------------------------
-  # ROUTER — music sources beyond Navidrome (#692)
+  # ROUTER — the station's music sources (#692)
   # -------------------------------------------------------------------------
   # Speaks the Subsonic API the controller already uses and answers it from
-  # music-source plugins: Jellyfin, Plex, Navidrome, the demo library, and any
-  # plugin dropped into state/router/plugins/. Idle until Admin → Settings →
-  # Music source selects it — a Navidrome station never routes through it.
+  # music-source plugins: Navidrome (the default — the station's own Navidrome
+  # connection), Jellyfin, Plex, and any plugin dropped into
+  # state/router/plugins/. Chosen in Admin → Music sources. If it goes down
+  # while a station plays its Navidrome alone, the controller falls back to a
+  # direct Navidrome connection until it answers again.
   # Internal only: the controller, Liquidsoap and the analyzer reach it on the
   # compose network as http://router:4534. It mounts ONLY state/router (its
   # config, plugins and plugin data): plugins are code, and must not see the

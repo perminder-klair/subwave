@@ -51,7 +51,6 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
-import { MusicSourceSection } from './settings/MusicSourceSection';
 import {
   useSettingsMutation,
   useSettingsQuery,
@@ -168,6 +167,11 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     const s = searchParams.get('section');
     if (s === 'jingles' || s === 'sfx' || s === 'beds') {
       router.replace(`/admin/imaging?tab=${s}`);
+      return;
+    }
+    // Music source moved to its own page (#692).
+    if (s === 'music') {
+      router.replace('/admin/sources?tab=sources');
       return;
     }
     if (s === 'brain' && !djBrainEnabled) {
@@ -536,9 +540,6 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors}
               />
-            )}
-            {activeSection === 'music' && (
-              <MusicSourceSection data={data} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

@@ -1,15 +1,14 @@
-/* Admin → Music router: the router's control-center look (rack faceplates,
-   channel strips, a phosphor routing monitor), ported from the prototype
-   console in subwave-router and re-pointed at the admin theme tokens. The
-   rack's own pieces — the stronger separators, the scope's phosphor, the
-   signal lamps — are module-local so they never leak into other pages. */
+/* Admin → Music sources: the router's control-center look (the header's
+   status strip, rack panels, channel strips, a phosphor routing monitor),
+   ported from the prototype console in subwave-router and re-pointed at the
+   admin theme tokens. The rack's own pieces — the stronger separators, the
+   scope's phosphor, the signal lamps — are module-local so they never leak
+   into other pages. */
 
 .console {
   --rk-sep-soft: color-mix(in oklab, var(--ink) 16%, transparent);
   --rk-sep-strong: color-mix(in oklab, var(--ink) 42%, transparent);
   --rk-card: var(--card-bg, var(--surface));
-  --rk-display: #171512;
-  --rk-display-ink: #f2ede3;
   --rk-scope: #11100e;
   --rk-scope-ink: #b8d5b5;
   --rk-scope-dim: #a8afa2;
@@ -41,46 +40,14 @@
   }
 }
 
-/* ── faceplate + rack panels ─────────────────────────────────────────────── */
+/* ── status strip + rack panels ────────────────────────────────────────── */
 
-.faceplate,
 .rack {
   position: relative;
   min-width: 0;
   border: 1px solid var(--ink);
   background: color-mix(in oklab, var(--rk-card) 94%, transparent);
 }
-
-.faceplate {
-  min-height: 82px;
-  padding: 16px 20px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
-}
-
-.brand { display: flex; align-items: center; gap: 13px; min-width: 250px; }
-.brand h1 {
-  margin: 0;
-  font-family: var(--rk-display-font);
-  font-size: clamp(1.45rem, 2vw, 2rem);
-  font-weight: 650;
-  line-height: 0.95;
-  letter-spacing: -0.035em;
-}
-.brand p,
-.runtimeNote {
-  margin: 5px 0 0;
-  font-family: var(--rk-mono);
-  font-size: 0.58rem;
-  font-weight: 700;
-  line-height: 1.5;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.runtimeNote { max-width: 190px; margin: 0; color: var(--accent); }
 
 .powerLamp,
 .scopeLamp {
@@ -95,22 +62,75 @@
 .powerLamp[data-state="error"] { background: var(--danger); box-shadow: 0 0 8px color-mix(in oklab, var(--danger) 70%, transparent); }
 .powerLamp[data-state="idle"] { background: var(--rk-amber); box-shadow: 0 0 8px color-mix(in oklab, var(--rk-amber) 60%, transparent); }
 
-.readout {
-  flex: 1;
-  min-width: 260px;
-  padding: 10px 13px;
+/* The Music sources header's status strip: the lamp at its head and one
+   labelled reading per cell, reflowing rather than truncating. A light panel
+   a shade off the card — it reads as part of the header, not an inset screen —
+   with colour only where a value carries state. It sits outside .console, so
+   it carries the tokens it reads. */
+.statusStrip {
+  --rk-green: #2f8a62;
+  --rk-amber: #a8690f;
+  --rk-mono: var(--mono-font, ui-monospace, monospace);
+  --strip-rule: color-mix(in oklab, var(--ink) 12%, transparent);
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--ink);
-  background: var(--rk-display);
-  color: var(--rk-display-ink);
-  font-family: var(--rk-mono);
-  font-size: 0.68rem;
-  letter-spacing: 0.065em;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  border: 1px solid color-mix(in oklab, var(--ink) 22%, transparent);
+  background: color-mix(in oklab, var(--ink) 4%, var(--card-bg, var(--surface)));
 }
-
-.faceplateActions { display: flex; gap: 8px; flex-wrap: wrap; }
+:global(:root[data-theme="dark"]) .statusStrip {
+  --rk-green: #62b68a;
+  --rk-amber: #d59a3b;
+}
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme="light"])) .statusStrip {
+    --rk-green: #62b68a;
+    --rk-amber: #d59a3b;
+  }
+}
+.lampCell {
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  box-shadow: 1px 0 0 var(--strip-rule);
+}
+.vfd {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  overflow: hidden;
+}
+/* Dividers drawn right and below each cell, 1px outside it: the strip's
+   overflow clips the outer ones, so the frame stays clean however it wraps. */
+.dcell {
+  min-width: 0;
+  padding: 7px 13px 8px;
+  box-shadow: 1px 0 0 var(--strip-rule), 0 1px 0 var(--strip-rule);
+}
+.dcell dt {
+  font-family: var(--rk-mono);
+  font-size: 0.46rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.dcell dd {
+  margin: 3px 0 0;
+  font-family: var(--rk-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.dcell[data-tone="ok"] dd { color: var(--rk-green); }
+.dcell[data-tone="warn"] dd { color: var(--rk-amber); }
+.dcell[data-tone="bad"] dd { color: var(--danger); }
 
 .screw {
   position: absolute;
@@ -416,8 +436,6 @@ a.stripFoot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2p
 }
 
 @media (max-width: 640px) {
-  .faceplate { align-items: stretch; gap: 12px; padding: 18px 16px; }
-  .brand, .readout { width: 100%; min-width: 0; }
   .rackHeader { align-items: flex-start; padding: 12px 16px 10px; flex-direction: column; }
   .rackHeader > div:first-child { width: 100%; overflow-wrap: anywhere; }
 
