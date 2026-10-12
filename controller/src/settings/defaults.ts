@@ -498,7 +498,7 @@ export const DEFAULTS = {
     // never costs the station a slot. 0 leaves only the back-to-back guard,
     // which is always on. See broadcast/dj-agent/artist-guard.ts.
     artistVarietyWindow: ARTIST_VARIETY_WINDOW,
-    // Maximum consecutive primary-genre airings before an agent re-pick.
+    // Maximum consecutive shared-genre-label airings before an agent re-pick.
     // 0 is off; unknown tags and unavailable alternatives never cost a slot.
     genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an

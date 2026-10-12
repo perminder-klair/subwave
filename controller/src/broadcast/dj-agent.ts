@@ -21,7 +21,7 @@ import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-n
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
-import { primaryGenreKey, runGenreGuard } from './dj-agent/genre-guard.js';
+import { genreLabelKeys, runGenreGuard } from './dj-agent/genre-guard.js';
 import * as sceneVocab from '../music/scene-vocab.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -996,18 +996,20 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   const genreWindow = settings.get().llm?.genreVarietyWindow ?? 0;
   if (genreWindow > 0 && !useShortlist && agentPickResolution && !episodeSource) {
     const aliases = sceneVocab.activeMap();
-    const genreKeyOf = (track: any) => {
+    const genreKeysOf = (track: any) => {
       const rec = track?.id ? library.get(track.id) : null;
       // The discovery projection joins its labels with ', '. Prefer the
       // mirror's original list; split only that compact fallback projection.
-      const primary = rec?.genres?.[0] ?? subsonic.songGenres(track)[0]?.split(', ')[0];
-      return primaryGenreKey(primary, aliases);
+      const labels = rec?.genres ?? (Array.isArray(track?.genres)
+        ? subsonic.songGenres(track)
+        : subsonic.songGenres(track).flatMap(label => label.split(', ')));
+      return genreLabelKeys(labels, aliases);
     };
     const genreGuarded = await runGenreGuard<any>({
       song, seen: extras.seen, window: genreWindow,
       recentGenres: [queue.current, ...queue.history].slice(0, genreWindow)
-        .map(item => item?.track ? genreKeyOf(item.track) : ''),
-      genreKeyOf, recentRoots: neighbourRoots,
+        .map(item => item?.track ? genreKeysOf(item.track) : new Set<string>()),
+      genreKeysOf, recentRoots: neighbourRoots,
       avoidAnchorRoot: artistRootKey(pickAnchor || {}),
       repick: guardRepick,
       log: line => queue.log('picker', line),

@@ -19,10 +19,12 @@ const { slim } = await import('../src/llm/internal/tools/picker/slim.js');
 const { getClockContext, getTimeContext, getDateContext } = await import('../src/context.js');
 const realFetch = globalThis.fetch;
 const realRun = pickerAgent.run;
-const track = (id: string, genre: string) => ({ id, title: id, artist: `${id} artist`, genres: [genre], duration: 240 });
+const track = (id: string, genres: string | string[]) => ({ id, title: id, artist: `${id} artist`, genres: typeof genres === 'string' ? [genres] : genres, duration: 240 });
 const anchor = track('on-air', 'Reggae');
 const repeat = track('picked', 'Reggae');
 const alternative = track('alternative', 'Soul');
+const prince = track('prince', ['Pop', 'International Pop', 'Reggae']);
+const jacob = track('jacob', ['Dub', 'Reggae', 'Roots Reggae']);
 
 before(async () => {
   const cfg = structuredClone(settings.getDefaults());
@@ -35,7 +37,7 @@ before(async () => {
   cfg.llm.fallback.enabled = false;
   store.setCache(cfg);
   await library.load();
-  for (const song of [anchor, repeat, alternative]) library.set(song.id, song);
+  for (const song of [anchor, repeat, alternative, prince, jacob]) library.set(song.id, song);
   db.upsertTrackAnalysis(anchor.id, { bpm: 98, musicalKey: '8A' });
 });
 
@@ -48,12 +50,12 @@ after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
-for (const scenario of ['boundary', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick'] as const) {
+for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick', 'projection-only'] as const) {
   test(`${scenario}: the real picker checks aired tracks and preserves transition facts`, async () => {
     settings.get().llm.genreVarietyWindow = scenario === 'off' ? 0 : 4;
     queue.current = { track: anchor, source: 'ai' };
     queue.history = Array.from({ length: scenario === 'below' || scenario === 'queued-only' ? 2 : 3 }, (_, i) => ({
-      track: track(`history-${i}`, 'Reggae'), source: 'ai',
+      track: track(`history-${i}`, [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae']][i]), source: 'ai',
     }));
     queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }] : [];
     queue._recentPlays = [];
@@ -67,10 +69,14 @@ for (const scenario of ['boundary', 'below', 'off', 'queued-only', 'empty-altern
       weather: null, festival: null, showHandover: null, listeners: { count: null }, episodeEditorial: '',
     };
     session.start(ctx);
+    const selected = scenario === 'prince' ? prince : scenario === 'jacob' ? jacob : repeat;
+    if (scenario === 'projection-only') {
+      for (const s of [repeat, alternative, prince, jacob]) db.requireDb().prepare('DELETE FROM tracks WHERE id = ?').run(s.id);
+    }
     pickerAgent.run = async () => ({
-      object: { id: repeat.id, reason: 'Synthetic choice', say: null, transition: null },
+      object: { id: selected.id, reason: 'Synthetic choice', say: null, transition: null },
       steps: 1, toolCalls: [], extras: { seen: new Map([
-        [repeat.id, slim(repeat)],
+        ...[repeat, prince, jacob].map(s => [s.id, slim(s)] as const),
         ...(scenario === 'empty-alternatives' ? [] : [[alternative.id, slim(alternative)] as const]),
       ]) },
     });
@@ -97,15 +103,19 @@ for (const scenario of ['boundary', 'below', 'off', 'queued-only', 'empty-altern
     };
     try {
       await runTrackEvent(queue, ctx, { wantLink: false });
-      assert.equal(queue.upcoming.at(-1)?.track.id, scenario === 'boundary' ? alternative.id : repeat.id);
+      const fires = ['boundary', 'prince', 'jacob', 'projection-only'].includes(scenario);
+      assert.equal(queue.upcoming.at(-1)?.track.id, fires ? alternative.id : selected.id);
       // One constrained djObject call can make its existing recovery attempt.
-      assert.equal(calls, scenario === 'failed-repick' ? 2 : scenario === 'boundary' ? 1 : 0);
-      assert.equal(logs.some(line => line.includes('genre run')), ['boundary', 'empty-alternatives', 'failed-repick'].includes(scenario));
+      assert.equal(calls, scenario === 'failed-repick' ? 2 : fires ? 1 : 0);
+      assert.equal(logs.some(line => line.includes('genre run')), fires || ['empty-alternatives', 'failed-repick'].includes(scenario));
       if (scenario === 'queued-only') assert.equal(queue.upcoming[0].track.id, 'operator');
     } finally {
       queue.log = realLog;
       globalThis.fetch = realFetch;
       pickerAgent.run = realRun;
+      if (scenario === 'projection-only') {
+        for (const s of [repeat, alternative, prince, jacob]) library.set(s.id, s);
+      }
     }
   });
 }
