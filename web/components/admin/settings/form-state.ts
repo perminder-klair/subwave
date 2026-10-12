@@ -231,6 +231,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       // LLM field silently persists it over the new one.
       noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 250),
       artistVarietyWindow: String(typeof v.llm?.artistVarietyWindow === 'number' ? v.llm.artistVarietyWindow : 5),
+      genreVarietyWindow: String(typeof v.llm?.genreVarietyWindow === 'number' ? v.llm.genreVarietyWindow : 0),
       requestWebResolve: !!v.llm?.requestWebResolve,
       agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
       pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,

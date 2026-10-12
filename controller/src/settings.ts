@@ -66,6 +66,7 @@ import {
   clampDiscoverySteps,
   clampNoRepeatWindow,
   clampArtistVarietyWindow,
+  clampGenreVarietyWindow,
   clampNumCtx,
   clampRepeatPenalty,
   clampTtsGain,
@@ -1067,6 +1068,7 @@ export async function load() {
         stored.llm?.artistVarietyWindow,
         DEFAULTS.llm.artistVarietyWindow,
       ),
+      genreVarietyWindow: clampGenreVarietyWindow(stored.llm?.genreVarietyWindow, DEFAULTS.llm.genreVarietyWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
@@ -2140,6 +2142,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       next.llm.artistVarietyWindow = clampArtistVarietyWindow(
         Number(l.artistVarietyWindow), next.llm.artistVarietyWindow,
       );
+    }
+    if (l.genreVarietyWindow !== undefined) {
+      next.llm.genreVarietyWindow = clampGenreVarietyWindow(Number(l.genreVarietyWindow), next.llm.genreVarietyWindow);
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;

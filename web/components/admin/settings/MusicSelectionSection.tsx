@@ -55,6 +55,7 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
         requestWebResolve: form.llm.requestWebResolve,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
         artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
+        genreVarietyWindow: Math.max(0, parseInt(form.llm.genreVarietyWindow, 10) || 0),
         discoverySteps: form.llm.discoverySteps,
         agentTimeoutMs: form.llm.agentTimeoutMs,
       },
@@ -262,6 +263,24 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
                 its model call fails. Spacing can relax when eligible choices are limited or a re-pick
                 fails, and the picker logs why. <strong>0 = off</strong>; both routes still avoid repeating
                 the pick-anchor artist. Listener requests are exempt. 0&ndash;25.
+              </div>
+            </div>
+            <div className="field">
+              <Label>Genre run limit (tracks)</Label>
+              <Input
+                type="number" min={0} max={25} step={1}
+                value={form.llm.genreVarietyWindow}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setForm(f => ({ ...f, llm: { ...f.llm, genreVarietyWindow: e.target.value } }))}
+                placeholder="0"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                After this many consecutive tracks in one genre family, the agent tries a candidate outside
+                that family. Two labels count as the same genre when they match, or when a small built-in
+                family list groups them (for example reggae, dub and ska). If every candidate is in the
+                family, the picker makes one extra search for a different sound. It keeps the original
+                pick if nothing eligible exists, and logs why. <strong>0 = off</strong> (the default), with
+                no extra reads or calls. Requests and operator-queued tracks are exempt. 0&ndash;25.
               </div>
             </div>
             <div className="field">

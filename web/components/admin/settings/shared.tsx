@@ -173,6 +173,7 @@ export interface LlmForm {
   segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
+  genreVarietyWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;

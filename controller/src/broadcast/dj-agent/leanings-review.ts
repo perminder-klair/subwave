@@ -52,7 +52,7 @@ export type PickResolution = {
     evidenceKind?: 'metadata-match' | 'editorial-comparison';
     editorialEvidence?: EditorialLeaningsEvidence;
   };
-  guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+  guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'genre-repick' | 'pool-rescue';
   final?: AgenticTrackRef;
   reason?: string | null;
   queued?: boolean;

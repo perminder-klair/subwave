@@ -337,6 +337,12 @@ export function clampArtistVarietyWindow(raw: unknown, def: number): number {
   return Math.min(25, Math.max(0, Math.floor(raw)));
 }
 
+// Genre run length, floored into [0, 25], like artist spacing. Zero disables.
+export function clampGenreVarietyWindow(raw: unknown, def: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
+  return Math.min(25, Math.max(0, Math.floor(raw)));
+}
+
 // Validate + apply the connection fields shared by the primary LLM leg and its
 // optional fallback. `label` prefixes error messages. The "openai-compatible
 // needs baseUrl" rule is left to the caller (the fallback enforces it only when

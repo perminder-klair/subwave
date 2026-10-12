@@ -68,7 +68,7 @@ export const SECTIONS = [
   {
     id: 'selection', group: 'the station', label: 'Music selection',
     hint: 'agentic · shortlist · requests', icon: ListMusic,
-    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.shortlistSearchPreparation', 'llm.guestMusicalLeanings', 'llm.requestMatching', 'llm.requestWebResolve', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
+    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.shortlistSearchPreparation', 'llm.guestMusicalLeanings', 'llm.requestMatching', 'llm.requestWebResolve', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.genreVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
   },
   {
     id: 'theme', group: 'the station', label: 'Skin & Themes',

@@ -1,0 +1,111 @@
+// Real agent selection, guard wiring, constrained SDK re-pick and queue
+// insertion. HTTP and discovery are synthetic; nothing reaches a station.
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import test, { after, before } from 'node:test';
+
+const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-genre-run-'));
+process.env.STATE_DIR = stateRoot;
+const settings = await import('../src/settings.js');
+const library = await import('../src/music/library.js');
+const db = await import('../src/music/library-db.js');
+const store = await import('../src/settings/store.js');
+const session = await import('../src/broadcast/session.js');
+const { queue } = await import('../src/broadcast/queue.js');
+const { pickerAgent, runTrackEvent } = await import('../src/broadcast/dj-agent.js');
+const { slim } = await import('../src/llm/internal/tools/picker/slim.js');
+const { getClockContext, getTimeContext, getDateContext } = await import('../src/context.js');
+const realFetch = globalThis.fetch;
+const realRun = pickerAgent.run;
+const track = (id: string, genre: string) => ({ id, title: id, artist: `${id} artist`, genres: [genre], duration: 240 });
+const anchor = track('on-air', 'Reggae');
+const repeat = track('picked', 'Reggae');
+const alternative = track('alternative', 'Soul');
+
+before(async () => {
+  const cfg = structuredClone(settings.getDefaults());
+  cfg.tts.enabled = false;
+  Object.assign(cfg.llm, {
+    provider: 'openai-compatible', model: 'genre-test',
+    baseUrl: 'http://genre-model.invalid/v1', apiKey: 'test',
+    artistVarietyWindow: 0, dailyTokenCap: 0,
+  });
+  cfg.llm.fallback.enabled = false;
+  store.setCache(cfg);
+  await library.load();
+  for (const song of [anchor, repeat, alternative]) library.set(song.id, song);
+  db.upsertTrackAnalysis(anchor.id, { bpm: 98, musicalKey: '8A' });
+});
+
+after(() => {
+  globalThis.fetch = realFetch;
+  pickerAgent.run = realRun;
+  if (queue._persistTimer) clearTimeout(queue._persistTimer);
+  if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
+  library.shutdown();
+  rmSync(stateRoot, { recursive: true, force: true });
+});
+
+for (const scenario of ['boundary', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick'] as const) {
+  test(`${scenario}: the real picker checks aired tracks and preserves transition facts`, async () => {
+    settings.get().llm.genreVarietyWindow = scenario === 'off' ? 0 : 4;
+    queue.current = { track: anchor, source: 'ai' };
+    queue.history = Array.from({ length: scenario === 'below' || scenario === 'queued-only' ? 2 : 3 }, (_, i) => ({
+      track: track(`history-${i}`, 'Reggae'), source: 'ai',
+    }));
+    queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }] : [];
+    queue._recentPlays = [];
+    queue.senderBusy = true;
+    const logs: string[] = [];
+    const realLog = queue.log;
+    queue.log = (_kind, line) => { logs.push(line); };
+    const ctx = {
+      at: new Date().toISOString(), activeShow: null, clock: getClockContext(),
+      time: getTimeContext(), date: getDateContext(), dominantMood: null,
+      weather: null, festival: null, showHandover: null, listeners: { count: null }, episodeEditorial: '',
+    };
+    session.start(ctx);
+    pickerAgent.run = async () => ({
+      object: { id: repeat.id, reason: 'Synthetic choice', say: null, transition: null },
+      steps: 1, toolCalls: [], extras: { seen: new Map([
+        [repeat.id, slim(repeat)],
+        ...(scenario === 'empty-alternatives' ? [] : [[alternative.id, slim(alternative)] as const]),
+      ]) },
+    });
+    let calls = 0;
+    globalThis.fetch = async (input, init) => {
+      assert.equal(new URL(String(input)).hostname, 'genre-model.invalid');
+      calls++;
+      const body = JSON.parse(String(init?.body));
+      const prompt = body.messages.find((m: { role: string }) => m.role === 'user').content;
+      const payload = JSON.parse(prompt.split('\n\n')[0]);
+      assert.deepEqual(payload.candidates.map((s: { id: string }) => s.id), [alternative.id]);
+      assert.deepEqual(body.tools[0].function.parameters.properties.id.enum, [alternative.id]);
+      assert.deepEqual(payload.predecessor, { title: anchor.title, artist: anchor.artist, bpm: 98, key: '8A' });
+      if (scenario === 'failed-repick') return Response.json({ error: { message: 'synthetic rejection' } }, { status: 400 });
+      return Response.json({
+        id: 'completion', object: 'chat.completion', created: 0, model: 'genre-test',
+        choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+          role: 'assistant', content: null, tool_calls: [{ id: 'emit', type: 'function', function: {
+            name: body.tools[0].function.name,
+            arguments: JSON.stringify({ id: alternative.id, reason: 'Smooth transition', transition: null }),
+          } }],
+        } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
+      });
+    };
+    try {
+      await runTrackEvent(queue, ctx, { wantLink: false });
+      assert.equal(queue.upcoming.at(-1)?.track.id, scenario === 'boundary' ? alternative.id : repeat.id);
+      // One constrained djObject call can make its existing recovery attempt.
+      assert.equal(calls, scenario === 'failed-repick' ? 2 : scenario === 'boundary' ? 1 : 0);
+      assert.equal(logs.some(line => line.includes('genre run')), ['boundary', 'empty-alternatives', 'failed-repick'].includes(scenario));
+      if (scenario === 'queued-only') assert.equal(queue.upcoming[0].track.id, 'operator');
+    } finally {
+      queue.log = realLog;
+      globalThis.fetch = realFetch;
+      pickerAgent.run = realRun;
+    }
+  });
+}
