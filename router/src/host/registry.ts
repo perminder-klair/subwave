@@ -23,11 +23,12 @@ import {
   type RouterConfig,
   type SourceEntry,
 } from '../config.js';
+import { observeSource } from './activity.js';
 import { createComposite } from './composite.js';
 import { prefixedCodec, rawCodec } from './ids.js';
 import { scanPlugins, type LoadedPlugin } from './loader.js';
 import { resolveConfig, type ResolvedConfig } from './manifest.js';
-import type { HostSource } from './types.js';
+import type { Capabilities, HostSource } from './types.js';
 import { wrapPlugin } from './wrap.js';
 
 const CONSTRUCT_TIMEOUT_MS = 15_000;
@@ -143,14 +144,26 @@ export async function buildSource(entry: SourceEntry): Promise<{ source: HostSou
     throw new Error(`plugin '${manifest.name}' did not return a source object`);
   }
   const rawIds = entry.rawIds === true;
-  const source = wrapPlugin(instance, {
+  const wrapped = wrapPlugin(instance, {
     name: manifest.name,
     label: manifest.label,
     codec: rawIds ? rawCodec() : prefixedCodec(manifest.idPrefix),
     rawIds,
     log,
   });
-  return { source, resolved, plugin };
+  capabilitiesSeen.set(manifest.name, wrapped.capabilities);
+  // Observed per child, before a merged set composes them (activity.ts).
+  return { source: observeSource(wrapped), resolved, plugin };
+}
+
+// What each plugin turned out to support the last time it was built, as the
+// active source or for a Test. Capabilities are read off a constructed
+// instance (wrap.ts introspect), so a plugin never built since the router
+// started has none to report rather than a guess.
+const capabilitiesSeen = new Map<string, Capabilities>();
+
+export function lastSeenCapabilities(plugin: string): Capabilities | null {
+  return capabilitiesSeen.get(plugin) ?? null;
 }
 
 function effectiveSources(config: RouterConfig): SourceEntry[] {

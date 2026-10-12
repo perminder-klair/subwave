@@ -36,6 +36,7 @@ const jellyfin = {
   homepage: null,
   envLocked: [] as string[],
   error: null,
+  capabilities: null,
   config: [
     { key: 'url', label: 'Server URL', type: 'url' as const, required: true },
     { key: 'apiKey', label: 'API key', type: 'secret' as const, required: true },
