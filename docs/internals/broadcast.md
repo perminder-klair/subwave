@@ -10,6 +10,24 @@ skips, spoken-clock forecasting, air-time stamping, the listener buffer, the lis
 TTS engine routing, personas, guests, programmes and the policy switches
 (voice, clock, token budget).
 
+- **Persona station IDs**: Admin → Personas → Behaviour offers `identMode`
+  (`improvise`, the default, or `verbatim`) and `identLines` (up to 20 trimmed,
+  non-blank lines of 300 characters each). `runStationId` handles scheduled
+  and manual IDs together. Verbatim mode selects a line without calling the
+  model; the picker compares and deduplicates text after one cleanup pass,
+  while passing trimmed raw lines to the queue. Each pick replaces one in-flight
+  reservation per persona, excluding that text and the last accepted text.
+  If those exclusions exhaust a two-line list, avoiding the last accepted text
+  takes priority. Requests never wait for earlier renders. One distinct line
+  repeats. An empty list uses the original improvisation path. Rotation stays in memory and resets on
+  controller restart.
+  Voice, queue kind and next-track placement use the existing queue path;
+  verbatim IDs have no daypart claim, so their daypart stamp is null.
+  Verbatim lines still pass the station's normal text cleanup (performance cues
+  and markdown are removed), and TTS pronunciation corrections still apply.
+  Rotation remembers the last line the queue accepted, so a clip dropped later
+  during handoff or replaced by a newer clip can still count as the last line.
+
 - **Speech corrections (#1669)**: `tts.corrections` allows **500 rows** on
   save/load and in the web editor (was 100, which one station filled with year
   and decade respellings alone). `applyCorrections` in `audio/speech-text.ts`

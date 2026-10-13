@@ -19,6 +19,8 @@ export interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
+  identMode: 'improvise' | 'verbatim';
+  identLines: string[];
   // Back-announces, teases what's next and runs callbacks across the session.
   djMode: boolean;
   // 'announce' limits the link to exactly "This is <artist>." / "Next up,
