@@ -22,7 +22,7 @@ import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, una
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
-import { showNoRepeatGuard } from './show-recency.js';
+import { showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 
@@ -687,6 +687,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       resolvedGenres: strictGenreResolution.genres,
       minTrackSec,
       maxTrackSec,
+      // Same catalogue the agent path sizes its window from.
+      showLibraryPool: strictShowLibraryPool(activeShow?.filtersStrict ? library.candidateFilterTracks() : null, {
+        show: activeShow, excludedIds, resolvedGenres: strictGenreResolution.genres, minTrackSec, maxTrackSec,
+      }),
     },
   );
   const effN = noRepeat.window;

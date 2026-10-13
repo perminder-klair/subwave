@@ -20,6 +20,7 @@ const SOURCE_LABELS: Record<string, string> = {
   listenerFavourites: 'listener favourites',
   randomSongs: 'a library wildcard',
   showPlaylistTracks: 'the show’s music selection',
+  showPoolTracks: 'the show’s own catalogue',
   tracksTowardJourney: 'the station’s sonic journey',
   sonicSimilarTracks: 'server sound-alike exploration',
   frequentAlbums: 'frequently played albums',

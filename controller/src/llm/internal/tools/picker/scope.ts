@@ -53,6 +53,12 @@ export interface PickerScope {
   // The show's playlist union tracks; registers the showPlaylistTracks tool. Set
   // in BOTH strict (with playlistLock) and soft (prompt preference only) modes.
   playlistTracks: any[] | null;
+  // A strict-filter show's whole eligible catalogue (music/show-recency.ts
+  // strictShowLibraryPool), before recency. Registers showPoolTracks when it is
+  // small enough to hand over whole. null when the show is not strict, or when
+  // a strict playlist or a prepared episode already names the source; not set
+  // on the request path.
+  showPool: any[] | null;
   // Configured pins, including an unresolved playlist anchor.
   hasPlaylistAnchor: boolean;
   hasPinnedMoods: boolean;
@@ -92,6 +98,7 @@ const NO_SCOPE: PickerScope = {
   maxTrackSec: null,
   playlistLock: null,
   playlistTracks: null,
+  showPool: null,
   hasPlaylistAnchor: false,
   hasPinnedMoods: false,
   excludedIds: null,

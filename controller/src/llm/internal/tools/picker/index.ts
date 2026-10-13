@@ -25,6 +25,7 @@ import starredSongs from './tools/starred-songs.js';
 import listenerFavourites from './tools/listener-favourites.js';
 import randomSongs from './tools/random-songs.js';
 import showPlaylistTracks from './tools/show-playlist-tracks.js';
+import showPoolTracks from './tools/show-pool-tracks.js';
 import episodeArtistTracks from './tools/episode-artist-tracks.js';
 import tracksTowardJourney from './tools/tracks-toward-journey.js';
 import identifyRequestedTrack from './tools/identify-requested-track.js';
@@ -56,6 +57,7 @@ export const PICKER_TOOLS: readonly PickerToolModule[] = [
   listenerFavourites,
   randomSongs,
   showPlaylistTracks,
+  showPoolTracks,
   episodeArtistTracks,
   tracksTowardJourney,
   identifyRequestedTrack,

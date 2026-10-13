@@ -15,7 +15,7 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
-import { showNoRepeatGuard } from '../music/show-recency.js';
+import { showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
@@ -300,6 +300,11 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   // starvation cascade. A resolved strict playlist is its own catalogue, so
   // clamp to its real identity count using the same resolved genre lock as the
   // tools; 0 leaves the relaxable window in charge.
+  // A strict-filter show's own catalogue, read once: it sizes the hard window
+  // below and, when small, becomes the showPoolTracks source.
+  const showLibraryPool = strictShowLibraryPool(strict ? library.candidateFilterTracks() : null, {
+    show: activeShow, excludedIds, resolvedGenres: genreLock ?? [], minTrackSec, maxTrackSec,
+  });
   const effN = showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
@@ -311,6 +316,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
       resolvedGenres: genreLock ?? [],
       minTrackSec,
       maxTrackSec,
+      showLibraryPool,
     },
   ).window;
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
@@ -357,6 +363,8 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
     maxTrackSec,
     playlistLock,
     playlistTracks,
+    // A strict playlist or a prepared episode already names its own source.
+    showPool: playlistLock || episodeSource ? null : showLibraryPool,
     hasPlaylistAnchor: !!activeShow?.playlistIds?.length,
     hasPinnedMoods: !!activeShow?.moods?.length,
     excludedIds,
