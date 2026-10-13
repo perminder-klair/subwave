@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { PICKER_TOOL_TIMEOUT_MS as TOOL_TIMEOUT_MS } from '../tools/picker/defs.js';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter } from '../core/pure.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter, endOnUserTurn } from '../core/pure.js';
 import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage, UsageMeter } from '../core/pure.js';
 import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, nativeFirstStepToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
@@ -415,7 +415,10 @@ export async function djAgent({
           lastVia = 'ai-sdk:agent:recovery';
           // The whole run's trail, never `response.messages` (final step only).
           const priorMessages = result.responseMessages || result.response?.messages || [];
-          const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
+          // Never end on the model's own turn: a run that stopped with plain
+          // text leaves an assistant message last, and current Claude models
+          // reject that as prefill (see endOnUserTurn).
+          const recoveryMessages = endOnUserTurn(priorMessages.length ? [...messages, ...priorMessages] : messages);
           const recoveryAttempt = createAgentAttempt(meter);
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);

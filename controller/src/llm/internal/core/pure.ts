@@ -839,3 +839,22 @@ export function soulBrief(soul: unknown, max: number = SOUL_BRIEF_MAX): string {
   if (s.length <= max) return s;
   return `${String(clipText(s, max)).replace(/[,;:.]+$/, '')}…`;
 }
+
+// The user turn a replayed conversation gets when it would otherwise END on the
+// model's own turn. Wording mirrors the recovery agent's instruction.
+export const RECOVERY_USER_TURN = 'Call the `done` tool now with your final answer.';
+
+// A conversation handed back to a model must not end on an assistant turn.
+// The done-only recovery replays the first run's trail, and when that run
+// stopped with plain text instead of a tool call, the trail's last message is
+// the model's own reply. Sending that is "assistant prefill", which current
+// Claude generations refuse outright ("This model does not support assistant
+// message prefill"), so the recovery threw and the segment was lost. Appending
+// a user turn only in that case keeps strict role alternation (#555) intact:
+// a conversation already ending on a user or tool message is returned as is.
+export function endOnUserTurn<M extends { role?: string }>(messages: M[], text: string = RECOVERY_USER_TURN): M[] {
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant') return messages;
+  return [...messages, { role: 'user', content: text } as unknown as M];
+}
+
