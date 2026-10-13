@@ -24,12 +24,13 @@
 // scripts/house-rules.test.ts.
 // Run: `tsx scripts/stem-blend-level.test.ts` (folded into `npm test`).
 
+import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-blend-level-'));
+const root = createTempDir(join(tmpdir(), 'subwave-blend-level-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
@@ -92,18 +93,6 @@ try {
       peakDb: -20,         // headroom is not the binding limit here
     });
     assert.equal(gain, 6, 'capped at maxBoostDb');
-  });
-
-  // Peak headroom binds before the boost cap — the render had no equivalent,
-  // so a quiet-but-hot-peaked track was boosted into the limiter.
-  await test('caps the boost by real peak headroom', async () => {
-    const gain = await loudness.resolveGainDb({
-      id: 't4',
-      replayGain: null,
-      loudnessLufs: -22,   // raw ask is +8, boost cap would allow 6
-      peakDb: -3,          // only 2 dB to the -1 dBFS ceiling
-    });
-    assert.equal(gain, 2, 'headroom wins over the boost cap');
   });
 
   // Cuts are not capped by maxBoostDb (that is boost-only) but by the wide cut

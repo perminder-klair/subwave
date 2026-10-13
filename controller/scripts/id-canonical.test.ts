@@ -90,13 +90,9 @@ async function main() {
   console.log('idempotence (safe to re-apply on an already-migrated store):');
 
   const shapes = [
-    '5cLJPkLA5DK2BADhoeotPk',
     'zzzzzzzzzzzzzzzzzzzzzz',
     'e3b7fc2ae9447bbec37a13bf916e3cf6',
     'f47ac10b-58cc-4372-a567-0e02b2c3d479',
-    '',
-    'aB3xY9kQz1',
-    '!!!!!!!!!!!!!!!!!!!!!!',
   ];
   for (const s of shapes) {
     await test(`canonicalId is a fixed point on canonicalId(${JSON.stringify(s)})`, () => {

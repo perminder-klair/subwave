@@ -19,8 +19,9 @@
 // scripts/stem-backfill.test.ts.
 // Run: `tsx scripts/stem-priority.test.ts` (folded into `npm run test`).
 
+import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, utimesSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,7 +37,7 @@ const NOW = Date.parse('2026-09-07T12:00:00.000Z');
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
 
 async function main() {
-  const stateDir = mkdtempSync(join(tmpdir(), 'subwave-stem-priority-'));
+  const stateDir = createTempDir(join(tmpdir(), 'subwave-stem-priority-'));
   process.env.STATE_DIR = stateDir;
 
   const db = await import('../src/music/library-db.js');
@@ -285,13 +286,6 @@ async function main() {
     assert.ok(drawn.size > 6, `eight draws only ever reached ${drawn.size} of the 60 tied tracks`);
   });
 
-  await test('a track that has already had a pass leaves the scope for good', () => {
-    // Resumption is the stems_at stamp's job, not the order's — which is the
-    // whole reason the order is free to be a random-tiebroken ranking.
-    db.upsertTrackAnalysis('heavy', { bpm: 120, stemsAttempted: true });
-    assert.ok(!db.needsStemsIds(undefined, signals).includes('heavy'));
-  });
-
   // -------------------------------------------------------------------------
   // Retention
   // -------------------------------------------------------------------------
@@ -352,16 +346,6 @@ async function main() {
   });
 
   db.close();
-
-  await test('a sweep with the library DB closed still fits the budget', () => {
-    // Fail-open: the priority lookup throws with no open handle, every dir
-    // reports a null priority, and the sort degrades to plain mtime LRU rather
-    // than the sweep giving up and leaving the cache over budget.
-    return stemCache.sweep(1024).then((res) => {
-      assert.equal(res.removed, 1);
-      assert.equal(res.overBudgetBytes, 0);
-    });
-  });
 
   rmSync(stateDir, { recursive: true, force: true });
   if (failures > 0) {

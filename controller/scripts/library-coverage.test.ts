@@ -3,23 +3,23 @@
 // unattended, so an in-memory cache would blank it every restart), and a
 // failed count is recorded rather than only logged.
 //
-// Pinned both behaviourally (doScan sets `scanning` before its first await)
-// and from source, since the behavioural half cannot tell a scan that never
-// started from one that failed instantly against a stub server.
+// Boot-state and corrupt-store checks live here, alongside the percentage
+// cap and atomic-write guards. library-coverage-e2e.test.ts counts real stub
+// requests and checks persisted scan results, reset, and failure behaviour.
 
+import { createTempDir } from './test-utils/temp-dir.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync, rmSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const STATE = mkdtempSync(join(tmpdir(), 'subwave-library-coverage-'));
+const STATE = createTempDir(join(tmpdir(), 'subwave-library-coverage-'));
 process.env.STATE_DIR = STATE;
 
 const COUNT_FILE = join(STATE, 'library-count.json');
 const SRC = new URL('../src/music/library-coverage.ts', import.meta.url);
-const ROUTES = new URL('../src/routes/library/maintenance.ts', import.meta.url);
 
 const coverage = await import('../src/music/library-coverage.js');
 
@@ -41,37 +41,6 @@ test('get() never starts a scan', async () => {
   const again = await coverage.get();
   assert.equal(again.scanning, false, 'a repeat get() started a scan');
   assert.equal(again.total, null);
-});
-
-test('the read path names no walker', async () => {
-  const src = codeOnly(await readFile(SRC, 'utf8'));
-  const body = src.slice(src.indexOf('export async function get()'));
-  assert.ok(
-    !/\brefresh\(\)/.test(body),
-    'get() calls refresh() — that is the #1570 bug, a scan on the read path',
-  );
-  assert.ok(
-    !/\bSTALE_MS\b|\bisStale\b/.test(src),
-    'a staleness check is back in library-coverage — get() must never expire its own cache',
-  );
-});
-
-test('GET /library/coverage has no ?refresh=1 escape hatch', async () => {
-  const src = codeOnly(await readFile(ROUTES, 'utf8'));
-  assert.ok(
-    !/query\?*\.?\[?['"]?refresh/.test(src),
-    'a GET that can start a walk is the shape something eventually polls by accident',
-  );
-});
-
-test('a library reset does not recount Navidrome', async () => {
-  const src = codeOnly(await readFile(ROUTES, 'utf8'));
-  const reset = src.slice(src.indexOf("router.post('/library/reset'"));
-  const body = reset.slice(0, reset.indexOf('\n// ---'));
-  assert.ok(
-    !/coverage\.refresh\(\)/.test(body),
-    'reset wipes library.db, not Navidrome — the total it would recompute cannot have changed',
-  );
 });
 
 test('every percentage is capped at 100, not just floored', async () => {
@@ -124,20 +93,6 @@ test('a missing or corrupt store reads as "never counted", never throws', async 
   }
 });
 
-test('the persisted shape carries only the count, never the in-flight flags', async () => {
-  const scannedAt = new Date().toISOString();
-  writeFileSync(COUNT_FILE, JSON.stringify({ version: 1, total: 7, scannedAt }));
-  const stored = JSON.parse(readFileSync(COUNT_FILE, 'utf8'));
-  // `scanning`/`scanError` describe THIS process's attempt: a stored
-  // `scanning: true` from a killed container would spin forever.
-  assert.deepEqual(Object.keys(stored).sort(), ['scannedAt', 'total', 'version']);
-
-  const src = codeOnly(await readFile(SRC, 'utf8'));
-  const persist = src.slice(src.indexOf('function persistCount()'));
-  const body = persist.slice(0, persist.indexOf('\n}'));
-  assert.ok(!/scanning|scanError/.test(body), 'persistCount must not write the in-flight flags');
-});
-
 test('an atomic write is used, so a torn file cannot replace a good count', async () => {
   const src = await readFile(SRC, 'utf8');
   assert.ok(
@@ -152,37 +107,4 @@ test('the payload carries scanError, and a clean read reports none', async () =>
   const snap = await fresh.get();
   assert.ok('scanError' in snap, 'scanError must ride the payload — the panel renders it');
   assert.equal(snap.scanError, null, 'no attempt yet means no error');
-});
-
-test('refresh() records why a scan failed instead of only logging it', async () => {
-  const src = codeOnly(await readFile(SRC, 'utf8'));
-  const refresh = src.slice(src.indexOf('export function refresh()'));
-  const body = refresh.slice(0, refresh.indexOf('\n}'));
-  assert.ok(
-    /cache\.scanError\s*=/.test(body),
-    'a failed count must be recorded on the snapshot, not just console.error-ed',
-  );
-});
-
-test('a scan that fails leaves the previous count and its age in place', async () => {
-  // total/scannedAt are written only on success, so a failed re-count cannot
-  // blank a good number over a transient Navidrome blip.
-  const src = codeOnly(await readFile(SRC, 'utf8'));
-  const scan = src.slice(src.indexOf('async function doScan()'));
-  const body = scan.slice(0, scan.indexOf('\n}'));
-  const assignIdx = body.indexOf('cache.total = count');
-  const iterIdx = body.indexOf('iterateAllSongs');
-  assert.ok(assignIdx > iterIdx, 'the total must be assigned only after the walk completes');
-  assert.ok(
-    !/finally[\s\S]*cache\.(total|scannedAt)\s*=/.test(body),
-    'the finally block must not write the count — that would land on the failure path too',
-  );
-});
-
-test('the count persists to state/library-count.json', async () => {
-  const scannedAt = new Date().toISOString();
-  writeFileSync(COUNT_FILE, JSON.stringify({ version: 1, total: 3, scannedAt }));
-  const fresh = await import(`../src/music/library-coverage.js?path=${Math.random()}`);
-  assert.equal((await fresh.get()).total, 3);
-  assert.ok(existsSync(COUNT_FILE), 'the documented path is state/library-count.json');
 });
