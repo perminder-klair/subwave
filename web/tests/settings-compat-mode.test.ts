@@ -24,5 +24,5 @@ test('the detection note names the result only for auto', () => {
 test('the form keeps auto, and reads anything unknown as local like the controller', () => {
   assert.equal(settingsForm({ llm: { compatibleMode: 'auto', fallback: { compatibleMode: 'auto' } } }).llm.compatibleMode, 'auto');
   assert.equal(settingsForm({ llm: { compatibleMode: 'auto', fallback: { compatibleMode: 'auto' } } }).llm.fallback.compatibleMode, 'auto');
-  assert.equal(settingsForm({ llm: { compatibleMode: 'bogus' } }).llm.compatibleMode, 'local');
+  assert.equal(settingsForm({ llm: { compatibleMode: 'bogus' as never } }).llm.compatibleMode, 'local');
 });
