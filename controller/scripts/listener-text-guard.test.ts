@@ -63,6 +63,9 @@ async function withFetch<T>(
   try {
     await settings.update({ llm: {
       provider: 'openai-compatible', model: 'fixture-model',
+      // Pinned: these tests read the prompt the model receives, and an `auto`
+      // connection would send its detection probes to this stub first.
+      compatibleMode: 'local',
       baseUrl: 'http://127.0.0.1:9/v1', fallback: { enabled: false },
     } } as never);
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {

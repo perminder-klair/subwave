@@ -26,6 +26,12 @@ function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
   return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
 }
 
+// The stored connection mode, as the form holds it. Anything unrecognised is
+// 'local', which is how the controller loads it too.
+function compatibleModeOf(v: unknown): 'local' | 'hosted' | 'auto' {
+  return v === 'hosted' || v === 'auto' ? v : 'local';
+}
+
 export function settingsForm(v: NonNullable<SettingsData['values']>): FormState {
   return {
     crossfadeDuration: String(v.crossfadeDuration ?? ''),
@@ -208,7 +214,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         return legacy ? { [prov]: legacy } : {};
       })(),
       headers: headerRows(v.llm?.headers),
-      compatibleMode: v.llm?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+      compatibleMode: compatibleModeOf(v.llm?.compatibleMode),
       reasoning: !!v.llm?.reasoning,
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
@@ -251,7 +257,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
           return legacy ? { [prov]: legacy } : {};
         })(),
         headers: headerRows(v.llm?.fallback?.headers),
-        compatibleMode: v.llm?.fallback?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+        compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
       },
     },

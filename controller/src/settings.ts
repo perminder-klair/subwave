@@ -333,6 +333,13 @@ const clampShortlistPasses = (v: unknown, def: number) => intIn(v, def, SHORTLIS
 // toggle. Anything else stored under these keys is treated as ABSENT rather
 // than as a choice, so a hand-edited or truncated value falls back to the
 // legacy toggle exactly as a missing one does.
+// compatibleMode as loaded. A valid stored value wins; a stored block that
+// lacks the key was written before 'auto' existed, so it keeps 'local' and an
+// upgraded station is driven exactly as before; no block at all is a new
+// station, which takes the default.
+const storedCompatibleMode = (v: unknown, blockStored: boolean, fallback: 'local' | 'hosted' | 'auto'): 'local' | 'hosted' | 'auto' =>
+  v === 'local' || v === 'hosted' || v === 'auto' ? v : blockStored ? 'local' : fallback;
+
 const storedTrackSelection = (v: unknown): 'agentic' | 'shortlist' | undefined =>
   v === 'agentic' || v === 'shortlist' ? v : undefined;
 const storedRuntime = (v: unknown): 'agentic' | 'direct' | undefined =>
@@ -995,7 +1002,10 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
-      compatibleMode: stored.llm?.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.compatibleMode,
+      // A stored llm block without the key predates 'auto' and keeps the
+      // historical 'local'; only a station with no llm block yet gets the
+      // 'auto' default. Same rule for the fallback leg below.
+      compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -1103,7 +1113,7 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
-          compatibleMode: fb.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.fallback.compatibleMode,
+          compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,

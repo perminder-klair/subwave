@@ -412,7 +412,12 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
-    compatibleMode: 'local' as 'local' | 'hosted',
+    // How an openai-compatible connection is driven: 'local' for a self-hosted
+    // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
+    // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
+    // 'auto' is the default for a NEW station only: load() keeps 'local' for a
+    // stored llm block written before 'auto' existed, so an upgrade is unchanged.
+    compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -548,7 +553,7 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
-      compatibleMode: 'local' as 'local' | 'hosted',
+      compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,

@@ -4,6 +4,7 @@
 import * as settings from '../../../settings.js';
 import { languageModel, resolveModelId, ollamaBaseUrl, chatBaseUrl, llmCfg } from './registry.js';
 import { capabilitiesFor, discoveryStepsFor, DISCOVERY_STEPS_MIN } from './capabilities.js';
+import { resolveCompatibleMode, detectCompatibleMode, type CompatDetection } from './compat-detect.js';
 
 export interface Leg {
   cfg: any;       // the resolved llm config for this leg
@@ -43,7 +44,7 @@ export function fallbackLeg(): Leg | null {
   if (!stored || !stored.enabled) return null;
   // Resolve the fallback's inline key per-provider (issue #657) — the stored
   // fallback.apiKey slot is legacy/empty now. Empty → its env var, as before.
-  const fb = { ...stored, apiKey: settings.llmKeyFor(stored.provider) };
+  const fb = resolveCompatibleMode({ ...stored, apiKey: settings.llmKeyFor(stored.provider) });
   try {
     return { cfg: fb, model: languageModel(fb), noThinkModel: languageModel(fb, { forceNoThink: true }), label: labelFor(fb) };
   } catch {
@@ -74,7 +75,7 @@ export function promptDiscoverySteps(): number {
   const stored = settings.get().llm?.fallback;
   if (stored?.enabled) {
     try {
-      steps = Math.min(steps, discoveryStepsFor(stored));
+      steps = Math.min(steps, discoveryStepsFor(resolveCompatibleMode(stored)));
     } catch {
       return DISCOVERY_STEPS_MIN;
     }
@@ -114,3 +115,23 @@ export async function probeLegReachable(leg: Leg, timeoutMs = 3000): Promise<boo
     return false;
   }
 }
+
+// Probe every leg set to `auto` now and wait for the answers, so the first
+// model call after boot or a settings save already runs in the detected mode
+// instead of spending one call as `local` while a background probe finishes.
+// Never throws; a leg that cannot be read is skipped.
+export async function warmCompatDetection(): Promise<Array<{ leg: 'primary' | 'fallback'; detection: CompatDetection }>> {
+  const llm = settings.get().llm;
+  const legs: Array<['primary' | 'fallback', any]> = [['primary', llm]];
+  if (llm?.fallback?.enabled) legs.push(['fallback', llm.fallback]);
+  const out: Array<{ leg: 'primary' | 'fallback'; detection: CompatDetection }> = [];
+  for (const [leg, cfg] of legs) {
+    if (cfg?.provider !== 'openai-compatible' || cfg.compatibleMode !== 'auto') continue;
+    try {
+      const detection = await detectCompatibleMode({ ...cfg, apiKey: settings.llmKeyFor(cfg.provider) });
+      out.push({ leg, detection });
+    } catch { /* detectCompatibleMode never rejects; belt and braces */ }
+  }
+  return out;
+}
+

@@ -350,8 +350,8 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
     target.model = v;
   }
   if (l.compatibleMode !== undefined) {
-    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted') {
-      throw new Error(`${label}.compatibleMode must be "local" or "hosted"`);
+    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted' && l.compatibleMode !== 'auto') {
+      throw new Error(`${label}.compatibleMode must be "local", "hosted" or "auto"`);
     }
     target.compatibleMode = l.compatibleMode;
   }

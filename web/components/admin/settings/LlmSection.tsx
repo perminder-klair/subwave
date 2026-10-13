@@ -19,6 +19,7 @@ import { ProviderSelector } from '../llm/ProviderSelector';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
+import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
@@ -533,12 +534,15 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>API behavior</Label>
               <Seg value={form.llm.compatibleMode}
-                options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
-                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as 'local' | 'hosted' } }))} />
+                options={COMPAT_MODE_OPTIONS}
+                onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, compatibleMode: v as CompatMode } }))} />
               <div className="field-hint">
-                Hosted uses native structured output and leaves sampling and reasoning
-                controls to the service. Local keeps the llama.cpp/vLLM request
-                adjustments. Existing stations stay on Local.
+                Auto-detect asks the server what it is: llama.cpp, LM Studio, vLLM
+                or Ollama run as a local model; a cloud model or public API runs as
+                a hosted service; anything it cannot tell stays local. Hosted uses
+                native structured output and leaves sampling and reasoning controls
+                to the service. Local keeps the llama.cpp/vLLM request adjustments.
+                {compatDetectedNote(form.llm.compatibleMode, data.llm?.compatDetection?.primary)}
               </div>
             </div>
           )}
@@ -632,7 +636,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'local')) && (
+          {(form.llm.provider === 'locca' || (form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'local')) && (
             <div className="field">
               <Label>Repetition penalty (repeat_penalty)</Label>
               <Input
@@ -900,8 +904,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="field">
                   <Label>Backup API behavior</Label>
                   <Seg value={form.llm.fallback.compatibleMode}
-                    options={[{ id: 'local', label: 'Local model' }, { id: 'hosted', label: 'Hosted service' }]}
-                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as 'local' | 'hosted' } } }))} />
+                    options={COMPAT_MODE_OPTIONS}
+                    onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, compatibleMode: v as CompatMode } } }))} />
+                  <div className="field-hint">
+                    {compatDetectedNote(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback)}
+                  </div>
                 </div>
               )}
 
@@ -976,7 +983,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </>
               )}
 
-              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'local')) && (
+              {(form.llm.fallback.provider === 'locca' || (form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'local')) && (
                 <div className="field">
                   <Label>Repetition penalty (repeat_penalty)</Label>
                   <Input
@@ -1118,7 +1125,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                    {form.llm.fallback.provider === 'openai-compatible' && form.llm.fallback.compatibleMode === 'hosted'
+                    {form.llm.fallback.provider === 'openai-compatible' && effectiveCompatMode(form.llm.fallback.compatibleMode, data.llm?.compatDetection?.fallback) === 'hosted'
                       ? 'Hosted compatible services control their own reasoning; this switch is ignored for this backup.'
                       : 'Whether the backup model may emit a reasoning step. Off by default, like the primary.'}
                   </div>
@@ -1145,7 +1152,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
             <div className="field-hint mt-1 max-w-[440px]">
-              {form.llm.provider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+              {form.llm.provider === 'openai-compatible' && effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary) === 'hosted'
                 ? 'Hosted compatible services control their own reasoning; this switch is ignored for this connection.'
                 : <>When off, thinking-capable models skip their internal reasoning
               step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,

@@ -18,6 +18,9 @@ import {
   probeLegReachable,
   providerName,
   activeModelLabel,
+  detectCompatibleMode,
+  type CompatDetection,
+  type Leg,
 } from '../llm/provider.js';
 import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
 import type { Finding, StationSettings } from './types.js';
@@ -72,6 +75,24 @@ export async function checkLlm(
       out.push({ label: 'fallback', status: 'skip', detail: 'none configured (optional)' });
     }
   } catch { /* fallback is best-effort */ }
+
+  // openai-compatible connection mode, per leg: is the server driven the way
+  // it wants to be? Probed fresh here (the doctor is occasional), never cached
+  // stale from a call path.
+  for (const [label, legOf] of [
+    ['connection mode', primaryLeg],
+    ['fallback connection mode', fallbackLeg],
+  ] as const) {
+    try {
+      const leg = legOf();
+      if (leg?.cfg?.provider !== 'openai-compatible') continue;
+      // The operator's own choice: resolveCompatibleMode keeps 'auto' here
+      // when it rewrote compatibleMode to the detected value.
+      const setting = leg.cfg.compatibleModeSetting ?? leg.cfg.compatibleMode;
+      const detection = await detectCompatibleMode(leg.cfg);
+      out.push(compatModeFinding(label, setting, detection, agentRecoveryRate(leg, recentCalls)));
+    } catch { /* a leg that cannot be built is reported by the provider rows */ }
+  }
 
   // Reachability cannot diagnose a provider whose generation slot is stuck.
   // Keep this finding independent of probes and cached/LLM-generated reviews.
@@ -374,4 +395,81 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Connection mode (openai-compatible)
+// ---------------------------------------------------------------------------
 
+export interface AgentRecoveryRate {
+  agentCalls: number;
+  recoveries: number;
+}
+
+// How often this leg's recent tool-loop calls needed the done-only recovery
+// ("agent stopped without calling done"). On a hosted API driven in local mode
+// that is nearly every multi-round call, which is the runtime half of the
+// evidence; the probe is the other half.
+export function agentRecoveryRate(leg: Pick<Leg, 'label'>, calls: ReadonlyArray<any>): AgentRecoveryRate {
+  const agent = calls.filter(c => c?.model === leg.label && typeof c?.via === 'string' && c.via.startsWith('ai-sdk:agent'));
+  return { agentCalls: agent.length, recoveries: agent.filter(c => c.via.endsWith(':recovery')).length };
+}
+
+// A recovery on most of a handful of agent calls is a pattern, not a blip.
+const RECOVERY_MIN_CALLS = 4;
+const RECOVERY_SHARE = 0.5;
+
+function recoveryPattern(r: AgentRecoveryRate): boolean {
+  return r.agentCalls >= RECOVERY_MIN_CALLS && r.recoveries / r.agentCalls >= RECOVERY_SHARE;
+}
+
+function recoveryClause(r: AgentRecoveryRate): string {
+  return r.agentCalls ? ` · ${r.recoveries}/${r.agentCalls} recent agent calls needed the done-only recovery` : '';
+}
+
+const MODE_NAME: Record<string, string> = {
+  local: 'Self-hosted server',
+  hosted: 'Hosted API or proxy',
+  auto: 'Auto-detect',
+};
+
+// Pure: the setting, what the probe saw and the runtime recovery rate in, one
+// finding out. Warns only on a mismatch with evidence behind it; an undecided
+// probe is never a warning on its own.
+export function compatModeFinding(
+  label: string,
+  setting: unknown,
+  detection: CompatDetection,
+  recovery: AgentRecoveryRate,
+): Finding {
+  const mode = setting === 'hosted' || setting === 'auto' ? setting : 'local';
+  const seen = detection.mode ? `${detection.server ?? detection.mode} (${detection.evidence})` : `undetected (${detection.evidence})`;
+
+  if (mode === 'auto') {
+    return {
+      label,
+      status: 'ok',
+      detail: `${MODE_NAME.auto} → ${detection.mode ?? 'local'} · ${seen}${recoveryClause(recovery)}`,
+      hint: detection.mode ? undefined : 'Auto-detect found no positive evidence, so the connection runs as a self-hosted server. If it is a cloud API or proxy, set the mode to Hosted API or proxy.',
+    };
+  }
+  if (mode === 'local' && (detection.mode === 'hosted' || (!detection.mode && recoveryPattern(recovery)))) {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.local}, but this looks like a hosted API · ${seen}${recoveryClause(recovery)}`,
+      hint: 'Self-hosted mode forces the final tool call and sends llama.cpp sampling extras. A hosted API or proxy does not honour the forced call after several tool rounds, so agent runs stop without committing and fall to the recovery path (slower, more tokens). Set Settings → LLM provider → connection mode to Auto-detect or Hosted API or proxy.',
+    };
+  }
+  if (mode === 'hosted' && detection.mode === 'local') {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.hosted}, but the server identifies as ${seen}`,
+      hint: 'Hosted mode drops the forced tool call and the repeat-penalty / context-size extras that small self-hosted models depend on, so structured picks can fail or loop. Set Settings → LLM provider → connection mode to Auto-detect or Self-hosted server.',
+    };
+  }
+  return {
+    label,
+    status: 'ok',
+    detail: `${MODE_NAME[mode]} · ${seen}${recoveryClause(recovery)}`,
+  };
+}

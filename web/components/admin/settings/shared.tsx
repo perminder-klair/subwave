@@ -138,10 +138,16 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
+}
+
+export interface CompatDetectionView {
+  mode: 'local' | 'hosted' | null;
+  server: string | null;
+  evidence: string;
 }
 
 export interface LlmForm {
@@ -152,7 +158,7 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -563,6 +569,11 @@ export interface SettingsData {
   llm?: {
     providers?: string[];
     active?: string;
+    // What an `auto` connection mode resolved to, per leg; null until probed.
+    compatDetection?: {
+      primary?: CompatDetectionView | null;
+      fallback?: CompatDetectionView | null;
+    };
   };
   embedding?: {
     providers?: string[];
