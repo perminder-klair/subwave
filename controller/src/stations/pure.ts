@@ -44,9 +44,12 @@ export function duplicateAction(entry: string): 'copy' | 'skip' {
 }
 
 // Conversion moves the legacy root's contents into stations/main/. Only
-// install-level entries stay at the root (spec §2).
+// install-level entries stay at the root (spec §2). `router` is the music
+// router's whole state (#692): its credentials, installed plugins and plugin
+// data. The router container mounts exactly STATE_ROOT/router, so moving it
+// would strand the plugins and make the controller mint new credentials.
 const INSTALL_LEVEL = new Set([
-  'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found',
+  'stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found', 'router',
 ]);
 
 export function conversionAction(entry: string): 'move' | 'keep' {

@@ -11,6 +11,7 @@ name: Publish images
 #   ghcr.io/<owner>/subwave-broadcast   (icecast2 + liquidsoap + radio.liq + sounds/)
 #   ghcr.io/<owner>/subwave-controller
 #   ghcr.io/<owner>/subwave-web
+#   ghcr.io/<owner>/subwave-router      (music router: Jellyfin/Plex/plugin sources, #692)
 #   ghcr.io/<owner>/subwave-aio         (whole stack in one container — the Unraid
 #                                        Community Applications one-click image)
 #   ghcr.io/<owner>/subwave-tts-heavy   (optional Chatterbox + PocketTTS sidecar, ~3-4GB)
@@ -58,6 +59,10 @@ jobs:
             platforms: linux/amd64,linux/arm64
           - image: subwave-web
             dockerfile: web/Dockerfile
+            platforms: linux/amd64,linux/arm64
+          # Music router (#692). Pure Node, so multi-arch like the core four.
+          - image: subwave-router
+            dockerfile: docker/Dockerfile.router
             platforms: linux/amd64,linux/arm64
           # The Unraid one-click image: the whole stack (icecast2 + liquidsoap,
           # controller, web, Caddy) in one container, supervised by

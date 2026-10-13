@@ -1,5 +1,8 @@
 // Keep blocklist.json outside library.db so library resets preserve bans. Match IDs first,
-// then album/artist names; track titles never name-match. #1300 FR 1.
+// then names (#1300 FR 1). A track title alone never name-matches — "Intro" is on every
+// other album — but artist + title + album together do (#1827 review): a music-source
+// switch re-keys every track, and a block whose id the metadata matcher could not carry
+// across would otherwise stop being enforced. All three must be present on both sides.
 import { config } from '../config.js';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -55,6 +58,7 @@ let albumIds = new Map<string, BlockEntry>();
 let artistIds = new Map<string, BlockEntry>();
 let artistNames = new Map<string, BlockEntry>();   // nameKey'd (as artistNameKey)
 let albumKeys = new Map<string, BlockEntry>();     // nameKey'd album + KEY_SEP + artist
+let trackKeys = new Map<string, BlockEntry>();     // trackNameKey(title, artist, album)
 
 // Album keys join two free-text fields, so the separator must be a character
 // neither can contain, or ("a b", "c") and ("a", "b c") collide. In-memory
@@ -65,15 +69,25 @@ const KEY_SEP = '\u0000';
 // answer the same way (#1611).
 const albumKey = (album: unknown, artist: unknown) => `${nameKey(album)}${KEY_SEP}${nameKey(artist)}`;
 
+/** The track tier's name key: null unless title, artist and album are all present. */
+export function trackNameKey(title: unknown, artist: unknown, album: unknown): string | null {
+  const parts = [nameKey(title), nameKey(artist), nameKey(album)];
+  return parts.every(Boolean) ? parts.join(KEY_SEP) : null;
+}
+
 function rebuildIndex() {
   trackIds = new Map();
   albumIds = new Map();
   artistIds = new Map();
   artistNames = new Map();
   albumKeys = new Map();
+  trackKeys = new Map();
   for (const e of entries) {
-    if (e.type === 'track') trackIds.set(e.id, e);
-    else if (e.type === 'album') {
+    if (e.type === 'track') {
+      trackIds.set(e.id, e);
+      const key = trackNameKey(e.name, e.artist, e.album);
+      if (key) trackKeys.set(key, e);
+    } else if (e.type === 'album') {
       albumIds.set(e.id, e);
       if (e.name) albumKeys.set(albumKey(e.name, e.artist), e);
     } else if (e.type === 'artist') {
@@ -296,15 +310,16 @@ export async function remapIds(
   return changed;
 }
 
-// Return the blocking entry for raw songs or library rows. Resolve IDs before name fallback;
-// album names are paired with artist names. Stable precedence determines which entry the admin
-// action removes.
+// Return the blocking entry for raw songs or library rows. Resolve IDs before name fallback,
+// then the most specific name first; album names are paired with artist names. Stable
+// precedence determines which entry the admin action removes.
 export function matchOf(song: any): BlockEntry | null {
   if (!song || entries.length === 0) return null;
   return (
     (song.id ? trackIds.get(song.id) : undefined)
     ?? (song.albumId ? albumIds.get(song.albumId) : undefined)
     ?? (song.artistId ? artistIds.get(song.artistId) : undefined)
+    ?? (trackKeys.size ? trackKeys.get(trackNameKey(song.title, song.artist, song.album) ?? '') : undefined)
     ?? (artistNames.size && song.artist ? artistNameHit(song.artist) : undefined)
     ?? (albumKeys.size && song.album ? albumKeys.get(albumKey(song.album, song.artist)) : undefined)
     ?? null

@@ -1,7 +1,8 @@
 // The never-play blocklist (music/blocklist.ts): persistence round-trips and
 // the isBlocked() matching contract — id first, exact normalised-name fallback
-// for album/artist entries (library-db rows carry no Subsonic ids), and NO
-// name matching for track entries, since covers share titles.
+// for album/artist entries (library-db rows carry no Subsonic ids), and no
+// title-only matching for track entries, since covers share titles. (The
+// artist + title + album fallback is pinned in blocklist-track-name.test.ts.)
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
@@ -24,7 +25,7 @@ try {
   const arr = [{ id: 'a' }, { id: 'b' }];
   assert.equal(blocklist.rejectBlocked(arr), arr);
 
-  // Track entries: id only, never by name.
+  // Track entries: by id; never by title alone (this entry has no album).
   const t = await blocklist.add({ type: 'track', id: 'trk1', name: 'Song X', artist: 'Y' });
   assert.ok(t);
   assert.equal(blocklist.isBlocked({ id: 'trk1' }), true);

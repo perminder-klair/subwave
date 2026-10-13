@@ -10,9 +10,10 @@ import { clearPoolCache } from '../music/picker.js';
 import { clearPlaylistCache } from '../music/show-playlist.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
 import { applyPendingRotation } from '../music/id-rotation.js';
+import { afterMaintenanceRun, pendingSourceSwitch } from '../music/source-switch.js';
 import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEvidence } from '../music/id-rotation-recovery.js';
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
-import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
+import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, SWITCH_BLOCKS_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation, type SwitchBlocksReport } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 
 type TaggerMode = MaintenanceMode;
@@ -216,6 +217,29 @@ export function startReconcile(opts: { automaticIdRotation?: RotatedIdEvidence }
   );
 }
 
+// The booth line for track blocks a source switch could not place.
+export function switchBlocksMessage(r: SwitchBlocksReport): string {
+  const named = r.tracks.map((t) => [t.name, t.artist].filter(Boolean).join(' — ')).filter(Boolean);
+  const more = r.count > named.length ? ` and ${r.count - named.length} more` : '';
+  return `Music source switch: ${r.count} blocked track${r.count === 1 ? ' was' : 's were'} not found on the new source` +
+    (named.length ? ` (${named.join('; ')}${more})` : '') +
+    ' — if they are there under different names, block them again';
+}
+
+// A music-source switch saved while a run was going (#692) answered "pending":
+// that run walked the library it loaded at start, so its own adoption leaves
+// the marker alone. Carry the library across now that the slot is free.
+function resumeSourceSwitch(startedAt: string, outcome: TaggerLastRun['outcome']): void {
+  const next = afterMaintenanceRun(pendingSourceSwitch(), { startedAt, outcome });
+  if (next === 'stopped') {
+    queue.log('scheduler', 'The music source changed during the stopped run — run Reconcile to re-link the library');
+  } else if (next === 'reconcile' && !tagger.running) {
+    // A run started meanwhile began after the switch, so its walk carries it.
+    queue.log('scheduler', 'The music source changed during the last run — re-linking the library now');
+    startReconcile();
+  }
+}
+
 function spawnChild(
   mode: TaggerMode,
   args: string[],
@@ -287,9 +311,17 @@ function spawnChild(
         if (line.startsWith(ROTATION_PREFIX)) {
           try {
             const rot = JSON.parse(line.slice(ROTATION_PREFIX.length)) as TaggerRotation;
-            queue.log('scheduler', `id-rotation: adopted ${rot.adopted} rotated Navidrome id(s) — migrating state files`);
+            queue.log('scheduler', `id-rotation: re-linked ${rot.adopted} track id(s) — migrating state files`);
             void applyRotationNow();
           } catch { /* malformed sentinel — drop; the exit handler retries */ }
+          continue;
+        }
+        if (line.startsWith(SWITCH_BLOCKS_PREFIX)) {
+          try {
+            const text = switchBlocksMessage(JSON.parse(line.slice(SWITCH_BLOCKS_PREFIX.length)) as SwitchBlocksReport);
+            queue.log('scheduler', text);
+            tagger.lastLog.push({ kind: 'warning', text, at: new Date().toISOString() });
+          } catch { /* malformed sentinel — drop */ }
           continue;
         }
         if (line.startsWith(CATALOGUE_PREFIX)) {
@@ -402,7 +434,8 @@ function spawnChild(
       })
       .catch(() => {
         if (opts.automaticIdRotation && outcome === 'ok') idRotationRecovery.automaticReconcileFailed();
-      });
+      })
+      .finally(() => resumeSourceSwitch(startedAt, outcome));
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);

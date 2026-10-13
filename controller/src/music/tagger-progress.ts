@@ -68,6 +68,21 @@ export function reportRotation(r: Omit<TaggerRotation, 'at'>): void {
   console.log(ROTATION_PREFIX + JSON.stringify({ ...r, at: new Date().toISOString() }));
 }
 
+// The first walk after a music-source switch found track blocks it could not
+// place on the new library (music/source-switch.ts strandedTrackBlocks). The
+// controller puts them in the booth log, where an operator will see them.
+export const SWITCH_BLOCKS_PREFIX = '[switch-blocks] ';
+
+export interface SwitchBlocksReport {
+  count: number;
+  /** The first few, for the log line. */
+  tracks: Array<{ name: string | null; artist: string | null }>;
+}
+
+export function reportSwitchBlocks(r: SwitchBlocksReport): void {
+  console.log(SWITCH_BLOCKS_PREFIX + JSON.stringify(r));
+}
+
 // A nonempty authoritative walk has finished adoption AND pruning. Consumers
 // may now rebuild without waiting for enrichment/tagging/analysis to finish.
 // Separate from [rotation], which can arrive before pruning and is only a
