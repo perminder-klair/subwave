@@ -12,7 +12,7 @@ import { modelTolerant } from '../../llm/sdk.js';
 import { autoVoiceAllowed } from '../voice-policy.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../util/pick-seed.js';
 import { instruction } from '../../llm/dj.js';
-import { agenticReasonMentionsLeanings, MUSICAL_REASON_UNAVAILABLE, EDITORIAL_LEANINGS_FIELDS, type AgenticLeaningsOption } from './leanings-review.js';
+import { MUSICAL_REASON_UNAVAILABLE, EDITORIAL_LEANINGS_FIELDS, type AgenticLeaningsOption } from './leanings-review.js';
 
 // Plain .nullable() fields, deliberately — GLM's malformed spellings of
 // "nothing" (the string "null", an omitted key, a double-JSON-encoded object)
@@ -294,24 +294,8 @@ export function resolvedMusicalLeaningsFlag(context: EditorialLeaningsContext | 
   return !!context?.promptValue && modelFlag === true && typeof tieBreak === 'string' && tieBreak.trim().length > 2;
 }
 
-// The Agentic reason becomes queue metadata and the next session turn. Match
-// the Shortlist final-boundary safeguard: a model that mentions Leanings but
-// did not explicitly claim the diagnostic cannot pass that assertion forward
-// as ordinary selection context.
-export function agentReasonForLeanings(reason: unknown, usedMusicalLeanings: boolean, tieBreak: unknown = null): string {
-  const compact = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
-  if (usedMusicalLeanings) {
-    const evidence = typeof tieBreak === 'string' ? tieBreak.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
-    return evidence ? `Leanings: ${evidence}` : 'flow fit after the current track';
-  }
-  if (!agenticReasonMentionsLeanings(compact)) return compact;
-  return 'flow fit after the current track';
-}
-
-// The system prompt holds the complete editorial policy, while this compact
-// reminder rides the newest pick event so a long Agentic session cannot bury
-// the tie-breaker beneath its own earlier selections. It receives the one
-// snapshot resolved for the logical selection; never resolve a guest again.
+// Evaluation scripts use this reminder with the resolved editorial snapshot.
+// Production selection uses the separate Leanings-blind baseline and review.
 export function musicalLeaningsPickReminder(context: EditorialLeaningsContext): string {
   if (!context.promptValue) return '';
   return ' Musical Leanings are supplied for this pick as a soft tie-breaker. Always return both diagnostic fields: default "usedMusicalLeanings" to false and "leaningsTieBreak" to null. Set true and give a short leaningsTieBreak trait ONLY when two or more eligible tracks already fit the flow and Leanings genuinely settle that close choice—not merely because this track is compatible. The trait must describe the chosen discovered track AND directly match the supplied Musical Leanings; generic flow facts such as energy, pace, key, or club feel are not Leanings evidence. Otherwise use false and null. They may affect the choice, never listener-facing output, and never override show rules, rotation, safety, or musical flow.';

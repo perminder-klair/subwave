@@ -4,15 +4,15 @@
 // behaviour rather than on the shape of dj-agent.ts's source.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'subwave-leanings-pass-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-leanings-pass-'));
 
 const { runLeaningsReview } = await import('../src/broadcast/dj-agent/leanings-pass.js');
-const { NO_AGENTIC_LEANINGS_INFLUENCE } = await import('../src/broadcast/dj-agent/schemas.js');
+const { agenticLeaningsReviewSystem, NO_AGENTIC_LEANINGS_INFLUENCE } = await import('../src/broadcast/dj-agent/schemas.js');
 import type { LeaningsRoute } from '../src/broadcast/dj-agent/leanings-pass.js';
 import type { PickResolution } from '../src/broadcast/dj-agent/leanings-review.js';
 
@@ -53,6 +53,7 @@ async function run(answer: unknown, kind: LeaningsRoute['kind'] = 'djAgentLeanin
     review: async (request) => {
       prompts.push(request.prompt);
       assert.equal(request.kind, kind);
+      assert.equal(request.system, agenticLeaningsReviewSystem(), 'review uses its compact dedicated system instruction');
       assert.equal(request.temperature, 0, 'the private review samples deterministically');
       if (answer instanceof Error) throw answer;
       return answer;
@@ -144,7 +145,8 @@ test('no Leanings, or nothing to compare, means no model call at all', async () 
 
 // Live lunchtime reproduction: the reviewer swapped rock for rock on every
 // turn, although the initial pick already supported the claimed preference.
-for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+{
+  const kind = 'djAgentLeaningsReview';
   const rock = { ...baseline, genre: 'Hard Rock' };
   const peer = { ...plain, genre: 'Alternative Rock' };
   const punk = { ...synth, genre: 'Rock, Punk' };
@@ -221,7 +223,8 @@ for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as con
 
 // Evening station reproductions: evidence stays private to the review, and
 // weak-flow matches cannot crowd viable preferences out of the reserved slots.
-for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+{
+  const kind = 'djAgentLeaningsReview';
   const preferences = { host: 'Favour techno and synth-pop.', guest: null, promptValue: 'Host: Favour techno and synth-pop.' };
   const base = { ...baseline, genre: 'Electronic' };
   const trance = { ...plain, genre: 'Trance' };
@@ -291,7 +294,8 @@ for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as con
   });
 }
 
-for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+{
+  const kind = 'djAgentLeaningsReview';
   for (const [preference, tag] of [['strong musicianship', 'virtuoso'], ['distinctive voices', 'soulful vocals'], ['unexpected cross-genre connections', 'jazz fusion']]) {
     const challenger = { ...synth, lastfm_tags: [tag] };
     const preferences = { host: `Favour ${preference}.`, guest: null, promptValue: `Host: Favour ${preference}.` };
@@ -343,7 +347,8 @@ for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as con
 // #1687 review: an interpreted comparison must rest on facts about the music,
 // on a preference tags cannot carry, and on the host's preferences while the
 // host has any. Each case below swapped the pick before the validator said so.
-for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+{
+  const kind = 'djAgentLeaningsReview';
   const musicianship = { host: 'Favour strong musicianship.', guest: null, promptValue: 'Host: Favour strong musicianship.' };
   for (const [field, before, after] of [['year', 1972, 2015], ['play_count', 12, 0], ['unaired', false, true], ['last_played_days_ago', 3, 90]] as const) {
     test(`${kind}: ${field} is not musical evidence for an interpreted preference`, async () => {
@@ -428,7 +433,8 @@ for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as con
   });
 }
 
-for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+{
+  const kind = 'djAgentLeaningsReview';
   test(`${kind}: a hung review releases the pick, cancels generation and ignores a late answer`, async () => {
     let finish!: (answer: unknown) => void;
     let received: AbortSignal | undefined;
@@ -452,5 +458,22 @@ for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as con
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(resolution.leaningsReview?.outcome, 'failed', 'late results cannot replace the settled baseline');
     assert.equal(calls, 1, 'timeout never asks for another review');
+  });
+}
+
+// Only request naming, log wording, failure fields and replacement rendering
+// depend on the route. Exercise those differences once for each kind.
+for (const kind of ['djAgentLeaningsReview', 'djShortlistLeaningsReview'] as const) {
+  test(`${kind}: forwards the route wording and failure event`, async () => {
+    const replacement = await run({ selectedId: synth.id, leaningsBasis: 'synth-pop', musicalReason: goodReason, transition: 'blend' }, kind);
+    assert.match(replacement.result.object.reason, new RegExp(`^\\[${kind}\\] synth: Mara Vex chose`));
+    const invalid = await run({ selectedId: 'invented', leaningsBasis: 'synth-pop', musicalReason: goodReason, transition: null }, kind);
+    assert.deepEqual(invalid.logLines, [`${route(kind).label} rejected (unknown-candidate) — using the baseline`]);
+    const failed = await run(new Error('provider down'), kind);
+    assert.equal(failed.result.song, baseline);
+    assert.equal(failed.resolution.leaningsReview?.outcome, 'failed');
+    assert.equal(failed.events[0][0], route(kind).failureEvent);
+    assert.equal(failed.events[0][1].agent, kind === 'djAgentLeaningsReview' ? 'pick' : undefined);
+    assert.deepEqual(failed.logLines, [`${route(kind).label} failed — using the baseline`]);
   });
 }

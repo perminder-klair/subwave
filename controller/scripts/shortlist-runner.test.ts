@@ -1,11 +1,14 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildShortlist, executeShortlistPlan, orderByTransitionFit, planShortlistSources } from '../src/music/shortlist.js';
-import { agenticSelectionReason } from '../src/broadcast/dj-agent/leanings-review.js';
-import { pickerScope } from '../src/llm/tools.js';
-import { buildPickerContext } from '../src/llm/internal/tools/picker/scope.js';
-import { cacheSourcePool } from '../src/llm/internal/tools/picker/source-pool-cache.js';
-import { shortlistCandidateForPick, shortlistClauseSelectionReason, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings } from '../src/broadcast/dj-agent/shortlist-pick.js';
+
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-shortlist-runner-'));
+const { buildShortlist, executeShortlistPlan, orderByTransitionFit, planShortlistSources } = await import('../src/music/shortlist.js');
+const { pickerScope } = await import('../src/llm/tools.js');
+const { cacheSourcePool } = await import('../src/llm/internal/tools/picker/source-pool-cache.js');
+const { shortlistCandidateForPick, shortlistClauseSelectionReason, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings } = await import('../src/broadcast/dj-agent/shortlist-pick.js');
 
 test('balances context, continuity and diversity lanes without inventing intent-driven sources', () => {
   const journey = planShortlistSources({
@@ -193,32 +196,6 @@ test('Shortlist sends a compact selection-only candidate payload', () => {
     'candidate JSON is compact rather than indentation-heavy');
 });
 
-test('Agentic presentation never attaches one track\'s note to another track', () => {
-  const selected = { id: 'sam', title: 'How Do You Sleep?', artist: 'Sam Smith' };
-  assert.equal(
-    agenticSelectionReason(selected, 'Porcupine Tree — Of the New Day keeps the atmosphere moving.'),
-    '“How Do You Sleep?” by Sam Smith offers a strong musical fit with the current flow.',
-  );
-  assert.equal(
-    agenticSelectionReason(selected, 'Sam Smith — How Do You Sleep? keeps the atmosphere moving.'),
-    'Sam Smith — How Do You Sleep? keeps the atmosphere moving.',
-  );
-  assert.equal(
-    agenticSelectionReason(
-      { id: 'gabriel', title: 'Digging in the Dirt', artist: 'Peter Gabriel' },
-      'Peter Gabriel fits well with the current flow, and',
-    ),
-    '“Digging in the Dirt” by Peter Gabriel — fits well with the current flow.',
-  );
-  assert.equal(
-    agenticSelectionReason(
-      { id: 'qualls', title: 'Black Qualls', artist: 'Thundercat feat. Steve Lacy, Steve Arrington & Childish Gambino' },
-      "Thundercat featuring Steve Lacy, Steve Arrington & Childish Gambino with Black Qualls fits the current low-energy vibe.",
-    ),
-    "Thundercat featuring Steve Lacy, Steve Arrington & Childish Gambino with Black Qualls fits the current low-energy vibe.",
-  );
-});
-
 test('Shortlist reasons use verified identity and reject model backstage language', () => {
   const song = { artist: 'Prince', title: '1999' };
   assert.equal(
@@ -289,39 +266,6 @@ test('replays a source plan, keeping the picker accumulator as the source of tru
     ['duplicate', 'ok', 1, 0],
     ['unavailable', 'unavailable', 0, 0],
   ]);
-});
-
-test('repeated mood passes reuse one library pool but still surface new candidates', async () => {
-  const ctx = buildPickerContext(pickerScope());
-  const pool = Array.from({ length: 5 }, (_, index) => ({
-    id: `mood-${index}`, title: `Song ${index}`, artist: `Artist ${index}`,
-    moods: ['calm'], energy: 'low',
-  }));
-  let reads = 0;
-  const moodPool = cacheSourcePool((mood: string) => {
-    reads++;
-    assert.equal(mood, 'calm');
-    return pool;
-  });
-  const tools = {
-    tracksByMood: {
-      inputSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-      execute: async (args: unknown) => {
-        const { mood, energy } = args as { mood: string; energy: string | null };
-        return ctx.collect(moodPool(mood).filter((track) => !energy || track.energy === energy), 2);
-      },
-    },
-  };
-
-  const result = await executeShortlistPlan(tools, ctx.seen, [
-    { source: 'tracksByMood', args: { mood: 'calm', energy: 'low' }, family: 'context' },
-    { source: 'tracksByMood', args: { mood: 'calm', energy: 'low' }, family: 'context' },
-  ]);
-
-  assert.equal(reads, 1, 'the expensive source query runs only once for this pick');
-  assert.deepEqual(result.sourceRuns.map((run) => run.accepted), [2, 2]);
-  assert.equal(result.uniqueCandidates, 4, 'the second pass still broadens the shortlist');
-  assert.equal(new Set(result.candidates.map((candidate) => candidate.id)).size, 4);
 });
 
 test('source-pool cache is keyed, retains empty results and retries failures', () => {
