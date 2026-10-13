@@ -8,7 +8,7 @@ import { buildPickerTools, type PickerScope } from '../llm/tools.js';
 import { SHORTLIST_PASSES_BOUNDS } from '../schemas/settings.js';
 import * as library from './library.js';
 import { mixCompat, type Analysis } from './mix.js';
-import { filterPickerCandidates } from './recency.js';
+import { artistCreditsOverlap, artistRootKey, filterPickerCandidates } from './recency.js';
 import { type YearRange, hasEraBound } from './show-filter.js';
 import { shortlistOffers, type CandidateOffers } from './shortlist-offers.js';
 import { shortlistSearchCalls, type ShortlistSearch } from './shortlist-search.js';
@@ -254,13 +254,16 @@ export async function executeShortlistPlan(
   tools: PickerToolSet,
   seen: Map<string, any>,
   plan: ShortlistSourceCall[],
-  options: { topUps?: ShortlistSourceCall[]; minimumCandidates?: number; maxPerArtist?: number; offers?: CandidateOffers; sourceTimeoutMs?: number; signal?: AbortSignal } = {},
+  options: { topUps?: ShortlistSourceCall[]; minimumCandidates?: number; maxPerArtist?: number; avoidArtist?: string | null; offers?: CandidateOffers; sourceTimeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ShortlistResult> {
   const started = performance.now();
   const sourceRuns: ShortlistSourceRun[] = [];
   const sourcesById = new Map<string, string[]>();
 
-  const balanced = () => balanceShortlist([...seen.values()], options.maxPerArtist, options.offers);
+  const avoidRoot = artistRootKey(options.avoidArtist || '');
+  const offerable = () => withoutArtist(
+    balanceShortlist([...seen.values()], options.maxPerArtist, options.offers), avoidRoot,
+  );
   const calls = [...plan];
   // Recovery is at most the supplied top-up sources, not an unbounded retry.
   // It never weakens scope locks or changes how either route handles models.
@@ -268,7 +271,9 @@ export async function executeShortlistPlan(
     if (!calls.some(planned => planned.source === call.source)) calls.push(call);
   }
   for (let index = 0; index < calls.length; index++) {
-    if (index >= plan.length && balanced().length >= (options.minimumCandidates ?? 4)) break;
+    // Counted after the anchor exclusion, so a list that is mostly the anchor
+    // artist still earns its top-ups.
+    if (index >= plan.length && offerable().other.length >= (options.minimumCandidates ?? 4)) break;
     if (options.signal?.aborted) break;
     const call = calls[index];
     const tool = tools[call.source];
@@ -322,7 +327,10 @@ export async function executeShortlistPlan(
     }
   }
 
-  const candidates = balanced().map(candidate => ({
+  // Never-starve: when every candidate is the anchor artist, offer them all and
+  // let the artist guard's pool rescue answer it, exactly as before.
+  const { other, all } = offerable();
+  const candidates = (other.length ? other : all).map(candidate => ({
     ...candidate,
     shortlistSources: sourcesById.get(candidate.id) || [],
   }));
@@ -346,6 +354,7 @@ export async function buildShortlist(context: ShortlistPlanningContext, offers: 
   const result = await executeShortlistPlan(tools as PickerToolSet, seen, plan, {
     topUps, minimumCandidates: 4,
     maxPerArtist: context.scope.playlistLock || context.scope.episodeSource ? Infinity : 3,
+    avoidArtist: shortlistAvoidArtist(context),
     offers,
   });
   if (!context.transitionTarget) return result;
@@ -353,6 +362,25 @@ export async function buildShortlist(context: ShortlistPlanningContext, offers: 
     ...result,
     candidates: orderByTransitionFit(result.candidates, context.transitionTarget, (candidate) => library.bpmKeyFor(candidate), offers),
   };
+}
+
+// The pick-anchor artist guard rejects the anchor's artist after the model
+// chooses it, at the cost of a second model call; offering the list without
+// that artist avoids the call. Prepared episodes are exempt here as they are
+// from the guard, since an artist episode is that artist by design.
+export function shortlistAvoidArtist(context: Pick<ShortlistPlanningContext, 'scope' | 'currentArtist'>): string | null {
+  return context.scope.episodeSource ? null : context.currentArtist || null;
+}
+
+// `other` is the balanced list minus every track sharing a credit with the
+// pick-anchor artist, beside the unfiltered `all` for the never-starve case.
+// The same overlap test the artist guard uses (artistCreditsOverlap over
+// artistRootKey), so a track in `other` is one that guard would accept. Order
+// is preserved; with no avoided artist, `other` is the whole list.
+export function withoutArtist<T extends PickerCandidate>(candidates: T[], avoidRoot: string): { other: T[]; all: T[] } {
+  if (!avoidRoot) return { other: candidates, all: candidates };
+  const other = candidates.filter(candidate => !artistCreditsOverlap(artistRootKey(candidate), avoidRoot));
+  return { other, all: candidates };
 }
 
 // Apply the cap to the merged set at choice time, leaving Agentic discovery
