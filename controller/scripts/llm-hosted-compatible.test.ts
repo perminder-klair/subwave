@@ -161,8 +161,11 @@ const LOCAL_ONLY_KEYS = [
   'reasoning_effort', 'repeat_penalty', 'parallel_tool_calls',
 ] as const;
 
-function assertHostedClean(body: Record<string, any>, where: string) {
+// `allow` names the one field a proxied Claude model may carry: its reasoning
+// level, which the proxy translates into Claude's thinking setting.
+function assertHostedClean(body: Record<string, any>, where: string, allow: readonly string[] = []) {
   for (const key of LOCAL_ONLY_KEYS) {
+    if (allow.includes(key)) continue;
     assert.equal(body[key], undefined, `${where}: hosted body carries local-only field ${key}`);
   }
 }
@@ -221,7 +224,11 @@ test('hosted mode sends no local-only fields on any transport variant (#1693)', 
       for (const forceNoThink of [false, true]) {
         const cfg = { ...mistral, model, reasoning };
         const where = `${model} reasoning=${reasoning} forceNoThink=${forceNoThink}`;
-        assert.equal(reasoningFor(cfg, { forceNoThink }), undefined, `${where}: reasoningFor`);
+        // A Claude id is driven like the native anthropic provider; anything
+        // else keeps the plain hosted body.
+        const claude = model.startsWith('claude-');
+        const expected = claude ? reasoningFor({ provider: 'anthropic', model, reasoning }, { forceNoThink }) : undefined;
+        assert.equal(reasoningFor(cfg, { forceNoThink }), expected, `${where}: reasoningFor`);
         const bodies = await captureBodies(async () => {
           await generateText({ model: languageModel(cfg, { forceNoThink }), prompt: 'hi', maxRetries: 0 });
           await generateText({
@@ -231,7 +238,7 @@ test('hosted mode sends no local-only fields on any transport variant (#1693)', 
         });
         assert.equal(bodies.length, 2, where);
         assert.equal(bodies[1].tool_choice, 'required', `${where}: forced tool request reached the wire`);
-        bodies.forEach(b => assertHostedClean(b, where));
+        bodies.forEach(b => assertHostedClean(b, where, claude ? ['reasoning_effort'] : []));
       }
     }
   }
@@ -260,6 +267,41 @@ test('hosted fallback leg is clean on model, noThinkModel and objectViaToolCall 
   assert.ok(bodies.every(b => b.model === 'ministral-8b-latest'));
   assert.equal(bodies[4].tool_choice, 'required', 'objectViaToolCall forced the emit tool');
   bodies.forEach((b, i) => assertHostedClean(b, `fallback body ${i}`));
+});
+
+test('a proxied Claude model gets its reasoning level on every strategy path; other hosted models do not', async () => {
+  const { djAgent } = await import('../src/llm/internal/strategy/agent.js');
+  const { djObject } = await import('../src/llm/internal/strategy/object.js');
+  const { djText } = await import('../src/llm/internal/strategy/text.js');
+  const schema = z.object({ id: z.string() });
+  const run = () => captureBodies(async () => {
+    await djObject({ system: 'You are a DJ.', prompt: 'pick', schema });
+    await djText({ system: 'You are a DJ.', prompt: 'say hi' });
+    await djAgent({
+      system: 'You are a DJ.', messages: [{ role: 'user' as const, content: 'pick' }], schema, providerDiscoveryBudget: true,
+      tools: { search: tool({ description: 'search', inputSchema: z.object({ query: z.string() }), execute: async () => ({ ids: ['a'] }) }) },
+    });
+  });
+  const proxy = { provider: 'openai-compatible', baseUrl: 'http://100.64.0.9:8317/v1', headers: {}, compatibleMode: 'hosted', reasoning: false };
+
+  // Reasoning off: 'none' turns thinking off; a generation whose thinking cannot
+  // be disabled gets its 'minimal' floor, exactly as on the native provider.
+  for (const [model, level] of [['claude-haiku-5-5', 'none'], ['claude-sonnet-5-5', 'minimal'], ['anthropic/claude-haiku-4.5', 'none']] as const) {
+    await coldLoad({ ...proxy, model });
+    const bodies = await run();
+    assert.ok(bodies.length >= 3, model);
+    bodies.forEach((b, i) => {
+      assert.equal(b.reasoning_effort, level, `${model} body ${i}`);
+      assertHostedClean(b, `${model} body ${i}`, ['reasoning_effort']);
+    });
+  }
+  // Reasoning on: the native provider's 'medium' opt-in, except on forced-tool legs.
+  await coldLoad({ ...proxy, model: 'claude-haiku-5-5', reasoning: true });
+  assert.ok((await run()).some(b => b.reasoning_effort === 'medium'), 'reasoning on reaches the wire');
+
+  // Any other hosted model keeps the plain body (#1693).
+  await coldLoad({ ...proxy, model: 'ministral-3b-latest', baseUrl: 'https://api.mistral.ai/v1' });
+  (await run()).forEach((b, i) => assertHostedClean(b, `ministral body ${i}`));
 });
 
 test('hosted strategy paths never pair response_format with a forced tool_choice (#1693 case D)', async () => {
