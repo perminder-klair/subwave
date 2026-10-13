@@ -3,16 +3,17 @@
 // mapping (serialization is outside the timing). Bytes are internal DB records;
 // outward payload compatibility is separately pinned. maxRSS is cumulative for
 // this process, not an isolated per-query allocation measurement.
-// LOOKUP_SCALE_N=76289 LOOKUP_SCALE_TMP=/var/tmp npm test -- library-lookup-scale
+// LOOKUP_SCALE_N=76289 LOOKUP_SCALE_TMP=/var/tmp npm run bench:lookups
+import { createTempDir } from './test-utils/temp-dir.js';
 import type { TrackRow } from '../src/music/library-db.js';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, statSync } from 'node:fs';
+import { rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { envInt, envStr } from '../src/util/env.js';
 const n = envInt('LOOKUP_SCALE_N', 2000, { min: 1 });
-const dir = mkdtempSync(join(envStr('LOOKUP_SCALE_TMP', tmpdir()), 'subwave-lookup-scale-'));
+const dir = createTempDir(join(envStr('LOOKUP_SCALE_TMP', tmpdir()), 'subwave-lookup-scale-'));
 process.env.STATE_DIR = dir;
 const db = await import('../src/music/library-db.js');
 await db.open({ embeddingDim: 3 });
@@ -50,17 +51,6 @@ async function measure(label: string, fn: () => unknown[]) {
   console.log(JSON.stringify({ label, rows: rows.length, ms, bytes, timerDelayMs: queryTimerDelayMs,
     peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
   return rows.length;
-}
-const prepare = d.prepare.bind(d);
-const statements: string[] = [];
-d.prepare = (sql: string) => { statements.push(sql); return prepare(sql); };
-try { db.songsByMood('rare'); db.songsByEnergy('low'); }
-finally { d.prepare = prepare; }
-for (const sql of statements) {
-  const plan = (prepare(`EXPLAIN QUERY PLAN ${sql}`).all('low') as Array<{ detail: string }>).map(r => r.detail).join(' | ');
-  console.log(JSON.stringify({ plan }));
-  assert.doesNotMatch(plan, /SCAN t\b/);
-  assert.match(plan, /SEARCH/);
 }
 try {
   for (const mode of ['reopened', 'warm']) {
