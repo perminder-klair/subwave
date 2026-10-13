@@ -49,6 +49,11 @@ export type ShortlistSelectionContext = {
   // Present only during a DJ-mode run: the tempo and key it is steering toward.
   // The pool ranks against the same target; the shortlist is ordered by it.
   mixRun?: { bpm: number | null; key: string | null };
+  // Present only when the last few plays all sat inside ONE of a multi-genre
+  // show's genres (music/genre-run.ts). Continuity sources are seeded from the
+  // track on air and the list is ordered by flow, so without it the set drifts
+  // into one genre for the whole show.
+  genreRun?: { genre: string; plays: number };
 };
 
 function comparable(value: unknown): string {
@@ -216,6 +221,9 @@ export function shortlistPickPrompt(candidates: PickerCandidate[], context: Shor
   const favouritesInstruction = context.listenerFavourites?.length
     ? ' listenerFavourites are the tracks listeners have liked most on this station recently: when one in the shortlist fits the moment, treat it as a strong preference, but keep variety and never loop the same favourites back to back.'
     : '';
+  const genreRunInstruction = context.genreRun
+    ? ` genreRun says the last ${context.genreRun.plays} tracks have all been ${context.genreRun.genre}, while the show also covers other genres: unless the moment clearly calls for staying, choose a shortlist track from a different genre, keeping the flow smooth.`
+    : '';
   const mixRunInstruction = context.mixRun
     ? ' A DJ-mode mix run is active: keep the energy moving toward mixRun, favouring a tempo near its bpm (or half or double) and a key beside it on the Camelot wheel.'
     : '';
@@ -232,7 +240,7 @@ export function shortlistPickPrompt(candidates: PickerCandidate[], context: Shor
     ? ' similarity is a cosine score against its named reference: audio measures sonic resemblance, text measures metadata/lyric resemblance. Compare scores only within the same kind and reference. Neither is BPM/key compatibility or evidence of a good transition; use the measured tempo/key and set context for that.'
     : '';
   return JSON.stringify({ context, shortlist: candidates.map(shortlistCandidateForPick) })
-    + `\n\nChoose one id from this Track Shortlist using ordinary musical flow${episodeInstruction ? ' and the active episode brief' : ' only'}.${episodeInstruction}${situationInstruction}${recentPlaysInstruction}${predecessorInstruction}${mixRunInstruction}${journeyInstruction}${explorationInstruction}${conversationInstruction}${favouritesInstruction}${similarityInstruction}${transitionInstruction} Write musicalReason as one natural, specific musical clause of roughly 12–28 words, beginning with "its" or "it". Do not repeat the artist or title. Do not mention the DJ, Musical Leanings, shortlist, candidates, sources, controller, metadata, queue position, BPM, key, energy level or mood tags. The controller adds verified identity and handles any separate Musical Leanings review.`;
+    + `\n\nChoose one id from this Track Shortlist using ordinary musical flow${episodeInstruction ? ' and the active episode brief' : ' only'}.${episodeInstruction}${situationInstruction}${recentPlaysInstruction}${predecessorInstruction}${genreRunInstruction}${mixRunInstruction}${journeyInstruction}${explorationInstruction}${conversationInstruction}${favouritesInstruction}${similarityInstruction}${transitionInstruction} Write musicalReason as one natural, specific musical clause of roughly 12–28 words, beginning with "its" or "it". Do not repeat the artist or title. Do not mention the DJ, Musical Leanings, shortlist, candidates, sources, controller, metadata, queue position, BPM, key, energy level or mood tags. The controller adds verified identity and handles any separate Musical Leanings review.`;
 }
 
 export async function djPick({

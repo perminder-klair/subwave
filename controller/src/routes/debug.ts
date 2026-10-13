@@ -150,6 +150,7 @@ router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
         context: selectionContextForPick(queue, pickContext, {
           scope, pickAnchor: current, predecessor: predecessorContext(current),
           audioWaypoint: scope.audioWaypoint, explore,
+          showGenres: activeShow?.genres ?? scope.genreLock,
         }),
       })
       : null;
