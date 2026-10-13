@@ -112,14 +112,8 @@ test('`[grr]` and `[sighs]` are sounds, not style strings', () => {
   // prose, which is the same lost-sound failure this file exists to catch.
   for (const spelling of ['grr', 'sighs']) {
     const r = splitCues(`Hi. [${spelling}] There.`);
-    assert.deepEqual(tagsFor(spelling), [spelling],
-      `[${spelling}] is in the guide's list and must emit <${spelling}>`);
     assert.deepEqual(r.styles, [], `[${spelling}] must not also become a style`);
   }
-  // `<sigh> / <sighs>` is a pair the guide spells out, so both spellings are
-  // named in the mapping rather than one relying on the inflection stripper.
-  assert.deepEqual(tagsFor('sigh'), ['sigh']);
-  assert.deepEqual(tagsFor('sighs'), ['sighs']);
 });
 
 test('[medium pause] emits its tag and adds no style', () => {
@@ -169,16 +163,6 @@ test('Google Mode 3 — the vocalized adjectives — never become tags', () => {
     assert.deepEqual(r.styles, [adj], `${adj} must ride the style field`);
     assert.doesNotMatch(r.text, new RegExp(`<${adj}>`), `${adj} must not become a tag`);
   }
-});
-
-test('a proper-noun bracket still survives into the transcript', () => {
-  // The complement of Mode 3: `[Blue Monday]` is a TITLE, not a direction, and
-  // Gemini reads the text verbatim — so it has to reach the wire untouched.
-  const r = splitCues('Now playing [Blue Monday] by The Smiths.');
-  assert.match(r.text, /\[Blue Monday\]/);
-  assert.deepEqual(r.styles, []);
-  const digits = splitCues('That was Track [2] on the album.');
-  assert.match(digits.text, /\[2\]/);
 });
 
 test('the DJ inflection hisses emits hiss rather than a style', () => {

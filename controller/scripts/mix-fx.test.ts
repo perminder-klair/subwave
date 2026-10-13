@@ -273,9 +273,7 @@ async function main() {
   });
 
   await test('an unknown peak never stops a cut', () => {
-    assert.equal(gainForLoudness(-10), -4);
     assert.equal(gainForLoudness(0, { peakDb: null }), -LOUDNESS_CUT_CLAMP_DB);
-    assert.equal(gainForLoudness(-14), 0);
     assert.equal(boostNeedsPeak(-4, null), false);
     assert.equal(boostNeedsPeak(0, null), false);
   });

@@ -104,6 +104,7 @@ test("the 'verbatim' posture changes only the flat string, never fieldErrors", a
   const prefixed = await run(validateBody(blockRuleSchema), body);
   const verbatim = await run(validateBody(blockRuleSchema, { messages: 'verbatim' }), body);
   assert.equal(verbatim.body!.error, 'rule.label is required');
+  assert.equal(verbatim.body!.fieldErrors!.label, 'rule.label is required');
   assert.equal(prefixed.body!.error, 'label: rule.label is required');
   assert.deepEqual(verbatim.body!.fieldErrors, prefixed.body!.fieldErrors);
 });

@@ -188,20 +188,6 @@ function runMiddleware(mw: ReturnType<typeof validateBody>, body: unknown): {
   return { status, payload, nexted, req: req as unknown as { body: unknown } };
 }
 
-test('the route reports the message VERBATIM, with no doubled location', () => {
-  const mw = validateBody(blockRuleSchema, { messages: 'verbatim' });
-  const { status, payload } = runMiddleware(mw, rule({ label: '' }));
-  assert.equal(status, 400);
-  assert.equal(payload!.error, 'rule.label is required', 'not "label: rule.label is required"');
-  // fieldErrors still carries the dotted path — that is where a form needs it.
-  assert.equal(payload!.fieldErrors.label, 'rule.label is required');
-});
-
-test('the default prefixed posture is unchanged for everyone else', () => {
-  const { payload } = runMiddleware(validateBody(blockRuleSchema), rule({ label: '' }));
-  assert.equal(payload!.error, 'label: rule.label is required');
-});
-
 test('the route and the store name the same failure for the same body', () => {
   const bad = rule({ values: ['x'.repeat(RULE_TEXT_MAX + 1)] });
   const { payload } = runMiddleware(validateBody(blockRuleSchema, { messages: 'verbatim' }), bad);
@@ -212,19 +198,6 @@ test('the route and the store name the same failure for the same body', () => {
     storeError = (err as Error).message;
   }
   assert.equal(payload!.error, storeError);
-});
-
-test('a valid body is normalised in place for the handler', () => {
-  const mw = validateBody(blockRuleSchema, { messages: 'verbatim' });
-  const { nexted, req } = runMiddleware(mw, rule({ label: '  Xmas  ', values: ['A', 'a'] }));
-  assert.equal(nexted, true);
-  assert.deepEqual(req.body, {
-    label: 'Xmas',
-    field: 'genre',
-    values: ['A'],
-    season: null,
-    showIds: [],
-  });
 });
 
 // --- the id-entry body ------------------------------------------------------

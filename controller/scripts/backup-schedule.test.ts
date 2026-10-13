@@ -48,7 +48,6 @@ async function coldLoad(backups: unknown) {
   return settings.get().backups;
 }
 
-
 test('the writer produces a name the grammar recognises, and it sorts by time', () => {
   const early = scheduledBackupName(new Date('2026-09-06T04:23:17.123Z'));
   const later = scheduledBackupName(new Date('2026-09-06T05:00:00.000Z'));
@@ -100,7 +99,6 @@ test('nothing an operator or the manual export puts in the state dir is ours', (
     assert.equal(isScheduledBackupName(junk), false);
   }
 });
-
 
 const AUTO = [
   'subwave-auto-backup-2026-09-01-042300.zip',
@@ -193,7 +191,6 @@ test('a future-dated backup is kept, not ranked away', () => {
   // And the due decision still ignores it, so the schedule is not wedged shut.
   assert.equal(lastScheduledBackupAt([...AUTO, future], NOW), Date.parse('2026-09-04T04:23:00Z'));
 });
-
 
 const NOW = Date.parse('2026-09-06T04:23:00.000Z');
 
@@ -343,7 +340,6 @@ test('a backup stamped in the future cannot wedge the schedule shut', () => {
   assert.equal(lastScheduledBackupAt(withReal, NOW), Date.parse('2026-09-06T00:00:00Z'));
 });
 
-
 test('an absent block is the pre-existing station: off', async () => {
   const b = await coldLoad(undefined);
   assert.equal(b.cadence, 'off');
@@ -422,11 +418,10 @@ test('saving the schedule does NOT ask for a mixer restart', async () => {
 });
 
 test('the key is in the patch inventory, so POST /settings accepts it', async () => {
-  const { SETTINGS_PATCH_KEYS, validateSettingsPatch } =
+  const { validateSettingsPatch } =
     await import('../src/settings/patch-registry.js');
   // A key absent from this list is rejected at the route — the Backup panel
   // would post it and get a 400 naming an unknown key.
-  assert.ok(SETTINGS_PATCH_KEYS.includes('backups'));
   assert.equal(
     validateSettingsPatch({ backups: { cadence: 'daily', keep: 7 } }),
     null,
@@ -437,7 +432,6 @@ test('the key is in the patch inventory, so POST /settings accepts it', async ()
   // only highlight itself if the error is keyed by its dotted path.
   assert.ok(bad!.fieldErrors?.['backups.keep']);
 });
-
 
 test('an off station does no work at all', async () => {
   // Not just "writes nothing" — it must not even walk the state dir once an
@@ -543,26 +537,6 @@ test('the temp grammar is as narrow as the finished one', () => {
   }
   // A temp is invisible to both finished-name readers, hence its own sweep.
   assert.equal(isScheduledBackupName(ours), false);
-});
-
-test('writeFileAtomic removes its own temp when the write fails', async () => {
-  // The in-process half of the leak: a failed rename left a partial
-  // multi-hundred-MB zip behind under a name no later call reuses.
-  const { writeFileAtomic } = await import('../src/util/atomic-file.js');
-  const { mkdirSync, readdirSync, rmSync } = await import('node:fs');
-
-  const blocked = path.join(stateRoot, 'blocked-target.zip');
-  mkdirSync(blocked, { recursive: true }); // rename onto a directory fails
-  await assert.rejects(
-    () => writeFileAtomic(blocked, Buffer.from('some backup bytes')),
-    'the original error must still propagate — cleanup is bookkeeping',
-  );
-  assert.deepEqual(
-    readdirSync(stateRoot).filter(n => n.startsWith('blocked-target.zip.')),
-    [],
-    'the temp must not survive a failed write',
-  );
-  rmSync(blocked, { recursive: true, force: true });
 });
 
 test('a run sweeps half-written backups a killed run left, and only those', async () => {

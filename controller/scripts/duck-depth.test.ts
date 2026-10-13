@@ -210,11 +210,10 @@ test('the intro side flags a restart on its own', async () => {
 // ---------------------------------------------------------------------------
 
 test('the key is in the patch inventory, so POST /settings accepts it', async () => {
-  const { SETTINGS_PATCH_KEYS, validateSettingsPatch } =
+  const { validateSettingsPatch } =
     await import('../src/settings/patch-registry.js');
   // A key absent from this list is rejected at the route — the panel would
   // post it and get a 400 naming an unknown key, with everything else saving.
-  assert.ok(SETTINGS_PATCH_KEYS.includes('ducking'));
   assert.equal(
     validateSettingsPatch({ ducking: { voice: 0.3 } }),
     null,

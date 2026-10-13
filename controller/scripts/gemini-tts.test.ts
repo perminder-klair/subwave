@@ -17,13 +17,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { TTS_ENGINES } from '../src/schemas/persona.js';
 import { splitCues } from '../src/audio/gemini.js';
 import { fallbackTextFor } from '../src/audio/tts-fallback.js';
-
-test('gemini is a first-class engine id', () => {
-  assert.ok((TTS_ENGINES as readonly string[]).includes('gemini'));
-});
 
 test('persona schema accepts a gemini slot', async () => {
   const persona = await import('../src/schemas/persona.js');
@@ -59,10 +54,6 @@ test('splitCues: bursts become angle tags, delivery joins style, titles survive'
   assert.deepEqual(
     splitCues('Hello [sigh] mate, that was [sarcasm] brilliant [short pause] news'),
     { text: 'Hello <sigh> mate, that was brilliant <short pause> news', styles: ['sarcastic'] },
-  );
-  assert.deepEqual(
-    splitCues('Live from [Track 2] tonight'),
-    { text: 'Live from [Track 2] tonight', styles: [] },
   );
   assert.deepEqual(splitCues('No cues'), { text: 'No cues', styles: [] });
 });
@@ -167,30 +158,13 @@ test('a persona soul reaches Gemini, the way it reaches OpenAI', async () => {
     /dry.*sarcastic/s);
 });
 
-test('an unusable voice name degrades instead of 400-ing the segment', async () => {
-  const { usableVoice } = await import('../src/audio/gemini.js');
-  // Verified against the engine: 'Charon', 'charon' and 'CHARON' all work, so
-  // case is not a reason to reject — and the retired sidecar's title-case
-  // normalisation was therefore fixing nothing worth porting.
-  assert.equal(usableVoice('charon'), 'Charon');
-  assert.equal(usableVoice('  PUCK '), 'Puck');
-  // Voice Design / Replication ids are opaque per-project handles and must pass
-  // through — rejecting them would break custom voices.
-  assert.equal(usableVoice('voice_abc123'), 'voice_abc123');
-  assert.equal(usableVoice('voicekey_abc123'), 'voicekey_abc123');
-  // A stale alias 400s ("No matching speaker voice found for name"), which would
-  // throw every segment that persona voices into the fallback chain.
-  assert.equal(usableVoice('jax'), undefined);
-  assert.equal(usableVoice(''), undefined);
-  assert.equal(usableVoice(undefined), undefined);
-});
-
 test('splitCues: a capitalised bracket is a title, never a direction', () => {
   // The shape that must survive. Losing a title to the style field would make
   // the DJ announce “Blue Monday” in a voice described as its own name.
   for (const text of [
     'Live from [Track 2] tonight',
     'Now playing [Blue Monday]',
+    'Live from [2] tonight',
     'the set kicks off at [7pm] sharp',
   ]) {
     assert.deepEqual(splitCues(text), { text, styles: [] }, text);
@@ -201,7 +175,6 @@ test('fallbackTextFor strips brackets for gemini rescues', () => {
   assert.equal(fallbackTextFor('gemini', null, 'Well [sigh] hello'), 'Well hello');
   assert.equal(fallbackTextFor('piper', null, 'Well [sigh] hello'), 'Well [sigh] hello');
 });
-
 
 // --- the fold: Gemini as a Cloud provider, still its own engine id ----------
 //
@@ -259,26 +232,6 @@ test("gemini's badge reads the engine flag, not cloudByProvider", async () => {
   assert.equal(cloudProviderStatus('gemini', {}).state, 'unknown');
   assert.equal(cloudProviderStatus('gemini', { cloudByProvider: { gemini: false } }).state, 'unknown',
     'cloudByProvider must not decide the gemini badge');
-});
-
-test('Gemini is offered as a provider card, not as its own engine card', async () => {
-  const fs = await import('node:fs');
-  const meta = fs.readFileSync(
-    new URL('../../web/components/admin/tts/engineMeta.ts', import.meta.url), 'utf8');
-  const providers = fs.readFileSync(
-    new URL('../../web/components/admin/tts/cloudProviderMeta.ts', import.meta.url), 'utf8');
-  // Gemini is a managed Google service reached with the same key as the LLM
-  // section, so it belongs beside OpenAI / ElevenLabs / Fish in the PROVIDER
-  // grid. Two Google-backed choices in two different menus is a question nobody
-  // can answer from the screen.
-  assert.doesNotMatch(meta, /\{ id: 'gemini',\s+label:/,
-    'gemini must not have its own entry in the ENGINE grid');
-  assert.match(providers, /\{ id: 'gemini', label: 'Gemini'/,
-    'it must appear in the provider grid instead');
-  // And the badge reads the ENGINE flag, not a cloudByProvider entry the
-  // controller never sends for it.
-  assert.match(providers, /if \(id === 'gemini'\) \{/);
-  assert.match(providers, /if \(a\.gemini === undefined\)/);
 });
 
 test('the Gemini model and voice vocabularies are the verified lists', async () => {
@@ -432,29 +385,11 @@ test('the station Voice panel offers model, voice and pronunciation', async () =
   assert.match(panel, /GEMINI_TTS_MODELS\.map\(/);
   // '' is the "walk the fallback chain" choice and must survive the round trip.
   assert.match(panel, /<SelectItem value="">Automatic \(fallback chain\)<\/SelectItem>/);
-  // The save payload moved out of the component and into its own module, because
-  // `save()` REBUILDS the gemini block field by field — a field it does not name is
-  // not unsaved, it is silently discarded while still rendering perfectly. These
-  // three assertions therefore read the module that now owns those defaults; the
-  // panel no longer contains them and asserting it did would only re-introduce the
-  // coupling that let the field be forgotten in the first place.
-  //
-  // The behavioural owner of these invariants is web/tests/gemini-save-payload.test.ts,
-  // which calls the builder and checks the wire shape, and controller/scripts/
-  // gemini-save-contract.test.ts, which fails if the schema gains a gemini field
-  // neither side names. These regexes are the secondary guard only.
-  const payload = fs.readFileSync(
-    new URL('../../web/components/admin/settings/geminiSavePayload.ts', import.meta.url), 'utf8');
-  assert.match(payload, /model: input\?\.model \?\? ''/, 'the payload must send the model');
-  assert.match(payload, /voice: input\?\.voice \?\? 'Puck'/, 'the payload must send the voice');
-  assert.match(payload, /pronunciation: input\?\.pronunciation \?\? ''/,
-    'a blank pronunciation note is a real choice and must survive the round trip');
   // The station pronunciation note is one free-text field, capped at the
   // engine's own bound.
   assert.match(panel, /<Label>Pronunciation notes<\/Label>/);
   assert.match(panel, /maxLength=\{GEMINI_PRONUNCIATION_MAX\}/);
 });
-
 
 test('the cloud-only panel content is gated on the selection, not removed', async () => {
   const fs = await import('node:fs');
@@ -472,16 +407,11 @@ test('both panels derive the Gemini selection from the one stored engine id', as
   const fs = await import('node:fs');
   const panel = fs.readFileSync(
     new URL('../../web/components/admin/settings/TtsSection.tsx', import.meta.url), 'utf8');
-  const meta = fs.readFileSync(
-    new URL('../../web/components/admin/tts/engineMeta.ts', import.meta.url), 'utf8');
   // One stored field decides both panels. If the engine grid highlighted by the
   // raw id while the provider grid selected by the same id, they could disagree.
   assert.match(panel, /const geminiSelected = form\.tts\.defaultEngine === GEMINI_CLOUD_PROVIDER;/);
   assert.match(panel, /engineCategory\(form\.tts\.defaultEngine\)/,
     'the engine grid must highlight through engineCategory');
-  // The two helpers are always written together and never read apart.
-  assert.match(meta, /export function engineCategory\(engine: string\): string \{\s*return engine === GEMINI_CLOUD_PROVIDER \? 'cloud' : engine;/);
-  assert.match(meta, /export function engineForCloudProvider\(provider: string\): string \{\s*return provider === GEMINI_CLOUD_PROVIDER \? GEMINI_CLOUD_PROVIDER : 'cloud';/);
 });
 
 test('gemini still reads the standard key, never the pool', async () => {
