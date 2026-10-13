@@ -33,23 +33,6 @@ test('persona schema accepts a gemini slot', async () => {
   assert.equal(out.tts.voice, 'Despina');
 });
 
-test('speakMulti picks the request shape from the DISTINCT voice count', async () => {
-  const fs = await import('node:fs');
-  const src = fs.readFileSync(new URL('../src/audio/gemini.ts', import.meta.url), 'utf8');
-  // Measured against the engine: the multi-speaker object form 400s on one voice
-  // ("speaker_voice_configs must equal 2"), and the array form 400s on two. Both
-  // branches are load-bearing; neither is a stylistic preference.
-  assert.match(src, /const oneVoice = seen\.size === 1;/,
-    'the shape must be chosen from the resolved voice count, not assumed');
-  assert.match(src, /\? \{ speech_config: \[\{ voice: speakers\[0\]\.voice \}\] \}/,
-    'one voice must use the single-speaker array form');
-  assert.match(src, /\{ speech_config: \{ mode: 'conversational', speakers \} \}/,
-    'two voices must use the conversational speakers form');
-  // `speaker` is required per-turn on the multi-speaker shape and forbidden on
-  // the single-speaker one, so it cannot just be left on unconditionally.
-  assert.match(src, /\.\.\.\(oneVoice \? \{\} : \{ speaker: speakerOf\(t\.alias\) \}\)/);
-});
-
 test('splitCues: bursts become angle tags, delivery joins style, titles survive', () => {
   assert.deepEqual(
     splitCues('Hello [sigh] mate, that was [sarcasm] brilliant [short pause] news'),
