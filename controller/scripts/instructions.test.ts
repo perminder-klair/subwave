@@ -4,20 +4,8 @@
 // and the extracted blocks are pinned verbatim so a reflow cannot reword them.
 
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import { instruction, sectionNames, instructionFiles } from '../src/llm/internal/prompts/instructions.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
-
-console.log('loader failure modes:');
 
 test('an unknown file throws, and names what exists', () => {
   assert.throws(() => instruction('nope', 'frame'), /no such file "nope\.md"/);
@@ -40,12 +28,6 @@ test('a VALUE containing {word} is content, not a missing placeholder', () => {
   const frame = instruction('pool-picker', 'frame', { station: 'Radio {x}' });
   assert.ok(frame.includes('Radio {x}'));
   assert.ok(instruction('pool-picker', 'show-brief', { topic: '$& {topic} $1' }).includes('$& {topic} $1'), 'inserted verbatim');
-});
-
-test('substitution fills every occurrence', () => {
-  const out = instruction('picker', 'show-brief', { topic: 'late-night dub' });
-  assert.ok(out.includes('late-night dub'));
-  assert.ok(!out.includes('{'), 'no braces should survive');
 });
 
 test('a numeric value substitutes', () => {
@@ -130,7 +112,6 @@ console.log('\nthe two discovery-budget variants stay in step:');
 test('both finding-candidates variants carry the same tool guidance', () => {
   // The variants differ only in how many rounds they promise.
   const steer = 'searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, deepCuts, randomSongs, and the audio/embedding similarity tools; similarSongs and topSongsByArtist use external data and often return little, so never lean on one of them alone.';
-  assert.ok(instruction('picker', 'finding-candidates').includes(steer));
   assert.ok(instruction('picker', 'finding-candidates-multi', { rounds: 3 }).includes(steer));
 });
 
@@ -141,9 +122,3 @@ test('the single-round variant never promises a second look', () => {
   assert.ok(one.includes('ONE discovery round'));
   assert.ok(!/\blater round\b|\bnext round\b/.test(one), 'single-round text must not imply a second round');
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall tests passed');

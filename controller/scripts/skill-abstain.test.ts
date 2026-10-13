@@ -165,6 +165,7 @@ test('the segment wrapper preserves usable custom queries unrelated to the artis
   }]);
   const data = await tools.search.execute({ query: 'history of Sway' });
   assert.deepEqual(data.sources, sources);
+  assert.equal(data.query, 'history of Sway');
   assert.equal(unusableDataReason(data), null);
 });
 
@@ -209,17 +210,6 @@ test('the abstention field is absent, not false, on an ungrounded run', () => {
     .parse({ reason: 'r', air: false, text: '', sfx: null });
   assert.ok('air' in grounded);
   assert.equal(grounded.air, false);
-});
-
-test('a grounded schema accepts a stand-down with an empty line', () => {
-  const parsed = forcedSchema({ mayAbstain: true }).parse({
-    reason: 'the search came back about a different Cue',
-    air: false,
-    text: '',
-    sfx: null,
-  });
-  assert.ok('air' in parsed);
-  assert.equal(parsed.air, false);
 });
 
 test('the mandate flips with mayAbstain', () => {
@@ -358,15 +348,4 @@ test("a skill's own requiresData export survives the loader", async () => {
   assert.ok(dry && own, 'both fixture skills loaded');
   assert.equal(requiresGrounding(dry), true);
   assert.equal(requiresGrounding(own), false);
-});
-
-test('a custom query is not filtered against the on-air artist', async () => {
-  // The agent chose the wording, so there is no subject to check the results
-  // against — filtering here would drop every result of a good search.
-  const data = await webSearch({}, {}, servicesFor({
-    answer: '',
-    results: [{ title: 'Sway (dance)', content: 'A ballroom standard recorded many times.' }],
-  }), {}, { query: 'history of the song Sway' });
-  assert.equal(data.sources.length, 1);
-  assert.equal(data.query, 'history of the song Sway');
 });

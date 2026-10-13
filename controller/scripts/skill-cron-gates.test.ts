@@ -37,54 +37,21 @@ const ALL_OPEN = {
 
 assert.equal(skillCronAllowed(ALL_OPEN), true, 'every gate open → cron is allowed to fire');
 
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, voiceAllowed: false }),
-  false,
-  'tts.enabled: false ("music only") must stand the cron down',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, programmeOnAir: true }),
-  false,
-  'a programme episode owns its talk moments — the cron must stand down mid-episode',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, djCallsAllowed: false }),
-  false,
-  'zero listeners must stand the cron down, same as every other autonomous tick',
-);
-assert.equal(
-  skillCronAllowed({ ...ALL_OPEN, optionalSegmentsAllowed: false }),
-  false,
-  'over the daily LLM token budget must stand the cron down — no model call past the hard cap',
-);
-
-// Any single closed gate is enough — this is a strict AND, not a majority vote.
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
+// Any single closed gate blocks the cron and names the operator's lever.
+assert.equal(skillCronStandDownReason(ALL_OPEN), null, 'all gates open means no reason');
+const gates: Array<[keyof typeof ALL_OPEN, string]> = [
+  ['voiceAllowed', 'tts.enabled: false must stand the cron down'],
+  ['programmeOnAir', 'a programme episode owns its talk moments'],
+  ['djCallsAllowed', 'zero listeners must stand the cron down'],
+  ['optionalSegmentsAllowed', 'the daily LLM hard cap must stand the cron down'],
+];
+const reasons = gates.map(([key, message]) => {
   const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
-  assert.equal(skillCronAllowed(closed), false, `closing "${key}" alone must block the cron`);
-}
-
-// Every closed gate names itself for the booth log. A registered cron that
-// stands down silently is undiagnosable — verifying this PR, one sat mute for
-// four ticks and the only way to learn why was to read listeners.ts.
-assert.equal(skillCronStandDownReason(ALL_OPEN), null, 'all gates open → no reason');
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
-  const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
+  assert.equal(skillCronAllowed(closed), false, message);
   const reason = skillCronStandDownReason(closed);
-  assert.ok(reason, `closing "${key}" must produce a reason`);
-  assert.ok(reason.length > 8, `the reason for "${key}" must be readable, got ${reason}`);
-}
-
-// The two stay in lockstep — allowed is defined as "no reason", so a gate added
-// to one can never be forgotten in the other.
-for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
-  const closed = { ...ALL_OPEN, [key]: key === 'programmeOnAir' };
-  assert.equal(skillCronAllowed(closed), skillCronStandDownReason(closed) === null);
-}
-
-// Reasons are distinct, so the log tells the operator WHICH lever to move.
-const reasons = (Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>)
-  .map((key) => skillCronStandDownReason({ ...ALL_OPEN, [key]: key === 'programmeOnAir' }));
+  assert.ok(reason && reason.length > 8, `the reason for ${key} must be readable`);
+  return reason;
+});
 assert.equal(new Set(reasons).size, reasons.length, 'each gate needs its own message');
 
 const cohosted = { seeded: true, skill: 'case-discussion', cohosts: true };

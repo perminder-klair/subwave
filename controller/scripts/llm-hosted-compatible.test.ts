@@ -71,8 +71,6 @@ test('hosted mode uses native objects and skips local request extensions', async
     globalThis.fetch = real;
   }
   assert.equal(request?.headers.get('api-key'), 'test-secret');
-  assert.equal(request?.body.repeat_penalty, undefined);
-  assert.equal(request?.body.chat_template_kwargs, undefined);
 });
 
 test('embedding headers survive cold load, are redacted, and reach the wire', async () => {

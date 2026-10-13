@@ -70,17 +70,13 @@ async function compatibleCall(model: string): Promise<any> {
   return sent;
 }
 
-test('native anthropic, claude-sonnet-5-5: tool_choice auto and thinking never disabled', async () => {
-  const body = await anthropicCall('claude-sonnet-5-5');
-  assert.equal(body.tool_choice?.type, 'auto');
-  assert.notEqual(body.thinking?.type, 'disabled');
-});
-
-test('native anthropic, claude-opus-5-5: tool_choice auto and thinking never disabled', async () => {
-  const body = await anthropicCall('claude-opus-5-5');
-  assert.equal(body.tool_choice?.type, 'auto');
-  assert.notEqual(body.thinking?.type, 'disabled');
-});
+for (const model of ['claude-sonnet-5-5', 'claude-opus-5-5']) {
+  test(`native anthropic, ${model}: tool_choice auto and thinking never disabled`, async () => {
+    const body = await anthropicCall(model);
+    assert.equal(body.tool_choice?.type, 'auto');
+    assert.notEqual(body.thinking?.type, 'disabled');
+  });
+}
 
 test('native anthropic control, claude-sonnet-5: still forced with thinking disabled', async () => {
   const body = await anthropicCall('claude-sonnet-5');

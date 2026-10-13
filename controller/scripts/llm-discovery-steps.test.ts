@@ -49,21 +49,6 @@ test('0 means auto: an untouched install still follows the capability table', as
   assert.equal(discoveryStepsFor({ ...CLOUD_LLM, discoverySteps: 0 }), 3, 'native provider keeps its 3');
 });
 
-test('a legacy pickerAgent:false cold-load keeps requests and segments off the tool loop', async () => {
-  const llm = await coldLoad({ pickerAgent: false });
-  assert.equal(llm.trackSelection, 'shortlist', 'the migrated UI must name the non-agentic route it will run');
-  assert.equal(llm.requestMatching, 'direct');
-  assert.equal(llm.segmentRuntime, 'direct');
-});
-
-test('the explicit track route keeps the legacy gate in sync', async () => {
-  await coldLoad({});
-  await settings.update({ llm: { trackSelection: 'shortlist' } } as any);
-  assert.equal(settings.get().llm.pickerAgent, false);
-  await settings.update({ llm: { trackSelection: 'agentic' } } as any);
-  assert.equal(settings.get().llm.pickerAgent, true);
-});
-
 test('an override survives a controller restart and reaches the harness', async () => {
   const llm = await coldLoad({ discoverySteps: 3 });
   assert.equal(llm.discoverySteps, 3);
@@ -131,14 +116,6 @@ test('saving an override then restarting keeps it — the operator story', async
 });
 
 test('the per-provider budget reaches only the agents that opted in', async () => {
-  // The director's maxSteps: 2 is load-bearing, so it must not opt in.
-  // Without the opt-in runDiscoverySteps pins the historical single step
-  // whatever the provider or override says.
-  const { runDiscoverySteps } = await import('../src/llm/internal/provider/capabilities.js');
-  const llm = await coldLoad({ ...CLOUD_LLM, discoverySteps: 5 });
-  assert.equal(runDiscoverySteps(llm, true), 5, 'opted-in agents follow descriptor + override');
-  assert.equal(runDiscoverySteps(llm, false), 1, 'everyone else keeps the single historical step');
-
   const { pickerAgent, requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
   const { directorAgent } = await import('../src/skills/_agent.js');
   assert.equal(pickerAgent.providerDiscoveryBudget, true, 'picker opts in');

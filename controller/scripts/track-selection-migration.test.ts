@@ -3,12 +3,13 @@
 // A cold load is essential: this is the actual upgrade path from settings.json.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-track-selection-migration-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-track-selection-migration-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
@@ -131,7 +132,6 @@ test('the Candidate Pool upgrade is announced until a save records the route', a
   }
 });
 
-
 test('targeted search preparation stays off for upgrades, malformed values and new stations', async () => {
   for (const llm of [{}, { pickerAgent: false }, { trackSelection: 'shortlist' },
     { shortlistSearchPreparation: 'true' }, { shortlistSearchPreparation: 1 }]) {
@@ -149,4 +149,12 @@ test('explicit targeted preparation opt-in and opt-out survive saving and cold l
     await settings.update({ llm: { shortlistSearchPreparation: 'bad' } });
     assert.equal(settings.get().llm.shortlistSearchPreparation, enabled, 'invalid writes retain the saved value');
   }
+});
+
+test('the explicit track route keeps the legacy gate in sync', async () => {
+  await coldLoad({});
+  await settings.update({ llm: { trackSelection: 'shortlist' } });
+  assert.equal(settings.get().llm.pickerAgent, false);
+  await settings.update({ llm: { trackSelection: 'agentic' } });
+  assert.equal(settings.get().llm.pickerAgent, true);
 });

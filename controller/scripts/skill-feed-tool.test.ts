@@ -132,6 +132,37 @@ feed: ftp://example.test/feed.xml
 Never gets a tool.
 `);
 
+const toolConfig = {
+  name: 'config-tool',
+  label: 'Giveaway watch',
+  cooldown: '30m',
+  feed: 'https://example.test/giveaways.rss',
+  feedMaxItems: '7',
+  editorialNote: 'local prizes only',
+};
+
+writeSkill('config-tool', `---
+name: config-tool
+label: Giveaway watch
+cooldown: 30m
+feed: https://example.test/giveaways.rss
+feedMaxItems: 7
+editorialNote: local prizes only
+---
+Share one worthwhile local giveaway when the feed has one.
+`, `export default async function (_ctx, _state, _services, config) {
+  return { receivedConfig: config };
+}
+`);
+
+writeSkill('brief-only', `---
+name: brief-only
+label: Brief only
+editorialNote: nothing to fetch
+---
+Write a timeless line from this brief alone.
+`);
+
 const { queue } = await import('../src/broadcast/queue.js');
 const logged: string[] = [];
 const realLog = queue.log.bind(queue);
@@ -303,4 +334,42 @@ test('news ships no tool.mjs — it takes the generic path like everything else'
   const tpl = await readTemplate('news');
   assert.ok(tpl, 'the news template exists');
   assert.equal(tpl.toolPath, null, 'a second copy of the feed fetch must not come back');
+});
+
+// tool.mjs frontmatter forwarding (#1526) and prompt-only skills.
+const configTool = caps.find(cap => cap.kind === 'config-tool');
+const briefOnly = caps.find(cap => cap.kind === 'brief-only');
+
+assert.ok(configTool, 'custom skill with tool.mjs loaded');
+assert.ok(briefOnly, 'prompt-only skill loaded');
+
+test('a non-News custom tool is named and receives all frontmatter as config', async () => {
+  assert.equal(configTool.toolName, 'skill_config_tool');
+  assert.equal(typeof configTool.toolFn, 'function');
+  assert.deepEqual(configTool.config, toolConfig);
+
+  const tools = buildSegmentTools({ time: {} }, {}, caps);
+  assert.ok(tools['skill_config_tool'], 'custom tool is registered in the segment tool set');
+
+  const result = await tools['skill_config_tool'].execute({});
+  assert.deepEqual(result, { receivedConfig: toolConfig });
+});
+
+test('a skill with no tool.mjs and no feed: stays prompt-only', () => {
+  assert.deepEqual(briefOnly.config, {
+    name: 'brief-only',
+    label: 'Brief only',
+    editorialNote: 'nothing to fetch',
+  });
+  assert.equal(briefOnly.toolFn, undefined);
+  assert.equal(briefOnly.toolName, undefined);
+
+  const tools = buildSegmentTools({ time: {} }, {}, [briefOnly]);
+  assert.equal(tools.skill_brief_only, undefined);
+  assert.deepEqual(Object.keys(tools), []);
+
+  // It is still OFFERED the feed knobs: the edit sheet is where an operator
+  // sets the first feed, so a form that appears only once a value exists is a
+  // form nobody can use to create one.
+  assert.deepEqual(briefOnly.configFields.map((f: any) => f.key), ['feed', 'feedMaxItems']);
 });

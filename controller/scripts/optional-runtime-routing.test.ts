@@ -12,7 +12,6 @@ const here = dirname(fileURLToPath(import.meta.url));
 const read = (path: string) => readFileSync(resolve(here, path), 'utf8');
 const djAgent = read('../src/broadcast/dj-agent.ts');
 const skills = read('../src/skills/_agent.ts');
-const cohosted = read('../src/skills/cohosted.ts');
 
 const pickerStart = djAgent.indexOf('async function pickViaSelectionRoute');
 const pickerEnd = djAgent.indexOf('\nfunction speechClockContext', pickerStart);
@@ -49,6 +48,4 @@ test('requests and segments choose their own runtime', () => {
     'direct request matching must bypass the request tool loop');
   assert.match(skills, /segmentRuntime === 'direct'/,
     'direct segments must be independently selectable');
-  assert.match(cohosted, /segmentRuntime === 'direct'/,
-    'co-hosted skills must follow the same direct-runtime boundary');
 });

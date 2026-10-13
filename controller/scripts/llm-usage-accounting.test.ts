@@ -11,14 +11,13 @@
 //   - djAgent's earlier legs when a later leg throws
 // Plus the done-only recovery carrying EVERY discovery step, not the last one.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import test, { after, type TestContext } from 'node:test';
+import test, { type TestContext } from 'node:test';
 import { z } from 'zod';
 
-const previousStateDir = process.env.STATE_DIR;
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-usage-accounting-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-usage-accounting-'));
 process.env.STATE_DIR = stateRoot;
 
 const store = await import('../src/settings/store.js');
@@ -27,15 +26,7 @@ const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
 const { objectViaToolCall } = await import('../src/llm/internal/strategy/object-via-tool.js');
-const previousCache = store.peek();
 const schema = z.object({ name: z.string() });
-
-after(() => {
-  store.setCache(previousCache);
-  if (previousStateDir === undefined) delete process.env.STATE_DIR;
-  else process.env.STATE_DIR = previousStateDir;
-  rmSync(stateRoot, { recursive: true, force: true });
-});
 
 const PER_CALL = 3;
 const usage = {
