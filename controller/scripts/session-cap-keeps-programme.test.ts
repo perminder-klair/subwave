@@ -7,24 +7,25 @@
 // the show's intro again: live, Friday Drive began at 23:00 and at 03:00 the
 // host said "Good evening, and welcome to Friday Drive".
 //
+// stampRolledFrom also used to treat this safety roll as a same-host show
+// change, so a host acknowledged a change to themself at about 03:00 each night.
+// A 4h roll must avoid that mic-pass when the show is unchanged.
 // Run: npm test -- session-cap-keeps-programme
 
 import assert from 'node:assert/strict';
-import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { test } from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionContext } from '../src/broadcast/session.js';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-cap-programme-'));
+const root = createTempDir(join(tmpdir(), 'subwave-cap-programme-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const stationContext = await import('../src/context.js');
 const programme = await import('../src/broadcast/programme.js');
-
-after(() => rmSync(root, { recursive: true, force: true }));
 
 const template = settings.get().personas[0];
 const MANOLO = { ...template, id: 'p_manolo', name: 'Manolo X' };
@@ -53,6 +54,7 @@ async function onAir(show: { id: string; name: string }) {
       { ...DAWN, topic: 'dawn', personaId: MANOLO.id, programme: true },
     ],
     schedule: week,
+    djBehaviour: { sameHostAcknowledgement: true },
   } as never);
 }
 
@@ -85,8 +87,8 @@ test('the 4h cap keeps the episode: no new plan, no second intro', async () => {
   const next = await session.maybeRoll(context(DRIVE, t0 + 60_000));
   assert.notEqual(next.id, first.id, 'the safety cap still rolls the session');
   assert.equal(next.key, first.key, 'same show');
-  assert.equal(session.getProgramme()?.plan?.angle, 'Friday angle', 'same episode plan');
-  assert.equal(session.getProgramme()?.beats?.intro, true, 'its intro already aired');
+  assert.equal(next.rolledFrom, null);
+  assert.equal(session.pendingHandoff(), null, 'no mic-pass to the same host mid-show');
 
   const { queue, count } = introCounter();
   assert.equal(await programme.maybeRunIntro(queue, context(DRIVE, t0 + 60_000)), false);

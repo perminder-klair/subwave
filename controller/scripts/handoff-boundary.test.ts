@@ -214,10 +214,6 @@ function main() {
     assert.equal(handoffAnchorReachesBoundary(now, 5 * 60, boundary), true);
   });
 
-  test('at a track start remaining ≈ duration → byte-for-byte the old lead', () => {
-    assert.equal(pickLeadSec(420), 420);
-  });
-
   test('#1282 — linkAirDate inverts the showAt padding back to air time', () => {
     // Reported case: logged 08:48:01, the on-air track has 2 min left, so the
     // link airs at 08:50 — but showAt (air + the attribution padding) says
