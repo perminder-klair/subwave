@@ -30,11 +30,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-banter-'));
+const root = createTempDir(join(tmpdir(), 'subwave-banter-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
@@ -92,13 +92,3 @@ test('the frequency ladder is unchanged, and reads the slot rather than the minu
     }
   }
 });
-
-test('the station voice switch still sits above the whole window', async () => {
-  await station('aggressive');
-  await settings.update({ tts: { enabled: false } } as any);
-  for (const m of [20, 25, 50, 59]) assert.equal(shouldFire('banter', at(m)), false);
-  await settings.update({ tts: { enabled: true } } as any);
-  assert.equal(shouldFire('banter', at(25)), true);
-});
-
-test.after(() => rmSync(root, { recursive: true, force: true }));

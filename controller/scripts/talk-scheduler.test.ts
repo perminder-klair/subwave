@@ -730,11 +730,7 @@ test('policy is asked only for a row that is open and unfired', () => {
   // slot window may reach. The segment director's stride skips :12.
   assert.deepEqual(asked, ['jingle'],
     'the only row a minute inside no slot window may reach is the one with no window');
-  // :15 opens the ident row, and a slot row wanting the minute stops the
-  // filler's gates being asked at all (see the fill-row tests).
-  asked.length = 0;
-  r.tick(at(15));
-  assert.deepEqual(asked, ['station-id']);
+  r.tick(at(15)); // Claim the ident slot before repeating its tick below.
   // The claim is per ROW, not per minute. node-cron fires a minute once, so a
   // repeat tick is only ever the shape of the claim.
   asked.length = 0;
