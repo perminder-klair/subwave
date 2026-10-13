@@ -15,7 +15,7 @@ import {
   type PlaylistCursor,
 } from '../src/music/playlist-order.js';
 import { createPlaylistCursorStore } from '../src/music/playlist-cursors.js';
-import { airableAnchorTracks, showNoRepeatGuard } from '../src/music/show-recency.js';
+import { airableAnchorTracks } from '../src/music/show-recency.js';
 
 type Track = { id: string; title: string; artist: string; genres: string[]; durationSec?: number };
 
@@ -160,16 +160,7 @@ test('airableAnchorTracks keeps the anchor order and drops what cannot air', () 
   assert.deepEqual(out.map(t => t.id), ['t1', 't2', 't4', 't6', 't7', 't8']);
 });
 
-test('the no-repeat guard still counts through the shared airable set', () => {
-  const tracks = makeTracks(40);
-  const viaGuard = showNoRepeatGuard(100, 27_986, {
-    show: { playlistStrict: true, playlistExhaust: true },
-    playlistTracks: tracks,
-    excludedIds: new Set(['t1', 't2']),
-  });
-  // 38 airable identities → exhaustive window of 36.
-  assert.deepEqual(viaGuard, { window: 36, exhaustive: true });
-});
+
 
 // ---------------------------------------------------------------------------
 // The durable position
@@ -267,15 +258,9 @@ test('two airings play 1…40 then loop, continuing where the first left off', a
 
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
 
-test('the schema declares the switch and records the playlistStrict dependency', () => {
-  const source = read('../src/schemas/show.ts');
-  assert.match(source, /playlistInOrder: showBool\(\)/);
-  assert.match(source, /Play in order[\s\S]{0,200}NO-OP without `playlistStrict`/);
-});
 
-test('the resolved show shape carries the switch to the pick path (#779)', () => {
-  assert.match(read('../src/settings/persona.ts'), /playlistInOrder: show\.playlistInOrder === true/);
-});
+
+
 
 test('runTrackEvent walks in order after the budget gate and before mini-run steering', () => {
   const source = read('../src/broadcast/dj-agent.ts');

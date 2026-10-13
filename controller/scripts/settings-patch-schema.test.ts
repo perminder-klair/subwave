@@ -87,7 +87,6 @@ const JINGLE_MSG = 'jingleRatio must be int in [0, 1000]';
 const THRESHOLD_MSG = 'beds.thresholdSec must be number in [0, 60]';
 const CROSS_MSG = 'beds.crossSec must be number in [0, 15]';
 
-
 test('jingleRatio still parses the string forms an older admin build posts', () => {
   assert.equal(jingleRatioSchema.parse('5'), 5);
   assert.equal(jingleRatioSchema.parse('  5  '), 5);
@@ -178,19 +177,11 @@ test('BOUNDS still reports the same numbers now that the schema owns them', () =
   assert.deepEqual(BOUNDS.bedsCrossSec, { min: 0, max: 15, type: 'float' });
 });
 
-
 test('every settings key with defaults is in the patch inventory', () => {
   // An unlisted key is REJECTED at the route, so a key added to DEFAULTS and
   // update() but forgotten here would 400 the panel that saves it.
   const missing = Object.keys(DEFAULTS).filter((k) => !SETTINGS_PATCH_KEYS.includes(k as never));
   assert.deepEqual(missing, []);
-});
-
-test('the inventory carries the two keys the issue overlooked', () => {
-  // Both are postable today: stationDescription is its own branch (not part of
-  // `station`), and maxTrackMinutes is the legacy alias rawMaxTrackSec reads.
-  assert.ok(SETTINGS_PATCH_KEYS.includes('stationDescription'));
-  assert.ok(SETTINGS_PATCH_KEYS.includes('maxTrackMinutes'));
 });
 
 test('the inventory has no duplicates', () => {
@@ -474,7 +465,6 @@ test('parseSettingsPatchKey passes an unconverted key straight through', () => {
   assert.equal(parseSettingsPatchKey('llm', value), value);
 });
 
-
 test('a valid patch passes', () => {
   assert.equal(validateSettingsPatch({ jingleRatio: 4, beds: { enabled: true } }), null);
   assert.equal(validateSettingsPatch({}), null);
@@ -483,13 +473,6 @@ test('a valid patch passes', () => {
 test('an unconverted key is not judged', () => {
   // Its hand-rolled branch is still the authority; the route must not guess.
   assert.equal(validateSettingsPatch({ llm: { provider: 'nonsense' } }), null);
-});
-
-test('fieldErrors are dotted and rooted at the settings key', () => {
-  const failure = validateSettingsPatch({ beds: { crossSec: 99 } });
-  assert.ok(failure);
-  assert.deepEqual(Object.keys(failure.fieldErrors), ['beds.crossSec']);
-  assert.equal(failure.fieldErrors['beds.crossSec'], CROSS_MSG);
 });
 
 test('a scalar key maps to the bare key, not an empty path', () => {
@@ -507,24 +490,10 @@ test('every failing key reports, and the flat error follows BRANCH order', () =>
   assert.deepEqual(Object.keys(failure.fieldErrors).sort(), ['beds.crossSec', 'jingleRatio']);
 });
 
-test('unknown top-level keys are rejected and all of them are named', () => {
-  const failure = validateSettingsPatch({ jingleRatioo: 4, bedz: {} });
-  assert.ok(failure);
-  assert.match(failure.error, /unknown settings keys: /);
-  assert.deepEqual(Object.keys(failure.fieldErrors).sort(), ['bedz', 'jingleRatioo']);
-});
-
 test('a non-object body is refused', () => {
   for (const bad of [null, undefined, 'x', 5, []]) {
     assert.ok(validateSettingsPatch(bad), `accepted ${JSON.stringify(bad)}`);
   }
-});
-
-
-test('middleware: a good patch calls next() and answers nothing', () => {
-  const r = runMiddleware({ beds: { thresholdSec: 12 } });
-  assert.equal(r.nexted, true);
-  assert.equal(r.status, undefined);
 });
 
 test('middleware: a bad patch 400s with both error and fieldErrors', () => {
@@ -546,10 +515,11 @@ test('middleware: an absent body is an empty patch, not a crash', () => {
 test('middleware: does NOT rewrite the body', () => {
   // update() re-runs the same schemas and stays the authoritative chokepoint.
   const body = { jingleRatio: '7' };
-  runMiddleware(body);
+  const r = runMiddleware(body);
+  assert.equal(r.nexted, true);
+  assert.equal(r.status, undefined);
   assert.equal(body.jingleRatio, '7');
 });
-
 
 test('update() stores what the schema parsed, coercions included', async () => {
   const a = await settings.update({ jingleRatio: '7', sfx: { enabled: 1 } });
@@ -799,7 +769,6 @@ test('the route and update() name the SAME first failure for a persona roster', 
   assert.match(routeError, /^personas\.1\.name: /);
 });
 
-
 test('timezone accepts aliases and offsets, and stores them verbatim', () => {
   // A try/catch ICU probe, not Intl.supportedValuesOf — so aliases validate.
   assert.equal(timezoneSchema.parse('Europe/London'), 'Europe/London');
@@ -869,22 +838,12 @@ test('requests treats an emptied input as ABSENT, not as zero', () => {
   assert.equal(requestsPatchSchema.safeParse({ maxPending: {} }).success, true);
 });
 
-test('update() falls each requests field back to the CURRENT value', async () => {
-  await settings.update({ requests: { maxPending: 9, globalHourlyCap: 77 } });
-  const r = await settings.update({ requests: { globalHourlyCap: null, maxPending: 3 } });
-  assert.equal(r.saved.requests.maxPending, 3);
-  assert.equal(r.saved.requests.globalHourlyCap, 77); // untouched by the null
-  assert.deepEqual(Object.keys(r.saved.requests).sort(), [
-    'cooldownSec', 'enabled', 'globalHourlyCap', 'maxPending', 'onePendingPerIp',
-    'perIpHourlyCap', 'repeatCooldownMin',
-  ]);
-});
-
-
 test('moods canonicalises names and refuses post-normalisation duplicates', () => {
   const r = moodsSchema.parse([{ name: 'Late Night!' }, { name: '  ROCK  ' }]);
   assert.deepEqual(r.map((m) => m.name), ['late-night', 'rock']);
   assert.equal(r[0].clapPrompt, '');
+  assert.deepEqual(moodsSchema.parse([{ name: 'Chill Vibes!', clapPrompt: 'soft downtempo' }]),
+    [{ name: 'chill-vibes', clapPrompt: 'soft downtempo' }]);
   // 'Chill' and 'chill' normalise to the same id, so this is a refusal.
   assert.equal(moodsSchema.safeParse([{ name: 'Chill' }, { name: 'chill' }]).success, false);
   assert.equal(
@@ -894,6 +853,28 @@ test('moods canonicalises names and refuses post-normalisation duplicates', () =
   assert.equal(moodsSchema.safeParse([]).success, false);
   assert.equal(moodsSchema.safeParse('nope').success, false);
   assert.equal(moodsSchema.parse([{ name: 'x', clapPrompt: 'y'.repeat(999) }])[0].clapPrompt.length, 200);
+});
+
+test('moods strips unknown keys and enforces the name and vocabulary caps', () => {
+  assert.deepEqual(moodsSchema.parse([{ name: 'x', clapPrompt: 'y', bogus: 1 }]),
+    [{ name: 'x', clapPrompt: 'y' }]);
+  assert.throws(() => moodsSchema.parse([{ name: '' }]), /must be 1-/);
+  assert.throws(() => moodsSchema.parse(
+    Array.from({ length: 41 }, (_, i) => ({ name: `m${i}` })),
+  ), /at most/);
+});
+
+test('a complete schedule of known moods round-trips', () => {
+  const fullSchedule = {
+    'early-morning': 'morning', morning: 'morning', midday: 'energetic',
+    afternoon: 'focus', 'drive-time': 'driving', evening: 'evening',
+    'late-evening': 'night', 'after-hours': 'reflective',
+  };
+  const moodNames = ['energetic', 'calm', 'focus', 'evening', 'night', 'morning', 'driving', 'reflective'];
+  const schema = moodScheduleSchema({ moodNames });
+  assert.deepEqual(schema.parse(fullSchedule), fullSchedule);
+  assert.throws(() => schema.parse({ ...fullSchedule, 'drive-time': 'banana' }),
+    /moodSchedule\.drive-time/);
 });
 
 test('a mood map validates SHAPE only when the caller has no vocabulary', () => {

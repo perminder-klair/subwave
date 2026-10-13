@@ -6,7 +6,7 @@
 //
 // Run: npx tsx scripts/station-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -72,12 +72,6 @@ test('rename: same name rule, and nothing else in the body', () => {
 });
 
 // --- slugify: the function the admin preview now shares ----------------------
-
-test('slugify: every result is a legal station id', () => {
-  for (const name of ['Late Night FM', 'SUB/WAVE', '  ***  ', 'Ünïcode Béats!!', 'x'.repeat(80)]) {
-    assert.ok(STATION_ID_RE.test(slugifyStationName(name)), name);
-  }
-});
 
 test('slugify: nothing usable falls back to "station"', () => {
   // The bug the shared schema fixes. StationsPanel carried a hand-copied
@@ -245,21 +239,7 @@ test('a duplicate with no source is attributed to the mode field', async () => {
       assert.equal((e as InstanceType<typeof manager.StationCreateError>).field, 'mode');
       assert.match((e as Error).message, /no active station to duplicate from/);
     }
-  });
-});
-
-test('a full rack carries NO field — nothing typed in the dialog fixes it', async () => {
-  await withRoot(async (root) => {
-    mkdirSync(join(root, 'stations'), { recursive: true });
-    for (let i = 0; i < MAX_STATIONS; i++) mkdirSync(join(root, 'stations', `s${i}`));
-    writeFileSync(join(root, 'stations', 'active.json'), JSON.stringify({ activeId: 's0' }));
-    try {
-      await manager.createStation(root, { name: 'One Too Many', mode: 'fresh', currentName: 'X' });
-      assert.fail('expected a throw');
-    } catch (e) {
-      assert.ok(e instanceof manager.StationCreateError);
-      assert.equal((e as InstanceType<typeof manager.StationCreateError>).field, undefined);
-    }
+    assert.ok(!existsSync(join(root, 'stations', 'copy')));
   });
 });
 

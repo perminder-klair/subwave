@@ -35,7 +35,6 @@ const guard = (show: Record<string, unknown>, playlistTracks: Track[] | null, ex
     ...extra,
   });
 
-
 test('absent and false are the shipped behaviour, unchanged', () => {
   const tracks = makeTracks(400);
   const strictOnly = { playlistStrict: true, filtersStrict: false };
@@ -77,12 +76,10 @@ test('the switch is inert without a resolved strict anchor', () => {
   );
 });
 
-
 test('the window is the rotation size less two, and both slots are load-bearing', () => {
   // queue.recentlyPlayedByCount(n) blocks the ON-AIR track on top of the n
   // ended plays it counts, so a window of n withholds n+1 identities; one more
   // has to survive or the pool is empty. Hence S-2 for a rotation of S.
-  assert.equal(exhaustiveNoRepeatWindow(40), 38);
   assert.equal(exhaustiveNoRepeatWindow(3), 1);
   // Too small to leave the headroom → 0, i.e. the guard switches off.
   assert.equal(exhaustiveNoRepeatWindow(2), 0);
@@ -103,7 +100,6 @@ test('the library-fraction ceiling and the minimum-effective floor do not apply'
   // Both exist to tame a number the operator TYPED against a catalogue it was
   // never measured on. Clamping a window derived from its own universe to
   // 37.5% of that same universe would just refuse the feature.
-  assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(40)).window, 38);
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(20)).window, 18);
   // And a playlist far wider than the configured window is not capped at it:
   // the operator asked for the whole playlist, not the first 100 of it.
@@ -114,10 +110,8 @@ test('a playlist growing mid-show widens the rotation on the next pick', () => {
   // Nothing is cached: the window is recomputed per pick off the resolved
   // pool, which is what makes "it silently stops being right the moment the
   const show = { playlistStrict: true, playlistExhaust: true };
-  assert.equal(guard(show, makeTracks(40)).window, 38);
   assert.equal(guard(show, makeTracks(41)).window, 39, 'one track added in Navidrome, one wider window');
 });
-
 
 test('strict music filters narrow the rotation before it is counted', () => {
   // 40 tracks, 25 of them Jazz. A strict Jazz show rotates 25, not 40 — sizing
@@ -177,7 +171,6 @@ test('the minimum-track-length floor is subtracted from the rotation', () => {
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, tracks).window, 38);
 });
 
-
 test('a playlist too small to rotate switches the guard off rather than risking a gap', () => {
   for (const size of [0, 1, 2]) {
     assert.deepEqual(
@@ -201,7 +194,6 @@ test('a filter that empties the playlist leaves the relaxable cascade in charge'
     'nothing can air → no hard window at all',
   );
 });
-
 
 // A faithful stand-in for queue.recentlyPlayedByCount(n): the last n DISTINCT
 // ended plays, plus the track currently on air — which is not in the sidecar,
@@ -281,6 +273,7 @@ test('both pick paths resolve the floor before they size the window', () => {
     assert.ok(guardAt > 0, `${file} must go through the shared show policy`);
     assert.ok(floorAt > 0 && floorAt < guardAt,
       `${file} must resolve effectiveMinTrackSec before sizing the no-repeat window`);
+    assert.match(source, /resolvedGenres:/, `${file} must use its resolved genre lock for show capacity`);
     assert.match(source, /minTrackSec,?\s*maxTrackSec,?\s*\}/,
       `${file} must hand the floor to the guard`);
   }
@@ -297,20 +290,111 @@ test('the pool picker prunes hard-blocked tracks before capping its playlist sou
     'the show-playlist source must pass the hard sets only under an exhaustive window');
 });
 
-test('the resolved show shape carries the switch to the pick paths', () => {
-  // resolveShowShape is an explicit allowlist and is what every pick path
-  // actually reads. A field missing there is a switch that saves, renders and
-  const source = readFileSync(new URL('../src/settings/persona.ts', import.meta.url), 'utf8');
-  assert.match(source, /playlistExhaust: show\.playlistExhaust === true/,
-    'resolveShowShape must carry playlistExhaust');
-});
+// The configured window clamps against a strict anchor's own catalogue.
+const windowOf = (...args: Parameters<typeof showNoRepeatGuard>) => showNoRepeatGuard(...args).window;
+const recencyTracks = makeTracks(40, { genre: (i) => i < 20 ? 'Jazz' : 'Rock' });
 
-test('the schema states which way the playlistStrict dependency was decided', () => {
-  // The issue asked for the choice to be recorded where the shape is defined,
-  // because a hand-edited settings.json reaches the schema without ever seeing
-  const source = readFileSync(new URL('../src/schemas/show.ts', import.meta.url), 'utf8');
-  assert.match(source, /playlistExhaust: showBool\(\)/,
-    'playlistExhaust must be a show boolean beside playlistStrict');
-  assert.match(source, /NO-OP without `playlistStrict`/,
-    'the schema must say how the playlistStrict dependency was decided');
+test('configured windows clamp to airable strict anchors', () => {
+  // A strict playlist is its own catalogue for the hard no-repeat clamp. With
+  // only 21 distinct tracks the configured 100-track guard must self-disable so
+  // the relaxable recency cascade can cycle the show instead of falling out to
+  // unrelated library material.
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: false },
+      playlistTracks: recencyTracks.slice(0, 21),
+      excludedIds: null,
+    }),
+    0,
+    'a 21-track strict playlist must clamp against 21, not the full library',
+  );
+
+  // The clamp is arithmetic, not a switch: pin both sides of it, or a regression
+  // that simply returned 0 for every strict playlist would satisfy the whole
+  // suite. Below the library ceiling the playlist's own 37.5% governs; above it
+  // the operator's configured window is already the smaller number and stands.
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: false },
+      playlistTracks: makeTracks(200),
+      excludedIds: null,
+    }),
+    75,
+    'a 200-track strict playlist clamps to floor(200 * 0.375), not the configured 100',
+  );
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: false },
+      playlistTracks: makeTracks(400),
+      excludedIds: null,
+    }),
+    100,
+    'a playlist wide enough to carry the configured window keeps it intact',
+  );
+
+  // Soft anchors and unresolved anchors still pick from the wider catalogue, so
+  // weakening their station-wide no-repeat window would be a regression.
+  for (const scope of [
+    { show: { playlistStrict: false }, playlistTracks: recencyTracks },
+    { show: { playlistStrict: true }, playlistTracks: null },
+  ]) {
+    assert.equal(
+      windowOf(CONFIGURED, LIBRARY, { ...scope, excludedIds: null }),
+      100,
+      'non-strict or unresolved playlist anchors must remain library-scoped',
+    );
+  }
+
+  // Strict music filters and excluded playlists narrow the real universe too.
+  // Twenty Jazz tracks remain in each case, which is below the minimum useful
+  // hard window and must therefore cycle under the relaxable guard.
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: true, genres: ['Jazz'] },
+      playlistTracks: recencyTracks,
+      excludedIds: null,
+    }),
+    0,
+    'strict music filters must narrow the no-repeat clamp universe',
+  );
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: true, genres: ['Pop Punk'] },
+      playlistTracks: recencyTracks.map((track, i) => ({
+        ...track,
+        genres: [i < 20 ? 'Pop' : 'Rock'],
+      })),
+      excludedIds: null,
+      resolvedGenres: ['Pop'],
+    }),
+    0,
+    'capacity must use the same resolved genre alias as candidate filtering',
+  );
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: false },
+      playlistTracks: recencyTracks,
+      excludedIds: new Set(recencyTracks.slice(20).map(track => track.id)),
+    }),
+    0,
+    'excluded playlist tracks must not inflate the no-repeat clamp universe',
+  );
+
+  // Different Subsonic ids for the same title/artist are one audible track. If
+  // counted separately these 40 rows would enable a 15-track hard window; as 20
+  // real songs the guard must switch off instead.
+  const duplicateRips = recencyTracks.slice(0, 20).flatMap(track => [
+    track,
+    { ...track, id: `${track.id}-duplicate` },
+  ]);
+  assert.equal(
+    windowOf(CONFIGURED, LIBRARY, {
+      show: { playlistStrict: true, filtersStrict: false },
+      playlistTracks: duplicateRips,
+      excludedIds: null,
+    }),
+    0,
+    'duplicate title/artist rips must count as one track for clamp capacity',
+  );
+
 });

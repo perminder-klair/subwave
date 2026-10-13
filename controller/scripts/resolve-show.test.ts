@@ -11,16 +11,7 @@ import assert from 'node:assert/strict';
 import { resolveActiveShow } from '../src/settings.js';
 import { setStationTimezone } from '../src/time.js';
 
-let failures = 0;
-async function test(name: string, fn: () => void | Promise<void>) {
-  try {
-    await fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
+import test from 'node:test';
 
 // Deterministic wall clock: pin the station zone and resolve at a fixed
 // instant — Saturday 2026-01-03 19:00 UTC (dow 6, hour 19).
@@ -47,37 +38,38 @@ const settings = {
       playlistIds: ['pl-anchor-1', 'pl-anchor-2'],
       playlistStrict: true,
       playlistInOrder: true,
+      playlistExhaust: true,
       excludedPlaylistIds: ['pl-blocked'],
     },
   ],
   personas: [{ id: 'p1', name: 'Miles', avatar: '' }],
 };
 
-console.log('resolveActiveShow field propagation:');
-await test('resolves the scheduled show at the station-zone slot', () => {
+test('resolves the scheduled show at the station-zone slot', () => {
   const show = resolveActiveShow(at, settings as any);
   assert.ok(show, 'expected a show at Sat 19:00');
   assert.equal(show!.id, 's1');
   assert.equal(show!.name, 'Jazz Hour');
 });
 
-await test('carries the playlist anchor (ids + strict toggle)', () => {
+test('carries the playlist anchor (ids + strict toggle)', () => {
   const show = resolveActiveShow(at, settings as any)!;
   assert.deepEqual(show.playlistIds, ['pl-anchor-1', 'pl-anchor-2']);
   assert.equal(show.playlistStrict, true);
 });
 
-await test('carries playlistInOrder — the running-order switch the pick branch reads (#779)', () => {
+test('carries playlistInOrder — the running-order switch the pick branch reads (#779)', () => {
   const show = resolveActiveShow(at, settings as any)!;
   assert.equal(show.playlistInOrder, true);
+  assert.equal(show.playlistExhaust, true);
 });
 
-await test('carries excludedPlaylistIds — the blocklist the pick paths read (#779 no-op regression)', () => {
+test('carries excludedPlaylistIds — the blocklist the pick paths read (#779 no-op regression)', () => {
   const show = resolveActiveShow(at, settings as any)!;
   assert.deepEqual((show as any).excludedPlaylistIds, ['pl-blocked']);
 });
 
-await test('carries the strict music filters', () => {
+test('carries the strict music filters', () => {
   const show = resolveActiveShow(at, settings as any)!;
   assert.equal(show.filtersStrict, true);
   assert.deepEqual(show.genres, ['Jazz']);
@@ -88,7 +80,7 @@ await test('carries the strict music filters', () => {
   assert.equal((show as any).vocals, 'instrumental');
 });
 
-await test('a live Default programming takeover suppresses the weekly show without mutating the grid', () => {
+test('a live Default programming takeover suppresses the weekly show without mutating the grid', () => {
   const before = structuredClone(schedule);
   const overridden = {
     ...settings,
@@ -102,7 +94,7 @@ await test('a live Default programming takeover suppresses the weekly show witho
   assert.deepEqual(schedule, before);
 });
 
-await test('the weekly show resumes before and after a Default programming takeover', () => {
+test('the weekly show resumes before and after a Default programming takeover', () => {
   const overridden = {
     ...settings,
     scheduleOverride: {
@@ -115,7 +107,7 @@ await test('the weekly show resumes before and after a Default programming takeo
   assert.equal(resolveActiveShow(new Date(at.getTime() + 30 * 60_000), overridden as any)?.id, 's1');
 });
 
-await test('a malformed takeover target voids the takeover rather than reading as Default programming', () => {
+test('a malformed takeover target voids the takeover rather than reading as Default programming', () => {
   // The drift the shared predicates exist to close: `showId === null` would
   // read this as a show pin, `typeof showId === 'string'` as an explicit
   // Default programming takeover. Neither is right — a target naming nothing
@@ -134,7 +126,7 @@ await test('a malformed takeover target voids the takeover rather than reading a
   }
 });
 
-await test('a live named-show takeover retains its existing precedence', () => {
+test('a live named-show takeover retains its existing precedence', () => {
   const alternate = {
     id: 's2', name: 'Dawn Patrol', topic: 'early sounds', personaId: 'p1',
   };
@@ -150,13 +142,7 @@ await test('a live named-show takeover retains its existing precedence', () => {
   assert.equal(resolveActiveShow(at, overridden as any)?.id, 's2');
 });
 
-await test('returns null on an unscheduled slot', () => {
+test('returns null on an unscheduled slot', () => {
   const off = new Date(Date.UTC(2026, 0, 3, 18, 0, 0)); // Sat 18:00 — empty cell
   assert.equal(resolveActiveShow(off, settings as any), null);
 });
-
-if (failures) {
-  console.error(`\n${failures} failing`);
-  process.exit(1);
-}
-console.log('\nall resolve-show tests passed');
