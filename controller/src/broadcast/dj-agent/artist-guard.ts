@@ -15,6 +15,20 @@ export { artistRootKey };
 // on-air track plus the last n distinct plays, so up to 2n+1 artists.
 export const ARTIST_VARIETY_WINDOW = 5;
 
+// The Agentic pick event names the artists this guard would refuse, so the
+// model can step around them up front. Without it the model sees only its own
+// pick notes, proposes an artist from the window, and every refusal costs a
+// second model call (seen live: one artist proposed four slots running on a
+// playlist show). The guard stays the enforcement; this is the same rule
+// stated where the choice is made, never a filter on the discovery tools
+// (#618). "Unless nothing else fits" matches the guard's own posture, which
+// lets a repeat through when the run surfaced no alternative.
+export function recentArtistsClause(credits: readonly string[]): string {
+  const names = credits.map(c => String(c ?? '').trim()).filter(Boolean);
+  if (!names.length) return '';
+  return ` Artists just played or already queued, so choose someone else unless nothing else fits: ${names.join('; ')}.`;
+}
+
 // Why the guard fired. The caller escalates the two differently: a match with
 // the pick-cycle anchor is worth a pool rescue, while spacing is a preference
 // that yields to whatever the run already surfaced. `onair` is the historical

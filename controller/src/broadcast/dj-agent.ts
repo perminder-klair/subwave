@@ -19,7 +19,7 @@ import { showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
-import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, recentArtistsClause, runArtistGuard } from './dj-agent/artist-guard.js';
 import { runAlbumGuard } from './dj-agent/album-guard.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -576,9 +576,19 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       queued: false,
       usedMusicalLeanings: false,
     };
+    // Name the guard's window on the ask itself (the last user turn), for this
+    // run only: the window is re-read per pick, so persisting it in the session
+    // would hand a later pick a stale list. Skipped where the guard is (an
+    // episode owns its artists).
+    const messages = session.pickWindowMessages();
+    const avoidClause = episodeSource ? '' : recentArtistsClause(
+      queue.neighbourArtistCredits(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
+    );
+    const ask = messages[messages.length - 1];
+    if (avoidClause && ask?.role === 'user') ask.content += avoidClause;
     const run = await pickerAgent.run({
       editorial: ctx?.episodeEditorial ?? '',
-      messages: session.pickWindowMessages(),
+      messages,
       scope,
       showAt,
       telemetry: { agentPickResolution },
