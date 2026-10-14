@@ -269,6 +269,10 @@ export const directorAgent = defineAgent({
   // widening is opt-in precisely so it can't override this; the director does
   // not opt in.
   maxSteps: 2,
+  // Deciding to stay silent reads no data, so a native "air: false" with no
+  // tool call is a finished answer, not a miss. Only silence: a line that
+  // airs may need a data tool, and the forced agents never opt in.
+  settledWithoutTools: (object) => object?.air === false,
   // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
   // done-tool recovery into a multi-step stall (#555) and hang the tick; the
   // deadline turns that into a clean throw, handled as silence below.

@@ -87,6 +87,9 @@ interface DjAgentOptions {
   kind?: string;
   timeoutMs?: number;
   validate?: (object: unknown) => boolean;
+  // An answer that is complete WITHOUT a discovery call — see the native
+  // branch. Absent, every native answer must have explored.
+  settledWithoutTools?: (object: unknown) => boolean;
   telemetry?: Record<string, unknown>;
   // Follow the leg's per-provider discovery budget instead of the pinned single
   // historical step. Opt-in per agent, OFF by default: a caller's step cap can
@@ -219,6 +222,7 @@ export async function djAgent({
   // Not applied to done-tool/recovery results: the caller repairs those itself
   // with the full `seen` context.
   validate,
+  settledWithoutTools,
 }: DjAgentOptions): Promise<{ object: unknown; steps: number; toolCalls: ToolCallSummary[] }> {
   return withFailover(
     kind,
@@ -311,12 +315,22 @@ export async function djAgent({
             // only tool calls populate the `seen` map the caller resolves ids
             // against.
             const explored = (nr.steps || []).some((s) => (s.toolCalls || []).length > 0);
+            // Some answers need no discovery at all, and the caller says which:
+            // the segment director's "stay silent" reads no data. Without this,
+            // hosted mode (first step tool_choice auto) discarded every silent
+            // tick and re-asked it twice more — ~11s and 13k tokens, every five
+            // minutes, to decide to say nothing. Picks never opt in: their id
+            // must come from a tool result.
+            let settled = false;
+            if (nObj && !explored && typeof settledWithoutTools === 'function') {
+              try { settled = !!settledWithoutTools(nObj); } catch { settled = false; }
+            }
             // A throwing validator counts as a miss, never as an agent failure.
             let accepted = true;
-            if (nObj && explored && typeof validate === 'function') {
+            if (nObj && (explored || settled) && typeof validate === 'function') {
               try { accepted = !!validate(nObj); } catch { accepted = false; }
             }
-            if (nObj && explored && accepted) {
+            if (nObj && (explored || settled) && accepted) {
               const toolCalls = flattenToolCalls(nr);
               return {
                 value: { object: nObj, steps: nSteps, toolCalls },
@@ -329,7 +343,7 @@ export async function djAgent({
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
-            console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
+            console.log(`[${kind}] native output produced no usable answer (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
           } catch (e) {
             if (isGenerationControlError(e) || isModelUnavailable(e)) throw e;
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);

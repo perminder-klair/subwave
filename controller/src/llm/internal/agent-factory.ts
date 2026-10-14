@@ -27,6 +27,9 @@ export interface AgentDefinition<TArgs = Record<string, any>, TExtras = any> {
   // extras (the picker checks its chosen id against the `seen` map). A miss
   // falls the run through to the done-tool harness — see djAgent's validate.
   validateObject?: (object: any, extras: TExtras) => boolean;
+  // A native answer this agent accepts without any tool call (the director's
+  // "stay silent"). Off by default: a pick's id must come from a tool result.
+  settledWithoutTools?: (object: any) => boolean;
   // Follow the leg's per-provider discovery budget instead of the single
   // historical step — see DjAgentOptions.providerDiscoveryBudget in
   // strategy/agent.ts for why this is opt-in per agent.
@@ -102,6 +105,7 @@ export function defineAgent<TArgs = Record<string, any>, TExtras = any>(
         kind: def.kind,
         ...(telemetry ? { telemetry } : {}),
         providerDiscoveryBudget: def.providerDiscoveryBudget === true,
+        ...(def.settledWithoutTools ? { settledWithoutTools: def.settledWithoutTools } : {}),
         ...(def.validateObject
           ? { validate: (object: any) => def.validateObject!(object, extras) }
           : {}),
