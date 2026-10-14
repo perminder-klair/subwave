@@ -12,6 +12,7 @@
 //
 // Run: npx tsx scripts/library-schema.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
+import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -168,24 +169,8 @@ function runMiddleware(mw: ReturnType<typeof validateBody>, body: unknown): {
   nexted: boolean;
   req: { body: unknown };
 } {
-  let status = 0;
-  let payload: { error: string; fieldErrors: Record<string, string> } | null = null;
-  let nexted = false;
-  const req = { body } as never;
-  const res = {
-    status(code: number) {
-      status = code;
-      return this;
-    },
-    json(p: unknown) {
-      payload = p as typeof payload;
-      return this;
-    },
-  } as never;
-  mw(req, res, () => {
-    nexted = true;
-  });
-  return { status, payload, nexted, req: req as unknown as { body: unknown } };
+  const out = captureMiddleware(mw, { body }, { initialStatus: 0 });
+  return { status: out.status!, payload: out.body as { error: string; fieldErrors: Record<string, string> } | null, nexted: out.nextCalled, req: out.req };
 }
 
 test('the route and the store name the same failure for the same body', () => {

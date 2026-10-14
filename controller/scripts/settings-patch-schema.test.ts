@@ -5,6 +5,7 @@
 // Run: npx tsx scripts/settings-patch-schema.test.ts (auto-discovered by npm test).
 // What these tests are really guarding is FIDELITY. The branches being replaced
 import assert from 'node:assert/strict';
+import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -60,25 +61,12 @@ const settings = await import('../src/settings.js');
 
 // Minimal express doubles — enough to see what the middleware answers.
 function runMiddleware(body: unknown) {
-  const captured: { status?: number; json?: unknown; nexted: boolean } = { nexted: false };
-  const res = {
-    status(code: number) {
-      captured.status = code;
-      return this;
-    },
-    json(payload: unknown) {
-      captured.json = payload;
-      return this;
-    },
+  const out = captureMiddleware(validateSettingsBody(), { body }, { initialStatus: undefined });
+  return {
+    ...(out.status === undefined ? {} : { status: out.status }),
+    ...(out.body === null ? {} : { json: out.body }),
+    nexted: out.nextCalled,
   };
-  validateSettingsBody()(
-    { body } as never,
-    res as never,
-    () => {
-      captured.nexted = true;
-    },
-  );
-  return captured;
 }
 
 // The exact strings the hand-rolled branches produced, hardcoded rather than
