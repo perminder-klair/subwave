@@ -1,3 +1,9 @@
+// Shared track and stem-render gain resolution (#1240).
+// A rendered clip has no liq_amplify, so its baked-in gain must match the drain's
+// track stamp. Resolving from the analyzer's leading window used to ignore
+// ReplayGain tags, maxBoostDb and peak headroom. These cases pin resolveGainDb
+// and the matching queue.applyLoudnessGain stamp.
+//
 // A boost needs a known peak (music/mix.ts gainForLoudness, music/loudness.ts
 // resolveGainDb).
 //
@@ -12,15 +18,16 @@
 //
 // Offline: every track object carries its own replayGain key, and the library
 // is never loaded, so nothing reaches Subsonic or library.db.
-// Run: `tsx scripts/loudness-boost-peak.test.ts` (folded into `npm test`).
+// Run: `npm test -- loudness`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, beforeEach, test } from 'node:test';
+import test, { after, before, beforeEach, describe } from 'node:test';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-boost-peak-'));
+const root = createTempDir(join(tmpdir(), 'subwave-loudness-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
@@ -28,6 +35,10 @@ const loudness = await import('../src/music/loudness.js');
 
 before(async () => {
   await settings.load();
+  // Defaults are the case that matters: target -14, maxBoost 6, tag-first.
+  assert.equal(settings.get().loudness.targetLufs, -14);
+  assert.equal(settings.get().loudness.maxBoostDb, 6);
+  assert.equal(settings.get().loudness.source, 'replaygain-then-measured');
 });
 
 beforeEach(async () => {
@@ -109,4 +120,116 @@ test("source 'replaygain' does not borrow a measured peak", async () => {
 test('a borrowed peak never changes a cut', async () => {
   const gain = await loudness.resolveGainDb({ id: 'b4', replayGain: { trackGain: -6 }, loudnessLufs: -30, peakDb: -0.1 });
   assert.equal(gain, -2, "-18 - (-6) = -12 LUFS → -2 dB, from the tag");
+});
+
+// The track/render cases use the shipped 6 dB cap; the peak cases above keep
+// their wider 10 dB cap so headroom and held-boost warnings stay observable.
+describe('track and render gain (#1240)', () => {
+  beforeEach(async () => {
+    await settings.update({ loudness: { maxBoostDb: 6 } });
+  });
+
+  // The tag says -18 - (-4) = -14 LUFS, already at target. The leading
+  // window says -20, which used to ask the render for +6 (#1240).
+  test('prefers the ReplayGain tag over the measured window', async () => {
+    const gain = await loudness.resolveGainDb({
+      id: 't1',
+      replayGain: { trackGain: -4, trackPeak: 0.9 },
+      loudnessLufs: -20,
+      peakDb: -1,
+    });
+    assert.equal(gain, 0, 'tag says the track is already at target');
+  });
+
+  // replayGain: null means the file was checked and untagged, so it falls
+  // through to the measured value, preserving untagged-library behaviour.
+  test('falls through to the measured window when untagged', async () => {
+    const gain = await loudness.resolveGainDb({
+      id: 't2',
+      replayGain: null,
+      loudnessLufs: -18,
+      peakDb: -12,
+    });
+    assert.equal(gain, 4, '-18 → -14 is +4 dB, inside every cap');
+  });
+
+  // The operator's boost cap, which the render's own ±12 dB clamp ignored.
+  test('caps the boost at maxBoostDb, not the render clamp', async () => {
+    const gain = await loudness.resolveGainDb({
+      id: 't3',
+      replayGain: null,
+      loudnessLufs: -30,   // raw ask is +16 dB
+      peakDb: -20,         // headroom is not the binding limit here
+    });
+    assert.equal(gain, 6, 'capped at maxBoostDb');
+  });
+
+  // maxBoostDb caps only boosts. A loud master still gets the full cut.
+  test('pulls a loud master down without the boost cap applying', async () => {
+    const gain = await loudness.resolveGainDb({
+      id: 't5',
+      replayGain: null,
+      loudnessLufs: -8,
+      peakDb: -0.1,
+    });
+    assert.equal(gain, -6, 'cut is the full distance to target');
+  });
+
+  test('no loudness from any source → null (unity, as before)', async () => {
+    const gain = await loudness.resolveGainDb({
+      id: 't6',
+      replayGain: null,
+      loudnessLufs: null,
+      peakDb: null,
+    });
+    assert.equal(gain, null);
+  });
+
+  test('null track resolves to null rather than throwing', async () => {
+    assert.equal(await loudness.resolveGainDb(null), null);
+  });
+
+  // A pinned measured source ignores the tag for both track and render.
+  test("source 'measured' ignores a present tag", async () => {
+    await settings.update({ loudness: { source: 'measured' } });
+    const gain = await loudness.resolveGainDb({
+      id: 't7',
+      replayGain: { trackGain: -4, trackPeak: 0.9 }, // would say 0 dB
+      loudnessLufs: -18,
+      peakDb: -12,
+    });
+    assert.equal(gain, 4, 'measured window, not the tag');
+  });
+
+  // …and `source: 'replaygain'` must not fall back to the measurement.
+  test("source 'replaygain' does not fall back to measured", async () => {
+    await settings.update({ loudness: { source: 'replaygain' } });
+    const gain = await loudness.resolveGainDb({
+      id: 't8',
+      replayGain: null,
+      loudnessLufs: -18,
+      peakDb: -12,
+    });
+    assert.equal(gain, null, 'untagged file plays at unity under a pinned tag source');
+  });
+
+  // The drain's liq_amplify and the renderer's gain_db use the same figure,
+  // so a clip matches its neighbouring tracks (#1240).
+  test('the drain stamps exactly what the render is handed', async () => {
+    await settings.update({ loudness: { source: 'replaygain-then-measured' } });
+    const { queue } = await import('../src/broadcast/queue.js');
+    const track: Parameters<typeof queue.applyLoudnessGain>[0] = {
+      id: 't9',
+      title: 'A song',
+      replayGain: { trackGain: -6, trackPeak: 0.5 },
+      loudnessLufs: -25,
+      peakDb: -30,
+    };
+    await queue.applyLoudnessGain(track);
+    const rendered = await loudness.resolveGainDb({ ...track });
+    assert.equal(track.gainDb, rendered, 'stamped gain === render gain');
+    // And it is the tag's answer (-18 - -6 = -12 LUFS → -2 dB), not the
+    // measured window's (+6 after the cap).
+    assert.equal(track.gainDb, -2);
+  });
 });
