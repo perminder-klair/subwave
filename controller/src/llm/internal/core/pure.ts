@@ -385,13 +385,24 @@ const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:\s+[`
 // Ollama's incident wording omits "model". Bound it to a single model-ID token
 // containing a digit, dot or colon, followed by the dated retirement sentence.
 const MODEL_ID_RETIRED_RE = /^\s*(?=[\w.:/-]*[\d.:])[\w.:/-]{1,60} was retired at \d{4}-\d{2}-\d{2}\b/i;
+// Anthropic answers a retired or unknown model id with a 404 whose error type is
+// `not_found_error` and whose whole message is `model: <id>`. A proxy relays it
+// as a tail inside its own error (CLIProxyAPI: "…; last upstream error:
+// not_found_error: model: claude-3-5-haiku-20241022)"), often under a 429 with
+// a day-long Retry-After, which is how it read as a rate limit and burned three
+// SDK attempts per call. The type name anchors the relayed form; the bare form
+// counts only on a 404, where the message IS the whole answer.
+const ANTHROPIC_MODEL_NOT_FOUND_RE = /\bnot_found_error:?\s+model:\s*[`'"]?[\w.:/-]{1,60}[`'"]?(?=$|[\s;),])/i;
+const BARE_MODEL_ID_RE = /^\s*model:\s*[`'"]?[\w.:/-]{1,60}[`'"]?\s*$/i;
 
 export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
   const msg = providerMessage(err);
-  return MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg);
+  if (MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg) || ANTHROPIC_MODEL_NOT_FOUND_RE.test(msg)) return true;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  return status === 404 && BARE_MODEL_ID_RE.test(msg);
 }
 
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
