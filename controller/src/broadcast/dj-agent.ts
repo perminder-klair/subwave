@@ -547,6 +547,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
         seedId: pickAnchor?.id ?? null,
         candidates: 0,
         toolCalls: shortlist.sourceRuns.length,
+        shortlist: { returned: shortlist.sourceRuns.reduce((sum, run) => sum + (run.returned || 0), 0) },
       });
       throw Object.assign(new Error(failure.message), { pickFailure: failure });
     }

@@ -105,3 +105,26 @@ await test('an unknown seed (boot / untracked track) never reads as an echo', ()
   const g = classifyPickFailure({ pickedId: OTHER, seedId: null, candidates: 3, toolCalls: 1 });
   assert.equal(g.kind, 'unknown-id');
 });
+
+await test('an empty Track Shortlist names the show filters, not a model answer', () => {
+  // Seen live on a strict-genre show with a handful of in-genre tracks: the
+  // agent wording blamed "its answer" although no model was ever asked.
+  const filtered = classifyPickFailure({ pickedId: null, seedId: SEED, candidates: 0, toolCalls: 4, shortlist: { returned: 23 } });
+  assert.equal(filtered.kind, 'no-candidates');
+  assert.equal(filtered.countsAgainstBreaker, false);
+  assert.match(filtered.message, /Track Shortlist/);
+  assert.match(filtered.message, /4 source run\(s\) returned 23 track\(s\)/);
+  assert.match(filtered.message, /no model was asked/);
+  assert.doesNotMatch(filtered.message, /answer/);
+
+  const empty = classifyPickFailure({ pickedId: null, seedId: SEED, candidates: 0, toolCalls: 3, shortlist: { returned: 0 } });
+  assert.match(empty.message, /returned no tracks/);
+});
+
+await test('a Shortlist with no source runs is not a model failure either', () => {
+  // The agent reading of zero calls — "the model may not drive tool calls" —
+  // cannot apply where the controller, not a model, runs the sources.
+  const f = classifyPickFailure({ pickedId: null, seedId: SEED, candidates: 0, toolCalls: 0, shortlist: { returned: 0 } });
+  assert.equal(f.kind, 'no-candidates');
+  assert.equal(f.countsAgainstBreaker, false);
+});
