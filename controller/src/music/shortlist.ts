@@ -8,7 +8,7 @@ import { buildPickerTools, type PickerScope } from '../llm/tools.js';
 import { SHORTLIST_PASSES_BOUNDS } from '../schemas/settings.js';
 import * as library from './library.js';
 import { mixCompat, type Analysis } from './mix.js';
-import { artistCreditsOverlap, artistRootKey, filterPickerCandidates } from './recency.js';
+import { artistCreditsOverlap, artistRootKey, creditInRoots, filterPickerCandidates } from './recency.js';
 import { type YearRange, hasEraBound } from './show-filter.js';
 import { shortlistOffers, type CandidateOffers } from './shortlist-offers.js';
 import { shortlistSearchCalls, type ShortlistSearch } from './shortlist-search.js';
@@ -48,6 +48,10 @@ export type ShortlistPlanningContext = {
   // the expected predecessor's measured analysis. Orders the finished
   // shortlist (orderByTransitionFit); absent, the plan's order stands.
   transitionTarget?: Analysis | null;
+  // queue.neighbourArtistRoots(artistVarietyWindow): the acts just played or
+  // already queued. Absent (a prepared episode, the Discovery Bench), the
+  // list is offered without spacing.
+  recentArtistRoots?: ReadonlySet<string>;
 };
 
 const ENERGY_VALUES = new Set(['low', 'medium', 'high']);
@@ -219,6 +223,9 @@ export type ShortlistResult = {
   sourceRuns: ShortlistSourceRun[];
   uniqueCandidates: number;
   elapsedMs: number;
+  // Candidates left out because their artist is inside the spacing window.
+  // Zero when nothing fresher was found and the window was waived.
+  spacingSkipped?: number;
 };
 
 type PickerTool = {
@@ -254,16 +261,16 @@ export async function executeShortlistPlan(
   tools: PickerToolSet,
   seen: Map<string, any>,
   plan: ShortlistSourceCall[],
-  options: { topUps?: ShortlistSourceCall[]; minimumCandidates?: number; maxPerArtist?: number; avoidArtist?: string | null; offers?: CandidateOffers; sourceTimeoutMs?: number; signal?: AbortSignal } = {},
+  options: { topUps?: ShortlistSourceCall[]; minimumCandidates?: number; maxPerArtist?: number; avoidArtist?: string | null; recentArtistRoots?: ReadonlySet<string>; offers?: CandidateOffers; sourceTimeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<ShortlistResult> {
   const started = performance.now();
   const sourceRuns: ShortlistSourceRun[] = [];
   const sourcesById = new Map<string, string[]>();
 
   const avoidRoot = artistRootKey(options.avoidArtist || '');
-  const offerable = () => withoutArtist(
+  const offerable = () => withRecentSpacing(withoutArtist(
     balanceShortlist([...seen.values()], options.maxPerArtist, options.offers), avoidRoot,
-  );
+  ), options.recentArtistRoots);
   const calls = [...plan];
   // Recovery is at most the supplied top-up sources, not an unbounded retry.
   // It never weakens scope locks or changes how either route handles models.
@@ -273,7 +280,7 @@ export async function executeShortlistPlan(
   for (let index = 0; index < calls.length; index++) {
     // Counted after the anchor exclusion, so a list that is mostly the anchor
     // artist still earns its top-ups.
-    if (index >= plan.length && offerable().other.length >= (options.minimumCandidates ?? 4)) break;
+    if (index >= plan.length && offerable().fresh.length >= (options.minimumCandidates ?? 4)) break;
     if (options.signal?.aborted) break;
     const call = calls[index];
     const tool = tools[call.source];
@@ -328,9 +335,11 @@ export async function executeShortlistPlan(
   }
 
   // Never-starve: when every candidate is the anchor artist, offer them all and
-  // let the artist guard's pool rescue answer it, exactly as before.
-  const { other, all } = offerable();
-  const candidates = (other.length ? other : all).map(candidate => ({
+  // let the artist guard's pool rescue answer it, exactly as before. Spacing
+  // yields the same way: with no fresher artist, the recent ones stay offered.
+  const { fresh, other, all } = offerable();
+  const offered = fresh.length ? fresh : other.length ? other : all;
+  const candidates = offered.map(candidate => ({
     ...candidate,
     shortlistSources: sourcesById.get(candidate.id) || [],
   }));
@@ -339,6 +348,7 @@ export async function executeShortlistPlan(
     sourceRuns,
     uniqueCandidates: candidates.length,
     elapsedMs: Math.round(performance.now() - started),
+    spacingSkipped: fresh.length ? other.length - fresh.length : 0,
   };
 }
 
@@ -355,6 +365,7 @@ export async function buildShortlist(context: ShortlistPlanningContext, offers: 
     topUps, minimumCandidates: 4,
     maxPerArtist: context.scope.playlistLock || context.scope.episodeSource ? Infinity : 3,
     avoidArtist: shortlistAvoidArtist(context),
+    recentArtistRoots: context.scope.episodeSource ? undefined : context.recentArtistRoots,
     offers,
   });
   if (!context.transitionTarget) return result;
@@ -381,6 +392,22 @@ export function withoutArtist<T extends PickerCandidate>(candidates: T[], avoidR
   if (!avoidRoot) return { other: candidates, all: candidates };
   const other = candidates.filter(candidate => !artistCreditsOverlap(artistRootKey(candidate), avoidRoot));
   return { other, all: candidates };
+}
+
+// The spacing half of the artist guard, applied before the model reads the
+// list. The guard refuses a pick whose credit names an act in the window and
+// re-picks from the run's other candidates (artist-guard.alternativeCandidates,
+// the same creditInRoots test), so offering only those up front reaches the
+// same outcome without the second model call — seen live at 3 re-picks in 17
+// Shortlist picks. `fresh` is `other` minus the window; empty when the run found
+// no other artist, in which case the guard's own "spacing yields" posture
+// applies and the recent acts stay offered. An untagged track is never dropped.
+export function withRecentSpacing<T extends PickerCandidate>(
+  { other, all }: { other: T[]; all: T[] }, recentRoots?: ReadonlySet<string>,
+): { fresh: T[]; other: T[]; all: T[] } {
+  if (!recentRoots?.size) return { fresh: other, other, all };
+  const fresh = other.filter(candidate => !artistRootKey(candidate) || !creditInRoots(candidate, recentRoots));
+  return { fresh, other, all };
 }
 
 // Apply the cap to the merged set at choice time, leaving Agentic discovery

@@ -527,6 +527,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // Same target the pool's soft re-rank uses: the run's, else the
       // predecessor's own measured tempo and ending key.
       transitionTarget: rankTarget ?? anchorAnalysis,
+      // The guard's spacing window, so the list the model reads already leaves
+      // those acts out when anything fresher was found. A prepared episode is
+      // exempt inside buildShortlist, as it is from the guard.
+      recentArtistRoots: queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
     });
     steps = shortlist.sourceRuns.length;
     toolCalls = shortlist.sourceRuns;
@@ -535,6 +539,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       candidates: shortlist.uniqueCandidates,
       sourceRuns: shortlist.sourceRuns,
       elapsedMs: shortlist.elapsedMs,
+      spacingSkipped: shortlist.spacingSkipped ?? 0,
     });
     if (!shortlist.candidates.length) {
       const failure = classifyPickFailure({

@@ -15,7 +15,7 @@ process.env.STATE_DIR = stateRoot;
 process.env.NAVIDROME_URL = 'http://shortlist-anchor.invalid';
 const { executeShortlistPlan, shortlistAvoidArtist, withoutArtist } = await import('../src/music/shortlist.js');
 const { pickerScope } = await import('../src/llm/tools.js');
-const { artistRootKey } = await import('../src/music/recency.js');
+const { artistRootKey, setKnownActsProvider } = await import('../src/music/recency.js');
 after(() => rmSync(stateRoot, { recursive: true, force: true }));
 
 const pass = { inputSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) } };
@@ -105,4 +105,67 @@ test('a prepared episode keeps its artist; every other pick avoids the anchor', 
     shortlistAvoidArtist({ scope: pickerScope({ episodeSource: { artist: 'Anchor' } as any }), currentArtist: 'Anchor' }),
     null, 'an artist episode is that artist by design, as the guard already exempts it',
   );
+});
+
+// The guard's spacing window, applied before the model reads the list (seen
+// live at 3 re-picks in 17 Shortlist picks): acts just played are left out
+// when anything fresher was found, and offered whole when nothing was.
+test('artists in the spacing window are left out when a fresher one exists', async () => {
+  const seen = new Map<string, any>();
+  const tools = {
+    similar: source(seen, [
+      { id: 'r1', artist: 'Arjan Dhillon' },
+      { id: 'f1', artist: 'Deep Kalsi' },
+      { id: 'r2', artist: 'Jazzy B & Amrinder Gill' },
+      { id: 'u1', artist: '' },
+      { id: 'f2', artist: 'Ne-Yo' },
+    ]),
+  };
+  const recent = new Set([artistRootKey('Arjan Dhillon'), artistRootKey('Amrinder Gill')]);
+  setKnownActsProvider(() => new Set(['Amrinder Gill', 'Jazzy B'].map(a => artistRootKey(a))));
+  const result = await executeShortlistPlan(tools, seen, [
+    { source: 'similar', args: {}, family: 'continuity' },
+  ], { recentArtistRoots: recent, minimumCandidates: 0 }).finally(() => setKnownActsProvider(null));
+  assert.deepEqual(result.candidates.map(c => c.id), ['f1', 'u1', 'f2'],
+    'a tail act in the window counts, as it does for the guard; an untagged track stays');
+  assert.equal(result.spacingSkipped, 2);
+});
+
+test('top-ups are judged on the list left after spacing', async () => {
+  const seen = new Map<string, any>();
+  let toppedUp = false;
+  const tools = {
+    similar: source(seen, [
+      { id: 'r1', artist: 'Recent One' }, { id: 'r2', artist: 'Recent Two' },
+      { id: 'r3', artist: 'Recent Three' }, { id: 'f1', artist: 'Fresh' },
+    ]),
+    randomSongs: {
+      ...pass,
+      execute: async () => {
+        toppedUp = true;
+        for (const id of ['x1', 'x2', 'x3']) seen.set(id, { id, title: id, artist: `Random ${id}` });
+        return [];
+      },
+    },
+  };
+  const recent = new Set(['Recent One', 'Recent Two', 'Recent Three'].map(a => artistRootKey(a)));
+  const result = await executeShortlistPlan(tools, seen, [
+    { source: 'similar', args: {}, family: 'continuity' },
+  ], { recentArtistRoots: recent, minimumCandidates: 4, topUps: [{ source: 'randomSongs', args: {}, family: 'diversity' }] });
+  assert.ok(toppedUp, 'four candidates, but only one outside the window');
+  assert.deepEqual(result.candidates.map(c => c.id), ['f1', 'x1', 'x2', 'x3']);
+});
+
+test('spacing yields: an all-recent list is offered whole, the anchor still left out', async () => {
+  const seen = new Map<string, any>();
+  const tools = {
+    similar: source(seen, [
+      { id: 'a1', artist: 'Anchor' }, { id: 'r1', artist: 'Recent' }, { id: 'r2', artist: 'Recent' },
+    ]),
+  };
+  const result = await executeShortlistPlan(tools, seen, [
+    { source: 'similar', args: {}, family: 'continuity' },
+  ], { avoidArtist: 'Anchor', recentArtistRoots: new Set([artistRootKey('Recent'), artistRootKey('Anchor')]), minimumCandidates: 0 });
+  assert.deepEqual(result.candidates.map(c => c.id), ['r1', 'r2']);
+  assert.equal(result.spacingSkipped, 0);
 });
