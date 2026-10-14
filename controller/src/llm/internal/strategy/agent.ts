@@ -55,6 +55,8 @@ function createAgentAttempt(meter: UsageMeter) {
   } satisfies Pick<ToolLoopAgentSettings<never, ToolSet>, 'onStepEnd' | 'onLanguageModelCallEnd'>;
   return {
     callbacks,
+    // What finished steps produced so far, available even when the run threw.
+    trail: () => ({ steps: [...steps], messages: [...responseMessages] }),
     declined(err: ToolChoiceViolationError): AgentGenerateResult {
       const text = err.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
       const messages: ModelMessage[] = [...responseMessages, { role: 'assistant', content: text }];
@@ -192,6 +194,14 @@ function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label
     withTransientRetry(kind, () => fn(signal), signal));
 }
 
+// The tool-call turns of a run and the tool results answering them, without
+// the model's prose or final answer. Kept only when it holds a tool result.
+export function nativeToolExchange(trail: ModelMessage[]): ModelMessage[] {
+  const out = trail.filter((m) => m.role === 'tool'
+    || (m.role === 'assistant' && Array.isArray(m.content) && m.content.some((part: any) => part?.type === 'tool-call')));
+  return out.some((m) => m.role === 'tool') ? out : [];
+}
+
 async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>): Promise<AgentGenerateResult> {
   try {
     return await runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
@@ -275,12 +285,23 @@ export async function djAgent({
           };
         }
 
+        // The native run's finished steps, read after a miss. Its tool calls fill
+        // the caller's `seen` map, and the same tools dedupe against it, so a
+        // done-tool run started from the bare messages re-searches, finds every
+        // match "already shown this pick", and never sees what the native run
+        // found: a listener asking for a track the library holds was told it
+        // was not there. Carrying the trail keeps those results in view.
+        let nativeTrailOf: (() => { steps: StepLike[]; messages: ModelMessage[] }) | null = null;
+
         // Native-first structured output. A miss falls through to the done-tool
         // path below; lastVia stays ':native' so the record attributes there.
         if (plan === 'native-then-done') {
           try {
             lastVia = 'ai-sdk:agent:native';
+            const nativeAttempt = createAgentAttempt(meter);
+            nativeTrailOf = nativeAttempt.trail;
             const nativeAgent = new ToolLoopAgent({
+              ...nativeAttempt.callbacks,
               // forceNoThink below, so use the no-think model.
               model: leg.noThinkModel ?? leg.model,
               instructions: system,
@@ -304,8 +325,8 @@ export async function djAgent({
               prepareStep: async ({ stepNumber }: { stepNumber: number }) =>
                 (stepNumber === 0 ? { toolChoice: nativeFirstStepToolChoice(leg.cfg) } : {}),
               // A run that ends on its step cap mid-exploration makes `output`
-              // throw after every step was billed; count each call as it ends.
-              onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
+              // throw after every step was billed; nativeAttempt's callbacks
+              // count each call as it ends and keep its trail.
             } as any);
             const nr = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
             const nObj = nr.output;
@@ -367,6 +388,11 @@ export async function djAgent({
         // Ungated runs keep the caller's value.
         const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
 
+        const nativeTrail = nativeTrailOf ? nativeTrailOf() : { steps: [], messages: [] };
+        // Only the discovery exchange: tool-call turns and their results. The
+        // native run's own unusable answer stays out, as before.
+        const nativeToolMessages = nativeToolExchange(nativeTrail.messages);
+        const baseMessages = nativeToolMessages.length ? endOnUserTurn([...messages, ...nativeToolMessages]) : messages;
         const mainAttempt = createAgentAttempt(meter);
         const agent = new ToolLoopAgent({
           ...mainAttempt.callbacks,
@@ -387,7 +413,7 @@ export async function djAgent({
           // On the done-tool path the schema lives on `done`, so no agent output.
           ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
         } as any);
-        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages, mainAttempt);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, baseMessages, mainAttempt);
         let steps = result.steps?.length ?? 0;
 
         // The trail belongs to the MAIN run: `result` is reassigned by the
@@ -395,7 +421,7 @@ export async function djAgent({
         // entirely. Capture here and top up from later attempts. The terminal
         // collapse renders this into its prompt, which is what stops a cornered
         // model from inventing an id.
-        let discoveryTrail = flattenToolCalls(result);
+        let discoveryTrail = [...flattenToolCalls(nativeTrail), ...flattenToolCalls(result)];
         const captureTrail = (r: AgentGenerateResult) => {
           const more = flattenToolCalls(r);
           if (more.length) discoveryTrail = [...discoveryTrail, ...more];
@@ -432,7 +458,7 @@ export async function djAgent({
           // Never end on the model's own turn: a run that stopped with plain
           // text leaves an assistant message last, and current Claude models
           // reject that as prefill (see endOnUserTurn).
-          const recoveryMessages = endOnUserTurn(priorMessages.length ? [...messages, ...priorMessages] : messages);
+          const recoveryMessages = endOnUserTurn(priorMessages.length ? [...baseMessages, ...priorMessages] : baseMessages);
           const recoveryAttempt = createAgentAttempt(meter);
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
