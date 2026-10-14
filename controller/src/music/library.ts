@@ -7,7 +7,7 @@ import * as sceneVocab from './scene-vocab.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
-import { trackKey, type CandidateLike } from './recency.js';
+import { artistRootKey, setKnownActsProvider, trackKey, type CandidateLike } from './recency.js';
 import { isInstrumental } from './lyric-vocal.js';
 
 let loaded = false;
@@ -27,6 +27,7 @@ export async function reload() {
   if (db.isOpen()) db.close();
   loaded = false;
   invalidateAiredIndex();
+  knownActsCache = null;
   await load();
 }
 
@@ -34,6 +35,7 @@ export async function reload() {
 export async function reset() {
   loaded = false;
   invalidateAiredIndex();
+  knownActsCache = null;
   await db.reset();
   await load();
 }
@@ -472,6 +474,31 @@ export function artistPlayStatsFor(artist: string | null | undefined): db.Artist
   if (!artist) return null;
   return artistPlayStats().get(artist.toLowerCase().trim()) ?? null;
 }
+
+// The acts this library knows: the lead (artistRootKey) of every distinct
+// credit. recency.creditedActKeys counts a credit's tail act toward the
+// spacing guards only when it is in here, which is what keeps "&" band names
+// whole. Cached like the play indexes; a failure answers an empty set, which
+// makes the guards lead-only, the behaviour before the index existed.
+const KNOWN_ACTS_TTL_MS = 10 * 60 * 1000;
+let knownActsCache: { at: number; val: Set<string> } | null = null;
+
+export function knownActKeys(): ReadonlySet<string> {
+  if (!loaded) return new Set();
+  if (knownActsCache && Date.now() - knownActsCache.at < KNOWN_ACTS_TTL_MS) return knownActsCache.val;
+  try {
+    const val = new Set<string>();
+    for (const credit of db.distinctArtistCredits()) {
+      const key = artistRootKey(credit);
+      if (key) val.add(key);
+    }
+    knownActsCache = { at: Date.now(), val };
+    return val;
+  } catch {
+    return new Set();
+  }
+}
+setKnownActsProvider(knownActKeys);
 
 export function lastAiredInfo(): AiredIndex {
   if (!loaded) return EMPTY_AIRED_INDEX;

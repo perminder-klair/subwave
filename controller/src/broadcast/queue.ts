@@ -16,7 +16,7 @@ import * as silenceTrim from '../music/silence-trim.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
+import { artistRootKey, creditedActKeys, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import {
@@ -4313,7 +4313,7 @@ class Queue {
   // Both pickers use lead-artist keys from the queue tail, current track, and last
   // n distinct plays. New picks append at the tail, including behind unaired requests.
   neighbourArtistRoots(n = 0): Set<string> {
-    return new Set(this.neighbourArtistCredits(n).map(artist => artistRootKey({ artist })));
+    return new Set(this.neighbourArtistCredits(n).flatMap(artist => creditedActKeys({ artist })));
   }
 
   // The same window as display credits, one per lead-artist key (first seen

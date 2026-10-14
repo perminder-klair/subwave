@@ -3,7 +3,7 @@
 // this module owns which candidates a re-pick may choose from and whether the
 // guard fires at all, so both are testable without a model call.
 
-import { artistCreditsOverlap, artistRootIn, artistRootKey, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
 // Re-exported so the guard's tests read its comparison key from here rather
 // than reaching past into music/recency.
@@ -41,14 +41,18 @@ export type ArtistGuardCause = 'onair' | 'recent' | null;
 // select the stronger compatibility cause, so an empty spacing window still
 // leaves pick-anchor protection intact. An untagged pick is never guarded: no
 // artist is not evidence of a repeat.
+// `pickCredit` is the pick's whole credit, so the spacing test sees every act
+// it names (recency.creditedActKeys), not only its lead; absent, the lead
+// stands for the credit, as before.
 export function artistGuardCause(
   pickRoot: string,
   anchorRoot: string,
   recentRoots: Set<string> = new Set(),
+  pickCredit: string = pickRoot,
 ): ArtistGuardCause {
   if (!pickRoot) return null;
   if (anchorRoot && artistCreditsOverlap(pickRoot, anchorRoot)) return 'onair';
-  return artistRootIn(pickRoot, recentRoots) ? 'recent' : null;
+  return creditInRoots(pickCredit || pickRoot, recentRoots) ? 'recent' : null;
 }
 
 export interface AlternativePool<T> {
@@ -83,7 +87,7 @@ export function alternativeCandidates<T extends CandidateLike>(
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !artistRootIn(root, recentRoots);
+    return !root || !creditInRoots(s, recentRoots);
   });
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
@@ -143,7 +147,7 @@ export async function runArtistGuard<T extends CandidateLike>(
 
   const pickRoot = artistRootKey(song);
   const anchorRoot = artistRootKey(pickAnchor || {});
-  const cause = artistGuardCause(pickRoot, anchorRoot, recentRoots);
+  const cause = artistGuardCause(pickRoot, anchorRoot, recentRoots, song?.artist || pickRoot);
   if (!cause) return { kind: 'none' };
 
   const avoidAnchorRoot = cause === 'onair' ? anchorRoot : '';

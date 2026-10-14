@@ -279,3 +279,12 @@ export function artistIdentities(minTracks: number) {
     GROUP BY artist_id HAVING COUNT(DISTINCT LOWER(COALESCE(title, id)) || '|' || LOWER(artist)) >= ?
   `).all(minTracks));
 }
+
+// Every distinct artist credit in the library, for the spacing guards' act
+// index (library.knownActKeys). Credits only; no row data.
+export function distinctArtistCredits(): string[] {
+  const rows = requireDb().prepare(
+    `SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL AND artist != ''`,
+  ).all() as Array<{ artist: string }>;
+  return rows.map(r => r.artist);
+}
