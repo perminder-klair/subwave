@@ -11,6 +11,7 @@
 //     replaces a cached client instead of being ignored until restart.
 
 import assert from 'node:assert/strict';
+import { chatCompletion } from './test-utils/llm.js';
 import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -42,11 +43,9 @@ async function capture(run: () => Promise<unknown>): Promise<Captured> {
     seen = { url: String(url), auth: headers.get('authorization') || '', headers };
     const body = String(url).includes('/embeddings')
       ? { data: [{ object: 'embedding', index: 0, embedding: [0.1, 0.2] }], model: 'm', usage: { prompt_tokens: 1, total_tokens: 1 } }
-      : {
-          id: 'x', object: 'chat.completion', created: 1, model: 'm',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        };
+      : chatCompletion({ model: 'm',
+        message: { role: 'assistant', content: 'ok' },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
     return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
   try {

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -55,11 +56,9 @@ test('hosted mode uses native objects and skips local request extensions', async
   let request: { headers: Headers; body: Record<string, unknown> } | undefined;
   globalThis.fetch = (async (_url, init) => {
     request = { headers: new Headers(init?.headers), body: JSON.parse(String(init?.body)) };
-    return new Response(JSON.stringify({
-      id: 'x', object: 'chat.completion', created: 1, model: cfg.model,
-      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return chatCompletionResponse({ model: cfg.model,
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   }) as typeof fetch;
   try {
     await generateText({ model: languageModel(cfg), prompt: 'hi', maxRetries: 0 });
@@ -185,11 +184,10 @@ function chatReply(body: Record<string, any>): Response {
   } else {
     message = { role: 'assistant', content: '{"id":"a"}' };
   }
-  return new Response(JSON.stringify({
-    id: 'x', object: 'chat.completion', created: 1, model: body.model,
-    choices: [{ index: 0, message, finish_reason: finish }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ model: body.model,
+    message: message,
+    finishReason: finish,
+    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
 }
 
 // Runs fn with globalThis.fetch capturing every chat-completion body.

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -131,18 +132,15 @@ for (const scenario of ['on-air', 'recent', 'held', 'unanalysed'] as const) {
       } else {
         assert.equal('predecessor' in payload, false, 'no analysis preserves the old payload');
       }
-      return Response.json({
-        id: 'completion', object: 'chat.completion', created: 0, model: 'context-test',
-        choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+      return chatCompletionResponse({ id: 'completion', created: 0, model: 'context-test',
+        message: {
           role: 'assistant', content: null, tool_calls: [{
             id: 'emit', type: 'function', function: {
               name: body.tools[0].function.name,
               arguments: JSON.stringify({ id: alternative.id, reason: 'Smooth next track', transition: null }),
             },
           }],
-        } }],
-        usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-      });
+        } });
     };
     try {
       await runTrackEvent(queue, ctx, {

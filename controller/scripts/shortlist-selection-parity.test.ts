@@ -8,6 +8,7 @@
 // - Listener favourites are one gate for every reader.
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,9 +48,8 @@ before(async () => {
     assert.equal(url.hostname, 'parity-model.invalid', 'unexpected network request');
     modelCalls++;
     const body = JSON.parse(String(init?.body));
-    return Response.json({
-      id: 'parity-completion', object: 'chat.completion', created: 0, model: 'parity-test',
-      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+    return chatCompletionResponse({ id: 'parity-completion', created: 0, model: 'parity-test',
+      message: {
         role: 'assistant', content: null, tool_calls: [{
           id: 'parity-tool', type: 'function', function: {
             name: body.tools[0].function.name,
@@ -60,9 +60,7 @@ before(async () => {
             }),
           },
         }],
-      } }],
-      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-    });
+      } });
   };
 });
 

@@ -9,6 +9,7 @@
 // Run: npm test -- speech-label-boundary
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { after, beforeEach, test, type TestContext } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -287,9 +288,8 @@ test('the banter runner carries its complete captured cast through generation in
     // Change the live cast while the model is in flight. Delivery must keep
     // the prompt's known names and each returned line's original voice.
     await settings.update({ shows: [{ id: SHOW, name: 'Label Show', personaId: IRIS.id }] } as never);
-    return new Response(JSON.stringify({
-      id: 'speech-test', object: 'chat.completion', created: 1, model: 'test',
-      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+    return chatCompletionResponse({ id: 'speech-test', model: 'test',
+      message: {
         role: 'assistant', content: null,
         tool_calls: [{ id: 'emit-test', type: 'function', function: {
           name: request.tools[0].function.name,
@@ -299,9 +299,8 @@ test('the banter runner carries its complete captured cast through generation in
             { speaker: IRIS.id, text: 'Et la suite.' },
           ] }),
         } }],
-      } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-    }), { headers: { 'content-type': 'application/json' } });
+      },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   };
   try {
     await runBanter();

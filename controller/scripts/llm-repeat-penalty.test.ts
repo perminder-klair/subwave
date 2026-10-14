@@ -18,6 +18,7 @@
 // capturing fetch.
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -100,14 +101,9 @@ test('the configured penalty is what lands on the wire', async () => {
   let sent: any = null;
   const capture: any = async (_url: any, init: any) => {
     sent = JSON.parse(init.body);
-    return new Response(
-      JSON.stringify({
-        id: 'x', object: 'chat.completion', created: 1, model: cfg.model,
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    return chatCompletionResponse({ model: cfg.model,
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   };
   const provider = createOpenAI({
     baseURL: cfg.baseUrl,

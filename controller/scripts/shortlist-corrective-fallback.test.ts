@@ -1,6 +1,7 @@
 // Real pick route + real guard subsets; only HTTP is synthetic. Corrective
 // model failure must use that subset, without reopening pool discovery.
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { before, after } from 'node:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,16 +47,14 @@ before(async () => {
     const prompt = body.messages.find((message: any) => message.role === 'user').content;
     offered.push(JSON.parse(prompt.split('\n')[0]).shortlist);
     if (calls > 1 && !invalidAnswer) return Response.json({ error: { message: 'synthetic corrective failure' } }, { status: 400 });
-    return Response.json({
-      id: 'correction-completion', object: 'chat.completion', created: 0, model: 'correction-test',
-      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+    return chatCompletionResponse({ id: 'correction-completion', created: 0, model: 'correction-test',
+      message: {
         role: 'assistant', content: null, tool_calls: [{ id: 'correction-tool', type: 'function', function: {
           name: body.tools[0].function.name,
           arguments: JSON.stringify({ id: invalidAnswer ? 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' : songs[0].id,
             musicalReason: 'its patient bass line carries the groove into a warmer room', transition: null }),
         } }],
-      } }], usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-    });
+      } });
   };
 });
 after(() => { globalThis.fetch = realFetch; library.shutdown(); rmSync(root, { recursive: true, force: true }); });

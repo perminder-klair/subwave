@@ -21,6 +21,7 @@
 // No credentials and no external host.
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -59,14 +60,9 @@ async function headersOnTheWire(cfg: Record<string, unknown>): Promise<Record<st
       ? [...raw.entries()]
       : Object.entries((raw ?? {}) as Record<string, string>);
     for (const [k, v] of entries) if (v != null) seen[String(k).toLowerCase()] = String(v);
-    return new Response(
-      JSON.stringify({
-        id: 'x', object: 'chat.completion', created: 1, model: String(cfg.model),
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    return chatCompletionResponse({ model: String(cfg.model),
+      message: { role: 'assistant', content: 'ok' },
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
   }) as typeof fetch;
   try {
     await generateText({ model: languageModel(cfg), prompt: 'hi', maxRetries: 0 });

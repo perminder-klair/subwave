@@ -13,6 +13,7 @@
 // a control model from the previous generation, which proves the capture sees
 // the forced shape when we do ask for it.
 import assert from 'node:assert/strict';
+import { chatCompletion } from './test-utils/llm.js';
 import test from 'node:test';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -55,14 +56,9 @@ async function compatibleCall(model: string): Promise<any> {
     apiKey: 'test',
     fetch: openAICompatibleFetch(cfg, async (_url: any, init: any) => {
       sent = JSON.parse(init.body);
-      return json({
-        id: 'c1', object: 'chat.completion', created: 0, model,
-        choices: [{
-          index: 0, finish_reason: 'tool_calls',
-          message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'emit', arguments: JSON.stringify(ANSWER) } }] },
-        }],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      });
+      return json(chatCompletion({ id: 'c1', created: 0, model,
+        message: { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'emit', arguments: JSON.stringify(ANSWER) } }] },
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
     }, true),
   });
   const out = await objectViaToolCall({ cfg, model: provider.chat(model) }, { prompt: 'pick', schema, temperature: 0.5, maxOutputTokens: 500 });
