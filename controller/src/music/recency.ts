@@ -255,6 +255,35 @@ export function creditedActKeys(song: CandidateLike | string): string[] {
   return out;
 }
 
+// The same acts as display names, for prompts: the Agentic pick event lists
+// them so the model can step around what the guard will refuse. A whole
+// credit there read as one act ("Amantej Hundal & Karan Aujla"), and the
+// model proposed Karan Aujla twice more for the guard to catch. The lead group
+// stays whole, commas and all (the guard's lead key covers each comma-joined
+// name by delimiter); a tail act is named only when the library knows it,
+// exactly as creditedActKeys counts it. With no act index: the whole credit.
+const ACT_JOIN_NAMED = /\s+(?:&|\+|and|x)\s+(?!the\b)/i;
+
+export function creditedActNames(song: CandidateLike | string): string[] {
+  const raw = String(typeof song === 'string' ? song : (song?.artist || '')).replace(/\s+/g, ' ').trim();
+  if (!artistRootKey(raw)) return [];
+  const known = knownActs?.();
+  if (!known?.size) return [raw];
+  const out = new Map<string, string>();
+  raw.split(FEATURE_SPLIT).forEach((segment, si) => {
+    segment.split(ACT_JOIN_NAMED).forEach((part, pi) => {
+      const lead = si === 0 && pi === 0;
+      const pieces = lead ? [part] : part.split(/\s*,\s*/);
+      for (const piece of pieces) {
+        const name = dropOrphanCloser(piece).trim();
+        const key = artistRootKey(name);
+        if (key && !out.has(key) && (lead || known.has(key))) out.set(key, name);
+      }
+    });
+  });
+  return out.size ? [...out.values()] : [raw];
+}
+
 // Does any act this credit names fall in a spacing window? The window side is
 // built from creditedActKeys too (queue.neighbourArtistRoots), so a shared
 // tail act meets from either direction.

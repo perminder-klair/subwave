@@ -5,12 +5,12 @@
 // knows it as an act of its own, which keeps "&" band names whole.
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { artistRootKey, creditedActKeys, creditInRoots, setKnownActsProvider } from '../src/music/recency.js';
+import { artistRootKey, creditedActKeys, creditedActNames, creditInRoots, setKnownActsProvider } from '../src/music/recency.js';
 import { alternativeCandidates, artistGuardCause } from '../src/broadcast/dj-agent/artist-guard.js';
 import { queue } from '../src/broadcast/queue.js';
 
 // The library's act index: the lead of every credit it holds.
-const LIBRARY = ['Karan Aujla', 'Karan Aujla & Jay Trak', 'Daljit Chahal & Karan Aujla', 'B Mohit & Karan Aujla',
+const LIBRARY = ['Karan Aujla', 'Amantej Hundal & Karan Aujla', 'AP Dhillon', 'Karan Aujla & Jay Trak', 'Daljit Chahal & Karan Aujla', 'B Mohit & Karan Aujla',
   'Sly & the Family Stone', 'Earth, Wind & Fire', 'Hall & Oates', 'Shubh', 'Jazzy B'];
 const known = new Set(LIBRARY.map(c => artistRootKey(c)));
 const useLibrary = () => setKnownActsProvider(() => known);
@@ -54,4 +54,34 @@ test('a guard re-pick steps around a tail-act repeat too', () => {
   const { alt, dropped } = alternativeCandidates(seen, 'jazzy b', new Set(['karan aujla']));
   assert.deepEqual([...alt.keys()], ['b']);
   assert.equal(dropped, 1);
+});
+
+// The Agentic pick event names these, so the model steps around an act the
+// guard will refuse instead of proposing it for a re-pick (seen live: Karan
+// Aujla proposed twice more after "Amantej Hundal & Karan Aujla" aired).
+test('the pick event names each act the guard counts, in display form', () => {
+  useLibrary();
+  assert.deepEqual(creditedActNames('Amantej Hundal & Karan Aujla'), ['Amantej Hundal', 'Karan Aujla']);
+  assert.deepEqual(creditedActNames('Intense (feat. Karan Aujla)'), ['Intense', 'Karan Aujla']);
+  assert.deepEqual(creditedActNames('AP Dhillon, Shinda Kahlon & Gminxr'), ['AP Dhillon, Shinda Kahlon'],
+    'the lead group stays whole; an unknown tail act is not named');
+  assert.deepEqual(creditedActNames('Sly & the Family Stone'), ['Sly & the Family Stone']);
+  assert.deepEqual(creditedActNames('Hall & Oates'), ['Hall']);
+  setKnownActsProvider(null);
+  assert.deepEqual(creditedActNames('Amantej Hundal & Karan Aujla'), ['Amantej Hundal & Karan Aujla'],
+    'no act index: the whole credit, as before');
+});
+
+test('the named window agrees with the guard window and dedupes across credits', () => {
+  useLibrary();
+  (queue as any).upcoming = [];
+  (queue as any).current = { track: { id: 'CUR', title: 'Few Days', artist: 'Amantej Hundal & Karan Aujla' } };
+  (queue as any)._recentPlays = [
+    { id: 'P1', title: 'Wavy', artist: 'Karan Aujla & Jay Trak', endedAt: '2026-10-14T13:40:00.000Z' },
+    { id: 'P2', title: 'Old Town', artist: 'Shubh', endedAt: '2026-10-14T13:37:00.000Z' },
+  ];
+  const named = queue.neighbourArtistActs(5);
+  assert.deepEqual(named, ['Amantej Hundal', 'Karan Aujla', 'Shubh'], 'Karan Aujla once; Jay Trak leads nothing');
+  const window = queue.neighbourArtistRoots(5);
+  for (const name of named) assert.ok(window.has(artistRootKey(name)), `${name} is in the guard window`);
 });

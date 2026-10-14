@@ -16,7 +16,7 @@ import * as silenceTrim from '../music/silence-trim.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, creditedActKeys, trackKey, type CandidateLike } from '../music/recency.js';
+import { artistRootKey, creditedActKeys, creditedActNames, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import {
@@ -4342,6 +4342,19 @@ class Queue {
       if (p.id) seenIds.add(p.id);
       if (k) seenKeys.add(k);
       add(p.artist);
+    }
+    return [...out.values()];
+  }
+
+  // The window as act names for the Agentic pick event: every act the guard
+  // will refuse, deduped across credits (recency.creditedActNames).
+  neighbourArtistActs(n = 0): string[] {
+    const out = new Map<string, string>();
+    for (const credit of this.neighbourArtistCredits(n)) {
+      for (const name of creditedActNames(credit)) {
+        const key = artistRootKey(name);
+        if (key && !out.has(key)) out.set(key, name);
+      }
     }
     return [...out.values()];
   }

@@ -582,7 +582,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // episode owns its artists).
     const messages = session.pickWindowMessages();
     const avoidClause = episodeSource ? '' : recentArtistsClause(
-      queue.neighbourArtistCredits(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
+      queue.neighbourArtistActs(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
     );
     const ask = messages[messages.length - 1];
     if (avoidClause && ask?.role === 'user') ask.content += avoidClause;
