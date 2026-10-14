@@ -69,6 +69,7 @@ export interface SkillFileResponse {
   window?: 'any' | 'commute';
   requiresKey?: string;
   hasTool?: boolean;
+  voice?: { engine: string; voice: string; cloudProvider: string } | null;
   // A tool.mjs that arrived by import/restore and has not been trusted yet.
   toolPending?: boolean;
   tags?: string[];
