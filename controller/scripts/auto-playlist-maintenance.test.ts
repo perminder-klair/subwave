@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { readFileSync } from 'node:fs';
 import cron from 'node-cron';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from '../src/broadcast/auto-playlist-maintenance.js';
@@ -37,12 +38,6 @@ test('every interval 2..60 preserves legacy cadence across hours without :00 or 
 });
 
 
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<void>((res, rej) => { resolve = res; reject = rej; });
-  return { promise, resolve, reject };
-}
 
 test('idle periodic work starts, repeated busy slots skip without catch-up', async () => {
   const build = deferred();

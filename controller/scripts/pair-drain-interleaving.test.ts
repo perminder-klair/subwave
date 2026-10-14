@@ -11,6 +11,7 @@
 // Run: npm test -- pair-drain-interleaving
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,11 +34,6 @@ after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => { resolve = done; });
-  return { promise, resolve };
-}
 
 let observed: {
   queueOrder: string[];

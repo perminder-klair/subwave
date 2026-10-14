@@ -3,6 +3,7 @@
 // result, while guest and co-host speech keep their independent ownership.
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -50,11 +51,6 @@ function ctx() {
   } as any;
 }
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 const realDirectorRun = directorAgent.run;
 const realForcedRun = forcedDirectorAgent.run;

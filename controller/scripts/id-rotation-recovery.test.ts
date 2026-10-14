@@ -4,6 +4,7 @@
 
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
@@ -112,11 +113,6 @@ function seed(state: string) {
   writeFileSync(join(state, 'playlist-recipes.json'), JSON.stringify({ version: 1, recipes: [{ playlistId: OLD_PL, name: 'Playlist', recipe: { seedTrackIds: [OLD], knobs: {}, sources: {} }, perSyncCap: 25, createdAt: new Date().toISOString(), lastSyncedAt: null, lastResult: null }] }));
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>(r => { resolve = r; });
-  return { promise, resolve };
-}
 
 async function orderedSaveScenario(mode: string, store: string) {
   const state = process.env.STATE_DIR!;

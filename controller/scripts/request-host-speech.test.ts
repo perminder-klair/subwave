@@ -3,6 +3,7 @@
 // never the listener provenance or requested music.
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -35,11 +36,6 @@ function ctx() {
     weather: null, festival: null, dominantMood: 'calm',
     activeShow: { id: SHOW, name: 'Request Show', topic: 'tests' },
   } as any;
-}
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
 }
 
 const realRequestRun = requestAgent.run;

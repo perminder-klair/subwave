@@ -3,6 +3,7 @@
 // audio remain untouched.
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
 import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -297,11 +298,6 @@ test('a stale uncommitted deferred host clip is settled false, while a committed
 });
 
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 function bedItem() {
   const queued = item();
