@@ -241,6 +241,12 @@ export async function logCompatDetection(): Promise<void> {
 // settings.update(): backup restore hands update() a whole settings.json, and
 // a key from a newer version must cost one setting, not the whole restore.
 router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) => {
+  // A steer starts and ends through /steer, which serialises the write, works
+  // out its opening tracks, clears a takeover and refuses a window that has
+  // already run out. Through here it would do none of that.
+  if (req.body && typeof req.body === 'object' && 'steer' in req.body) {
+    return res.status(400).json({ error: 'start or clear a steer with POST or DELETE /steer' });
+  }
   try {
     const result = await settings.update(req.body || {});
     // context.ts reads the live settings cache, so the update already applies;

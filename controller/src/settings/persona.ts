@@ -18,6 +18,8 @@ import {
   personaToneDirectives,
   takeoverShowId,
 } from './vocab.js';
+import { steerActiveAt, type Steer } from '../schemas/steer.js';
+import { steeredShow } from '../music/steer.js';
 import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 import { get, peek } from './store.js';
 
@@ -220,6 +222,20 @@ export function getScheduleOverride(now = Date.now()) {
   const pinnedId = takeoverShowId(ov);
   if (!pinnedId || !s.shows?.some(x => x.id === pinnedId)) return null;
   return ov;
+}
+
+// The steer in force at `now`, or null. Look-ahead callers pass the instant
+// their pick will air, as they do for the takeover above.
+export function activeSteer(now = Date.now(), s = get()): Steer | null {
+  return steerActiveAt(s?.steer as Steer | null | undefined, now);
+}
+
+// The show as a PICK path reads it: the active show with a live steer's music
+// overlay. Both halves are judged at the same instant, the pick's look-ahead,
+// so a steer ending at a show boundary cannot colour the next show's first
+// track. Everything that asks which show is on air keeps resolveActiveShow.
+export function resolvePickShow(date = new Date(), s = get()) {
+  return steeredShow(resolveActiveShow(date, s), activeSteer(date.getTime(), s));
 }
 
 // A stored show, resolved to the consumer-facing shape (persona/guests
