@@ -75,6 +75,8 @@ export interface BoardProps {
   folded: Record<number, boolean>;
   onToggleFold: (day: number) => void;
   todayKey: number;
+  /** The station's clock as minutes since midnight (1265 = 21:05), for the now line. */
+  nowMinute: number;
   colorOf: (id: string | null | undefined) => string;
   hoursOf: (id: string) => number;
   onPick: (b: Block) => void;
@@ -96,7 +98,7 @@ export interface BoardProps {
 }
 
 export default function Board({
-  schedule, shows, folded, onToggleFold, todayKey,
+  schedule, shows, folded, onToggleFold, todayKey, nowMinute,
   colorOf, hoursOf, onPick, onRemove, onResize, onDropShow, onDragRun,
   armedShowId, onArmShow, onFillDay, onFillHour,
   density, hourPx, onDensity,
@@ -389,6 +391,7 @@ export default function Board({
                 label={d.label}
                 name={d.name}
                 today={d.key === todayKey}
+                nowMinute={nowMinute}
                 blocks={dayBlocks(preview && d.key === dragDay ? preview.week : schedule, d.key)}
                 colorOf={colorOf}
                 shows={shows}
@@ -427,7 +430,7 @@ export default function Board({
 }
 
 function DayColumn({
-  label, name, today, blocks, colorOf, shows, density, hourPx, armedShowId, armedName,
+  label, name, today, nowMinute, blocks, colorOf, shows, density, hourPx, armedShowId, armedName,
   onToggleFold, onFillDay, onPick, onRemove, onResize, onDropShow,
   dragRun, dragStart, domOrder,
   runPlacements,
@@ -436,6 +439,7 @@ function DayColumn({
   label: string;
   name: string;
   today: boolean;
+  nowMinute: number;
   blocks: Block[];
   colorOf: (id: string | null | undefined) => string;
   shows: ScheduleShow[];
@@ -506,6 +510,7 @@ function DayColumn({
           ref={hoursRef}
           className="relative"
         >
+          <NowLine minute={nowMinute} today={today} />
           {ordered.map(({ block: b, key }) =>
             b.showId ? (
               <BoardCard
@@ -880,5 +885,30 @@ function DropSlot({
         </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// The station's current time across the board: solid with a time tag in today's
+// column, dashed in the others. Show colours span every hue, so the line is white
+// with a dark halo to read on any card.
+function NowLine({ minute, today }: { minute: number; today: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useDynamicStyle(ref, { top: `calc(var(--hour-px) * ${minute} / 60)` });
+  return (
+    <div
+      ref={ref}
+      aria-hidden="true"
+      className={cn(
+        // above the cards, below the sticky hour rail (z-10) and the page header
+        'pointer-events-none absolute inset-x-[-5px] z-[5] [filter:drop-shadow(0_0_1px_rgb(0_0_0/0.9))_drop-shadow(0_1px_3px_rgb(0_0_0/0.5))]',
+        today ? 'h-[3px] bg-white' : 'border-t-2 border-dashed border-white/60',
+      )}
+    >
+      {today && (
+        <span className="absolute top-1/2 right-0 -translate-y-1/2 bg-vermilion px-2 py-1 font-mono text-[13px] leading-none font-bold tracking-[0.04em] text-white">
+          {hh(Math.floor(minute / 60))}:{hh(minute % 60)}
+        </span>
+      )}
+    </div>
   );
 }
