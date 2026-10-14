@@ -16,6 +16,8 @@
 // Run: npm test -- handoff-armed-on-air
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
@@ -42,11 +44,7 @@ const DRIVE = { id: 's_drive', name: 'Friday Drive' };
 const CAVE = { id: 's_cave', name: 'The Minoan Cave' };
 const RUTTI = { id: 'rutti', title: 'Rutti', artist: 'Slowdive' };
 
-function blankSchedule() {
-  const week: Record<number, null[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(null);
-  return week;
-}
+function blankSchedule() { return emptyScheduleWeek(); }
 
 function context(show: { id: string; name: string }, atMs: number, period = 'night', mood = 'calm'): SessionContext {
   return {
@@ -71,8 +69,7 @@ async function armed({
   } as never);
   const now = Date.now();
   session.start(context(outgoing, now, period, mood));
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(incoming.id);
+  const week: Record<number, string[]> = fullScheduleWeek(incoming.id);
   await settings.update({
     activePersonaId: persona.id,
     shows: [{ ...incoming, topic: incoming === DRIVE ? 'drive' : 'caves', personaId: persona.id }],
@@ -171,8 +168,7 @@ test('a record aired on the live show gives way to the next boundary', async () 
   // The Cave's own boundary into the next host's show.
   const ANYA = { ...TOM, id: 'p_anya', name: 'Anya' };
   const DAWN = { id: 's_dawn', name: 'Dawn Patrol' };
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(DAWN.id);
+  const week: Record<number, string[]> = fullScheduleWeek(DAWN.id);
   await settings.update({
     personas: [TOM, PROF, ANYA], activePersonaId: ANYA.id,
     shows: [{ ...CAVE, topic: 'caves', personaId: PROF.id }, { ...DAWN, topic: '', personaId: ANYA.id }],

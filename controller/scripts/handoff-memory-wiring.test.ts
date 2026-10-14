@@ -18,6 +18,8 @@
 // Run: npm test -- handoff-memory-wiring
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
 import { test, type TestContext } from 'node:test';
 import { writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
@@ -73,8 +75,7 @@ function restorePromptSettingsAfter(t: TestContext) {
 // Recovery now verifies show continuity against the station grid. These
 // handoff fixtures must schedule the incoming show they put in the context.
 async function scheduleIncoming() {
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
   await settings.update({
     shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', programme: true, personaId: GIGI.id }],
     schedule: week,
@@ -261,8 +262,7 @@ test('a final-track handoff uses the incoming identity captured at arm time', as
   // still Wren, while the next show belongs to Gigi.
   const priorShows = settings.get().shows;
   const priorSchedule = settings.get().schedule;
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
   await settings.update({
     activePersonaId: GIGI.id,
     shows: [{
@@ -673,8 +673,7 @@ test('a handoff pair settles only after its final live-edge marker', async () =>
 
 test('same-show recovery repairs the host without disturbing armed, queued, or aired boundary handoffs', async () => {
   for (const state of ['armed', 'queued', 'aired'] as const) {
-    const emptyWeek: Record<number, (string | null)[]> = {};
-    for (let day = 0; day < 7; day++) emptyWeek[day] = Array(24).fill(null);
+    const emptyWeek: Record<number, (string | null)[]> = emptyScheduleWeek();
     await settings.update({
       personas: [WREN, GIGI], activePersonaId: WREN.id,
       shows: [], schedule: emptyWeek, scheduleOverride: null,
@@ -695,8 +694,7 @@ test('same-show recovery repairs the host without disturbing armed, queued, or a
     const before = { id: stale.id, key: stale.key, startedAt: stale.startedAt, messages: stale.messages.length };
     await new Promise(resolve => setTimeout(resolve, 1_100));
 
-    const week: Record<number, string[]> = {};
-    for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_same_show');
+    const week: Record<number, string[]> = fullScheduleWeek('s_same_show');
     await settings.update({
       activePersonaId: WREN.id,
       shows: [{ id: 's_same_show', name: 'Same Show', topic: 'tests', personaId: GIGI.id }],

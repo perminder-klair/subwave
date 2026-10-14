@@ -9,6 +9,7 @@
 // Run: npm test -- speech-label-boundary
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import { after, beforeEach, test, type TestContext } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -36,11 +37,7 @@ const LUCIFER = { ...template, id: 'p_lucifer', name: 'Lucifer' };
 const SOLENE = { ...template, id: 'p_solene', name: 'Solène' };
 const SHOW = 's_label';
 
-function week() {
-  const out: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) out[day] = Array(24).fill(SHOW);
-  return out;
-}
+function week() { return fullScheduleWeek(SHOW); }
 
 function ctx() {
   return {

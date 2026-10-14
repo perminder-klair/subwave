@@ -3,6 +3,7 @@
 // result, while guest and co-host speech keep their independent ownership.
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,11 +35,7 @@ const B = { ...template, id: 'p_b', name: 'Host B', skills: ['host-race'], frequ
 const G = { ...template, id: 'p_guest', name: 'Guest', skills: ['host-race'], frequency: 'aggressive' };
 const SHOW = 's_skill';
 
-function week() {
-  const out: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) out[day] = Array(24).fill(SHOW);
-  return out;
-}
+function week() { return fullScheduleWeek(SHOW); }
 
 function show(personaId: string, guests = [G.id]) {
   return { id: SHOW, name: 'Skill Show', topic: 'tests', personaId, guestPersonaIds: guests };

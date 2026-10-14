@@ -5,6 +5,8 @@
 // Run: npm test -- handoff-pending-recovery
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
 import { after, test } from 'node:test';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
@@ -31,11 +33,7 @@ const template = settings.get().personas[0];
 const WREN = { ...template, id: 'p_wren', name: 'Wren' };
 const GIGI = { ...template, id: 'p_gigi', name: 'Gigi' };
 
-function blankSchedule() {
-  const week: Record<number, null[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(null);
-  return week;
-}
+function blankSchedule() { return emptyScheduleWeek(); }
 
 function context(show: { id: string; name: string }, atMs: number): SessionContext {
   return {
@@ -58,8 +56,7 @@ async function armScheduledIncoming(finalTrack?: Parameters<typeof session.armBo
   } as never);
   const now = Date.now();
   session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
   await settings.update({
     activePersonaId: GIGI.id,
     shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id }],
