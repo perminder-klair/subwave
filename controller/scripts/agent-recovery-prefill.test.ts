@@ -59,7 +59,7 @@ function prefillRefusingModel(bodies: Record<string, any>[]) {
   }) as typeof fetch;
 }
 
-test('a recovery after a prose-only first run ends on a user turn and succeeds', async () => {
+test('a recovery after a prose-only first run ends on a user turn and succeeds', async (t) => {
   writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: {
     provider: 'openai-compatible', model: 'claude-sonnet-5-5', baseUrl: 'http://proxy.invalid/v1',
     compatibleMode: 'local', fallback: { enabled: false },
@@ -68,8 +68,7 @@ test('a recovery after a prose-only first run ends on a user turn and succeeds',
   await settings.load();
 
   const bodies: Record<string, any>[] = [];
-  const real = globalThis.fetch;
-  globalThis.fetch = prefillRefusingModel(bodies);
+  const fetchMock = t.mock.method(globalThis, 'fetch', prefillRefusingModel(bodies));
   try {
     const out = await djAgent({
       system: 'You are a DJ.',
@@ -79,7 +78,7 @@ test('a recovery after a prose-only first run ends on a user turn and succeeds',
     } as never);
     assert.deepEqual((out as any).object, { line: 'ok' }, 'the recovery produced the answer');
   } finally {
-    globalThis.fetch = real;
+    fetchMock.mock.restore();
   }
 
   const recovery = bodies.filter(b => b.messages.some((m: any) => m.role === 'assistant'));

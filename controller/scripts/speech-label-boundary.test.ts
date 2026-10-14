@@ -268,16 +268,15 @@ for (const placement of ['immediate', 'next-track'] as const) {
   });
 }
 
-test('the banter runner carries its complete captured cast through generation into delivery', async () => {
+test('the banter runner carries its complete captured cast through generation into delivery', async (t) => {
   const { runBanter } = await import('../src/broadcast/scheduler.js');
   await settings.update({
     personas: [IRIS, LUCIFER, SOLENE],
     shows: [{ id: SHOW, name: 'Label Show', topic: 'tests', personaId: IRIS.id, guestPersonaIds: [LUCIFER.id, SOLENE.id] }],
     llm: { provider: 'openai-compatible', baseUrl: 'http://review.invalid/v1', model: 'test', fallback: { enabled: false } },
   } as never);
-  const realFetch = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async (url, init) => {
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url, init) => {
     if (!String(url).endsWith('/chat/completions')) throw new Error('external network disabled in speech regression');
     calls += 1;
     const request = JSON.parse(String(init?.body));
@@ -298,13 +297,13 @@ test('the banter runner carries its complete captured cast through generation in
         } }],
       },
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
-  };
+  });
   try {
     await runBanter();
     assert.equal(calls, 1);
     assert.deepEqual(spoken, ['Bonsoir.', 'Oui.', 'Et la suite.']);
     assert.deepEqual(speakers, [IRIS.id, LUCIFER.id, IRIS.id]);
   } finally {
-    globalThis.fetch = realFetch;
+    fetchMock.mock.restore();
   }
 });
