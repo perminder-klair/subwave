@@ -1,4 +1,4 @@
-// Drift guard for the Connect catalog. Run: `npm run test:connect`
+// Drift guard for the Connect catalog. Run: `npm test -- connect-catalog`
 // (also picked up by `npm test`, which auto-discovers scripts/*.test.ts).
 //
 // The catalog (src/connect/catalog.ts) is hand-curated, so a renamed or removed
