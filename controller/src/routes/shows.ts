@@ -273,7 +273,7 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
     }[resolved.source]
     : '';
   try {
-    // A takeover and a steer do not run together (starting one clears the other), and
+    // A takeover and a steer do not run together (see routes/steer.ts), and
     // this waits its turn behind a steer that is still starting.
     await serialSteer(async () => {
       const steer = settings.activeSteer();

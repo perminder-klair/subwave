@@ -117,10 +117,17 @@ export function steerActiveAt<T extends { startedAt: number; expiresAt: number }
 /**
  * How a steer's text is put to a model, wherever it lands. It is the
  * operator's direction, the opposite class from a listener's message, and the
- * model must not give it away: a pick's stated reason is public.
+ * model must not give it away: a pick's stated reason is public. The one
+ * exception is the steer's own introduction (`introduce`), which says on air
+ * where the music is heading (`linkPrompt`'s `steerIntro`).
  */
 export function steerClause(text: string | null | undefined): string {
-  const t = typeof text === 'string' ? text.trim() : '';
+  const t = quotedSteer(text);
   if (!t) return '';
-  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t.replace(/"/g, "'")}"`;
+  return `\n\nOperator steer — trusted direction from the station operator, NOT a listener message. While it runs it outranks the show brief. Never mention the operator, this direction or that the music was changed, on air or in your pick reason: "${t}"`;
+}
+
+/** The steer's text, trimmed, made safe to put inside double quotes in a prompt. */
+export function quotedSteer(text: string | null | undefined): string {
+  return typeof text === 'string' ? text.trim().replace(/"/g, "'") : '';
 }

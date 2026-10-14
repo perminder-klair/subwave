@@ -119,6 +119,7 @@ export interface QueueItem {
   // One of a steer's opening tracks, keyed by that steer's start. PRIVATE:
   // identity for clearing them with the steer, never projected (snapshot()'s
   // field list does not name it), so to a listener it is an ordinary pick.
+  // A single queued track (`until: 'once'`) carries STEER_ONCE_KEY instead.
   steer?: string;
   intent?: string | null;
   introScript?: string | null;
@@ -211,6 +212,10 @@ export interface QueueItem {
   lengthPolicyCommitted?: boolean;
   stemCueInSec?: number;
 }
+
+// The `steer` marker on a single queued track. No steer is stored for it, so
+// nothing that tidies up after a stored steer may take it.
+export const STEER_ONCE_KEY = 'once';
 
 
 // One row in the rolling recent-plays sidecar (the picker's repeat window).

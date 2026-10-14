@@ -114,6 +114,7 @@ import type {
   RecentPlay,
   Track,
 } from './queue/types.js';
+import { STEER_ONCE_KEY } from './queue/types.js';
 import {
   BACKFILL_DEDUP_MAX_GAP_MS,
   EMPTY_DJ_QUEUE_CLEAR_THRESHOLD,
@@ -405,6 +406,10 @@ const PENDING_JINGLE_TTL_MS = 30 * 60 * 1000;
 const HANDOFF_BOUNDARY_WAIT_MS = 2 * 60_000;
 
 const STEM_BLEND_EXIT_KEYS = ['washout', 'washoutAuto', 'washoutDelay', 'loop', 'loopBar', 'crossSec'] as const;
+
+// What "start now" on a steer clears: the DJ's own queued picks. Listener
+// requests, operator queueing and a steer's own tracks stay.
+const startNowDrops = (i: QueueItem) => !!i.aiPicked && !i.requestedBy && !i.steer;
 
 // transitions far more often — a working DJ talks across most of them.
 class Queue {
@@ -4594,6 +4599,34 @@ class Queue {
     return { ok: true };
   }
 
+  // Drop the picks the DJ has queued so a change the operator just made applies
+  // now, not after them ("start now" on a steer). Listener requests and operator
+  // queueing stay. A pick Liquidsoap has already taken plays out, as with a
+  // block cancel, and a pick still running lands after this returns: the caller
+  // is told so. Then the usual re-pick gate, since the queue may now be empty.
+  async dropQueuedPicks(reason = 'operator'): Promise<{ dropped: number; kept: number; pickInFlight: boolean }> {
+    let dropped = 0;
+    let kept = 0;
+    for (const item of this.upcoming.filter(startNowDrops)) {
+      const result = await this.removeUpcomingItem(item, reason);
+      if (result.ok) dropped++;
+      else kept++;
+    }
+    const pickInFlight = this.pickerBusy;
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
+      this.runPickCycle({ isAutonomous: true });
+    }
+    return { dropped, kept, pickInFlight };
+  }
+
+  // The track a steer's first opening track will follow: the queued tail, less
+  // what "start now" is about to drop, else the track on air. A pick the mixer
+  // has already taken cannot be dropped and plays first.
+  tailTrack(startNow: boolean) {
+    const kept = startNow ? this.upcoming.filter(i => i.sent || !startNowDrops(i)) : this.upcoming;
+    return kept.at(-1)?.track ?? this.current?.track ?? null;
+  }
+
   // A steer's opening tracks that have not aired, for the dashboard.
   steerQueued(key: string): QueueItem[] {
     return this.upcoming.filter(i => i.steer === key);
@@ -4603,7 +4636,7 @@ class Queue {
   // out across a restart, or one replaced while its tracks were being queued.
   async removeOrphanSteerQueued(activeKey: string | null): Promise<number> {
     let removed = 0;
-    for (const item of this.upcoming.filter(i => i.steer && i.steer !== activeKey)) {
+    for (const item of this.upcoming.filter(i => i.steer && i.steer !== STEER_ONCE_KEY && i.steer !== activeKey)) {
       if ((await this.removeUpcomingItem(item, 'steer ended —')).ok) removed++;
     }
     return removed;

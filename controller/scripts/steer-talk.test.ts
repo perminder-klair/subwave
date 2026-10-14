@@ -42,6 +42,22 @@ test('a skill that narrows its context fields still gets the steer', async () =>
   assert.ok(!lines.some(l => l.startsWith('Day:')), 'the gate still applies to gated fields');
 });
 
+test('the steer intro names the heading in its first sentence and drops the generic clause', async () => {
+  await steer('stored direction');
+  const current = { title: 'Track A', artist: 'Artist A' };
+  const run = [{ title: 'Track B', artist: 'Artist B' }];
+  const both = linkPrompt({ current, context: base, steerIntro: { direction: 'say "hi" a lot', run } });
+  assert.match(both, /- Track B by Artist B\nThis link opens a new stretch of music\. In its first sentence[^]*"say 'hi' a lot"\. Name at least one of the coming artists\./);
+  assert.doesNotMatch(both, /stored direction|Never mention the operator, this direction/);
+  // A playlist steer has no words: name what is coming, never guess its sound.
+  const playlistOnly = linkPrompt({ current, context: base, steerIntro: { direction: undefined, run } });
+  assert.match(playlistOnly, /In its first sentence, name one or two of the coming artists\./);
+  assert.doesNotMatch(playlistOnly, /where the music is heading|trusted direction/);
+  // Nothing to say about the steer: a plain link, still without the clause.
+  const empty = linkPrompt({ current, context: base, steerIntro: { direction: '', run: [] } });
+  assert.doesNotMatch(empty, /new stretch of music|Operator steer/);
+});
+
 // GET /now-playing spreads this object to every listener.
 test('the context object itself never carries the steer', async () => {
   const now = Date.now();
