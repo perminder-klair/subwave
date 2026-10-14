@@ -8,7 +8,7 @@
 //   the key keeps `local`, so an upgrade is driven exactly as before.
 // - An explicit operator choice is never rewritten.
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
@@ -121,11 +121,7 @@ test('resolveCompatibleMode rewrites only auto on openai-compatible, and only fr
   assert.equal(discoveryStepsFor(resolved), 3);
 });
 
-async function coldLoad(stored: Record<string, unknown>) {
-  writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify(stored));
-  setCache(null);
-  await settings.load();
-}
+async function coldLoad(stored: Record<string, unknown>) { await coldLoadSettings(stored); }
 
 test('auto is the default for a new station only; a stored block keeps local', async () => {
   await coldLoad({});

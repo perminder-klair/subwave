@@ -21,7 +21,7 @@
 // break in the plumbing is invisible to every assertion below.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -30,18 +30,12 @@ import test from 'node:test';
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-silence-trim-'));
 process.env.STATE_DIR = stateRoot;
 
-const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { resolveSilenceTrim, shiftOnsetMs } = await import('../src/music/silence-trim.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(silenceTrim: Record<string, unknown> | undefined) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify(silenceTrim === undefined ? {} : { silenceTrim }));
-  setCache(null);
-  await settings.load();
-}
+async function coldLoad(silenceTrim: Record<string, unknown> | undefined) { await coldLoadSettings(silenceTrim === undefined ? {} : { silenceTrim }); }
 
 // A 200s track with a 6s leading blank and a 9s trailing one. `tailStartMs`
 // is where that trailing gap opens, absolute: 200s - 9s.

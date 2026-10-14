@@ -2,7 +2,7 @@
 // Agent saves accept five minutes and hand edits are capped at that ceiling.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -10,12 +10,7 @@ import test from 'node:test';
 process.env.STATE_DIR = createTempDir(path.join(tmpdir(), 'subwave-generation-settings-'));
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
-async function coldLoad(llm: Record<string, unknown> = {}) {
-  writeFileSync(path.join(process.env.STATE_DIR!, 'settings.json'), JSON.stringify({ llm }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown> = {}) { return (await coldLoadSettings({ llm })).llm; }
 test('request timeout remains finite and survives save and cold load without changing agent budget', async () => {
   assert.equal((await coldLoad()).requestTimeoutMs, 300_000);
   for (const value of [null, 'bad', '123', {}]) assert.equal((await coldLoad({ requestTimeoutMs: value })).requestTimeoutMs, 300_000);

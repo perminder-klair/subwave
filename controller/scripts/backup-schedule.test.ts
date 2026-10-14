@@ -6,6 +6,7 @@
 // Run: `npm test -- backup-schedule`.
 
 import assert from 'node:assert/strict';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -37,16 +38,10 @@ const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { BACKUP_KEEP_BOUNDS, SETTINGS_BACKUP_CADENCES, backupsPatchSchema } =
   await import('../src/schemas/settings.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 const DAY = 86_400_000;
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(backups: unknown) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify(backups === undefined ? {} : { backups }));
-  setCache(null);
-  await settings.load();
-  return settings.get().backups;
-}
+async function coldLoad(backups: unknown) { return (await coldLoadSettings(backups === undefined ? {} : { backups })).backups; }
 
 test('the writer produces a name the grammar recognises, and it sorts by time', () => {
   const early = scheduledBackupName(new Date('2026-09-06T04:23:17.123Z'));

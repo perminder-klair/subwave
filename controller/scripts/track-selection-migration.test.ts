@@ -3,7 +3,7 @@
 // A cold load is essential: this is the actual upgrade path from settings.json.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -14,14 +14,8 @@ process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
-const settingsPath = path.join(stateRoot, 'settings.json');
 
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(settingsPath, JSON.stringify({ llm }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm })).llm; }
 
 test('a retired Candidate Pool install upgrades to Track Shortlist', async () => {
   const llm = await coldLoad({ pickerAgent: false });

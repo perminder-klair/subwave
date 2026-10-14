@@ -11,7 +11,7 @@
 //     replaces a cached client instead of being ignored until restart.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,18 +23,13 @@ for (const k of ['EMBEDDING_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'R
   delete process.env[k];
 }
 
-const { setCache } = await import('../src/settings/store.js');
-const settings = await import('../src/settings.js');
+await import('../src/settings.js');
 const { languageModel, credentialSig, pinnedApiKey, chatBaseUrl } = await import('../src/llm/internal/provider/registry.js');
 const { resolveEmbeddingCfg, embeddingModel } = await import('../src/llm/internal/provider/embedding.js');
 const { embeddingSharesChatCredential } = await import('../src/llm/internal/provider/capabilities.js');
 const { generateText, embed } = await import('ai');
 
-async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) {
-  writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm, embedding }));
-  setCache(null);
-  await settings.load();
-}
+async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) { await coldLoadSettings({ llm, embedding }); }
 
 interface Captured { url: string; auth: string; headers: Headers }
 

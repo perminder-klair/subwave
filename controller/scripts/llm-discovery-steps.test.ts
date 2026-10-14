@@ -7,7 +7,7 @@
 // half checks the value reaches its consumers, the harness and the prompt.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,7 +23,6 @@ const { discoveryStepsFor, gatedMaxStepsFor, DISCOVERY_STEPS_MAX } =
   await import('../src/llm/internal/provider/capabilities.js');
 const { promptDiscoverySteps } = await import('../src/llm/internal/provider/legs.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 // A forced-tool provider (capability default 1).
 const LOCAL_LLM = {
@@ -34,12 +33,7 @@ const LOCAL_LLM = {
 // A native-strategy provider (capability default 3).
 const CLOUD_LLM = { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' };
 
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm: { ...LOCAL_LLM, ...llm } }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm: { ...LOCAL_LLM, ...llm } })).llm; }
 
 test('0 means auto: an untouched install still follows the capability table', async () => {
   // Upgrading to a build with this setting must change no station's behaviour.

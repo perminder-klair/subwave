@@ -18,7 +18,7 @@
 // capturing fetch.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -36,7 +36,6 @@ const { openAICompatibleFetch, languageModel } = await import('../src/llm/intern
 const { generateText } = await import('ai');
 const { createOpenAI } = await import('@ai-sdk/openai');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 const BASE_LLM = {
   provider: 'openai-compatible',
@@ -45,12 +44,7 @@ const BASE_LLM = {
 };
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm: { ...BASE_LLM, ...llm } }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm: { ...BASE_LLM, ...llm } })).llm; }
 
 test('a configured repeat penalty survives a controller restart', async () => {
   const llm = await coldLoad({ repeatPenalty: 1.15 });

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -26,11 +26,7 @@ const base = {
   headers: { 'api-key': 'test-secret' },
 };
 
-async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) {
-  writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: { ...base, ...llm }, embedding }));
-  setCache(null);
-  await settings.load();
-}
+async function coldLoad(llm: Record<string, unknown>, embedding: Record<string, unknown> = {}) { await coldLoadSettings({ llm: { ...base, ...llm }, embedding }); }
 
 test('hosted mode survives save and cold load independently for both legs', async () => {
   await coldLoad({ compatibleMode: 'hosted', fallback: {
