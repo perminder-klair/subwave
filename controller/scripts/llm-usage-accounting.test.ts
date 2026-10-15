@@ -101,8 +101,9 @@ test('djObject counts both attempts when both fail', async (t) => {
 test('djAgent counts a native leg that hits its step cap before falling back', async (t) => {
   const leg = configure(t, 'openai');
   // Native leg: only `sample` is offered, and the model never stops calling it,
-  // so the run ends on the step cap and its output getter throws. The done-tool
-  // main run then explores once and commits.
+  // so the run ends on the step cap and its output getter throws. Those three
+  // steps spent the whole discovery budget, so the done-tool run commits at
+  // once with their results carried in.
   const calls = mockModel(t, leg, (o, n) => ({
     ...(toolNames(o) === 'done' ? call('done', { name: 'ok' }) : call('sample', {})),
     // The largest request belongs to the discarded native leg, not the
@@ -113,9 +114,9 @@ test('djAgent counts a native leg that hits its step cap before falling back', a
     system: 'Pick', messages: [{ role: 'user', content: 'pick' }], tools, schema, maxSteps: 3,
   });
   assert.deepEqual(r.object, { name: 'ok' });
-  assert.equal(calls(), 3 + 2, 'three native steps, then discovery + done');
+  assert.equal(calls(), 3 + 1, 'three native steps, then done');
   assert.equal(lastRecord()?.ok, true);
-  assert.equal(lastRecord()?.usage?.total, 5 * PER_CALL + 18, 'the native leg is on the record');
+  assert.equal(lastRecord()?.usage?.total, 4 * PER_CALL + 18, 'the native leg is on the record');
   assert.equal(lastRecord()?.contextPeakInput, 20, 'context capacity is the peak request, not cumulative spend');
 });
 
