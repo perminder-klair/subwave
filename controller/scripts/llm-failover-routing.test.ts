@@ -9,6 +9,7 @@ import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { deferred } from './test-utils/async.js';
 
 const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-llm-failover-routing-'));
 process.env.STATE_DIR = stateRoot;
@@ -174,3 +175,72 @@ test('reading the snapshot never changes routing', async () => {
   }));
   assert.deepEqual(attempts, [backupLabel], 'the window still holds after repeated reads');
 });
+
+test('a pending backup has no successful or failed outcome yet', async () => {
+  resetFailoverStickyForTest();
+  await configure({ ...base, fallback });
+  const backup = deferred<{ value: string; via: string }>();
+  const pending = withFailover('routing-pending', failExtra, async (leg) => {
+    if (leg.label === primaryLabel) throw retired();
+    return backup.promise;
+  });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  const observed = failoverRoutingSnapshot();
+  backup.resolve({ value: 'backup', via: 'test-backup' });
+  await pending;
+  assert.ok(observed);
+  assert.equal(observed.lastOk, undefined);
+  assert.equal(failoverRoutingSnapshot()?.lastOk, true);
+});
+
+test('an older failed backup cannot label the latest successful backup as failed', async () => {
+  resetFailoverStickyForTest();
+  await configure({ ...base, fallback });
+  const older = deferred<{ value: string; via: string }>();
+  const callOlder = withFailover('routing-older', failExtra, async (leg) => {
+    if (leg.label === primaryLabel) throw retired();
+    return older.promise;
+  });
+  await new Promise<void>(resolve => setImmediate(resolve));
+  await call(retired);
+  older.reject(new Error('older backup failed'));
+  await assert.rejects(callOlder, /older backup failed/);
+  assert.equal(failoverRoutingSnapshot()?.calls, 2);
+  assert.equal(failoverRoutingSnapshot()?.lastOk, true);
+});
+
+test('a cancelled backup does not claim the provider failed', async () => {
+  resetFailoverStickyForTest();
+  await configure({ ...base, fallback });
+  const controller = new AbortController();
+  await assert.rejects(withFailover('routing-cancelled', failExtra, async (leg) => {
+    if (leg.label === primaryLabel) throw bare500();
+    controller.abort();
+    throw controller.signal.reason;
+  }, undefined, controller.signal));
+  assert.notEqual(failoverRoutingSnapshot()?.lastOk, false);
+  assert.ok(failoverRoutingSnapshot()?.retryPrimaryAt);
+});
+
+for (const oldFails of [false, true]) {
+  test(`an old primary ${oldFails ? 'failure' : 'success'} cannot hide the current primary's routing record`, async () => {
+    resetFailoverStickyForTest();
+    await configure({ ...base, fallback });
+    const older = deferred<{ value: string; via: string }>();
+    const oldCall = withFailover('routing-old-primary', failExtra, (leg) => {
+      if (leg.label === primaryLabel) return older.promise;
+      return Promise.resolve({ value: 'backup', via: 'test-backup' });
+    });
+    await configure({ ...base, model: 'new-primary', fallback });
+    await quietly(() => withFailover('routing-new-primary', failExtra, async (leg) => {
+      if (leg.label !== backupLabel) throw retired();
+      return { value: 'backup', via: 'test-backup' };
+    }));
+    const current = failoverRoutingSnapshot();
+    if (oldFails) older.reject(retired());
+    else older.resolve({ value: 'old primary', via: 'test-primary' });
+    await oldCall;
+    assert.ok(current);
+    assert.deepEqual(failoverRoutingSnapshot(), current);
+  });
+}

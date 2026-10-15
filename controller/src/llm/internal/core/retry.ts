@@ -4,7 +4,8 @@
 //   withDeadline       — a hard wall-clock ceiling (Promise.race + AbortSignal).
 
 import { throwIfCancelled } from './generation.js';
-import { isTransient, errReason, unwrapSdkError, isConnectionRefused } from './pure.js';
+import { shouldFailoverRefusal } from './retry-policy.js';
+import { isTransient, errReason, unwrapSdkError } from './pure.js';
 
 // Retry-After (seconds, or an HTTP-date) — RFC 9110 §10.2.3. Providers rate-
 // limiting a 429 commonly tell the caller exactly how long to wait (OpenAI,
@@ -81,10 +82,8 @@ export async function withTransientRetry<T>(
       throwIfCancelled(signal);
       lastErr = err;
       if (!isTransient(err) || attempt === delays.length || signal?.aborted) throw err;
-      // A refused or unresolvable host is a verdict, not a blip: it will not
-      // come back within the 0.5s backoff, so hand the error to withFailover
-      // at once instead of burning retries on a dead port.
-      if (isConnectionRefused(err)) {
+      // Only an unpinned primary with a usable backup can give up its retries.
+      if (shouldFailoverRefusal(err)) {
         console.log(`[${kind}] ${errReason(err)} — host down, not retrying this leg`);
         throw err;
       }

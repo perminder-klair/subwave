@@ -273,7 +273,11 @@ test('a refused host skips same-leg retries so failover decides at once', async 
   const originalLog = console.log;
   console.log = (...args: unknown[]) => logs.push(args.join(' '));
   try {
-    await assert.rejects(withTransientRetry('refused-retry-test', async () => { calls++; throw error; }), (err) => err === error);
+    const result = await withFailover('refused-retry-test', failExtra, (leg) => withTransientRetry('refused-retry-test', async () => {
+      if (leg.label === primaryLabel) { calls++; throw error; }
+      return { value: 'backup', via: 'test-backup' };
+    }));
+    assert.equal(result, 'backup');
     assert.equal(calls, 1, 'no backoff against a dead port');
     assert.ok(!logs.some((line) => line.includes('retrying in')));
   } finally {
@@ -361,7 +365,7 @@ test('a provider request timeout fails over and marks the primary down (a model 
   resetFailoverStickyForTest();
 });
 
-test('an agent deadline with no model answer is not resubmitted, but marks the primary down for the next call', async () => {
+test('an unanswered agent deadline leaves a slow healthy primary in use', async () => {
   resetFailoverStickyForTest();
   await configure();
   const attempts: string[] = [];
@@ -373,9 +377,9 @@ test('an agent deadline with no model answer is not resubmitted, but marks the p
   assert.deepEqual(attempts, [primaryLabel], 'the spent call itself is not failed over (its budget is gone)');
   await withFailover('deadline-test', failExtra, async (leg) => {
     attempts.push(leg.label);
-    return { value: 'backup', via: 'test-backup' };
+    return { value: 'primary', via: 'test-primary' };
   });
-  assert.deepEqual(attempts, [primaryLabel, backupLabel], 'the next call goes straight to the backup');
+  assert.deepEqual(attempts, [primaryLabel, primaryLabel], 'a caller budget does not mark the host down');
   resetFailoverStickyForTest();
 });
 
@@ -423,6 +427,7 @@ test('an agent deadline after the model DID answer is an overthinking model: pri
 // ── D5 review follow-ups: window length, both legs down, timeouts, probe ──
 
 const { withPermanentNotRetryable } = await import('../src/llm/internal/core/generation.js');
+const { withRefusalFailover } = await import('../src/llm/internal/core/retry-policy.js');
 
 // The sticky window is observed through N2's routing record: retryPrimaryAt is
 // set exactly while the window holds.
@@ -599,13 +604,18 @@ test('the probe clears an unreachable window once the primary port answers again
   }
 });
 
-test('a refused or unresolvable host is not retried inside the AI SDK either', () => {
-  for (const code of ['ECONNREFUSED', 'ENOTFOUND']) {
-    const err = Object.assign(new Error(`Cannot connect to API: connect ${code} 127.0.0.1:1`), { isRetryable: true, cause: Object.assign(new Error(code), { code }) });
-    withPermanentNotRetryable(err);
-    assert.equal(err.isRetryable, false, code);
-  }
-  const again = Object.assign(new Error('Cannot connect to API: getaddrinfo EAI_AGAIN locca'), { isRetryable: true, cause: Object.assign(new Error('EAI_AGAIN'), { code: 'EAI_AGAIN' }) });
-  withPermanentNotRetryable(again);
-  assert.equal(again.isRetryable, true, 'EAI_AGAIN keeps the SDK retries');
+test('an eligible primary skips SDK refusal retries while other attempts retain them', async () => {
+  const ordinary = Object.assign(new Error('connect ECONNREFUSED'), { isRetryable: true });
+  withPermanentNotRetryable(ordinary);
+  assert.equal(ordinary.isRetryable, true);
+  await withRefusalFailover(() => true, async () => {
+    for (const code of ['ECONNREFUSED', 'ENOTFOUND']) {
+      const err = Object.assign(new Error(`Cannot connect to API: connect ${code} 127.0.0.1:1`), { isRetryable: true, cause: Object.assign(new Error(code), { code }) });
+      withPermanentNotRetryable(err);
+      assert.equal(err.isRetryable, false, code);
+    }
+    const again = Object.assign(new Error('Cannot connect to API: getaddrinfo EAI_AGAIN locca'), { isRetryable: true, cause: Object.assign(new Error('EAI_AGAIN'), { code: 'EAI_AGAIN' }) });
+    withPermanentNotRetryable(again);
+    assert.equal(again.isRetryable, true, 'EAI_AGAIN keeps the SDK retries');
+  });
 });

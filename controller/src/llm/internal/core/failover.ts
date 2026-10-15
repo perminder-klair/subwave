@@ -13,6 +13,8 @@ import { ollamaBaseUrl, loccaBaseUrl } from '../provider/registry.js';
 import { guardGenerationModel, throwIfCancelled } from './generation.js';
 import type { Leg } from '../provider/legs.js';
 import { primaryLeg, fallbackLeg, probeLegReachable } from '../provider/legs.js';
+import { capabilitiesFor } from '../provider/capabilities.js';
+import { withRefusalFailover } from './retry-policy.js';
 import { record } from '../telemetry/log.js';
 import { isUnreachable, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, isServerExhausted, isGenerationControlError, isProviderRequestTimeout } from './pure.js';
 
@@ -130,18 +132,17 @@ function logFailurePreview(kind: string, err: any) {
 //                 re-detection that follows is cheap (the server answers at
 //                 once), which is exactly why this class needs no probe.
 //   hung        — the host accepts the call but never answers: a generation
-//                 hit the provider request timeout, or an agent ran out its
-//                 whole deadline without ONE model response. Detection here is
-//                 the expensive case (up to the full timeout per call, and the
-//                 call that hit it is not resubmitted when its deadline is
-//                 spent), so the first verdict marks the primary down at once.
+//                 hit the provider request timeout before any model response.
+//                 Detection here is the expensive case (up to the full timeout
+//                 per call), so the first verdict marks the primary down at once.
 //                 Expiry only, like exhausted: the server answers a probe.
 // The window length depends on the class. An unreachable host has a probe to
 // clear it early, so it can hold the long window. An exhausted or hung verdict
 // has only the expiry, and both are common on a self-hosted primary that will
 // serve again within a minute or two: a llama.cpp server answering 503 "Loading
-// model" while it starts, or a slow first token on a cold model running into
-// the agent deadline. Those hold a short window, so a recovered primary is not
+// model" while it starts, or a cold model running into the provider request
+// timeout. An agent's own deadline says nothing about provider health. These
+// provider failures hold a short window, so a recovered primary is not
 // left idle while a paid backup takes every call.
 // One verdict is enough for every class: waiting for a second failure would
 // let the next call pay the same detection again, which is the delay this
@@ -168,6 +169,10 @@ function stickyKey(leg: Leg): string {
   return `${leg.label}|${legEndpoint(leg)}`;
 }
 
+function isCurrentPrimary(leg: Leg): boolean {
+  try { return stickyKey(primaryLeg()) === stickyKey(leg); } catch { return false; }
+}
+
 const STICKY_VERDICT: Record<StickyState['kind'], string> = {
   unreachable: 'unreachable',
   exhausted: 'cannot serve (5xx)',
@@ -189,11 +194,13 @@ function formatWindow(ms: number): string {
   return ms >= 60_000 && ms % 60_000 === 0 ? `${ms / 60_000} min` : `${Math.round(ms / 1000)} s`;
 }
 
-function startSticky(kind: StickyState['kind'], leg: Leg): void {
+function startSticky(kind: StickyState['kind'], leg: Leg): StickyState | null {
+  if (!isCurrentPrimary(leg)) return null;
   const windowMs = stickyWindowMs(kind);
   sticky = { until: Date.now() + windowMs, kind, key: stickyKey(leg) };
   console.log(`[failover] primary LLM (${leg.label}) ${STICKY_VERDICT[kind]} — routing to the backup for ${formatWindow(windowMs)}`);
   if (kind === 'unreachable') scheduleStickyProbe();
+  return sticky;
 }
 
 // The window holds only for the primary it judged. A different primary (the
@@ -220,8 +227,11 @@ function scheduleStickyProbe(): void {
     let leg: Leg;
     try { leg = primaryLeg(); } catch { return; }
     if (stickyKey(leg) !== sticky.key) { clearSticky(); return; }
+    if (!capabilitiesFor(leg.cfg.provider).reachabilityProbe) return;
+    const down = sticky;
     let up = false;
     try { up = await probeLegReachable(leg, 3000); } catch { up = false; }
+    if (sticky !== down) return;
     if (up) {
       clearSticky();
       console.log('[failover] primary LLM reachable again — back to normal routing');
@@ -249,7 +259,7 @@ export interface FailoverRouting {
   since: number;           // first call routed to the backup in this run
   lastAt: number;          // latest call routed to the backup
   calls: number;           // calls routed to the backup since `since`
-  lastOk: boolean;         // whether the backup answered the latest one
+  lastOk?: boolean;        // absent until the latest call has an outcome
   provider: string;        // the backup that took them
   model: string;
   // Set while D5's sticky window holds: when the primary will be tried again.
@@ -263,14 +273,15 @@ interface BackupRoutingState {
   since: number;
   lastAt: number;
   calls: number;
-  lastOk: boolean;
+  lastOk?: boolean;
   provider: string;
   model: string;
 }
 
 let backupRouting: BackupRoutingState | null = null;
 
-function noteRoutedToBackup(primary: Leg, backup: Leg, reason: string): void {
+function noteRoutedToBackup(primary: Leg, backup: Leg, reason: string): BackupRoutingState | null {
+  if (!isCurrentPrimary(primary)) return null;
   const now = Date.now();
   const primaryKey = stickyKey(primary);
   const same = backupRouting && backupRouting.primaryKey === primaryKey && backupRouting.model === backup.label;
@@ -280,14 +291,18 @@ function noteRoutedToBackup(primary: Leg, backup: Leg, reason: string): void {
     since: same ? backupRouting!.since : now,
     lastAt: now,
     calls: same ? backupRouting!.calls + 1 : 1,
-    lastOk: true,
     provider: String(backup.cfg?.provider || ''),
     model: backup.label,
   };
+  return backupRouting;
 }
 
-function noteBackupFailed(): void {
-  if (backupRouting) backupRouting.lastOk = false;
+function noteBackupResult(routing: BackupRoutingState | null, ok: boolean): void {
+  if (routing && backupRouting === routing) routing.lastOk = ok;
+}
+
+function isBackupFailure(err: Parameters<typeof isGenerationControlError>[0], signal?: AbortSignal): boolean {
+  return !signal?.aborted && (!isGenerationControlError(err) || isProviderRequestTimeout(err));
 }
 
 export function failoverRoutingSnapshot(now: number = Date.now()): FailoverRouting | null {
@@ -299,10 +314,6 @@ export function failoverRoutingSnapshot(now: number = Date.now()): FailoverRouti
   const { primaryKey: _key, ...shown } = backupRouting;
   const holding = sticky && sticky.key === backupRouting.primaryKey && now < sticky.until;
   return holding ? { ...shown, retryPrimaryAt: sticky!.until } : shown;
-}
-
-function isAgentDeadline(err: any): boolean {
-  return err?.name === 'AgentDeadlineError' || err?.cause?.name === 'AgentDeadlineError';
 }
 
 // Test seam: drop the sticky state (and any pending probe) between scenarios,
@@ -359,13 +370,17 @@ export async function withFailover<T>(
   pin?: 'primary' | 'fallback',
   signal?: AbortSignal,
 ): Promise<T> {
+  const runAttempt = (leg: Leg, role: 'primary' | 'fallback', onAnswer?: () => void) => withRefusalFailover(
+    () => !pin && role === 'primary' && fallbackLeg() != null,
+    () => attempt(guardedLeg(leg, kind, role, onAnswer)),
+  );
   throwIfCancelled(signal);
   if (pin) {
     const leg = pin === 'fallback' ? fallbackLeg() : primaryLeg();
     if (!leg) throw new Error(`withFailover: pinned leg "${pin}" is not configured`);
     const started = Date.now();
     try {
-      const r = await attempt(guardedLeg(leg, kind, pin));
+      const r = await runAttempt(leg, pin);
       recordSuccess({ kind, started, via: `${r.via}:pinned`, model: leg.label, sampling: r.sampling, usage: r.usage, contextPeakInput: r.contextPeakInput, perf: r.perf, warnings: r.warnings, extra: r.extra });
       return r.value;
     } catch (err: any) {
@@ -382,15 +397,17 @@ export async function withFailover<T>(
   if (stickyHolds(primary)) {
     const backup = fallbackLeg();
     if (backup) {
+      const down = sticky;
       const started = Date.now();
       console.log(`[${kind}] primary LLM (${primary.label}) marked down — using ${backup.label} without retrying it`);
-      noteRoutedToBackup(primary, backup, `primary marked down: ${STICKY_VERDICT[sticky!.kind]}`);
+      const routing = noteRoutedToBackup(primary, backup, `primary marked down: ${STICKY_VERDICT[sticky!.kind]}`);
       try {
-        const r = await attempt(guardedLeg(backup, kind, 'fallback'));
+        const r = await runAttempt(backup, 'fallback');
+        noteBackupResult(routing, true);
         recordSuccess({ kind, started, via: r.via, model: backup.label, sampling: r.sampling, usage: r.usage, contextPeakInput: r.contextPeakInput, perf: r.perf, warnings: r.warnings, extra: r.extra });
         return r.value;
       } catch (err2: any) {
-        noteBackupFailed();
+        if (isBackupFailure(err2, signal)) noteBackupResult(routing, false);
         logFailurePreview(kind, err2);
         recordFailure({ kind, started, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
         // Both legs failing: routing to the backup no longer saves anything,
@@ -398,7 +415,7 @@ export async function withFailover<T>(
         // every call fails. Clear the window so the next call tries the
         // primary — at most one call is lost this way. A cancelled call says
         // nothing about the backup, so it leaves the window alone.
-        if (!signal?.aborted) {
+        if (isBackupFailure(err2, signal) && sticky === down) {
           clearSticky();
           console.log(`[failover] backup LLM (${backup.label}) failed too — the primary is tried again on the next call`);
         }
@@ -409,9 +426,9 @@ export async function withFailover<T>(
   const primaryStarted = Date.now();
   let primaryAnswered = false;
   try {
-    const r = await attempt(guardedLeg(primary, kind, 'primary', () => { primaryAnswered = true; }));
-    clearSticky(); // the primary served — whatever marked it down is gone
-    backupRouting = null; // and calls are going where they should go first again
+    const r = await runAttempt(primary, 'primary', () => { primaryAnswered = true; });
+    if (sticky?.key === stickyKey(primary)) clearSticky();
+    if (backupRouting?.primaryKey === stickyKey(primary)) backupRouting = null;
     recordSuccess({ kind, started: primaryStarted, via: r.via, model: primary.label, sampling: r.sampling, usage: r.usage, contextPeakInput: r.contextPeakInput, perf: r.perf, warnings: r.warnings, extra: r.extra });
     return r.value;
   } catch (err: any) {
@@ -429,15 +446,6 @@ export async function withFailover<T>(
     if (!backup) {
       logFailurePreview(kind, err);
       recordFailure({ kind, started: primaryStarted, via: primaryVia, model: primary.label, error: err?.message, extra: failExtra(err) });
-      // An agent deadline is not a failover (its budget is spent, and a model
-      // that overthinks is not a host that is down), so this call is lost to
-      // the pool picker either way. But a deadline the primary spent without
-      // returning ONE generation is a model that is not answering, and the
-      // next call would wait out the same deadline (or the far longer request
-      // timeout) on it. Mark it down so those calls go to the backup.
-      if (isAgentDeadline(err) && !primaryAnswered && !signal?.aborted && fallbackLeg()) {
-        startSticky('hung', primary);
-      }
       throwIfCancelled(signal);
       throw err;
     }
@@ -463,16 +471,20 @@ export async function withFailover<T>(
       : reason === 'cannot serve (5xx after retries)' ? 'exhausted'
       : reason === 'generation timed out' && !primaryAnswered ? 'hung'
       : null;
-    if (stickyKind) startSticky(stickyKind, primary);
+    const down = stickyKind ? startSticky(stickyKind, primary) : null;
     throwIfCancelled(signal);
-    noteRoutedToBackup(primary, backup, `primary ${reason}`);
+    const routing = noteRoutedToBackup(primary, backup, `primary ${reason}`);
     const backupStarted = Date.now();
     try {
-      const r = await attempt(guardedLeg(backup, kind, 'fallback'));
+      const r = await runAttempt(backup, 'fallback');
+      noteBackupResult(routing, true);
       recordSuccess({ kind, started: backupStarted, via: r.via, model: backup.label, sampling: r.sampling, usage: r.usage, contextPeakInput: r.contextPeakInput, perf: r.perf, warnings: r.warnings, extra: r.extra });
       return r.value;
     } catch (err2: any) {
-      noteBackupFailed();
+      if (isBackupFailure(err2, signal)) {
+        noteBackupResult(routing, false);
+        if (down && sticky === down) clearSticky();
+      }
       logFailurePreview(kind, err2);
       recordFailure({ kind, started: backupStarted, via: err2?.__via || 'ai-sdk', model: backup.label, error: err2?.message, extra: failExtra(err2) });
       throw err2;

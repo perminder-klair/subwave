@@ -117,7 +117,7 @@ export async function checkLlm(
     out.push({
       label: 'backup routing',
       status: 'warn',
-      detail: `${routing.reason} — ${routing.calls} call${routing.calls === 1 ? '' : 's'} sent to ${routing.model}${routing.lastOk ? '' : ', which failed too'}; ${next}`,
+      detail: `${routing.reason} — ${routing.calls} call${routing.calls === 1 ? '' : 's'} sent to ${routing.model}${routing.lastOk === false ? ', which failed too' : ''}; ${next}`,
       hint: 'Calls return to the primary as soon as it answers. A refused connection is probed every 30 s; a 5xx or a hung model is retried after 90 s, or at once if the backup also fails.',
     });
   }

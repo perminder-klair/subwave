@@ -10,6 +10,7 @@ interface ErrorLike {
   message?: unknown;
   statusCode?: unknown;
   status?: unknown;
+  status_code?: unknown;
   code?: unknown;
   name?: unknown;
   cause?: ErrorLike;
@@ -371,7 +372,8 @@ export function isServerExhausted(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   if (isGenerationControlError(err)) return false;
-  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  const status = err.statusCode ?? err.status ?? err.status_code
+    ?? err.cause?.statusCode ?? err.cause?.status ?? err.cause?.status_code;
   if (typeof status === 'number') return EXHAUSTED_STATUS.has(status);
   const msg = providerMessage(err);
   return /\b(500|502|503|504)\b/.test(msg);
@@ -385,11 +387,17 @@ export function isServerExhausted(err: ErrorLike | null | undefined): boolean {
 const CONNECTION_REFUSED_CODE = new Set(['ECONNREFUSED', 'ENOTFOUND']);
 
 export function isConnectionRefused(err: ErrorLike | null | undefined): boolean {
-  if (!err) return false;
-  err = unwrapSdkError(err);
-  const code = err.code ?? err.cause?.code;
-  if (typeof code === 'string' && CONNECTION_REFUSED_CODE.has(code)) return true;
-  return /connect ECONNREFUSED|ENOTFOUND/i.test(providerMessage(err));
+  const seen = new Set<ErrorLike>();
+  while (err && typeof err === 'object' && !seen.has(err)) {
+    seen.add(err);
+    if (isGenerationControlError(err) || isLocalParseError(err)) return false;
+    const inner = unwrapSdkError(err);
+    if (inner !== err) { err = inner; continue; }
+    if (typeof err.code === 'string' && CONNECTION_REFUSED_CODE.has(err.code)) return true;
+    if (/connect ECONNREFUSED|ENOTFOUND/i.test(providerMessage(err))) return true;
+    err = err.cause;
+  }
+  return false;
 }
 
 // Quota / billing rejection or auth failure: host up but this leg cannot
