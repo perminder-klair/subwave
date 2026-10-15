@@ -5,7 +5,7 @@
 // Adding a token: a descriptor here AND a :root fallback in web/app/globals.css,
 // then regenerate the mirror.
 
-export type TokenType = 'color' | 'font' | 'grain';
+export type TokenType = 'color' | 'font' | 'grain' | 'image';
 export type TokenGroup =
   | 'surface'
   | 'text'
@@ -80,6 +80,7 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
   { key: '--mono-font', label: 'mono font', group: 'type', type: 'font', fontSet: 'mono' },
   // Texture
   { key: '--grain', label: 'grain', group: 'texture', type: 'grain' },
+  { key: '--bg-image', label: 'background image', group: 'texture', type: 'image' },
 ] as const;
 
 export const THEME_TOKEN_KEYS: readonly string[] = THEME_TOKENS.map((t) => t.key);
@@ -99,8 +100,19 @@ export function tokenType(key: string): TokenType | undefined {
 // covers every realistic colour value.
 export const COLOR_VAL_RE = /^[^;{}<>]{1,100}$/;
 
+// Background image → "none", or a CSS url(...) pointing at either our own
+// /theme-assets/<file> static route (an image an operator drops into
+// ${STATE_DIR}/themes/, served by routes/public.ts) or an https:// URL —
+// never plain http:// (mixed content on an HTTPS station, and a cleartext
+// fetch the operator did not ask for), and never a bare scheme like
+// javascript:/data: that could smuggle a payload into an inline style.
+// Quotes are optional but must match.
+export const IMAGE_VAL_RE =
+  /^url\((['"]?)(\/theme-assets\/[a-zA-Z0-9._-]{1,120}|https:\/\/[^\s'"()<>{};]{1,300})\1\)$/;
+
 // Colour → the safety regex. Font → a curated id, never a free font string.
-// Grain → a number in [0,1]. Unknown key → false.
+// Grain → a number in [0,1]. Image → "none" or the url() shape above.
+// Unknown key → false.
 export function isValidTokenValue(key: string, value: string): boolean {
   const desc = TOKEN_BY_KEY.get(key);
   switch (desc?.type) {
@@ -115,6 +127,10 @@ export function isValidTokenValue(key: string, value: string): boolean {
       if (!/^\d*\.?\d+$/.test(v)) return false;
       const n = Number(v);
       return n >= 0 && n <= 1;
+    }
+    case 'image': {
+      const v = value.trim();
+      return v === 'none' || IMAGE_VAL_RE.test(v);
     }
     default:
       return false;

@@ -2,6 +2,8 @@
 // browser audio gesture and theme tokens for colours. Co-locate styles. Lite mode requires JS
 // animation loops to stop, long transitions to be disabled, and animation-only content to remain
 // visible. See web/CLAUDE.md for the full contract.
+// The shell paints the operator's --bg-image behind the skin: keep the skin's own root free of an
+// opaque full-bleed background, and read the image only as var(--bg-image), never a literal url().
 
 import type { ComponentType } from 'react';
 

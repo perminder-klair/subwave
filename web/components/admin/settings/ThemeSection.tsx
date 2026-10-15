@@ -5,8 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
-import { adminJson, useAdminMutation } from '../../../lib/admin-query';
-import { applyTheme, cacheTheme, resolveFont } from '../../../lib/theme';
+import { adminJson, useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
+import { applyTheme, cacheTheme, resolveTokenValue, themeAssetUrl } from '../../../lib/theme';
 import { useThemeSwitcher } from '../../ThemeProvider';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Modal } from '../../ui/modal';
@@ -67,12 +67,15 @@ function ThemePreview({ tokens, mode }: { tokens: Record<string, string>; mode: 
     for (const key of THEME_TOKEN_KEYS) el.style.removeProperty(key);
     for (const [k, v] of Object.entries(tokens)) {
       if (!v.trim()) continue;
-      const isFont = k === '--display-font' || k === '--mono-font';
-      el.style.setProperty(k, isFont ? resolveFont(v) : v);
+      el.style.setProperty(k, resolveTokenValue(k, v));
     }
   }, [tokens, mode]);
   return (
-    <div ref={ref} data-theme={mode} className="grid gap-2 border border-line bg-bg p-3 text-ink">
+    <div
+      ref={ref}
+      data-theme={mode}
+      className="grid gap-2 border border-line bg-bg [background-image:var(--bg-image,none)] bg-cover bg-center bg-no-repeat p-3 text-ink"
+    >
       <div className="flex items-baseline justify-between">
         <span className="font-display text-[22px] leading-none">Aa Now Playing</span>
         <span className="text-[9px] tracking-[0.2em] text-ink-faint uppercase">preview</span>
@@ -88,6 +91,143 @@ function ThemePreview({ tokens, mode }: { tokens: Record<string, string>; mode: 
           <span className="ml-auto inline-block h-3.5 w-3.5 bg-accent-2" title="accent 2" />
         </div>
       </div>
+    </div>
+  );
+}
+
+interface ThemeAssetRow { name: string; size: number; mtime: string }
+
+const ASSET_TOKEN_RE = /^url\((['"]?)\/theme-assets\/([^'")]+)\1\)$/;
+const assetToken = (name: string) => `url("/theme-assets/${name}")`;
+const fmtKb = (n: number) => (n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.round(n / 1024)} KB`);
+
+// The `--bg-image` token: pick an image already in state/themes/, upload a new
+// one, or type an https:// URL. The token keeps the controller-relative
+// url("/theme-assets/<file>") form; lib/theme.ts resolves it at paint time.
+function BackgroundImageField({
+  value,
+  onChange,
+  adminFetch,
+  label,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  label: string;
+}) {
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Cacheable admin read → TanStack Query (web/AGENTS.md). The list failing is
+  // shown under the field like an upload error; the picker then offers only
+  // "none" and a custom URL.
+  const assetsQuery = useAdminQuery<ThemeAssetRow[]>({
+    key: adminThemeKeys.assets(),
+    adminFetch,
+    request: async (fetcher, signal) => {
+      const r = await adminJson<{ assets?: ThemeAssetRow[] }>(fetcher, '/themes/assets', undefined, signal);
+      return Array.isArray(r?.assets) ? r.assets : [];
+    },
+    toastOnError: false,
+  });
+  const assets = assetsQuery.data ?? (assetsQuery.error ? [] : null);
+  const listErr = assetsQuery.error ? errorMessage(assetsQuery.error) : null;
+
+  // The upload's receipt carries the whole list, so it replaces the cached
+  // one instead of costing a refetch.
+  const uploadMutation = useAdminMutation<{ asset: ThemeAssetRow; assets: ThemeAssetRow[] }, File>({
+    adminFetch,
+    request: (file, fetcher) => {
+      const body = new FormData();
+      body.append('file', file);
+      // No Content-Type header: the browser sets the multipart boundary.
+      return adminJson(fetcher, '/themes/assets', { method: 'POST', body });
+    },
+    onDone: (r, _file, client) => { client.setQueryData(adminThemeKeys.assets(), r.assets); },
+    toastOnError: false,
+  });
+  const busy = uploadMutation.isPending;
+
+  const trimmed = value.trim();
+  const selectedAsset = ASSET_TOKEN_RE.exec(trimmed)?.[2] ?? null;
+  const hasCustomValue = trimmed !== '' && trimmed !== 'none' && selectedAsset == null;
+  // Picking "custom" before typing leaves the token empty, so remember the
+  // choice separately to keep the URL box open.
+  const [customMode, setCustomMode] = useState(hasCustomValue);
+  const isCustom = hasCustomValue || (customMode && selectedAsset == null);
+  const selectValue = selectedAsset ? `asset:${selectedAsset}` : isCustom ? 'custom' : '';
+  const previewSrc = selectedAsset
+    ? themeAssetUrl(selectedAsset)
+    : isCustom ? /^url\((['"]?)(https:\/\/[^'")]+)\1\)$/.exec(trimmed)?.[2] ?? null : null;
+
+  const onSelect = (v: string) => {
+    setErr(null);
+    setCustomMode(v === 'custom');
+    if (v === '') onChange('');
+    else if (v === 'custom') onChange(hasCustomValue ? value : '');
+    else if (v.startsWith('asset:')) onChange(assetToken(v.slice(6)));
+  };
+
+  const upload = async (file: File) => {
+    setErr(null);
+    try {
+      const r = await uploadMutation.mutateAsync(file);
+      setCustomMode(false);
+      onChange(assetToken(r.asset.name));
+      notify.ok(`uploaded ${r.asset.name}`);
+    } catch (e) {
+      setErr(errorMessage(e));
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={selectValue}
+          onChange={(e: ChangeEvent<HTMLSelectElement>) => onSelect(e.target.value)}
+          className="min-w-0 flex-1 border border-ink bg-field px-2 py-1.5 font-mono text-[12px] text-ink"
+          aria-label={label}
+          disabled={busy}
+        >
+          <option value="">none (flat background colour)</option>
+          {(assets ?? []).map(a => (
+            <option key={a.name} value={`asset:${a.name}`}>{a.name} · {fmtKb(a.size)}</option>
+          ))}
+          {selectedAsset && assets && !assets.some(a => a.name === selectedAsset) && (
+            <option value={`asset:${selectedAsset}`}>{selectedAsset} (missing)</option>
+          )}
+          <option value="custom">custom https:// URL…</option>
+        </select>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          className="hidden"
+          onChange={(e: ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (f) void upload(f); }}
+        />
+        <Btn sm onClick={() => fileRef.current?.click()} disabled={busy}>
+          {busy ? 'Uploading…' : 'Upload image'}
+        </Btn>
+      </div>
+      {isCustom && (
+        <Input
+          value={value}
+          maxLength={340}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => onChange(e.target.value)}
+          placeholder='url("https://example.com/background.jpg")'
+          className="font-mono text-[12px]"
+        />
+      )}
+      {previewSrc && (
+        <img src={previewSrc} alt="" className="h-20 w-36 border border-line object-cover" />
+      )}
+      {(err || listErr) && <span className="text-[11px] text-[var(--danger)]">{err || listErr}</span>}
+      <span className="text-[10px] text-ink-faint">
+        JPEG, PNG, WebP or GIF, up to 8 MB. Stored in <code>state/themes/</code>; turn grain down for a crisper picture.
+      </span>
     </div>
   );
 }
@@ -250,6 +390,13 @@ function ThemeEditorModal({
                     />
                     <span className="w-8 shrink-0 text-right font-mono text-[11px] text-muted">{tokens[key] || '—'}</span>
                   </div>
+                ) : type === 'image' ? (
+                  <BackgroundImageField
+                    value={tokens[key] || ''}
+                    onChange={(v) => setTokens(prev => ({ ...prev, [key]: v }))}
+                    adminFetch={adminFetch}
+                    label={label}
+                  />
                 ) : (
                   <Input
                     value={tokens[key] || ''}
@@ -535,7 +682,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
             Describe a look in the editor and we&apos;ll draft the palette, or drop a JSON
             theme file in <code>state/themes/</code> and hit <em>Refresh</em>, no controller
             restart needed. The folder&apos;s <code>README.md</code> lists the format and the
-            allowed token keys.
+            allowed token keys. For a player background image, upload one from the
+            theme editor&apos;s <em>background image</em> field, or drop the picture in that
+            same folder and pick it there (an <code>https://</code> URL works too).
           </div>
           {error && (
             <div className="field-hint text-[var(--danger)]">

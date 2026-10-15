@@ -24,13 +24,14 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '..', '..', 'web', 'lib', 'theme-tokens.generated.ts');
 
 const groups = [...new Set(THEME_TOKENS.map((t) => t.group))].map((g) => `'${g}'`).join(' | ');
+const types = [...new Set(THEME_TOKENS.map((t) => t.type))].map((t) => `'${t}'`).join(' | ');
 
 const body = `// GENERATED FILE — do not edit by hand.
 // Mirror of controller/src/theme-tokens.ts. Regenerate with:
 //   cd controller && npm run gen:themes
 // CI fails if this drifts from the controller registry.
 
-export type TokenType = 'color' | 'font' | 'grain';
+export type TokenType = ${types};
 export type TokenGroup = ${groups};
 export type FontSet = 'display' | 'mono';
 

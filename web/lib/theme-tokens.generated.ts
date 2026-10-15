@@ -3,7 +3,7 @@
 //   cd controller && npm run gen:themes
 // CI fails if this drifts from the controller registry.
 
-export type TokenType = 'color' | 'font' | 'grain';
+export type TokenType = 'color' | 'font' | 'grain' | 'image';
 export type TokenGroup = 'surface' | 'text' | 'accent' | 'structure' | 'type' | 'texture';
 export type FontSet = 'display' | 'mono';
 
@@ -113,10 +113,16 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
     "label": "grain",
     "group": "texture",
     "type": "grain"
+  },
+  {
+    "key": "--bg-image",
+    "label": "background image",
+    "group": "texture",
+    "type": "image"
   }
 ];
 
-export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain"];
+export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain","--bg-image"];
 
 export const SWATCH_KEYS = ["--bg","--ink","--accent","--overlay"] as const;
 
