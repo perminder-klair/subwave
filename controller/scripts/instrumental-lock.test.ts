@@ -201,7 +201,12 @@ for (const [name, input, oldLimit, endpoint, key] of [
     if (key) assert.ok(calls.some(url => url.pathname.endsWith(`/${endpoint}`) && Number(url.searchParams.get(key)) === oldLimit * 5));
     calls.length = 0;
     const unlocked = await execute(name, input, {});
-    assert.ok(tracksSchema.parse(unlocked.result).every(row => row.id.startsWith('v')));
+    const unlockedTracks = tracksSchema.parse(unlocked.result);
+    if (name === 'recentlyAdded') {
+      assert.equal(unlockedTracks.length, 3, 'the cached album source keeps its unlocked three-track sample');
+    } else {
+      assert.ok(unlockedTracks.every(row => row.id.startsWith('v')));
+    }
     if (key) assert.ok(calls.some(url => url.pathname.endsWith(`/${endpoint}`) && Number(url.searchParams.get(key)) === oldLimit));
   });
 }

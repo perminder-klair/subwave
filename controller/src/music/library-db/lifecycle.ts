@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { copyFile, rm } from 'node:fs/promises';
 import { DB_PATH, getDb, getEmbeddingDim, requireDb, setHandle } from './handle.js';
-import { invalidateStats } from './stats.js';
+import { ensureStatsIndexes, invalidateStats } from './stats.js';
 import { migrate } from './schema.js';
 import { maybeMigrateFromMoodsJson } from './legacy.js';
 
@@ -53,6 +53,7 @@ export async function open(opts: {
     ),
   });
   await maybeMigrateFromMoodsJson();
+  ensureStatsIndexes();
 }
 
 export function close(): void {

@@ -94,7 +94,7 @@ const themeIds = ['classic-light', 'vinyl', 'blueprint'];
 // ── a stale pin must not paint nothing ───────────────────────────────────────
 
 // The theme file was deleted under our feet (or a built-in id was retired —
-// see show-theme-id.test.ts for the validator half of the same story).
+// see show-schema.test.ts for the validator half of the same story).
 {
   const p = resolveThemeProvenance({
     stationDefault: 'vinyl',

@@ -3,7 +3,7 @@
 // artist-guard.test.ts pins the pieces: which cause fires, and which candidates
 // a re-pick may choose from. This file pins how they are composed — which is
 // where the two causes actually diverge, and the half that was previously only
-// verifiable by reading, because it lived inline in pickViaAgent behind a model
+// verifiable by reading, because it lived inline in pickViaSelectionRoute behind a model
 // call.
 //
 // What it must hold:

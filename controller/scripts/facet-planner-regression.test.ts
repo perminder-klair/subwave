@@ -13,6 +13,9 @@ process.env.NAVIDROME_USER = 'u';
 process.env.NAVIDROME_PASS = 'p';
 let tailCapable: boolean | null = true;
 let failAnalysis = false;
+let facetsCapable = false;
+let lyricCalls = 0;
+let lyrics: Array<{ synced: boolean; line: Array<{ start: number; value: string }> }> = [];
 const requests: Array<Record<string, unknown>> = [];
 const head = [{ startMs: 5000, endMs: 15000 }];
 const tail = [{ startMs: 225000, endMs: 239000 }];
@@ -21,13 +24,25 @@ const server = createServer((req, res) => {
   res.setHeader('Content-Type', 'application/json');
   if (req.url?.startsWith('/health')) {
     res.end(JSON.stringify({ ok: true, engines: ['analyze'], analyze_audio_capable: false,
-      analyze_vocal_capable: true, analyze_tail_vocal_capable: tailCapable }));
+      analyze_vocal_capable: true, analyze_tail_vocal_capable: tailCapable,
+      analyze_facets_capable: facetsCapable }));
   } else if (req.url?.startsWith('/analyze')) {
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', () => {
       const input: Record<string, unknown> = JSON.parse(body);
       requests.push(input);
+      if (Array.isArray(input.facets)) {
+        const data: Record<string, unknown> = {
+          head: { bpm: 120, key: 'Am', intro_ms: 1000 },
+          tail: { outro: { startMs: 220000, ending: 'cold' }, tail_silence_ms: 0, tail_start_ms: 240000 },
+          vocal: { vocal_ranges: [], tail_vocal_ranges: [] },
+        };
+        res.end(JSON.stringify({ ok: true,
+          facets: Object.fromEntries(input.facets.map(f => [f, { status: 'ok', data: data[f] }])),
+          source: { kind: 'path', complete: true } }));
+        return;
+      }
       res.end(JSON.stringify(failAnalysis ? { ok: false, error: 'decode failed' } : {
         ok: true, bpm: 120, key: 'Am', intro_ms: 1000, confidence: 0.9,
         loudness_lufs: -10, peak_db: -1, tail_silence_ms: 0, tail_start_ms: 240000,
@@ -37,7 +52,8 @@ const server = createServer((req, res) => {
       }));
     });
   } else if (req.url?.includes('getLyrics')) {
-    res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', lyricsList: { structuredLyrics: [] } } }));
+    lyricCalls++;
+    res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', lyricsList: { structuredLyrics: lyrics } } }));
   } else {
     res.setHeader('Content-Type', 'audio/flac');
     res.end(Buffer.alloc(1024, 1));
@@ -248,6 +264,54 @@ test('CLI planning gates tail support and exhausted retries without taking the l
   assert.equal(requests.length, beforeRequests);
   assert.equal(existsSync(join(stateDir, 'tagger.pid')), false);
 });
+
+for (const ranges of [tail, []]) {
+  test(`facet tail-only runs preserve ${ranges.length ? 'sung' : 'instrumental'} tail vocals and their version`, async () => {
+    const id = `facet-kept-${ranges.length}`;
+    seed(id, true);
+    db.upsertTrackAnalysis(id, { bpm: 120, vocalRanges: head,
+      outro: { startMs: 220000, ending: 'cold', lufs: -10, bpm: 120,
+        beats: null, bars: null, vocalRanges: ranges } });
+    db.requireDb().prepare("UPDATE track_facet_status SET version = 0 WHERE track_id = ? AND facet = 'vocal'").run(id);
+    facetsCapable = true;
+    analyzer._resetBackendCacheForTests();
+    try {
+      await runAnalysisPass({ plan: plan(id, 'tail', 'all'), vocalBackfill: false });
+      assert.deepEqual(requests.at(-1)?.facets, ['tail']);
+      assert.deepEqual(db.getTrack(id)?.outro?.vocalRanges, ranges);
+      assert.deepEqual(db.getTrack(id)?.vocalRanges, head);
+      assert.equal(db.loadFacetState(['vocal']).get(id)?.get('vocal')?.version, 0);
+      assert.equal(checkFacets().driftCount, 0);
+    } finally { facetsCapable = false; analyzer._resetBackendCacheForTests(); }
+  });
+}
+
+for (const instrumental of [false, true]) {
+  test(`facet vocal runs prefer ${instrumental ? 'instrumental lyrics' : 'synced lyrics'} to Demucs`, async () => {
+    const id = `facet-lyrics-${instrumental}`;
+    seed(id, true);
+    facetsCapable = true;
+    lyrics = [{ synced: !instrumental, line: instrumental
+      ? [{ start: 0, value: 'Instrumental' }]
+      : [{ start: 12000, value: 'First line' }, { start: 225000, value: 'Last line' }] }];
+    lyricCalls = 0;
+    requests.length = 0;
+    analyzer._resetBackendCacheForTests();
+    try {
+      const p = planner.planAcoustics({ ids: [id], facets: ['head', 'vocal'], where: { kind: 'all' },
+        state: db.loadFacetState(['head', 'vocal']), capabilities: { clap: false, demucs: true, tailVocal: true } });
+      await runAnalysisPass({ plan: p });
+      assert.equal(lyricCalls, 1);
+      assert.deepEqual(requests[0]?.facets, ['head'], 'lyric-decided vocals need no Demucs request');
+      assert.deepEqual(db.getTrack(id)?.vocalRanges, instrumental ? [] : [
+        { startMs: 12000, endMs: 20000 }, { startMs: 225000, endMs: 229000 },
+      ]);
+      assert.deepEqual(db.getTrack(id)?.outro?.vocalRanges,
+        instrumental ? [] : [{ startMs: 225000, endMs: 229000 }]);
+      assert.equal(db.getTrack(id)?.introMs, instrumental ? 1000 : 12000);
+    } finally { facetsCapable = false; lyrics = []; analyzer._resetBackendCacheForTests(); }
+  });
+}
 
 test('clearing analysis resets failure history on kept vocal and stems measurements', () => {
   seed('clear-kept', true);

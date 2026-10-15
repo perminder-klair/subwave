@@ -2,6 +2,7 @@
 // this process, never provider queue depth or a promise of remote slot release.
 import { randomUUID } from 'node:crypto';
 import { wrapLanguageModel, type LanguageModel } from 'ai';
+import { isModelUnavailable, isQuotaOrAuthError } from './pure.js';
 
 export interface GenerationMetadata {
   kind: string;
@@ -140,6 +141,8 @@ export function createGenerationLifecycle(now = () => performance.now(), wallNow
             const lastTimeout = evidence.get(row.targetId)?.timeout;
             if (!lastTimeout || row.startedMono >= lastTimeout.mono) evidence.delete(row.targetId);
             return result;
+          } catch (err) {
+            throw withPermanentNotRetryable(err);
           } finally {
             clearTimeout(timer);
             if (onAbort) parent?.removeEventListener('abort', onAbort);
@@ -151,6 +154,21 @@ export function createGenerationLifecycle(now = () => performance.now(), wallNow
   }
   return { guard, snapshot };
 }
+// The AI SDK retries any APICallError it marks retryable — by status, so a 429
+// or 5xx — before withTransientRetry or withFailover ever see it. A retired
+// model or a rejected key behind such a status (a proxy relaying it under a
+// 429) then cost three SDK attempts and their backoff on every call, about
+// 12s, before failover tried the backup. Clearing the flag here, where every
+// failover leg's model is wrapped, lets the one classifier the controller
+// already trusts decide; transient errors keep the SDK's retries unchanged.
+export function withPermanentNotRetryable(err: unknown): unknown {
+  const e = err as { isRetryable?: unknown } | null;
+  if (e && typeof e === 'object' && e.isRetryable === true && (isModelUnavailable(e as any) || isQuotaOrAuthError(e as any))) {
+    try { e.isRetryable = false; } catch { /* a frozen error keeps its retries */ }
+  }
+  return err;
+}
+
 const lifecycle = createGenerationLifecycle();
 export const guardGenerationModel = lifecycle.guard;
 export const generationHealthSnapshot = lifecycle.snapshot;

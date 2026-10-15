@@ -16,8 +16,14 @@ export {
   noThinkFetch,
 } from './internal/provider/registry.js';
 
-export { primaryLeg, fallbackLeg, probeLegReachable, promptDiscoverySteps } from './internal/provider/legs.js';
+export { primaryLeg, fallbackLeg, probeLegReachable, promptDiscoverySteps, warmCompatDetection } from './internal/provider/legs.js';
 export type { Leg } from './internal/provider/legs.js';
+
+export {
+  detectCompatibleMode,
+  cachedCompatDetection,
+} from './internal/provider/compat-detect.js';
+export type { CompatDetection, CompatMode } from './internal/provider/compat-detect.js';
 
 export {
   embeddingModel,

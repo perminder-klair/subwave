@@ -1,9 +1,9 @@
 // Pick-anchor and spacing artist guard policy — pure, unit-pinned
-// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaAgent;
+// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute;
 // this module owns which candidates a re-pick may choose from and whether the
 // guard fires at all, so both are testable without a model call.
 
-import { artistCreditsOverlap, artistRootIn, artistRootKey, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
 // Re-exported so the guard's tests read its comparison key from here rather
 // than reaching past into music/recency.
@@ -14,6 +14,20 @@ export { artistRootKey };
 // neighbourArtistRoots(n) gathers up to n queued-and-unaired tracks plus the
 // on-air track plus the last n distinct plays, so up to 2n+1 artists.
 export const ARTIST_VARIETY_WINDOW = 5;
+
+// The Agentic pick event names the artists this guard would refuse, so the
+// model can step around them up front. Without it the model sees only its own
+// pick notes, proposes an artist from the window, and every refusal costs a
+// second model call (seen live: one artist proposed four slots running on a
+// playlist show). The guard stays the enforcement; this is the same rule
+// stated where the choice is made, never a filter on the discovery tools
+// (#618). "Unless nothing else fits" matches the guard's own posture, which
+// lets a repeat through when the run surfaced no alternative.
+export function recentArtistsClause(credits: readonly string[]): string {
+  const names = credits.map(c => String(c ?? '').trim()).filter(Boolean);
+  if (!names.length) return '';
+  return ` Artists just played or already queued, so choose someone else unless nothing else fits: ${names.join('; ')}.`;
+}
 
 // Why the guard fired. The caller escalates the two differently: a match with
 // the pick-cycle anchor is worth a pool rescue, while spacing is a preference
@@ -27,14 +41,18 @@ export type ArtistGuardCause = 'onair' | 'recent' | null;
 // select the stronger compatibility cause, so an empty spacing window still
 // leaves pick-anchor protection intact. An untagged pick is never guarded: no
 // artist is not evidence of a repeat.
+// `pickCredit` is the pick's whole credit, so the spacing test sees every act
+// it names (recency.creditedActKeys), not only its lead; absent, the lead
+// stands for the credit, as before.
 export function artistGuardCause(
   pickRoot: string,
   anchorRoot: string,
   recentRoots: Set<string> = new Set(),
+  pickCredit: string = pickRoot,
 ): ArtistGuardCause {
   if (!pickRoot) return null;
   if (anchorRoot && artistCreditsOverlap(pickRoot, anchorRoot)) return 'onair';
-  return artistRootIn(pickRoot, recentRoots) ? 'recent' : null;
+  return creditInRoots(pickCredit || pickRoot, recentRoots) ? 'recent' : null;
 }
 
 export interface AlternativePool<T> {
@@ -69,7 +87,7 @@ export function alternativeCandidates<T extends CandidateLike>(
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !artistRootIn(root, recentRoots);
+    return !root || !creditInRoots(s, recentRoots);
   });
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
@@ -102,7 +120,7 @@ export interface ArtistGuardDeps<T> {
   song: T;
   object: { id?: string | null } & Record<string, unknown>;
   pickAnchor: CandidateLike | null;
-  // The run's own candidates, keyed by id, as pickViaAgent's `extras.seen`.
+  // The run's own candidates, keyed by id, as pickViaSelectionRoute's `extras.seen`.
   seen: Iterable<[string, T]>;
   // queue.neighbourArtistRoots(window) — passed in rather than fetched, so the
   // caller owns every queue read. `window` is carried only for the log text.
@@ -129,7 +147,7 @@ export async function runArtistGuard<T extends CandidateLike>(
 
   const pickRoot = artistRootKey(song);
   const anchorRoot = artistRootKey(pickAnchor || {});
-  const cause = artistGuardCause(pickRoot, anchorRoot, recentRoots);
+  const cause = artistGuardCause(pickRoot, anchorRoot, recentRoots, song?.artist || pickRoot);
   if (!cause) return { kind: 'none' };
 
   const avoidAnchorRoot = cause === 'onair' ? anchorRoot : '';

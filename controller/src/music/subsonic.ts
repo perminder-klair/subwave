@@ -570,27 +570,27 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
-export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size }, RETRY_FAST_TRANSPORT);
+export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
 // moves, so an offset-less read pins the same albums forever.
-export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, RETRY_FAST_TRANSPORT);
+export async function getFrequentAlbums({ size = 20, offset = 0, signal }: { size?: number; offset?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
-export async function getArtistInfo(id, { count = 10 } = {}) {
-  const r = await call('getArtistInfo2', { id, count }, RETRY_FAST_TRANSPORT);
+export async function getArtistInfo(id, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getArtistInfo2', { id, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artistInfo2 || null;
 }
 
 // Last.fm "top songs" for an artist, intersected with the library. Keyed by
 // artist NAME, not id.
-export async function getTopSongs(artistName, { count = 10 } = {}) {
-  const r = await call('getTopSongs', { artist: artistName, count }, RETRY_FAST_TRANSPORT);
+export async function getTopSongs(artistName, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getTopSongs', { artist: artistName, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.topSongs?.song || []);
 }
 
@@ -632,8 +632,8 @@ export async function getRecentSongsByArtist(
   return songs.slice(0, count);
 }
 
-export async function getAlbum(id) {
-  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
 }
 
@@ -790,14 +790,19 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
   }
 }
 
-export async function getPlaylists() {
-  const r = await call('getPlaylists', {}, RETRY_FAST_TRANSPORT);
+export async function getPlaylists({ signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getPlaylists', {}, { ...RETRY_FAST_TRANSPORT, signal });
   return r.playlists?.playlist || [];
 }
 
-export async function getPlaylist(id) {
-  const r = await call('getPlaylist', { id }, RETRY_FAST_TRANSPORT);
-  return rejectArchive(r.playlist?.entry || []);
+// `includeBlocked` is for the blocklist's OWN playlist-rule resolver: it builds
+// the member set that `rejectBlocked` consults, so reading through the filter
+// returned the playlist minus its own members on every refresh after the first
+// (0 tracks, rule inert, flipping back each TTL). Airing paths take the default.
+export async function getPlaylist(id, { signal, includeBlocked = false }: { signal?: AbortSignal; includeBlocked?: boolean } = {}) {
+  const r = await call('getPlaylist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
+  const songs = (r.playlist?.entry || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 // Playlist mutations: song-id lists ride the query string, so they are chunked
@@ -956,7 +961,9 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` and
   // radio.liq's `cue_cut` stops the track there. Only the capped paths set it
   // (autonomous picks + auto.m3u); listener requests pass null and play in
-  // full. A cue_out past the track's end is a no-op. An explicit cueOutSec (a
+  // full. Callers pass the cap only for a track that runs past it
+  // (track-floor.capCueOutSec): a cue_out past the end is NOT a no-op when the
+  // decoder cannot measure the stream, it defeats the crossfade. An explicit cueOutSec (a
   // stem blend's start in the OUTGOING track) competes with the cap and the
   // earlier cut wins, so a blend can't resurrect audio past the cap. cueInSec
   // skips the INCOMING track past the head its rendered clip already played.

@@ -213,6 +213,84 @@ export function artistCreditsOverlap(a: string, b: string): boolean {
   return false;
 }
 
+// Every act a credit names that the SPACING guards should see, not only its
+// lead (#1251 keys on the lead alone). artistRootKey drops everything after the
+// first join, so "Daljit Chahal & Karan Aujla" keyed as "daljit chahal" and
+// walked past a window holding "karan aujla" — seen live: three Karan Aujla
+// credits in 13 minutes, two back to back. Comma-joined acts were already
+// reachable through artistCreditsOverlap's delimiters; "&", "+", "and" and
+// "x" sit inside real act names, so they were not.
+//
+// A tail act counts only when the LIBRARY knows it as an act of its own: some
+// credit there leads with it. That is the guard against band names — "Earth,
+// Wind & Fire" offers "fire", which counts only if an act called Fire leads a
+// credit in this library. "X & the Y" never splits (artistRootKey's rule).
+// Without a provider (tests, a library not loaded yet) only the lead counts,
+// which is exactly the old behaviour: the failure direction is the status quo.
+//
+// SPACING only. Never a blocklist key: that list is absolute, and these keys
+// are deliberately allowed to over-match.
+const ACT_JOIN = /\s+(?:&|\+|and|x)\s+(?!the\b)|\s*,\s*/i;
+
+let knownActs: (() => ReadonlySet<string>) | null = null;
+
+// library.ts registers its act index here; recency stays free of a library import.
+export function setKnownActsProvider(fn: (() => ReadonlySet<string>) | null): void {
+  knownActs = fn;
+}
+
+export function creditedActKeys(song: CandidateLike | string): string[] {
+  const root = artistRootKey(song);
+  if (!root) return [];
+  const known = knownActs?.();
+  if (!known?.size) return [root];
+  const raw = typeof song === 'string' ? song : (song?.artist || '');
+  const out = [root];
+  for (const segment of artistNameKey(raw).split(FEATURE_SPLIT)) {
+    for (const part of segment.split(ACT_JOIN)) {
+      const key = artistRootKey(dropOrphanCloser(part).trim());
+      if (key && !out.includes(key) && known.has(key)) out.push(key);
+    }
+  }
+  return out;
+}
+
+// The same acts as display names, for prompts: the Agentic pick event lists
+// them so the model can step around what the guard will refuse. A whole
+// credit there read as one act ("Amantej Hundal & Karan Aujla"), and the
+// model proposed Karan Aujla twice more for the guard to catch. The lead group
+// stays whole, commas and all (the guard's lead key covers each comma-joined
+// name by delimiter); a tail act is named only when the library knows it,
+// exactly as creditedActKeys counts it. With no act index: the whole credit.
+const ACT_JOIN_NAMED = /\s+(?:&|\+|and|x)\s+(?!the\b)/i;
+
+export function creditedActNames(song: CandidateLike | string): string[] {
+  const raw = String(typeof song === 'string' ? song : (song?.artist || '')).replace(/\s+/g, ' ').trim();
+  if (!artistRootKey(raw)) return [];
+  const known = knownActs?.();
+  if (!known?.size) return [raw];
+  const out = new Map<string, string>();
+  raw.split(FEATURE_SPLIT).forEach((segment, si) => {
+    segment.split(ACT_JOIN_NAMED).forEach((part, pi) => {
+      const lead = si === 0 && pi === 0;
+      const pieces = lead ? [part] : part.split(/\s*,\s*/);
+      for (const piece of pieces) {
+        const name = dropOrphanCloser(piece).trim();
+        const key = artistRootKey(name);
+        if (key && !out.has(key) && (lead || known.has(key))) out.set(key, name);
+      }
+    });
+  });
+  return out.size ? [...out.values()] : [raw];
+}
+
+// Does any act this credit names fall in a spacing window? The window side is
+// built from creditedActKeys too (queue.neighbourArtistRoots), so a shared
+// tail act meets from either direction.
+export function creditInRoots(song: CandidateLike | string, roots: Iterable<string>): boolean {
+  return creditedActKeys(song).some(act => artistRootIn(act, roots));
+}
+
 // artistCreditsOverlap against a set of keys (queue.neighbourArtistRoots): an
 // exact hit first, the scan only when there is none.
 export function artistRootIn(root: string, roots: Iterable<string>): boolean {
@@ -459,7 +537,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
       // answer a block on "Marvin Gaye".
       if (key && (blockedArtists.has(key) || artistRootIn(artistRootKey(song), blockedArtists))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
-      if (mode.recentArtists && artistRootIn(artistRootKey(song), recentArtistRoots)) continue;
+      if (mode.recentArtists && creditInRoots(song, recentArtistRoots)) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;
         if (count >= maxPerArtist) continue;

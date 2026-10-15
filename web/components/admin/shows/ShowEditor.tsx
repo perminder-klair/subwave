@@ -48,6 +48,7 @@ import {
 import type { EraWindow, Persona, PlaylistIndexStatus, Show, ShowsFormValues, SkillOption, ThemeOption } from './types';
 import { hasAnyMusicFilter, showPayload } from './lib';
 import { ChipRow } from './ChipRow';
+import { PlaylistPosition } from './PlaylistPosition';
 import { displayedMatchingTracks, type CandidateDiagnostic } from './candidate-diagnostic';
 import { fetchShowCandidates, useShowBlocklistQuery } from './queries';
 
@@ -830,6 +831,29 @@ export function ShowEditor({
               )}
 
               {show.playlistIds.length > 0 && show.playlistStrict && (
+                <SwitchField
+                  control={control}
+                  name={path('playlistInOrder')}
+                  label="Play in order"
+                  description="On: the pinned playlist(s) play top to bottom, several playlists back to back in the order you pinned them. The next airing picks up where this one left off, and the list loops at the end. Your order wins over the station's artist and album variety rules; blocked tracks, excluded playlists and this show's length limits still skip a track. Off: tracks are picked from the playlist in shuffled order."
+                />
+              )}
+
+              {show.playlistIds.length > 1 && show.playlistStrict && show.playlistInOrder && (
+                // The picker lists playlists in library order, but a tick APPENDS
+                // to playlistIds, which is the order they play in. Say it.
+                <span className="field-hint">
+                  Plays {show.playlistIds
+                    .map(id => playlists.find(p => p.id === id)?.name ?? 'an unavailable playlist')
+                    .join(', then ')}. To move a playlist to the end, untick it and tick it again; a new order starts from the top.
+                </span>
+              )}
+
+              {show.playlistIds.length > 0 && show.playlistStrict && show.playlistInOrder && (
+                <PlaylistPosition adminFetch={adminFetch} showId={show.id} enabled={!isNew} />
+              )}
+
+              {show.playlistIds.length > 0 && show.playlistStrict && !show.playlistInOrder && (
                 <SwitchField
                   control={control}
                   name={path('playlistExhaust')}

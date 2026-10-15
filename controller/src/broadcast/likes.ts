@@ -348,13 +348,24 @@ export function topLiked({ windowDays = 30, limit = 10 }: { windowDays?: number;
     .slice(0, Math.max(1, limit));
 }
 
+export type DjFavouritesConfig = { enabled?: boolean; influenceDj?: boolean; windowDays?: number; maxTracks?: number } | null | undefined;
+
+// The favourites the DJ may lean on, or [] when likes do not influence picks.
+// One gate for every reader — the Agentic pick event's clause, the Shortlist's
+// selection context, the pool's listener-liked source and the listenerFavourites
+// discovery tool — so the selection routes cannot disagree about whether likes
+// steer the DJ (#991).
+export function djFavourites(cfg: DjFavouritesConfig): TopLikedEntry[] {
+  if (!cfg?.enabled || !cfg?.influenceDj) return [];
+  return topLiked({ windowDays: cfg.windowDays, limit: cfg.maxTracks });
+}
+
 // The listener-favourites clause for the pick EVENT turn (#991). Deliberately NOT
 // part of pickSystem: the list changes as likes land, and re-rendering it there
 // would break the byte-stable prefix prompt caching keys on. Returns '' when not
 // opted in or nothing is liked, so the event turn stays byte-identical.
-export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean; windowDays?: number; maxTracks?: number } | null | undefined): string {
-  if (!cfg?.enabled || !cfg?.influenceDj) return '';
-  const favs = topLiked({ windowDays: cfg.windowDays, limit: cfg.maxTracks });
+export function favouritesClause(cfg: DjFavouritesConfig): string {
+  const favs = djFavourites(cfg);
   if (!favs.length) return '';
   return ` Listener favourites — the most-liked tracks on this station recently: ${favs
     .map((f) => `"${f.track.title}" by ${f.track.artist || 'unknown'} (${f.count})`)

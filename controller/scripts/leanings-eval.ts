@@ -362,7 +362,7 @@ async function main() {
           };
           try {
             const result = await djAgent({
-              system: pickSystem(null, true, context),
+              system: pickSystem(null, true, false, context),
               messages: messagesFor(scenario, reminder),
               tools,
               schema: pickSchema(),

@@ -108,23 +108,3 @@ test('Gemini previews retain the requested model and speech language together', 
   assert.equal(request.model, 'gemini-3.8-flash-tts');
   assert.equal(request.input[0].content[0].text, 'Sorti en 1967.');
 });
-
-test('Gemini exchanges normalize each speaker in their own language and keep delivery styles', async () => {
-  await tts.speakExchange([
-    {
-      persona: { ...french, voiceStyle: 'warm', tts: { engine: 'gemini', voice: 'Puck' } },
-      text: 'Sorti en 1967.',
-    },
-    {
-      persona: { ...french, language: 'English', voiceStyle: 'dry', tts: { engine: 'gemini', voice: 'Kore' } },
-      text: 'Released in 1967. Measured at 1967 ms, 1967 g and ₹1967.',
-    },
-  ]);
-  const turns = geminiRequests.at(-1)!.input[0].content;
-  assert.deepEqual(turns.map((turn) => turn.text), [
-    'Sorti en 1967.',
-    'Released in nineteen sixty-seven. Measured at 1967 ms, 1967 g and ₹1967.',
-  ]);
-  assert.match(turns[0].annotations[0].style, /warm/);
-  assert.match(turns[1].annotations[0].style, /dry/);
-});

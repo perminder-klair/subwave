@@ -1,7 +1,7 @@
 // Apply album cooldown after the artist guard. A failed re-pick retains the original; this
 // preference never triggers pool rescue or loses a slot. #1485 FR 3, #618.
 
-import { artistCreditsOverlap, artistRootIn, artistRootKey, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
 // How a candidate's album key is resolved. Caller-supplied so every lookup
 // stays at the call site; in production `music/album-facts.albumKeyFor`.
@@ -38,7 +38,7 @@ export function alternativeAlbumCandidates<T extends CandidateLike>(
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !artistRootIn(root, avoidArtistRoots);
+    return !root || !creditInRoots(s, avoidArtistRoots);
   });
   if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
 
@@ -58,7 +58,7 @@ export type AlbumGuardOutcome<T> =
 export interface AlbumGuardDeps<T> {
   song: T;
   object: { id?: string | null } & Record<string, unknown>;
-  /** The run's own candidates, keyed by id, as pickViaAgent's `extras.seen`. */
+  /** The run's own candidates, keyed by id, as pickViaSelectionRoute's `extras.seen`. */
   seen: Iterable<[string, T]>;
   /** queue.recentAlbumKeys(hours) — the caller owns every queue read. */
   recentAlbums: Set<string>;

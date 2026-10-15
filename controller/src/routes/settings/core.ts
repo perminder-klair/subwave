@@ -171,6 +171,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       llm: {
         providers: settings.LLM_PROVIDERS,
         active: llmProvider.activeModelLabel(),
+        // What an `auto` connection mode resolved to, per leg (null until the
+        // first probe finishes). Read-only display for the mode selector.
+        compatDetection: compatDetectionView(),
       },
       embedding: {
         // Embedding-capable providers only, a strict subset of llm.providers,
@@ -207,6 +210,29 @@ router.get('/settings', requireAdmin, async (req, res) => {
   }
 });
 
+// The last connection-mode detection for each openai-compatible leg, trimmed
+// to what the admin form shows. Cache reads only: a GET never starts a probe.
+function compatDetectionView() {
+  const view = (cfg: any) => {
+    if (cfg?.provider !== 'openai-compatible') return null;
+    const d = llmProvider.cachedCompatDetection(cfg);
+    return d ? { mode: d.mode, server: d.server, evidence: d.evidence } : null;
+  };
+  const llm = settings.get().llm;
+  return { primary: view(llm), fallback: llm?.fallback?.enabled ? view(llm.fallback) : null };
+}
+
+// One booth line per `auto` openai-compatible leg naming the mode it resolved
+// to and why. Shared by boot (server.ts) and the save below, so both say it
+// the same way. Never throws.
+export async function logCompatDetection(): Promise<void> {
+  try {
+    for (const { leg, detection } of await llmProvider.warmCompatDetection()) {
+      queue.log('scheduler', `LLM connection mode (${leg}): auto → ${detection.mode ?? 'local'} · ${detection.server ?? 'undetected'} (${detection.evidence})`);
+    }
+  } catch { /* detection is advisory */ }
+}
+
 // Update values; returns { requiresRestart } for mixer-affecting keys.
 // validateSettingsBody() rejects unknown top-level keys HERE and not in
 // settings.update(): backup restore hands update() a whole settings.json, and
@@ -225,6 +251,9 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
     }
+    // Re-detect a changed LLM connection in the background: the save must not
+    // wait on a probe of a server that may be down.
+    if (req.body?.llm !== undefined) void logCompatDetection();
     // Re-probe now so the admin badge doesn't wait out the 30s probe tick.
     if (req.body?.tts?.remote?.url !== undefined) {
       await remoteTts.refresh();

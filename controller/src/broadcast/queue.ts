@@ -13,10 +13,11 @@ import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import { aboveKnownTrackCeiling } from '../music/track-duration.js';
 import * as silenceTrim from '../music/silence-trim.js';
+import { capCueOutSec } from '../music/track-floor.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
+import { artistRootKey, creditedActKeys, creditedActNames, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import {
@@ -38,7 +39,7 @@ import * as bedPolicy from './bed-policy.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { HostSpeechStamp, TurnMeta } from './session.js';
-import type { PromptMemoryEntry } from './prompt-memory.js';
+import { promptRecapEntries } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { TRANSITION_EFFECTS, type TransitionEffect } from '../settings/vocab.js';
@@ -129,7 +130,6 @@ import {
   repickAfterFailure,
 } from './resolve-probe.js';
 import {
-  DEDUPE_KINDS,
   KIND_LABEL,
   TRACK_TIED_KINDS,
   VOICE_KINDS,
@@ -815,25 +815,13 @@ class Queue {
     maxChars = settings.get().djBehaviour.recapChars,
     prior = false,
   }: { limit?: number; withinMinutes?: number; maxChars?: number; prior?: boolean } = {}) {
-    const cutoff = Date.now() - withinMinutes * 60_000;
-    const seenDedupe = new Set<string>();
-    const picked: PromptMemoryEntry[] = [];
-    for (const entry of prior ? session.priorPromptMemory() : session.promptMemory()) {
-      if (!VOICE_KINDS.has(entry.kind)) continue;
-      if (new Date(entry.t).getTime() < cutoff) break;
-      if (DEDUPE_KINDS.has(entry.kind)) {
-        if (seenDedupe.has(entry.kind)) continue;
-        seenDedupe.add(entry.kind);
-      }
-      picked.push(entry);
-      if (picked.length >= limit) break;
-    }
+    const now = Date.now();
+    const picked = promptRecapEntries(prior ? session.priorPromptMemory() : session.promptMemory(),
+      { limit, withinMinutes, maxChars }, now);
     if (picked.length === 0) return null;
-    return picked.map((e) => {
-      const ago = formatAgo(Date.now() - new Date(e.t).getTime());
-      const msg = (e.message || '').replace(/\s+/g, ' ').trim();
-      const truncated = msg.length > maxChars ? msg.slice(0, maxChars - 1) + '…' : msg;
-      return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${truncated}"`;
+    return picked.map(e => {
+      const ago = formatAgo(now - Date.parse(e.t));
+      return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${e.message}"`;
     }).join('\n');
   }
 
@@ -2218,7 +2206,9 @@ class Queue {
           const liveCueIns = positiveCues([item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]);
           item.cueInSec = liveCueIns.length ? Math.max(...liveCueIns) : undefined;
           return subsonic.getAnnotatedUri(item.track, {
-            maxDurationSec: liveMax,
+            // The cap's cue only when this track actually runs past it — a stamp
+            // past a short track's end defeats the crossfade (track-floor.ts).
+            maxDurationSec: capCueOutSec(itemDurSec, liveMax),
             cueOutSec: earlyEnds.length ? Math.min(...earlyEnds) : null,
             cueInSec: item.cueInSec ?? null,
             resolveProbeId: item.resolveProbeId,
@@ -4326,11 +4316,19 @@ class Queue {
   // Both pickers use lead-artist keys from the queue tail, current track, and last
   // n distinct plays. New picks append at the tail, including behind unaired requests.
   neighbourArtistRoots(n = 0): Set<string> {
-    const out = new Set<string>();
-    if (!Number.isFinite(n) || n <= 0) return out;
+    return new Set(this.neighbourArtistCredits(n).flatMap(artist => creditedActKeys({ artist })));
+  }
+
+  // The same window as display credits, one per lead-artist key (first seen
+  // wins), so the Agentic pick event can name exactly the artists the guard
+  // will refuse. One walk serves both, so the named list and the guard's set
+  // cannot drift apart.
+  neighbourArtistCredits(n = 0): string[] {
+    const out = new Map<string, string>();
+    if (!Number.isFinite(n) || n <= 0) return [];
     const add = (artist: string | null | undefined) => {
       const key = artistRootKey({ artist });
-      if (key) out.add(key);
+      if (key && !out.has(key)) out.set(key, String(artist).trim());
     };
     for (const item of this.upcoming.slice(-n)) add(item?.track?.artist);
     add(this.current?.track?.artist);
@@ -4348,7 +4346,20 @@ class Queue {
       if (k) seenKeys.add(k);
       add(p.artist);
     }
-    return out;
+    return [...out.values()];
+  }
+
+  // The window as act names for the Agentic pick event: every act the guard
+  // will refuse, deduped across credits (recency.creditedActNames).
+  neighbourArtistActs(n = 0): string[] {
+    const out = new Map<string, string>();
+    for (const credit of this.neighbourArtistCredits(n)) {
+      for (const name of creditedActNames(credit)) {
+        const key = artistRootKey(name);
+        if (key && !out.has(key)) out.set(key, name);
+      }
+    }
+    return [...out.values()];
   }
 
   // Both pickers share this album window, including every unaired queue item.

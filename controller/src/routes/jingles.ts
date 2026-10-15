@@ -6,7 +6,9 @@ import { queue } from '../broadcast/queue.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { audioUpload } from '../middleware/upload.js';
 import { validateBody } from '../middleware/validate.js';
-import { jingleCreateSchema, jingleImportSchema } from '../schemas/imaging.js';
+import { jingleImportSchema } from '../schemas/imaging.js';
+import { jingleCreateBodySchema } from '../schemas/imaging-server.js';
+import type { TtsVoiceSlot } from '../schemas/persona.js';
 import { sendAudioFile } from '../util/audio-response.js';
 import { tagger, startTagger, stopTagger } from '../broadcast/tagger.js';
 
@@ -20,10 +22,10 @@ router.get('/jingles', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/jingles', requireAdmin, validateBody(jingleCreateSchema), async (req, res) => {
-  const { text } = req.body as { text: string };
+router.post('/jingles', requireAdmin, validateBody(jingleCreateBodySchema), async (req, res) => {
+  const { text, tts } = req.body as { text: string; tts?: TtsVoiceSlot };
   try {
-    const created = await jingles.create(text);
+    const created = await jingles.create(text, { tts });
     queue.log('scheduler', `New jingle created: "${text.slice(0, 60)}…"`);
     res.json(created);
   } catch (err) {

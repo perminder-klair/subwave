@@ -897,6 +897,25 @@ export function windowMessages() {
   return out;
 }
 
+// The window for a PICK run, which must end on the user's side. The pick
+// event is appended to the session before the agent reads it, and a scheduled
+// segment that airs in that gap (an ident, a co-host's line) lands after the
+// ask. The window then ends on an assistant turn, which current Claude models
+// reject outright as assistant prefill, and the done-tool retry re-sends the
+// same messages, so the pick falls through to the pool. A short user turn
+// after the aired line hands the open ask back. Not folded into
+// windowMessages(): the request run appends its own user tail to that window,
+// and this line would then point it at the wrong ask.
+export const PICK_STILL_OPEN = '(That aired after the pick request above. The request still stands: pick the track to play next.)';
+
+export function pickWindowMessages() {
+  const out = windowMessages();
+  if (out.length && out[out.length - 1].role === 'assistant') {
+    out.push({ role: 'user', content: PICK_STILL_OPEN });
+  }
+  return out;
+}
+
 // Every listener request text inside the same WINDOW_TURNS slice
 // windowMessages() hands the agents — the echo guards' horizon, so it can never
 // be shorter than what the model can quote. Read from the request event turn as

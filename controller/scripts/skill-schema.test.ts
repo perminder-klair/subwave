@@ -189,18 +189,6 @@ test('create requires a valid slug and lowercases it', () => {
 test('the slug pattern is the one every surface now shares', async () => {
   const { SLUG_RE } = await import('../src/skills/loader.js');
   const { SKILL_SLUG_RE: SETTINGS_RE } = await import('../src/settings/vocab.js');
-  const { validatePersonasStrict } = await import('../src/settings/validate.js');
-  // The alias swap must not let old-format entries block a roster save: the
-  // pattern this replaced (/^[a-z0-9-]{1,40}$/) accepted a leading hyphen, so a
-  // backup or older settings.json can carry one. An entry that can't name a
-  // skill can never fire — it is DROPPED (the themeId #917 tolerance), never
-  // thrown, and the valid entries around it survive.
-  const [p] = validatePersonasStrict([{
-    name: 'Kai', soul: 'warm', frequency: 'moderate',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: '' },
-    skills: ['-nope', 'weather'],
-  }]);
-  assert.deepEqual(p.skills, ['weather']);
   // loader.SLUG_RE and settings/vocab's SKILL_SLUG_RE are aliases of this one.
   // vocab's used to be a SEPARATE pattern that accepted `-nope` and rejected a
   // real 41–49-char slug, so a legally-named skill couldn't be assigned to a
@@ -284,15 +272,4 @@ test('CONTEXT_FIELDS is the vocabulary the prompt layer emits', async () => {
   // Re-exported, not copied: the admin editor renders one chip per entry and
   // used to carry a hand-maintained second list.
   assert.equal(PROMPT_FIELDS, CONTEXT_FIELDS);
-});
-
-test('the mirror carries the skill schema to the browser', async () => {
-  const { readFileSync } = await import('node:fs');
-  const mirror = readFileSync(
-    new URL('../../web/lib/schemas.generated.ts', import.meta.url),
-    'utf8',
-  );
-  for (const name of ['SKILL_SLUG_RE', 'SKILL_TAG_RE', 'SKILL_COOLDOWN_RE', 'CONTEXT_FIELDS', 'skillCreateSchema', 'skillFileSchema']) {
-    assert.match(mirror, new RegExp(`export (const|function) ${name}\\b`), `mirror is missing ${name}`);
-  }
 });

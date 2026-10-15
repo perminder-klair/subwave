@@ -1,5 +1,6 @@
 import type { SessionContext, ProgrammeState } from '../src/broadcast/session.js';
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { after } from 'node:test';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,11 +25,9 @@ const consumed = { intro: true, 'feature:0': true, outro: true };
 const weekFor = (id: string) => Object.fromEntries(Array.from({ length: 7 }, (_, day) => [day, Array(24).fill(id)]));
 
 function fixtureFetch(): Response {
-  return new Response(JSON.stringify({
-    id: 'fixture', object: 'chat.completion', created: 1, model: 'fixture-model',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'Welcome to the prepared episode.' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ id: 'fixture',
+    message: { role: 'assistant', content: 'Welcome to the prepared episode.' },
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }
 
 for (const sameSubject of [false, true]) {

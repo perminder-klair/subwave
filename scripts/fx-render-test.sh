@@ -27,6 +27,10 @@
 #       Regression check — on A -> jingle -> B, B's entry gesture must stand
 #       down on the jingle's seam yet still arm on a direct A -> B seam. Lifts
 #       the arming lines, the jingle mark and the cross stamps from radio.liq.
+#   scripts/fx-render-test.sh jingledry
+#       Regression check — a stinger shorter than the crossfade must air dry at
+#       full level, not as its own fade-in under the outgoing track. Lifts the
+#       seam block and the jingle mark from radio.liq.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -792,13 +796,89 @@ LIQ
   echo "JINGLESEAM PASS — the jingle's seam is a plain fade; the direct seam still arms B's sweep"
 }
 
+# jdry_render <stinger.wav> <cross seconds> <out name> — A, the stinger, B through
+# the seam block LIFTED from radio.liq, rendered to $WORK/<out>.wav.
+jdry_render() {
+  awk '/^  seam =$/{on=1} on{print} on&&/^    end$/{exit}' "$HERE/../liquidsoap/radio.liq" > "$WORK/jdry-seam.liq"
+  local mark
+  mark=$(grep -m1 -oE 'metadata\.map\(update=true, fun \(_\) -> \[\("subwave_jingle", "true"\)\]' "$HERE/../liquidsoap/radio.liq")
+  grep -q "jingle_in" "$WORK/jdry-seam.liq" && [ -n "$mark" ] \
+    || { echo "JINGLEDRY FAIL — could not lift the seam block / jingle mark from radio.liq"; return 1; }
+  {
+    cat <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 2
+sa = once(single('annotate:title="A":/work/a.wav'))
+sb = once(single('annotate:title="B":/work/b.wav'))
+LIQ
+    echo "sj = once(single('annotate:title=\"J\":/work/$1'))"
+    echo "jingle = ${mark}, sj)"
+    cat <<'LIQ'
+music = sequence([sa, jingle, sb])
+def t(a, b) =
+  jingle_out = a.metadata["subwave_jingle"] == "true"
+  jingle_in = b.metadata["subwave_jingle"] == "true"
+  d = min(source.remaining(a.source), source.remaining(b.source))
+  a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
+  b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
+%include "/work/jdry-seam.liq"
+  seam
+end
+LIQ
+    echo "music = cross(duration=$2., persist_override=true, t, music)"
+    echo "output.file(%wav, fallible=true, on_stop=shutdown, \"/work/$3.wav\", music)"
+    echo 'clock.assign_new(sync="none", [music])'
+  } > "$WORK/$3.liq"
+  liq "$3.liq" > "$WORK/$3.log" || { cat "$WORK/$3.log"; return 1; }
+}
+
+# jdry_band <render> <freq> <start> — mean level of one tone over 400 ms, whole dB.
+jdry_band() {
+  local v
+  v=$(ffmpeg -v info -ss "$3" -t 0.4 -i "$WORK/$1.wav" -af "bandpass=f=$2:width_type=h:w=60,volumedetect" -f null - 2>&1 \
+    | sed -n 's/.*mean_volume: \(-\{0,1\}[0-9]*\).*/\1/p')
+  echo "${v:--99}"
+}
+
+jingledry() {
+  # Tones sit near -36 dB through the band filter; "at level" is -38 or above,
+  # "gone" is -55 or below.
+  gen_tones
+  [ -f "$WORK/j.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=2.8" -af volume=-12dB -ar 44100 -ac 2 "$WORK/j.wav"
+  [ -f "$WORK/jlong.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=8" -af volume=-12dB -ar 44100 -ac 2 "$WORK/jlong.wav"
+
+  # A stinger shorter than the crossfade. A is 12 s; its tail fades over the
+  # stinger's 2.8 s (9.2 -> 12.0), then the stinger runs 12.0 -> 14.8. Blended,
+  # it was already at level by 11.4 and gone by 12.0.
+  jdry_render j.wav 10 jdry || return 1
+  local early head mid under
+  early=$(jdry_band jdry 1000 11.4); head=$(jdry_band jdry 1000 12.0)
+  mid=$(jdry_band jdry 1000 13.2); under=$(jdry_band jdry 440 12.0)
+  echo "short stinger: before its start ${early} dB, head ${head} dB, middle ${mid} dB, outgoing under it ${under} dB"
+  [ "$early" -le -55 ] && [ "$head" -ge -38 ] && [ "$mid" -ge -38 ] && [ "$under" -le -55 ] \
+    || { echo "JINGLEDRY FAIL — the stinger is blended into the outgoing track's fade instead of following it"; return 1; }
+
+  # A stinger longer than the crossfade (8 s under a 3 s cross): it runs
+  # 12.0 -> 20.0 and must keep its last second, with B starting dry after it.
+  jdry_render jlong.wav 3 jdrylong || return 1
+  local tail bhead bearly
+  tail=$(jdry_band jdrylong 1000 19.4); bhead=$(jdry_band jdrylong 880 20.2); bearly=$(jdry_band jdrylong 880 19.4)
+  echo "long stinger: its last second ${tail} dB, next track under it ${bearly} dB, next track's head ${bhead} dB"
+  # 880 Hz sits close to the stinger's 1000 Hz, so the filter leaks about -47 dB
+  # of the stinger into B's band; B itself mixed under would read near -36.
+  [ "$tail" -ge -38 ] && [ "$bearly" -le -44 ] && [ "$bhead" -ge -38 ] \
+    || { echo "JINGLEDRY FAIL — the end of a long stinger is faded, or the next track is mixed under it"; return 1; }
+  echo "JINGLEDRY PASS — a stinger airs dry after the outgoing track's fade and keeps its own ending"
+}
+
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   loopcheck) loopcheck ;;
   loopgaps) loopgaps ;;
   jingleseam) jingleseam ;;
+  jingledry) jingledry ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | xdur | xchain"; exit 2 ;;
 esac

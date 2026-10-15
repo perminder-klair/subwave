@@ -3,6 +3,7 @@
 // scripts, picker). Barrel so call sites keep importing from `llm/dj.js` unchanged.
 
 export { djSystem, lengthMode, lengthPhrase } from './internal/prompts/system.js';
+export { onAirLocationGrounding } from './internal/prompts/grounding.js';
 export {
   ANGLES,
   pickAngle,

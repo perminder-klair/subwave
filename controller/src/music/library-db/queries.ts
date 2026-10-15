@@ -67,6 +67,15 @@ export function allTaggedIds(): string[] {
   ).map(r => r.id);
 }
 
+// Ids of one energy bucket, in table order (the same order songsByEnergy uses).
+export function idsByEnergy(energy: EnergyValue): string[] {
+  if (!energy) return [];
+  // Same population as songsByEnergy (tagged rows only, #1732): the ids-only
+  // read must not widen the bucket it replaces on the pick path.
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE energy = ? AND ${SQL_HAS_MOODS} ORDER BY rowid`).all(energy) as Array<{ id: string }>)
+    .map((r) => r.id);
+}
+
 // Trusted sample for the propagation self-check: no 'propagated' rows (circular)
 // and no vectorless rows (KNN can't run). Null source = legacy LLM import, counts.
 export function trustedTaggedIds(): string[] {
@@ -271,4 +280,13 @@ export function artistIdentities(minTracks: number) {
     WHERE artist_id IS NOT NULL AND artist IS NOT NULL
     GROUP BY artist_id HAVING COUNT(DISTINCT LOWER(COALESCE(title, id)) || '|' || LOWER(artist)) >= ?
   `).all(minTracks));
+}
+
+// Every distinct artist credit in the library, for the spacing guards' act
+// index (library.knownActKeys). Credits only; no row data.
+export function distinctArtistCredits(): string[] {
+  const rows = requireDb().prepare(
+    `SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL AND artist != ''`,
+  ).all() as Array<{ artist: string }>;
+  return rows.map(r => r.artist);
 }

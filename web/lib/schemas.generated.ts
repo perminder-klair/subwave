@@ -1588,6 +1588,42 @@ export type PlaybackFailureInput = Pick<PlaybackFailure, 'attemptId' | 'source'>
   & Partial<Pick<PlaybackFailure, 'sourceTrackId' | 'title' | 'artist' | 'album'>>;
 export type PlaybackFailureHistory = z.output<typeof playbackFailureHistorySchema>;
 
+// ─── from controller/src/schemas/playlist-cursor.ts ──────────────────────
+
+// Play in order (show.playlistInOrder): where each show's walk through its
+// anchor playlist has got to. Persisted to state/playlist-cursors.json by
+// music/playlist-cursors.ts; the walk itself is music/playlist-order.ts.
+//
+// The cursor names the LAST PICKED anchor track, never the next one, so an edit
+// to the playlist between airings resolves against what actually went out: the
+// walk finds that track again and steps past it.
+export const playlistCursorSchema = z.object({
+  // The anchor this position belongs to (playlistIds, in order). A different
+  // anchor restarts the walk at the top.
+  sig: z.string().max(2000),
+  // Slot of the last pick in the merged anchor list.
+  index: z.number().int().min(0),
+  lastId: z.string().max(256),
+  // title|artist — what finds the last pick again after a Navidrome id
+  // rotation, which no remap hook reaches.
+  lastKey: z.string().max(1000),
+  // ISO time of the pick. Diagnostics only.
+  at: z.string().max(64),
+});
+
+// Keyed by show id. Bounded because a show deletion has no cleanup hook — the
+// store prunes unknown ids on write, and the cap is the backstop.
+export const PLAYLIST_CURSOR_STORE_MAX = 500;
+
+export const playlistCursorStoreSchema = z.object({
+  version: z.literal(1),
+  cursors: z.record(z.string().min(1).max(64), playlistCursorSchema)
+    .refine(c => Object.keys(c).length <= PLAYLIST_CURSOR_STORE_MAX, `at most ${PLAYLIST_CURSOR_STORE_MAX} cursors`),
+});
+
+export type PlaylistCursor = z.output<typeof playlistCursorSchema>;
+export type PlaylistCursorStore = z.output<typeof playlistCursorStoreSchema>;
+
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────
 
 // Shared playlist schemas — the request bodies of the /playlists routes and
@@ -2758,6 +2794,29 @@ export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72
 // the per-show override — a mirrored module may import only zod, so the two are
 // separate declarations of one number and must move together.
 export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
+
+// Track Shortlist discovery passes (#1687): how many controller-run source
+// calls build one shortlist. Unlike the agent's discoverySteps, 0 has no
+// meaning here, because one pass is the smallest real shortlist.
+export const SHORTLIST_PASSES_BOUNDS: SettingsNumericBound = { min: 1, max: 5 };
+export const SHORTLIST_PASSES_DEFAULT = 3;
+
+// Which of the three model routes run an agent tool loop (#1687): track
+// selection, listener-request matching and segment delivery each choose
+// independently. The agent deadline, the context-window floor and the
+// output-cap warning apply to whichever of them are agentic, so every reader
+// (DJ Doc, the Music selection form) asks here instead of re-deriving it.
+// Absent values read as the shipped default, which is agentic for all three.
+export function settingsAgentRoutes(llm: {
+  trackSelection?: unknown;
+  requestMatching?: unknown;
+  segmentRuntime?: unknown;
+} | null | undefined) {
+  const picks = llm?.trackSelection !== 'shortlist';
+  const requests = llm?.requestMatching !== 'direct';
+  const segments = llm?.segmentRuntime !== 'direct';
+  return { picks, requests, segments, any: picks || requests || segments };
+}
 
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
@@ -4312,6 +4371,13 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // The window is counted AFTER strict locks and excluded playlists, in
       // music/show-recency.ts.
       playlistExhaust: showBool(),
+      // Play in order: picks walk the anchor top to bottom (several playlists
+      // back to back, in playlistIds order), resume where the last airing left
+      // off and wrap at the end. A NO-OP without `playlistStrict`, for the same
+      // reason as playlistExhaust: a soft anchor mixes other tracks in, so a
+      // running order has nothing to be true of. Supersedes playlistExhaust
+      // when on. The walk and its position live in music/playlist-order.ts.
+      playlistInOrder: showBool(),
       excludedPlaylistIds: showStringList({
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,

@@ -96,55 +96,66 @@ export default function Concepts() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">CHOOSING THE NEXT TRACK</p>
-        <h2>Candidate pool vs the agent picker.</h2>
+        <h2>Track Shortlist vs Agentic Tools.</h2>
         <p>
           Both end in the same place &mdash; one track, handed to the queue &mdash; and
-          both run inside a session and get logged. What differs is who does the
-          searching.
+          both run inside a session and get logged. They use the same show context,
+          musical policy, artist spacing and recency protection. What differs is how the
+          choice is reached.
         </p>
         <p>
-          With the <strong>candidate pool</strong>, the station does. It merges up to
-          sixteen sources into one shortlist &mdash; mood matches, sonically similar
-          tracks, embedding neighbours, the current show&rsquo;s genres and playlists,
-          starred and frequently-played, recently added, listener favourites, a wildcard
-          and a little pure random &mdash; de-duplicates, applies the recency and artist
-          filters, caps it, and asks the model <em>once</em>: pick one of these. One
-          round-trip per track, bounded tokens, and it works happily on a small local
-          model because there&rsquo;s no tool loop to get lost in. The catch is that the
-          model can only choose from what the pool already found.
+          With <strong>Track Shortlist</strong>, the controller does the discovery. It
+          combines eligible tracks from the library, de-duplicates them, applies the
+          show and recency rules, then asks the model once to choose from the resulting
+          shortlist. That keeps the model&rsquo;s job small and predictable: one structured
+          decision, with no tool loop required. It is a good fit for modest local models
+          and for hosted models where token use matters.
         </p>
         <p>
-          With the <strong>agent</strong> &mdash; the default &mdash; the model drives. It
-          gets about eighteen discovery tools (similar songs, tracks like this one, search
-          by sound, search by lyrics, by mood, by energy, by genre, deep cuts, recently
-          added, tracks toward a journey) and searches the library itself across the
-          session&rsquo;s memory before committing. Richer, more coherent across a run,
-          and more expensive: several round-trips per track, and it needs a model that is
-          genuinely good at multi-step tool calling with a context window of at least
-          16,384. Most &ldquo;the DJ stopped without choosing&rdquo; reports are that
-          requirement not being met.
+          With <strong>Agentic Tools</strong>, the model drives the discovery. It can use
+          the library&rsquo;s search tools across several steps before committing to a track.
+          That is an equally valid route for a robust tool-capable model, but it asks more
+          of the model and may use more time and tokens. The setting is a choice of
+          workflow, not a claim that one path has better taste or less variety.
+        </p>
+        <p>
+          The shared discovery tools now include frequently played albums, mood-named
+          playlists, neighbouring artists and an autonomous mood detour. These are available
+          to Agentic Tools and agent-assisted requests as well as Shortlist, so existing
+          Agentic stations can discover different tracks after upgrading. Energy requested
+          within a mood is a preference; strict show restrictions still apply. A show&rsquo;s
+          pinned moods suppress the mood detour on both routes. Similarity scores describe
+          resemblance, while measured tempo and key help judge the transition.
+        </p>
+        <p>
+          Shortlist&rsquo;s <strong>Prepare targeted searches</strong> setting is off by default,
+          including for stations migrated from Candidate Pool. Enable it under Music selection
+          to have an extra, bounded model call extract explicit musical requests from the show
+          brief once per airing. It uses the existing discovery pass budget. With two passes
+          and a soft playlist, the playlist keeps its pass and targeted searches rotate with
+          other sources in the remaining pass. Preparation can add time to the first pick;
+          ordinary discovery continues if it fails. Prompt memory follows your live DJ behaviour
+          settings for the number, age and length of already-aired remarks.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">WHICH ONE</div>
           <p>
-            Start on <strong>Agent</strong>{' '}if you&rsquo;re on a cloud model or a 12B-class
-            local one. Drop to <strong>Candidate pool</strong>{' '}if picks are slow, if the
-            DJ keeps re-picking, or if you&rsquo;re on a 9B-class model. Nothing is lost
-            either way: the station still picks, still writes links, still honours
-            requests. The agent already falls back to the pool on a timeout, so a slot is
-            never dropped.
+            Start with <strong>Track Shortlist</strong> if you use modest local hardware,
+            want a predictable token budget, or your model does not reliably call tools.
+            Try <strong>Agentic Tools</strong> when you have a strong tool-capable model
+            and want it to explore the library itself. The station still writes links and
+            honours the same track rules either way. Requests and segments have their own
+            direct or agent-assisted settings, so changing the picker does not force a
+            change there.
           </p>
         </div>
         <p className="text-muted">
           Two behaviours hold whichever you run. <strong>Variety is enforced after the
-          choice, not inside the search</strong> &mdash; the discovery tools carry no
-          artist filter on purpose, because filtering inside them gutted the similarity
-          pool on smaller libraries; instead a pick that repeats a recent artist triggers
-          a re-pick. And <strong>the daily token budget degrades in tiers</strong>: past
-          the soft threshold the station drops to the pool and mutes optional segments; at
-          the cap it stops calling the model at all and coasts on the fallback playlist.
-          The music never stops. The switch is under Settings &rarr; LLM &rarr; Agentic
-          picker; the model side is on{' '}
+          choice as well as during discovery</strong>, so a recent artist or album can
+          cause a re-pick. And <strong>the daily token budget degrades in tiers</strong>:
+          optional work is reduced first; at the cap the station coasts on the fallback
+          playlist. The music never stops. Choose the track-selection path under Settings
+          &rarr; Music Selection; the model side is on{' '}
           <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
         </p>
       </section>
@@ -376,8 +387,8 @@ export default function Concepts() {
           you&rsquo;ve left that on. The DJ never hears about it.
         </p>
         <p>
-          Influence is opt-in, under Settings &rarr; Likes. Turned on, the most-liked
-          tracks become one more source feeding the candidate pool, capped like every
+          Influence is opt-in, under Settings &rarr; Listeners. Turned on, the most-liked
+          tracks become one more signal available to Track Shortlist, capped like every
           other source &mdash; a weighted preference, never a lock, so the crowd can steer
           the pool without taking it over. Out of the box that means the ten most-liked
           tracks of the last thirty days; both numbers are yours to change, and a window

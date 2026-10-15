@@ -1,13 +1,13 @@
 // Exercise real leg selection/settings/telemetry, with generation callbacks
 // replacing only the provider boundary. No provider traffic or credentials.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
 
-const previousStateDir = process.env.STATE_DIR;
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-llm-failover-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-llm-failover-'));
 process.env.STATE_DIR = stateRoot;
 
 const store = await import('../src/settings/store.js');
@@ -15,7 +15,6 @@ const settings = await import('../src/settings.js');
 const { withFailover } = await import('../src/llm/internal/core/failover.js');
 const { withTransientRetry } = await import('../src/llm/internal/core/retry.js');
 const { recentCalls } = await import('../src/llm/internal/telemetry/log.js');
-const previousCache = store.peek();
 const primaryLabel = 'ollama:qwen3.5:397b';
 const backupLabel = 'ollama:llama3.1:8b';
 const fallback = { enabled: true, provider: 'ollama', model: 'llama3.1:8b', baseUrl: 'http://127.0.0.1:11434' };
@@ -38,11 +37,7 @@ function retired() {
 const failExtra = (err: Error) => ({ diagnostic: err.message });
 
 after(() => {
-  store.setCache(previousCache);
   recentCalls.length = 0;
-  if (previousStateDir === undefined) delete process.env.STATE_DIR;
-  else process.env.STATE_DIR = previousStateDir;
-  rmSync(stateRoot, { recursive: true, force: true });
 });
 
 test('a permanent primary failure returns the backup result without controller retries and records both legs', async () => {

@@ -22,23 +22,27 @@ function callUsesMusicalLeanings(call: {
   ok?: boolean;
   kind?: string;
   response?: string;
-  agentPickResolution?: {
-    usedMusicalLeanings?: boolean;
-    preliminary?: { id?: string; title?: string | null; artist?: string | null };
-    final?: { id?: string; title?: string | null; artist?: string | null };
-  };
+  agentPickResolution?: { usedMusicalLeanings?: boolean };
   shortlistResolution?: { usedMusicalLeanings?: boolean };
 }): boolean {
   if (call.ok === false) return false;
   const agentic = call.kind === 'djAgentPick' || call.kind === 'djAgentLeaningsReview';
-  const shortlist = call.kind === 'djShortlistPick' || call.kind === 'djShortlistRepick';
+  const shortlist = call.kind === 'djShortlistPick' || call.kind === 'djShortlistRepick' || call.kind === 'djShortlistLeaningsReview';
   if (!agentic && !shortlist) return false;
   // Agentic influence is controller-derived after guards and enqueue. Never
   // resurrect the old self-reported model flag from the raw response.
   if (agentic) return call.agentPickResolution?.usedMusicalLeanings === true;
-  const resolved = call.shortlistResolution;
-  if (resolved?.usedMusicalLeanings !== undefined) return resolved.usedMusicalLeanings;
-  try { return JSON.parse(call.response || '{}').usedMusicalLeanings === true; } catch { return false; }
+  return call.shortlistResolution?.usedMusicalLeanings === true;
+}
+
+function isShortlistCall(kind?: string): boolean {
+  return kind === 'djShortlistPick' || kind === 'djShortlistRepick' || kind === 'djShortlistLeaningsReview';
+}
+
+function leaningsBadgeTitle(kind?: string): string {
+  return isShortlistCall(kind)
+    ? 'Track Shortlist: a separate Musical Leanings review changed the initial choice, and that exact replacement passed the guards and reached the queue'
+    : 'Agentic Tools: Musical Leanings changed the preliminary choice, and that exact replacement passed the guards and reached the queue';
 }
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
@@ -251,10 +255,18 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="truncate text-[12px] font-bold">{c.kind}</span>
-                  {callUsesMusicalLeanings(c) && <span title="Musical Leanings changed the preliminary choice, and that replacement reached the queue" className="shrink-0 border border-vermilion/40 bg-vermilion/10 px-1 py-px text-[8px] font-bold tracking-[0.08em] text-vermilion">LEANINGS</span>}
+                  {callUsesMusicalLeanings(c) && (
+                    <span className="shrink-0 border border-vermilion/40 bg-vermilion/10 px-1 py-px text-[8px] font-bold tracking-[0.08em] text-vermilion" title={leaningsBadgeTitle(c.kind)}>
+                      LEANINGS
+                    </span>
+                  )}
                 </span>
                 <span className="caption text-[10px] whitespace-nowrap">
-                  {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
+                  {c.toolCalls?.length
+                    ? isShortlistCall(c.kind)
+                      ? `◈ ${c.toolCalls.length}`
+                      : `🔧 ${c.toolCalls.length}`
+                    : ''}
                   {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
                 </span>
                 <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
@@ -306,17 +318,25 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                     <ToolList calls={c.toolCalls} />
                   </CallSection>
                 )}
+                {c.shortlistResolution?.final && (
+                  <CallSection
+                    label="verified selection"
+                    preview={[c.shortlistResolution.final.title, c.shortlistResolution.final.artist].filter(Boolean).join(' — ')}
+                  >
+                    <JsonBlock value={c.shortlistResolution} />
+                  </CallSection>
+                )}
+                {c.agentPickResolution?.final && (
+                  <CallSection
+                    label="verified selection"
+                    preview={[c.agentPickResolution.final.title, c.agentPickResolution.final.artist].filter(Boolean).join(' — ')}
+                  >
+                    <JsonBlock value={c.agentPickResolution} />
+                  </CallSection>
+                )}
                 {c.response && (
                   <CallSection label="response" preview={oneLine(c.response)}>
                     <JsonOrText text={c.response} />
-                  </CallSection>
-                )}
-                {c.agentPickResolution && (
-                  <CallSection
-                    label="verified selection"
-                    preview={oneLine(c.agentPickResolution.final || c.agentPickResolution)}
-                  >
-                    <JsonBlock value={c.agentPickResolution} />
                   </CallSection>
                 )}
               </div>

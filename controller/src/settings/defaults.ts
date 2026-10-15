@@ -12,6 +12,7 @@ import {
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
+  SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
   HANDOVER_OFFSET_BOUNDS,
@@ -411,7 +412,12 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
-    compatibleMode: 'local' as 'local' | 'hosted',
+    // How an openai-compatible connection is driven: 'local' for a self-hosted
+    // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
+    // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
+    // 'auto' is the default for a NEW station only: load() keeps 'local' for a
+    // stored llm block written before 'auto' existed, so an upgrade is unchanged.
+    compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -454,14 +460,29 @@ export const DEFAULTS = {
     // block that category; unchecked/absent = allow (BLOCK_NONE). Only the
     // google leg reads them — every other provider ignores the field.
     geminiSafety: normalizeGeminiSafety(undefined),
-    // On: the session DJ agent drives picks, links and requests as a tool-loop
-    // over the session chat history. Off: the stateless pool picker runs instead,
-    // still inside a session and still logged.
+    // Compatibility flag for older clients, derived from trackSelection on
+    // load. A legacy-only update also moves request/segment runtimes; modern
+    // selection paths use their independent settings.
     pickerAgent: true,
+    // Agentic Tools remains the default route; shared discovery upgrades are
+    // declared in the operator manual. Track Shortlist performs
+    // controller-led discovery followed by one bounded structured selection.
+    trackSelection: 'agentic',
+    // Native discovery passes. Kept separate from agent discoverySteps: the
+    // latter is a tool-loop budget, while this is a controller source budget.
+    shortlistPasses: SHORTLIST_PASSES_DEFAULT,
+    // An extra bounded model call for explicit show search requests is opt-in.
+    shortlistSearchPreparation: false,
     // Guest preferences are a deliberately optional, secondary programming
     // input. Keep them off for upgrades and new stations: a blank host field
-    // must mean no Musical Leanings are sent to the picker.
+    // must mean no Musical Leanings are sent to either picker.
     guestMusicalLeanings: false,
+    // Kept independent from Track selection: requests are the one place an
+    // operator may deliberately retain tool use beside a tool-free shortlist.
+    requestMatching: 'agentic',
+    // Segment and Skill delivery is independently selectable for the same
+    // reason: a station may use a bounded picker yet retain agentic research.
+    segmentRuntime: 'agentic',
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.
@@ -532,7 +553,7 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
-      compatibleMode: 'local' as 'local' | 'hosted',
+      compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,

@@ -99,6 +99,29 @@ interface LlmCall {
   systemPreview?: string;
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
+  shortlistResolution?: {
+    preliminary?: { id?: string; title?: string | null; artist?: string | null };
+    leaningsReview?: {
+      outcome?: 'not-run' | 'kept' | 'replaced' | 'invalid' | 'failed';
+      replacementId?: string | null;
+      track?: { id?: string; title?: string | null; artist?: string | null } | null;
+      leaningsBasis?: string | null;
+      leaningsSource?: 'host' | 'guest' | null;
+      baselineId?: string | null;
+      reviewedSelectedId?: string | null;
+      candidateIds?: string[];
+      leaningsOptions?: string[];
+      leaningsSources?: Array<{ phrase: string; source: 'host' | 'guest'; ownerName: string | null }>;
+      proposedReplacementId?: string | null;
+      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'basis-already-supported-by-baseline' | 'not-flow-tie' | 'weak-musical-reason' | null;
+    };
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    final?: { id?: string; title?: string | null; artist?: string | null };
+    reason?: string | null;
+    queued?: boolean;
+    usedMusicalLeanings?: boolean;
+    rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'basis-already-supported-by-baseline' | 'not-flow-tie' | 'weak-musical-reason' | 'queue-collision' | 'pool-rescue' | null;
+  };
   response?: string;
   /** What the model said INSTEAD of the expected structured output on a failed call.
    * From the controller's failureDiagnostics(); absent on success (see `response`). */
@@ -117,9 +140,9 @@ interface LlmCall {
       candidateIds?: string[];
       leaningsOptions?: string[];
       leaningsSources?: Array<{ phrase: string; source: 'host' | 'guest'; ownerName: string | null }>;
-      leaningsSource?: 'host' | 'guest';
+      leaningsSource?: 'host' | 'guest' | null;
       proposedReplacementId?: string | null;
-      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'not-flow-tie' | 'weak-musical-reason' | null;
+      rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'basis-already-supported-by-baseline' | 'not-flow-tie' | 'weak-musical-reason' | null;
     };
     guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
     final?: { id?: string; title?: string | null; artist?: string | null };
@@ -127,8 +150,6 @@ interface LlmCall {
     queued?: boolean;
     usedMusicalLeanings?: boolean;
   };
-  /** Controller-verified Track Shortlist diagnostic for the completed pick. */
-  shortlistResolution?: { usedMusicalLeanings?: boolean };
 }
 
 export interface DebugLlm {

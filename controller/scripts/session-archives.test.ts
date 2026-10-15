@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import { test } from 'node:test';
 import { mkdtemp, mkdir, writeFile, unlink, rename, rm, stat, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createServer } from 'node:http';
 import express from 'express';
 import { createSessionArchiveReader } from '../src/util/session-archives.js';
 
@@ -70,8 +70,7 @@ test('the admin endpoint preserves its default response and accepts bounded pagi
   const { router } = await import('../src/routes/debug.js');
   const app = express();
   app.use(router);
-  const server = createServer(app);
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { server, close } = await listenHttp(app);
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}`;
@@ -88,6 +87,6 @@ test('the admin endpoint preserves its default response and accepts bounded pagi
       assert.equal((await fetch(`${base}/sessions?${query}`, { headers })).status, 400);
     }
   } finally {
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    await close();
   }
 });

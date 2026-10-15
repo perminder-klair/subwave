@@ -63,13 +63,16 @@ function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): voi
   if (!startId) return;
   try {
     const destEnergy = energyForDaypart().speed >= 1 ? 'high' : 'low';
-    const bucket = shuffle(library.songsByEnergy(destEnergy).map((s: any) => s.id));
+    // Ids only (#1723): mapping the whole bucket's rows just to sample 8 of
+    // them cost ~0.75 s per run start on a 76k-track library.
+    const bucket = shuffle(library.idsByEnergy(destEnergy));
     // Draw ids the audio index actually covers, rather than slicing blind and
-    // letting audioCentroid average around the gaps.
+    // letting audioCentroid average around the gaps. The blocklist check moved
+    // here from the bucket read, and only runs on ids that would be kept.
     const destIds: string[] = [];
     for (let i = 0; i < bucket.length && i < JOURNEY_DEST_PROBE_LIMIT; i++) {
       if (destIds.length >= JOURNEY_DEST_SAMPLE) break;
-      if (library.hasAudioVector(bucket[i])) destIds.push(bucket[i]);
+      if (library.hasAudioVector(bucket[i]) && !library.isBlockedId(bucket[i])) destIds.push(bucket[i]);
     }
     if (destIds.length === 0) return;
     const j = journey.buildJourney({ startId, endIds: destIds, steps: totalSteps });

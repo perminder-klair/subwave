@@ -2437,7 +2437,7 @@ def _failed(e):
     return {"status": "failed", "reason": str(e)[:500]}
 
 
-def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker=False):
+def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -2446,7 +2446,10 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
 
     Asking for a facet means asking for its model: clap force-loads CLAP and
     vocal/stems force-load Demucs, whatever the env defaults say; facets not
-    asked for never load a model.
+    asked for never load a model. `want_tail_vocals` asks a tail measured
+    without the vocal or stems facets to carry the outro's vocal ranges too
+    (one Demucs pass over the tail window only), as the flat response does
+    when Demucs is loaded; it loads Demucs only when the tail was measured.
 
     With `stems_require_marker` a stems root without the marker (a share not
     mounted here) gets no stem writes, and `stems` answers unavailable rather
@@ -2538,6 +2541,13 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
                 else:
                     out["stems"] = _ok({"stems_cached": stems_cached, "tail_stems": tail_vocals})
 
+    if "tail" in wanted and want_tail_vocals and outro is not None and "startMs" in outro \
+            and not (wanted & {"vocal", "stems"}):
+        detector = get_vocal_detector(force=True)
+        if detector is not None:
+            demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
+                        source.duration_s, outro)
+
     if "tail" in wanted and "tail" not in out:
         if outro is None:
             out["tail"] = _unmeasurable(tail_reason or "tail-not-measured")
@@ -2592,6 +2602,7 @@ def analyze_facet_request(librosa, req):
         source.open(librosa)
         result = analyze_facets(
             librosa, source, facets, stems_dir=req.get("stems_dir"),
+            want_tail_vocals=req.get("tail_vocals") is True,
             stems_require_marker=req.get("stems_require_marker") is True,
         )
         return {"facets": result, "source": source.describe()}

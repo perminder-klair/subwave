@@ -7,17 +7,14 @@
 // node:assert-via-tsx style, matching scripts/auto-pool.test.ts.
 
 import assert from 'node:assert/strict';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
 import { showSpan, overrideSpan, planFeature, beatWindow } from '../src/broadcast/programme-pure.js';
 // The stride is REQUIRED by beatWindow — a default there would be a second copy
 // of the constant talk-scheduler.ts imports (#1576).
 import { HANDOVER_OFFSET_STEP_MINUTES as STRIDE } from '../src/schemas/settings.js';
 
 // A 7×24 grid with every slot null.
-function emptyWeek(): Record<number, (string | null)[]> {
-  const week: Record<number, (string | null)[]> = {};
-  for (let d = 0; d < 7; d++) week[d] = Array(24).fill(null);
-  return week;
-}
+function emptyWeek(): Record<number, (string | null)[]> { return emptyScheduleWeek(); }
 
 // ── showSpan ─────────────────────────────────────────────────────────────────
 

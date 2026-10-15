@@ -4,10 +4,10 @@
 // section is `transitions`, the seam record read back from library.db plays.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
+import { recentCalls, generationHealthSnapshot, contextMeasurements } from '../llm/log.js';
 import * as llmProvider from '../llm/provider.js';
 import * as settings from '../settings.js';
-import { ttsCalls, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests } from '../stats.js';
+import { ttsCalls, shortlistPicks, summarizeLlm, summarizeTts, summarizeDjLog, summarizeRequests, summarizeShortlistPicks } from '../stats.js';
 import { queue } from '../broadcast/queue.js';
 import { recentRequests } from '../broadcast/request-log.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
@@ -35,11 +35,14 @@ router.get('/stats', requireAdmin, (req, res) => {
     llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
     // Durable per-UTC-day tally, unlike the rings above. enabled:false with no cap.
     llm.budget = budgetStatus();
+    llm.contextWindows = contextMeasurements.snapshot();
     llm.generation = generationHealthSnapshot();
 
     res.json({
       t: new Date().toISOString(),
       llm,
+      trackSelection: settings.get().llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlist: summarizeShortlistPicks(shortlistPicks),
       tts: summarizeTts(ttsCalls),
       djLog: summarizeDjLog(queue.djLog),
       requests: summarizeRequests(recentRequests),

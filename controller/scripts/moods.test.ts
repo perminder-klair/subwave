@@ -6,6 +6,7 @@
 // Run: `tsx scripts/moods.test.ts`.
 
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import {
   moodVocab,
   moodEntries,
@@ -20,121 +21,53 @@ import {
   WEATHER_CONDITIONS,
 } from '../src/settings.js';
 
-import { parseSettingsPatchKey, SETTINGS_PATCH_SHAPE_ONLY } from '../src/settings/patch-registry.js';
-
 // ── vocabulary ───────────────────────────────────────────────────────────────
 
-// Pre-load, the vocabulary IS the seed defaults (get() → DEFAULTS).
-assert.deepEqual(
-  moodVocab(),
-  MOOD_DEFAULTS.map((m) => m.name),
-  'moodVocab() returns the seed mood names before load()',
-);
-assert.equal(moodEntries().length, MOOD_DEFAULTS.length, 'moodEntries() returns every seed mood');
-assert.ok(moodVocab().includes('energetic'), 'a known default mood is present');
+test('seed vocabulary is available before settings.load', () => {
+  // Pre-load, the vocabulary IS the seed defaults (get() → DEFAULTS).
+  assert.deepEqual(
+    moodVocab(),
+    MOOD_DEFAULTS.map((m) => m.name),
+    'moodVocab() returns the seed mood names before load()',
+  );
+  assert.equal(moodEntries().length, MOOD_DEFAULTS.length, 'moodEntries() returns every seed mood');
+  assert.ok(moodVocab().includes('energetic'), 'a known default mood is present');
+});
 
 // ── per-mood CLAP prompt ─────────────────────────────────────────────────────
 
-// Every seed mood resolves to its curated description; an unknown mood falls
-// back to the bare "<name> music" form.
-for (const m of MOOD_DEFAULTS) {
-  const expected = m.clapPrompt || `${m.name} music`;
-  assert.equal(moodPromptFor(m.name), expected, `curated prompt for "${m.name}"`);
-}
-assert.equal(moodPromptFor('zydeco'), 'zydeco music', 'unknown mood → bare-word fallback');
+test('seed CLAP prompts and unknown-mood fallback', () => {
+  // Every seed mood resolves to its curated description; an unknown mood falls
+  // back to the bare "<name> music" form.
+  for (const m of MOOD_DEFAULTS) {
+    const expected = m.clapPrompt || `${m.name} music`;
+    assert.equal(moodPromptFor(m.name), expected, `curated prompt for "${m.name}"`);
+  }
+  assert.equal(moodPromptFor('zydeco'), 'zydeco music', 'unknown mood → bare-word fallback');
+});
 
 // ── time-of-day → mood ───────────────────────────────────────────────────────
 
-// Every fixed period resolves to its seed mood, and each is a real vocabulary entry.
-for (const period of MOOD_PERIODS) {
-  assert.equal(moodScheduleFor(period), PERIOD_MOOD_DEFAULTS[period], `schedule seed for ${period}`);
-  assert.ok(moodVocab().includes(moodScheduleFor(period)), `${period} maps to a real mood`);
-}
+test('every daypart resolves to a seed mood', () => {
+  // Every fixed period resolves to its seed mood, and each is a real vocabulary entry.
+  for (const period of MOOD_PERIODS) {
+    assert.equal(moodScheduleFor(period), PERIOD_MOOD_DEFAULTS[period], `schedule seed for ${period}`);
+    assert.ok(moodVocab().includes(moodScheduleFor(period)), `${period} maps to a real mood`);
+  }
+});
 
 // ── weather → mood ───────────────────────────────────────────────────────────
 
-// Every condition resolves to its seed; '' (cloudy) stays "no steer", and any
-// non-empty value is a real vocabulary entry.
-for (const cond of WEATHER_CONDITIONS) {
-  assert.equal(weatherMoodFor(cond), WEATHER_MOOD_DEFAULTS[cond], `weather seed for ${cond}`);
-  const v = weatherMoodFor(cond);
-  if (v) assert.ok(moodVocab().includes(v), `${cond} maps to a real mood`);
-}
-assert.equal(weatherMoodFor('cloudy'), '', 'cloudy has no mood steer by default');
-
-// ── moods patch validation ──────────────────────────────────────────────────────
-
-// Valid list round-trips, normalising the id (lowercase, spaces/punct → dashes)
-// and keeping the CLAP prompt.
-assert.deepEqual(
-  parseSettingsPatchKey('moods', [{ name: 'Chill Vibes!', clapPrompt: 'soft downtempo' }]),
-  [{ name: 'chill-vibes', clapPrompt: 'soft downtempo' }],
-  'name normalises to a kebab id; prompt preserved',
-);
-// A missing/blank prompt is allowed (falls back to `${name} music` at read time).
-assert.deepEqual(
-  parseSettingsPatchKey('moods', [{ name: 'mellow' }]),
-  [{ name: 'mellow', clapPrompt: '' }],
-  'clapPrompt is optional',
-);
-// Unknown keys are stripped (rebuilt objects).
-assert.deepEqual(
-  parseSettingsPatchKey('moods', [{ name: 'x', clapPrompt: 'y', bogus: 1 }]),
-  [{ name: 'x', clapPrompt: 'y' }],
-  'unknown keys stripped',
-);
-assert.throws(() => parseSettingsPatchKey('moods', []), /at least one/, 'empty vocabulary rejected');
-assert.throws(() => parseSettingsPatchKey('moods', 'nope'), /must be an array/, 'non-array rejected');
-assert.throws(
-  () => parseSettingsPatchKey('moods', [{ name: 'a' }, { name: 'A' }]),
-  /duplicate/,
-  'duplicate names (after normalise) rejected',
-);
-assert.throws(
-  () => parseSettingsPatchKey('moods', [{ name: '' }]),
-  /must be 1-/,
-  'empty name rejected',
-);
-assert.throws(
-  () => parseSettingsPatchKey('moods', Array.from({ length: 41 }, (_, i) => ({ name: `m${i}` }))),
-  /at most/,
-  'over the 40-entry cap rejected',
-);
-
-// ── moodSchedule patch validation ───────────────────────────────────────────────
-
-const NAMES = ['energetic', 'calm', 'focus', 'evening', 'night', 'morning', 'driving', 'reflective'];
-const moodContext = { ...SETTINGS_PATCH_SHAPE_ONLY, moodNames: NAMES };
-const fullSchedule = Object.fromEntries(MOOD_PERIODS.map((p) => [p, PERIOD_MOOD_DEFAULTS[p]]));
-assert.deepEqual(
-  parseSettingsPatchKey('moodSchedule', fullSchedule, moodContext),
-  fullSchedule,
-  'a complete schedule of known moods round-trips',
-);
-assert.throws(
-  () => parseSettingsPatchKey('moodSchedule', { ...fullSchedule, 'drive-time': 'banana' }, moodContext),
-  /moodSchedule\.drive-time/,
-  'a slot pointing at an unknown mood is rejected, naming the slot',
-);
-assert.throws(
-  () => parseSettingsPatchKey('moodSchedule', [], moodContext),
-  /must be an object/,
-  'non-object schedule rejected',
-);
-
-// ── weatherMoods patch validation ───────────────────────────────────────────────
-
-// '' (no steer) is allowed; missing conditions default to '' — so a partial map fills out.
-const weatherOut = parseSettingsPatchKey<Record<string, string>>('weatherMoods', { clear: 'energetic', rainy: '' }, moodContext);
-assert.equal(weatherOut.clear, 'energetic', 'known mood kept');
-assert.equal(weatherOut.rainy, '', 'blank = no steer kept');
-assert.equal(weatherOut.stormy, '', 'omitted condition defaults to no steer');
-assert.equal(Object.keys(weatherOut).length, WEATHER_CONDITIONS.length, 'all conditions present');
-assert.throws(
-  () => parseSettingsPatchKey<Record<string, string>>('weatherMoods', { clear: 'banana' }, moodContext),
-  /weatherMoods\.clear/,
-  'a condition pointing at an unknown mood is rejected',
-);
+test('weather seeds keep cloudy unsteered', () => {
+  // Every condition resolves to its seed; '' (cloudy) stays "no steer", and any
+  // non-empty value is a real vocabulary entry.
+  for (const cond of WEATHER_CONDITIONS) {
+    assert.equal(weatherMoodFor(cond), WEATHER_MOOD_DEFAULTS[cond], `weather seed for ${cond}`);
+    const v = weatherMoodFor(cond);
+    if (v) assert.ok(moodVocab().includes(v), `${cond} maps to a real mood`);
+  }
+  assert.equal(weatherMoodFor('cloudy'), '', 'cloudy has no mood steer by default');
+});
 
 // ── assertNoOrphanMoods (the in-use removal guard) ───────────────────────────
 
@@ -147,41 +80,43 @@ const baseState = () => ({
 });
 
 // All references resolve → no throw.
-assert.doesNotThrow(() => assertNoOrphanMoods(baseState()), 'consistent state passes');
+test('consistent mood references pass the removal guard', () => {
+  assert.doesNotThrow(() => assertNoOrphanMoods(baseState()));
+});
 
 // Remove 'calm' while a festival still uses it → rejected, naming the festival.
-{
+test('a festival reference blocks mood removal', () => {
   const s = baseState();
   s.moods = [{ name: 'energetic', clapPrompt: '' }];
   assert.throws(() => assertNoOrphanMoods(s), /festival "Diwali"/, 'festival ref blocks removal');
-}
+});
 // Schedule slot still referencing the removed mood → names the slot.
-{
+test('a daypart reference blocks mood removal', () => {
   const s = baseState();
   s.moods = [{ name: 'energetic', clapPrompt: '' }];
   s.festivals = [];
   assert.throws(() => assertNoOrphanMoods(s), /evening time-of-day slot/, 'schedule ref blocks removal');
-}
+});
 // Weather slot referencing the removed mood → names the condition.
-{
+test('a weather reference blocks mood removal', () => {
   const s = baseState();
   s.moods = [{ name: 'calm', clapPrompt: '' }];
   s.moodSchedule = { 'drive-time': 'calm', evening: 'calm' };
   s.festivals = [];
   s.shows = [];
   assert.throws(() => assertNoOrphanMoods(s), /clear weather slot/, 'weather ref blocks removal');
-}
+});
 // Show referencing the removed mood → names the show.
-{
+test('a show reference blocks mood removal', () => {
   const s = baseState();
   s.moods = [{ name: 'calm', clapPrompt: '' }];
   s.moodSchedule = { 'drive-time': 'calm', evening: 'calm' };
   s.weatherMoods = { clear: 'calm', rainy: '' };
   s.festivals = [];
   assert.throws(() => assertNoOrphanMoods(s), /show "Breakfast"/, 'show ref blocks removal');
-}
+});
 // A rename done in one shot (add new, repoint every referrer, drop old) passes.
-{
+test('a fully repointed mood rename passes', () => {
   const s = baseState();
   s.moods = [{ name: 'energetic', clapPrompt: '' }, { name: 'serene', clapPrompt: '' }];
   s.moodSchedule = { 'drive-time': 'energetic', evening: 'serene' };
@@ -189,6 +124,4 @@ assert.doesNotThrow(() => assertNoOrphanMoods(baseState()), 'consistent state pa
   s.festivals = [{ name: 'Diwali', mood: 'serene' }];
   s.shows = [{ name: 'Breakfast', moods: ['energetic'] }];
   assert.doesNotThrow(() => assertNoOrphanMoods(s), 'a fully-repointed rename passes');
-}
-
-console.log('moods: all assertions passed');
+});

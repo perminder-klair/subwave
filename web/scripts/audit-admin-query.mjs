@@ -136,6 +136,10 @@ const allowed = new Map([
     ['diagnosis-command', { callee: 'adminResponse', method: 'GET', path: /^\/doctor$/ }],
     ['diagnosis-stream', { callee: 'adminResponse', method: 'GET', path: /^\/doctor\/stream$/ }],
   ])],
+  ['DiscoveryPanel.tsx', new Map([
+    ['discovery-tool-preview', { callee: 'adminJson', method: 'POST', path: /^\/debug\/discovery\/tool\/\$\{\}$/ }],
+    ['discovery-comparison-preview', { callee: 'adminJson', method: 'POST', path: /^\/debug\/discovery\/compare$/ }],
+  ])],
   ['PersonasPanel.tsx', new Map([
     // Persona bundle (#1620). A one-shot blob download, like backup-export and
     // skill-export next door — the import half is an ordinary useAdminMutation.

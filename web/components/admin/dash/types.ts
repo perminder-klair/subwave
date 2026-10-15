@@ -74,6 +74,8 @@ export interface DashStatus {
 // status: the figures move slowly and the endpoint is heavier.
 export interface HealthStats {
   llm?: { count?: number; latency?: { p95?: number }; agentTimeoutMs?: number };
+  trackSelection?: 'agentic' | 'shortlist';
+  shortlist?: { count?: number; latency?: { p95?: number }; warningMs?: number; warmingUp?: boolean };
   tts?: { count?: number; fallbackRate?: number | null };
 }
 
@@ -127,7 +129,7 @@ export function geoipHint(
   if (!s || s.ok) return null;
   if (!rows?.some(r => !r.country)) return null;
   if (s.source === 'none') {
-    return 'No country for some listeners: no GeoIP database is set, so only listeners who opened the web player get one. Set Settings → Danger zone → Listener country → GeoIP database.';
+    return 'No country for some listeners: no GeoIP database is set, so only listeners who opened the web player get one. Set Settings → Broadcast & mixer → Listener country → GeoIP database.';
   }
   const where = s.source === 'env' ? 'GEOIP_DB_PATH' : 'the GeoIP database setting';
   return `No country for some listeners: can’t open ${s.path} (${s.error || 'unreadable'}), set in ${where}. Use the path as the controller container sees it (e.g. /var/sub-wave/…) and make sure the file is readable; it is retried every minute.`;
@@ -227,7 +229,7 @@ export function countryName(code: string | undefined): string {
 // operator can tell a beacon's edge header from a database guess.
 export function countryTitle(c: { country?: string; countrySource?: string }): string {
   if (!c.country) {
-    return 'Unknown: no player beacon from this IP and no GeoIP database match (Settings → Danger zone → Listener country)';
+    return 'Unknown: no player beacon from this IP and no GeoIP database match (Settings → Broadcast & mixer → Listener country)';
   }
   const via = c.countrySource === 'beacon' ? 'from the player beacon' : 'from the GeoIP database';
   return `${countryName(c.country)} (${via})`;
@@ -258,5 +260,4 @@ export function sortConnections(
     return cmp * sign;
   });
 }
-
 

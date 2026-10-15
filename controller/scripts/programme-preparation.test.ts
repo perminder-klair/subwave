@@ -14,7 +14,7 @@ const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 after(() => rm(root, { recursive: true, force: true }));
 
-test('late preparation replaces a generic plan while preserving aired programme beats', async () => {
+test('late preparation replaces a generic plan while preserving aired programme beats', async (t) => {
   await settings.load();
   const host = settings.get().personas[0];
   const outgoing = { ...host, id: 'p_outgoing', name: 'Outgoing host' };
@@ -35,13 +35,12 @@ test('late preparation replaces a generic plan while preserving aired programme 
       return { available: true, subject: 'Prepared artist', data: { fact: 'A supplied fact.' } };
     },
   }]);
-  const realFetch = globalThis.fetch;
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
   let baseContext;
   try {
-    globalThis.fetch = async () => new Response('{}', { headers: { 'content-type': 'application/json' } });
     baseContext = await getFullContext();
   } finally {
-    globalThis.fetch = realFetch;
+    fetchMock.mock.restore();
   }
   const incoming = { ...baseContext, activeShow: { id: 's_prepared', name: 'Artist hour' } };
   session.start({ ...incoming, activeShow: { id: 's_outgoing', name: 'Outgoing' } });

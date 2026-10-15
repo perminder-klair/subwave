@@ -4,3 +4,5 @@
 
 export { buildPickerTools, pickerScope, PICKER_TOOLS } from './internal/tools/picker/index.js';
 export type { PickerScope, PickerContext, PickerToolModule } from './internal/tools/picker/index.js';
+
+export { clearPickerSourceCache } from './internal/tools/picker/source-pool-cache.js';

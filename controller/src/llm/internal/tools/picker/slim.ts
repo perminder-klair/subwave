@@ -10,6 +10,7 @@ import { isInstrumental } from '../../../../music/lyric-vocal.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';
 import { resolveEraYear } from '../../../../music/show-filter.js';
+import { shiftOnsetMs } from '../../../../music/silence-trim.js';
 
 export function slim(s: any) {
   // Surface the editorial tags + measured acoustic facts when known — merged
@@ -61,7 +62,9 @@ export function slim(s: any) {
   // to mask the analyzed value.
   const bpm = library.realBpm(rec?.bpm) ?? library.realBpm(s.bpm);
   const key = rec?.musicalKey ?? s.musicalKey ?? null;
-  const introMs = rec?.introMs ?? s.introMs ?? null;
+  const rawIntroMs = rec?.introMs ?? s.introMs;
+  const introMs = typeof rawIntroMs === 'number' && rawIntroMs >= 0
+    ? shiftOnsetMs(s, rawIntroMs) : null;
   const pace = rec?.paceMean ?? s.paceMean ?? null;
   const sections = library.sectionCount(rec) ?? library.sectionCount(s);
   // Airing memory (music/airing.ts): true when the station has provably never
@@ -84,8 +87,15 @@ export function slim(s: any) {
   const daysAgo = (ms: number) => Math.max(0, Math.round((Date.now() - ms) / 86400000));
   const songStats = library.trackPlayStatsFor(s);
   const artistStats = library.artistPlayStatsFor(s.artist);
+  const evidence = s.similarity;
+  const similarity = evidence && (evidence.kind === 'audio' || evidence.kind === 'text')
+    && typeof evidence.reference === 'string' && evidence.reference.length > 0
+    && typeof evidence.score === 'number' && Number.isFinite(evidence.score)
+    && evidence.score >= -1 && evidence.score <= 1
+    ? { kind: evidence.kind, reference: evidence.reference, score: evidence.score } : null;
   return {
     ...base,
+    ...(similarity ? { similarity } : {}),
     ...(moods.length ? { moods } : {}),
     ...(energy != null ? { energy } : {}),
     ...(durationSec != null ? { duration_sec: durationSec } : {}),

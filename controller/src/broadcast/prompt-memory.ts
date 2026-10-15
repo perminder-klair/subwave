@@ -1,3 +1,5 @@
+import { VOICE_KINDS, DEDUPE_KINDS } from './queue/kinds.js';
+
 // Pure selection policy for the speech memory injected into DJ prompts. The
 // booth log is station-wide; editorial continuity belongs to the current
 // session, whose turns are stamped only after speech reaches air.
@@ -42,4 +44,32 @@ export function promptMemoryEntries(
     out.push({ t: turn.t, kind: turn.kind, message: speaker ? `${speaker}: ${text}` : text });
   }
   return out.reverse();
+}
+
+// Shared recap policy. Callers supply the live DJ behaviour values; rendering
+// can differ, but line count, lookback, kinds, dedupe and truncation cannot.
+export function promptRecapEntries(
+  entries: readonly PromptMemoryEntry[],
+  { limit, withinMinutes, maxChars }: { limit: number; withinMinutes: number; maxChars: number },
+  now = Date.now(),
+): PromptMemoryEntry[] {
+  if (limit <= 0 || withinMinutes < 0 || maxChars < 1) return [];
+  const cutoff = now - withinMinutes * 60_000;
+  const kinds = new Set<string>();
+  const picked: PromptMemoryEntry[] = [];
+  for (const entry of entries) {
+    if (!VOICE_KINDS.has(entry.kind)) continue;
+    const at = Date.parse(entry.t);
+    if (!Number.isFinite(at) || at > now) continue;
+    if (at < cutoff) break;
+    if (DEDUPE_KINDS.has(entry.kind)) {
+      if (kinds.has(entry.kind)) continue;
+      kinds.add(entry.kind);
+    }
+    const message = typeof entry.message === 'string' ? entry.message.replace(/\s+/g, ' ').trim() : '';
+    if (!message) continue;
+    picked.push({ ...entry, message: message.length > maxChars ? message.slice(0, maxChars - 1) + '…' : message });
+    if (picked.length >= limit) break;
+  }
+  return picked;
 }

@@ -350,8 +350,8 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
     target.model = v;
   }
   if (l.compatibleMode !== undefined) {
-    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted') {
-      throw new Error(`${label}.compatibleMode must be "local" or "hosted"`);
+    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted' && l.compatibleMode !== 'auto') {
+      throw new Error(`${label}.compatibleMode must be "local", "hosted" or "auto"`);
     }
     target.compatibleMode = l.compatibleMode;
   }
@@ -912,6 +912,9 @@ export interface NormalizedShow {
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor
    *  airs once before any of them repeats. Inert without it. */
   playlistExhaust: boolean;
+  /** Play in order: with playlistStrict on, picks walk the anchor in its own
+   *  order and resume across airings. Inert without it. */
+  playlistInOrder: boolean;
   excludedPlaylistIds: string[];
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */
