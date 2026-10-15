@@ -37,12 +37,12 @@ export default function BackupRouteNote({ routing }: { routing?: DebugLlm['route
   if (!routing) return null;
   const label = [routing.provider, routing.model].filter(Boolean).join(' / ') || 'backup';
   return (
-    <span className="inline-flex items-center gap-1.5 whitespace-nowrap" title={backupRouteTitle(routing)}>
+    <span className="inline-flex max-w-full items-center gap-1.5 whitespace-normal" title={backupRouteTitle(routing)}>
       <span
         aria-hidden="true"
         className="inline-block size-[7px] shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_6px_1px_color-mix(in_oklab,var(--accent)_70%,transparent)]"
       />
-      <span>routed to backup {label}</span>
+      <span className="min-w-0 wrap-anywhere">routed to backup {label}</span>
     </span>
   );
 }
