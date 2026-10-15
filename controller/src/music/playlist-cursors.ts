@@ -87,5 +87,3 @@ export function createPlaylistCursorStore({ file, knownShowIds }: {
     },
   };
 }
-
-export type PlaylistCursorStore = ReturnType<typeof createPlaylistCursorStore>;

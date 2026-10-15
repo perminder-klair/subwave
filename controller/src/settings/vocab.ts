@@ -30,7 +30,6 @@ import {
   PERSONA_LIMIT as PERSONA_LIMIT_VALUE,
   PERSONA_LINK_STYLES,
   PERSONA_SCRIPT_LENGTHS,
-  PERSONA_SKILLS_LIMIT,
   PERSONA_SOUL_MAX,
   TTS_CHATTERBOX_VOICE_RE,
   TTS_CLOUD_PROVIDERS as TTS_CLOUD_PROVIDER_VALUES,
@@ -823,9 +822,6 @@ export { GUESTS_PER_SHOW, PLAYLISTS_PER_SHOW, EXCLUDED_PLAYLISTS_PER_SHOW };
 // name every library tag it wants. Keep in lockstep with FILTER_VALUES_MAX in
 // web/components/admin/shows/types.ts.
 export { SHOW_FILTER_VALUES_MAX };
-// Must comfortably exceed a realistic skill library: unticking one skill on an
-// "all skills" (null) persona materialises the full catalog minus one.
-export const SKILLS_PER_PERSONA_LIMIT = PERSONA_SKILLS_LIMIT;
 // djPrompts text bounds; keep in lockstep with PROMPT_MIN/PROMPT_MAX in
 // web/components/admin/personas/constants.ts.
 export const DJ_PROMPT_LIMIT = DJ_PROMPT_LIMIT_VALUE;
