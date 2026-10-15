@@ -107,13 +107,6 @@ export function pageAudioMoodScores(
   return { items, lastId: rows.length ? rows[rows.length - 1].id : null };
 }
 
-// Decides whether the library is big enough to calibrate.
-export function audioMoodScoredCount(): number {
-  return (requireDb().prepare(
-    'SELECT COUNT(*) AS n FROM tracks WHERE audio_mood_scores_json IS NOT NULL',
-  ).get() as { n: number }).n;
-}
-
 // Labels only; a calibration-only change must not need the analyzer's text tower.
 export function setTrackAudioMoodLabelsBulk(
   rows: Array<{ id: string; moods: string[] }>,

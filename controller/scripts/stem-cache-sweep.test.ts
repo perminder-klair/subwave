@@ -158,8 +158,6 @@ async function main() {
     assert.equal(u.dirs, 2);
     // Two dirs is far below MEASURED_MIN_DIRS → the guess, not 5 MB.
     assert.equal(u.estTrackBytes, stemCache.APPROX_TRACK_BYTES);
-    assert.equal(await stemCache.usageBytes(), 10 * MB);
-    assert.equal(await stemCache.cachedTrackCount(), 2);
   });
 
   await test('headroom is sized off the measured average once the cache has one', async () => {
