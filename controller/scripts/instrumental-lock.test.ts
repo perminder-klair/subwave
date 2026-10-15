@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { z } from 'zod';
+import express from 'express';
+import { chatCompletion } from './test-utils/llm.js';
 import type { PickerScope } from '../src/llm/internal/tools/picker/scope.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-instrumental-lock-'));
@@ -14,9 +16,13 @@ let includeInstrumentals = true;
 let textDim = 768;
 let releases: Array<{ id: string; year: number; songs: ReturnType<typeof song>[] }> | null = null;
 const calls: URL[] = [];
-const server = createServer((req, res) => {
+const embeddingInputs: string[] = [];
+const app = express();
+app.use(express.json());
+const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
   calls.push(url);
+  if (url.pathname.startsWith('/library/')) return app(req, res);
   const vector = (dim: number) => Array.from({ length: dim }, (_, i) => i === 0 ? 1 : 0);
   const json = (body: unknown) => {
     res.setHeader('content-type', 'application/json');
@@ -24,11 +30,21 @@ const server = createServer((req, res) => {
   };
   if (url.pathname === '/health') return json({ ok: true, engines: ['analyze'], analyze_text_capable: true });
   if (url.pathname === '/embed-text') return json({ ok: true, embeddings: [vector(512)] });
-  if (url.pathname === '/v1/embeddings') return json({
-    object: 'list', model: 'fixture',
-    data: [{ object: 'embedding', index: 0, embedding: vector(textDim) }],
-    usage: { prompt_tokens: 1, total_tokens: 1 },
-  });
+  if (url.pathname === '/v1/embeddings' || url.pathname === '/v1/chat/completions') {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString());
+    if (url.pathname.endsWith('/chat/completions')) return json(chatCompletion({
+      message: { role: 'assistant', content: null, tool_calls: [{ id: 'tag', type: 'function',
+        function: { name: body.tool_choice?.function?.name ?? body.tools?.[0]?.function?.name ?? 'emit', arguments: JSON.stringify({ results: [{ moods: ['calm'], energy: 'low' }] }) } }] },
+    }));
+    embeddingInputs.push(...z.array(z.string()).parse(body.input));
+    return json({
+      object: 'list', model: 'fixture',
+      data: [{ object: 'embedding', index: 0, embedding: vector(textDim) }],
+      usage: { prompt_tokens: 1, total_tokens: 1 },
+    });
+  }
   const rows = [
     ...Array.from({ length: headCount }, (_, i) => song(`v${i}`)),
     ...(includeInstrumentals ? Array.from({ length: 12 }, (_, i) => song(`i${i}`)) : []),
@@ -37,6 +53,8 @@ const server = createServer((req, res) => {
   let body: Record<string, unknown> = {};
   if (url.pathname.endsWith('/getRandomSongs')) body = { randomSongs: { song: rows.slice(0, count) } };
   if (url.pathname.endsWith('/getSimilarSongs2')) body = { similarSongs2: { song: rows.slice(0, count) } };
+  if (url.pathname.endsWith('/getSonicSimilarTracks')) body = { sonicSimilarTracks: { sonicMatch: rows.slice(0, count).map(entry => ({ entry })) } };
+  if (url.pathname.endsWith('/getArtistInfo2')) body = { artistInfo2: { similarArtist: [{ name: 'Neighbour' }] } };
   if (url.pathname.endsWith('/getTopSongs')) body = { topSongs: { song: rows.slice(0, count) } };
   if (url.pathname.endsWith('/getSongsByGenre')) body = { songsByGenre: { song: rows.slice(0, count) } };
   if (url.pathname.endsWith('/getGenres')) body = { genres: { genre: [{ value: 'Ambient', songCount: 0 }] } };
@@ -54,6 +72,8 @@ process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = `http://127.0.0.1:${address.port}`;
 process.env.NAVIDROME_USER = 'test';
 process.env.NAVIDROME_PASS = 'test';
+process.env.ADMIN_USER = 'test';
+process.env.ADMIN_PASS = 'test';
 process.env.ANALYZE_URL = `http://127.0.0.1:${address.port}`;
 const db = await import('../src/music/library-db.js');
 const { requireDb } = await import('../src/music/library-db/handle.js');
@@ -64,6 +84,9 @@ const { trackInstrumental, applyStrictLocks } = await import('../src/music/show-
 const { soundDescriptors } = await import('../src/music/embeddings.js');
 const { buildPickerContext, pickerScope } = await import('../src/llm/internal/tools/picker/scope.js');
 const { buildPickerTools } = await import('../src/llm/internal/tools/picker/index.js');
+const { clearPickerSourceCache } = await import('../src/llm/tools.js');
+const { router: maintenanceRoutes } = await import('../src/routes/library/maintenance.js');
+app.use(maintenanceRoutes);
 await settings.load();
 await library.load();
 textDim = db.getEmbeddingDim() ?? 768;
@@ -294,4 +317,73 @@ test('wider discovery never relaxes strict locks or other hard exclusions', asyn
   }
   assert.equal(buildPickerContext(pickerScope()).candidateLimit(60), 60);
   assert.equal(buildPickerContext(pickerScope({ vocalLock: '', energyLock: [] })).candidateLimit(60), 60);
+});
+
+test('server sonic neighbours widen before the strict vocal filter', async () => {
+  headCount = 20;
+  includeInstrumentals = true;
+  for (const scope of [{ sonicSimilarity: true }, { ...strict, sonicSimilarity: true }]) {
+    calls.length = 0;
+    const rows = tracksSchema.parse((await execute('sonicSimilarTracks', { songId: 'seed' }, scope)).result);
+    assert.equal(rows.length, 8);
+    assert.ok(rows.every(row => row.id.startsWith(scope.vocalLock ? 'i' : 'v')));
+    assert.ok(calls.some(url => url.pathname.endsWith('/getSonicSimilarTracks')
+      && Number(url.searchParams.get('count')) === (scope.vocalLock ? 100 : 20)));
+  }
+});
+
+for (const [name, input, vocalHead] of [
+  ['frequentAlbums', {}, 3],
+  ['similarArtistTracks', { artist: 'Test Artist' }, 5],
+] as const) {
+  test(`${name} separates locked and unlocked cached pools`, async (t) => {
+    headCount = vocalHead;
+    includeInstrumentals = true;
+    t.mock.method(Math, 'random', () => 0.999999);
+    for (const scopes of [[{}, strict], [strict, {}]]) {
+      clearPickerSourceCache();
+      for (const scope of scopes) {
+        const rows = tracksSchema.parse((await execute(name, input, scope)).result);
+        assert.ok(rows.length > 0 && rows.length <= 8);
+        assert.ok(rows.every(row => row.id.startsWith('vocalLock' in scope ? 'i' : 'v')));
+      }
+    }
+  });
+}
+
+test('era discovery widens across browse pages without changing unlocked samples', async (t) => {
+  for (let i = 0; i < 320; i++) {
+    const id = `era-${String(i).padStart(3, '0')}`;
+    db.upsertTrackMeta(id, { ...song(id), artist: id, year: 1985 });
+    db.upsertTrackTags(id, { moods: ['focus'], energy: 'low', source: 'manual' });
+    db.upsertTrackAnalysis(id, { vocalRanges: i < 280 ? [{ startMs: 0, endMs: 60000 }] : bleed });
+  }
+  t.mock.method(Math, 'random', () => 0);
+  const input = { fromYear: 1980, toYear: 1989 };
+  const unlocked = tracksSchema.parse((await execute('songsByEra', input, {})).result);
+  assert.ok(unlocked.every(row => Number(row.id.slice(4)) < 60));
+  const locked = tracksSchema.parse((await execute('songsByEra', input, strict)).result);
+  assert.equal(locked.length, 8, 'eligible rows past browse\'s 200-row page must be reached');
+  assert.ok(locked.every(row => row.instrumental && Number(row.id.slice(4)) >= 280));
+});
+
+test('retag embeds the same malformed-span classification as the bulk path', async () => {
+  const id = 'retag-malformed';
+  db.upsertTrackMeta(id, song(id));
+  requireDb().prepare('UPDATE tracks SET vocal_ranges_json = ? WHERE id = ?')
+    .run('[{}, {"startMs":0,"endMs":3000}]', id);
+  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  await settings.update({
+    llm: { provider: 'openai-compatible', model: 'fixture', compatibleMode: 'local', baseUrl },
+    embedding: { enabled: true, provider: 'openai-compatible', model: 'fixture',
+      providerBaseUrls: { 'openai-compatible': baseUrl }, enrichment: { lastfmTags: false, lyrics: false, originalYear: false } },
+  });
+  embeddingInputs.length = 0;
+  const response = await fetch(`http://127.0.0.1:${address.port}/library/retag`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Basic ${Buffer.from('test:test').toString('base64')}` },
+    body: JSON.stringify(song(id)), signal: AbortSignal.timeout(10000),
+  });
+  assert.equal(response.status, 200, await response.text());
+  assert.equal(embeddingInputs.length, 1, 'the real retag route must submit an embedding');
+  assert.doesNotMatch(embeddingInputs[0], /instrumental/, 'clean timing spans must retain their invalid-span evidence');
 });

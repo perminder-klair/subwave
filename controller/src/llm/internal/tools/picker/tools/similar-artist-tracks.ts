@@ -9,13 +9,14 @@ export default definePickerTool({
   // A bounded global cooldown avoids spending a pass on each new seed when
   // this server supplies no artist-graph/top-song data. Re-probe after 5 min.
   available: () => pickerSourceAvailable('similar-artists:availability'),
-  build: ({ collect, emptyResult }) => tool({
+  build: ({ collect, candidateLimit, emptyResult }) => tool({
     description: 'Top songs by neighbouring artists in the server’s similar-artist graph. Uses an artist name as its seed, rather than a song or audio vector; useful for holding an artist’s musical orbit while changing artist. Requires similar-artist and top-song data on the server.',
     inputSchema: z.object({ artist: z.string().min(1) }),
     execute: async ({ artist }, { abortSignal }: { abortSignal?: AbortSignal }) => {
       try {
         let graphProbed = false;
-        const rows = await cachedPickerSource(`similar-artists:${artist.toLowerCase()}`, async () => {
+        const songsPerArtist = candidateLimit(5);
+        const rows = await cachedPickerSource(`similar-artists:${artist.toLowerCase()}:${songsPerArtist}`, async () => {
           const matches = await subsonic.searchArtists(artist, { artistCount: 1, signal: abortSignal });
           if (!matches.length) return [];
           graphProbed = true;
@@ -24,7 +25,7 @@ export default definePickerTool({
           const neighbours = (info?.similarArtist ?? []).filter((artist: any) => artist.name).slice(0, 2);
           let failed = 0;
           for (const neighbour of neighbours) {
-            try { out.push(...await subsonic.getTopSongs(neighbour.name, { count: 5, signal: abortSignal })); } catch { failed++; }
+            try { out.push(...await subsonic.getTopSongs(neighbour.name, { count: songsPerArtist, signal: abortSignal })); } catch { failed++; }
           }
           abortSignal?.throwIfAborted();
           if (neighbours.length && failed === neighbours.length) throw new Error('could not read similar-artist songs from the music server');

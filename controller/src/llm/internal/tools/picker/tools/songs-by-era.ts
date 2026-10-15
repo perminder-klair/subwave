@@ -8,7 +8,7 @@ import * as blocklist from '../../../../../music/blocklist.js';
 
 export default definePickerTool({
   name: 'songsByEra',
-  build: ({ collect, emptyResult }) => tool({
+  build: ({ collect, candidateLimit, emptyResult }) => tool({
     description: 'A random library sample from a requested era, using original release years where known. Give inclusive year bounds; null leaves that end open. Reissue and compilation dates are not evidence of a track belonging to that era.',
     inputSchema: z.object({ fromYear: z.number().int().min(1000).max(9999).nullable(), toYear: z.number().int().min(1000).max(9999).nullable() }),
     execute: async ({ fromYear, toYear }) => {
@@ -19,11 +19,19 @@ export default definePickerTool({
         // The mirror filters on resolved original years, so a reissue is not
         // missed merely because Navidrome's file-year envelope excludes it.
         const bounds = { yearFrom: fromYear, yearTo: toYear };
-        const first = library.filter({ ...bounds, limit: 60 });
-        const offset = Math.floor(Math.random() * Math.max(1, first.total - 60 + 1));
+        const limit = candidateLimit(60);
+        const first = library.filter({ ...bounds, limit });
+        const offset = Math.floor(Math.random() * Math.max(1, first.total - limit + 1));
+        const rows = offset ? library.filter({ ...bounds, limit, offset }).rows : first.rows;
+        // Browse pages cap at 200; a strict discovery sample spans up to 300.
+        while (rows.length < limit && offset + rows.length < first.total) {
+          const next = library.filter({ ...bounds, limit: limit - rows.length, offset: offset + rows.length }).rows;
+          if (!next.length) break;
+          rows.push(...next);
+        }
         const list = first.total
-          ? blocklist.rejectBlocked(offset ? library.filter({ ...bounds, limit: 60, offset }).rows : first.rows)
-          : await subsonic.getRandomSongs({ size: 60, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined });
+          ? blocklist.rejectBlocked(rows)
+          : await subsonic.getRandomSongs({ size: limit, fromYear: fromYear ?? undefined, toYear: toYear ?? undefined });
         const resolved = list.map(track => {
           const record = library.get(track.id);
           return { ...track, originalYear: record?.originalYear, yearUntrusted: record?.yearUntrusted ?? track.isCompilation };
