@@ -475,7 +475,11 @@ function DayColumn({
   return (
     // Phone: fixed-width strip so the next day peeks past the edge. From sm up
     // `min-w-0` lets the seven columns divide the board's width.
-    <div className="flex min-w-[164px] flex-1 flex-col border border-ink bg-[var(--page-bg)] sm:min-w-0">
+    // Today's clock gets its own gutter so it cannot cover a card's title.
+    <div className={cn(
+      'flex min-w-[164px] flex-1 flex-col border border-ink bg-[var(--page-bg)] sm:min-w-0',
+      today && 'mr-[var(--now-gutter)] [--now-gutter:4rem]',
+    )}>
       <div className="flex h-[38px] items-stretch border-b border-solid border-b-ink">
         <button
           type="button"
@@ -900,8 +904,10 @@ function NowLine({ minute, today }: { minute: number; today: boolean }) {
       aria-hidden="true"
       className={cn(
         // above the cards, below the sticky hour rail (z-10) and the page header
-        'pointer-events-none absolute inset-x-[-5px] z-[5] [filter:drop-shadow(0_0_1px_rgb(0_0_0/0.9))_drop-shadow(0_1px_3px_rgb(0_0_0/0.5))]',
-        today ? 'h-[3px] bg-white' : 'border-t-2 border-dashed border-white/60',
+        'pointer-events-none absolute -left-[5px] z-[5] [filter:drop-shadow(0_0_1px_rgb(0_0_0/0.9))_drop-shadow(0_1px_3px_rgb(0_0_0/0.5))]',
+        today
+          ? 'right-[calc(-5px_-_var(--now-gutter))] h-[3px] bg-white'
+          : '-right-[5px] border-t-2 border-dashed border-white/60',
       )}
     >
       {today && (

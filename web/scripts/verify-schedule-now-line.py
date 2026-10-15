@@ -13,7 +13,7 @@ STACK. Defaults to the isolated verify stack from the `verify` skill (web on
 SUBWAVE_VERIFY_WEB, SUBWAVE_VERIFY_API and SUBWAVE_VERIFY_AUTH ("user:pass").
 
 SAFE BY CONSTRUCTION. /settings and /schedule are answered from a fixture in the
-browser and nothing is clicked, so no station state is read or written.
+browser and only row-density controls are clicked, so no station state is written.
 
 The clock is frozen at Wednesday 15:37 UTC and the station runs on Asia/Kolkata
 (UTC+05:30), so the board must show 21:07 on Wednesday. The browser stays on
@@ -83,6 +83,28 @@ MEASURE = """() => [...document.querySelectorAll('button[aria-label$=" out of th
   })
   .filter(Boolean)"""
 
+TITLE_CLEARANCE = """() => {
+  const btn = document.querySelector('button[aria-label="Fold Wednesday out of the way"]');
+  const hours = btn.parentElement.parentElement.children[1].firstElementChild;
+  const tag = hours.firstElementChild.querySelector('span');
+  const badge = tag.getBoundingClientRect();
+  const titles = [...document.querySelectorAll('button[data-schedule-run] > span:first-child')];
+  const overlaps = titles.flatMap(title => {
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    const text = range.getBoundingClientRect(), box = title.getBoundingClientRect();
+    const style = getComputedStyle(title);
+    const left = Math.max(text.left, box.left + parseFloat(style.paddingLeft));
+    const right = Math.min(text.right, box.right - parseFloat(style.paddingRight));
+    const width = Math.min(right, badge.right) - Math.max(left, badge.left);
+    const height = Math.min(text.bottom, badge.bottom) - Math.max(text.top, badge.top);
+    return width > 0 && height > 0
+      ? [{ run: title.parentElement.dataset.scheduleRun, width, height }]
+      : [];
+  });
+  return { tag: tag.textContent, titles: titles.length, overlaps };
+}"""
+
 with sync_playwright() as p:
     browser = p.chromium.launch()
     pg = browser.new_page(viewport={"width": 1440, "height": 1100}, timezone_id="UTC")
@@ -118,13 +140,31 @@ with sync_playwright() as p:
         check("the line stays under the sticky hour rail (z-10)",
               all(c["z"] < 10 for c in cols), f"z={cols[0]['z']}")
     if today:
-        check("the tag sits at the right edge, clear of the card's name and grip",
+        check("the tag sits at the right edge of the line",
               today[0]["tagRightGap"] is not None and abs(today[0]["tagRightGap"]) <= 1,
               f"gap={today[0]['tagRightGap']}")
 
     if SHOT:
         pg.screenshot(path=SHOT, full_page=True)
         print(f"screenshot: {SHOT}")
+
+    # Half past a one-hour show puts the badge level with its centered title.
+    for day in range(7):
+        week[str(day)] = [None] * 24
+        week[str(day)][21] = "s_verify_now"
+    pg.clock.set_fixed_time(datetime(2026, 10, 14, 16, 0, tzinfo=timezone.utc))
+    pg.reload(wait_until="networkidle")
+    pg.locator('button[data-schedule-run="3:21"]').wait_for()
+    pg.evaluate("document.fonts.ready")
+    for width in (1440, 390):
+        pg.set_viewport_size({"width": width, "height": 1100})
+        for density in ("Roomy", "Compact"):
+            pg.locator(f'button[title^="{density} rows"]').click()
+            pg.wait_for_timeout(250)
+            clearance = pg.evaluate(TITLE_CLEARANCE)
+            check(f"{width}px {density.lower()}: the badge clears one-hour show titles",
+                  clearance["tag"] == "21:30" and clearance["titles"] == 7
+                  and not clearance["overlaps"], json.dumps(clearance))
     browser.close()
 
 sys.exit(1 if fails else 0)
