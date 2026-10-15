@@ -22,6 +22,7 @@ const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { djAgent, remainingDiscoverySteps } = await import('../src/llm/internal/strategy/agent.js');
 const { tool } = await import('ai');
+const { recentCalls } = await import('../src/llm/log.js');
 const { z } = await import('zod');
 
 const schema = z.object({ id: z.string() });
@@ -85,6 +86,7 @@ test('a native run that spent the discovery budget leaves the done-tool run to c
   assert.equal(bodies.length, 5, 'four native requests, then ONE done-tool request — no wasted run, no recovery');
   assert.deepEqual(toolNames(bodies[4]), ['done'], 'the done-tool run commits at step 0');
   assert.equal(toolTurns(bodies[4]), 3, 'with all three native results in view');
+  assert.equal(recentCalls[0].via, 'ai-sdk:agent', 'recorded as the done-tool path, not as a native answer');
 });
 
 test('a native run that explored less keeps the rest of the budget', () => {

@@ -312,7 +312,7 @@ export async function djAgent({
         let nativeTrailOf: (() => { steps: StepLike[]; messages: ModelMessage[] }) | null = null;
 
         // Native-first structured output. A miss falls through to the done-tool
-        // path below; lastVia stays ':native' so the record attributes there.
+        // path below, which takes the attribution over from here.
         if (plan === 'native-then-done') {
           try {
             lastVia = 'ai-sdk:agent:native';
@@ -393,6 +393,11 @@ export async function djAgent({
             console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
           }
         }
+
+        // Past here the native pass is over, so the record names the path that
+        // answers (or fails). Left at ':native', a pick the done-tool run rescued
+        // read as a first-pass answer, and the stats hid how often native missed.
+        lastVia = 'ai-sdk:agent';
 
         // Unified main agent: done-tool (Ollama-with-tools, or a native miss),
         // native-no-tools (agent-level Output.object), or free text (no schema).
