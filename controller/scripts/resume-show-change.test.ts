@@ -105,6 +105,7 @@ for (const [name, showKey] of [
         await resumeIntoAnotherShow({
           snapshot: () => queue.snapshotProgramme(ON_AIR),
           rebuild: async () => 'refreshed',
+          ready: async () => true,
           drop: async stale => {
             cleaned.resolve(await queue.dropProgrammeFromEarlierShow(stale, async () => { skips++; }));
           },
@@ -160,13 +161,46 @@ test('resume: snapshot first, drop only after a confirmed rebuild', async () => 
   const run = (result: 'refreshed' | 'unreloaded' | 'deferred') => resumeIntoAnotherShow({
     snapshot: () => { order.push('snapshot'); return { current: null, upcoming: [] }; },
     rebuild: async () => { order.push('rebuild'); return result; },
+    ready: async () => { order.push('ready'); return true; },
     drop: async () => { order.push('drop'); },
     log: line => order.push(`log:${line.slice(0, 12)}`),
   });
   assert.equal(await run('refreshed'), true);
-  assert.deepEqual(order.splice(0), ['snapshot', 'rebuild', 'drop']);
+  assert.deepEqual(order.splice(0), ['snapshot', 'rebuild', 'ready', 'drop']);
   for (const result of ['unreloaded', 'deferred'] as const) {
     assert.equal(await run(result), false, result);
     assert.deepEqual(order.splice(0), ['snapshot', 'rebuild', 'log:show changed'], result);
   }
+});
+
+test('resume: the skip waits until the new fallback has a track ready', async () => {
+  const { resumeIntoAnotherShow } = await import('../src/broadcast/resume-show.js');
+  const order: string[] = [];
+  const answers = [false, false, true];
+  await resumeIntoAnotherShow({
+    snapshot: () => ({ current: null, upcoming: [] }),
+    rebuild: async () => 'refreshed',
+    ready: async () => { const r = answers.shift()!; order.push(`ready:${r}`); return r; },
+    drop: async () => { order.push('drop'); },
+    log: line => order.push(`log:${line}`),
+    pollMs: 1,
+  });
+  // The fresh playlist fetches its first track after the reload; skipping
+  // before it is ready would air the emergency loop until it arrives.
+  assert.deepEqual(order, ['ready:false', 'ready:false', 'ready:true', 'drop']);
+});
+
+test('resume: a fallback that never gets ready is skipped to anyway, and logged', async () => {
+  const { resumeIntoAnotherShow } = await import('../src/broadcast/resume-show.js');
+  const order: string[] = [];
+  await resumeIntoAnotherShow({
+    snapshot: () => ({ current: null, upcoming: [] }),
+    rebuild: async () => 'refreshed',
+    ready: async () => false,
+    drop: async () => { order.push('drop'); },
+    log: line => order.push('log'),
+    pollMs: 1,
+    waitMs: 10,
+  });
+  assert.deepEqual(order, ['log', 'drop']);
 });

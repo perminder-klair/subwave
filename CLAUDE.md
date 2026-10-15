@@ -81,7 +81,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 | `jingle-now.txt` | 0.5s | one jingle URI, drained into a priority queue for the next safe boundary — an operator press, or the automatic rotate when the controller owns it (#1619) |
 | `say.txt` | 0.5s | WAV path → `voice_queue`, **heavy-ducked** (`smooth_add p`, `ducking.voice`, default 0.22). Idents, hourly time, weather, request intros |
 | `intro.txt` | 0.5s | between-track links → `intro_queue`, **light-ducked** (`ducking.intro`, default 0.30) so the song stays audible under the voice |
-| `auto.m3u` | watch | fallback playlist, rewritten every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) for the current mood |
+| `auto.m3u` | telnet `auto.reload` | fallback playlist, rewritten every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) for the current mood; the mixer re-reads it only on the reload sent after each write (no file watch, #874) |
 | `liquidsoap_*.txt` | startup | jingle_ratio, crossfade, per-codec enable/bitrate… written by `settings.update()`, **read once** — changes need a mixer restart (`/restart-mixer` → telnet) |
 
 **Liquidsoap → Controller / UI** — marker files, normally written from an `on_metadata` hook (the pause acceptance marker is the ordered exception):

@@ -18,20 +18,36 @@ export function programmeShowKey(item: Pick<QueueItem, 'showKey' | 'selectionSho
   return at == null ? null : showKeyAt(at);
 }
 
-export async function resumeIntoAnotherShow<P extends Programme>({ snapshot, rebuild, drop, log }: {
+export async function resumeIntoAnotherShow<P extends Programme>({ snapshot, rebuild, ready, drop, log, pollMs = 250, waitMs = 20_000 }: {
   snapshot: () => P;
   rebuild: () => Promise<RefreshResult>;
+  // Whether the mixer's fallback has a track ready to air (`auto.ready`).
+  ready: () => Promise<boolean>;
   drop: (stale: P) => Promise<unknown>;
   log: (line: string) => void;
+  pollMs?: number;
+  waitMs?: number;
 }): Promise<boolean> {
   // Before any await: the new show may start picking while the fallback rebuilds.
   const stale = snapshot();
-  // The skip must land on the new show's fallback. Liquidsoap holds one
-  // prefetched request from the old list until a reload drops it, so do
-  // nothing unless the rebuild and its reload both went through.
+  // The skip must land on the new show's fallback. The mixer's reload drops
+  // the old list, including a track the playlist had already prepared
+  // (radio.liq), so do nothing unless the rebuild and its reload both went
+  // through.
   if ((await rebuild()) !== 'refreshed') {
     log('show changed while the programme was paused — fallback not rebuilt, leaving the queue as it is');
     return false;
+  }
+  // The new playlist fetches its first track after the reload. Skipping before
+  // it arrives would air the emergency loop meanwhile; the bound keeps a mixer
+  // that never answers from holding the earlier show's track on air.
+  const deadline = Date.now() + waitMs;
+  while (!(await ready().catch(() => false))) {
+    if (Date.now() >= deadline) {
+      log(`show changed while the programme was paused — the new fallback was not ready after ${waitMs / 1000}s, skipping anyway`);
+      break;
+    }
+    await new Promise(r => setTimeout(r, pollMs));
   }
   await drop(stale);
   return true;

@@ -114,7 +114,7 @@ const violations: string[] = [];
 function requireEqual(actual: unknown, expected: unknown, label: string) {
   try { assert.deepEqual(actual, expected, label); } catch { violations.push(label); }
 }
-const reloads = () => (execFileSync('sudo', ['-n', 'cat', join(rootfs, 'var/log/liquidsoap/radio.log')], { encoding: 'utf8' }).match(/\[auto:3\] Reloading playlist/g) || []).length;
+const reloads = () => (execFileSync('sudo', ['-n', 'cat', join(rootfs, 'var/log/liquidsoap/radio.log')], { encoding: 'utf8' }).match(/\[auto(?:\.\d+)?:3\] (?:Reloading playlist|Initial load)/g) || []).length;
 const snapshot = () => ({ streams: streams.length, metadata: metadata.length, reloads: reloads() });
 async function stage(label: string, fn: () => Promise<void>) {
   const before = snapshot();
@@ -160,10 +160,8 @@ try {
     assert.equal(streams.length, settled, `${label} did not settle`);
   };
   await characterization('explicit-auto.reload', async () => { await control.reloadAutoPlaylist(); });
-  await characterization('watch-only', async () => {
-    const { writeFileAtomic } = await import(`${controllerRoot}/src/util/atomic-file.ts`);
-    await writeFileAtomic(playlistPath, initial + '\n');
-  });
+  // No 'watch-only' case: the playlist has no file watch (radio.liq), so a
+  // rewrite without auto.reload starts nothing.
   await listeners.startListenerMonitor();
   await monitor.startStreamIdleMonitor(scheduler.flushPendingAutoPlaylist);
   await until(() => monitor.isIdle(), 'controller did not adopt mixer pause');

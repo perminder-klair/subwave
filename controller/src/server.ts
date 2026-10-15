@@ -21,6 +21,7 @@ import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
 import { showKeyAt } from './broadcast/show-boundary.js';
 import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -324,6 +325,7 @@ app.listen(config.server.port, async (err?: Error) => {
     await resumeIntoAnotherShow({
       snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
       rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
       drop: stale => queue.dropProgrammeFromEarlierShow(stale),
       log: line => queue.log('scheduler', line),
     });
