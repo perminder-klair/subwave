@@ -256,10 +256,6 @@ export async function operatorUnlike(songId: string): Promise<{ removed: boolean
   return { removed, count: countForSong(songId) };
 }
 
-export function operatorLiked(songId: string): boolean {
-  return records.some((r) => r.songId === songId && isOperator(r));
-}
-
 // Decorates the heart on every admin library row, whatever its source.
 export function index(): Record<string, { count: number; operator: boolean }> {
   const out: Record<string, { count: number; operator: boolean }> = Object.create(null);

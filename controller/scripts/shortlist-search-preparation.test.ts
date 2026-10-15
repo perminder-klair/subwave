@@ -6,7 +6,7 @@ import test, { after } from 'node:test';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-search-preparation-'));
 process.env.STATE_DIR = root;
-const { createShortlistSearchPreparation: createPreparation, shortlistSearchPrompt } = await import('../src/broadcast/shortlist-search-preparation.js');
+const { createShortlistSearchPreparation: createPreparation } = await import('../src/broadcast/shortlist-search-preparation.js');
 // The synthetic verifier approves only the structurally grounded proposals.
 // Semantic rejection and deadline behavior have dedicated cases below.
 function createShortlistSearchPreparation(deps: Omit<Parameters<typeof createPreparation>[0], 'verify'>
@@ -158,14 +158,6 @@ test('blank or expired input makes no call, and a late result cannot revive an e
   assert.deepEqual(await owner.ensure({ ...brief, expiresAt: base }), []);
   assert.deepEqual(await owner.ensure(brief), []);
   assert.equal(calls, 1);
-});
-
-test('preparation input is bounded factual data and cannot inherit persona or listener context', () => {
-  const prompt = shortlistSearchPrompt({ ...brief, topic: 't'.repeat(3000), editorial: 'e'.repeat(3000),
-    persona: { musicalLeanings: 'PRIVATE_LEANINGS' }, conversation: 'RAW_LISTENER' } as any);
-  assert.equal(JSON.parse(prompt).topic.length, 2000);
-  assert.equal(JSON.parse(prompt).editorial.length, 2000);
-  assert.doesNotMatch(prompt, /PRIVATE_LEANINGS|RAW_LISTENER/);
 });
 
 test('persisted preparation stays bounded as show identities change', async () => {

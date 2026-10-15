@@ -208,10 +208,6 @@ export function agenticLeaningsSources(editorialLeanings: {
   return sources;
 }
 
-export function agenticLeaningsPhrases(editorialLeanings: Parameters<typeof agenticLeaningsSources>[0]): string[] {
-  return agenticLeaningsSources(editorialLeanings).map(({ phrase }) => phrase);
-}
-
 function stringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
   return typeof value === 'string' ? value.split(',') : [];

@@ -42,10 +42,6 @@ function shortlistSearchInput(brief: ShortlistSearchBrief) {
   };
 }
 
-export function shortlistSearchPrompt(brief: ShortlistSearchBrief): string {
-  return JSON.stringify(shortlistSearchInput(brief));
-}
-
 export function createShortlistSearchPreparation({ file, generate, verify, now = Date.now, timeoutMs = 10_000 }: {
   file: string;
   generate: (prompt: string, signal?: AbortSignal) => Promise<unknown>;

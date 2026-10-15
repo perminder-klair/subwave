@@ -23,7 +23,6 @@ const {
 const {
   agenticDiscoverySelectionReason,
   agenticSelectionReason,
-  agenticLeaningsPhrases,
   agenticLeaningsSources,
   agenticLeaningsSelectionReason,
   compactAgenticReviewCandidate,
@@ -160,11 +159,6 @@ test('Review prompts and phrase extraction remain explicit', () => {
   assert.doesNotMatch(prompt, /musicalLeanings/i, 'the compact review receives only controller-extracted exact options');
   assert.ok(agenticLeaningsReviewSystem().length < 600, 'the review uses a compact dedicated system instruction');
   assert.doesNotMatch(agenticLeaningsReviewSystem(), /Four Acres|on-air|station house/i);
-  assert.deepEqual(agenticLeaningsPhrases({
-    host: 'Shelby strongly favours electronic music across synth-pop, electro, house, techno, trip-hop, big beat, IDM and leftfield electronica. She enjoys distinctive production, unusual textures and deeper catalogue discoveries.',
-    guest: null,
-  }), ['electronic music', 'synth-pop', 'electro', 'house', 'techno', 'trip-hop', 'big beat', 'IDM', 'leftfield electronica', 'distinctive production', 'unusual textures', 'deeper catalogue discoveries']);
-  assert.deepEqual(agenticLeaningsPhrases({ host: 'Warm voices, patient dub and deeper cuts.', guest: null }), ['Warm voices', 'patient dub', 'deeper cuts']);
 });
 
 test('Candidate scoring and compact metadata preserve ownership and flow', () => {

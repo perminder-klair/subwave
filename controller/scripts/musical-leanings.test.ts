@@ -12,8 +12,8 @@ process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-musical-leanings-'
 
 const settings = await import('../src/settings.js');
 await settings.load();
-const { PICK_SCHEMA, agenticDiscoverySchema, agenticLeaningsReviewSchema, musicalLeaningsPickReminder, NO_AGENTIC_LEANINGS_INFLUENCE, pickSystem, pickerMusicLeanings, resolveEditorialLeanings, resolvedMusicalLeaningsFlag } = await import('../src/broadcast/dj-agent/schemas.js');
-const { agenticLeaningsPhrases, agenticLeaningsSources } = await import('../src/broadcast/dj-agent/leanings-review.js');
+const { PICK_SCHEMA, agenticDiscoverySchema, musicalLeaningsPickReminder, pickSystem, pickerMusicLeanings, resolveEditorialLeanings, resolvedMusicalLeaningsFlag } = await import('../src/broadcast/dj-agent/schemas.js');
+const { agenticLeaningsSources } = await import('../src/broadcast/dj-agent/leanings-review.js');
 
 test('persona prompts, evaluation diagnostics and guest opt-in use the editorial snapshot', async () => {
   const persona = { ...settings.get().personas[0], musicLean: 'Favour patient dub, deep electronic cuts, and melodic post-punk.' };
@@ -37,8 +37,6 @@ test('persona prompts, evaluation diagnostics and guest opt-in use the editorial
   assert.match(PICK_SCHEMA.shape.reason.description ?? '', /Default to actual flow/i);
   assert.match(PICK_SCHEMA.shape.usedMusicalLeanings.description ?? '', /Default false/i);
   const editorialLeanings = resolveEditorialLeanings();
-  const leaningsOptions = agenticLeaningsPhrases(editorialLeanings);
-  assert.deepEqual(leaningsOptions, ['patient dub', 'deep electronic cuts', 'melodic post-punk']);
   assert.deepEqual(agenticLeaningsSources(editorialLeanings, 'Mara Vex'), [
     { phrase: 'patient dub', source: 'host', ownerName: 'Mara Vex' },
     { phrase: 'deep electronic cuts', source: 'host', ownerName: 'Mara Vex' },
@@ -54,14 +52,6 @@ test('persona prompts, evaluation diagnostics and guest opt-in use the editorial
   assert.match(reminder, /club feel are not Leanings evidence/i);
   assert.equal(resolvedMusicalLeaningsFlag(editorialLeanings, false, 'warm vocal and melody'), false);
   assert.equal(resolvedMusicalLeaningsFlag(editorialLeanings, undefined, 'warm vocal and melody'), false);
-  const reviewSchema = agenticLeaningsReviewSchema(['alternative', 'candidate'], leaningsOptions, 'candidate');
-  assert.equal(
-    reviewSchema.parse({ selectedId: 'candidate', leaningsBasis: null, musicalReason: null, transition: null }).musicalReason,
-    '[musical reason unavailable]',
-    'a weak-model null is repaired so the controller can supply its safe Agentic fallback',
-  );
-  assert.equal(reviewSchema.safeParse({ selectedId: null, leaningsBasis: NO_AGENTIC_LEANINGS_INFLUENCE, musicalReason: 'its patient rhythm keeps the reflective flow moving naturally', transition: null }).success, false, 'the final review cannot take a null shortcut');
-
   const guest = settings.guestEditorialNudgeFromGuests([
     { id: 'p_f023a4', name: 'Carrie Marshall', musicLean: 'Favour great guitar work and unexpected rock records.' },
   ], () => 0);

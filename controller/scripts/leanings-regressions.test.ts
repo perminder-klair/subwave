@@ -11,7 +11,7 @@ await settings.load();
 const session = await import('../src/broadcast/session.js');
 const context = await import('../src/context.js');
 const { config } = await import('../src/config.js');
-const { agenticLeaningsPhrases, agenticLeaningsSources, eligibleAgenticLeanings, compactAgenticReviewCandidate,
+const { agenticLeaningsSources, eligibleAgenticLeanings, compactAgenticReviewCandidate,
   agenticLeaningsSelectionReason, leaningsBlindPickReason, validateAgenticLeaningsReplacement,
 } = await import('../src/broadcast/dj-agent/leanings-review.js');
 const { agenticLeaningsReviewPrompt } = await import('../src/broadcast/dj-agent/schemas.js');
@@ -21,19 +21,7 @@ const hostTrack = { ...baseline, id: 'host-track', genre: 'dub' };
 const guestTrack = { ...baseline, id: 'guest-track', title: 'Guest Choice', artist: 'Guest Artist', genre: 'classical' };
 const preferences = { host: 'patient dub', guest: { guest: { name: 'Guest DJ' }, musicalLeanings: 'She favours classical.' } };
 
-test('short genres work as bare preferences and in sentences, regardless of case', () => {
-  for (const genre of ['jazz', 'Jazz', 'JAZZ', 'rock', 'soul', 'folk', 'pop', 'ska', 'dub', 'IDM']) {
-    for (const host of [genre, `I love ${genre}.`]) {
-      const phrases = agenticLeaningsPhrases({ host, guest: null });
-      assert.deepEqual(phrases, [genre]);
-      assert.deepEqual(compactAgenticReviewCandidate({ ...baseline, genre }, phrases, baseline).leaningsMatches, [genre]);
-    }
-  }
-  assert.deepEqual(agenticLeaningsPhrases({ host: 'music, tracks, sounds', guest: null }), []);
-});
-
 test('each persona gets its own noun-phrase fallback and duplicates belong to the host', () => {
-  assert.deepEqual(agenticLeaningsPhrases(preferences), ['patient dub', 'classical']);
   assert.deepEqual(agenticLeaningsSources(preferences, 'Host DJ'), [
     { phrase: 'patient dub', source: 'host', ownerName: 'Host DJ' },
     { phrase: 'classical', source: 'guest', ownerName: 'Guest DJ' },
