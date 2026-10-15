@@ -302,7 +302,7 @@ test('applyStrictLocks NEVER returns its input array', () => {
 });
 
 // Vocal filters (#1300 FR 13) use the heavy analyzer's Demucs ranges:
-// [] is measured instrumental, [..] is measured vocal, null is never measured.
+// isInstrumental classifies measured sung duration; null is never measured.
 // Most libraries have no heavy analysis. Reading null as vocal would silently
 // reject the entire library for an instrumental show, so unknowns stay eligible
 // under soft filters and are refused only under hard filters.

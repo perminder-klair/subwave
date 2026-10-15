@@ -108,7 +108,8 @@ export function get(songId: string): any {
     // symmetric with what slimTrack gives library-sourced candidates.
     durationSec: t.durationSec,
     structure: t.structure,
-    vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
+    vocalRanges: t.vocalRanges, // clean timing spans; classify through isInstrumental
+    vocalRangesInvalid: t.vocalRangesInvalid,
     paceMean: paceMeanOf(t.pace),
     // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
@@ -309,6 +310,7 @@ function slimTrack(r: db.EnergyPoolRecord) {
     loudnessLufs: r.loudnessLufs,
     structure: r.structure,
     vocalRanges: r.vocalRanges,
+    vocalRangesInvalid: r.vocalRangesInvalid,
     // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
@@ -623,8 +625,8 @@ export function labelOnlyShare(): number | null {
   }
 }
 
-// How many tracks have had a vocal pass at all (a stored "[]", an analysed
-// instrumental, counts as done). Deliberately NOT folded into stats() — only
+// How many tracks have had a vocal pass at all. A stored "[]" is a measured
+// absence of spans and counts as done. Not folded into stats() — only
 // the vocal show filter needs it, so only its callers pay for the COUNT.
 export function vocalAnalyzedCount(): number {
   if (!loaded) return 0;
@@ -666,8 +668,7 @@ export interface FilteredRow {
   source?: string | null;
   taggedAt?: string | null;
   // Acoustic analysis, null when the analyze pass hasn't touched the track.
-  // `instrumental` is derived: null = not computed, true = analysed with no
-  // vocal ranges, false = analysed with vocals.
+  // `instrumental` uses isInstrumental's measured-duration rule; null = unknown.
   bpm?: number | null;
   musicalKey?: string | null;
   loudnessLufs?: number | null;
@@ -701,7 +702,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: isInstrumental(r.vocalRanges),
+      instrumental: isInstrumental(r.vocalRanges, r.vocalRangesInvalid),
     })),
   };
 }

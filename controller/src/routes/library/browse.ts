@@ -110,7 +110,7 @@ router.get('/library/liked', requireAdmin, async (req, res) => {
         bpm: rec?.bpm ?? null,
         musicalKey: rec?.musicalKey ?? null,
         loudnessLufs: rec?.loudnessLufs ?? null,
-        instrumental: isInstrumental(rec?.vocalRanges),
+        instrumental: isInstrumental(rec?.vocalRanges, rec?.vocalRangesInvalid),
         likeCount: entry.count,
         likedByOperator: entry.operator,
         lastLikedAt: entry.lastLikedAt,
@@ -180,7 +180,7 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
         bpm: t.bpm ?? null,
         musicalKey: t.musicalKey ?? null,
         loudnessLufs: t.loudnessLufs ?? null,
-        instrumental: isInstrumental(t.vocalRanges),
+        instrumental: isInstrumental(t.vocalRanges, t.vocalRangesInvalid),
         similarity: typeof t._similarity === 'number' ? t._similarity : null,
       }));
     res.json({ results: blocklist.annotate(results) });

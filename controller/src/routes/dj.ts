@@ -871,8 +871,8 @@ function toAdminRow(s: AdminSong) {
     musicalKey: tag?.musicalKey ?? null,
     loudnessLufs: tag?.loudnessLufs ?? null,
     paceMean: tag?.paceMean ?? null,
-    // As /library/browse: [] = analysed, no vocals detected.
-    instrumental: isInstrumental(tag?.vocalRanges),
+    // Shared measured-duration classification, as in /library/browse.
+    instrumental: isInstrumental(tag?.vocalRanges, tag?.vocalRangesInvalid),
     // /dj/search returns blocked rows on purpose; this is what marks them.
     blockedBy: blocked ? blocklist.refOf(blocked) : null,
   };

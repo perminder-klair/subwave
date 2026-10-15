@@ -50,6 +50,7 @@ export interface TrackAcoustics {
   // tracks.vocal_ranges. Total sung duration determines instrumental status;
   // null/undefined = not computed.
   vocalRanges?: unknown[] | null;
+  vocalRangesInvalid?: boolean;
   // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
   // fixed threshold stamp one word on ~everything.
 }
@@ -92,7 +93,7 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
   if (mode) words.push(mode);
   // [] is a measurement ("no vocals found"), null is its absence.
-  if (isInstrumental(acoustics.vocalRanges) === true) {
+  if (isInstrumental(acoustics.vocalRanges, acoustics.vocalRangesInvalid) === true) {
     words.push('instrumental');
   }
   return words;

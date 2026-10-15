@@ -12,6 +12,7 @@ const song = (id: string) => ({ id, title: id, artist: `Artist ${id}`, genre: 'A
 let headCount = 80;
 let includeInstrumentals = true;
 let textDim = 768;
+let releases: Array<{ id: string; year: number; songs: ReturnType<typeof song>[] }> | null = null;
 const calls: URL[] = [];
 const server = createServer((req, res) => {
   const url = new URL(req.url || '/', 'http://localhost');
@@ -40,9 +41,9 @@ const server = createServer((req, res) => {
   if (url.pathname.endsWith('/getSongsByGenre')) body = { songsByGenre: { song: rows.slice(0, count) } };
   if (url.pathname.endsWith('/getGenres')) body = { genres: { genre: [{ value: 'Ambient', songCount: 0 }] } };
   if (url.pathname.endsWith('/search3')) body = { searchResult3: { song: rows.slice(0, count), artist: [{ id: 'artist', name: 'Test Artist' }] } };
-  if (url.pathname.endsWith('/getArtist')) body = { artist: { album: [{ id: 'album', year: 2026 }] } };
+  if (url.pathname.endsWith('/getArtist')) body = { artist: { album: releases?.map(({ id, year }) => ({ id, year })) ?? [{ id: 'album', year: 2026 }] } };
   if (url.pathname.endsWith('/getAlbumList2')) body = { albumList2: { album: [{ id: 'album' }] } };
-  if (url.pathname.endsWith('/getAlbum')) body = { album: { song: rows } };
+  if (url.pathname.endsWith('/getAlbum')) body = { album: { song: releases?.find(release => release.id === url.searchParams.get('id'))?.songs ?? rows } };
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify({ 'subsonic-response': { status: 'ok', ...body } }));
 });
@@ -55,6 +56,7 @@ process.env.NAVIDROME_USER = 'test';
 process.env.NAVIDROME_PASS = 'test';
 process.env.ANALYZE_URL = `http://127.0.0.1:${address.port}`;
 const db = await import('../src/music/library-db.js');
+const { requireDb } = await import('../src/music/library-db/handle.js');
 const library = await import('../src/music/library.js');
 const settings = await import('../src/settings.js');
 const { isInstrumental, instrumentalFromJson, deriveVocalFromLyrics } = await import('../src/music/lyric-vocal.js');
@@ -150,6 +152,69 @@ test('SQL browse, Observatory, diagnostic rows, show locks and picker payloads a
     assert.equal(payload.instrumental ?? null, c.expected, `picker ${c.id}`);
     assert.equal(soundDescriptors({ vocalRanges: c.ranges }).includes('instrumental'), c.expected === true);
   }
+});
+
+test('persisted malformed vocal spans never earn instrumental eligibility through any reader', () => {
+  const valid = [{ startMs: 0, endMs: 3000 }];
+  for (const fixture of [
+    { id: 'mixed', json: JSON.stringify([...valid, {}]), ranges: valid, expected: false },
+    { id: 'invalid', json: '[{}]', ranges: [], expected: false },
+    { id: 'strings', json: '[{"startMs":"0","endMs":"3000"}]', ranges: [], expected: false },
+    { id: 'negative', json: '[{"startMs":-1000,"endMs":2000}]', ranges: [], expected: false },
+    { id: 'broken', json: 'broken json', ranges: null, expected: null },
+    { id: 'object', json: '{}', ranges: null, expected: null },
+  ]) {
+    const id = `malformed-${fixture.id}`;
+    db.upsertTrackMeta(id, song(id));
+    db.upsertTrackTags(id, { moods: ['focus'], energy: 'low', source: 'manual' });
+    requireDb().prepare('UPDATE tracks SET vocal_ranges_json = ? WHERE id = ?').run(fixture.json, id);
+    assert.equal(instrumentalFromJson(fixture.json), fixture.expected == null ? null : 0, id);
+    for (const [reader, row] of [
+      ['getTrack', db.getTrack(id)],
+      ['library.get', library.get(id)],
+      ['energy pool', db.songsByEnergy('low').find(row => row.id === id)],
+      ['library energy pool', library.songsByEnergy('low').find(row => row.id === id)],
+      ['browse row', db.filter({ q: id }).rows[0]],
+      ['diagnostic', db.candidateFilterTracks().find(row => row.id === id)],
+    ] as const) {
+      assert.ok(row, `${id}: ${reader}`);
+      assert.equal(row.vocalRangesInvalid, fixture.expected === false, `${id}: ${reader} retains invalid-span evidence`);
+      assert.deepEqual(row.vocalRanges, fixture.ranges, `${id}: ${reader} retains usable timing spans`);
+      assert.equal(trackInstrumental(row), fixture.expected, `${id}: ${reader} classification`);
+      assert.deepEqual(soundDescriptors(row), [], `${id}: ${reader} embedding descriptor`);
+    }
+    assert.equal(db.filter({ q: id, vocal: 'instrumental' }).total, 0, id);
+    assert.equal(db.filter({ q: id, vocal: 'vocal' }).total, fixture.expected == null ? 0 : 1, id);
+    assert.equal(db.allTagged().find(row => row.id === id)?.vocal, fixture.expected == null ? null : 'vocal', id);
+    assert.equal(library.filter({ q: id }).rows[0].instrumental, fixture.expected, id);
+    assert.deepEqual(buildPickerContext(pickerScope(strict)).collect([song(id)]), [], id);
+    const [payload] = buildPickerContext(pickerScope()).collect([song(id)]);
+    assert.equal(payload.instrumental ?? null, fixture.expected, `${id}: picker payload`);
+  }
+});
+
+test('recentByArtist keeps the newest eligible releases through recency and the cap', async (t) => {
+  const newest = Array.from({ length: 6 }, (_, i) => ({ ...song(`latest-new-${i}`), artist: 'Test Artist', album: 'New', year: 2026 }));
+  const older = Array.from({ length: 24 }, (_, i) => ({ ...song(`latest-old-${i}`), artist: 'Test Artist', album: 'Old', year: 2020 }));
+  releases = [{ id: 'new', year: 2026, songs: newest }, { id: 'old', year: 2020, songs: older }];
+  t.after(() => { releases = null; });
+  for (const row of [...newest, ...older]) {
+    db.upsertTrackMeta(row.id, row);
+    db.upsertTrackTags(row.id, { moods: ['focus'], energy: 'low', source: 'manual' });
+    db.upsertTrackAnalysis(row.id, { vocalRanges: [] });
+  }
+  let draw = 0;
+  t.mock.method(Math, 'random', () => ++draw / 100);
+  const { tools } = buildPickerTools({ ...strict, hardRecentIds: new Set([newest[0].id]) });
+  const run = tools.recentByArtist.execute;
+  assert.ok(run);
+  const eligible = [...newest.slice(1), ...older];
+  for (const offset of [0, 8]) {
+    const rows = tracksSchema.parse(await run({ artist: 'Test Artist' }, { toolCallId: 'latest', messages: [], context: undefined }));
+    assert.deepEqual(rows.map(row => row.id), eligible.slice(offset, offset + 8).map(row => row.id));
+  }
+  const shuffled = buildPickerContext(pickerScope(strict)).collect([...newest, ...older], 8, { maxPerArtist: Infinity });
+  assert.ok(shuffled.every(row => row.id.startsWith('latest-old-')), 'other tools keep the freshness shuffle');
 });
 
 test('text/audio seed and journey tools find eligible tracks beyond the old top 60', async () => {

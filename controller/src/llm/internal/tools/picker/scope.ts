@@ -116,6 +116,7 @@ export function pickerScope(partial: Partial<PickerScope> = {}): PickerScope {
 // builder, and the index-coverage flags the conditional tools gate on.
 type CollectOptions = {
   maxPerArtist?: number;
+  order?: 'source';
   preferredEnergy?: string;
   similarity?: { kind: 'audio' | 'text'; reference: string };
 };
@@ -189,9 +190,12 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // Ordering is a freshness-biased shuffle (music/airing.ts): a KNN tool's
     // top-60 must not reach the model in similarity order, or the cap of 8 pins
     // the same neighbours every pick. Randomness stays dominant; with no play
-    // history this is a plain shuffle.
+    // history this is a plain shuffle. recentByArtist keeps source order so
+    // its newest eligible releases survive the cap.
     const items: any[] = Array.isArray(list) ? list : [];
-    let pool = applyStrictLocks(freshnessBiasedOrder(intersectEpisodeSource(items, scope.episodeSource), library.lastAiredInfo(), Date.now()), {
+    const source = intersectEpisodeSource(items, scope.episodeSource);
+    const ordered = opts.order === 'source' ? source : freshnessBiasedOrder(source, library.lastAiredInfo(), Date.now());
+    let pool = applyStrictLocks(ordered, {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
     }, { starve: true });
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a

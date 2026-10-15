@@ -101,6 +101,7 @@ export interface SimilarSourceRow {
   bpm?: number | null;
   musicalKey?: string | null;
   vocalRanges?: unknown[] | null;
+  vocalRangesInvalid?: boolean;
   _similarity?: number | null;
 }
 
@@ -137,8 +138,8 @@ export function publicSimilarTrack(t: SimilarSourceRow): PublicSimilarTrack {
     energy: t.energy ?? null,
     bpm: t.bpm ?? null,
     musicalKey: t.musicalKey ?? null,
-    // [] = analysed, no vocals detected; null = never analysed.
-    instrumental: isInstrumental(t.vocalRanges),
+    // Shared measured-duration classification; null = unknown.
+    instrumental: isInstrumental(t.vocalRanges, t.vocalRangesInvalid),
     similarity: typeof t._similarity === 'number' ? t._similarity : null,
   };
 }

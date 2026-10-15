@@ -56,8 +56,8 @@ export function slim(s: any) {
   const durationSec = durationSeconds(s) ?? durationSeconds(rec);
   // vocalRanges: classify measured sung duration; null/undefined = not
   // computed (unknown — omit rather than guess "has vocals").
-  const vocalRanges = Array.isArray(s.vocalRanges) ? s.vocalRanges : rec?.vocalRanges;
-  const instrumental = isInstrumental(vocalRanges);
+  const vocalSource = Array.isArray(s.vocalRanges) ? s : rec;
+  const instrumental = isInstrumental(vocalSource?.vocalRanges, vocalSource?.vocalRangesInvalid);
   // realBpm: a non-positive bpm means unknown — never emitted, never allowed
   // to mask the analyzed value.
   const bpm = library.realBpm(rec?.bpm) ?? library.realBpm(s.bpm);

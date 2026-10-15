@@ -3,6 +3,7 @@
 // version must degrade to null rather than throw a query.
 
 import type { MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import { parseVocalRangesJson } from '../lyric-vocal.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
   return {
@@ -46,8 +47,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     loudnessLufs: row.loudness_lufs ?? null,
     peakDb: row.peak_db ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
-    // [] means analysed instrumental; only a SQL NULL (not computed) maps to null.
-    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    ...parseVocalRangesJson(row.vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
     beats: row.beats_json ? parseMsArray(row.beats_json) : null,
     bars: row.bars_json ? parseMsArray(row.bars_json) : null,
@@ -73,8 +73,8 @@ export function parseOutroJson(s: string): TrackOutro | null {
     const msList = (x: unknown): number[] | null =>
       Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
     // Gate on KEY PRESENCE: absent stays null (not computed), present-but-empty
-    // survives as [] (analysed instrumental tail). Malformed entries drop
-    // span-by-span — a wholesale [] would fake "measured instrumental" and
+    // survives as [] (no detected tail vocals). Malformed entries drop
+    // span-by-span — a wholesale [] would fake "no tail vocals" and
     // permanently satisfy the backfill's tail-missing probe.
     let vocalRanges: Array<{ startMs: number; endMs: number }> | null = null;
     if (Array.isArray(v?.vocalRanges)) {
@@ -218,7 +218,7 @@ export function rowToEnergyPool(row: EnergyPoolRow): EnergyPoolRecord {
     bpm: row.bpm ?? null, musicalKey: row.musical_key ?? null,
     introMs: row.intro_ms ?? null, loudnessLufs: row.loudness_lufs ?? null,
     structure: row.structure_json ? safeParseSections(row.structure_json) : null,
-    vocalRanges: row.vocal_ranges_json != null ? parseSpans(row.vocal_ranges_json) : null,
+    ...parseVocalRangesJson(row.vocal_ranges_json),
     pace: row.pace_json ? parsePaceSpans(row.pace_json) : null,
   };
 }

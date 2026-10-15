@@ -219,6 +219,7 @@ export function candidateFilterTracks(): Array<{
   audioMoods: string[];
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
+  vocalRangesInvalid: boolean;
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
@@ -258,8 +259,7 @@ export function candidateFilterTracks(): Array<{
     moods: row.moods ? safeParseArray(row.moods) : [],
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
-    // Preserve the measured spans: classification now depends on duration.
-    vocalRanges: parseVocalRangesJson(row.vocal_ranges_json),
+    ...parseVocalRangesJson(row.vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
   }));
 }

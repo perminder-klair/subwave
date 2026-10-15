@@ -137,7 +137,7 @@ test('a resolved era becomes a decade word on its own line, last', () => {
 });
 
 test('an empty index adopts the current format', () => {
-  // A fresh install is entirely v2, so it must never show the advisory.
+  // A fresh install uses the current format, so it never shows the advisory.
   assert.equal(resolveIndexTextFormat(null, 0), EMBED_TEXT_VERSION);
   assert.equal(resolveIndexTextFormat(1, 0), EMBED_TEXT_VERSION);
 });

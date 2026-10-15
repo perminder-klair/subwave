@@ -91,7 +91,8 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
 
   if (userVersion < 6) {
     // Vocal-presence ranges (Demucs), JSON array of {startMs,endMs}. NULL = not
-    // computed; "[]" = analysed and instrumental, so needsVocalIds can skip it.
+    // computed; "[]" = measured with no vocal spans, so needsVocalIds can skip
+    // it. Track classification belongs to lyric-vocal.isInstrumental.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN vocal_ranges_json TEXT;`);
     d.pragma('user_version = 6');
   }

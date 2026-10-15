@@ -63,7 +63,7 @@ export interface FacetSourceRow {
   has_tail_silence: number;  // tail_silence_ms IS NOT NULL
   has_outro: number;         // outro_json IS NOT NULL
   outro_has_vocals: number;  // outro_json carries a "vocalRanges" key
-  has_vocal: number;         // vocal_ranges_json IS NOT NULL ('[]' = instrumental, counts)
+  has_vocal: number;         // vocal_ranges_json IS NOT NULL ('[]' is measured, counts)
   has_stems: number;         // stems_at IS NOT NULL
   analyze_fail_count: number | null;
   analyze_error: string | null;

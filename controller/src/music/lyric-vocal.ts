@@ -29,15 +29,18 @@ export interface LyricVocalResult {
 // reported library have <5s total. Use a fixed tolerance because the measured
 // windows need not cover the whole track. Equality remains vocal.
 export const INSTRUMENTAL_VOCAL_TOLERANCE_MS = 5_000;
-const vocalSections = z.array(z.object({
+const vocalSection = z.object({
   startMs: z.number().finite().nonnegative(),
   endMs: z.number().finite(),
-}).refine((r) => r.endMs > r.startMs));
+  kind: z.unknown().optional(),
+}).refine((r) => r.endMs > r.startMs);
+const vocalSections = z.array(vocalSection);
 
 // The one track classification rule. Unknown stays unknown; malformed non-empty
 // ranges stay vocal rather than granting instrumental eligibility. Timing rules
 // still inspect the original spans, including a short phrase below this tolerance.
-export function isInstrumental(vocalRanges: unknown[] | null | undefined): boolean | null {
+export function isInstrumental(vocalRanges: unknown[] | null | undefined, vocalRangesInvalid = false): boolean | null {
+  if (vocalRangesInvalid) return false;
   if (vocalRanges == null) return null;
   const parsed = vocalSections.safeParse(vocalRanges);
   if (!parsed.success) return false;
@@ -45,19 +48,33 @@ export function isInstrumental(vocalRanges: unknown[] | null | undefined): boole
     < INSTRUMENTAL_VOCAL_TOLERANCE_MS;
 }
 
-export function parseVocalRangesJson(json: string | null | undefined): unknown[] | null {
-  if (json == null) return null;
+// Keep bad-span evidence beside clean timing spans; dropping it would let a
+// partial measurement earn instrumental eligibility after a normal row read.
+export function parseVocalRangesJson(json: string | null | undefined): {
+  vocalRanges: Array<Section & { kind?: string }> | null;
+  vocalRangesInvalid: boolean;
+} {
   try {
-    const ranges: unknown = JSON.parse(json);
-    return Array.isArray(ranges) ? ranges : null;
-  } catch {
-    return null;
-  }
+    const ranges: unknown = json == null ? null : JSON.parse(json);
+    if (Array.isArray(ranges)) {
+      const vocalRanges: Array<Section & { kind?: string }> = [];
+      let vocalRangesInvalid = false;
+      for (const range of ranges) {
+        const parsed = vocalSection.safeParse(range);
+        if (!parsed.success) { vocalRangesInvalid = true; continue; }
+        const { startMs, endMs, kind } = parsed.data;
+        vocalRanges.push(typeof kind === 'string' ? { startMs, endMs, kind } : { startMs, endMs });
+      }
+      return { vocalRanges, vocalRangesInvalid };
+    }
+  } catch { /* unreadable measurements stay unknown */ }
+  return { vocalRanges: null, vocalRangesInvalid: false };
 }
 
 // Registered as a deterministic SQLite scalar so SQL filters use the JS rule.
 export function instrumentalFromJson(json: string | null): number | null {
-  const instrumental = isInstrumental(parseVocalRangesJson(json));
+  const { vocalRanges, vocalRangesInvalid } = parseVocalRangesJson(json);
+  const instrumental = isInstrumental(vocalRanges, vocalRangesInvalid);
   return instrumental == null ? null : Number(instrumental);
 }
 

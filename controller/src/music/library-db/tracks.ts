@@ -363,8 +363,9 @@ interface TrackAnalysisWrite {
   loudnessLufs?: number | null;
   peakDb?: number | null;
   sections?: TrackSection[] | null;
-  // [] means analysed instrumental; null/undefined means not computed. Only a
-  // non-null array is written, so a vocal-off pass leaves the column be.
+  // [] means measured with no vocal spans; isInstrumental owns classification.
+  // null/undefined means not computed. Only a non-null array is written,
+  // so a vocal-off pass leaves the column be.
   vocalRanges?: TrackSection[] | null;
   pace?: TrackPaceSpan[] | null;
   beats?: number[] | null;

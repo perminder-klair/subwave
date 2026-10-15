@@ -87,7 +87,7 @@ function clampCount(n: number): number {
 function norm(r: any, source: string, baseScore: number): PoolTrack {
   const instrumental =
     typeof r.instrumental === 'boolean' ? r.instrumental
-      : isInstrumental(r.vocalRanges);
+      : isInstrumental(r.vocalRanges, r.vocalRangesInvalid);
   const yearNum = typeof r.year === 'number' ? r.year : parseInt(String(r.year ?? ''), 10);
   return {
     id: String(r.id),
