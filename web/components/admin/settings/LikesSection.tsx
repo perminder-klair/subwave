@@ -102,8 +102,8 @@ export function LikesInfluenceCard(props: LikesPartProps) {
             options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
           />
           <div className="field-hint">
-            When on, the most-liked tracks ride into both pick paths (the
-            session DJ&apos;s prompt and the pool picker&apos;s candidate list) as a
+            When on, the most-liked tracks ride into every pick path (the
+            Agentic DJ&apos;s prompt, the Track Shortlist and the pool fallback) as a
             weighted preference signal (favour these and similar artists,
             genres, moods), never a hard playlist. Variety rules still apply.
           </div>

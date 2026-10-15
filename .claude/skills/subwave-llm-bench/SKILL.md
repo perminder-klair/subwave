@@ -3,7 +3,7 @@ name: subwave-llm-bench
 description: >-
   Benchmark and compare LLM models for SUB/WAVE's on-air calls — track picks,
   segments, listener requests, DJ scripts, banter, and programme beats — in
-  both candidate-pool and agent modes, using controller/scripts/llm-bench (the
+  pool, agent and Track Shortlist modes, using controller/scripts/llm-bench (the
   matrix harness) or the legacy picker-only controller/scripts/picker-test.mjs.
   Use this skill whenever the user wants to assess, benchmark, compare, or test
   which LLM model to run the station on — phrases like "which model should I
@@ -143,11 +143,13 @@ prompt changes or across model updates.
 1. A compact table: one row per provider+model, columns for thrown rate,
    violation rate, p50 latency, and the dominant failure.
 2. A clear call naming the best **provider + model + mode** ("gemma via
-   OpenRouter, pool mode — clean structured output, agent cells time out").
+   OpenRouter, Track Shortlist — clean structured output, agent cells time
+   out"). Pool cells exercise the fallback picker every station keeps; they
+   are not a selectable route, so recommend Shortlist or Agentic Tools.
 3. Call out disqualifiers and deferrals (5xx throughout = re-test later).
 
 Do **not** apply the change. The operator sets `llm.provider` + `llm.model`
-(and the Agentic picker toggle) in admin Settings — those are global, their
+(and the Music selection route, Agentic Tools or Track Shortlist) in admin Settings — those are global, their
 call.
 
 ## Legacy: picker-test.mjs deep-dive

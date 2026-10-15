@@ -342,7 +342,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/updating.md`](docs/updating.md):** updating on every install shape, and the half people need at 2am — how to roll back to a previous version, and how to recover a broken login, a silent stream or a restart-looping controller.
-- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, candidate pool vs the agent picker, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
+- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, Track Shortlist vs Agentic Tools, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
 - **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes — including [public stream, LAN-only admin](docs/reverse-proxy.md#public-stream-lan-only-admin).
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
