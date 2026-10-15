@@ -326,9 +326,9 @@ test('server sonic neighbours widen before the strict vocal filter', async () =>
     calls.length = 0;
     const rows = tracksSchema.parse((await execute('sonicSimilarTracks', { songId: 'seed' }, scope)).result);
     assert.equal(rows.length, 8);
-    assert.ok(rows.every(row => row.id.startsWith(scope.vocalLock ? 'i' : 'v')));
+    assert.ok(rows.every(row => row.id.startsWith('vocalLock' in scope ? 'i' : 'v')));
     assert.ok(calls.some(url => url.pathname.endsWith('/getSonicSimilarTracks')
-      && Number(url.searchParams.get('count')) === (scope.vocalLock ? 100 : 20)));
+      && Number(url.searchParams.get('count')) === ('vocalLock' in scope ? 100 : 20)));
   }
 });
 
