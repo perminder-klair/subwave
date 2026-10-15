@@ -203,6 +203,30 @@ export function nativeToolExchange(trail: ModelMessage[]): ModelMessage[] {
   return out.some((m) => m.role === 'tool') ? out : [];
 }
 
+// What a native miss looked like, for its log line. The SDK's own message
+// can't tell the failure modes apart: "could not parse the response" covers
+// both prose and an EMPTY reply (a hosted Claude thinking, then ending its turn
+// with no text, billed but blank), and "No output generated" is a run that hit
+// its step cap still calling tools. Each step reads as its tool names or as
+// `reply(<finish>, <chars>, <output tokens>)`; a non-empty unparsed text is
+// quoted short. Pure, so the wording is pinned without a model call.
+export interface NativeMissStep extends StepLike {
+  finishReason?: unknown;
+  text?: string;
+}
+export function describeNativeMiss(err: unknown, steps: readonly NativeMissStep[], cap: number): string {
+  const trail = steps.map((s) => {
+    const names = (s.toolCalls || []).map((c) => c.toolName || '?');
+    if (names.length) return names.join('+');
+    return `reply(${String(s.finishReason ?? '?')}, ${(s.text || '').length} chars, ${usageOf({ usage: s.usage }).output} out)`;
+  });
+  const last = steps.at(-1);
+  const hitCap = steps.length >= cap && (last?.toolCalls || []).length > 0;
+  const text = (err as { text?: unknown } | null)?.text;
+  const quoted = typeof text === 'string' && text.trim() ? ` · text "${text.trim().replace(/\s+/g, ' ').slice(0, 120)}"` : '';
+  return `steps ${trail.length ? trail.join(' → ') : 'none'}${hitCap ? ` · hit the ${cap}-step cap still calling tools` : ''}${quoted}`;
+}
+
 // The done-tool run's discovery budget after a native miss: the leg's budget
 // less the native steps that called a tool. Zero is safe only because the
 // caller passes steps solely when their tool results are carried forward, so
@@ -318,6 +342,7 @@ export async function djAgent({
             lastVia = 'ai-sdk:agent:native';
             const nativeAttempt = createAgentAttempt(meter);
             nativeTrailOf = nativeAttempt.trail;
+            const nativeCap = Math.max(maxSteps, gatedMaxSteps);
             const nativeAgent = new ToolLoopAgent({
               ...nativeAttempt.callbacks,
               // forceNoThink below, so use the no-think model.
@@ -327,7 +352,7 @@ export async function djAgent({
               // No `done` tool to force here, so the cap is every discovery step
               // plus one to emit. Max with the caller's value so a deliberately
               // taller loop isn't shrunk by a narrow descriptor.
-              stopWhen: [isStepCount(Math.max(maxSteps, gatedMaxSteps))],
+              stopWhen: [isStepCount(nativeCap)],
               temperature,
               maxOutputTokens,
               ...googleSafetyOptions(leg.cfg),
@@ -382,7 +407,7 @@ export async function djAgent({
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
-            console.log(`[${kind}] native output produced no usable answer (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
+            console.log(`[${kind}] native output produced no usable answer (explored=${explored}, accepted=${accepted}; ${describeNativeMiss(null, nativeAttempt.trail().steps, nativeCap)}) — falling back to done-tool`);
           } catch (e) {
             // The native leg's own cap is not the pick's deadline: while shared
             // time remains, the done-tool path runs with what native finished.
@@ -390,7 +415,7 @@ export async function djAgent({
               && deadlineAt != null && nativeDeadlineAt != null && nativeDeadlineAt < deadlineAt
               && Date.now() < deadlineAt;
             if (!nativeCapHit && (isGenerationControlError(e) || isModelUnavailable(e))) throw e;
-            console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
+            console.log(`[${kind}] native output failed (${e?.message}; ${describeNativeMiss(e, nativeTrailOf ? nativeTrailOf().steps : [], Math.max(maxSteps, gatedMaxSteps))}) — falling back to done-tool`);
           }
         }
 
