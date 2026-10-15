@@ -144,8 +144,6 @@ export const blockRuleSchema = z.object({
   ),
 });
 
-export type BlockRulePatch = z.output<typeof blockRuleSchema>;
-
 // `POST /library/blocklist` — the id-entry create body. Two accepted forms, so
 // only `type` is required: `{type, trackId}` (server resolves the rest) or a
 // pre-resolved `{type, id, …}`. The route decides which arrived.
