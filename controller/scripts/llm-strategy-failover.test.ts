@@ -16,7 +16,6 @@ const settings = await import('../src/settings.js');
 const { primaryLeg, fallbackLeg } = await import('../src/llm/internal/provider/legs.js');
 const { djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
-const { agenticPickerContextWindow } = await import('../src/llm/internal/telemetry/context-window.js');
 const { GenerationCancelledError } = await import('../src/llm/internal/core/generation.js');
 const { resetFailoverStickyForTest } = await import('../src/llm/internal/core/failover.js');
 const schema = z.object({ name: z.string() });
@@ -235,5 +234,4 @@ test('context peaks include refused requests in a successful terminal recovery',
   assert.equal(calls, 4);
   assert.equal(recentCalls[0].usage.input, 53_000);
   assert.equal(recentCalls[0].contextPeakInput, 30_000);
-  assert.equal(agenticPickerContextWindow(recentCalls).suggestedTokens, 38_912);
 });

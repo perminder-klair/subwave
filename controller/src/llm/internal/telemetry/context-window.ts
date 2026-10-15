@@ -100,18 +100,6 @@ function contextWindowRecommendation(
   };
 }
 
-export function shortlistContextWindow(calls: ContextCall[]) {
-  return measurementsOf(calls).snapshot().shortlist;
-}
-
-export function agenticPickerContextWindow(calls: ContextCall[]) {
-  return measurementsOf(calls).snapshot().agenticPicker;
-}
-
-export function contextWindowByKind(calls: ContextCall[]) {
-  return measurementsOf(calls).snapshot().byKind;
-}
-
 export class ContextMeasurements {
   private readonly groups = new Map<string, ContextGroup>();
 
@@ -164,10 +152,4 @@ export class ContextMeasurements {
       'Based on the largest successful prompt since this controller started, across Agentic Picker steps and every other LLM function that shares this context window.',
     );
   }
-}
-
-function measurementsOf(calls: ContextCall[]): ContextMeasurements {
-  const measurements = new ContextMeasurements();
-  for (const call of Array.isArray(calls) ? calls : []) measurements.record(call);
-  return measurements;
 }
