@@ -149,16 +149,30 @@ export function pickStats(): PickStats {
 //   idx_tracks_stats          computeStats()' tagged scans, covering every
 //     column they read so they skip the wide rows
 // Every condition is JSON-free for the same reason as the index above.
+//
+// Accelerators, not schema: every count they serve is exact without them, only
+// slower. So a build that fails must not fail open(). The first open after an
+// upgrade builds them in whichever process opens first, and a rival opener
+// (the tagger or analyzer child) waits on that build's write lock for the busy
+// timeout and then gets SQLITE_BUSY. A full disk fails it the same way. Warn,
+// keep what was built, and leave the rest to the next open.
 export function ensureStatsIndexes(): void {
   const d = requireDb();
-  for (const sql of [
-    'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL',
-    'CREATE INDEX IF NOT EXISTS idx_tracks_analysed ON tracks(bpm) WHERE bpm IS NOT NULL',
-    'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))',
-    'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL',
-    'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL',
-  ]) {
-    d.prepare(sql).run();
+  try {
+    for (const sql of [
+      'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL',
+      'CREATE INDEX IF NOT EXISTS idx_tracks_analysed ON tracks(bpm) WHERE bpm IS NOT NULL',
+      'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))',
+      'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL',
+      'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL',
+    ]) {
+      d.prepare(sql).run();
+    }
+  } catch (err) {
+    console.warn(
+      `[library-db] count indexes not built (${(err as Error).message}); ` +
+        'library counts stay correct but scan until the next open retries',
+    );
   }
 }
 

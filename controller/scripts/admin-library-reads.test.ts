@@ -198,6 +198,34 @@ test('a commit from another connection (the tagger child) also forces the recoun
   db.invalidateStats();
 });
 
+test('a rival writer during the one-time index build does not fail open()', (t) => {
+  // The first open after an upgrade builds these over the whole table; a
+  // second process opening meanwhile waits out the busy timeout on that
+  // build's write lock. Shortened here so the test does not sit for 5 s.
+  const NEW = ['idx_tracks_analysed', 'idx_tracks_vocal_measured', 'idx_tracks_fail_count', 'idx_tracks_stats'];
+  const present = () => (d.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${NEW.map(() => '?').join(', ')})`,
+  ).all(...NEW) as Array<{ name: string }>).map(r => r.name).sort();
+  for (const name of NEW) d.exec(`DROP INDEX ${name}`);
+  const expected = db.analysedCount();
+  const warn = t.mock.method(console, 'warn', () => {});
+  const rival = new Database(join(stateDir, 'library.db'));
+  d.pragma('busy_timeout = 50');
+  try {
+    rival.exec('BEGIN IMMEDIATE');
+    assert.doesNotThrow(() => db.ensureStatsIndexes(), 'a locked build is skipped, not thrown');
+    assert.deepEqual(present(), [], 'nothing was built under the lock');
+    assert.equal(warn.mock.callCount(), 1, 'and the skip is logged');
+    assert.equal(db.analysedCount(), expected, 'counts stay exact without the index');
+  } finally {
+    if (rival.inTransaction) rival.exec('ROLLBACK');
+    rival.close();
+    d.pragma('busy_timeout = 5000');
+  }
+  db.ensureStatsIndexes();
+  assert.deepEqual(present(), [...NEW].sort(), 'the next open builds them');
+});
+
 test('coverage counts are reused only while the library is unchanged', async (t) => {
   const before = await coverage.get();
   // Unchanged: the second read runs no count at all.
