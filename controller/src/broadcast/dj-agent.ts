@@ -15,7 +15,7 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
-import { showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
+import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
@@ -308,7 +308,7 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
   const showLibraryPool = timePhase('pick.showLibraryPool', () => strictShowLibraryPool(strict ? library.candidateFilterTracks() : null, {
     show: activeShow, excludedIds, resolvedGenres: genreLock ?? [], minTrackSec, maxTrackSec,
   }));
-  const effN = timePhase('pick.noRepeatGuard', () => showNoRepeatGuard(
+  const noRepeat = timePhase('pick.noRepeatGuard', () => showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
     {
@@ -321,8 +321,10 @@ export async function livePickerScope(queue: any, { audioWaypoint = null, showAt
       maxTrackSec,
       showLibraryPool,
     },
-  )).window;
-  const { ids: hardRecentIds, keys: hardRecentKeys } = timePhase('pick.recentlyPlayedByCount', () => queue.recentlyPlayedByCount(effN));
+  ));
+  // A full rotation is measured over its own tracks' airings (#1919), every
+  // other show over the station's last N distinct plays.
+  const { ids: hardRecentIds, keys: hardRecentKeys } = timePhase('pick.recentlyPlayedByCount', () => hardRecentFor(noRepeat, queue));
   // A pinned anchor that resolves to nothing (deleted/recreated playlist →
   // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
   // silently un-anchors the show: no lock, no showPlaylistTracks tool. Say so,

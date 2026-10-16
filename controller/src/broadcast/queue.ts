@@ -18,6 +18,7 @@ import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, creditedActKeys, creditedActNames, trackKey, type CandidateLike } from '../music/recency.js';
+import type { AirTimeOf } from '../music/show-recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import {
@@ -4252,6 +4253,44 @@ class Queue {
       }
     }
     return { ids, keys };
+  }
+
+  // When each track last went to air, for a full playlist rotation (#1919) —
+  // music/show-recency.ts measures the rotation's window over its OWN tracks'
+  // airings with this, and orders its coast by it.
+  //
+  // The durable plays index (library.lastAiredInfo: every airing on record,
+  // memoised five minutes) under this process's fresher memory: the sidecar's
+  // end stamps, and Infinity for the track on air and everything queued behind
+  // it — committed to air, so the rotation counts them as spent. The sidecar
+  // alone holds 96h at most, which a weekly show's rotation outlives. Newest
+  // wins, by id or by title|artist, so a duplicate rip shares its twin's history.
+  rotationAirTimes(): AirTimeOf {
+    const durable = library.lastAiredInfo();
+    const ids = new Map<string, number>();
+    const keys = new Map<string, number>();
+    const newest = (map: Map<string, number>, key: string, at: number) => {
+      const prev = map.get(key);
+      if (prev == null || at > prev) map.set(key, at);
+    };
+    const stamp = (track: CandidateLike | null | undefined, at: number) => {
+      if (Number.isNaN(at)) return;
+      if (track?.id) newest(ids, track.id, at);
+      if (track?.title) newest(keys, trackKey(track), at);
+    };
+    for (const p of this._recentPlays) stamp(p, Date.parse(p.endedAt));
+    stamp(this.current?.track, Infinity);
+    for (const item of this.upcoming) stamp(item?.track, Infinity);
+    return (track) => {
+      const key = track?.title ? trackKey(track) : null;
+      const times = [
+        track?.id ? durable.byId.get(track.id) : undefined,
+        track?.id ? ids.get(track.id) : undefined,
+        key ? durable.byKey.get(key) : undefined,
+        key ? keys.get(key) : undefined,
+      ].filter((at): at is number => at != null);
+      return times.length ? Math.max(...times) : null;
+    };
   }
 
   queuedIds(): Set<string> {

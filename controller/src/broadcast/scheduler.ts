@@ -26,7 +26,8 @@ import { allowsMoodPlaylistDiscovery } from '../music/discovery-policy.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
-import { applyTrackFloor, capCueOutSec } from '../music/track-floor.js';
+import { applyTrackFloor, capCueOutSec, trackLengthSeconds } from '../music/track-floor.js';
+import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotationOrder, showNoRepeatGuard } from '../music/show-recency.js';
 import { knownDurationSec } from './queue/pure.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
@@ -241,12 +242,33 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // the cap: applied to the assembled pool below, never-starve.
   const minDurationSec = settings.effectiveMinTrackSec(show);
 
+  // Full rotation (#1612), decided by the same guard the pick paths read, so
+  // the coast continues the rotation they are walking instead of sampling round
+  // it (#1919). Only `rotation` is read here; the window sizes are the pickers'.
+  const rotation = strictPlaylist
+    ? showNoRepeatGuard(0, 0, {
+        show,
+        playlistTracks: playlistPool!.tracks,
+        episodeTracks: episodeSource?.tracks,
+        excludedIds,
+        resolvedGenres: genreNames,
+        minTrackSec: minDurationSec,
+        maxTrackSec: selectionMaxSec,
+      }).rotation ?? null
+    : null;
+  // Air history for every strict playlist: the rotation's order, and the
+  // longest-waiting fill under the coast floor below.
+  const airTimeOf = strictPlaylist ? queue.rotationAirTimes() : null;
+  // Shuffled first so never-aired ties break at random.
+  const rotationPool = rotation ? rotationCoast(shuffle(rotation), airTimeOf!, { cap: SHOW_PLAYLIST_STRICT_WEIGHT }) : null;
+
   // Balanced pool builder — recency/dedup/artist-cap guards on every candidate,
   // keyed on both id and `title|artist` (#874). Pure; scripts/auto-pool.test.ts.
   const builder = createPoolBuilder({
     recentIds,
     recentKeys,
-    targetPool: TARGET_POOL,
+    // A rotation's floor may need more than the usual pool to fill the hour.
+    targetPool: Math.max(TARGET_POOL, rotationPool?.length ?? 0),
     maxPerArtist: AUTO_MAX_PER_ARTIST,
     selectionMaxSec,
   });
@@ -264,6 +286,9 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   };
 
   if (episodeSource) take('episode-artist', shuffle(episodeSource.tracks), TARGET_POOL, { neverStarve: true, maxPerArtist: Infinity });
+  // A full rotation IS the coast: the tracks next due, carrying their own
+  // recency. The other sources could only add in-playlist tracks out of turn.
+  else if (rotationPool) take('show-rotation', rotationPool, rotationPool.length, { ignoreRecency: true, maxPerArtist: Infinity });
   else {
   // 0. Dedicated show-genre/era source, the dominant contributor when a show
   // pins a genre or year window. Both Navidrome queries filter server-side, so
@@ -481,6 +506,24 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     if (allowed.length) replacePool(allowed);
   }
 
+  // Never-collapse floor (#1919), every strict playlist: the recency-filtered
+  // take above never-starves only on ZERO, so a playlist mostly heard inside
+  // trackHours came out as 2-5 tracks that looped for an hour and more. Top up
+  // to an hour of audio from the playlist's longest-waiting tracks, through the
+  // same "can this anchor track air" rule the pickers count. A prepared episode
+  // steers the airing, so its coast is left to its own source.
+  if (strictPlaylist && !episodeSource) {
+    const airable = rotation ?? airableAnchorTracks(playlistPool!.tracks, {
+      show, excludedIds, resolvedGenres: genreNames, minTrackSec: minDurationSec, maxTrackSec: selectionMaxSec,
+    });
+    const before = pool.length;
+    replacePool(coastFloor(pool, rotationOrder(shuffle(airable), airTimeOf!), airTimeOf!));
+    if (pool.length > before) {
+      fromSource.floor = pool.length - before;
+      queue.log('scheduler', `Auto-playlist: strict playlist fallback ran under an hour — topped up with ${pool.length - before} longest-waiting playlist track(s)`);
+    }
+  }
+
   // This fallback bypasses the drain, so it has to stamp what the drain would:
   // loudness gain (same resolver, so both paths level identically), the
   // max-track cue_out cap (#447) and the silence trim (music/silence-trim.ts).
@@ -524,7 +567,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   } else if (strict && genreNames.length && pool.length < TARGET_POOL) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreNames.join(', ')} — looping a short genre-pure fallback`);
   }
-  if (strictPlaylist && pool.length < TARGET_POOL) {
+  if (strictPlaylist && pool.length < TARGET_POOL
+    && pool.reduce((sec, t) => sec + (trackLengthSeconds(t) ?? 0), 0) < COAST_MIN_SEC) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
   }
 
