@@ -762,6 +762,15 @@ export default function PersonasPanel() {
       </Modal>
 
       <PersonaEditor
+        // Keyed by id, as ShowsPanel keys ShowEditor. EditorDialog's
+        // AnimatePresence keeps a closing editor's element tree mounted with its
+        // OLD props for the exit animation, so after a removal its controllers
+        // are still bound to `personas.<removed index>.*`. RHF's post-replace
+        // broadcast re-renders them, `register()` re-creates that path, and a
+        // half-row with no `id` or `name` reappears in `watch` (#1950). Removing
+        // the focused row always changes `focused.id`, so the new key unmounts
+        // the frozen tree in the same commit as the removal.
+        key={focused.id}
         persona={focused}
         index={safeIdx}
         position={focusedPosition}
