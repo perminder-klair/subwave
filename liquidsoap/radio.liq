@@ -112,8 +112,9 @@ station_name = ref("SUB/WAVE")
 # holds in AUDIO time under any clock (wall-clock envelopes drift).
 #
 # Engine constraints, all measured — do not "simplify" past them:
-#   * v2.4.5 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
-#     every effect transition (see Dockerfile.broadcast).
+#   * v2.4.6 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
+#     every effect transition, and 2.4.5 drops a partial frame after every
+#     `cross` (see Dockerfile.broadcast).
 #   * comb, NOT echo: native `echo` (incl. ping_pong) type-checks then passes
 #     audio through bit-for-bit on 2.2.5 and 2.4.4.
 #   * filter.rc, NOT the SVF `filter` (unstable near sr/4, collapses to

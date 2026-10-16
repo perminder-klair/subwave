@@ -258,7 +258,7 @@ This reads that commit's mixer directly without merging or copying its
 implementation into #1775. The output identifies the exact mixer SHA and
 keeps the rendered scripts, WAVs and logs under `scripts/.fx-render/stemseam/`.
 Controller dependencies and Python with numpy and soundfile are required;
-Liquidsoap defaults to the production `savonet/liquidsoap:v2.4.5` image.
+Liquidsoap defaults to the production `savonet/liquidsoap:v2.4.6` image.
 
 ### The stem cache (analyzer change)
 

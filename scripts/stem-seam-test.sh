@@ -10,13 +10,13 @@
 # mixer and correctly fails on a checkout missing the required fix.
 #
 # Needs controller/node_modules (npm ci), Python with numpy + soundfile
-# (or ANALYZER_IMAGE), and savonet/liquidsoap:v2.4.5 (or LIQ_BIN).
+# (or ANALYZER_IMAGE), and savonet/liquidsoap:v2.4.6 (or LIQ_BIN).
 # Output: scripts/.fx-render/stemseam/ or STEM_SEAM_WORK.
 # Residual: frame-boundary cross buffering can leave up to one 20ms frame
 # of beat error. SEAM_TOLERANCE_MS defaults to 25ms.
 set -euo pipefail
 
-IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.5}"
+IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.6}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 WORK="${STEM_SEAM_WORK:-$HERE/.fx-render/stemseam}"
