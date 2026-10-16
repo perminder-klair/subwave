@@ -18,7 +18,10 @@ import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -317,7 +320,16 @@ app.listen(config.server.port, async (err?: Error) => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  await startStreamIdleMonitor(flushPendingAutoPlaylist);
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: stale => queue.dropProgrammeFromEarlierShow(stale),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));

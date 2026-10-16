@@ -15,7 +15,7 @@ import {
 const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
 const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
-export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
+export function sendCommand(cmd: string, timeoutMs = 3000, { requireComplete = false }: { requireComplete?: boolean } = {}): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const sock = net.createConnection({ host: HOST, port: PORT });
     let buf = '';
@@ -47,9 +47,10 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
     sock.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
       // Liquidsoap terminates responses with END\r\n
-      if (/END\r?\n/.test(buf)) finish(null, buf.replace(/END\r?\n.*$/s, '').trim());
+      const end = /(?:^|\r?\n)END\r?\n/.exec(buf);
+      if (end) finish(null, buf.slice(0, end.index).trim());
     });
-    sock.on('close', () => finish(null, buf.trim()));
+    sock.on('close', () => finish(requireComplete ? new Error('incomplete liquidsoap telnet response') : null, buf.trim()));
   });
 }
 
@@ -131,17 +132,23 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
-// Force auto.m3u to re-read from disk. The playlist's reload_mode="watch"
-// inotify watch orphans itself because the controller rewrites the file by
-// atomic rename (new inode), and a missed watch loops the last snapshot forever
-// (#874). Best-effort: errors are swallowed so a refresh never fails here.
+// Re-read auto.m3u: the mixer's only trigger (the playlist has no file watch;
+// an atomic rename orphaned it, #874). Off air, radio.liq also replaces the
+// playlist, dropping a track it had already prepared from the old list, so OK
+// means the old fallback is gone. Best-effort: errors are swallowed so a refresh
+// never fails here.
 export async function reloadAutoPlaylist(): Promise<boolean> {
   try {
-    await sendCommand('auto.reload', 2000);
-    return true;
+    return await sendCommand('auto.reload', 2000, { requireComplete: true }) === 'OK';
   } catch {
     return false;
   }
+}
+
+// Whether the fallback has a track ready to air: after auto.reload the mixer's
+// fresh playlist fetches its first track first (radio.liq `auto.ready`).
+export async function autoPlaylistReady(): Promise<boolean> {
+  return await sendCommand('auto.ready', 2000) === 'ready';
 }
 
 // stream_off disconnects the Icecast mounts (station off air); stream_on
