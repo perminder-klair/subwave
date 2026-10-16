@@ -5,8 +5,11 @@ import { SQL_HAS_MOODS, getDbNonce, requireDb } from './handle.js';
 import type { LibraryStats } from './types.js';
 
 // Aggregate scans, polled from several admin pages; uncached they block
-// listener polls on the synchronous DB thread (#723).
-let statsCache: { at: number; value: LibraryStats } | null = null;
+// listener polls on the synchronous DB thread (#723). `token` is the
+// changeToken() read before the compute: while it still matches, no
+// connection has committed since, so the tallies cannot have moved and the
+// cache holds past its TTL (#1937).
+let statsCache: { at: number; token: string; value: LibraryStats } | null = null;
 const STATS_TTL_MS = 5000;
 
 // EMBEDDED tracks whose vector carries no musical signal, only the head line
@@ -133,15 +136,33 @@ export function pickStats(): PickStats {
 // JSON is malformed. The JSON check runs at query time on the indexed moods
 // copy instead. Created at open, outside the user_version chain so it never
 // takes an upstream migration number; idempotent, built once (~1 s at 76k).
+//
+// The rest serve the admin console's counts (#1937). A tracks row carries
+// kilobytes of analysis JSON, so any scan of the table reads close to the whole
+// file, and the coverage meter alone ran four of them per poll (every 3 s
+// during a tagging run). Each index answers its count without touching a row:
+//   idx_tracks_analysed       analysedCount()       (bpm IS NOT NULL)
+//   idx_tracks_vocal_measured vocalAnalyzedCount()  an expression index, not a
+//     partial one: a partial index whose key isn't the predicate column stops
+//     being chosen once ANALYZE has stats for it, and the column is a JSON blob
+//   idx_tracks_fail_count     analysisFailedCount() (few rows; partial)
+//   idx_tracks_stats          computeStats()' tagged scans, covering every
+//     column they read so they skip the wide rows
+// Every condition is JSON-free for the same reason as the index above.
 export function ensureStatsIndexes(): void {
-  requireDb()
-    .prepare(
-      'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL',
-    )
-    .run();
+  const d = requireDb();
+  for (const sql of [
+    'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_tracks_analysed ON tracks(bpm) WHERE bpm IS NOT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))',
+    'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL',
+    'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL',
+  ]) {
+    d.prepare(sql).run();
+  }
 }
 
-// pickStats() counts. Same rows as the single-pass totals in computeStats()
+// pickStats() counts. Same rows as the tagged totals in computeStats()
 // (tagged rows; distinct non-blank artists), but answered from
 // idx_tracks_tagged_artist alone: the artist key must be the indexed
 // expression, or SQLite falls back to reading every tracks row.
@@ -190,10 +211,14 @@ function computePickStats(): PickStats {
 export function stats(): LibraryStats {
   const now = Date.now();
   if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
+  // Read before the compute, so a commit landing mid-compute leaves a token
+  // the next call no longer matches.
+  const token = changeToken();
+  if (statsCache && statsCache.token === token) return statsCache.value;
   const value = computeStats();
   // Stamp AFTER the compute: a large library can exceed the TTL, and a
   // start-of-compute stamp would expire on store.
-  statsCache = { at: Date.now(), value };
+  statsCache = { at: Date.now(), token, value };
   return value;
 }
 
@@ -209,17 +234,22 @@ export function changeToken(): string {
 
 function computeStats(): LibraryStats {
   const d = requireDb();
-  // Count the whole mirror and the tagged subset in one pass. Empty moods,
-  // blank artists and untagged timestamps keep their original exclusions.
-  const totals = d.prepare(`
-    SELECT COUNT(*) AS mirrorTotal,
-           COUNT(*) FILTER (WHERE ${SQL_HAS_MOODS}) AS total,
+  // The mirror count and the tagged totals are two reads, not one pass: a
+  // single pass has to visit every wide row, while apart the mirror count
+  // reads any small index and the tagged half reads idx_tracks_stats alone
+  // (#1937). Empty moods, blank artists and untagged timestamps keep their
+  // original exclusions.
+  const { mirrorTotal } = d.prepare('SELECT COUNT(*) AS mirrorTotal FROM tracks').get() as
+    Pick<LibraryStats, 'mirrorTotal'>;
+  const tagged = d.prepare(`
+    SELECT COUNT(*) AS total,
            COUNT(DISTINCT LOWER(TRIM(artist))) FILTER (
-             WHERE ${SQL_HAS_MOODS} AND artist IS NOT NULL AND TRIM(artist) != ''
+             WHERE artist IS NOT NULL AND TRIM(artist) != ''
            ) AS distinctArtists,
-           MAX(tagged_at) FILTER (WHERE ${SQL_HAS_MOODS}) AS updatedAt
-      FROM tracks
-  `).get() as Pick<LibraryStats, 'mirrorTotal' | 'total' | 'distinctArtists' | 'updatedAt'>;
+           MAX(tagged_at) AS updatedAt
+      FROM tracks WHERE ${SQL_HAS_MOODS}
+  `).get() as Pick<LibraryStats, 'total' | 'distinctArtists' | 'updatedAt'>;
+  const totals = { mirrorTotal, ...tagged };
   const byMood: Record<string, number> = {};
   for (const r of d
     .prepare(

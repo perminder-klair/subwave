@@ -177,9 +177,11 @@ export function setAudioMoodVocabHash(hash: string): void {
 }
 
 // Coverage meter, inverse of needsVocalIds (#646); a stored "[]" counts as done.
+// Spelled as idx_tracks_vocal_measured's expression so the count reads that
+// index, never the wide rows (#1937).
 export function vocalAnalyzedCount(): number {
   return (requireDb().prepare(
-    'SELECT COUNT(*) AS n FROM tracks WHERE vocal_ranges_json IS NOT NULL',
+    'SELECT COUNT(*) AS n FROM tracks WHERE (vocal_ranges_json IS NOT NULL) = 1',
   ).get() as { n: number }).n;
 }
 
@@ -265,7 +267,7 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
 }
 
 // "Analysed" means bpm IS NOT NULL; upsertTrackAnalysis writes bpm/key/intro
-// together.
+// together. Answered from idx_tracks_analysed alone (#1937).
 export function analysedCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE bpm IS NOT NULL').get() as {
     n: number;
