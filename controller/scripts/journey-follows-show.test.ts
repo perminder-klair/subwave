@@ -116,6 +116,34 @@ test('a changeover pick with no run going reports nothing ended and starts nothi
   assert.equal(runs.runActive(), false);
 });
 
+test('an in-order show between two autonomous stretches ends the autonomous run', async (t) => {
+  // The in-order walk never calls advanceRun. Without notePickShow, the run
+  // left going when the show began resumed on the first autonomous pick after
+  // it: same 'auto' key on both sides, so nothing looked like a change.
+  t.mock.method(Math, 'random', () => 0);
+  await reset(null);
+  const started = await runs.advanceRun(true, onAir, { show: null });
+  assert.ok(started.rankTarget);
+  assert.equal(runs.runActive(), true, 'a run is going as the in-order show starts');
+
+  runs.notePickShow({ id: 'in-order-hour' });
+  runs.notePickShow({ id: 'in-order-hour' });
+  assert.equal(runs.runActive(), false, 'the walked show ends the autonomous run');
+
+  const back = await runs.advanceRun(true, onAir, { show: null });
+  assert.deepEqual(back, { rankTarget: null, audioWaypoint: null },
+    'the first autonomous pick after the show is a changeover pick, not the old run');
+  assert.ok((await runs.advanceRun(true, onAir, { show: null })).rankTarget, 'the next pick may start a fresh run');
+});
+
+test('a walked pick inside the run\'s own show leaves the run alone', async (t) => {
+  t.mock.method(Math, 'random', () => 0);
+  await reset(JAZZ_SHOW);
+  await runs.advanceRun(true, onAir, { show: JAZZ_SHOW });
+  runs.notePickShow(JAZZ_SHOW);
+  assert.equal(runs.runActive(), true);
+});
+
 test('autonomous blocks share one run identity, so a run keeps going without a show', async (t) => {
   t.mock.method(Math, 'random', () => 0);
   await reset(null);
@@ -237,4 +265,6 @@ test('runTrackEvent resolves the pick\'s show on the brief\'s clock and hands it
   const body = source.slice(source.indexOf('export async function runTrackEvent('));
   assert.match(body, /const pickShow = settings\.resolveActiveShow\(showAt \?\? undefined\);/);
   assert.match(body, /await timePhase\('pick\.advanceRun', \(\) => advanceRun\(djMode, pickAnchor, \{ show: pickShow \}\)\)/);
+  assert.match(body, /if \(await pickInOrder\([^)]*\)\) \{\s*notePickShow\(settings\.resolveActiveShow\(showAt \?\? undefined\)\);\s*return;/,
+    'an in-order pick records the show it was for');
 });

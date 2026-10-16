@@ -251,7 +251,10 @@ step of an arc anchored on the outgoing host's last track; the following pick
 may start a fresh run. It is checked per pick, not cleared at the session
 roll: the incoming show's first pick is made under the look-ahead before the
 live session rolls, so a roll-time reset lands one pick late. Every autonomous
-block shares one run identity, matching the session's soft shift. The journey
+block shares one run identity, matching the session's soft shift. An in-order
+pick takes no run step but still records its show (`notePickShow`): with
+`auto` on both sides of an in-order show, a run left going when the show began
+would otherwise resume on the first pick after it. The journey
 destination comes from `music/journey-destination.ts`. With no show on air it is
 still the daypart energy bucket. With a show it is the show's own tracks: a
 resolved playlist anchor through `airableAnchorTracks`, otherwise the show's

@@ -37,7 +37,7 @@ import {
   breakerSuccess,
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
-import { advanceRun, runActive } from './dj-agent/runs.js';
+import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
 import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
@@ -1425,7 +1425,12 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // selection outright — no agent, no pool, and no mini-run or journey
     // steering, which is why it runs before advanceRun. Only the link still
     // costs a model call. False means it stood aside and today's paths run.
-    if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) return;
+    // A walked pick still records its show, so the next advanceRun sees the
+    // show change it crossed (#1911).
+    if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) {
+      notePickShow(settings.resolveActiveShow(showAt ?? undefined));
+      return;
+    }
 
     const djMode = !!settings.getEffectivePersona()?.djMode;
     // The show this pick will air in, on the same look-ahead clock as the pick

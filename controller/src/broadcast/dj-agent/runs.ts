@@ -179,6 +179,17 @@ export async function advanceRun(
   return { rankTarget: target, audioWaypoint: takeWaypoint(started) };
 }
 
+// A pick that took no run step (the in-order walk, which replaces selection
+// outright) is still a pick FOR a show. Record it, and end a run that belongs
+// to another show, so the change it crossed is not missed: an autonomous run
+// left going when an in-order show began would otherwise resume on the first
+// pick after that show, since the walk never calls advanceRun.
+export function notePickShow(show: { id?: string | null } | null | undefined): void {
+  const showKey = runShowKey(show);
+  if (runState && runState.showKey !== showKey) runState = null;
+  lastPickShowKey = showKey;
+}
+
 export function runActive(): boolean {
   return !!(runState && runState.remaining > 0);
 }
