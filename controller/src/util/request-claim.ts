@@ -35,11 +35,11 @@
 // skipped, and the queued track's own names — every credited act, "The"-less
 // forms, a title without its "(Remastered)" tail, the album — are masked out
 // first. A word in the run's own genre tags is a genre, not a name ("a little
-// Motown magic" for "some motown please"). Diacritics fold on both sides ("Beyonce" meets "Beyoncé"). A cover
-// is not a mismatch: "Leonard Cohen's Hallelujah" over Jeff Buckley's version
-// names the queued title, which grounds the request claim. Caseless scripts
-// carry no capital, so they never make a request or candidate claim — an
-// accepted miss, never a false alarm.
+// Motown magic" for "some motown please"). Diacritics fold on both sides
+// ("Beyonce" meets "Beyoncé"). A cover is not a mismatch: "Leonard Cohen's
+// Hallelujah" over Jeff Buckley's version names the queued title, which grounds
+// the request claim. Caseless scripts carry no capital, so they never make a
+// request or candidate claim — an accepted miss, never a false alarm.
 import { isNamedRequester, normalizeListenerText } from './request-guard.js';
 import { artistParticipantKeys } from '../music/recency.js';
 import { composedEnglishFits } from '../broadcast/announce-line.js';
