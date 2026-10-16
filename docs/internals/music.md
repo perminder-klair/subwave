@@ -241,6 +241,30 @@ exploration flag used by its discovery plan. Journey choices prefer a fitting
 long-unplayed deep cuts extra consideration. Runs and journeys suppress that
 exploration steer. Corrective choices keep the same selection context.
 
+**DJ-mode runs and sonic journeys belong to one show (#1911).** A run
+(`broadcast/dj-agent/runs.ts`) records the show it started for, and
+`advanceRun` compares that with the show resolved at the pick's own look-ahead
+clock (`settings.resolveActiveShow(showAt)`, the clock the pick brief and the
+discovery locks use). A change ends the run and that pick starts none, so the
+first pick of an incoming show is chosen for the show rather than as the next
+step of an arc anchored on the outgoing host's last track; the following pick
+may start a fresh run. It is checked per pick, not cleared at the session
+roll: the incoming show's first pick is made under the look-ahead before the
+live session rolls, so a roll-time reset lands one pick late. Every autonomous
+block shares one run identity, matching the session's soft shift. The journey
+destination comes from `music/journey-destination.ts`. With no show on air it is
+still the daypart energy bucket. With a show it is the show's own tracks: a
+resolved playlist anchor through `airableAnchorTracks`, otherwise the show's
+genre/era/mood/energy/vocal filters applied HARD whether the show is strict or
+not (a destination is a direction, not a pick), with dimensions the library
+has no data for left out as the pick path does, unresolved genres off, and
+excluded playlists removed. The daypart's energy bucket leads that sample when
+the show has tracks in it. A show placed by nothing but its free-text brief gets
+the tempo/key run and **no** journey: heading for a random energy bucket was
+the bug. With a show on air the pick event's run and journey clauses defer to
+its brief, and `tracksTowardJourney` says "prefer when it fits" rather than
+"strongly prefer". Pinned by `scripts/journey-follows-show.test.ts`.
+
 Conversation continuity uses the same `promptRecapEntries` selector as
 `queue.getDjRecap`. Both read the live `djBehaviour.recapLimit`, `recapMinutes`
 and `recapChars` controls (defaults 10/120/140), the shared voice-kind registry

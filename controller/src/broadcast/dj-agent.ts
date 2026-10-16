@@ -1428,23 +1428,34 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) return;
 
     const djMode = !!settings.getEffectivePersona()?.djMode;
+    // The show this pick will air in, on the same look-ahead clock as the pick
+    // brief (pickSystem) and the discovery locks (livePickerScope). A run
+    // belongs to one show, and a journey heads somewhere inside it (#1911).
+    const pickShow = settings.resolveActiveShow(showAt ?? undefined);
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
     // waypoint for the pool's audio anchor.
-    const { rankTarget, audioWaypoint } = timePhase('pick.advanceRun', () => advanceRun(djMode, pickAnchor));
+    const { rankTarget, audioWaypoint, endedForShow } = await timePhase('pick.advanceRun', () => advanceRun(djMode, pickAnchor, { show: pickShow }));
+    if (endedForShow) queue.log('picker', `show change — the DJ-mode run ends here; this pick is chosen for ${pickShow ? `"${pickShow.name}"` : 'the autonomous block'}`);
     const inRun = runActive();
 
     // Selection steering stays in this prompt, but it no longer shares a
-    // response schema with listener speech.
+    // response schema with listener speech. With a show on air both clauses
+    // defer to its brief (#1911): each is the last concrete instruction in the
+    // pick event, and a small model followed "keep the energy moving" over the
+    // brief in its system prompt. With no show they are byte-identical to before.
+    const showFirst = pickShow ? ', inside this show\'s brief — the brief outranks the run' : '';
     const runClause = inRun
-      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'})${showFirst}.`
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
     // destination itself — is still the one to land on.
-    const journeyClause = audioWaypoint && audioWaypoint.length
-      ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
-      : '';
+    const journeyClause = !(audioWaypoint && audioWaypoint.length)
+      ? ''
+      : pickShow
+        ? ' A sonic journey is active, heading somewhere inside this show: call tracksTowardJourney and lean toward one of its tracks that fits the show\'s brief — each carries the sound a step along the arc. The brief outranks the arc: never take a track the brief rules out to follow it, and "same energy" or "same era" is no reason to leave it. If nothing fits, pick via the library mood/genre/audio tools inside the brief. Never mention the journey on air.'
+        : ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.';
     // Surface the expected predecessor's real Subsonic id so similarSongs /
     // tracksLikeThis actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
