@@ -48,6 +48,7 @@ import {
   useSettingsMutation,
   useSettingsQuery,
 } from './settings/queries';
+import { useScheduleOverrideQuery } from './schedule/queries';
 
 // `activePersonaId` / `activeDjPromptId` / `djHouseRules` stay out of the
 // resolver: they aren't array rows, and the patch registry validates each as
@@ -79,6 +80,12 @@ export default function PersonasPanel() {
   const [avatarTick, setAvatarTick] = useState(0);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+  // When Remove was pressed: the takeover line re-checks expiry against it.
+  // State, not a render-time Date.now().
+  const [deleteAskedAt, setDeleteAskedAt] = useState(0);
+  // Read only while the Delete confirm is open, through the Schedule panel's
+  // own key, so the page load pays nothing for it.
+  const takeoverQuery = useScheduleOverrideQuery(adminFetch, hydrated && !needsAuth && confirmDeleteIdx !== null);
   // Raised when the editor is closed by ×/Escape with the focused persona dirty.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Best-effort; null = still loading.
@@ -621,7 +628,9 @@ export default function PersonasPanel() {
   const defaultEngine = data?.values?.tts?.defaultEngine || 'piper';
   const skillCatalog = data?.skills?.catalog || [];
   const deleteTarget = confirmDeleteIdx !== null ? personas[confirmDeleteIdx] : undefined;
-  const deleteImpact = deleteTarget ? personaRemovalImpact(deleteTarget.id, data) : null;
+  const deleteImpact = deleteTarget
+    ? personaRemovalImpact(deleteTarget.id, data, { override: takeoverQuery.data?.override ?? null, now: deleteAskedAt })
+    : null;
   const oneHosted = deleteImpact?.hosts.length === 1;
 
   return (
@@ -799,7 +808,7 @@ export default function PersonasPanel() {
         onGenerateAvatar={generateAvatar}
         onClearAvatar={clearAvatar}
         onSetActive={() => setActivePersonaId(focused.id)}
-        onRemove={() => setConfirmDeleteIdx(safeIdx)}
+        onRemove={() => { setDeleteAskedAt(Date.now()); setConfirmDeleteIdx(safeIdx); }}
         exporting={exportingId === focused.id}
         exportStale={focusedDirty}
         onExportBundle={() => { void exportPersona(focused.id, focused.name); }}
@@ -842,6 +851,11 @@ export default function PersonasPanel() {
                 Saving also deletes {oneHosted ? 'the show' : `the ${deleteImpact.hosts.length} shows`} this
                 persona hosts, <b>{deleteImpact.hosts.join(', ')}</b>, and {oneHosted ? 'its' : 'their'} schedule
                 hours. To keep {oneHosted ? 'it' : 'them'}, give {oneHosted ? 'it' : 'them'} a new host under Shows first.
+              </span>
+            )}
+            {deleteImpact?.endsTakeoverOf && (
+              <span className="mt-2 block">
+                The takeover putting <b>{deleteImpact.endsTakeoverOf}</b> on air right now is cancelled too.
               </span>
             )}
             {deleteImpact && deleteImpact.guestOn.length > 0 && (

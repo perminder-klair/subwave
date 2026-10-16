@@ -86,16 +86,17 @@ test('removal impact names the shows a persona hosts and guests on', () => {
     { id: 's3', name: 'Drive', personaId: 'p_other', guestPersonaIds: ['p_host'] },
     { id: 's4', name: 'Unrelated', personaId: 'p_other', guestPersonaIds: ['p_third'] },
   ]));
-  assert.deepEqual(impact, { hosts: ['Late Night', 'Breakfast'], guestOn: ['Drive'] });
+  assert.deepEqual(impact, { hosts: ['Late Night', 'Breakfast'], guestOn: ['Drive'], endsTakeoverOf: null });
 });
 
 test('a host listed among its own guests is reported once, as the host', () => {
-  // The schema strips a host from its own guest list, but a hand-edited
-  // settings.json can still carry one; the show is deleted, not merely left.
+  // Defence in depth: the controller's load path already strips a host from
+  // its own guests (repairShowForLoad), so GET /settings should never send this
+  // shape. If it did, the show is deleted, not merely left.
   const impact = personaRemovalImpact('p_host', settings([
     { id: 's1', name: 'Solo', personaId: 'p_host', guestPersonaIds: ['p_host'] },
   ]));
-  assert.deepEqual(impact, { hosts: ['Solo'], guestOn: [] });
+  assert.deepEqual(impact, { hosts: ['Solo'], guestOn: [], endsTakeoverOf: null });
 });
 
 test('an unnamed show still gets a label', () => {
@@ -109,11 +110,42 @@ test('an unnamed show still gets a label', () => {
 test('no shows, no payload, or a malformed list means no impact', () => {
   // A never-saved persona, an older controller, or settings still loading must
   // not invent a warning.
-  const none = { hosts: [], guestOn: [] };
+  const none = { hosts: [], guestOn: [], endsTakeoverOf: null };
   assert.deepEqual(personaRemovalImpact('p_host', null), none);
   assert.deepEqual(personaRemovalImpact('p_host', {} as SettingsResponse), none);
   assert.deepEqual(personaRemovalImpact('p_host', settings('not-an-array')), none);
   assert.deepEqual(personaRemovalImpact('p_new', settings([
     { id: 's1', name: 'Late Night', personaId: 'p_host', guestPersonaIds: ['p_other'] },
   ])), none);
+});
+
+// The takeover line: the controller's sweep clears a takeover whose pinned show
+// it just deleted, so the confirm says so, but only when one is really running.
+const NOW = Date.UTC(2026, 9, 16, 21, 0);
+const hosting = settings([
+  { id: 's_late', name: 'Late Night', personaId: 'p_host' },
+  { id: 's_drive', name: 'Drive', personaId: 'p_other', guestPersonaIds: ['p_host'] },
+]);
+const live = (override: { showId: string | null; expiresAt: number } | null) => ({ override, now: NOW });
+
+test('a live takeover pinning a show the persona hosts is reported as ending', () => {
+  const impact = personaRemovalImpact('p_host', hosting, live({ showId: 's_late', expiresAt: NOW + 60_000 }));
+  assert.equal(impact.endsTakeoverOf, 'Late Night');
+});
+
+test('a takeover that the delete leaves alone is not mentioned', () => {
+  // Pinning a show the persona only GUESTS on: the show survives, so does the pin.
+  assert.equal(personaRemovalImpact('p_host', hosting, live({ showId: 's_drive', expiresAt: NOW + 60_000 })).endsTakeoverOf, null);
+  // Default programming pins no show at all (#1507).
+  assert.equal(personaRemovalImpact('p_host', hosting, live({ showId: null, expiresAt: NOW + 60_000 })).endsTakeoverOf, null);
+  // No takeover, or the caller never asked.
+  assert.equal(personaRemovalImpact('p_host', hosting, live(null)).endsTakeoverOf, null);
+  assert.equal(personaRemovalImpact('p_host', hosting).endsTakeoverOf, null);
+});
+
+test('a takeover that has already run out is not reported as cancelled', () => {
+  // GET /schedule nulls an expired pin, but the cached read can outlive it.
+  // Expiry is exclusive, the same as the controller's getScheduleOverride.
+  assert.equal(personaRemovalImpact('p_host', hosting, live({ showId: 's_late', expiresAt: NOW })).endsTakeoverOf, null);
+  assert.equal(personaRemovalImpact('p_host', hosting, live({ showId: 's_late', expiresAt: NOW - 1 })).endsTakeoverOf, null);
 });

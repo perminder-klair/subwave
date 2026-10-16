@@ -4,7 +4,7 @@ import {
   CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProviderMeta';
-import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot } from '../../../lib/schemas.generated';
+import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot, takeoverShowId } from '../../../lib/schemas.generated';
 
 /**
  * The slot a persona will actually be voiced by: the 'inherit' sentinel
@@ -118,17 +118,29 @@ export function personasEqual(a: Persona | undefined, b: Persona | undefined): b
 // controller/src/settings.ts) deletes every show the persona hosts, along with
 // those shows' schedule hours and any takeover pinning one, and drops it from
 // guest line-ups. Reads the SAVED shows, the same list the sweep will see.
+//
+// `live` is the takeover as GET /schedule reports it (already null once expired
+// or dangling) plus the moment the operator asked; `now` re-checks expiry
+// because that read can be up to a cache lifetime old. A Default-programming
+// takeover pins no show, so it never ends with one.
 export function personaRemovalImpact(
   personaId: string,
   data: SettingsResponse | null,
-): { hosts: string[]; guestOn: string[] } {
+  live: { override: { showId?: string | null; expiresAt?: number } | null; now: number } | null = null,
+): { hosts: string[]; guestOn: string[]; endsTakeoverOf: string | null } {
   const shows = Array.isArray(data?.values?.shows) ? data.values.shows : [];
   const label = (s: { name?: string }) => (typeof s.name === 'string' && s.name.trim()) || 'Untitled show';
+  const hosted = shows.filter(s => s.personaId === personaId);
+  const pinnedId = takeoverShowId(live?.override);
+  const pinned = pinnedId && typeof live?.override?.expiresAt === 'number' && live.override.expiresAt > live.now
+    ? hosted.find(s => s.id === pinnedId)
+    : undefined;
   return {
-    hosts: shows.filter(s => s.personaId === personaId).map(label),
+    hosts: hosted.map(label),
     guestOn: shows
       .filter(s => s.personaId !== personaId && Array.isArray(s.guestPersonaIds) && s.guestPersonaIds.includes(personaId))
       .map(label),
+    endsTakeoverOf: pinned ? label(pinned) : null,
   };
 }
 
