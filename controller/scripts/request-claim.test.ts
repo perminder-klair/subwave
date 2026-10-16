@@ -199,9 +199,20 @@ test('plain copy names the queued track from metadata, and the listener only by 
   assert.deepEqual(misnamedRequestLines({ intro: plainRequestIntro(ISLA, 'Michael'), ack: plainRequestAck(ISLA, 'Michael') }, incident), []);
 });
 
+test('the spoken plain intro is composed English, so it follows announceLine\'s gate', () => {
+  // '' is the caller's signal to have the model write it instead.
+  assert.equal(plainRequestIntro(ISLA, 'Michael', { language: 'Spanish' }), '');
+  assert.equal(plainRequestIntro({ title: '稻香', artist: '周杰倫' }, 'Michael', { language: 'English' }), '');
+  assert.equal(plainRequestIntro(ISLA, 'Michael', { language: 'english' }), "Here's La Isla Bonita by Madonna, for Michael.");
+  // A name the English voice can't read is left out, not the line.
+  assert.equal(plainRequestIntro(ISLA, '小明', null), "Here's La Isla Bonita by Madonna.");
+});
+
 // --- the remedy, through runRequest ---------------------------------------------
 
-type Scripted = { llm: Array<unknown | Error>; search?: any[] };
+// `text` answers a plain-text call (no tools offered: generateIntro) without
+// spending a scripted object reply.
+type Scripted = { llm: Array<unknown | Error>; search?: any[]; text?: string };
 type Calls = { llm: any[]; search: string[] };
 
 // Routes every fetch: the corrective re-pick's model call (openai-compatible
@@ -220,6 +231,9 @@ async function withNetwork<T>(script: Scripted, fn: (calls: Calls) => Promise<T>
     if (url.startsWith('http://127.0.0.1:9/')) {
       const body = JSON.parse(String(init?.body ?? '{}'));
       calls.llm.push(body);
+      if (script.text !== undefined && !(Array.isArray(body?.tools) && body.tools.length)) {
+        return chatCompletionResponse({ message: { role: 'assistant', content: script.text } });
+      }
       const reply = replies.shift();
       if (reply === undefined || reply instanceof Error) return new Response('model down', { status: 400 });
       const tools = Array.isArray(body?.tools) ? body.tools : [];
@@ -325,6 +339,22 @@ test('when the corrective call fails, the original pick airs with plain copy', a
   assert.equal(queue.upcoming[0].track.id, ISLA.id);
   assert.equal(queue.upcoming[0].introScript, "Here's La Isla Bonita by Madonna, for Michael.");
   assert.equal(result?.ack, 'Coming up for you, Michael: La Isla Bonita by Madonna.');
+});
+
+test('a persona that speaks another language never airs the English plain copy', async () => {
+  const personas = settings.get().personas;
+  await settings.update({ personas: personas.map((p: any, i: number) => (i === 0 ? { ...p, language: 'Spanish' } : p)) } as never);
+  try {
+    agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro: INCIDENT_INTRO }, [ISLA, HOLIDAY]);
+    const spanish = 'Para Michael, aquí está Madonna con La Isla Bonita.';
+    const result = await withNetwork({ search: [], llm: [new Error('down')], text: spanish },
+      () => runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' }));
+    assert.equal(result?.guard, 'claim-plain');
+    assert.equal(queue.upcoming[0].track.id, ISLA.id);
+    assert.equal(queue.upcoming[0].introScript, spanish, 'the metadata-only intro, in the persona\'s language');
+  } finally {
+    await settings.update({ personas } as never);
+  }
 });
 
 test('a run that already searched gets no second lookup', async () => {

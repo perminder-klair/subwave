@@ -42,6 +42,7 @@
 // accepted miss, never a false alarm.
 import { isNamedRequester, normalizeListenerText } from './request-guard.js';
 import { artistParticipantKeys } from '../music/recency.js';
+import { composedEnglishFits } from '../broadcast/announce-line.js';
 
 export interface ClaimTrack {
   title?: string | null;
@@ -420,8 +421,13 @@ function trackLabel(track: ClaimTrack): string {
   return artist ? `${title} by ${artist}` : title;
 }
 
-export function plainRequestIntro(track: ClaimTrack, requester: string | null | undefined): string {
-  return isNamedRequester(requester)
+// The intro is SPOKEN, and it is composed English, so it follows announceLine's
+// gate: '' — the caller's signal to have the model write it — for a persona
+// that speaks something else or a name an English voice would read as nothing.
+// The ack below is read, not aired, like screenAck's own fixed fallback.
+export function plainRequestIntro(track: ClaimTrack, requester: string | null | undefined, persona?: unknown): string {
+  if (!composedEnglishFits(persona, track?.title, track?.artist)) return '';
+  return isNamedRequester(requester) && composedEnglishFits(persona, requester)
     ? `Here's ${trackLabel(track)}, for ${String(requester).trim()}.`
     : `Here's ${trackLabel(track)}.`;
 }

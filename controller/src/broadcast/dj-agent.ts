@@ -1786,13 +1786,22 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // session then records the ack rather than a line that never aired.
     // Echo guard (A2): a script that reads the request back is regenerated
     // with the request text withheld — it can't echo what it never saw.
-    // Plain copy (claim guard above) stands in for a line that misnamed the track.
-    const modelIntro = typeof object.intro === 'string' ? object.intro.trim() : '';
-    const rawIntro = autoVoiceAllowed() ? (plainLines.has('intro') ? plainRequestIntro(song, requester) : modelIntro) : '';
-    const guarded = await guardIntro(rawIntro || null, echoTexts, () => dj.generateIntro({
+    // Plain copy (claim guard above) stands in for a line that misnamed the
+    // track. It is composed English, so where that cannot air — a persona that
+    // speaks another language, a name in a script the frame can't carry — the
+    // metadata-only intro the echo guard regenerates with stands in instead.
+    const regenerateIntro = () => dj.generateIntro({
       track: trackFields(song), context: null, requestedBy: requester,
       persona: requestSpeech.persona,
-    }));
+    });
+    const modelIntro = typeof object.intro === 'string' ? object.intro.trim() : '';
+    let rawIntro = '';
+    if (autoVoiceAllowed()) {
+      rawIntro = !plainLines.has('intro') ? modelIntro
+        : plainRequestIntro(song, requester, requestSpeech.persona)
+          || String((await regenerateIntro().catch(() => null)) ?? '').trim();
+    }
+    const guarded = await guardIntro(rawIntro || null, echoTexts, regenerateIntro);
     if (guarded.guard) queue.log('request-guard', `agent intro echoed request text — ${guarded.guard}`);
     const currentSpeech = session.finalizeAutomaticHostSpeech(guarded.script, requestSpeech);
     const intro = currentSpeech.text || '';
