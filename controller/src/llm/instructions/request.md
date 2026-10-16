@@ -11,8 +11,10 @@ block rather than a clause the assembly strips.
 
 The `frame`'s searchLibrary and "describes the track whose id you return"
 sentences are the prompt half of #1918; the enforced half is
-`util/request-claim.ts`, which the request agent checks every answer against.
-A model that ignores these still cannot air a line naming another track.
+`util/request-claim.ts`, which the request agent checks every answer against:
+a line it reads as naming another track gets one corrective re-pick, then plain
+copy. It cannot read every such line (caseless scripts, a one-word name at a
+sentence start), so these sentences still carry weight.
 
 ## frame
 
