@@ -17,10 +17,13 @@
 // Three sources of a wrong name, each chosen because it needs no world
 // knowledge (the asked-for artist is often exactly the one the library lacks):
 //
-//   request          a run of the listener's own words the line repeats as a
-//                    proper name — the incident's "Michael Jackson". A dodge
-//                    without naming the track trips it: the corrected line will
-//                    then say what is really playing, which is the point.
+//   request          a run of the listener's own words the line repeats, read for
+//                    the proper names in it — the incident's "Michael Jackson".
+//                    A lowercase word splits a run rather than disqualifying
+//                    it, so "some upbeat Michael Jackson" read back still yields
+//                    the name. A dodge without naming the track trips it: the
+//                    corrected line will then say what is really playing, which
+//                    is the point.
 //   candidate-*      another candidate's artist or title — the model describing
 //                    the neighbour of the id it returned.
 //   quoted-title     a quoted, title-cased span — "'Billie Jean'" — which radio
@@ -270,8 +273,22 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     claims.push({ source, text: surface(text, span) });
   };
 
-  // 1. Runs of the listener's words the line repeats as a name.
+  // 1. Runs of the listener's words the line repeats, read for the names in
+  // them. A lowercase content word ends a name, not the claim: judged whole,
+  // "some upbeat Michael Jackson" read back failed nameLike on "upbeat", and so
+  // did a possessive ("Michael Jackson's Thriller" keys its "s" lower case).
   const req = keysOf(ctx.requestText);
+  const readName = (from: number, to: number) => {
+    let a = from;
+    let b = to;
+    while (a <= b && FILLER.has(toks[a]!.key)) a++;
+    while (b >= a && FILLER.has(toks[b]!.key)) b--;
+    if (a > b) return;
+    const span = toks.slice(a, b + 1);
+    if (!nameLike(span)) return;
+    if (requester.length && contains(requester, span.map((t) => t.key))) return;
+    add('request', span);
+  };
   for (let i = 0; i < toks.length; i++) {
     for (let j = 0; j < req.length; j++) {
       if (masked[i] || toks[i]!.key !== req[j]) continue;
@@ -280,15 +297,13 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
       let end = i;
       while (end + 1 < toks.length && j + (end + 1 - i) < req.length
         && !masked[end + 1] && toks[end + 1]!.key === req[j + (end + 1 - i)]) end++;
-      let a = i;
-      let b = end;
-      while (a <= b && FILLER.has(toks[a]!.key)) a++;
-      while (b >= a && FILLER.has(toks[b]!.key)) b--;
-      if (a > b) continue;
-      const span = toks.slice(a, b + 1);
-      if (!nameLike(span)) continue;
-      if (requester.length && contains(requester, span.map((t) => t.key))) continue;
-      add('request', span);
+      let from = i;
+      for (let k = i; k <= end; k++) {
+        if (toks[k]!.capital !== false || MINOR.has(toks[k]!.key)) continue;
+        readName(from, k - 1);
+        from = k + 1;
+      }
+      readName(from, end);
     }
   }
 

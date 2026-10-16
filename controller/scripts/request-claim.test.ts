@@ -73,6 +73,26 @@ test("the listener's own name is never a claim, even when it is half the artist"
   assert.equal(misnamedClaims('Michael, here comes Michael Jackson.', incident)[0]?.text, 'Michael Jackson');
 });
 
+test('a name inside a longer phrase the line repeats is still read', () => {
+  // Judged whole, each shared run failed nameLike on a lowercase word ("upbeat",
+  // the possessive "s") and the lie went to air unflagged.
+  const ctx = { track: ISLA, requester: 'Jen', others: [] };
+  assert.deepEqual(
+    misnamedClaims('Some upbeat Michael Jackson coming right up!', { ...ctx, requestText: 'some upbeat Michael Jackson' }).map((c) => c.text),
+    ['Michael Jackson'],
+  );
+  assert.deepEqual(
+    misnamedClaims('Got it — some old school Michael Jackson for you!', { ...ctx, requestText: 'some old school Michael Jackson please' }).map((c) => c.text),
+    ['Michael Jackson'],
+  );
+  assert.deepEqual(
+    misnamedClaims("Here's Michael Jackson's Thriller, Jen!", { ...ctx, requestText: "play Michael Jackson's Thriller" }).map((c) => c.text),
+    ['Michael Jackson', 'Thriller'],
+  );
+  // Still a name only where the line capitalises it.
+  assert.deepEqual(misnamedClaims('some upbeat michael jackson coming up', { ...ctx, requestText: 'some upbeat Michael Jackson' }), []);
+});
+
 test('a dedication in the request is excused once the line names the track', () => {
   const ctx = { track: ISLA, requestText: 'Madonna for my friend Sarah Jones please', requester: 'Tom', others: [] };
   assert.deepEqual(misnamedClaims('This one is for Sarah Jones, with love from Madonna.', ctx), []);
