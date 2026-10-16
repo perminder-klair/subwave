@@ -318,6 +318,57 @@ test('#1918 end to end: the skipped lookup finds the artist, and the re-pick que
   assert.equal(result?.ack, 'Got you, Michael — Billie Jean it is.');
 });
 
+// The same incident through the REAL request agent loop rather than a stubbed
+// run: what claimLookupQuery reads is the agent's own tool-call summary, and
+// what the guard reads is the slim projection the tools put in `seen`.
+test('#1918 through the real request agent: a lookup-free run is caught and re-picked', async () => {
+  const realFetch = globalThis.fetch;
+  const bodies: any[] = [];
+  const searches: string[] = [];
+  const answer = { kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro: INCIDENT_INTRO };
+  const repick = { id: BILLIE.id, ack: 'Got you, Michael — Billie Jean it is.', intro: "Michael, here's Michael Jackson with Billie Jean." };
+  const subsonic = (payload: Record<string, unknown>) => Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...payload } });
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes('/rest/getRandomSongs')) return subsonic({ randomSongs: { song: [ISLA, HOLIDAY, GIRLS] } });
+    if (url.includes('/rest/search3')) {
+      searches.push(new URL(url).searchParams.get('query') ?? '');
+      return subsonic({ searchResult3: { song: [BILLIE] } });
+    }
+    if (url.startsWith('http://127.0.0.1:9/') && url.includes('/chat/completions')) {
+      const body = JSON.parse(String(init?.body ?? '{}'));
+      bodies.push(body);
+      const names: string[] = (body.tools ?? []).map((t: any) => t.function?.name);
+      const forced = body.tool_choice?.function?.name ?? null;
+      const explored = (body.messages ?? []).some((m: any) => m.role === 'tool');
+      // A model that only browses (the incident's one similarity call), then
+      // answers with the incident's lines; the corrective object call gets
+      // the honest re-pick.
+      const [name, args] = forced === 'done' || (names.includes('done') && explored) ? ['done', answer]
+        : names.includes('randomSongs') ? ['randomSongs', {}]
+          : [forced ?? names[0], repick];
+      return chatCompletionResponse({
+        message: name
+          ? { role: 'assistant', content: null, tool_calls: [{ id: `call_${bodies.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
+          : { role: 'assistant', content: JSON.stringify(repick) },
+      });
+    }
+    if (url.startsWith('http://127.0.0.1:9/')) return new Response('not here', { status: 404 });
+    return subsonic({});
+  }) as typeof fetch;
+  let result: any;
+  try {
+    result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  assert.ok(bodies.some((b) => (b.tools ?? []).some((t: any) => t.function?.name === 'randomSongs')), 'the real tool loop ran');
+  assert.ok(searches.length >= 1 && searches.every((q) => q === 'Michael Jackson'), searches.join(' | '));
+  assert.equal(result?.track?.id, BILLIE.id);
+  assert.equal(result?.guard, 'claim-repicked');
+  assert.equal(queue.upcoming[0].introScript, repick.intro);
+});
+
 test('a re-pick that still misnames its track airs plain copy for that track', async () => {
   agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro: INCIDENT_INTRO }, [ISLA, HOLIDAY, GIRLS]);
   const result = await withNetwork({
