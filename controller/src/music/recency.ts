@@ -54,9 +54,10 @@ interface CandidateFilterState {
   // from the library — without it the exemption is dead on a raw Subsonic
   // candidate. Injected rather than imported so this module stays pure.
   albumKeyOf?: (song: CandidateLike) => string;
-  // Count-based hard no-repeat guard, from queue.recentlyPlayedByCount(N).
-  // Checked OUTSIDE the relaxation cascade, so the last N distinct plays can't
-  // re-air even once the relaxable track guard is dropped. Empty = off.
+  // Count-based hard no-repeat guard, from show-recency.hardRecentFor (the
+  // last N distinct plays, or a full rotation's own airings). Checked OUTSIDE
+  // the relaxation cascade, so the last N distinct plays can't re-air even
+  // once the relaxable track guard is dropped. Empty = off.
   hardRecentIds?: Set<string>;
   hardRecentKeys?: Set<string>;
   seenIds?: Set<string>;

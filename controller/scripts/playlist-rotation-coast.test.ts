@@ -2,13 +2,12 @@
 // rotationCoast/coastFloor, the queue's air-time reader, and their wiring in
 // broadcast/scheduler.ts.
 //
-// THE DEFECT. With `llm.pauseWhenEmpty` the station coasts on auto.m3u whenever
-// nobody is listening, and an idle-paused programme defers every automatic
-// rebuild, so whatever the last build wrote plays until a listener arrives. For
-// a strict-playlist show that build filtered the playlist through the
-// station-wide trackHours recency window; on a show that airs most of the day
-// that left 2-5 tracks, and the source's never-starve only fires on ZERO. One
-// reported hour aired one track six times and another five.
+// THE DEFECT. With `llm.pauseWhenEmpty` the DJ stops picking whenever nobody is
+// listening and the station coasts on auto.m3u, which the refresh cron rebuilds
+// at most an hour apart. For a strict-playlist show each build filtered the
+// playlist through the station-wide trackHours recency window; on a show that
+// airs most of the day that left 2-5 tracks, and the source's never-starve only
+// fires on ZERO. One reported hour aired one track six times and another five.
 //
 // Run: npm test -- playlist-rotation-coast
 

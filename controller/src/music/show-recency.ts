@@ -51,9 +51,11 @@ export interface NoRepeatHistory {
 }
 
 // Floor on the strict-playlist coast (#1919): never write a fallback shorter
-// than an hour of audio. Liquidsoap plays auto.m3u until the next rebuild, and
-// an idle-paused programme defers every automatic rebuild — a 2-track file is a
-// 2-track loop for as long as nobody is listening.
+// than an hour of audio. With llm.pauseWhenEmpty the DJ stops picking while
+// nobody listens and auto.m3u IS the programme until the next rebuild, which
+// the refresh cron runs at most an hour apart — a 2-track file is a 2-track
+// loop for that hour. (A stream idle pause freezes the music instead, so
+// nothing coasts through it.)
 export const COAST_MIN_SEC = 3600;
 
 // What of a strict anchor can actually AIR: the show's strict locks (never-
