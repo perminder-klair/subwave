@@ -260,6 +260,39 @@ test('journeyDestinationIds keeps the autonomous energy bucket and places a show
   assert.equal(await journeyDestinationIds({ id: 'brief-only' }, 'low'), null);
 });
 
+test('the Shortlist\'s run, journey and favourites steers defer to the brief only with a show on air', async () => {
+  const { shortlistPickPrompt, FAVOURITES_INSIDE_SHOW } = await import('../src/broadcast/dj-agent/shortlist-pick.js');
+  const context = {
+    journeyActive: true,
+    mixRun: { bpm: 120, key: '8A' },
+    listenerFavourites: [{ title: 'Anthem 1', artist: 'Arena 1', likes: 3 }],
+  } as never;
+  const autonomous = shortlistPickPrompt([], context);
+  assert.equal(shortlistPickPrompt([], context, { showOnAir: false }), autonomous, 'no show: the prompt is unchanged');
+  assert.match(autonomous, /If none fits, keep its energy direction\./);
+  assert.ok(!autonomous.includes(FAVOURITES_INSIDE_SHOW));
+
+  const inShow = shortlistPickPrompt([], context, { showOnAir: true });
+  assert.doesNotMatch(inShow, /keep its energy direction/, '"same energy" is no reason to leave the show');
+  assert.match(inShow, /The brief outranks the arc/);
+  assert.match(inShow, /The show's brief outranks the run\./);
+  assert.ok(inShow.includes(FAVOURITES_INSIDE_SHOW), 'a favourite is a lean inside the brief');
+
+  const shortlistSource = readFileSync(new URL('../src/broadcast/dj-agent/shortlist-pick.ts', import.meta.url), 'utf8');
+  assert.match(shortlistSource, /prompt: shortlistPickPrompt\(candidates, context, \{ showOnAir: !!settings\.resolveActiveShow\(showAt \?\? undefined\) \}\)/,
+    'the live Shortlist pick resolves the show on the pick\'s own clock');
+  const agentSource = readFileSync(new URL('../src/broadcast/dj-agent.ts', import.meta.url), 'utf8');
+  assert.match(agentSource, /shortlistPickPrompt\(\[\.\.\.seen\.values\(\)\], selectionContext, \{ showOnAir: !!settings\.resolveActiveShow\(showAt \?\? undefined\) \}\)/,
+    'and so does its corrective re-pick');
+});
+
+test('the Agentic pick event names favourites as a lean inside the show, and only with one on', () => {
+  const source = readFileSync(new URL('../src/broadcast/dj-agent.ts', import.meta.url), 'utf8');
+  const body = source.slice(source.indexOf('export async function runTrackEvent('));
+  assert.match(body, /const favShowClause = favClause && pickShow \? FAVOURITES_INSIDE_SHOW : '';/);
+  assert.match(body, /\$\{favClause\}\$\{favShowClause\}/);
+});
+
 test('runTrackEvent resolves the pick\'s show on the brief\'s clock and hands it to the run', () => {
   const source = readFileSync(new URL('../src/broadcast/dj-agent.ts', import.meta.url), 'utf8');
   const body = source.slice(source.indexOf('export async function runTrackEvent('));

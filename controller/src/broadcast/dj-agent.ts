@@ -48,7 +48,7 @@ import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
 import { buildShortlist } from '../music/shortlist.js';
 import { genreRun } from '../music/genre-run.js';
-import { djPick, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
+import { djPick, FAVOURITES_INSIDE_SHOW, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
 import { shortlistOffers } from '../music/shortlist-offers.js';
 import { SHORTLIST_PASSES_DEFAULT } from '../schemas/settings.js';
 import { shortlistSourceHint } from '../music/shortlist-presentation.js';
@@ -141,7 +141,7 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
       // effects are active), so a corrective re-pick chooses a fresh transition
       // for its new track instead of settling into one effect.
       prompt: shortlistRepick
-        ? shortlistPickPrompt([...seen.values()], selectionContext) + `\n\n${why}`
+        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}`
         : JSON.stringify({
           ...(Array.isArray(selectionContext.recentTransitions) ? { context: { recentTransitions: selectionContext.recentTransitions } } : {}),
           ...(predecessor ? { predecessor } : {}),
@@ -1487,6 +1487,10 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // multiplies across the window. Mirrored by the pool picker's listener-liked
     // source so both paths lean the same way — a lean, never a lock.
     const favClause = timePhase('pick.favouritesClause', () => likes.favouritesClause(settings.get()?.likes));
+    // With a show on air a favourite is a lean inside its brief, never a reason
+    // to leave it (#1911): a reported off-brief pick cited a favourite and the
+    // outgoing show's mood, not the incoming brief.
+    const favShowClause = favClause && pickShow ? FAVOURITES_INSIDE_SHOW : '';
     // Exploration nudge (ε-greedy seed break, music/airing.ts): every pick
     // seeding discovery from the expected predecessor is a random walk that never
     // leaves its similarity cluster, so a fraction of picks steer the round
@@ -1504,7 +1508,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // Keep its id model-facing so similarity tools can use it without showing
     // a raw id in the operator-facing event text.
     const anchorIdClause = explicitPickAnchor && pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '';
-    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
+    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${favShowClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
     timePhase('pick.appendTurn', () => session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},

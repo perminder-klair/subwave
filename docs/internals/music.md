@@ -264,9 +264,12 @@ has no data for left out as the pick path does, unresolved genres off, and
 excluded playlists removed. The daypart's energy bucket leads that sample when
 the show has tracks in it. A show placed by nothing but its free-text brief gets
 the tempo/key run and **no** journey: heading for a random energy bucket was
-the bug. With a show on air the pick event's run and journey clauses defer to
-its brief, and `tracksTowardJourney` says "prefer when it fits" rather than
-"strongly prefer". Pinned by `scripts/journey-follows-show.test.ts`.
+the bug. With a show on air the run, journey and listener-favourites steers
+defer to its brief on both routes (the Agentic pick event, and the Shortlist's
+one-shot prompt via `shortlistPickPrompt`'s `showOnAir`), and
+`tracksTowardJourney` says "prefer when it fits" rather than "strongly prefer".
+With no show on air every one of those texts is unchanged. Pinned by
+`scripts/journey-follows-show.test.ts`.
 
 Conversation continuity uses the same `promptRecapEntries` selector as
 `queue.getDjRecap`. Both read the live `djBehaviour.recapLimit`, `recapMinutes`
