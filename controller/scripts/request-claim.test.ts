@@ -93,6 +93,34 @@ test('a name inside a longer phrase the line repeats is still read', () => {
   assert.deepEqual(misnamedClaims('some upbeat michael jackson coming up', { ...ctx, requestText: 'some upbeat Michael Jackson' }), []);
 });
 
+test("a word in the run's own genre tags is a genre, not a name", () => {
+  // The commonest request is a genre, a language or a season, read back
+  // capitalised in an ack that names no track.
+  const myGirl = { title: 'My Girl', artist: 'The Temptations', genre: 'Soul, Motown' };
+  const motown = { track: myGirl, requestText: 'some motown please', requester: 'Sam', others: [] };
+  assert.deepEqual(misnamedClaims('You got it, Sam — a little Motown magic coming up!', motown), []);
+  assert.deepEqual(misnamedClaims('Some classic Hip Hop for you, Dee!', {
+    track: { title: 'N.Y. State of Mind', artist: 'Nas', genre: 'Hip-Hop' }, requestText: 'hip hop please', requester: 'Dee',
+  }), []);
+  assert.deepEqual(misnamedClaims('Smooth R&B coming your way, Kim.', {
+    track: { title: 'Crazy in Love', artist: 'Beyoncé', genre: 'R&B' }, requestText: 'play some r&b', requester: 'Kim',
+  }), []);
+  // Any candidate's tags count, word by word.
+  assert.deepEqual(misnamedClaims('Got it, Raj — some Punjabi heat coming your way!', {
+    track: { title: 'Softly', artist: 'Karan Aujla', genre: null }, requestText: 'punjabi songs please', requester: 'Raj',
+    others: [{ title: 'Lover', artist: 'Diljit Dosanjh', genre: 'Punjabi Pop' }],
+  }), []);
+  // The tags are the evidence: untagged, the same word still reads as a name.
+  assert.deepEqual(
+    misnamedClaims('You got it, Sam — a little Motown magic coming up!', { ...motown, track: { ...myGirl, genre: 'Soul' } }).map((c) => c.text),
+    ['Motown'],
+  );
+  // …and a genre word never hides the asked-for artist.
+  assert.deepEqual(misnamedClaims("Here's Michael Jackson for you, Jen!", {
+    ...incident, requester: 'Jen', track: { ...ISLA, genre: 'Pop' }, others: [{ ...HOLIDAY, genre: 'Pop, Dance' }],
+  }).map((c) => c.text), ['Michael Jackson']);
+});
+
 test('a dedication in the request is excused once the line names the track', () => {
   const ctx = { track: ISLA, requestText: 'Madonna for my friend Sarah Jones please', requester: 'Tom', others: [] };
   assert.deepEqual(misnamedClaims('This one is for Sarah Jones, with love from Madonna.', ctx), []);
@@ -319,6 +347,20 @@ test('honest lines cost nothing: no lookup, no extra model call, words untouched
     assert.deepEqual(calls.search, []);
     assert.equal(result?.guard, null);
     assert.equal(queue.upcoming[0].introScript, intro);
+  });
+});
+
+test("a genre ack over a track the run tagged with it costs nothing", async () => {
+  const myGirl = { id: 'temptations-girl', title: 'My Girl', artist: 'The Temptations', genre: 'Soul, Motown', duration: 165 };
+  const ack = 'You got it, Sam — a little Motown magic coming up!';
+  agentAnswers({ kind: 'track', id: myGirl.id, ack, intro: 'Sunshine on a cloudy day, Sam.' }, [myGirl, HOLIDAY],
+    [{ name: 'songsByGenre', args: { genre: 'motown' }, result: [], round: 1 }]);
+  await withNetwork({ search: [], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Sam', text: 'some motown please' });
+    assert.equal(calls.llm.length, 0);
+    assert.deepEqual(calls.search, []);
+    assert.equal(result?.guard, null);
+    assert.equal(result?.ack, ack);
   });
 });
 

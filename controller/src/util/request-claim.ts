@@ -34,7 +34,8 @@
 // are ("smooth and steady"), a lone capital at a sentence start is ambiguous and
 // skipped, and the queued track's own names — every credited act, "The"-less
 // forms, a title without its "(Remastered)" tail, the album — are masked out
-// first. Diacritics fold on both sides ("Beyonce" meets "Beyoncé"). A cover
+// first. A word in the run's own genre tags is a genre, not a name ("a little
+// Motown magic" for "some motown please"). Diacritics fold on both sides ("Beyonce" meets "Beyoncé"). A cover
 // is not a mismatch: "Leonard Cohen's Hallelujah" over Jeff Buckley's version
 // names the queued title, which grounds the request claim. Caseless scripts
 // carry no capital, so they never make a request or candidate claim — an
@@ -46,6 +47,8 @@ export interface ClaimTrack {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
+  // The slim projection's comma-joined genre tags ("Hip-Hop, Rap").
+  genre?: string | null;
 }
 
 export interface ClaimContext {
@@ -263,6 +266,21 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     for (const i of occurrences(toks, p)) for (let k = 0; k < p.length; k++) masked[i + k] = true;
   }
   const requester = isNamedRequester(ctx.requester) ? keysOf(ctx.requester) : [];
+  const others = [...(ctx.others ?? [])];
+
+  // Words in the run's own genre tags — the queued track's and every other
+  // candidate's. The commonest request is a genre, a language or a season
+  // ("some motown please", "punjabi songs", "christmas music"), its ack reads
+  // the word back capitalised ("a little Motown magic"), and that ack often
+  // names no track: read as a name, it cost a corrective model call and a
+  // library search to fix a line that was true. The tags tell a genre from an
+  // artist with no world knowledge. Word by word, so a "Christmas Music" tag
+  // covers "Christmas". The request source only: a candidate's TITLE may share
+  // a genre word ("Soul Man") and is still a name.
+  const genreWords = new Set<string>();
+  for (const c of [ctx.track, ...others]) {
+    for (const k of keysOf(c?.genre)) if (!MINOR.has(k)) genreWords.add(k);
+  }
 
   const claims: LineClaim[] = [];
   const claimed = new Set<string>();
@@ -276,7 +294,8 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   // 1. Runs of the listener's words the line repeats, read for the names in
   // them. A lowercase content word ends a name, not the claim: judged whole,
   // "some upbeat Michael Jackson" read back failed nameLike on "upbeat", and so
-  // did a possessive ("Michael Jackson's Thriller" keys its "s" lower case).
+  // did a possessive ("Michael Jackson's Thriller" keys its "s" lower case). A
+  // genre word ends one the same way, however it is cased.
   const req = keysOf(ctx.requestText);
   const readName = (from: number, to: number) => {
     let a = from;
@@ -299,7 +318,8 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
         && !masked[end + 1] && toks[end + 1]!.key === req[j + (end + 1 - i)]) end++;
       let from = i;
       for (let k = i; k <= end; k++) {
-        if (toks[k]!.capital !== false || MINOR.has(toks[k]!.key)) continue;
+        const word = toks[k]!;
+        if (!genreWords.has(word.key) && (word.capital !== false || MINOR.has(word.key))) continue;
         readName(from, k - 1);
         from = k + 1;
       }
@@ -310,7 +330,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   // 2. Another candidate's artist or title.
   const ownIds = new Set(own.map((p) => p.join(' ')));
   const typed: Array<[ClaimSource, string[][]]> = [['candidate-artist', []], ['candidate-title', []]];
-  for (const o of ctx.others ?? []) {
+  for (const o of others) {
     if (!o) continue;
     typed[0]![1].push(...artistPhrases(o.artist));
     typed[1]![1].push(...titlePhrases(o.title));
