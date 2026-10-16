@@ -10,7 +10,7 @@ import { writeFileAtomic, writeFileAtomicSync } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
-import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
+import { promptMemoryEntries, withheldFromPrompts, type PromptMemoryEntry } from './prompt-memory.js';
 import { snapshotBoothCarry, type BoothCarry } from './booth-carry.js';
 import { BOUNDARY_MAX_HORIZON_SEC, nextShowBoundaryMs, showKeyAt, showRunContinues, showTakeoverStartedAt } from './show-boundary.js';
 import type { Persona } from './queue/types.js';
@@ -38,6 +38,8 @@ export interface TurnMeta {
   personaId?: string;
   personaName?: string;
   promptSuffix?: string;
+  /** Aired words no model wrote; kept out of every prompt (prompt-memory.ts). */
+  verbatim?: boolean;
   [k: string]: unknown;
 }
 
@@ -838,6 +840,9 @@ function softShift(ctx: SessionContext, nextKey: string): Session {
 // event (older asks are already answered and add ambiguity). The DJ's own
 // `dj`/`pick` rationales are kept to the most recent RATIONALE_WINDOW — left
 // unbounded, the agent reads its own commentary as a mandate to keep the thread.
+// Verbatim turns (a RAW /dj/say, a jingle's script) are withheld for a different
+// reason: no model wrote them, and as an assistant turn the agent would take an
+// operator's notice for its own words (#1908, prompt-memory.ts).
 export function windowMessages() {
   if (!_session) return [];
   const raw: { role: 'user' | 'assistant'; content: string }[] = [];
@@ -860,6 +865,7 @@ export function windowMessages() {
     if (m.kind === 'scenario') continue;  // infra noise
     if (m.kind === 'play') continue;       // redundant — current track is in the pick event
     if (m.kind === 'sfx') continue;        // audio-production cue, not conversation — bare effect name reads as spoken
+    if (withheldFromPrompts(m)) continue;  // aired verbatim, never written by a model
     if (m.role === 'event' && m.kind === 'pick' && i !== lastPickEventIdx) continue;  // old pick asks
     if (m.role === 'dj' && m.kind === 'pick' && !keepRationaleIdx.has(i)) continue;   // stale pick rationales
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';

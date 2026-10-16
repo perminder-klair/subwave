@@ -170,7 +170,9 @@ Puts a spoken update on-air via `POST /dj/say`. Three axes:
 - **`mode`** — `styled` (default) hands the text to the LLM as an *instruction*
   and the DJ rewrites it in persona before speaking; `raw` speaks the text
   verbatim. Give a topic → `styled`. Give finished words → `raw` (also the
-  right choice for emergency wording that must not be paraphrased).
+  right choice for emergency wording that must not be paraphrased). A `raw`
+  line is booth-logged and shown in the session feed but never fed back into
+  the DJ's later prompts, so it cannot resurface as banter (#1908).
 - **`placement`** — `solo` (default) is a heavy-ducked solo DJ moment (maps to
   the controller's `dj-speak` kind → `say.txt`); `over-track` is lightly ducked
   so the DJ talks over the playing song (maps to `link` → `intro.txt`).

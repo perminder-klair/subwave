@@ -16,6 +16,7 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist, syncSkillCrons } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
+import { VERBATIM_META } from '../broadcast/prompt-memory.js';
 import { loadSkills, loadedCapabilities, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { communitySkillConfig } from '../community/registry.js';
 import {
@@ -696,7 +697,9 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
 
 // Manual voice DJ. mode 'raw' speaks text verbatim, 'styled' has the LLM write it
 // in persona first. `sfx` airs under the opening words and, being a manual
-// trigger, ignores the settings.sfx.enabled autonomy toggle.
+// trigger, ignores the settings.sfx.enabled autonomy toggle. A raw line is
+// stamped verbatim so later prompts never read it back (#1908); a styled one is
+// the model's own words and stays in its memory like any other segment.
 router.post('/dj/say', requireAdmin, async (req, res) => {
   const text = (typeof req.body?.text === 'string' ? req.body.text : '').trim().slice(0, SAY_TEXT_MAX);
   if (!text) return res.status(400).json({ error: 'text is required' });
@@ -722,7 +725,7 @@ router.post('/dj/say', requireAdmin, async (req, res) => {
         recentOpeners: queue.getRecentOpeners(),
       });
     }
-    await queue.announce(spoken, kind);
+    await queue.announce(spoken, kind, mode === 'raw' ? { meta: { ...VERBATIM_META } } : {});
     if (sfxName) void queue.playSfx(sfxName, { underVoice: true });
     res.json({ ok: true, mode, kind, spoken, sfx: sfxName || null });
   } catch (err) {

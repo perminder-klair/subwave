@@ -39,7 +39,7 @@ import * as bedPolicy from './bed-policy.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { HostSpeechStamp, TurnMeta } from './session.js';
-import { promptRecapEntries } from './prompt-memory.js';
+import { promptRecapEntries, VERBATIM_META } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { TRANSITION_EFFECTS, type TransitionEffect } from '../settings/vocab.js';
@@ -3270,12 +3270,13 @@ class Queue {
     await writeHandoff(config.liquidsoap.jingleFile, jingles.jingleUri(path), { maxWaitMs: 5000 });
     this._pendingJingles.set(filename, { at: Date.now(), rotate });
     // The sidecar's own script, not the hashed filename: every other segment
-    // turn in the booth log and the DJ's chat history carries prose, and
+    // turn in the booth log and the listener booth carries prose, and
     // `jingle_a1b2c3d4.wav` reads as noise next to them (playSfx logs its
-    // effect NAME for the same reason).
+    // effect NAME for the same reason). Verbatim: the operator wrote that
+    // script, often as an announcement, so no prompt reads it back (#1908).
     const label = (await jingles.list()).find(j => j.filename === filename)?.text || filename;
     this.log('jingle', `"${label}" queued — airs at the next safe boundary`);
-    session.appendTurn({ role: 'segment', kind: 'jingle', text: label });
+    session.appendTurn({ role: 'segment', kind: 'jingle', text: label, meta: { ...VERBATIM_META } });
     return { ok: true as const };
   }
 
