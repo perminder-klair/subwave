@@ -517,7 +517,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
       show, excludedIds, resolvedGenres: genreNames, minTrackSec: minDurationSec, maxTrackSec: selectionMaxSec,
     });
     const before = pool.length;
-    replacePool(coastFloor(pool, rotationOrder(shuffle(airable), airTimeOf!), airTimeOf!));
+    // Copied as take() copies: the top-up rows are the memoised playlist's own
+    // objects, and the loudness stamp below writes onto whatever it is handed.
+    replacePool(coastFloor(pool, rotationOrder(shuffle(airable), airTimeOf!), airTimeOf!)
+      .map((t: any, i) => (i < before ? t : { ...t, _source: 'floor' })));
     if (pool.length > before) {
       fromSource.floor = pool.length - before;
       queue.log('scheduler', `Auto-playlist: strict playlist fallback ran under an hour — topped up with ${pool.length - before} longest-waiting playlist track(s)`);
