@@ -28,7 +28,7 @@ import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed } from './clock-policy.js';
 import { pickerAgent, requestAgent } from './dj-agent/agents.js';
-import { pickerScope, type PickerScope } from '../llm/tools.js';
+import { buildPickerTools, pickerScope, PICKER_TOOL_TIMEOUT_MS, type PickerScope } from '../llm/tools.js';
 import {
   HANDOFF_MAX_AGE_MS,
   agentDeadline,
@@ -44,6 +44,7 @@ import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, tr
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
+import { claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
 import { buildShortlist } from '../music/shortlist.js';
@@ -183,8 +184,10 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
 // requestSchema()'s own wording and the same autoVoiceAllowed() gate for
 // `intro`, so a re-picked request is consistent with a first-try one. Returns
 // a result whose id is in `seen`, or null. Never throws.
-async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
-  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null }) {
+// `reason`, when given, replaces the bad-id framing — the claim guard (#1918)
+// reuses this call for a VALID id whose lines named another track.
+async function repickRequestFromSeen({ seen, badId, requester, text, persona, reason = null }:
+  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null; reason?: string | null }) {
   if (seen.size === 0) return null;
   const wantIntro = autoVoiceAllowed();
   const schema = modelTolerant(z.object({
@@ -198,7 +201,7 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
     const outcome: any = await djObject({
       system: requestSystem(persona),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
+        + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". ${reason ?? `The id you returned (${badId ?? 'none'}) matches none of the candidates above.`} Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
       schema,
       temperature: 0.3,
       kind: 'djAgentRequestRepick',
@@ -207,6 +210,30 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
   } catch {
     return null;
   }
+}
+
+// The claim guard's corrective framing (#1918). Names the chosen track from
+// library metadata and never the claim itself: a request claim is the
+// listener's own words, and listener text reaches a prompt only as data.
+function misnamedRepickReason(song: any, misnamed: MisnamedLine[]): string {
+  const fields = misnamed.map((m) => `"${m.field}"`).join(' and ');
+  return `You chose "${song.title}" by ${song.artist}, but your ${fields} named a different artist or title as the one playing. `
+    + 'Whatever you write must name the track you choose by its real title and artist. If no candidate is what they asked for, say so and introduce the closest one as a stand-in — never present it as what they asked for.';
+}
+
+// The library lookup a request run skipped (#1918): the searchLibrary tool
+// itself, under the run's own scope, so its hits went through the same
+// recency/blocklist filtering and slim projection as every other candidate.
+// Bounded by the tool deadline; any failure only means no extra candidates.
+async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Map<string, any>> {
+  const { tools, seen } = buildPickerTools(scope);
+  const search = (tools as Record<string, any>).searchLibrary;
+  try {
+    await search?.execute?.({ query }, {
+      toolCallId: 'request-claim-lookup', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
+    });
+  } catch { /* no extra candidates */ }
+  return seen;
 }
 
 // Build the exact discovery scope used by a live next-track pick. Diagnostics
@@ -1612,9 +1639,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
     // here rather than being built from the active show.
+    const scope = pickerScope({ recentIds });
     const run = await requestAgent.run({
       messages,
-      scope: pickerScope({ recentIds }),
+      scope,
       persona: requestSpeech.persona,
     });
     const { toolCalls, extras } = run;
@@ -1690,6 +1718,55 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       throw new Error(`request agent returned unknown id ${object?.id}`);
     }
 
+    // Claim guard (#1918): a REAL candidate id under lines that name another
+    // artist or title — "Michael Jackson please" queued Madonna under a
+    // "Billie Jean" intro. util/request-claim.ts decides what a wrong name is;
+    // this is the remedy. One corrective re-pick over the run's candidates
+    // (plus the library lookup the agent skipped, when the lines repeat what
+    // the listener asked for), checked again; still wrong, or no re-pick, and
+    // each misnamed line becomes plain copy naming the queued track. The
+    // unknown-id salvage above already spent this request's one corrective
+    // call when it replaced `object`. Never a breaker failure: the harness
+    // worked, the words did not.
+    let claimGuard: string | null = null;
+    let plainLines = new Set<MisnamedLine['field']>();
+    const misnamed = (answer: any, track: any, pool: Map<string, any>) => misnamedRequestLines(
+      { ack: answer?.ack, intro: autoVoiceAllowed() ? answer?.intro : null },
+      { track, requestText: text, requester, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
+    );
+    const firstMiss = misnamed(object, song, extras.seen);
+    if (firstMiss.length) {
+      const canRepick = object === run.object;
+      const pool = new Map(extras.seen);
+      const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
+      if (lookup) {
+        for (const [id, hit] of await lookupRequestClaim(lookup, scope)) if (!pool.has(id)) pool.set(id, hit);
+      }
+      const claimed = [...new Set(firstMiss.flatMap((m) => m.claims.map((c) => `"${c.text}"`)))].join(', ');
+      queue.log('request-guard', `agent ${firstMiss.map((m) => m.field).join('+')} named ${claimed} over "${song.title}" by ${song.artist}${lookup ? ` — looked up "${lookup}"` : ''}`);
+      const repicked = canRepick
+        ? await repickRequestFromSeen({
+          seen: pool, badId: object?.id ?? null, requester, text,
+          persona: requestSpeech.persona, reason: misnamedRepickReason(song, firstMiss),
+        })
+        : null;
+      const from = song.id;
+      let stillMisnamed = firstMiss;
+      if (repicked) {
+        object = repicked;
+        song = pool.get(repicked.id);
+        stillMisnamed = misnamed(object, song, pool);
+      }
+      plainLines = new Set(stillMisnamed.map((m) => m.field));
+      claimGuard = plainLines.size ? 'claim-plain' : 'claim-repicked';
+      logEvent('pick.misnamed', {
+        agent: 'request', from, to: song.id, lines: firstMiss, lookup, candidates: pool.size, outcome: claimGuard,
+      });
+      queue.log('request-guard', plainLines.size
+        ? `request ${[...plainLines].join('+')} replaced with plain copy for "${song.title}" by ${song.artist}`
+        : `request re-picked "${song.title}" by ${song.artist} with lines that name it`);
+    }
+
     // Repeat cooldown (B6) — mirrors the cascade path. `refused` is what tells
     // the caller nothing was queued: it returns a track (the one it declined,
     // so the ack and the operator log can name it), and without the flag the
@@ -1698,7 +1775,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
-      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: null, refused: 'cooldown' };
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: claimGuard, refused: 'cooldown' };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -1709,7 +1786,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // session then records the ack rather than a line that never aired.
     // Echo guard (A2): a script that reads the request back is regenerated
     // with the request text withheld — it can't echo what it never saw.
-    const rawIntro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
+    // Plain copy (claim guard above) stands in for a line that misnamed the track.
+    const modelIntro = typeof object.intro === 'string' ? object.intro.trim() : '';
+    const rawIntro = autoVoiceAllowed() ? (plainLines.has('intro') ? plainRequestIntro(song, requester) : modelIntro) : '';
     const guarded = await guardIntro(rawIntro || null, echoTexts, () => dj.generateIntro({
       track: trackFields(song), context: null, requestedBy: requester,
       persona: requestSpeech.persona,
@@ -1722,14 +1801,15 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // is never falsy and a downstream `||` is unreachable. Threading it in here
     // means the listener gets the named line in both cases the fallback covers
     // — the model wrote nothing, and the model echoed their own text back.
-    const screened = screenAck(object.ack, echoTexts, isNamedRequester(requester)
+    const screened = screenAck(plainLines.has('ack') ? plainRequestAck(song, requester) : object.ack, echoTexts, isNamedRequester(requester)
       ? `Coming up for you, ${requester}.`
       : 'Coming up for you.');
     if (screened.guard) queue.log('request-guard', `agent ack echoed request text — replaced`);
     const ack = screened.ack;
-    // Both guards can fire on one request (the model echoed in the ack AND in
-    // the intro) — join rather than let one verdict hide the other.
-    const guardVerdict = [guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    // Several guards can fire on one request (the model echoed in the ack AND
+    // in the intro, after misnaming the track) — join rather than let one
+    // verdict hide another.
+    const guardVerdict = [claimGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
