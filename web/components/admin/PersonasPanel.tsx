@@ -28,7 +28,7 @@ import { DIAL_NEUTRAL, HOUSE_RULES_MAX, PERSONA_MAX } from './personas/constants
 import {
   clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl,
   voiceForSave, cloudIssue, formFromSettings, personaFromSettings, personasEqual,
-  promptLibraryFromSettings,
+  promptLibraryFromSettings, personaRemovalImpact,
 } from './personas/helpers';
 import { PersonaHero } from './personas/PersonaHero';
 import { SystemPromptModal } from './personas/SystemPromptModal';
@@ -620,6 +620,9 @@ export default function PersonasPanel() {
   const onAirCloudIssue = onAirPersona ? cloudIssue(onAirPersona, data) : null;
   const defaultEngine = data?.values?.tts?.defaultEngine || 'piper';
   const skillCatalog = data?.skills?.catalog || [];
+  const deleteTarget = confirmDeleteIdx !== null ? personas[confirmDeleteIdx] : undefined;
+  const deleteImpact = deleteTarget ? personaRemovalImpact(deleteTarget.id, data) : null;
+  const oneHosted = deleteImpact?.hosts.length === 1;
 
   return (
     <div className="grid gap-4">
@@ -832,8 +835,20 @@ export default function PersonasPanel() {
         description={
           <>
             Remove{' '}
-            <b>{confirmDeleteIdx !== null ? (personas[confirmDeleteIdx]?.name.trim() || 'this persona') : 'this persona'}</b>
+            <b>{deleteTarget?.name.trim() || 'this persona'}</b>
             {' '}from the roster? Nothing is permanent until you Save persona.
+            {deleteImpact && deleteImpact.hosts.length > 0 && (
+              <span className="mt-2 block">
+                Saving also deletes {oneHosted ? 'the show' : `the ${deleteImpact.hosts.length} shows`} this
+                persona hosts, <b>{deleteImpact.hosts.join(', ')}</b>, and {oneHosted ? 'its' : 'their'} schedule
+                hours. To keep {oneHosted ? 'it' : 'them'}, give {oneHosted ? 'it' : 'them'} a new host under Shows first.
+              </span>
+            )}
+            {deleteImpact && deleteImpact.guestOn.length > 0 && (
+              <span className="mt-2 block">
+                It also leaves the guest line-up of <b>{deleteImpact.guestOn.join(', ')}</b>.
+              </span>
+            )}
           </>
         }
         confirmLabel="Delete"

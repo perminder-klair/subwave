@@ -21,13 +21,15 @@
 // posture as tts/CloudProviderSelector.test.tsx. The crash itself was reproduced,
 // and the fix confirmed, by mounting the real panel in a throwaway jsdom harness;
 // that harness is not committed because it needs a DOM dependency web/ does not
-// carry.
+// carry. The remaining tests cover the removal-impact warning, which is pure.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ts from 'typescript';
+import { personaRemovalImpact } from './helpers';
+import type { SettingsResponse } from './types';
 
 const panelPath = join(process.cwd(), 'components/admin/PersonasPanel.tsx');
 const sf = ts.createSourceFile(
@@ -72,4 +74,46 @@ test('the persona editor is keyed by the id of the persona it edits (#1950)', ()
     `${persona}.id`,
     'PersonaEditor must be keyed by the id of the persona it is given, so removing that persona unmounts the closing editor instead of leaving its controllers bound to a dead index',
   );
+});
+
+const settings = (shows: unknown): SettingsResponse =>
+  ({ values: { shows } } as unknown as SettingsResponse);
+
+test('removal impact names the shows a persona hosts and guests on', () => {
+  const impact = personaRemovalImpact('p_host', settings([
+    { id: 's1', name: 'Late Night', personaId: 'p_host', guestPersonaIds: [] },
+    { id: 's2', name: '  Breakfast  ', personaId: 'p_host' },
+    { id: 's3', name: 'Drive', personaId: 'p_other', guestPersonaIds: ['p_host'] },
+    { id: 's4', name: 'Unrelated', personaId: 'p_other', guestPersonaIds: ['p_third'] },
+  ]));
+  assert.deepEqual(impact, { hosts: ['Late Night', 'Breakfast'], guestOn: ['Drive'] });
+});
+
+test('a host listed among its own guests is reported once, as the host', () => {
+  // The schema strips a host from its own guest list, but a hand-edited
+  // settings.json can still carry one; the show is deleted, not merely left.
+  const impact = personaRemovalImpact('p_host', settings([
+    { id: 's1', name: 'Solo', personaId: 'p_host', guestPersonaIds: ['p_host'] },
+  ]));
+  assert.deepEqual(impact, { hosts: ['Solo'], guestOn: [] });
+});
+
+test('an unnamed show still gets a label', () => {
+  const impact = personaRemovalImpact('p_host', settings([
+    { id: 's1', name: '   ', personaId: 'p_host' },
+    { id: 's2', personaId: 'p_host' },
+  ]));
+  assert.deepEqual(impact.hosts, ['Untitled show', 'Untitled show']);
+});
+
+test('no shows, no payload, or a malformed list means no impact', () => {
+  // A never-saved persona, an older controller, or settings still loading must
+  // not invent a warning.
+  const none = { hosts: [], guestOn: [] };
+  assert.deepEqual(personaRemovalImpact('p_host', null), none);
+  assert.deepEqual(personaRemovalImpact('p_host', {} as SettingsResponse), none);
+  assert.deepEqual(personaRemovalImpact('p_host', settings('not-an-array')), none);
+  assert.deepEqual(personaRemovalImpact('p_new', settings([
+    { id: 's1', name: 'Late Night', personaId: 'p_host', guestPersonaIds: ['p_other'] },
+  ])), none);
 });

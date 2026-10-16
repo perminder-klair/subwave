@@ -113,6 +113,25 @@ export function personasEqual(a: Persona | undefined, b: Persona | undefined): b
   return canonical(a) === canonical(b);
 }
 
+// What saving the roster without this persona takes with it. The controller
+// never refuses a removal: its post-save integrity sweep (`prepareUpdate` in
+// controller/src/settings.ts) deletes every show the persona hosts, along with
+// those shows' schedule hours and any takeover pinning one, and drops it from
+// guest line-ups. Reads the SAVED shows, the same list the sweep will see.
+export function personaRemovalImpact(
+  personaId: string,
+  data: SettingsResponse | null,
+): { hosts: string[]; guestOn: string[] } {
+  const shows = Array.isArray(data?.values?.shows) ? data.values.shows : [];
+  const label = (s: { name?: string }) => (typeof s.name === 'string' && s.name.trim()) || 'Untitled show';
+  return {
+    hosts: shows.filter(s => s.personaId === personaId).map(label),
+    guestOn: shows
+      .filter(s => s.personaId !== personaId && Array.isArray(s.guestPersonaIds) && s.guestPersonaIds.includes(personaId))
+      .map(label),
+  };
+}
+
 export function initialsFor(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return '?';
