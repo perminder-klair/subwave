@@ -10,6 +10,7 @@ import { effectEnabled, enabledEffects } from '../../../settings/transition-effe
 import { TRANSITION_EFFECTS } from '../../../settings/vocab.js';
 import { djObject } from '../strategy/object.js';
 import { instruction } from './instructions.js';
+import { steerClause } from '../../../schemas/steer.js';
 
 export const PICKER_CRITERIA = instruction('pick-criteria', 'criteria');
 
@@ -117,12 +118,14 @@ export function showMusicLean(show?: ShowMusic | null): string {
     : '';
 }
 
-function pickerSystem(show?: ShowMusic | null) {
+function pickerSystem(show?: ShowMusic | null, steer?: string | null) {
   const stationName = settings.get().station;
   const showLine = show?.topic
     ? `\n\n${instruction('pool-picker', 'show-brief', { topic: show.topic })}`
     : '';
-  return `${instruction('pool-picker', 'frame', { station: stationName })}${showLine}${showMusicLean(show)}
+  // The pool picker is a stateless one-shot, so the operator's steer sits in
+  // its system prompt. It can only re-rank the pool it is handed.
+  return `${instruction('pool-picker', 'frame', { station: stationName })}${showLine}${showMusicLean(show)}${steerClause(steer)}
 
 ${PICKER_CRITERIA}
 
@@ -131,8 +134,12 @@ ${instruction('pool-picker', 'source-tags')}
 ${instruction('pool-picker', 'recent-plays')}`;
 }
 
-export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [] }: {
+export async function pickNextTrack({ candidates, recentPlays, context, show = null, current = null, recentTransitions = [], steer = null, count = 1 }: {
   candidates: any[];
+  /** More than one asks for an ordered opening list (`ids`) instead of one pick. */
+  count?: number;
+  /** The operator's steer text in force for this pick, or null. */
+  steer?: string | null;
   recentPlays: any;
   context: any;
   show?: ShowMusic | null;
@@ -189,8 +196,25 @@ export async function pickNextTrack({ candidates, recentPlays, context, show = n
     ? `\n\nYour recent transition choices, oldest first: ${recentTransitions.join(', ')} — the station strips a third repeat, so vary deliberately.`
     : '';
 
+  // A steer's opening list: several ids in play order, and no transition craft
+  // (those tracks are queued as plain picks).
+  if (count > 1) {
+    return djObject({
+      system: `${pickerSystem(show, steer)}\n\n${instruction('pool-picker', 'preview', { count })}`,
+      prompt: user,
+      schema: z.object({
+        // No `.max(count)`: a model that lists one too many should be trimmed
+        // by the caller, not refused.
+        ids: z.array(idSchema).min(1).describe(`up to ${count} candidate ids in the order they should play`),
+        reason: z.string().describe('one short sentence on the set as a whole'),
+      }),
+      temperature: 0.5,
+      kind: 'pickNextTrack',
+    });
+  }
+
   return djObject({
-    system: `${pickerSystem(show)}${fxGuidance}${fxHistory}`,
+    system: `${pickerSystem(show, steer)}${fxGuidance}${fxHistory}`,
     prompt: user,
     schema: z.object({
       id: idSchema,

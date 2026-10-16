@@ -23,6 +23,8 @@ import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, una
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
+import { steeredShow } from './steer.js';
+import type { Steer } from '../schemas/steer.js';
 import { showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
@@ -634,10 +636,20 @@ function slimAlbum(album: string | null | undefined, title: string | null | unde
 // Build a candidate pool, ask the LLM to choose one; null when it can't.
 // Guard-rescue artist exclusions (#1187) hold through the whole starvation
 // cascade. Preserve the anchor as well as the rejected credit.
-export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null } = {}) {
+export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, opts: { avoidArtist?: string | null; avoidAnchorArtist?: string | null; preview?: { steer: Steer; count: number } } = {}): Promise<any> {
   await library.load();
+  // A preview works out a steer's opening tracks without airing anything: it
+  // runs under the PROPOSED steer, writes no booth lines, charges no candidate
+  // its "offered" penalty, and fails loudly instead of falling back, because
+  // its answer is shown to the operator as what will play.
+  const preview = opts.preview ?? null;
+  if (preview) queue = Object.create(queue, { log: { value: () => {} } });
   ctx = await prepareEpisodeContext(ctx);
-  const episodeSource = showPreparation.read({ context: ctx }).music;
+  // Judged where the pick will air: the context's own instant when it has one.
+  const pickAt = ctx?.at ? new Date(ctx.at) : new Date();
+  const steer = preview ? preview.steer : settings.activeSteer(pickAt.getTime());
+  // A steered playlist sets an artist episode aside (see dj-agent.ts).
+  const episodeSource = steer?.playlistId ? null : showPreparation.read({ context: ctx }).music;
   const stats = library.pickStats(); // per pick: the narrow, cached counts (#1723)
   // Sized off the MIRROR, not `stats.total`, which counts only tagged tracks.
   const librarySize = stats.mirrorTotal || stats.total;
@@ -654,7 +666,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const currentTrack = queue.upcoming?.at(-1)?.track ?? queue.current?.track ?? null;
   // Prefer the show already resolved into ctx: near a boundary that is a
   // look-ahead, so the pool follows the show on air when the pick plays.
-  const activeShow = ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow();
+  const activeShow = steeredShow(ctx?.activeShow !== undefined ? ctx.activeShow : settings.resolveActiveShow(pickAt), steer);
   const showFilter: ShowFilter = activeShow
     ? {
         moods: activeShow.moods ?? [],
@@ -724,7 +736,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
 
   if (candidates.some(c => creditInRoots(c, recentArtistRoots))) {
     queue.log('picker', `artist spacing relaxed (window ${varietyWindow} slots): no candidate survived spacing with the active selection rules; keeping music available`);
-    logEvent('pick.artistSpacingRelaxed', {
+    if (!preview) logEvent('pick.artistSpacingRelaxed', {
       agent: 'pool', basis: 'recent-window', window: varietyWindow,
       reason: 'no-eligible-fresh-artist', candidates: candidates.length,
     });
@@ -760,7 +772,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   }
 
   // Every candidate reaching the model accrues its soft penalty.
-  recordOffered(candidates.map((c) => c.id));
+  if (!preview) recordOffered(candidates.map((c) => c.id));
 
   const airedNow = library.lastAiredInfo();
 
@@ -774,6 +786,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   try {
     // Same show-brief plumbing as the agent picker, whose fallback this is.
     pickRaw = await dj.pickNextTrack({
+      count: preview?.count ?? 1,
+      steer: steer?.prompt || null,
       show: activeShow
         ? {
             name: activeShow.name,
@@ -839,6 +853,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       recentTransitions,
     });
   } catch (err) {
+    if (preview) throw err;
     // Top candidate rather than null: null drops the stream to auto.m3u.
     queue.log('error', `picker LLM failed: ${err.message} — falling back to first pool candidate`);
     if (candidates[0]?.id) offered.delete(candidates[0].id);
@@ -847,6 +862,23 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       reason: 'fallback (LLM pick failed)',
       source: candidates[0]._source,
     };
+  }
+
+  if (preview) {
+    const known = candidates.map(c => c.id).filter((id): id is string => Boolean(id));
+    const asked: unknown[] = Array.isArray(pickRaw?.ids) ? pickRaw.ids : [pickRaw?.id];
+    const picks: any[] = [];
+    for (const raw of asked.slice(0, preview.count)) {
+      const id = typeof raw === 'string' ? (known.includes(raw) ? raw : nearestId(raw, known)) : null;
+      const song = id ? candidates.find(c => c.id === id) : null;
+      if (song && !picks.includes(song)) picks.push(song);
+    }
+    // A strict playlist falls back to the wider pool rather than starve a live
+    // pick; a preview must not present such a track as the playlist's.
+    const inPlaylist = steer?.playlistId && playlistPool ? picks.filter(song => playlistPool.ids.has(song.id)) : picks;
+    if (picks.length && !inPlaylist.length) throw new Error('nothing in the playlist is eligible right now');
+    if (!inPlaylist.length) throw new Error('the model named no track from the pool');
+    return { picks: inPlaylist, pool: candidates.length };
   }
 
   let chosen = candidates.find(c => c.id === pickRaw?.id);

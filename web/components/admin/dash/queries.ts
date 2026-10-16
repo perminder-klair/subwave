@@ -1,7 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
 import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
-import type { ScheduleOverride } from '../../../lib/schemas.generated';
+import type { ScheduleOverride, Steer } from '../../../lib/schemas.generated';
 import {
   UNKNOWN_TRUSTED_PROXIES,
   type ActResponse,
@@ -25,6 +25,7 @@ export const dashKeys = {
   // Nested under takeover() on purpose: a pin write invalidates that prefix,
   // and the preview it invalidates alongside is stale the moment one lands.
   takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
+  steer: () => ['dash', 'steer'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
 };
@@ -158,6 +159,33 @@ export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): P
       : [],
     override: body.override ?? null,
   };
+}
+
+export interface SteerTrack {
+  id: string;
+  title: string;
+  artist: string;
+}
+
+export interface SteerData {
+  steer: Steer | null;
+  /** The steer's opening tracks still to air. Operator-only: the public queue does not mark them. */
+  queued: (SteerTrack & { sent: boolean })[];
+  /** The token budget tier, so the card can say what a steer is worth now. */
+  budgetMode: 'normal' | 'soft' | 'hard';
+}
+
+export async function fetchSteer(fetcher: AdminFetch, signal: AbortSignal): Promise<SteerData> {
+  const body = await adminJson<Partial<SteerData>>(fetcher, '/steer', undefined, signal);
+  return { steer: body.steer ?? null, budgetMode: body.budgetMode ?? 'normal', queued: body.queued ?? [] };
+}
+
+export function writeSteer(client: QueryClient, steer: Steer | null, queued: SteerTrack[] = []): void {
+  client.setQueryData<SteerData>(dashKeys.steer(), current => ({
+    steer,
+    budgetMode: current?.budgetMode ?? 'normal',
+    queued: steer ? queued.map(t => ({ ...t, sent: false })) : [],
+  }));
 }
 
 export interface NavidromeStatus {

@@ -17,6 +17,7 @@ import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
+import { serialSteer } from '../music/steer.js';
 import { jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
@@ -1243,6 +1244,25 @@ async function overrideJanitor() {
   }
 }
 
+// The same hygiene for a steer that has run out: activeSteer() already ignores it.
+export async function steerJanitor() {
+  try {
+    // In turn with Start and Clear, so it never clears a steer saved meanwhile.
+    await serialSteer(async () => {
+      const steer = settings.get()?.steer;
+      const live = steer && Date.now() < steer.expiresAt ? steer : null;
+      // Opening tracks still waiting go with their steer, including one that ran
+      // out while the controller was down (the load path drops it, not its tracks).
+      await queue.removeOrphanSteerQueued(live ? String(live.startedAt) : null);
+      if (!steer || live) return;
+      await settings.update({ steer: null });
+      queue.log('scheduler', '[steer] ended');
+    });
+  } catch (err) {
+    queue.log('error', `Steer janitor failed: ${err.message}`);
+  }
+}
+
 export function startScheduler() {
   refreshAutoPlaylist({ automatic: true }).catch(err => queue.log('error', `Initial playlist failed: ${err.message}`));
 
@@ -1262,6 +1282,7 @@ export function startScheduler() {
   cron.schedule('* * * * *', talkTick);
 
   cron.schedule('*/5 * * * *', overrideJanitor);
+  cron.schedule('*/5 * * * *', steerJanitor);
   cron.schedule('2 * * * *', cleanup, { noOverlap: true });
   cron.schedule('17 4 * * *', nightlyDoctor);
 

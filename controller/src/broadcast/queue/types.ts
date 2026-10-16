@@ -116,6 +116,11 @@ export interface QueueItem {
   // `index`/`size` are stamped from the PLAN, so they describe the block as it
   // was queued and do not shrink as it plays out ("3 of 11" stays "3 of 11").
   block?: { id: string; label: string; index: number; size: number };
+  // One of a steer's opening tracks, keyed by that steer's start. PRIVATE:
+  // identity for clearing them with the steer, never projected (snapshot()'s
+  // field list does not name it), so to a listener it is an ordinary pick.
+  // A single queued track (`until: 'once'`) carries STEER_ONCE_KEY instead.
+  steer?: string;
   intent?: string | null;
   introScript?: string | null;
   // Persist the one-label pass so retries/recovery cannot eat a second label
@@ -203,6 +208,11 @@ export interface QueueItem {
   stemCueInSec?: number;
 }
 
+// The `steer` marker on a single queued track. No steer is stored for it, so
+// nothing that tidies up after a stored steer may take it.
+export const STEER_ONCE_KEY = 'once';
+
+
 // One row in the rolling recent-plays sidecar (the picker's repeat window).
 export interface RecentPlay {
   id: string | null;
@@ -242,3 +252,4 @@ export interface NowPlaying {
 //   chatty     → uniform 1-5 tracks
 //   aggressive → uniform 1-3 tracks
 // A DJ-mode persona reads one rung chattier (effectiveFrequency), so it links
+
