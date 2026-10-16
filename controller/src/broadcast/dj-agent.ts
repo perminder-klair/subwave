@@ -1508,7 +1508,16 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // Keep its id model-facing so similarity tools can use it without showing
     // a raw id in the operator-facing event text.
     const anchorIdClause = explicitPickAnchor && pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '';
-    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${favShowClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
+    // The changeover pick (#1911): under the look-ahead clock the incoming
+    // show's first track is picked while the live session, and so the whole
+    // window, still belongs to the outgoing show. The system prompt already
+    // carries the incoming brief; say which show this track airs in, last, so
+    // the outgoing history is not read as the show to pick for.
+    const liveShowId = session.getSession()?.show?.id ?? null;
+    const changeoverClause = (pickShow?.id ?? null) !== liveShowId
+      ? ` This track airs in ${pickShow ? `the show "${pickShow.name}"` : 'the autonomous block'}, which follows what is on air now: pick it for ${pickShow ? 'that show\'s brief' : 'that block'}, not for what is ending.`
+      : '';
+    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${favShowClause}${effectClause}${runClause}${journeyClause}${exploreClause}${changeoverClause}`;
     timePhase('pick.appendTurn', () => session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},

@@ -250,7 +250,11 @@ first pick of an incoming show is chosen for the show rather than as the next
 step of an arc anchored on the outgoing host's last track; the following pick
 may start a fresh run. It is checked per pick, not cleared at the session
 roll: the incoming show's first pick is made under the look-ahead before the
-live session rolls, so a roll-time reset lands one pick late. Every autonomous
+live session rolls, so a roll-time reset lands one pick late. For the same
+reason that pick's window still belongs to the outgoing show, so when the show
+the pick is for differs from the live session's, the pick event ends by naming
+the show (or autonomous block) its track airs in
+(`scripts/changeover-pick-clause.test.ts`). Every autonomous
 block shares one run identity, matching the session's soft shift. An in-order
 pick takes no run step but still records its show (`notePickShow`): with
 `auto` on both sides of an in-order show, a run left going when the show began
