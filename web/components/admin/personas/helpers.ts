@@ -113,8 +113,8 @@ export function personasEqual(a: Persona | undefined, b: Persona | undefined): b
   return canonical(a) === canonical(b);
 }
 
-// What saving the roster without this persona takes with it. The controller
-// never refuses a removal: its post-save integrity sweep (`prepareUpdate` in
+// What deleting this persona takes with it. The controller never refuses the
+// removal: the post-patch integrity sweep (`prepareUpdate` in
 // controller/src/settings.ts) deletes every show the persona hosts, along with
 // those shows' schedule hours and any takeover pinning one, and drops it from
 // guest line-ups. Reads the SAVED shows, the same list the sweep will see.
@@ -142,6 +142,22 @@ export function personaRemovalImpact(
       .map(label),
     endsTakeoverOf: pinned ? label(pinned) : null,
   };
+}
+
+// Which persona the local "default" points at once a delete has landed. An
+// unsaved "Set as default" survives unless it named the deleted persona;
+// otherwise the default follows the controller's re-point (or the baseline's,
+// for a persona that was never saved). Always lands on a surviving row.
+export function activeAfterDelete(o: {
+  current: string;
+  deletedId: string;
+  baselineActive: string | null;
+  serverActive: string | null;
+  remainingIds: string[];
+}): string {
+  const unsavedChoice = o.current !== o.deletedId && o.current !== o.baselineActive;
+  const candidates = unsavedChoice ? [o.current] : [o.serverActive, o.baselineActive];
+  return [...candidates, o.remainingIds[0]].find(id => !!id && o.remainingIds.includes(id)) ?? o.current;
 }
 
 export function initialsFor(name: string): string {
