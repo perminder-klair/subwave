@@ -19,6 +19,7 @@ import {
   runArtistGuard,
 } from '../src/broadcast/dj-agent/artist-guard.js';
 import { queue } from '../src/broadcast/queue.js';
+import { setKnownActsProvider } from '../src/music/recency.js';
 
 type Cand = { id: string; title: string; artist: string };
 
@@ -138,46 +139,82 @@ test('creditDistance: a nearer combined credit beats an exact solo entry further
   assert.equal(creditDistance({ artist: 'Pixies • Black Francis' }, reverse), 1, 'the solo act one slot back');
 });
 
-test('the swap never lands on an act heard one slot ago under another credit', async () => {
+// Reaches the queue's private fields to stage a window without a live station.
+type Staged = '_recentPlays' | 'current' | 'upcoming';
+const q = queue as unknown as Omit<typeof queue, Staged> & Record<Staged, unknown>;
+function staged(window: { upcoming: unknown[]; current: unknown; plays: unknown[] }, fn: () => void | Promise<void>) {
+  const saved = { plays: q._recentPlays, current: q.current, upcoming: q.upcoming };
+  q.upcoming = window.upcoming; q.current = window.current; q._recentPlays = window.plays;
+  return (async () => fn())().finally(() => {
+    q._recentPlays = saved.plays; q.current = saved.current; q.upcoming = saved.upcoming;
+  });
+}
+const play = (id: string, artist: string) => ({ id, title: `Track ${id}`, artist });
+
+test('the swap never lands on an act heard one slot ago under another credit', () => staged({
   // Queue tail "Pixies • Black Francis" (1), Norah Jones on air (2), then
   // plays back to a solo Pixies (9). Read as nine slots ago, Pixies was the
   // furthest-back candidate and aired straight after its own combined credit.
+  upcoming: [{ track: { id: 'u1', artist: 'Pixies • Black Francis' } }],
+  current: { track: { id: 'c1', artist: 'Norah Jones' } },
+  plays: [
+    play('p1', 'Katerine'), play('p2', 'Air'), play('p3', 'Zero 7'), play('p4', 'Bebel Gilberto'),
+    play('p5', 'Moby'), play('p6', 'Portishead'), play('p7', 'Pixies'),
+  ],
+}, async () => {
   const pixies: Cand = { id: 'px1', title: 'Where Is My Mind', artist: 'Pixies' };
-  const d = dist(
-    ['Pixies • Black Francis', 1], ['Norah Jones', 2], ['Katerine', 3], ['Air', 4], ['Zero 7', 5],
-    ['Bebel Gilberto', 6], ['Moby', 7], ['Portishead', 8], ['Pixies', 9],
-  );
   const h = harness();
-  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, pixies), distances: d });
+  const out = await run(h, {
+    song: katerine, pickAnchor: norah, seen: seenOf(katerine, pixies),
+    roots: q.neighbourArtistRoots(12), distances: q.neighbourArtistDistances(12),
+  });
   assert.equal(out.kind, 'kept', 'Pixies was heard one slot ago, nearer than Katerine at three');
   assert.equal(h.events.at(-1)?.swapped, undefined);
   assert.deepEqual(h.calls, { repick: 0, poolRescue: 0 });
-});
+}));
 
-test('queue.neighbourArtistDistances: queue tail first, then on air, then plays newest first', () => {
-  // Reaches the queue's private fields to stage a window without a live station.
-  type Staged = '_recentPlays' | 'current' | 'upcoming';
-  const q = queue as unknown as Omit<typeof queue, Staged> & Record<Staged, unknown>;
-  const saved = { plays: q._recentPlays, current: q.current, upcoming: q.upcoming };
-  try {
-    q.upcoming = [{ track: { id: 'u1', artist: 'Zero 7' } }, { track: { id: 'u2', artist: 'Norah Jones' } }];
-    q.current = { track: { id: 'c1', artist: 'Katerine' } };
-    q._recentPlays = [
-      { id: 'p1', title: 'One', artist: 'Bebel Gilberto' },
-      { id: 'p1', title: 'One', artist: 'Bebel Gilberto' }, // a duplicate row is one play
-      { id: 'p2', title: 'Two', artist: 'Air' },
-      { id: 'p3', title: 'Three', artist: 'Zero 7' },
-    ];
-    const d = q.neighbourArtistDistances(12) as Map<string, number>;
-    assert.equal(d.get(artistRootKey('Norah Jones')), 1);
-    assert.equal(d.get(artistRootKey('Zero 7')), 2, 'nearest occurrence wins');
-    assert.equal(d.get(artistRootKey('Katerine')), 3);
-    assert.equal(d.get(artistRootKey('Bebel Gilberto')), 4);
-    assert.equal(d.get(artistRootKey('Air')), 5);
-    // Same acts as the window the guard tests against.
-    assert.deepEqual(new Set(d.keys()), q.neighbourArtistRoots(12));
-    assert.equal(q.neighbourArtistDistances(0).size, 0, 'window off: no distances');
-  } finally {
-    q._recentPlays = saved.plays; q.current = saved.current; q.upcoming = saved.upcoming;
-  }
+test('queue.neighbourArtistDistances: queue tail first, then on air, then plays newest first', () => staged({
+  upcoming: [{ track: { id: 'u1', artist: 'Zero 7' } }, { track: { id: 'u2', artist: 'Norah Jones' } }],
+  current: { track: { id: 'c1', artist: 'Katerine' } },
+  plays: [
+    { id: 'p1', title: 'One', artist: 'Bebel Gilberto' },
+    { id: 'p1', title: 'One', artist: 'Bebel Gilberto' }, // a duplicate row is one play
+    { id: 'p2', title: 'Two', artist: 'Air' },
+    { id: 'p3', title: 'Three', artist: 'Zero 7' },
+  ],
+}, () => {
+  const d = q.neighbourArtistDistances(12);
+  assert.equal(d.get(artistRootKey('Norah Jones')), 1);
+  assert.equal(d.get(artistRootKey('Zero 7')), 2, 'nearest occurrence wins');
+  assert.equal(d.get(artistRootKey('Katerine')), 3);
+  assert.equal(d.get(artistRootKey('Bebel Gilberto')), 4);
+  assert.equal(d.get(artistRootKey('Air')), 5);
+  // No act index here, so every credit is its lead: the same acts as the
+  // window the guard tests against (the superset case is below).
+  assert.deepEqual(new Set(d.keys()), q.neighbourArtistRoots(12));
+  // A window shorter than the queue keeps the queue's tail end, as the guard's does.
+  assert.deepEqual([...q.neighbourArtistDistances(1)], [
+    [artistRootKey('Norah Jones'), 1], [artistRootKey('Katerine'), 2], [artistRootKey('Bebel Gilberto'), 3],
+  ]);
+  assert.deepEqual(q.neighbourArtistRoots(1), new Set(q.neighbourArtistDistances(1).keys()));
+  assert.equal(q.neighbourArtistDistances(0).size, 0, 'window off: no distances');
+}));
+
+test('queue.neighbourArtistDistances: every credit\'s acts count, a superset of the guard\'s roots', () => {
+  // With the library's act index, a tail act counts (recency.creditedActKeys).
+  // The roots key only the FIRST credit per lead act, so Karan Aujla on air is
+  // in the distances alone; the swap needs every candidate in the roots, so an
+  // extra key can only make a distance nearer.
+  setKnownActsProvider(() => new Set(['daljit chahal', 'amantej hundal', 'karan aujla']));
+  return staged({
+    upcoming: [{ track: { id: 'u1', artist: 'Daljit Chahal & Amantej Hundal' } }],
+    current: { track: { id: 'c1', artist: 'Daljit Chahal & Karan Aujla' } },
+    plays: [],
+  }, () => {
+    const d = q.neighbourArtistDistances(12);
+    const roots = q.neighbourArtistRoots(12);
+    assert.deepEqual([...roots], ['daljit chahal', 'amantej hundal']);
+    assert.deepEqual([...d], [['daljit chahal', 1], ['amantej hundal', 1], ['karan aujla', 2]]);
+    for (const key of roots) assert.ok(d.has(key), `${key} has a distance`);
+  }).finally(() => setKnownActsProvider(null));
 });
