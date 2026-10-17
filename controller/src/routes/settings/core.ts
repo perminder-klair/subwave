@@ -270,10 +270,18 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
 // "Swap with primary" (settings/llm-swap.ts owns what moves and what stays).
 // The preview and the write both plan from the stored settings here, so what
 // the confirm dialog says will be pinned is exactly what the swap pins.
+// The embedding leg is planned from the servers it actually REACHES: a blank
+// Ollama or locca URL resolves to a built-in default only at call time, and
+// pinned as blank it would follow whatever server the incoming primary names.
 function planSwap() {
+  const embedding = llmProvider.resolveEmbeddingCfg();
   return planLlmSwap(
     settings.get(),
-    llmProvider.resolveEmbeddingCfg(),
+    {
+      ...embedding,
+      ollamaUrl: llmProvider.embeddingInfoOf(embedding).ollamaUrl || embedding.ollamaUrl,
+      baseUrl: llmProvider.embeddingBaseUrl(embedding),
+    },
     !!process.env.EMBEDDING_API_KEY,
   );
 }

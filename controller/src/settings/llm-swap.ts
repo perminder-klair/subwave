@@ -48,7 +48,10 @@ export const LLM_LEG_FIELDS = [
 
 type Leg = Record<string, unknown>;
 
-/** What the embedding leg resolved to before the swap (resolveEmbeddingCfg()). */
+/** What the embedding leg resolved to before the swap (resolveEmbeddingCfg()),
+ *  with a blank Ollama/locca URL resolved to the default server it reaches —
+ *  the route's planSwap() does that, since a blank pin would follow the new
+ *  primary. */
 export interface ResolvedEmbedding {
   provider: string;
   baseUrl?: string;

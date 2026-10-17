@@ -30,6 +30,7 @@ export {
   embeddingEnabled,
   embeddingProviderInfo,
   embeddingInfoOf,
+  embeddingBaseUrl,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
   isHeavyEmbeddingModel,

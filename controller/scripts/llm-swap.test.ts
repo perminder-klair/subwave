@@ -38,7 +38,7 @@ const settings = await import('../src/settings.js');
 const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { applyLlmLegPatch, EMBEDDING_API_KEY_MAX } = await import('../src/settings/vocab.js');
 const { buildLlmSwapPatch, planLlmSwap, LLM_LEG_FIELDS, LlmSwapError } = await import('../src/settings/llm-swap.js');
-const { resolveEmbeddingCfg } = await import('../src/llm/provider.js');
+const { resolveEmbeddingCfg, embeddingInfoOf, embeddingBaseUrl } = await import('../src/llm/provider.js');
 
 const PRIMARY = {
   provider: 'ollama',
@@ -257,4 +257,38 @@ test('GET /settings/llm/swap/fit previews exactly the pins the swap writes', asy
   const receipt = (await swapped.json()) as { pinned: string[]; keyNotPinned: boolean };
   assert.deepEqual(preview, { pinned: receipt.pinned, keyNotPinned: receipt.keyNotPinned });
   assert.deepEqual(preview, { pinned: ['provider', 'providerBaseUrls', 'headers'], keyNotPinned: true });
+});
+
+// A blank server URL reaches a built-in default only when a call is made, so
+// the embedding leg was "inheriting" a server no setting names. Left blank by
+// the pin, it would follow whatever server the incoming primary names.
+test('an inherited blank Ollama URL is pinned to the default server it reaches', async () => {
+  await reset();
+  await settings.update({
+    llm: {
+      ollamaUrl: '',
+      fallback: { provider: 'ollama', model: 'qwen3:14b', ollamaUrl: 'http://other-box:11434', compatibleMode: 'local' },
+    },
+  });
+  const before = embeddingInfoOf(resolveEmbeddingCfg());
+  assert.equal(before.provider, 'ollama');
+  const res = await fetch(`${base}/settings/llm/swap`, { method: 'POST', headers: { authorization } });
+  assert.equal(res.status, 200, await res.text());
+  assert.equal(settings.get().llm.ollamaUrl, 'http://other-box:11434', 'the backup host is the primary now');
+  assert.equal(embeddingInfoOf(resolveEmbeddingCfg()).ollamaUrl, before.ollamaUrl, 'embeddings stay on their server');
+});
+
+test('an inherited blank locca URL is pinned to the default embed server it reaches', async () => {
+  await reset();
+  await settings.update({
+    llm: {
+      provider: 'locca', model: 'chat-a', providerBaseUrls: { locca: '' },
+      fallback: { provider: 'locca', model: 'chat-b', providerBaseUrls: { locca: 'http://other-box:8080/v1' }, compatibleMode: 'local' },
+    },
+  });
+  const before = embeddingBaseUrl(resolveEmbeddingCfg());
+  const res = await fetch(`${base}/settings/llm/swap`, { method: 'POST', headers: { authorization } });
+  assert.equal(res.status, 200, await res.text());
+  assert.equal(settings.get().llm.baseUrl, 'http://other-box:8080/v1', 'the backup server is the primary now');
+  assert.equal(embeddingBaseUrl(resolveEmbeddingCfg()), before, 'embeddings stay on their server');
 });
