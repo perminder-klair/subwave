@@ -76,6 +76,15 @@ test('a negation that qualifies a preference keeps it, so positive Leanings read
   assert.deepEqual(phrases('patient dub'), ['patient dub']);
 });
 
+test('a non-English name is not read as holding a negation', () => {
+  assert.deepEqual(phrases('Favours French jazz: Noël Akchoté and Django Reinhardt.'), ['French jazz: Noël Akchoté', 'Django Reinhardt']);
+  assert.deepEqual(phrases('Favours Japanese jazz, Yūji Ōno and Ryo Fukui.'), ['Japanese jazz', 'Yūji Ōno', 'Ryo Fukui']);
+  assert.deepEqual(phrases('Favours Noémie Ouellette and Québécois folk.'), ['Noémie Ouellette', 'Québécois folk']);
+  assert.deepEqual(phrases('Favours anime soundtracks like Shingeki no Kyojin and Yoko Kanno.'), ['anime soundtracks like Shingeki no Kyojin', 'Yoko Kanno']);
+  assert.deepEqual(phrases('Favours city pop such as Mayonaka no Door and Mariya Takeuchi.'), ['city pop such as Mayonaka no Door', 'Mariya Takeuchi']);
+  assert.deepEqual(phrases('Favours soul, no Motown.'), ['soul'], 'a lowercase "no" before a name still rules it out');
+});
+
 test('a guest source is read by the same rule', () => {
   const sources = agenticLeaningsSources({
     host: 'Favours dub.',

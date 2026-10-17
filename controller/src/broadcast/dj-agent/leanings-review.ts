@@ -188,8 +188,10 @@ const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'r
 // and credits it as "<owner>'s taste for <phrase>", so a line written to steer
 // away has nowhere to go: read as a phrase it becomes a taste for the very
 // thing it rules out. Every reading below drops it instead. "no wave" is a
-// genre, and a hyphenated "no-frills" or "hate-fuelled" is one word.
-const NEGATIVE_CUE = /\b(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never|not(?!\s+(?:just|only|merely|simply)\b)|nor|neither|no(?!\s+wave\b)|cannot|[a-z]+n['’]t|rarely|seldom|hardly)\b(?!-)/i;
+// genre, and a hyphenated "no-frills" or "hate-fuelled" is one word. The
+// boundaries are Unicode-aware, since \b reads "Noël" and "Ōno" as holding
+// the word "no".
+const NEGATIVE_CUE = /(?<![\p{L}\p{N}])(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never|not(?!\s+(?:just|only|merely|simply)\b)|nor|neither|no(?!\s+wave\b)|cannot|[a-z]+n['’]t|rarely|seldom|hardly)(?![\p{L}\p{N}-])/iu;
 // A cue inside one of these qualifies the preference rather than reversing it:
 // "records that never outstay their welcome", "dub with no vocals".
 const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+or\s+)?no)\b.*$/i;
@@ -198,12 +200,20 @@ const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+or\s
 const EXCLUSION = /\s*,?\s*\b(?:except(?:\s+for)?|excluding|apart\s+from|other\s+than)\b/i;
 const CONTRAST = /\s*,?\s*(?:\b(?:but|yet|though|although|whereas|however)\b|\s[-–—]\s|[–—])/gi;
 
+// A Japanese title's "no" ("Shingeki no Kyojin", "Mayonaka no Door") is a
+// particle between two capitalised words, never a negation.
+const NAME_PARTICLE = /(?<=(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{N}'’-]*\s+)no(?=\s+\p{Lu})/gu;
+
+function negates(text: string): boolean {
+  return NEGATIVE_CUE.test(text.replace(NAME_PARTICLE, ' '));
+}
+
 function reversesPreference(text: string): boolean {
   const core = text.replace(TRAILING_CONTEXT, '');
   // A qualifier needs something to qualify: "with no metal" standing alone is
   // an exclusion, and kept it would be read as a taste for "no metal".
   const tail = QUALIFYING_TAIL.exec(core);
-  return NEGATIVE_CUE.test(tail && /[\p{L}\p{N}]/u.test(core.slice(0, tail.index)) ? core.slice(0, tail.index) : core);
+  return negates(tail && /[\p{L}\p{N}]/u.test(core.slice(0, tail.index)) ? core.slice(0, tail.index) : core);
 }
 
 function positiveText(text: string): string {
@@ -232,7 +242,7 @@ function positiveItems(text: string, separator: RegExp): string[] {
 function negatedTrigger(sentence: string, trigger: RegExpExecArray): boolean {
   const head = sentence.slice(0, trigger.index);
   const opening = [...head.matchAll(CONTRAST)].at(-1);
-  return NEGATIVE_CUE.test(opening ? head.slice(opening.index + opening[0].length) : head);
+  return negates(opening ? head.slice(opening.index + opening[0].length) : head);
 }
 
 function cleanLeaningsPhrase(value: string): string | null {
