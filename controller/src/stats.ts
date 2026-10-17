@@ -106,13 +106,20 @@ export function estimateCost(modelLabel, usage) {
 // call AT the agent deadline (it has none of its own), and their timer starts
 // before withFailover's clock, so the record can land a few ms short of it.
 // Any other cancellation is the caller walking away, not the model running slow.
+// The Leanings review has the same skew without the cancellation: it wraps its
+// djObject in withDeadline at the agent deadline, whose AgentDeadlineError is
+// recorded as-is and names the budget it enforced ("… exceeded 45000ms
+// deadline"), so a named budget at least the agent's counts as well.
 const CANCELLED_RE = /cancelled by caller/i;
 const DEADLINE_CAUSE_RE = /deadline/i;
+const NAMED_BUDGET_RE = /exceeded (\d+)ms deadline/;
 
 export function isDeadlineHit(c, agentTimeoutMs: number): boolean {
   if (!c || c.ok !== false || typeof c.ms !== 'number') return false;
   if (CANCELLED_RE.test(String(c.error ?? ''))) return DEADLINE_CAUSE_RE.test(String(c.causeMessage ?? ''));
-  return c.ms >= agentTimeoutMs;
+  if (c.ms >= agentTimeoutMs) return true;
+  const budget = NAMED_BUDGET_RE.exec(String(c.error ?? ''));
+  return budget != null && Number(budget[1]) >= agentTimeoutMs;
 }
 
 // Roll the LLM call ring (llm/log.js recentCalls) into success/latency/token

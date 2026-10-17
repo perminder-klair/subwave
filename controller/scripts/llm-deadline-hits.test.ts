@@ -31,9 +31,13 @@ test('deadlineHits counts failed calls that ran out the agent deadline, and noth
     // The simple-segment / co-hosted wrappers cancel AT the deadline; their
     // timer starts before withFailover's clock, so the record can land short.
     cancelled(44_999, new Error('segment call exceeded 45000ms deadline')),
+    // The Leanings review's withDeadline is armed before withFailover's clock
+    // too, and its AgentDeadlineError is recorded as-is, naming the budget.
+    { ok: false, ms: 44_996, error: 'djAgentLeaningsReview exceeded 45000ms deadline' },
   ];
   const misses = [
     { ok: false, ms: 1_200, error: 'quota exceeded' },
+    { ok: false, ms: 10_002, error: 'Shortlist search preparation exceeded 10000ms deadline' }, // a budget of its own
     { ok: true, ms: 50_000 }, // a slow success is the needle's job
     cancelled(50_000, new Error('show changed')), // the caller walked away
     { ok: false, error: 'no duration' },
@@ -41,10 +45,10 @@ test('deadlineHits counts failed calls that ran out the agent deadline, and noth
   for (const c of hits) assert.equal(isDeadlineHit(c, 45_000), true, JSON.stringify(c));
   for (const c of misses) assert.equal(isDeadlineHit(c, 45_000), false, JSON.stringify(c));
   const calls = [...hits, ...misses];
-  assert.equal(summarizeLlm(calls, { agentTimeoutMs: 45_000 }).deadlineHits, 4);
+  assert.equal(summarizeLlm(calls, { agentTimeoutMs: 45_000 }).deadlineHits, 5);
   assert.equal(summarizeLlm(calls, { agentTimeoutMs: 120_000 }).deadlineHits, 1, 'only the deadline-cause cancellation');
   assert.equal(summarizeLlm(calls).deadlineHits, null, 'no deadline, no judgement');
-  assert.equal(summarizeLlm(calls, { agentTimeoutMs: 45_000 }).failed, 7, 'failed still counts every failure');
+  assert.equal(summarizeLlm(calls, { agentTimeoutMs: 45_000 }).failed, 9, 'failed still counts every failure');
 });
 
 test('GET /stats judges deadline hits against the live agent deadline', async (t) => {
@@ -72,4 +76,56 @@ test('GET /stats judges deadline hits against the live agent deadline', async (t
   assert.equal(llm.deadlineHits, 2);
   assert.equal(llm.failed, 3);
   assert.equal(llm.okLatency.p95, 4_000);
+});
+
+test('the deadline records the real primitives write are counted', async (t) => {
+  // Hand-built records can drift from what withFailover writes, so drive the
+  // real djAgent and djObject against a model that never answers.
+  const store = await import('../src/settings/store.js');
+  const settings = await import('../src/settings.js');
+  const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
+  const { djAgent, djObject, withDeadline } = await import('../src/llm/sdk.js');
+  const { resetFailoverStickyForTest } = await import('../src/llm/internal/core/failover.js');
+  const { z } = await import('zod');
+  const deadline = 200;
+  const defaults = settings.getDefaults();
+  store.setCache({ ...defaults, llm: { ...defaults.llm, provider: 'ollama', model: 'hangs', agentTimeoutMs: deadline,
+    fallback: { ...defaults.llm.fallback, enabled: false } } });
+  resetFailoverStickyForTest();
+  t.after(() => { recentCalls.length = 0; resetFailoverStickyForTest(); });
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected provider traffic'); });
+  const leg = primaryLeg();
+  for (const model of new Set([leg.model, leg.noThinkModel])) {
+    t.mock.method(model, 'doGenerate', (opts: { abortSignal?: AbortSignal }) => new Promise((_, reject) => {
+      opts.abortSignal?.addEventListener('abort', () => reject(opts.abortSignal!.reason), { once: true });
+    }));
+  }
+  const schema = z.object({ name: z.string() });
+  const busy = (ms: number) => { const end = Date.now() + ms; while (Date.now() < end) { /* building the prompt */ } };
+
+  recentCalls.length = 0;
+  await assert.rejects(djAgent({ system: 's', messages: [{ role: 'user', content: 'pick' }], schema, kind: 'djAgentPick',
+    tools: { sample: { inputSchema: z.object({}), execute: async () => ({ found: 1 }) } }, timeoutMs: deadline }));
+  // The Leanings review's shape: withDeadline at the agent deadline around a
+  // djObject that starts its own clock only after the prompt is built.
+  let review: Promise<unknown> | undefined;
+  await assert.rejects(withDeadline(deadline, 'djAgentLeaningsReview', async (signal) => {
+    busy(20);
+    review = djObject({ prompt: 'review', schema, kind: 'djAgentLeaningsReview', signal });
+    return review;
+  }));
+  await review?.catch(() => {}); // the deadline rejects first; the record lands as the call unwinds
+  // The simple-segment wrapper's shape (skills/_agent.ts deadlinedSegmentObject).
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error(`segment call exceeded ${deadline}ms deadline`)), deadline);
+  busy(20);
+  await assert.rejects(djObject({ prompt: 'segment', schema, kind: 'segment', signal: ac.signal }));
+  clearTimeout(timer);
+
+  const byKind = new Map(recentCalls.map(c => [c.kind, c]));
+  for (const kind of ['djAgentPick', 'djAgentLeaningsReview', 'segment']) {
+    const record = byKind.get(kind);
+    assert.ok(record, `${kind} was recorded`);
+    assert.equal(isDeadlineHit(record, deadline), true, `${kind}: ${JSON.stringify({ ms: record.ms, error: record.error })}`);
+  }
 });
