@@ -26,6 +26,7 @@ const settings = await import('../src/settings.js');
 const { router } = await import('../src/routes/request.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const requestLog = await import('../src/broadcast/request-log.js');
+const { addDailyUsage } = await import('../src/llm/internal/telemetry/budget.js');
 
 await settings.load();
 
@@ -163,6 +164,25 @@ test('#1993: a pool of nothing but recent stand-ins still fills the request', as
   assert.equal(outcome.track?.title, 'Holiday', 'spacing is a preference, never a lost slot');
   assert.equal(record.guard, null);
   assert.ok(boothLines().some((l) => /stand-in by recently-played artist "Madonna" allowed/.test(l)), boothLines().join(' | '));
+});
+
+test('#1993: past the token cap there is no matcher reading, so a dedication or "more of this" is never spaced', async (t) => {
+  // modelFreeMatch hands the whole request on as the one search term, and no
+  // dedication or deictic slot can hold a whole request: read as a name, it
+  // spaced the on-air artist for both of these.
+  await settings.update({ llm: { dailyTokenCap: 1000, exemptRequests: false } } as never);
+  t.after(() => settings.update({ llm: { dailyTokenCap: 0 } } as never));
+  addDailyUsage(5000);
+  stubNetwork(t, { matcher: LIKE_MJ, similar: [HOLIDAY, GIRLS] });
+  for (const text of ['something like this for Sarah', 'anything like this please, happy birthday Sarah']) {
+    queue.upcoming = [];
+    queue.djLog = [];
+    const { outcome, record } = await request(text);
+    assert.equal(outcome.track?.title, 'Holiday', text);
+    assert.equal(record.pickSource, 'similar-to-current', text);
+    assert.equal(record.guard, null, text);
+    assert.deepEqual(boothLines(), [], text);
+  }
 });
 
 test('#1993: a spacing window of 0 turns stand-in spacing off, as it does for picks', async (t) => {

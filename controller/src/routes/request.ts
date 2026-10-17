@@ -396,7 +396,8 @@ async function resolveRequest(entry) {
   // what is on air. Gated before generation: past the hard token cap with
   // requests not exempt, the model is not called at all.
   const currentTrack = queue.current?.track || null;
-  const matched = budget.requestsAllowed()
+  const matcherRan = budget.requestsAllowed();
+  const matched = matcherRan
     ? await dj.matchRequest(text, {
       listenerName: requester,
       nowPlaying: currentTrack,
@@ -461,8 +462,12 @@ async function resolveRequest(entry) {
   // how a draw is spaced, as a preference that never costs the request its
   // slot. Every pool draws through it; the artist path (2a) is the ask itself.
   // The window is read at the draw, so a pick that landed while the pools were
-  // fetched is in it.
-  const named = [matched.artist, ...terms];
+  // fetched is in it. Past the token cap there is no reading: modelFreeMatch's
+  // one search term is the whole request, which no dedication, feel or "more
+  // of this" slot can hold, so read as a name it spaced exactly the asks the
+  // agent path exempts. Nothing then says a name was meant, and the draw is
+  // unspaced, as it was before #1993.
+  const named = matcherRan ? [matched.artist, ...terms] : [];
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
   const draw = (pool: any[]) => {
     const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);

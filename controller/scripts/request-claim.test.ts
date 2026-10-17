@@ -546,7 +546,9 @@ test('the cascade: a pool track for a name the library cannot meet is a stand-in
   // "Keep it going" beside a name: the matcher, handed the on-air track, read
   // the name, so the on-air artist stands in for it.
   assert.equal(matchedFor(HOLIDAY, 'keep it going with some Michael Jackson', 'Michael Jackson', 'Michael Jackson'), true);
-  // Past the token cap the cleaned text is the one search term.
+  // A term the matcher copied with the listener's filler still names the ask.
+  // (Past the token cap the route reads no names at all: the whole request is
+  // the one term there, and no dedication slot can hold it.)
   assert.equal(matchedFor(ISLA, 'Michael Jackson please', null, 'Michael Jackson please'), true);
 });
 
