@@ -1,7 +1,8 @@
 // Pick-anchor and spacing artist guard policy — pure, unit-pinned
-// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute;
-// this module owns which candidates a re-pick may choose from and whether the
-// guard fires at all, so both are testable without a model call.
+// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute,
+// and on a listener request's stand-in in runRequestViaAgent (#1979); this
+// module owns which candidates a re-pick may choose from and whether the guard
+// fires at all, so both are testable without a model call.
 
 import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
@@ -76,24 +77,46 @@ function alternativeArtist(song: CandidateLike, avoidRoot: string, anchorRoot: s
   return !artistCreditsOverlap(root, avoidRoot) && !artistCreditsOverlap(root, anchorRoot);
 }
 
+// `exempt` marks candidates the recency narrowing never removes — a listener
+// request's own ask (#1979). Absent, every candidate is subject to it. It is
+// asked only of a candidate by a recent artist: on the request path it is the
+// stand-in reading, a pass over every line the run wrote, and a pool of a
+// hundred candidates asking it of each one stalled the event loop.
 export function alternativeCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   avoidRoot: string,
   recentRoots: Set<string> = new Set(),
   anchorRoot = '',
+  exempt: (song: T) => boolean = () => false,
 ): AlternativePool<T> {
   const base = [...seen].filter(([, s]) => alternativeArtist(s, avoidRoot, anchorRoot));
   if (!base.length || !recentRoots.size) return { alt: new Map(base), dropped: 0, starved: false };
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
-    return !root || !creditInRoots(s, recentRoots);
+    return !root || !creditInRoots(s, recentRoots) || exempt(s);
   });
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
   if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
 
   return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false };
+}
+
+// The candidates a corrective LISTENER-REQUEST call may choose from (#1979).
+// A request is exempt from spacing because an explicit ask wins, but a
+// stand-in for an ask the library could not meet is the DJ's choice of
+// artist, so a corrective call — the request path's one model call after the
+// run — is not offered a stand-in by a recently-heard artist. What the
+// listener asked for always stays, whoever played it last. No artist is being
+// rejected yet, so none is avoided outright, and a set with nothing fresh left
+// is handed back whole, as above: the call still gets to answer.
+export function requestRepickCandidates<T extends CandidateLike>(
+  seen: Iterable<[string, T]>,
+  recentRoots: Set<string>,
+  isStandIn: (song: T) => boolean,
+): AlternativePool<T> {
+  return alternativeCandidates(seen, '', recentRoots, '', (song) => !isStandIn(song));
 }
 
 // What the guard did, split by OUTCOME not cause: the call site only needs
@@ -126,6 +149,8 @@ export interface ArtistGuardDeps<T> {
   // caller owns every queue read. `window` is carried only for the log text.
   recentRoots: Set<string>;
   window: number;
+  // Candidates the recency narrowing never removes (alternativeCandidates).
+  exempt?: (song: T) => boolean;
   // A constrained re-pick over `alt`. Returns the model's object, or null when
   // the call failed or answered with an id outside the set it was offered.
   repick: (
@@ -143,7 +168,7 @@ export interface ArtistGuardDeps<T> {
 export async function runArtistGuard<T extends CandidateLike>(
   deps: ArtistGuardDeps<T>,
 ): Promise<ArtistGuardOutcome<T>> {
-  const { song, pickAnchor, seen, recentRoots, window, repick, poolRescue, log, logEvent } = deps;
+  const { song, pickAnchor, seen, recentRoots, window, exempt, repick, poolRescue, log, logEvent } = deps;
 
   const pickRoot = artistRootKey(song);
   const anchorRoot = artistRootKey(pickAnchor || {});
@@ -151,7 +176,7 @@ export async function runArtistGuard<T extends CandidateLike>(
   if (!cause) return { kind: 'none' };
 
   const avoidAnchorRoot = cause === 'onair' ? anchorRoot : '';
-  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots, avoidAnchorRoot);
+  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots, avoidAnchorRoot, exempt);
   const label = cause === 'onair' ? 'pick-anchor artist' : 'recently-played artist';
   const telemetry = {
     cause,

@@ -124,6 +124,10 @@ interface Session {
   persona: { id: string; name: string } | null;
   scenario: Scenario;
   handoff: string | null;
+  /** The handoff names a run that ENDED at a show change, not one this session
+   *  continues (#1911). Absent (a legacy session, a 4h cap) keeps the
+   *  "Continuing on air from" wording. */
+  handoffEnded?: boolean;
   programme: ProgrammeState | null;
   messages: Turn[];
   handoffAired?: boolean;
@@ -217,19 +221,30 @@ function scenarioText(s: Session) {
   return `Autonomous block begins — ${bits.join(', ')}.`;
 }
 
+// A session's on-air identity: show or block, host, and (optionally) mood.
+function sessionIdentity(s: Session, { mood = true }: { mood?: boolean } = {}): string {
+  const parts = [
+    s.kind === 'show'
+      ? `the show "${s.show?.name}"`
+      : `a ${s.scenario?.period || ''} block`,
+  ];
+  if (s.persona?.name) parts.push(`hosted as ${s.persona.name}`);
+  if (mood && s.scenario?.mood) parts.push(`mood ${s.scenario.mood}`);
+  return parts.join(' — ');
+}
+
 // Continuity summary carried into the next session on a HARD roll. Identity only
 // (#1479): never carry raw prior speech, and never add the recently-aired track
 // list — titles in the new picker's prompt window bias it toward repeats.
 function buildHandoff(prev: Session | null): string | null {
   if (!prev) return null;
-  const parts = [
-    prev.kind === 'show'
-      ? `the show "${prev.show?.name}"`
-      : `a ${prev.scenario?.period || ''} block`,
-  ];
-  if (prev.persona?.name) parts.push(`hosted as ${prev.persona.name}`);
-  if (prev.scenario?.mood) parts.push(`mood ${prev.scenario.mood}`);
-  return parts.join(' — ');
+  return sessionIdentity(prev);
+}
+
+// A hard roll across a genuine show change: a show starting or ending. Two
+// autonomous keys only meet here on the 4h cap, which continues the block.
+function rollEndsShowRun(prevKey: string, nextKey: string): boolean {
+  return prevKey !== nextKey && (prevKey.startsWith('show:') || nextKey.startsWith('show:'));
 }
 
 async function persist() {
@@ -478,6 +493,7 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
+  if (rollEndsShowRun(prev.key, next.key)) next.handoffEnded = true;
   // Display-only booth tail for GET /session (#1690); never prompt memory.
   next.boothCarry = snapshotBoothCarry(prev, next, at.getTime());
   if (prev.key === nextKey) next.hostRevision = sameKeyRevision;
@@ -834,6 +850,11 @@ function softShift(ctx: SessionContext, nextKey: string): Session {
 // to AI SDK roles. Consecutive same-role turns are coalesced because some
 // providers (Anthropic) require strictly alternating user/assistant messages.
 //
+// After a show change the handoff line says the earlier show ENDED and names
+// what is on now (#1911): "Continuing on air from <previous show, host, mood>"
+// opened every pick prompt of the incoming show, while that show's own
+// scenario turn is filtered out below as infra noise.
+//
 // Filtered out because they derail the picker in long sessions: `scenario`
 // events (infra noise), `play` turns (the pick event already names the tracks),
 // `sfx` cues (they read as words the DJ spoke), and all but the LATEST `pick`
@@ -847,7 +868,12 @@ export function windowMessages() {
   if (!_session) return [];
   const raw: { role: 'user' | 'assistant'; content: string }[] = [];
   if (_session.handoff) {
-    raw.push({ role: 'user', content: `[Continuing on air from ${_session.handoff}]` });
+    raw.push({
+      role: 'user',
+      content: _session.handoffEnded
+        ? `[Earlier on air: ${_session.handoff}. That has ended — now on air: ${sessionIdentity(_session, { mood: false })}.]`
+        : `[Continuing on air from ${_session.handoff}]`,
+    });
   }
   const recent = _session.messages.slice(-WINDOW_TURNS);
   // The current ask the agent should respond to; older pick events are filtered.
@@ -1024,6 +1050,7 @@ export async function recover(ctx: SessionContext): Promise<Session> {
           && stored.boundaryHandoff.targetKey === sessionKeyFor(ctx)
           && boundaryRunContinues(stored.boundaryHandoff, contextDate(ctx))) {
         const next = start(ctx, buildHandoff(stored as Session));
+        if (rollEndsShowRun(String(stored.key ?? ''), next.key)) next.handoffEnded = true;
         next.boothCarry = recoveredBoothCarry(stored as Session, next);
         const boundary = stored.boundaryHandoff as BoundaryHandoff;
         carryInterruptedProgramme(next, stored.programme, contextDate(ctx));
