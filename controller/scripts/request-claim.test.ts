@@ -929,6 +929,27 @@ test('#1979: a stand-in with no fresher artist in the run stays, at no cost', as
   });
 });
 
+// The pick path's least-recent swap (#1982) answers with no ack or intro. On
+// a request that would replace the listener's lines, so this guard is never
+// handed distances: here the only alternative (Cyndi Lauper, on air) was heard
+// longer ago than the stand-in (Madonna, queued), which is exactly the window
+// a pick would swap on.
+test('#1979: a stand-in whose only alternative is also recent keeps its own lines, never the pick swap', async () => {
+  queue.current = { track: { id: 'cyndi-time', title: 'Time After Time', artist: 'Cyndi Lauper', album: "She's So Unusual", duration: 241 } } as any;
+  queue.upcoming = [{ track: DANCETERIA }] as any;
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: 'Closest I have, Michael!', intro: HONEST_INTRO }, [ISLA, GIRLS]);
+  await withNetwork({ search: [], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+    assert.equal(calls.llm.length, 0);
+    assert.equal(result?.guard, null);
+    assert.equal(result?.track?.id, ISLA.id);
+    assert.equal(result?.ack, 'Closest I have, Michael!');
+    assert.equal(queue.upcoming.at(-1)?.track.id, ISLA.id);
+    assert.equal(queue.upcoming.at(-1)?.introScript, HONEST_INTRO);
+  });
+  assert.ok(queue.djLog.some((e: any) => /stand-in by recently-played artist "Madonna" allowed — no fresher artist/.test(e.message)));
+});
+
 test('#1979: a spent corrective call is never spent again for spacing', async () => {
   queue.current = { track: DANCETERIA } as any;
   agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro: INCIDENT_INTRO }, [ISLA, HOLIDAY, GIRLS]);

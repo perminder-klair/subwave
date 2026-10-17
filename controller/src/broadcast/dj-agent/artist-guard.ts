@@ -189,6 +189,9 @@ export interface ArtistGuardDeps<T> {
   recentRoots: Set<string>;
   // queue.neighbourArtistDistances(window): how many slots ago each act in
   // `recentRoots` was heard. Absent, a relaxation keeps the pick, as before.
+  // PICK path only. The swap it enables answers with no ack or intro, so the
+  // listener-request stand-in guard (runRequestViaAgent, #1979) must never pass
+  // it: a swap there would replace the listener's answer lines with nothing.
   recentDistances?: Map<string, number>;
   window: number;
   // Candidates the recency narrowing never removes (alternativeCandidates).
