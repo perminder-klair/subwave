@@ -19,8 +19,8 @@ import { chatCompletionResponse } from './test-utils/llm.js';
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-request-claim-'));
 
 const {
-  asksForTrack, claimEarnsRepick, claimLookupQuery, lineClaims, misnamedClaims, misnamedRequestLines, plainRequestAck, plainRequestIntro,
-  requestLookups, requestStandIn,
+  asksForTrack, claimEarnsRepick, claimLookupQuery, lineClaims, matchedRequestStandIn, misnamedClaims, misnamedRequestLines, plainRequestAck,
+  plainRequestIntro, requestLookups, requestStandIn,
 } = await import('../src/util/request-claim.js');
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
@@ -522,6 +522,60 @@ test('a stand-in the run found by a lookup of other words, or by feel, is still 
   ]) {
     assert.equal(requestStandIn(honest, { ...incident, lookups: requestLookups(toolCalls, incident.requestText) }), true);
   }
+});
+
+// --- the stateless cascade's stand-ins (#1993) -----------------------------------
+//
+// routes/request.ts draws from a pool before any line is written, so its
+// evidence is the matcher's reading: the artist and the names it searched for.
+// Driven through POST /request in scripts/request-cascade-spacing.test.ts.
+
+const JANET = { id: 'janet-nasty', title: 'Nasty', artist: 'Janet Jackson', album: 'Control' };
+const matchedFor = (track: any, requestText: string, ...named: Array<string | null>) =>
+  matchedRequestStandIn(named, { track, requestText });
+
+test('the cascade: a pool track for a name the library cannot meet is a stand-in', () => {
+  // The incident through the cascade: the matcher read Michael Jackson, the
+  // library has none, and the pool offers someone else.
+  assert.equal(matchedFor(ISLA, 'Michael Jackson please', 'Michael Jackson', 'Michael Jackson'), true);
+  assert.equal(matchedFor(GIRLS, 'something like Michael Jackson', 'Michael Jackson', 'Michael Jackson'), true);
+  // A title the library lacks, read without an artist.
+  assert.equal(matchedFor(ISLA, 'play Billie Jean', null, 'Billie Jean'), true);
+  // The ask beside a dedication is still the ask.
+  assert.equal(matchedFor(ISLA, 'Michael Jackson for Sarah please', 'Michael Jackson', 'Michael Jackson'), true);
+  // "Keep it going" beside a name: the matcher, handed the on-air track, read
+  // the name, so the on-air artist stands in for it.
+  assert.equal(matchedFor(HOLIDAY, 'keep it going with some Michael Jackson', 'Michael Jackson', 'Michael Jackson'), true);
+  // A term the matcher copied with the listener's filler still names the ask.
+  // (Past the token cap the route reads no names at all: the whole request is
+  // the one term there, and no dedication slot can hold it.)
+  assert.equal(matchedFor(ISLA, 'Michael Jackson please', null, 'Michael Jackson please'), true);
+});
+
+test('the cascade: what the matcher or the listener named is never a stand-in', () => {
+  assert.equal(matchedFor(BILLIE, 'Michael Jackson please', 'Michael Jackson', 'Michael Jackson'), false);
+  assert.equal(matchedFor(BILLIE, 'play Billie Jean', null, 'Billie Jean'), false);
+  // A nickname the matcher resolved with the world knowledge this module lacks…
+  assert.equal(matchedFor(ELVIS, 'more of the King please', 'Elvis Presley', 'Elvis Presley'), false);
+  // …and one it read back as written, met through the listener's words.
+  assert.equal(matchedFor(BILLIE, 'more MJ please', 'MJ', 'MJ'), false);
+  assert.equal(matchedFor(HOLIDAY, 'some Madona please', 'Madona', 'Madona'), false);
+  // "More of this", which the matcher reads as the on-air artist.
+  assert.equal(matchedFor(HOLIDAY, 'more of this please', 'Madonna', 'Madonna'), false);
+  // A wide excusal, the safe direction: one credit word shared by chance.
+  assert.equal(matchedFor(JANET, 'Michael Jackson please', 'Michael Jackson', 'Michael Jackson'), false);
+});
+
+test('the cascade: an ask naming no music has nothing to stand in for', () => {
+  for (const text of ['something chill', 'more of this please', 'some punjabi please', 'anything in Turkish']) {
+    assert.equal(matchedFor(HOLIDAY, text, null), false, text);
+    assert.equal(matchedFor(HOLIDAY, text), false, `${text}, nothing named`);
+  }
+  // A name the matcher read out of a dedication, a feel or a day is no ask.
+  assert.equal(matchedFor(HOLIDAY, 'something upbeat for Sarah', 'Sarah', 'Sarah'), false);
+  assert.equal(matchedFor(HOLIDAY, 'happy birthday Sarah Jones!', null, 'Sarah Jones'), false);
+  assert.equal(matchedFor(HOLIDAY, 'some Friday vibes please', null, 'Friday'), false);
+  assert.equal(matchedFor(HOLIDAY, "it's friday, more of this", null, 'Friday'), false);
 });
 
 // --- the remedy, through runRequest ---------------------------------------------

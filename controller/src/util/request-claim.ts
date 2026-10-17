@@ -12,7 +12,9 @@
 // names nothing at all is vague, not wrong, and passes; so does one that owns a
 // substitution ("no Michael Jackson tonight, but here's Madonna"). The same
 // reading says whether the track is a STAND-IN for the ask at all
-// (requestStandIn, #1979), which is what puts it under artist spacing. Pure:
+// (requestStandIn, #1979), which is what puts it under artist spacing; the
+// stateless cascade, which has no lines when it chooses, asks the same of the
+// matcher's reading (matchedRequestStandIn, #1993). Pure:
 // the orchestration (one corrective re-pick, then plain copy) is the request
 // agent's, in broadcast/dj-agent.ts. A pick's note is read by the same rule
 // (#1978, misnamedPickNote below).
@@ -654,11 +656,8 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   const asked = [ctx.requestText, ...(ctx.lookups ?? [])];
   if (asked.some((a) => asksForTrack(a, ctx.track))) return false;
   const onAirAsked = !!ctx.onAir && pointsAtOnAir(ctx.requestText) && asksForTrack(ctx.onAir.artist, ctx.track);
-  const unasked = unaskedSlots(ctx.requestText);
-  const asks = (c: LineClaim) => {
-    const keys = keysOf(c.text);
-    return !keys.every((k) => DAYS.has(k) || MINOR.has(k)) && !unasked.some((slot) => contains(slot, keys));
-  };
+  const asksName = askedNameTest(ctx.requestText);
+  const asks = (c: LineClaim) => asksName(c.text);
   // Only the request's own words are evidence, so the other candidates count
   // only for their genre tags; their names would be read as claims nobody
   // looks at, once per candidate the spacing pass asks about.
@@ -668,6 +667,42 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
     if (read.declines.some(asks) || (!onAirAsked && unexcused(read).some((c) => c.source === 'request' && asks(c)))) return true;
   }
   return false;
+}
+
+// Is the track a STAND-IN for what the stateless cascade's matcher read the
+// listener as naming (#1993)? routes/request.ts draws from a pool before any
+// line is written — its ack and intro come after the pick — so there are no
+// lines to read. Its evidence is the matcher's reading instead, `named`: the
+// artist and the artist names or song titles it searched for. That reading is
+// the cascade's own named lookup, the counterpart of requestLookups, so a
+// track any of it names is the ask, as is one the listener's words name
+// (asksForTrack, with its spellings, initials and joined credits). Any other
+// track stands in when the matcher named music at all: an ask naming none — a
+// mood, a genre, a language, "more of this" — has nothing a track could stand
+// in for, as on the agent path. A name the matcher read out of a dedication or
+// a feel, or a weekday, is no ask either (askedNameTest). There is no on-air
+// excusal for a "more of this" ask: the matcher is handed the on-air track, so
+// one it understood names that artist and is excused above, and one naming
+// someone else asked for them ("keep it going with some Michael Jackson") —
+// the case where a declining line outranks that excusal on the agent path.
+export function matchedRequestStandIn(
+  named: Iterable<string | null | undefined>,
+  ctx: Pick<ClaimContext, 'track' | 'requestText'>,
+): boolean {
+  const names = [...named];
+  if ([ctx.requestText, ...names].some((a) => asksForTrack(a, ctx.track))) return false;
+  return names.some(askedNameTest(ctx.requestText));
+}
+
+// Is a name from the listener's words, as a line or the matcher spells it, an
+// ask? Not a weekday or a run of connectives, nor a word the request uses for
+// something other than music (unaskedSlots, read once per request).
+function askedNameTest(requestText: string | null | undefined): (name: string | null | undefined) => boolean {
+  const unasked = unaskedSlots(requestText);
+  return (name) => {
+    const keys = keysOf(name);
+    return !keys.every((k) => DAYS.has(k) || MINOR.has(k)) && !unasked.some((slot) => contains(slot, keys));
+  };
 }
 
 // An ask that points at what is playing (#1979): "more of this", "more like
