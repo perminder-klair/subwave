@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { artistKey, artistRootKey, filterPickerCandidates } from '../src/music/recency.js';
-import { ARTIST_VARIETY_WINDOW, alternativeCandidates, artistGuardCause } from '../src/broadcast/dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, alternativeCandidates, artistGuardCause, requestRepickCandidates } from '../src/broadcast/dj-agent/artist-guard.js';
 import { queue } from '../src/broadcast/queue.js';
 
 // ── artistRootKey: collaborations collapse, band names don't ────────────────
@@ -263,6 +263,42 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
     new Set([artistRootKey('The Clash')]),
   );
   assert.equal(alt.size, 0, 'a single-artist run still reports no alternatives');
+}
+
+// A candidate marked exempt survives the recency narrowing — a listener
+// request's own ask (#1979) — while the rejected artist stays excluded.
+{
+  const recent = new Set(['the beatles', 'marvin gaye'].map((a) => artistRootKey(a)));
+  const { alt, dropped } = alternativeCandidates(
+    seenOf(marvin, sly, clash), artistRootKey('The Clash'), recent, '', (s) => s.id === 'm1',
+  );
+  assert.deepEqual([...alt.keys()].sort(), ['m1', 's1'], 'an exempt candidate is offered however recently its artist played');
+  assert.equal(dropped, 0, 'nothing else was recent');
+}
+
+// A corrective REQUEST call (#1979): stand-ins by a recently-heard artist are
+// withheld, what the listener asked for stays whoever played it last, and no
+// artist is avoided outright — nothing has been rejected yet.
+{
+  const recent = new Set(['marvin gaye', 'the clash'].map((a) => artistRootKey(a)));
+  const standIn = (s: Cand) => s.id !== 'm2';
+  const { alt, dropped, starved } = requestRepickCandidates(seenOf(marvin, marvinTammi, clash, sly), recent, standIn);
+  assert.deepEqual([...alt.keys()].sort(), ['m2', 's1'], 'the ask stays; recent stand-ins go; a fresh stand-in stays');
+  assert.equal(dropped, 2);
+  assert.equal(starved, false);
+}
+// …and a set with nothing fresh left is handed back whole: the call still answers.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const { alt, starved } = requestRepickCandidates(seenOf(marvin, marvinTammi), recent, () => true);
+  assert.deepEqual([...alt.keys()].sort(), ['m1', 'm2']);
+  assert.equal(starved, true);
+}
+// No recency data → the run's candidates, untouched.
+{
+  const { alt, dropped } = requestRepickCandidates(seenOf(marvin, clash), new Set(), () => true);
+  assert.deepEqual([...alt.keys()].sort(), ['c1', 'm1']);
+  assert.equal(dropped, 0);
 }
 
 assert(ARTIST_VARIETY_WINDOW >= 2, 'the window must span at least the every-other-slot shape it was filed for');

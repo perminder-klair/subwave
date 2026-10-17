@@ -10,8 +10,10 @@
 // be confused with — what the listener asked for, another candidate the run
 // surfaced, a quoted title — only if it ALSO names the queued track. A line that
 // names nothing at all is vague, not wrong, and passes; so does one that owns a
-// substitution ("no Michael Jackson tonight, but here's Madonna"). Pure: the
-// orchestration (one corrective re-pick, then plain copy) is the request
+// substitution ("no Michael Jackson tonight, but here's Madonna"). The same
+// reading says whether the track is a STAND-IN for the ask at all
+// (requestStandIn, #1979), which is what puts it under artist spacing. Pure:
+// the orchestration (one corrective re-pick, then plain copy) is the request
 // agent's, in broadcast/dj-agent.ts.
 //
 // Three sources of a wrong name, each chosen because it needs no world
@@ -284,8 +286,10 @@ function quotedSpans(text: string): Array<{ start: number; end: number }> {
   return out;
 }
 
+// `declines` are the request names the line declines or uses as a reference
+// (DECLINES) — never claims, but the mark of a stand-in (requestStandIn).
 export function lineClaims(line: string | null | undefined, ctx: ClaimContext): {
-  claims: LineClaim[]; titleNamed: boolean; artistNamed: boolean;
+  claims: LineClaim[]; declines: LineClaim[]; titleNamed: boolean; artistNamed: boolean;
 } {
   const text = normalizeListenerText(line);
   const toks = tokenize(text);
@@ -294,7 +298,8 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   const own = [...titles, ...artists, ...titlePhrases(ctx.track?.album)];
   const titleNamed = names(toks, titles);
   const artistNamed = names(toks, artists);
-  if (!toks.length) return { claims: [], titleNamed, artistNamed };
+  const declines: LineClaim[] = [];
+  if (!toks.length) return { claims: [], declines, titleNamed, artistNamed };
 
   // The queued track's own names, masked out before anything is read as a claim.
   const masked = new Array<boolean>(toks.length).fill(false);
@@ -352,7 +357,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     const span = toks.slice(a, b + 1);
     if (!nameLike(span)) return;
     if (isExempt(span.map((t) => t.key))) return;
-    if (declined(text, span[0]!.start, span[span.length - 1]!.end)) return;
+    if (declined(text, span[0]!.start, span[span.length - 1]!.end)) {
+      declines.push({ source: 'request', text: surface(text, span) });
+      return;
+    }
     add('request', span);
   };
   for (let i = 0; i < toks.length; i++) {
@@ -405,7 +413,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     add('quoted-title', span);
   }
 
-  return { claims, titleNamed, artistNamed };
+  return { claims, declines, titleNamed, artistNamed };
 }
 
 // The claims that make a line wrong about the queued track. A wrong ARTIST is
@@ -413,7 +421,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
 // queued title; the listener's own words, which could be either, by naming
 // either. Empty means the line may air.
 export function misnamedClaims(line: string | null | undefined, ctx: ClaimContext): LineClaim[] {
-  const { claims, titleNamed, artistNamed } = lineClaims(line, ctx);
+  return misnamedOf(lineClaims(line, ctx));
+}
+
+function misnamedOf({ claims, titleNamed, artistNamed }: ReturnType<typeof lineClaims>): LineClaim[] {
   return claims.filter((c) => {
     if (c.source === 'request') return !titleNamed && !artistNamed;
     if (c.source === 'candidate-artist') return !artistNamed;
@@ -467,6 +478,51 @@ export function claimLookupQuery(
     }
   }
   return best;
+}
+
+// Is the track a STAND-IN for what the listener named (#1979)? Requests are
+// exempt from artist spacing because an explicit ask wins, and a stand-in is
+// not the ask: the listener named an artist or a title, the library could not
+// meet it, and the agent chose something else — in #1918, Madonna straight
+// after Madonna for "Michael Jackson please". Whose track stands in is the
+// DJ's choice, so the DJ's spacing rule applies to it
+// (broadcast/dj-agent/artist-guard.ts); the listener's own ask never does.
+//
+// The evidence is the run's OWN lines — every ack and intro it wrote, replaced
+// ones included — read against the track by this module's rules: a line that
+// declines a name the listener used or uses it as a reference (DECLINES, the
+// honest substitution the frame prompt asks for), or one that names the
+// listener's words over a track it does not name (the #1918 lie, which still
+// says what they asked for after plain copy has replaced it). Not the request
+// text's own capitals: a nickname, an abbreviation or a typo ("more MJ
+// please", "Madona") reads as an unmet name over the very artist asked for,
+// and a test wrong in that direction steers a genuine request away from its
+// artist. A substitution owned without a name ("can't do that one") is an
+// accepted miss: the track airs as it always did.
+export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
+  if (asksForTrack(ctx.requestText, ctx.track)) return false;
+  for (const line of lines) {
+    const read = lineClaims(line, ctx);
+    if (read.declines.length || misnamedOf(read).some((c) => c.source === 'request')) return true;
+  }
+  return false;
+}
+
+// Do the listener's words name this track — a title form, the album, any
+// credited act, or one word of the credit ("some Elvis" for Elvis Presley)?
+// Case-blind, because a listener's casing is no evidence ("madonna or michael
+// jackson"). A lone request word is not a title: "something by Michael
+// Jackson" does not ask for the Beatles' "Something". It errs wide on
+// purpose: a word shared by chance only leaves a request exempt from spacing,
+// which is where it started.
+export function asksForTrack(requestText: string | null | undefined, track: ClaimTrack | null | undefined): boolean {
+  const req = keysOf(requestText);
+  if (!req.length || !track) return false;
+  const credit = artistPhrases(track.artist);
+  const phrases = [...titlePhrases(track.title), ...credit, ...titlePhrases(track.album)];
+  if (phrases.some((p) => !(p.length === 1 && FILLER.has(p[0]!)) && contains(req, p))) return true;
+  const words = new Set(req);
+  return credit.some((p) => p.some((k) => k.length >= 3 && !FILLER.has(k) && words.has(k)));
 }
 
 // Fixed copy for a request whose own lines could not be trusted: names the

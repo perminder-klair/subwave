@@ -19,7 +19,7 @@ import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../musi
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
-import { ARTIST_VARIETY_WINDOW, recentArtistsClause, runArtistGuard } from './dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { runAlbumGuard } from './dj-agent/album-guard.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -44,7 +44,7 @@ import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, tr
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
-import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, type MisnamedLine } from '../util/request-claim.js';
+import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, requestStandIn, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
 import { buildShortlist } from '../music/shortlist.js';
@@ -1700,6 +1700,39 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
     }
 
+    // Whoever voices this answer, the host and guests on the roster, and the
+    // station: the lines may greet any of them without claiming a track.
+    const roster = settings.getOnAirRoster();
+    const stationNames = [
+      requestSpeech.persona?.name, roster.host?.name, ...roster.guests.map((g: any) => g?.name), settings.get().station,
+    ];
+    // Stand-in spacing (#1979). A request is exempt from artist spacing — an
+    // explicit ask wins — but a STAND-IN for an ask the library could not
+    // meet is the DJ's choice of artist, and #1918 aired Madonna straight
+    // after Madonna for "Michael Jackson please". util/request-claim.ts says
+    // whether a track is a stand-in, from every line this run writes;
+    // artist-guard.ts says what spacing does about it. The window is read
+    // once, after the run, so a pick that landed while the agent ran is in it.
+    const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+    const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
+    const runLines: Array<string | null | undefined> = [];
+    const noteLines = (answer: any) => runLines.push(answer?.ack, autoVoiceAllowed() ? answer?.intro : null);
+    noteLines(object);
+    const standIn = (track: any, pool: Map<string, any>) => requestStandIn(runLines, {
+      track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
+    });
+    // What a corrective call is offered: no stand-in by a recently-heard
+    // artist, unless nothing fresh is left. Spacing rides the call the request
+    // was already spending, so it never costs one of its own here.
+    const spacedOffer = (pool: Map<string, any>) => {
+      const { alt, dropped } = requestRepickCandidates(pool, neighbourRoots, (c) => standIn(c, pool));
+      if (dropped) queue.log('request-guard', `${dropped} stand-in(s) by recently-played artists withheld from the corrective call (spacing window ${varietyWindow} slots)`);
+      return alt;
+    };
+    // The request's ONE corrective model call: the unknown-id salvage, the
+    // claim re-pick, or the stand-in spacing re-pick — whichever comes first.
+    let corrected = false;
+
     let song = object?.id ? extras.seen.get(object.id) : null;
     // Near-miss repair, same as the pick path: an unambiguous prefix /
     // clear-winner edit-distance match against the run's own candidates
@@ -1718,8 +1751,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // caller's stateless matcher cascade is still the fallback when this
     // misses too (empty seen, or the re-pick call itself fails).
     if (!song && extras.seen.size) {
+      corrected = true;
       const repicked = await repickRequestFromSeen({
-        seen: extras.seen, badId: object?.id ?? null, requester, text,
+        seen: spacedOffer(extras.seen), badId: object?.id ?? null, requester, text,
         persona: requestSpeech.persona,
       });
       if (repicked) {
@@ -1727,6 +1761,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
         object = repicked;
         song = extras.seen.get(repicked.id);
+        noteLines(repicked);
       }
     }
     if (!song) {
@@ -1756,17 +1791,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // each misnamed line becomes plain copy naming the queued track. Only a
     // misnamed intro earns the re-pick (claimEarnsRepick); a misnamed ack
     // alone is replaced with the plain ack outright. The unknown-id salvage
-    // above already spent this request's one corrective call when it
-    // replaced `object`. Never a breaker failure: the harness
-    // worked, the words did not.
+    // above already spent this request's one corrective call when it ran.
+    // Never a breaker failure: the harness worked, the words did not.
     let claimGuard: string | null = null;
     let plainLines = new Set<MisnamedLine['field']>();
-    // Whoever voices this answer, the host and guests on the roster, and the
-    // station: the lines may greet any of them without claiming a track.
-    const roster = settings.getOnAirRoster();
-    const stationNames = [
-      requestSpeech.persona?.name, roster.host?.name, ...roster.guests.map((g: any) => g?.name), settings.get().station,
-    ];
     const misnamed = (answer: any, track: any, pool: Map<string, any>) => misnamedRequestLines(
       { ack: answer?.ack, intro: autoVoiceAllowed() ? answer?.intro : null },
       { track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
@@ -1774,7 +1802,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const firstMiss = misnamed(object, song, extras.seen);
     if (firstMiss.length) {
       // An ack-only miss goes straight to the plain ack: no call, no lookup.
-      const canRepick = object === run.object && claimEarnsRepick(firstMiss);
+      const canRepick = !corrected && claimEarnsRepick(firstMiss);
       const pool = new Map(extras.seen);
       const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
       if (lookup) {
@@ -1782,9 +1810,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       }
       const claimed = [...new Set(firstMiss.flatMap((m) => m.claims.map((c) => `"${c.text}"`)))].join(', ');
       queue.log('request-guard', `agent ${firstMiss.map((m) => m.field).join('+')} named ${claimed} over "${song.title}" by ${song.artist}${lookup ? ` — looked up "${lookup}"` : ''}`);
+      if (canRepick) corrected = true;
       const repicked = canRepick
         ? await repickRequestFromSeen({
-          seen: pool, badId: object?.id ?? null, requester, text,
+          seen: spacedOffer(pool), badId: object?.id ?? null, requester, text,
           persona: requestSpeech.persona, reason: misnamedRepickReason(song, firstMiss),
         })
         : null;
@@ -1793,6 +1822,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       if (repicked) {
         object = repicked;
         song = pool.get(repicked.id);
+        noteLines(repicked);
         stillMisnamed = misnamed(object, song, pool);
       }
       plainLines = new Set(stillMisnamed.map((m) => m.field));
@@ -1805,6 +1835,54 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         : `request re-picked "${song.title}" by ${song.artist} with lines that name it`);
     }
 
+    // Stand-in spacing (#1979), on the track the claim guard left standing.
+    // With the corrective call unspent, a stand-in by a recently-heard artist
+    // goes through the normal artist guard: spacing only (no pick anchor, so
+    // never the pool rescue — a pool pick is not this listener's request),
+    // which yields to the run when nothing fresher was surfaced. What the
+    // listener asked for is exempt from the re-pick's narrowing too. A spent
+    // call means the corrective pick was already offered spaced candidates;
+    // whatever it left stands, as spacing does on a failed re-pick.
+    let spacingGuard: string | null = null;
+    if (neighbourRoots.size && standIn(song, extras.seen)) {
+      if (!corrected) {
+        const spaced = await runArtistGuard<any>({
+          song, object, pickAnchor: null,
+          seen: extras.seen,
+          recentRoots: neighbourRoots,
+          window: varietyWindow,
+          exempt: (c) => !standIn(c, extras.seen),
+          repick: (alt, reason) => {
+            corrected = true;
+            return repickRequestFromSeen({
+              seen: alt, badId: null, requester, text, persona: requestSpeech.persona,
+              reason: `${reason} If no candidate is what they asked for, own the substitution — never present a stand-in as their ask.`,
+            });
+          },
+          // Unreachable: with no anchor the only cause is spacing.
+          poolRescue: async () => 'empty',
+          log: (line) => queue.log('request-guard', `stand-in by ${line}`),
+          logEvent: (name, payload) => logEvent(name, { agent: 'request', ...payload }),
+        });
+        if (spaced.kind === 'repicked') {
+          object = spaced.object;
+          song = spaced.song;
+          spacingGuard = 'artist-spaced';
+          // The new answer's lines get the claim check, never another call.
+          // The first answer's verdict described lines that no longer air.
+          plainLines = new Set(misnamed(object, song, extras.seen).map((m) => m.field));
+          claimGuard = plainLines.size ? 'claim-plain' : null;
+          if (plainLines.size) queue.log('request-guard', `request ${[...plainLines].join('+')} replaced with plain copy for "${song.title}" by ${song.artist}`);
+        }
+      } else if (artistGuardCause(artistRootKey(song), '', neighbourRoots, song.artist) === 'recent') {
+        logEvent('pick.artistGuard', {
+          agent: 'request', cause: 'recent', basis: 'recent-window', relaxed: true, reason: 'call-spent',
+          artist: song.artist, window: varietyWindow,
+        });
+        queue.log('request-guard', `stand-in by recently-played artist "${song.artist}" allowed — the request's one corrective call is spent (spacing window ${varietyWindow} slots)`);
+      }
+    }
+
     // Repeat cooldown (B6) — mirrors the cascade path. `refused` is what tells
     // the caller nothing was queued: it returns a track (the one it declined,
     // so the ack and the operator log can name it), and without the flag the
@@ -1813,7 +1891,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
-      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: claimGuard, refused: 'cooldown' };
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -1856,7 +1934,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // Several guards can fire on one request (the model echoed in the ack AND
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
-    const guardVerdict = [claimGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
