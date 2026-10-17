@@ -8,11 +8,13 @@
 //     as the reports describe) and nothing else, so every candidate was a
 //     neighbour of the waypoint in the off-show lane. With Leanings that point
 //     at the show's lane the review ran, and kept, because none of the tracks
-//     it could prefer were in its set. The Shortlist route never had this: on
-//     the same pick its plan runs the show's context and the anchor's
-//     continuity beside the journey. The Agentic review now gets those same
-//     companions, controller-run with no model call (music/shortlist.ts
-//     journeyCompanions). That was the defect.
+//     it could prefer were in its set. The Agentic review now gets the
+//     Shortlist planner's companions to the journey (the show's context and
+//     the anchor's continuity), controller-run with no model call
+//     (music/shortlist.ts journeyCompanions). That was the defect. The show's
+//     context means the show's OWN lane: a live pick always carries a station
+//     mood (time of day, weather), and with no show moods the planner lets it
+//     stand in ahead of the show's era, so every pick here runs with one.
 //   - Leanings the journey lane shares with the pick (a broad genre) cannot
 //     settle anything, so the review skips. Working as designed.
 //   - "Avoid that lane" in the persona's Soul is not a Leaning; no Leanings
@@ -156,10 +158,15 @@ after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
-function context() {
+// getFullContext always sets dominantMood on a live pick: the show's first
+// mood, else festival, weather or time of day. This show has no moods, so it is
+// the station's own: the afternoon default, which no track here carries.
+const STATION_MOOD = 'focus';
+
+function context(dominantMood: string | null = STATION_MOOD) {
   return {
     at: new Date(now).toISOString(), activeShow: settings.resolveActiveShow() as never, clock: getClockContext(),
-    time: getTimeContext(), date: getDateContext(), dominantMood: null,
+    time: getTimeContext(), date: getDateContext(), dominantMood,
     weather: null, festival: null, showHandover: null, listeners: { count: null }, episodeEditorial: '',
   };
 }
@@ -169,8 +176,8 @@ function context() {
 // the agent does what the reports describe: tracksTowardJourney three times,
 // and one of its tracks. Without a journey the agent reads the anchor's
 // sound-alikes instead.
-async function pick(t: any, { selection = 'agentic', musicLean = SHOW_LANE, journey = true }: {
-  selection?: 'agentic' | 'shortlist'; musicLean?: string; journey?: boolean;
+async function pick(t: any, { selection = 'agentic', musicLean = SHOW_LANE, journey = true, dominantMood = STATION_MOOD }: {
+  selection?: 'agentic' | 'shortlist'; musicLean?: string; journey?: boolean; dominantMood?: string | null;
 } = {}) {
   await configure(selection, musicLean);
   let draws = 0;
@@ -181,7 +188,7 @@ async function pick(t: any, { selection = 'agentic', musicLean = SHOW_LANE, jour
   queue.history = [];
   queue.djLog = [];
   queue.senderBusy = true;
-  session.start(context());
+  session.start(context(dominantMood));
   reviewPrompts.length = 0;
   let resolution: any = null;
   let seenIds: string[] = [];
@@ -206,7 +213,7 @@ async function pick(t: any, { selection = 'agentic', musicLean = SHOW_LANE, jour
     };
   };
   try {
-    await runTrackEvent(queue, context(), { wantLink: false, showAt: new Date(now) });
+    await runTrackEvent(queue, context(dominantMood), { wantLink: false, showAt: new Date(now) });
   } finally {
     pickerAgent.run = realRun;
     queue.senderBusy = false;
@@ -235,8 +242,11 @@ test('an Agentic journey pick offers the review the show\'s lane, and the review
   assert.ok(inLane(r.queued[0]), `the host's Leanings bring the pick back into the show (queued ${r.queued[0]})`);
 });
 
-test('the Shortlist route already gave its review the same lanes on that pick', async (t) => {
-  const r = await pick(t, { selection: 'shortlist' });
+// Only with no station mood standing in: the Shortlist's own journey plan still
+// spends its context pass on that mood ahead of the show's era (left for the
+// maintainer; changing it changes what the Shortlist model chooses from).
+test('with no station mood standing in, the Shortlist route gave its review the same lanes', async (t) => {
+  const r = await pick(t, { selection: 'shortlist', dominantMood: null });
   assert.ok(r.reviewIds.slice(1).some(inLane), 'the Agentic companions match what this route offers');
   assert.ok(inLane(r.queued[0]));
 });
@@ -273,4 +283,11 @@ test('journeyCompanions runs the Shortlist\'s companions, never the journey itse
     'the show\'s context lane and the anchor\'s continuity lane');
   assert.ok(candidates.some(c => inLane(c.id)), 'the show\'s era reaches the review');
   assert.ok(!candidates.some(c => c.id === 'hook' || c.artist === 'Pop Act'), 'never the anchor or its artist');
+
+  const withStationMood = await journeyCompanions({ ...base, dominantMood: STATION_MOOD, scope: pickerScope({ audioWaypoint: waypoint }) });
+  assert.deepEqual(withStationMood.sourceRuns.map(run => run.source).sort(), ['songsByEra', 'tracksThatSoundLikeThis'],
+    'the station\'s own mood never takes the show\'s pass');
+  const unplaced = await journeyCompanions({ currentTrackId: 'hook', currentArtist: 'Pop Act', dominantMood: STATION_MOOD, scope: pickerScope({ audioWaypoint: waypoint }) });
+  assert.deepEqual(unplaced.sourceRuns.map(run => [run.source, run.args.mood ?? null]).sort(), [['tracksByMood', STATION_MOOD], ['tracksThatSoundLikeThis', null]],
+    'with nothing of the show\'s own to place it, the station mood stands in as before');
 });

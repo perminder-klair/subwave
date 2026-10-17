@@ -396,7 +396,17 @@ export async function journeyCompanions(
   const { tools, seen } = buildPickerTools(context.scope);
   const sources = new Set(Object.keys(tools));
   sources.delete('tracksTowardJourney');
-  const plan = planShortlistSources({ ...context, discoveryPasses: JOURNEY_COMPANION_PASSES }, sources);
+  // With no show moods the planner lets the station's own mood (weather, time
+  // of day — always set on a live pick) stand in, ahead of the show's genres,
+  // eras and energies. A journey fixes the plan's order, so that stand-in took
+  // the context pass on every pick and the show's lane never ran. The review
+  // needs the show's lane, so a show that places itself keeps its own.
+  const energies = strings(context.energies).filter(value => ENERGY_VALUES.has(value));
+  const genres = strings(context.genres?.length ? context.genres : context.scope.genreLock);
+  const showPlaced = !!(context.scope.playlistTracks?.length || energies.length || genres.length
+    || hasEraBound(context.eras ?? context.scope.eraLock ?? []));
+  const dominantMood = showPlaced && !strings(context.moods).length ? null : context.dominantMood;
+  const plan = planShortlistSources({ ...context, dominantMood, discoveryPasses: JOURNEY_COMPANION_PASSES }, sources);
   const { sourceRuns } = await executeShortlistPlan(tools as PickerToolSet, seen, plan);
   const maxPerArtist = context.scope.playlistLock || context.scope.episodeSource ? Infinity : 3;
   const { fresh } = withRecentSpacing(

@@ -282,16 +282,25 @@ the model to call `tracksTowardJourney`, and on a journey it usually calls
 nothing else, often several times. The run's candidate map is then the
 waypoint's neighbourhood alone, and the review chooses only from that map. With
 Leanings pointing at the show's lane it ran and kept, because none of the tracks
-those Leanings favour were in its set. The Shortlist never had this gap: on a
-journey its plan pairs the journey with the show's context lane and the anchor's
-continuity lane. The Agentic review now gets those same companions.
-`journeyCompanions` (`music/shortlist.ts`) runs the Shortlist planner without
-the journey tool for `JOURNEY_COMPANION_PASSES` (what the default plan spends
-beside the journey), through the pick's own scope, with no prepared searches and
-no model call. It runs only on an Agentic journey pick with Leanings on air.
-The companions join the review's pool only; the run's `seen` stays as discovery
-left it for the guards and re-picks. Only tracks the artist guard would accept
-are offered, so a replacement cannot buy a corrective re-pick. Two other skips
+those Leanings favour were in its set. On a journey the Shortlist plan pairs the
+journey with a context lane and the anchor's continuity lane, and the Agentic
+review now gets those companions. `journeyCompanions` (`music/shortlist.ts`)
+runs the Shortlist planner without the journey tool for
+`JOURNEY_COMPANION_PASSES` (what the default plan spends beside the journey),
+through the pick's own scope, with no prepared searches and no model call. One
+input differs, and it is the point: a live pick always carries `dominantMood`,
+and for a show with no moods that is the station's own (festival, weather, time
+of day). The planner lets it stand in ahead of the show's genres, eras and
+energies, and a journey fixes the plan's order, so it took the context pass on
+every pick and the show's lane never ran. The companions drop that stand-in
+whenever the show places itself. The Shortlist's own journey plan still spends
+its pass on the station mood; changing that changes what the Shortlist model
+chooses from, so it is left as it was. The companions run only on an Agentic
+journey pick with Leanings on air. They join the review's pool only; the run's
+`seen` stays as discovery left it for the guards and re-picks. Only tracks the
+artist guard would accept are offered, so a replacement cannot buy that guard's
+corrective re-pick (the album cooldown, when on, judges it as it judges any
+review replacement). Two other skips
 on journey picks are the design, not a gap. Leanings the journey lane shares
 with the pick (a broad genre both carry) cannot distinguish a challenger. And
 "avoid that lane" written in a persona's Soul is not a Leaning: the Soul is
