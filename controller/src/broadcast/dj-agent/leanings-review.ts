@@ -84,24 +84,57 @@ function trimDanglingEnding(value: string): string {
   return value.replace(/\s*[,;:]\s*(?:and|or|but)?\s*$/i, '').replace(/\s+(?:and|or|but)\s*$/i, '').trim();
 }
 
+// The part of a stored name a note can be expected to say. Titles and credits
+// often carry a feature list or an edition tag — "Final Warning (feat. Bun B,
+// Shawty Lo, …)", "Bumpin My Song Feat. J.Hind", "Alien Girl (Today W/ Her)" —
+// that no model repeats in a sentence, so requiring the full string replaced
+// notes that named the track correctly with plain copy. Splits on feat./ft./
+// featuring only, as the blocklist does: `&`, `,` and `x` live inside real names.
+function coreName(raw: string): string {
+  return raw
+    .replace(/\s*[([{][^)\]}]*[)\]}]/g, ' ')
+    .replace(/\s+(?:feat\.?|ft\.?|featuring)\s.*$/i, '')
+    .replace(/\s+[-–—]\s+.*$/, '')
+    .trim();
+}
+
+// Does the note say this name? The full name as before, or its core as whole
+// words — a short core ("Up") as a bare substring would match "upbeat", and a
+// core of one short word is too common to count as naming anything.
+function noteNames(note: string, raw: string): boolean {
+  const full = identityComparable(raw);
+  if (!full || note.includes(full)) return true;
+  const core = identityComparable(coreName(raw));
+  if (!core || core === full) return false;
+  if (!core.includes(' ') && core.length < 4) return false;
+  return ` ${note} `.includes(` ${core} `);
+}
+
 // Agentic reasons are verified against the final track at the queue boundary.
 // This keeps useful model variation while preventing a guard replacement from
 // inheriting another track's explanation or Shortlist-specific wording.
 export function agenticSelectionReason(track: any, reason: unknown): string {
   const titleRaw = typeof track?.title === 'string' ? track.title.trim() : '';
   const artistRaw = typeof track?.artist === 'string' ? track.artist.trim() : '';
-  const title = identityComparable(titleRaw);
-  const artist = identityComparable(artistRaw);
   const note = identityComparable(reason);
-  if (note && (!title || note.includes(title)) && (!artist || note.includes(artist))) return String(reason).trim();
+  const namesTitle = noteNames(note, titleRaw);
+  if (note && namesTitle && noteNames(note, artistRaw)) return String(reason).trim();
 
   const raw = typeof reason === 'string' ? trimDanglingEnding(reason.replace(/\s+/g, ' ')) : '';
-  if (raw && titleRaw && artistRaw && artist && !note.includes(title)) {
+  if (raw && titleRaw && artistRaw && identityComparable(artistRaw) && !namesTitle) {
     const remainder = raw.replace(new RegExp(`^${escapeRegExp(artistRaw)}\\s*[-—,:]?\\s*`, 'i'), '').trim();
     if (/^(?:fits|works|brings|keeps|matches|follows|continues|adds|carries|suits|makes|offers)\b/i.test(remainder)) {
       return `“${titleRaw}” by ${artistRaw} — ${/[.!?]$/.test(remainder) ? remainder : `${remainder}.`}`;
     }
   }
+  return plainAgenticSelectionReason(track);
+}
+
+// The plain copy a note becomes when it cannot be grounded on the track.
+// Exported so the pick path can tell a discarded note from a kept one.
+export function plainAgenticSelectionReason(track: any): string {
+  const titleRaw = typeof track?.title === 'string' ? track.title.trim() : '';
+  const artistRaw = typeof track?.artist === 'string' ? track.artist.trim() : '';
   const credited = titleRaw && artistRaw ? `“${titleRaw}” by ${artistRaw}` : titleRaw ? `“${titleRaw}”` : artistRaw ? `A track by ${artistRaw}` : '';
   return credited ? `${credited} offers a strong musical fit with the current flow.` : 'Selected for its strong musical fit with the current flow.';
 }

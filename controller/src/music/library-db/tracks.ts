@@ -6,6 +6,7 @@ import { FACETS, clearFacetFailures, clearFacetRows, syncTrackFacets, type Facet
 import type { TagWrite, TrackEnrichment, TrackKeyRange, TrackMeta, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { normaliseYear, rowToTrack, safeParseArray } from './rows.js';
 import { runDdl } from './schema.js';
+import { touchGenreInputs } from './genre-inputs.js';
 import { resolveEraYear } from '../era-year.js';
 import { MAX_ANALYSIS_FAILURES, analysisFailureExclusion } from '../analyze-capability.js';
 
@@ -752,6 +753,7 @@ export function upsertTrackVector(
   const d = requireDb();
   d.prepare(`DELETE FROM track_vectors WHERE id = ?`).run(id);
   d.prepare(`INSERT INTO track_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
+  touchGenreInputs(d);
   // Embedding is an external await: compare the era this vector was built from
   // against the row at completion, so a stale writer can't clear the refresh
   // marker a concurrent metadata/manual edit set.
@@ -776,6 +778,7 @@ export function dropVectors(): void {
     `CREATE VIRTUAL TABLE track_vectors USING vec0(` +
       `id TEXT PRIMARY KEY, embedding FLOAT[${getEmbeddingDim()}] distance_metric=cosine)`,
   );
+  touchGenreInputs(d);
   d.prepare(`UPDATE tracks SET text_vector_dirty = 0`).run();
 }
 
