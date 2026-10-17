@@ -16,6 +16,10 @@ export interface AlbumAlternativePool<T> {
    *  artist exclusion was waived. `dropped` is 0 here too, so this is what
    *  tells "no-op" from "overruled". */
   starved: boolean;
+  /** How many fresh-album candidates the anchor exclusion removed. With `alt`
+   *  empty, this is what tells "the run was all one record" from "the only
+   *  other records were by the pick-anchor artist". */
+  anchorSkipped: number;
 }
 
 // Album re-picks preserve unknown/exempt album keys. Narrow by the artist guard's window,
@@ -27,22 +31,23 @@ export function alternativeAlbumCandidates<T extends CandidateLike>(
   avoidArtistRoots: Set<string> = new Set(),
   avoidAnchorRoot = '',
 ): AlbumAlternativePool<T> {
-  const base = [...seen].filter(([, s]) => {
+  const otherAlbum = [...seen].filter(([, s]) => {
     const key = albumKeyOf(s);
-    return (!key || !recentAlbums.has(key))
-      && !artistCreditsOverlap(artistRootKey(s), avoidAnchorRoot);
+    return !key || !recentAlbums.has(key);
   });
+  const base = otherAlbum.filter(([, s]) => !artistCreditsOverlap(artistRootKey(s), avoidAnchorRoot));
+  const anchorSkipped = otherAlbum.length - base.length;
   if (!base.length || !avoidArtistRoots.size) {
-    return { alt: new Map(base), dropped: 0, starved: false };
+    return { alt: new Map(base), dropped: 0, starved: false, anchorSkipped };
   }
 
   const fresh = base.filter(([, s]) => {
     const root = artistRootKey(s);
     return !root || !creditInRoots(s, avoidArtistRoots);
   });
-  if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
+  if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true, anchorSkipped };
 
-  return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false };
+  return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false, anchorSkipped };
 }
 
 export type AlbumGuardOutcome<T> =
@@ -116,15 +121,21 @@ export async function runAlbumGuard<T extends CandidateLike>(
   // BOTH sides, so it neither blocks nor is blocked.
   if (!key || !recentAlbums.has(key)) return { kind: 'none' };
 
-  const { alt, dropped, starved } = alternativeAlbumCandidates<T>(
+  const { alt, dropped, starved, anchorSkipped } = alternativeAlbumCandidates<T>(
     seen, recentAlbums, albumKeyOf, avoidArtistRoots, avoidAnchorRoot,
   );
 
+  // Two different runs end here, and the booth must not call one the other:
+  // a run that really was all recent records, and one whose only other records
+  // were by the pick-anchor artist, kept off back-to-back on purpose.
   if (!alt.size) {
     logEvent('pick.albumGuard', {
-      relaxed: true, reason: 'no-other-album', album: song.album, artist: song.artist, hours,
+      relaxed: true, reason: anchorSkipped ? 'only-anchor-artist' : 'no-other-album',
+      album: song.album, artist: song.artist, anchorSkipped, hours,
     });
-    log(`recently-played album "${song.album}" allowed — every candidate in the run came off it (album cooldown ${hours}h)`);
+    log(anchorSkipped
+      ? `recently-played album "${song.album}" allowed — the run's only other-album candidate(s) were by the pick-anchor artist, kept off back-to-back (album cooldown ${hours}h)`
+      : `recently-played album "${song.album}" allowed — every candidate in the run came off it (album cooldown ${hours}h)`);
     return { kind: 'kept' };
   }
 

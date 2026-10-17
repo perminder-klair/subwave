@@ -162,6 +162,30 @@ test('with the anchor always passed, the on-air artist is never the album re-pic
   assert.equal(h.calls.repick, 0, 'and it costs no model call');
 });
 
+test('a pick kept because only the anchor artist had another record says so, not "one album"', async () => {
+  // The run surfaced Crimson/Red; the booth must not claim every candidate
+  // came off the recent record, or the operator diagnosing the repeat is told
+  // the run was single-album.
+  const { h, out } = replay(albumGuardAnchorRoot(onAir, cocosumaPick, false));
+  await out;
+  assert.equal(h.events[0].payload.reason, 'only-anchor-artist');
+  assert.equal(h.events[0].payload.anchorSkipped, 1);
+  assert.match(h.lines[0], /only other-album candidate\(s\) were by the pick-anchor artist/);
+  assert.doesNotMatch(h.lines[0], /every candidate in the run came off it/);
+});
+
+test('alternatives count what the anchor exclusion removed', () => {
+  const { alt, anchorSkipped } = alternativeAlbumCandidates(
+    seenOf(cocosumaPick, prefab, clash), albumsOf(cocosuma), albumKey, new Set(), artistRootKey('Prefab Sprout'),
+  );
+  assert.deepEqual([...alt.keys()], [clash.id]);
+  assert.equal(anchorSkipped, 1);
+  assert.equal(
+    alternativeAlbumCandidates(seenOf(kidA2, clash), albumsOf(kidA1), albumKey).anchorSkipped, 0,
+    'no anchor, nothing skipped',
+  );
+});
+
 test('albumGuardAnchorRoot: the anchor artist on every agent pick, nothing for an episode or a conceded repeat', () => {
   assert.equal(albumGuardAnchorRoot(onAir, cocosumaPick, false), artistRootKey('Prefab Sprout'));
   assert.equal(albumGuardAnchorRoot(onAir, cocosumaPick, true), '', 'an episode runs no artist guard, by design');
