@@ -86,7 +86,9 @@ async function build(nonce: string): Promise<GenreSuggest> {
 }
 
 async function assemble(centroids: db.GenreCentroid[]): Promise<GenreSuggest> {
-  const byGenre = library.stats().byGenre || {};
+  // Never TTL-held: the payload is cached under the token read before the walk,
+  // and tallies from before that token would be served until the next commit.
+  const byGenre = library.stats({ fresh: true }).byGenre || {};
   const centroidCount = new Map(centroids.map((c) => [c.genre, c.count]));
   const countOf = (g: string) => byGenre[g] ?? centroidCount.get(g) ?? 0;
 

@@ -13,6 +13,8 @@
 //   - an unchanged library is answered from cache, and so is a changed one
 //     inside the refresh floor; past the floor the last result is answered at
 //     once and one walk re-reads the library behind it;
+//   - the tagged count per genre is never older than the token the walk is
+//     cached under, or an idle library would serve it until the next commit;
 //   - a reopened library is never answered with the previous handle's result.
 //
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- genre-suggest`.
@@ -211,6 +213,26 @@ test('past the floor the last result is answered at once and one walk re-reads b
   assert.notStrictEqual(fresh, stale);
   assert.ok(fresh.genres.some((g) => g.value === 'Later Genre'), 'the walk saw the write');
   assert.ok(!stale.genres.some((g) => g.value === 'Later Genre'));
+});
+
+test('the genre counts are never older than the change the walk is cached under', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  await genreSuggest();
+  t.mock.timers.tick(GENRE_SUGGEST_REFRESH_FLOOR_MS);
+  // An admin poll after a commit: stats() recomputes, then holds for its TTL.
+  db.upsertTrackMeta('polled', { title: 'Polled', artist: 'New', genres: [] });
+  library.stats();
+  // A tagged track whose genre only stats() counts: it has no vector, so no centroid.
+  db.upsertTrackMeta('burst', { title: 'Burst', artist: 'New', genres: ['Burst Genre'] });
+  db.upsertTrackTags('burst', { moods: ['calm'], energy: 'low', source: 'manual' });
+  await genreSuggest();
+  await genreSuggestIdle();
+  // Nothing commits from here, so nothing re-walks: this result is the one every later open gets.
+  t.mock.timers.tick(GENRE_SUGGEST_REFRESH_FLOOR_MS);
+  const answer = await genreSuggest();
+  await genreSuggestIdle();
+  assert.deepEqual(answer.genres.find((g) => g.value === 'Burst Genre'), { value: 'Burst Genre', songCount: 1 });
 });
 
 test('a failed re-read keeps the last result and waits out the floor', async (t) => {
