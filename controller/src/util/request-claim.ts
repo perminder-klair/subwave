@@ -30,7 +30,8 @@
 //                    copy only ever uses for a title.
 //
 // False positives are bounded by what counts as a NAME (see nameLike): the
-// listener's name is never a claim ("Got you, Michael"), lowercase words never
+// listener's name is never a claim ("Got you, Michael"), nor are the station's
+// own — host, guests, station, a standalone "DJ" — lowercase words never
 // are ("smooth and steady"), a lone capital at a sentence start is ambiguous and
 // skipped, and the queued track's own names — every credited act, "The"-less
 // forms, a title without its "(Remastered)" tail, the album — are masked out
@@ -59,6 +60,9 @@ export interface ClaimContext {
   requestText?: string | null;
   // The listener's screened name; never a claim.
   requester?: string | null;
+  // The station's own names — the on-air host, any guest on the roster, the
+  // station itself. Never a claim either, bare or as "DJ <name>".
+  stationNames?: Iterable<string | null | undefined>;
   // Every OTHER candidate the run surfaced.
   others?: Iterable<ClaimTrack | null | undefined>;
 }
@@ -266,7 +270,17 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   for (const p of own) {
     for (const i of occurrences(toks, p)) for (let k = 0; k < p.length; k++) masked[i + k] = true;
   }
-  const requester = isNamedRequester(ctx.requester) ? keysOf(ctx.requester) : [];
+  // Names a line may say without claiming a track: the listener's, the
+  // station's own (the host greets "hey DJ Marlowe" back), and "DJ" standalone
+  // ("Your DJ has you covered" for "hey DJ, play something chill"). A span
+  // inside one is not a claim; "DJ Shadow" is not inside ["dj"], so it still is.
+  const exempt: string[][] = [['dj']];
+  if (isNamedRequester(ctx.requester)) exempt.push(keysOf(ctx.requester));
+  for (const name of ctx.stationNames ?? []) {
+    const keys = keysOf(name);
+    if (keys.length) exempt.push(keys, ['dj', ...keys]);
+  }
+  const isExempt = (keys: string[]) => exempt.some((name) => contains(name, keys));
   const others = [...(ctx.others ?? [])];
 
   // Words in the run's own genre tags — the queued track's and every other
@@ -306,7 +320,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     if (a > b) return;
     const span = toks.slice(a, b + 1);
     if (!nameLike(span)) return;
-    if (requester.length && contains(requester, span.map((t) => t.key))) return;
+    if (isExempt(span.map((t) => t.key))) return;
     add('request', span);
   };
   for (let i = 0; i < toks.length; i++) {
@@ -342,7 +356,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
       for (const i of occurrences(toks, p)) {
         const span = toks.slice(i, i + p.length);
         if (masked.slice(i, i + p.length).some(Boolean) || !nameLike(span)) continue;
-        if (requester.length && contains(requester, p)) continue;
+        if (isExempt(p)) continue;
         add(source, span);
       }
     }
@@ -355,7 +369,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     const span = idx.map((i) => toks[i]!);
     if (span[0]!.capital === false || !span.some((t) => t.capital === true)) continue;
     if (idx.some((i) => masked[i])) continue;
-    if (requester.length && contains(requester, span.map((t) => t.key))) continue;
+    if (isExempt(span.map((t) => t.key))) continue;
     add('quoted-title', span);
   }
 

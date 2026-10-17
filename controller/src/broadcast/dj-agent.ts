@@ -1730,9 +1730,15 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // worked, the words did not.
     let claimGuard: string | null = null;
     let plainLines = new Set<MisnamedLine['field']>();
+    // Whoever voices this answer, the host and guests on the roster, and the
+    // station: the lines may greet any of them without claiming a track.
+    const roster = settings.getOnAirRoster();
+    const stationNames = [
+      requestSpeech.persona?.name, roster.host?.name, ...roster.guests.map((g: any) => g?.name), settings.get().station,
+    ];
     const misnamed = (answer: any, track: any, pool: Map<string, any>) => misnamedRequestLines(
       { ack: answer?.ack, intro: autoVoiceAllowed() ? answer?.intro : null },
-      { track, requestText: text, requester, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
+      { track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
     );
     const firstMiss = misnamed(object, song, extras.seen);
     if (firstMiss.length) {

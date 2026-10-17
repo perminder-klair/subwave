@@ -73,6 +73,32 @@ test("the listener's own name is never a claim, even when it is half the artist"
   assert.equal(misnamedClaims('Michael, here comes Michael Jackson.', incident)[0]?.text, 'Michael Jackson');
 });
 
+test("the station's own names are never a claim: host, guests, the station, a standalone DJ", () => {
+  const ctx = { ...incident, requester: 'Jen', stationNames: ['Marlowe', 'Nova Reyes', 'SUB/WAVE'] };
+  const greetings: Array<[string, string]> = [
+    ['hey DJ play something chill', 'Your DJ has you covered, Jen — easing right in.'],
+    ['hey DJ Marlowe, something chill', 'You got it — DJ Marlowe has you covered, Jen.'],
+    ['nova reyes pick something for me', 'Okay Jen, Nova Reyes is on it.'],
+    ['play something for everyone at SUB/WAVE', 'Big love to everyone listening to SUB/WAVE, Jen!'],
+  ];
+  for (const [requestText, line] of greetings) {
+    assert.deepEqual(misnamedClaims(line, { ...ctx, requestText }), [], line);
+  }
+  // The names are the evidence: without them the host reads as a name.
+  assert.deepEqual(
+    misnamedClaims('You got it — DJ Marlowe has you covered, Jen.', { ...ctx, stationNames: [], requestText: 'hey DJ Marlowe, something chill' })
+      .map((c) => c.text),
+    ['DJ Marlowe'],
+  );
+  // An act with "DJ" in its name is still a name, and greeting the host
+  // never hides the asked-for artist.
+  assert.deepEqual(misnamedClaims("Here's DJ Shadow for you, Jen!", { ...ctx, requestText: 'some DJ Shadow please' }).map((c) => c.text), ['DJ Shadow']);
+  assert.deepEqual(
+    misnamedClaims('Marlowe here — Michael Jackson coming up, Jen!', { ...ctx, requestText: 'hey Marlowe, Michael Jackson please' }).map((c) => c.text),
+    ['Michael Jackson'],
+  );
+});
+
 test('a name inside a longer phrase the line repeats is still read', () => {
   // Judged whole, each shared run failed nameLike on a lowercase word ("upbeat",
   // the possessive "s") and the lie went to air unflagged.
@@ -438,6 +464,20 @@ test("a genre ack over a track the run tagged with it costs nothing", async () =
     [{ name: 'songsByGenre', args: { genre: 'motown' }, result: [], round: 1 }]);
   await withNetwork({ search: [], llm: [] }, async (calls) => {
     const result = await runRequest(queue, { requester: 'Sam', text: 'some motown please' });
+    assert.equal(calls.llm.length, 0);
+    assert.deepEqual(calls.search, []);
+    assert.equal(result?.guard, null);
+    assert.equal(result?.ack, ack);
+  });
+});
+
+test("greeting the on-air host and the station costs nothing", async () => {
+  const host = session.onAirPersona()?.name;
+  assert.ok(host, 'a seeded persona is on air');
+  const ack = `Nice one, Jen — ${host} and the ${settings.get().station} crew have you covered.`;
+  agentAnswers({ kind: 'track', id: ISLA.id, ack, intro: "Here's Madonna with La Isla Bonita, Jen." }, [ISLA, HOLIDAY]);
+  await withNetwork({ search: [], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Jen', text: `hey ${host}, anything good on ${settings.get().station} tonight?` });
     assert.equal(calls.llm.length, 0);
     assert.deepEqual(calls.search, []);
     assert.equal(result?.guard, null);
