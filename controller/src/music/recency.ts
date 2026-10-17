@@ -104,6 +104,14 @@ const APOSTROPHES = /[‘’ʼ´`]/g;
 // it, so "The The" keys as "the".
 const LEADING_ARTICLE = /^the\s+/;
 
+// A hyphen or dash BETWEEN two letters/digits spells the same act as a space
+// does: one server credits "SCSI-9", another "SCSI 9" (seen back to back on
+// air), "Jay-Z"/"Jay Z", "A-ha"/"A ha". Only inside a word: " - " joining two
+// credits is untouched, and so are dots (initialisms like "M.I.A." and
+// "Booker T. & the M.G.'s" keep their keys) and "/" ("AC/DC"). Nothing feeding
+// the blocklist (nameKey) folds this way.
+const IN_NAME_SEPARATOR = /(?<=[\p{L}\p{N}])[-‐‑‒–](?=[\p{L}\p{N}])/gu;
+
 // Exact full-name aliases for acts whose tags alternate between a named lead
 // and their ensemble credit. Never make this a generic suffix strip: "The Beta
 // Band" and "Kronos Quartet" are complete act names, and a false equivalence
@@ -139,7 +147,8 @@ export const artistNameKey = nameKey;
 //   "Sly & the Family Stone"       → "sly & the family stone"   (unchanged)
 //
 // Also folds the variants one act picks up across multi-source tagging (#1406):
-// leading article, exact full-name aliases, apostrophes. The `the …` exception
+// leading article, exact full-name aliases, apostrophes, and a hyphen or dash
+// inside a word spelled as a space ("SCSI-9" = "SCSI 9"). The `the …` exception
 // on the join keeps band names whole ("X & the Y" is one act); everything else
 // after a join is a second credited act — imperfect on "Hall & Oates"-shaped
 // duos, but a wrong key here can only over-match, which every caller reads as
@@ -166,11 +175,14 @@ export function artistRootKey(song: CandidateLike | string): string {
 
   // Article and alias come AFTER the splits, so the join's `the …` exception
   // still sees the tail it protects and the alias is judged against the LEAD.
+  // The separator fold comes after the splits too, so a hyphen never changes
+  // where a credit splits.
   const unarticled = root.replace(LEADING_ARTICLE, '').trim();
   if (unarticled) root = unarticled;
+  root = root.replace(IN_NAME_SEPARATOR, ' ');
   root = ARTIST_ROOT_ALIASES.get(root) ?? root;
 
-  return root || base;
+  return root || base.replace(IN_NAME_SEPARATOR, ' ');
 }
 
 // Do two artist MATCHING keys (artistRootKey) name the same act, or does one
