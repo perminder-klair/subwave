@@ -157,11 +157,15 @@ export function HeaderRowsEditor({
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
-  /** The LLM page has unsaved edits: the swap saves straight away from the
-   *  stored settings, so it would silently drop them. */
-  dirty?: boolean;
+  /** Settings holds unsaved edits in ANY section, not just this one. The swap
+   *  saves straight away from the stored settings, and while anything is
+   *  unsaved the panel holds the post-swap read back from the form. */
+  unsavedChanges?: boolean;
+  /** POST /settings/llm/swap through the panel, which adopts the swapped legs
+   *  from the authoritative read (SettingsPanel swapLlmLegs). */
+  swapLegs: () => Promise<boolean>;
 }
-export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors, dirty = false }: LlmSectionProps) {
+export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors, unsavedChanges = false, swapLegs }: LlmSectionProps) {
   const [swapOpen, setSwapOpen] = useState(false);
   const [swapping, setSwapping] = useState(false);
   // What the backup may not suit once primary, for the agentic routes set in
@@ -181,14 +185,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
   // The swap is built and saved on the controller (settings/llm-swap.ts):
   // headers only ever reach this page redacted, so the browser cannot move them.
-  const swapLegs = async () => {
+  const confirmSwap = async () => {
     setSwapping(true);
     try {
-      await adminResponse(adminFetch, '/settings/llm/swap', { method: 'POST' });
-      notify.ok('swapped: the backup is now the primary');
-      refresh();
-    } catch (e) {
-      notify.err(`swap failed: ${errorMessage(e)}`);
+      await swapLegs();
     } finally {
       setSwapping(false);
       setSwapOpen(false);
@@ -1182,16 +1182,16 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div>
                   <div className="text-[13px] font-bold">Swap with primary</div>
                   <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
-                    {dirty
-                      ? 'Save or discard your changes first: the swap saves straight away.'
-                      : 'Make this backup the primary, and the primary the backup. Each keeps its own settings, so swapping again restores the current setup.'}
+                    {unsavedChanges
+                      ? 'Save or discard your unsaved settings changes first (on any page of Settings): the swap saves straight away.'
+                      : 'Make this backup the primary, and the primary the backup. Each keeps its own settings, so swapping again swaps the two back.'}
                   </div>
                 </div>
                 <Btn
                   tone="accent"
                   onClick={() => { void openSwap(); }}
-                  disabled={dirty || busy || swapping}
-                  title={dirty ? 'Unsaved changes on this page' : undefined}
+                  disabled={unsavedChanges || busy || swapping}
+                  title={unsavedChanges ? 'Unsaved changes in Settings' : undefined}
                 >
                   {swapping ? 'Swapping…' : 'Swap with primary'}
                 </Btn>
@@ -1410,7 +1410,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         details={<SwapFitNotice fit={swapFit} />}
         confirmLabel="swap"
         cancelLabel="cancel"
-        onConfirm={() => { void swapLegs(); }}
+        onConfirm={() => { void confirmSwap(); }}
       />
 
       <V3AlertDialog
