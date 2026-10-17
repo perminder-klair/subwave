@@ -361,6 +361,33 @@ test('who a request is for, and the feel or the day it asks for, are never the a
   assert.equal(standInFor(ISLA, 'dedicate some Michael Jackson to Sarah', "Couldn't find Michael Jackson — this one's for Sarah."), true);
 });
 
+test("an ask's own \"for\" names what it wants; a dedication's names who it is for", () => {
+  // The incident through the commonest "for" phrasings: still a stand-in,
+  // under the lie and under an honest decline alike.
+  for (const text of [
+    'looking for Michael Jackson please',
+    'asking for Michael Jackson',
+    'a request for Michael Jackson',
+    'requesting for Michael Jackson please',
+    'in the mood for Michael Jackson',
+    'craving for Michael Jackson',
+    'hoping for Michael Jackson tonight',
+    'going for Michael Jackson',
+  ]) {
+    assert.equal(standInFor(ISLA, text, INCIDENT_INTRO, INCIDENT_ACK), true, text);
+    assert.equal(standInFor(ISLA, text, "No Michael Jackson tonight — here's Madonna."), true, `${text}, declined`);
+  }
+  // A dedication's "for" stays exempt, including one after an ask's.
+  for (const [text, line] of [
+    ['something upbeat for Sarah', 'Something upbeat for Sarah!'],
+    ['a song for Sarah please', 'A song for Sarah, coming up!'],
+    ['looking for something fun for Sarah', 'Something fun for Sarah, Michael!'],
+    ['asking for a tune for my friend Sarah Jones', 'A tune for your friend Sarah Jones!'],
+  ]) {
+    assert.equal(standInFor(HOLIDAY, text, line), false, text);
+  }
+});
+
 test('an ask that points at what is playing names the on-air artist, whatever else the line reads back', () => {
   const DANCETERIA_ON_AIR = { title: 'Danceteria', artist: 'Madonna', album: 'Iconic By Mistake' };
   const pointed = (track: any, requestText: string, line: string, onAir: any = DANCETERIA_ON_AIR, requester: string | null = 'Jen') =>
