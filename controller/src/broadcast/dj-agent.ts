@@ -41,7 +41,7 @@ import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
 import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
-import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
+import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, plainAgenticSelectionReason, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, type MisnamedLine } from '../util/request-claim.js';
@@ -758,6 +758,12 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // it (#1978): a note describing another candidate becomes plain copy.
     const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
     object = { ...object, reason: agenticDiscoverySelectionReason(song, note) };
+    // A note that names nothing on the queued track becomes plain copy too.
+    // Keep what the model wrote, so a formatting miss in the identity check
+    // can be told from a note about another track.
+    if (note?.trim() && object.reason === plainAgenticSelectionReason(song)) {
+      logEvent('pick.notePlain', { agent: 'pick', to: song.id ?? null, note: note.slice(0, 400) });
+    }
   }
   pickResolution.preliminary = agenticTrackRef(song);
   // On an Agentic journey pick the run's candidates are the waypoint's
