@@ -242,7 +242,7 @@ test('the stateless intro retry is built without the missed artist name', async 
 
 test('the cascade artist-miss ack is fixed copy, and the route hands the prompt only the cleaned name', () => {
   const route = readFileSync(join(process.cwd(), 'src/routes/request.ts'), 'utf8');
-  const ackLine = route.split('\n').find(l => l.includes("in the crates — here's something that fits the moment instead"));
+  const ackLine = route.split('\n').find(l => l.includes("Couldn't match that request exactly — here's an alternative from the library."));
   assert.ok(ackLine, 'the artist-miss ack is present');
   assert.doesNotMatch(ackLine!, /\$\{/, 'the ack interpolates nothing a listener supplied');
   assert.match(route, /entry\.missedArtist = cleanMissedArtist\(matched\.artist\)/);

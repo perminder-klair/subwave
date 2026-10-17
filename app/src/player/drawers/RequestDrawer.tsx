@@ -3,11 +3,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import type { StationApi } from '@/lib/api';
 import type { NowPlayingTrack, RequestResult, StationContext } from '@/lib/types';
+import { requestResultLabel, requestPollPhase, REQUEST_DELAY_MESSAGE, REQUEST_UNCONFIRMED_MESSAGE, REQUEST_UNKNOWN_MESSAGE } from '@/lib/request-outcome';
 import { useTheme } from '@/theme/ThemeContext';
 
 const SUCCESS_HOLD_MS = 2800;
 const POLL_INTERVAL_MS = 1500;
-const POLL_DEADLINE_MS = 60000;
 
 function templatedAck(name: string): string {
   const n = name.trim();
@@ -92,10 +92,19 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
 
   const startPolling = (requestId: string) => {
     pollStop.current = false;
-    const deadline = Date.now() + POLL_DEADLINE_MS;
+    const startedAt = Date.now();
+    let delayShown = false;
     const tick = async () => {
       if (pollStop.current) return;
-      if (Date.now() > deadline) { scheduleClose(); return; }
+      const phase = requestPollPhase(startedAt, Date.now());
+      if (phase === 'unconfirmed') {
+        setResult({ success: false, message: REQUEST_UNCONFIRMED_MESSAGE });
+        return;
+      }
+      if (!delayShown && phase === 'delayed') {
+        delayShown = true;
+        setResult(prev => prev ? { ...prev, ack: REQUEST_DELAY_MESSAGE } : prev);
+      }
       let data: RequestResult | null = null;
       try {
         data = await api.pollRequest(requestId);
@@ -109,15 +118,19 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
           ack: data!.ack || prev?.ack,
           track: data!.track,
           queuePosition: data!.queuePosition,
+          outcome: data!.outcome,
         }));
         scheduleClose();
         return;
       }
       if (data?.status === 'failed') {
-        setResult({ success: false, message: data.message || 'No match — try different words.' });
+        setResult({ success: false, outcome: data.outcome, message: data.message || 'No match — try different words.' });
         return;
       }
-      if (data?.status === 'unknown') { scheduleClose(); return; }
+      if (data?.status === 'unknown') {
+        setResult({ success: false, message: REQUEST_UNKNOWN_MESSAGE });
+        return;
+      }
       pollTimer.current = setTimeout(tick, POLL_INTERVAL_MS);
     };
     pollTimer.current = setTimeout(tick, POLL_INTERVAL_MS);
@@ -263,13 +276,14 @@ export default function RequestDrawer({ api, nowPlaying, context, onClose }: Req
 
 function SuccessCard({ result }: { result: RequestResult }) {
   const { colors } = useTheme();
-  const { ack, track, queuePosition, pending, requestText } = result;
+  const { ack, track, queuePosition, pending, requestText, outcome } = result;
+  const refused = outcome === 'cooldown' || outcome === 'already-queued';
   return (
     <View style={{ paddingVertical: 8 }}>
       <View className="flex-row items-center" style={{ gap: 8, marginBottom: 14 }}>
         <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: colors.accent }} />
         <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 4 }}>
-          {pending ? 'ON THE WIRE' : 'QUEUED'}
+          {requestResultLabel(result).toUpperCase()}
         </Text>
       </View>
 
@@ -293,7 +307,7 @@ function SuccessCard({ result }: { result: RequestResult }) {
 
       <View style={{ borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.softBorder, paddingVertical: 16 }}>
         <Text className="font-mono text-muted" style={{ fontSize: 9, letterSpacing: 3, marginBottom: 6 }}>
-          {pending ? 'THE DJ IS DIGGING' : 'NOW IN THE BOOTH'}
+          {pending ? 'THE DJ IS DIGGING' : refused ? 'YOUR REQUESTED TRACK' : 'NOW IN THE BOOTH'}
         </Text>
         {pending ? (
           <>

@@ -50,7 +50,7 @@ export const specs: KindSpec[] = [
         name: 'artist-request',
         run: () => matchRequest('play some Sidhu Moose Wala', { listenerName: 'Meera', nowPlaying: CURRENT_TRACK }),
         check: (out: any) => {
-          const v = checkAck(out?.ack);
+          const v = out?.kind === 'chat' ? checkAck(out?.ack) : [];
           const artist = String(out?.artist || '').toLowerCase();
           const terms = (out?.search_terms || []).map((t: any) => String(t).toLowerCase());
           if (!artist.includes('sidhu') && !terms.some((t: string) => t.includes('sidhu'))) v.push('artist-missed');
@@ -61,7 +61,7 @@ export const specs: KindSpec[] = [
         name: 'vibe-request',
         run: () => matchRequest('something calm for an overcast evening', { nowPlaying: CURRENT_TRACK }),
         check: (out: any) => {
-          const v = checkAck(out?.ack);
+          const v = out?.kind === 'chat' ? checkAck(out?.ack) : [];
           if (!out?.mood || !MOODS.has(String(out.mood))) v.push('mood-missed');
           const terms = (out?.search_terms || []).map((t: any) => String(t));
           if (terms.some((t: string) => VIBE_WORDS.test(t))) v.push('vibe-in-search-terms');
@@ -72,11 +72,12 @@ export const specs: KindSpec[] = [
         name: 'title-request',
         run: () => matchRequest('can you play Hanju by Amrinder Gill?', { nowPlaying: CURRENT_TRACK }),
         check: (out: any) => {
-          const v = checkAck(out?.ack);
+          const v = out?.kind === 'chat' ? checkAck(out?.ack) : [];
           const terms = (out?.search_terms || []).map((t: any) => String(t).toLowerCase());
-          if (!terms.some((t: string) => t.includes('hanju')) && !String(out?.artist || '').toLowerCase().includes('amrinder')) {
+          if (!String(out?.title || '').toLowerCase().includes('hanju') && !terms.some((t: string) => t.includes('hanju'))) {
             v.push('title-missed');
           }
+          if (!String(out?.artist || '').toLowerCase().includes('amrinder')) v.push('artist-missed');
           return v;
         },
       },

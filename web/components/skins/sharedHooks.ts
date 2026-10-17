@@ -1,5 +1,7 @@
 'use client';
 
+import { requestPollPhase, REQUEST_DELAY_MESSAGE, REQUEST_UNCONFIRMED_MESSAGE, REQUEST_UNKNOWN_MESSAGE } from '@/lib/request-outcome';
+
 // The hook siblings of shared.ts (which stays pure derivations). Everything
 // here reads only the core contexts, per the skin contract (see types.ts);
 // wording and layout stay with each skin.
@@ -35,7 +37,6 @@ export function useSkinCalm(): boolean {
 // Poll cadence + give-up window for a submitted request's outcome. Past the
 // deadline the accepted line stands.
 const POLL_INTERVAL_MS = 1500;
-const POLL_DEADLINE_MS = 60_000;
 
 /** Copy for a request slip's three outcomes, when the controller doesn't
  *  supply its own line — each skin keeps its own voice. */
@@ -98,10 +99,19 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
 
   const startPolling = (requestId: string) => {
     pollStopRef.current = false;
-    const deadline = Date.now() + POLL_DEADLINE_MS;
+    const startedAt = Date.now();
+    let delayShown = false;
     const tick = async () => {
       if (pollStopRef.current) return;
-      if (Date.now() > deadline) return; // give up quietly; accepted line stands
+      const phase = requestPollPhase(startedAt, Date.now());
+      if (phase === 'unconfirmed') {
+        setAck(REQUEST_UNCONFIRMED_MESSAGE);
+        return;
+      }
+      if (!delayShown && phase === 'delayed') {
+        delayShown = true;
+        setAck(REQUEST_DELAY_MESSAGE);
+      }
       const data = await pollRequest(requestId);
       if (pollStopRef.current) return;
       if (data?.status === 'resolved') {
@@ -110,12 +120,10 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
           typeof data.queuePosition === 'number' && data.queuePosition > 0
             ? ` — #${data.queuePosition} in the queue`
             : '';
-        setAck(
-          data.ack ||
-            (t?.title
-              ? `Lining up “${t.title}”${t.artist ? ` by ${t.artist}` : ''}${pos}.`
-              : copy.sent),
-        );
+        const refused = data.outcome === 'cooldown' || data.outcome === 'already-queued';
+        const identity = t?.title ? `“${t.title}”${t.artist ? ` by ${t.artist}` : ''}` : '';
+        setAck([data.ack || (identity ? `Lining up ${identity}${pos}.` : copy.sent), data.ack && identity ? identity : ''].filter(Boolean).join(' '));
+        setOutcome(refused ? 'refused' : 'sent');
         return;
       }
       if (data?.status === 'failed') {
@@ -123,7 +131,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
         setOutcome('refused');
         return;
       }
-      if (data?.status === 'unknown') return;
+      if (data?.status === 'unknown') { setAck(REQUEST_UNKNOWN_MESSAGE); return; }
       // pending, or a transient network null — keep polling.
       pollTimerRef.current = setTimeout(tick, POLL_INTERVAL_MS);
     };

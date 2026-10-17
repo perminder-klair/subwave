@@ -37,12 +37,13 @@ import type { KindSpec } from './kinds/types.js';
 import { specs as pickSpecs } from './kinds/pick.js';
 import { specs as segmentSpecs } from './kinds/segment.js';
 import { specs as requestSpecs } from './kinds/request.js';
+import { directRequestSpec } from './direct-request.js';
 import { specs as scriptSpecs } from './kinds/scripts.js';
 import { specs as banterSpecs } from './kinds/banter.js';
 import { specs as programmeSpecs } from './kinds/programme.js';
 
 const ALL_SPECS: KindSpec[] = [
-  ...pickSpecs, ...segmentSpecs, ...requestSpecs, ...scriptSpecs, ...banterSpecs, ...programmeSpecs,
+  ...pickSpecs, ...segmentSpecs, ...requestSpecs, directRequestSpec, ...scriptSpecs, ...banterSpecs, ...programmeSpecs,
 ];
 
 function parseArgs(argv: string[]) {

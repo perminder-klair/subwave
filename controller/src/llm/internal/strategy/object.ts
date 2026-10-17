@@ -34,6 +34,9 @@ export async function djObject({
   telemetry = {},
   // Includes the tighter simple-segment caller budget; never reset for failover.
   signal = undefined,
+  // Direct runtimes must also work on models without tool or native-schema
+  // support. Parse a schema-described JSON reply without sending either.
+  toolFree = false,
 }: any): Promise<any> {
   return withFailover(
     kind,
@@ -50,11 +53,11 @@ export async function djObject({
           let object;
           let perf;
           let warnings;
-          if (attempt === 1 && needsToolCallObject(l.cfg)) {
+          if (attempt === 1 && !toolFree && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
             ({ object, perf, warnings } = await withTransientRetry(kind,
               () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal, meter }), signal));
-          } else if (attempt === 1) {
+          } else if (attempt === 1 && !toolFree) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
               model: l.model,
@@ -73,7 +76,7 @@ export async function djObject({
             perf = perfOf(result);
             warnings = warningsOf(result);
           } else {
-            lastVia = 'ai-sdk:recovery';
+            lastVia = toolFree ? 'ai-sdk:json' : 'ai-sdk:recovery';
             // Text recovery has no schema channel; include schemaHint and suppress reasoning.
             const hint = schemaHint(schema);
             const result = await withTransientRetry(kind, () => generateText({
