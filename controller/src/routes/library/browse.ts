@@ -212,7 +212,8 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
 });
 
 // Genres by track count plus, per genre, its nearest genres by embedding cosine.
-// Answered from the last walk; a changed library is re-read behind the response.
+// Answered from the last walk; a changed library is re-read behind the response,
+// or before it once that walk is past the max age (music/genre-suggest.ts).
 router.get('/library/genres/related', requireAdmin, async (_req, res) => {
   try {
     await library.load();
