@@ -21,7 +21,7 @@ export interface HealthMetrics {
   latencyFallbacks?: boolean;
   /** Failed calls / calls in the LLM log ring, or null when none failed.
    *  The needle itself reads successful calls only. */
-  llmFailedCalls?: { failed: number; total: number } | null;
+  llmFailedCalls?: { failed: number; total: number; title: string } | null;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
   /** broadcast online? null before the first poll resolves */
@@ -325,7 +325,7 @@ export default function StationHeader({
             <span className="hs-u">ms</span>
             <span className="hs-x flex flex-col items-end">
               {metrics.llmFailedCalls && (
-                <span title="Failed LLM calls / calls in the log queue. The gauge counts successful calls only.">
+                <span title={metrics.llmFailedCalls.title}>
                   failed <b>{metrics.llmFailedCalls.failed} / {metrics.llmFailedCalls.total}</b>
                 </span>
               )}

@@ -66,9 +66,20 @@ export function latencyZone({
   return { zone: needleMs > redlineMs * 0.8 ? 'rising' : 'nominal', warn };
 }
 
-/** "failed / calls in the log ring", only while the ring holds a failed call. */
-export function failedCallsNote(stats: HealthStats | null | undefined): { failed: number; total: number } | null {
-  const failed = stats?.llm?.failed ?? 0;
-  const total = stats?.llm?.count ?? 0;
-  return failed > 0 && total > 0 ? { failed, total } : null;
+/** "failed / calls in the log ring", only while the ring holds a failed call.
+ *  Gated on okLatency: an older controller's needle still reads every call, so
+ *  the note's "successful calls only" would be false there. */
+export function failedCallsNote(
+  stats: HealthStats | null | undefined,
+): { failed: number; total: number; title: string } | null {
+  const llm = stats?.llm;
+  if (!llm?.okLatency) return null;
+  const failed = llm.failed ?? 0;
+  const total = llm.count ?? 0;
+  if (failed <= 0 || total <= 0) return null;
+  const title =
+    stats?.trackSelection === 'shortlist'
+      ? 'Failed LLM calls / all LLM calls in the log ring: links, segments and requests as well as picks. The needle reads Track Shortlist primary picks only.'
+      : `Failed LLM calls / calls in the log ring${llm.deadlineHits ? `, ${llm.deadlineHits} at the agent deadline` : ''}. The needle reads successful calls only; the gauge goes red when 1 call in ${FALLBACK_SHARE_DENOMINATOR} ran out the agent deadline.`;
+  return { failed, total, title };
 }

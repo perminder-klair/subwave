@@ -80,11 +80,26 @@ test('the needle alone still drives redline, rising, nominal and no data', () =>
 });
 
 test('the failed note shows failed / total while the ring holds a failure', () => {
-  assert.deepEqual(failedCallsNote({ llm: llm({}) }), { failed: 3, total: 120 });
+  const note = failedCallsNote({ llm: llm({ ok: 112, failed: 8, deadlineHits: 6 }) });
+  assert.equal(note?.failed, 8);
+  assert.equal(note?.total, 120);
+  assert.match(note!.title, /6 at the agent deadline/);
+  assert.match(note!.title, /successful calls only/);
+});
+
+test('on Track Shortlist the note says it counts all LLM calls, not picks', () => {
+  const note = failedCallsNote({ trackSelection: 'shortlist', shortlist: { count: 5 }, llm: llm({}) });
+  assert.match(note!.title, /all LLM calls/);
+  assert.match(note!.title, /Track Shortlist primary picks/);
+  assert.doesNotMatch(note!.title, /agent deadline/);
 });
 
 test('the failed note disappears once every failure has left the ring', () => {
   assert.equal(failedCallsNote({ llm: llm({ ok: 120, failed: 0 }) }), null);
   assert.equal(failedCallsNote(null), null);
-  assert.equal(failedCallsNote({ llm: { count: 4 } }), null, 'an older controller without the field shows nothing');
+});
+
+test('an older controller shows no note: its needle still reads every call', () => {
+  // `ok` and `failed` predate okLatency, so a real older controller sends them.
+  assert.equal(failedCallsNote({ llm: { count: 10, ok: 8, failed: 2, latency: { p95: 9_000 } } }), null);
 });
