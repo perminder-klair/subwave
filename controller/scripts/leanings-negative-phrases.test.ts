@@ -62,6 +62,8 @@ test('a positive clause after a negative one still counts', () => {
   assert.deepEqual(phrases('Avoids stadium rock but loves Motown.'), ['Motown']);
   assert.deepEqual(phrases("Can't stand stadium rock; loves deep house."), ['deep house']);
   assert.deepEqual(phrases('Steers clear of stadium rock. Prefers dub.'), ['dub']);
+  assert.deepEqual(phrases("Doesn't favour stadium rock but loves Motown."), ['Motown'], 'a negated trigger does not hide a later one');
+  assert.deepEqual(phrases('Does not favour or enjoy stadium rock.'), [], 'a later trigger inside the same negation stays negated');
 });
 
 test('a negation that qualifies a preference keeps it, so positive Leanings read exactly as before', () => {

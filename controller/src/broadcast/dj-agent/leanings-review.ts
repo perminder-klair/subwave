@@ -180,7 +180,7 @@ function comparable(value: unknown): string {
     : '';
 }
 
-const LEANINGS_TRIGGER = /\b(?:leans?(?:\s+strongly)?\s+towards?|(?:strongly\s+)?favou?rs?|enjoys?|values?|prefers?|loves?|(?:is|are)\s+receptive\s+to|(?:is|are)\s+curious\s+about|tastes?\s+spanning|preferences?\s+include|move(?:s)?\s+between)\b/i;
+const LEANINGS_TRIGGER = /\b(?:leans?(?:\s+strongly)?\s+towards?|(?:strongly\s+)?favou?rs?|enjoys?|values?|prefers?|loves?|(?:is|are)\s+receptive\s+to|(?:is|are)\s+curious\s+about|tastes?\s+spanning|preferences?\s+include|move(?:s)?\s+between)\b/gi;
 const TRAILING_CONTEXT = /\b(?:when|while|rather\s+than|without|if|over\s+extremes)\b.*$/i;
 const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'records', 'material', 'sounds']);
 
@@ -238,7 +238,9 @@ function positiveItems(text: string, separator: RegExp): string[] {
 }
 
 // "Does not favour …" and "He never enjoys …" negate the trigger itself. A
-// contrast before it opens a new clause, so "Avoids X but loves Y" keeps Y.
+// contrast before it opens a new clause, so "Avoids X but loves Y" keeps Y,
+// and so does "Doesn't favour X but loves Y": the sentence is read from its
+// first trigger that is not negated.
 function negatedTrigger(sentence: string, trigger: RegExpExecArray): boolean {
   const head = sentence.slice(0, trigger.index);
   const opening = [...head.matchAll(CONTRAST)].at(-1);
@@ -273,8 +275,8 @@ function phrasesFromSource(source: string): string[] {
   };
   const sentences = source.split(/[.!?;]+/).map((sentence) => sentence.trim());
   for (const sentence of sentences) {
-    const trigger = LEANINGS_TRIGGER.exec(sentence);
-    if (!trigger || negatedTrigger(sentence, trigger)) continue;
+    const trigger = [...sentence.matchAll(LEANINGS_TRIGGER)].find((match) => !negatedTrigger(sentence, match));
+    if (!trigger) continue;
     const preference = sentence.slice(trigger.index + trigger[0].length).trim();
     positiveItems(preference, /\s*,\s*|\s+and\s+|\s+alongside\s+|\s+across\s+/i).forEach(add);
   }
