@@ -157,8 +157,42 @@ export function HeaderRowsEditor({
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
+  /** The LLM page has unsaved edits: the swap saves straight away from the
+   *  stored settings, so it would silently drop them. */
+  dirty?: boolean;
 }
-export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors }: LlmSectionProps) {
+export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh, fieldErrors, dirty = false }: LlmSectionProps) {
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapping, setSwapping] = useState(false);
+  // What the backup may not suit once primary, for the agentic routes set in
+  // Music selection / DJ behaviour (settings/llm-swap-fit.ts). Warning only:
+  // null while loading, 'error' when the check could not run.
+  const [swapFit, setSwapFit] = useState<SwapFit | 'error' | null>(null);
+  const openSwap = async () => {
+    setSwapFit(null);
+    setSwapOpen(true);
+    try {
+      const r = await adminResponse(adminFetch, '/settings/llm/swap/fit');
+      setSwapFit(await r.json() as SwapFit);
+    } catch {
+      setSwapFit('error');
+    }
+  };
+  // The swap is built and saved on the controller (settings/llm-swap.ts):
+  // headers only ever reach this page redacted, so the browser cannot move them.
+  const swapLegs = async () => {
+    setSwapping(true);
+    try {
+      await adminResponse(adminFetch, '/settings/llm/swap', { method: 'POST' });
+      notify.ok('swapped: the backup is now the primary');
+      refresh();
+    } catch (e) {
+      notify.err(`swap failed: ${errorMessage(e)}`);
+    } finally {
+      setSwapping(false);
+      setSwapOpen(false);
+    }
+  };
   const [resetCompatKey, setResetCompatKey] = useState(false);
   const [primaryKeyInput, setPrimaryKeyInput] = useState('');
   const [fallbackKeyInput, setFallbackKeyInput] = useState('');
@@ -1142,6 +1176,25 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   }
                 />
               </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+                <div>
+                  <div className="text-[13px] font-bold">Swap with primary</div>
+                  <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
+                    {dirty
+                      ? 'Save or discard your changes first: the swap saves straight away.'
+                      : 'Make this backup the primary, and the primary the backup. Each keeps its own settings, so swapping again restores the current setup.'}
+                  </div>
+                </div>
+                <Btn
+                  tone="accent"
+                  onClick={() => { void openSwap(); }}
+                  disabled={dirty || busy || swapping}
+                  title={dirty ? 'Unsaved changes on this page' : undefined}
+                >
+                  {swapping ? 'Swapping…' : 'Swap with primary'}
+                </Btn>
+              </div>
             </>
           )}
         </div>
@@ -1340,6 +1393,26 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       />
 
       <V3AlertDialog
+        open={swapOpen}
+        onOpenChange={(o) => { if (!o && !swapping) setSwapOpen(false); }}
+        title="Swap primary and backup LLM"
+        description={
+          <>
+            <strong>{llmProviderLabel(form.llm.fallback.provider)}</strong>
+            {form.llm.fallback.model ? <> / <code>{form.llm.fallback.model}</code></> : null}
+            {' '}becomes the primary, and{' '}
+            <strong>{llmProviderLabel(form.llm.provider)}</strong>
+            {form.llm.model ? <> / <code>{form.llm.model}</code></> : null}
+            {' '}the backup. Each keeps its own settings, and the change is saved at once.
+          </>
+        }
+        details={<SwapFitNotice fit={swapFit} />}
+        confirmLabel="swap"
+        cancelLabel="cancel"
+        onConfirm={() => { void swapLegs(); }}
+      />
+
+      <V3AlertDialog
         open={embedPinNotice != null}
         onOpenChange={(o) => { if (!o) setEmbedPinNotice(null); }}
         title="Embeddings kept on your library's model"
@@ -1364,5 +1437,45 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         }}
       />
     </>
+  );
+}
+
+/** GET /settings/llm/swap/fit (controller settings/llm-swap-fit.ts). */
+interface SwapFit {
+  agenticRoutes: string[];
+  target: { provider: string; model: string };
+  warnings: { check: string; detail: string }[];
+}
+
+/** The swap dialog's warning: which agentic routes the incoming primary may
+ *  not suit, and why. Never blocks the swap — the same engine already takes
+ *  those routes on a failover. */
+function SwapFitNotice({ fit }: { fit: SwapFit | 'error' | null }) {
+  if (fit === null) {
+    return <div className="mt-3 text-[12px] text-muted">Checking the agentic routes…</div>;
+  }
+  if (fit === 'error') {
+    return <div className="mt-3 text-[12px] text-muted">Could not check the agentic routes against the backup.</div>;
+  }
+  if (!fit.warnings.length) return null;
+  const who = fit.target.model || llmProviderLabel(fit.target.provider);
+  return (
+    <div role="note" className="mt-3 border border-[var(--warn,var(--accent))] px-3 py-2 text-[12px] leading-[1.5]">
+      <div className="font-bold text-[color:var(--warn,var(--accent))]">
+        {who} may not suit the agentic routes
+      </div>
+      <div className="mt-1">
+        Agentic: {fit.agenticRoutes.join(', ')}.
+      </div>
+      <ul className="m-0 mt-1 list-disc pl-4">
+        {fit.warnings.map(w => (
+          <li key={w.check + w.detail}><strong>{w.check}</strong>: {w.detail}.</li>
+        ))}
+      </ul>
+      <div className="mt-1 text-muted">
+        The swap still goes through. These routes are set in Settings → Music selection and DJ behaviour,
+        not on this page, and the backup already takes them over on a failover.
+      </div>
+    </div>
   );
 }

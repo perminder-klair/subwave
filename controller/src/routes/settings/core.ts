@@ -27,6 +27,9 @@ import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
+import { buildLlmSwapPatch, LlmSwapError } from '../../settings/llm-swap.js';
+import { llmSwapFit } from '../../settings/llm-swap-fit.js';
+import { recentCalls } from '../../llm/log.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -261,6 +264,43 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
     res.json(result);
   } catch (err) {
     res.status(400).json({ error: err.message });
+  }
+});
+
+// "Swap with primary": the backup leg becomes the primary and vice versa, in
+// one save through settings.update(). Built here, not in the browser, because
+// the admin UI only ever sees a leg's headers redacted. settings/llm-swap.ts
+// owns what moves and what stays.
+// What the backup may not suit once it is primary, for the swap's confirm
+// dialog: the agentic routes are set in Music selection / DJ behaviour, not on
+// the LLM page. Read-only, and a warning only — settings/llm-swap-fit.ts.
+router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
+  try {
+    await settings.load();
+    res.json(llmSwapFit(settings.get().llm, recentCalls));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/settings/llm/swap', requireAdmin, async (_req, res) => {
+  try {
+    await settings.load();
+    const patch = buildLlmSwapPatch(
+      settings.get(),
+      llmProvider.resolveEmbeddingCfg(),
+      !!process.env.EMBEDDING_API_KEY,
+    );
+    const result = await settings.update(patch);
+    const llm = result.saved.llm;
+    queue.log(
+      'scheduler',
+      `LLM legs swapped · primary → ${llm.provider}${llm.model ? ` / ${llm.model}` : ''} · backup → ${llm.fallback.provider}${llm.fallback.model ? ` / ${llm.fallback.model}` : ''}`,
+    );
+    void logCompatDetection();
+    res.json(result);
+  } catch (err) {
+    res.status(err instanceof LlmSwapError ? 409 : 400).json({ error: err.message });
   }
 });
 

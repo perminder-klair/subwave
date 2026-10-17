@@ -26,6 +26,7 @@ import { recentCalls, generationHealthSnapshot, failoverRoutingSnapshot } from '
 import type { Finding, StationSettings } from './types.js';
 import { classifyModel, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { AGENT_PICKS_MIN_SIZE_B } from '../settings/llm-swap-fit.js';
 
 // ---------------------------------------------------------------------------
 // Sections
@@ -172,7 +173,7 @@ export async function checkLlm(
       detail: `${activeModelLabel()} looks code-specialised`,
       hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, Track Shortlist, the pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM provider.',
     });
-  } else if (cls.sizeB !== null && cls.sizeB < 11 && routes.picks) {
+  } else if (cls.sizeB !== null && cls.sizeB < AGENT_PICKS_MIN_SIZE_B && routes.picks) {
     out.push({
       label: 'model class',
       status: 'warn',

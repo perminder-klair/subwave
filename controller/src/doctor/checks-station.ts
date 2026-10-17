@@ -13,6 +13,7 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import { AGENT_NUM_CTX_FLOOR } from '../settings/llm-swap-fit.js';
 
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
@@ -176,7 +177,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // --- Context window too small for an agent tool loop (Ollama only) ---
   if (llm.provider === 'ollama' && routes.any) {
     const nc = Number(llm.numCtx);
-    if (Number.isFinite(nc) && nc > 0 && nc < 8192) {
+    if (Number.isFinite(nc) && nc > 0 && nc < AGENT_NUM_CTX_FLOOR) {
       out.push({
         label: 'context window',
         status: 'warn',

@@ -521,6 +521,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                dirty={sectionDirty}
               />
             )}
             {activeSection === 'search' && (
