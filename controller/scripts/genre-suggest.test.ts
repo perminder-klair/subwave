@@ -17,6 +17,13 @@
 //     cached under, or an idle library would serve it until the next commit;
 //   - a reopened library is never answered with the previous handle's result.
 //
+// #1991: how often the editor is opened is not a clock, so on a changed
+// library a walk past GENRE_SUGGEST_MAX_AGE_MS is waited for rather than
+// served (joining one in flight, answering with it only if the walk fails, and
+// not re-walking inside the floor after a failure), while an idle library is
+// still never re-walked however old its walk. And a request waiting on a walk
+// whose handle is swapped waits once for the new handle's instead of failing.
+//
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- genre-suggest`.
 
 import assert from 'node:assert/strict';
@@ -31,7 +38,8 @@ process.env.STATE_DIR = stateDir;
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { genreSuggest, genreSuggestIdle, GENRE_SUGGEST_REFRESH_FLOOR_MS } = await import('../src/music/genre-suggest.js');
+const { genreSuggest, genreSuggestIdle, GENRE_SUGGEST_REFRESH_FLOOR_MS, GENRE_SUGGEST_MAX_AGE_MS } =
+  await import('../src/music/genre-suggest.js');
 await db.open({ embeddingDim: 4 });
 await library.load();
 after(() => {
@@ -272,18 +280,175 @@ test('a reopened library is never answered with the previous handle\'s result', 
   assert.ok(reopened.some(walkSql));
 
   // A walk in flight when the handle is swapped stops rather than mixing two
-  // libraries, and a request on the new handle does not wait on it.
+  // libraries, and a request on the new handle does not wait on it. The
+  // request that was waiting on the stopped walk waits for the new handle's
+  // instead of failing (#1991), and joins the walk already running there.
   await library.reload();
+  t.mock.method(console, 'warn', () => {});
   let clock = 0;
   t.mock.method(performance, 'now', () => (clock += 1_000));
-  const doomed = genreSuggest();
+  const interrupted = genreSuggest();
   await new Promise((resolve) => setImmediate(resolve));
   const reloading = library.reload();
   const next = genreSuggest();
-  await assert.rejects(doomed, /library reopened during the genre walk/);
-  await reloading;
   const answer = await next;
+  assert.strictEqual(await interrupted, answer, 'the interrupted request gets the new handle\'s walk');
+  await reloading;
   t.mock.restoreAll();
   assert.equal(answer.hasEmbeddings, true);
   assert.ok(answer.genres.some((g) => g.value === 'Jazz'));
+});
+
+test('a request waiting past the max age on a swapped handle gets the new handle\'s walk, not the old result', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const old = await genreSuggest();
+  db.upsertTrackMeta('swap', { title: 'Swap', artist: 'New', genres: ['Swap Genre'] });
+  db.upsertTrackVector('swap', [1, 0, 0, 1], null);
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS);
+  t.mock.method(console, 'warn', () => {});
+  let clock = 0;
+  t.mock.method(performance, 'now', () => (clock += 1_000));
+  const waiting = genreSuggest();
+  await new Promise((resolve) => setImmediate(resolve));
+  await library.reload();
+  const answer = await waiting;
+  t.mock.restoreAll();
+  assert.notStrictEqual(answer, old, 'the previous handle\'s result never stands in');
+  assert.ok(answer.genres.some((g) => g.value === 'Swap Genre'));
+  assert.strictEqual(await genreSuggest(), answer, 'it is the new handle\'s cached walk');
+});
+
+test('a second swap during the retry fails the request rather than chasing the library', async (t) => {
+  await library.reload();
+  t.mock.method(console, 'warn', () => {});
+  let clock = 0;
+  t.mock.method(performance, 'now', () => (clock += 1_000));
+  const interrupted = genreSuggest();
+  await new Promise((resolve) => setImmediate(resolve));
+  await library.reload();
+  // Wait until the retry is walking the second handle, then swap that one too.
+  const second = t.mock.method(d(), 'prepare');
+  for (let turns = 0; !second.mock.calls.some((c) => walkSql(String(c.arguments[0]))); turns++) {
+    assert.ok(turns < 50, 'the retry walks the new handle');
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await library.reload();
+  await assert.rejects(interrupted, /library reopened during the genre walk/);
+  t.mock.restoreAll();
+  await genreSuggestIdle();
+});
+
+test('an idle library is never re-walked, however old its walk', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const first = await genreSuggest();
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS * 100);
+  let answer: unknown;
+  const sqls = await preparedBy(t, async () => {
+    answer = await genreSuggest();
+    await genreSuggestIdle();
+  });
+  assert.strictEqual(answer, first);
+  assert.deepEqual(sqls.filter(walkSql), []);
+});
+
+test('a playing station is answered from the last walk, however old, with no walk at all', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const first = await genreSuggest();
+  const broad = db.changeToken();
+  // Hours on air: a play row per track and an analysis result now and then,
+  // none of it anything the walk reads.
+  for (let i = 0; i < 5; i++) {
+    db.recordPlay({
+      trackId: 't01', title: 't01', artist: 'Artist 1', album: null, playedAt: new Date().toISOString(),
+      source: 'auto', requestedBy: null, showId: null, showName: null,
+    });
+    db.upsertTrackAnalysis('t01', { bpm: 100 + i });
+    t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS);
+  }
+  assert.notEqual(db.changeToken(), broad, 'the library committed, which the pre-#1991 token read as a change');
+  let answer: unknown;
+  const sqls = await preparedBy(t, async () => {
+    answer = await genreSuggest();
+    await genreSuggestIdle();
+  });
+  assert.strictEqual(answer, first);
+  assert.deepEqual(sqls.filter(walkSql), [], 'no walk, awaited or behind the answer');
+});
+
+test('a changed library past the max age waits for the re-read', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const stale = await genreSuggest();
+  db.upsertTrackMeta('aged', { title: 'Aged', artist: 'New', genres: ['Aged Genre'] });
+  db.upsertTrackVector('aged', [0, 1, 0, 1], null);
+  // One short of the max age the last result still answers, and its walk runs behind it.
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS - 1);
+  assert.strictEqual(await genreSuggest(), stale);
+  await genreSuggestIdle();
+  const behind = await genreSuggest();
+  assert.ok(behind.genres.some((g) => g.value === 'Aged Genre'));
+
+  db.upsertTrackMeta('older', { title: 'Older', artist: 'New', genres: ['Older Genre'] });
+  db.upsertTrackVector('older', [0, 0, 1, 1], null);
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS);
+  let answer: Awaited<ReturnType<typeof genreSuggest>> | undefined;
+  const sqls = await preparedBy(t, async () => { answer = await genreSuggest(); });
+  assert.equal(sqls.filter(walkSql).length, 1, 'the request walked');
+  assert.notStrictEqual(answer, behind, 'the aged result is not served');
+  assert.ok(answer!.genres.some((g) => g.value === 'Older Genre'), 'the answer has the write');
+  assert.strictEqual(await genreSuggest(), answer, 'and is the cached walk');
+});
+
+test('a request past the max age joins the walk already in flight', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const stale = await genreSuggest();
+  db.upsertTrackMeta('joined', { title: 'Joined', artist: 'New', genres: ['Joined Genre'] });
+  db.upsertTrackVector('joined', [1, 1, 0, 0], null);
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS - 1);
+  const answers: unknown[] = [];
+  const sqls = await preparedBy(t, async () => {
+    answers.push(await genreSuggest()); // starts the walk behind the answer
+    t.mock.timers.tick(1); // inside the floor of that walk, past the max age of the last
+    answers.push(await genreSuggest());
+    await genreSuggestIdle();
+  });
+  assert.strictEqual(answers[0], stale);
+  assert.equal(sqls.filter(walkSql).length, 1, 'one walk served both');
+  assert.notStrictEqual(answers[1], stale);
+  assert.ok((answers[1] as typeof stale).genres.some((g) => g.value === 'Joined Genre'));
+  assert.strictEqual(await genreSuggest(), answers[1]);
+});
+
+test('a failed re-read past the max age answers with the last result and waits out the floor', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  await library.reload();
+  const last = await genreSuggest();
+  const warn = t.mock.method(console, 'warn', () => {});
+  const handle = d();
+  const prepare = handle.prepare.bind(handle);
+  const failing = t.mock.method(handle, 'prepare', (sql: string) => {
+    if (walkSql(sql)) throw new Error('disk I/O error');
+    return prepare(sql);
+  });
+  const attempts = () => failing.mock.calls.filter((c) => walkSql(String(c.arguments[0]))).length;
+  db.upsertTrackMeta('lost', { title: 'Lost', artist: 'New', genres: ['Lost Genre'] });
+  db.upsertTrackVector('lost', [0, 1, 1, 0], null);
+  t.mock.timers.tick(GENRE_SUGGEST_MAX_AGE_MS);
+  assert.strictEqual(await genreSuggest(), last, 'the failed walk falls back to the last result');
+  assert.equal(attempts(), 1);
+  assert.equal(warn.mock.callCount(), 1, 'the failure is logged');
+  assert.match(String(warn.mock.calls[0].arguments[0]), /\[genre-suggest\] refresh failed: disk I\/O error/);
+  assert.strictEqual(await genreSuggest(), last);
+  assert.equal(attempts(), 1, 'no walk inside the floor of the failed one');
+  t.mock.timers.tick(GENRE_SUGGEST_REFRESH_FLOOR_MS);
+  assert.strictEqual(await genreSuggest(), last);
+  assert.equal(attempts(), 2, 'past the floor the request waits on a walk again');
+  failing.mock.restore();
+  t.mock.timers.tick(GENRE_SUGGEST_REFRESH_FLOOR_MS);
+  const fresh = await genreSuggest();
+  assert.ok(fresh.genres.some((g) => g.value === 'Lost Genre'));
 });

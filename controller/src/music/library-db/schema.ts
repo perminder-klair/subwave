@@ -3,6 +3,7 @@
 import Database from 'better-sqlite3';
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
 import { ensureFacetStatus } from './facets.js';
+import { ensureGenreInputs, touchGenreInputs } from './genre-inputs.js';
 
 // Returns the dim track_vectors is actually created at (stored dim when
 // `adoptStoredDim`, else `embeddingDim`) — the live schema dim.
@@ -455,6 +456,12 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 28');
   }
 
+  // Before the vector reconcile below, which bumps it when it drops vectors.
+  // Never throws. Its update trigger names tracks.genres and tracks.moods, and
+  // SQLite refuses to DROP COLUMN either while it exists: a migration above
+  // that drops one must DROP TRIGGER genre_inputs_tracks_update first.
+  ensureGenreInputs(d);
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
@@ -482,6 +489,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           `recreating at ${embeddingDim}-d for the current embedding model`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      touchGenreInputs(d);
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     } else if (!reseed) {
       throw new Error(
@@ -499,6 +507,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           `dropping vectors for re-embed`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      touchGenreInputs(d);
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     }
   }

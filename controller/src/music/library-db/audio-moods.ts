@@ -6,6 +6,7 @@ import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
 // re-attempted forever (#1300).
 import { analysisFailureExclusion } from './tracks.js';
 import { deleteFacetRows } from './facets.js';
+import { touchGenreInputs } from './genre-inputs.js';
 
 // Phase one of a calibrated pass: raw cosines only, since the per-mood
 // baselines need the whole library on disk first. A crash between phases leaves
@@ -261,6 +262,7 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
       delAudioVec.run(id);
       deleteFacetRows(id);
     }
+    touchGenreInputs(d);
   });
   runPrune(orphans);
   return orphans.length;

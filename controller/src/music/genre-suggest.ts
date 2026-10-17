@@ -24,27 +24,68 @@ const MIN_FOR_EMBEDDINGS = 3;
 // The centroid walk reads every embedded track, which takes seconds at 150k,
 // all of it on the event loop (#1976). So it runs in slices that hand the loop
 // back between them, and a request is answered from the last result while a
-// changed library is re-read behind it. An unchanged changeToken() means
-// nothing has committed, so an idle library is never re-read. A changed one is
-// re-read at most once per floor: a tagging run commits every batch, and
-// without the floor every Show-editor open would start another full walk.
+// changed library is re-read behind it. "Changed" is genreInputsToken(), which
+// moves only on writes to what the walk reads (#1991), never on a play, an
+// analysis result or an audio vector, so a library whose genres are untouched
+// is never re-read however long the station plays. A changed one is re-read at
+// most once per floor: a tagging run commits every batch, and without the
+// floor every Show-editor open would start another full walk.
+//
+// The last result is only answered at once while its walk is younger than the
+// max age (#1991). How often the editor is opened is not a clock: a week-old
+// walk would otherwise be served to the first open after a week of tagging. So
+// a changed library whose last walk is past the max age waits for the re-read,
+// which costs that one request the walk's wall time and nobody else anything,
+// and answers with the last result only if that walk fails.
 const SLICE_MS = 25;
 export const GENRE_SUGGEST_REFRESH_FLOOR_MS = 60_000;
+export const GENRE_SUGGEST_MAX_AGE_MS = 10 * 60_000;
 
-let cache: { nonce: string; token: string; payload: GenreSuggest } | null = null;
+// walkedAt is the walk's start, when its token was read: the payload is the
+// library as of then.
+type Cached = { nonce: string; token: string; walkedAt: number; payload: GenreSuggest };
+let cache: Cached | null = null;
 let inflight: { nonce: string; promise: Promise<GenreSuggest> } | null = null;
 let lastWalkAt = 0;
 
 const yieldLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 export async function genreSuggest(): Promise<GenreSuggest> {
+  const nonce = db.getDbNonce();
+  try {
+    return await answer();
+  } catch (err) {
+    // A handle swapped while this request waited (reload, restore, reset)
+    // abandons the walk it was waiting on. Wait once for the new handle's
+    // rather than answer 500, which leaves the editor with no chips at all.
+    if (db.getDbNonce() === nonce) throw err;
+    return answer();
+  }
+}
+
+async function answer(): Promise<GenreSuggest> {
   // A new handle (reset, restore) is a different library: never answer with
   // the previous one's genres, wait for this one's.
   if (!cache || cache.nonce !== db.getDbNonce()) return refresh();
-  if (cache.token !== db.changeToken() && Date.now() - lastWalkAt >= GENRE_SUGGEST_REFRESH_FLOOR_MS) {
-    refresh().catch((err) => console.warn(`[genre-suggest] refresh failed: ${(err as Error).message}`));
+  const last = cache;
+  if (last.token === db.genreInputsToken()) return last.payload;
+  const now = Date.now();
+  const floorPassed = now - lastWalkAt >= GENRE_SUGGEST_REFRESH_FLOOR_MS;
+  if (now - last.walkedAt >= GENRE_SUGGEST_MAX_AGE_MS) {
+    // Too old to answer with: wait for the re-read, joining one in flight. A
+    // walk that failed inside the floor is not retried, so the last result
+    // stands until the floor passes.
+    if (floorPassed || inflight?.nonce === last.nonce) {
+      return refresh().catch((err) => {
+        // Never the previous handle's result; genreSuggest() retries that.
+        if (db.getDbNonce() !== last.nonce) throw err;
+        return last.payload;
+      });
+    }
+  } else if (floorPassed) {
+    refresh().catch(() => {});
   }
-  return cache.payload;
+  return last.payload;
 }
 
 // Resolves once no walk is in flight. For tests and the bench.
@@ -53,22 +94,25 @@ export async function genreSuggestIdle(): Promise<void> {
 }
 
 // One walk per handle at a time. A walk still running on a handle that has
-// since been swapped is not joined: it fails at its next slice.
+// since been swapped is not joined: it fails at its next slice. A failed walk
+// logs once here, however many requests were waiting on it.
 function refresh(): Promise<GenreSuggest> {
   const nonce = db.getDbNonce();
   if (inflight?.nonce === nonce) return inflight.promise;
   const promise = build(nonce).finally(() => {
     if (inflight?.promise === promise) inflight = null;
   });
+  promise.catch((err) => console.warn(`[genre-suggest] refresh failed: ${(err as Error).message}`));
   inflight = { nonce, promise };
   return promise;
 }
 
 async function build(nonce: string): Promise<GenreSuggest> {
-  // Read before the walk, so a commit landing mid-walk leaves a token the
-  // next call no longer matches.
-  const token = db.changeToken();
-  lastWalkAt = Date.now();
+  // Read before the walk, so a write landing mid-walk leaves a token the next
+  // call no longer matches. Every writer bumps after its write, never before.
+  const token = db.genreInputsToken();
+  const walkedAt = Date.now();
+  lastWalkAt = walkedAt;
   const acc = db.newGenreVectorSums();
   // Yield first, so a request answered from the last result is not held for a
   // slice. Each slice closes its statement before the next yield, which leaves
@@ -81,13 +125,13 @@ async function build(nonce: string): Promise<GenreSuggest> {
   }
   const payload = await assemble(db.centroidsOf(acc));
   if (db.getDbNonce() !== nonce) throw new Error('library reopened during the genre walk');
-  cache = { nonce, token, payload };
+  cache = { nonce, token, walkedAt, payload };
   return payload;
 }
 
 async function assemble(centroids: db.GenreCentroid[]): Promise<GenreSuggest> {
   // Never TTL-held: the payload is cached under the token read before the walk,
-  // and tallies from before that token would be served until the next commit.
+  // and tallies from before that token would be served until the next write.
   const byGenre = library.stats({ fresh: true }).byGenre || {};
   const centroidCount = new Map(centroids.map((c) => [c.genre, c.count]));
   const countOf = (g: string) => byGenre[g] ?? centroidCount.get(g) ?? 0;
