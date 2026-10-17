@@ -49,6 +49,17 @@ The final validator independently rejects a basis already supported by the
 baseline, even if the model proposes a swap. Short genres such as jazz,
 rock and soul are valid phrases. Parse each persona independently, including
 noun-phrase fallback, then merge with the host owning duplicate phrases.
+Leanings are positive-only (#1994): the review swaps only towards a phrase and
+credits it as a "taste for" that phrase, so a sentence or clause that steers
+away ("Avoids stadium rock", "…, never metal", "Does not favour…", "…, except
+X") yields no phrase. It used to become one, through the noun-phrase fallback
+when nothing positive sat beside it. Negation that qualifies a preference keeps
+it ("records that are not overproduced", "dub with no vocals"), and "no wave"
+is a genre. There is no negative channel: the review prompt and its credit line
+speak only of preferences to swap towards, and the Leanings-blind baseline
+would air an avoided track anyway, so a veto would promise an exclusion it
+cannot keep. The persona editor says so and points exclusions at show filters
+and Library blocking rules. Pinned by `scripts/leanings-negative-phrases.test.ts`.
 `dj-agent/leanings-review.ts` owns extraction, source priority, evidence
 validation and reason filtering. A viable host match, including the baseline,
 excludes guest evidence; a guest can nudge only when no viable host match exists.

@@ -151,6 +151,53 @@ const LEANINGS_TRIGGER = /\b(?:leans?(?:\s+strongly)?\s+towards?|(?:strongly\s+)
 const TRAILING_CONTEXT = /\b(?:when|while|rather\s+than|without|if|over\s+extremes)\b.*$/i;
 const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'records', 'material', 'sounds']);
 
+// Leanings are positive-only (#1994). The review swaps only TOWARDS a phrase
+// and credits it as "<owner>'s taste for <phrase>", so a line written to steer
+// away has nowhere to go: read as a phrase it becomes a taste for the very
+// thing it rules out. Every reading below drops it instead. "no wave" is a
+// genre, and a hyphenated "no-frills" or "hate-fuelled" is one word.
+const NEGATIVE_CUE = /\b(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never|not(?!\s+(?:just|only|merely|simply)\b)|nor|neither|no(?!\s+wave\b)|cannot|[a-z]+n['’]t|rarely|seldom|hardly)\b(?!-)/i;
+// A cue inside one of these qualifies the preference rather than reversing it:
+// "records that never outstay their welcome", "dub with no vocals".
+const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+or\s+)?no)\b.*$/i;
+// An exclusion always ends a sentence's positive text; a contrast ends it only
+// when the clause it opens steers away ("anything but metal" stays one phrase).
+const EXCLUSION = /\s*,?\s*\b(?:except(?:\s+for)?|excluding|apart\s+from|other\s+than)\b/i;
+const CONTRAST = /\s*,?\s*(?:\b(?:but|yet|though|although|whereas|however)\b|\s[-–—]\s|[–—])/gi;
+
+function reversesPreference(text: string): boolean {
+  return NEGATIVE_CUE.test(text.replace(TRAILING_CONTEXT, '').replace(QUALIFYING_TAIL, ''));
+}
+
+function positiveText(text: string): string {
+  const exclusion = EXCLUSION.exec(text);
+  const end = exclusion ? exclusion.index : text.length;
+  for (const contrast of text.slice(0, end).matchAll(CONTRAST)) {
+    const clause = text.slice(contrast.index + contrast[0].length, end).split(',')[0];
+    if (reversesPreference(clause)) return text.slice(0, contrast.index);
+  }
+  return text.slice(0, end);
+}
+
+// A list stops at its first item that steers away: in "soul, never stadium
+// rock and metal" the "never" governs every item after it.
+function positiveItems(text: string, separator: RegExp): string[] {
+  const items: string[] = [];
+  for (const item of positiveText(text).split(separator)) {
+    if (reversesPreference(item)) break;
+    items.push(item);
+  }
+  return items;
+}
+
+// "Does not favour …" and "He never enjoys …" negate the trigger itself. A
+// contrast before it opens a new clause, so "Avoids X but loves Y" keeps Y.
+function negatedTrigger(sentence: string, trigger: RegExpExecArray): boolean {
+  const head = sentence.slice(0, trigger.index);
+  const opening = [...head.matchAll(CONTRAST)].at(-1);
+  return NEGATIVE_CUE.test(opening ? head.slice(opening.index + opening[0].length) : head);
+}
+
 function cleanLeaningsPhrase(value: string): string | null {
   const phrase = value
     .replace(TRAILING_CONTEXT, '')
@@ -173,21 +220,19 @@ export type AgenticLeaningsOption = {
 
 function phrasesFromSource(source: string): string[] {
   const phrases: string[] = [];
-  for (const rawSentence of source.split(/[.!?;]+/)) {
-    const sentence = rawSentence.trim();
+  const add = (rawPart: string) => {
+    const phrase = cleanLeaningsPhrase(rawPart);
+    if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
+  };
+  const sentences = source.split(/[.!?;]+/).map((sentence) => sentence.trim());
+  for (const sentence of sentences) {
     const trigger = LEANINGS_TRIGGER.exec(sentence);
-    if (!trigger) continue;
+    if (!trigger || negatedTrigger(sentence, trigger)) continue;
     const preference = sentence.slice(trigger.index + trigger[0].length).trim();
-    for (const rawPart of preference.split(/\s*,\s*|\s+and\s+|\s+alongside\s+|\s+across\s+/i)) {
-      const phrase = cleanLeaningsPhrase(rawPart);
-      if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
-    }
+    positiveItems(preference, /\s*,\s*|\s+and\s+|\s+alongside\s+|\s+across\s+/i).forEach(add);
   }
   if (phrases.length === 0) {
-    for (const rawPart of source.split(/[.!?;,]+|\s+and\s+/i)) {
-      const phrase = cleanLeaningsPhrase(rawPart);
-      if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
-    }
+    for (const sentence of sentences) positiveItems(sentence, /\s*,+\s*|\s+and\s+/i).forEach(add);
   }
   return phrases;
 }
