@@ -379,6 +379,8 @@ test('asksForTrack reads the listener\'s spelling: initials and a letter off, ne
   assert.equal(asksForTrack('some Madona please', HOLIDAY), true, 'a letter dropped');
   assert.equal(asksForTrack('Micheal Jakson please', BILLIE), true, 'a swapped pair, a letter dropped');
   assert.equal(asksForTrack('play bilie jean', BILLIE), true, 'a title a letter off');
+  assert.equal(asksForTrack('more Moosewala please', { title: 'So High', artist: 'Sidhu Moose Wala' }), true, 'a credit written as one word');
+  assert.equal(asksForTrack('some fleetwoodmac', { title: 'Dreams', artist: 'Fleetwood Mac' }), true, 'the whole credit, joined');
   // Still no: what the incident asked for is not Madonna, by any spelling rule.
   assert.equal(asksForTrack('Michael Jackson please', ISLA), false);
   assert.equal(asksForTrack('MJ please', ISLA), false);
@@ -944,6 +946,13 @@ test('#1979: an alias the run looked up in the listener\'s spelling is never spa
       label: 'more Moosewala', onAir: SMW_295, text: 'more Moosewala please', pick: SO_HIGH,
       ack: 'More Moosewala coming right up, Jen!',
       toolCalls: [{ name: 'searchLibrary', args: { query: 'Moosewala' }, result: [SO_HIGH], round: 1 }],
+    },
+    {
+      // A library search for "Moosewala" may meet "Sidhu Moose Wala" only by
+      // feel; the spelling rule reads it without the lookup.
+      label: 'more Moosewala, found only by feel', onAir: SMW_295, text: 'more Moosewala please', pick: SO_HIGH,
+      ack: 'More Moosewala coming right up, Jen!',
+      toolCalls: [{ name: 'searchLibrary', args: { query: 'Moosewala' }, result: { tracks: [SO_HIGH], via: 'vibe' }, round: 1 }],
     },
     {
       label: 'more Tupac', onAir: CHANGES, text: 'more Tupac please', pick: CALI,

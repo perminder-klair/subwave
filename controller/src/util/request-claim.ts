@@ -768,6 +768,17 @@ function initialsOf(phrase: string[]): string[] {
   return [first(phrase), first(phrase.filter((k) => !MINOR.has(k)))].filter((s) => s.length >= 2);
 }
 
+// Every run of two or more words of a credit, written as one: how a listener
+// spells a split name they have only heard ("Moosewala", "Fleetwoodmac"). Six
+// letters at least, so a join never matches a short word by chance.
+function joinedRuns(phrase: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < phrase.length; i++) {
+    for (let j = i + 2; j <= phrase.length; j++) out.push(phrase.slice(i, j).join(''));
+  }
+  return out.filter((w) => w.length >= 6);
+}
+
 // The request's possible abbreviations: a short word ("MJ", "RHCP") or a run of
 // single letters ("M.J.", "R E M").
 function abbreviationsOf(req: string[]): Set<string> {
@@ -787,6 +798,7 @@ function abbreviationsOf(req: string[]): Set<string> {
 
 // Do the listener's words name this track — a title form, the album, any
 // credited act, one word of the credit ("some Elvis" for Elvis Presley), the
+// credit written as one word ("more Moosewala" for Sidhu Moose Wala), the
 // credit's initials ("more MJ") — spelled right or a letter off ("Madona")?
 // Case-blind, because a listener's casing is no evidence ("madonna or michael
 // jackson"). A lone request word is not a title: "something by Michael
@@ -802,6 +814,7 @@ export function asksForTrack(requestText: string | null | undefined, track: Clai
   const phrases = [...titlePhrases(track.title), ...credit, ...titlePhrases(track.album)];
   if (phrases.some((p) => !(p.length === 1 && FILLER.has(p[0]!)) && containsSaid(req, p))) return true;
   if (credit.some((p) => p.some((k) => k.length >= 3 && !FILLER.has(k) && req.some((w) => saysWord(w, k))))) return true;
+  if (credit.some((p) => joinedRuns(p).some((j) => req.some((w) => saysWord(w, j))))) return true;
   const abbreviations = abbreviationsOf(req);
   return credit.some((p) => p.length > 1 && initialsOf(p).some((i) => abbreviations.has(i)));
 }
