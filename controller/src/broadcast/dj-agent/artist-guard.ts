@@ -123,8 +123,9 @@ export function creditDistance(song: CandidateLike | string, distances: Map<stri
 // than the pick's. Without it the guard kept the model's pick, which could be
 // the artist from two slots back while a candidate from eleven slots back sat
 // in the same run (Katerine, 10 Oct). No model call: the run already chose its
-// candidates, and the model's taste is the tiebreak — the first-listed wins.
-// Never the anchor artist, whatever the window says.
+// candidates. A tie goes to the first-listed, which is the run's own order —
+// discovery order on Agentic, fit order on Shortlist — not a ranking by the
+// model. Never the anchor artist, whatever the window says.
 export function leastRecentAlternative<T extends CandidateLike>(
   alt: Map<string, T>,
   pick: CandidateLike,
