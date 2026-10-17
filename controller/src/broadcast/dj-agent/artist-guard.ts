@@ -105,12 +105,14 @@ export function alternativeCandidates<T extends CandidateLike>(
 
 // How many slots ago a credit was last heard (queue.neighbourArtistDistances):
 // its NEAREST act, matched the way the window matches. Not in the window:
-// Infinity.
+// Infinity. Unlike the window's yes/no test (artistRootIn), an exact hit does
+// not end the search: "pixies" can sit nine slots back while "pixies • black
+// francis" sits one back, and stopping at the exact key read the act as nine
+// slots ago — the very candidate the swap then chose, straight after itself.
 export function creditDistance(song: CandidateLike | string, distances: Map<string, number>): number {
   let best = Infinity;
   for (const act of creditedActKeys(song)) {
-    const hit = distances.get(act);
-    if (hit !== undefined) { best = Math.min(best, hit); continue; }
+    best = Math.min(best, distances.get(act) ?? Infinity);
     for (const [key, d] of distances) if (d < best && artistCreditsOverlap(act, key)) best = d;
   }
   return best;

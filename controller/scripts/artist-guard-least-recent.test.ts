@@ -128,6 +128,32 @@ test('creditDistance: a credit is as recent as its nearest act', () => {
   assert.equal(creditDistance({ artist: 'The Marvin Gaye' }, d), 3, 'matched like the window matches');
 });
 
+// artistRootKey keeps a " • " credit whole, so the window can hold the solo
+// act and the combined credit as two keys. The nearer one is the distance,
+// whichever of the two is the exact key.
+test('creditDistance: a nearer combined credit beats an exact solo entry further back, both ways', () => {
+  const d = dist(['Pixies • Black Francis', 1], ['Norah Jones', 2], ['Pixies', 9]);
+  assert.equal(creditDistance({ artist: 'Pixies' }, d), 1, 'the combined credit one slot back');
+  const reverse = dist(['Pixies', 1], ['Norah Jones', 2], ['Pixies • Black Francis', 9]);
+  assert.equal(creditDistance({ artist: 'Pixies • Black Francis' }, reverse), 1, 'the solo act one slot back');
+});
+
+test('the swap never lands on an act heard one slot ago under another credit', async () => {
+  // Queue tail "Pixies • Black Francis" (1), Norah Jones on air (2), then
+  // plays back to a solo Pixies (9). Read as nine slots ago, Pixies was the
+  // furthest-back candidate and aired straight after its own combined credit.
+  const pixies: Cand = { id: 'px1', title: 'Where Is My Mind', artist: 'Pixies' };
+  const d = dist(
+    ['Pixies • Black Francis', 1], ['Norah Jones', 2], ['Katerine', 3], ['Air', 4], ['Zero 7', 5],
+    ['Bebel Gilberto', 6], ['Moby', 7], ['Portishead', 8], ['Pixies', 9],
+  );
+  const h = harness();
+  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, pixies), distances: d });
+  assert.equal(out.kind, 'kept', 'Pixies was heard one slot ago, nearer than Katerine at three');
+  assert.equal(h.events.at(-1)?.swapped, undefined);
+  assert.deepEqual(h.calls, { repick: 0, poolRescue: 0 });
+});
+
 test('queue.neighbourArtistDistances: queue tail first, then on air, then plays newest first', () => {
   // Reaches the queue's private fields to stage a window without a live station.
   type Staged = '_recentPlays' | 'current' | 'upcoming';
