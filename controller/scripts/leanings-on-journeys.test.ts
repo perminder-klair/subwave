@@ -45,6 +45,7 @@ const { pickerAgent, runTrackEvent } = await import('../src/broadcast/dj-agent.j
 const runs = await import('../src/broadcast/dj-agent/runs.js');
 const { buildPickerTools, pickerScope } = await import('../src/llm/tools.js');
 const { journeyCompanions, JOURNEY_COMPANION_PASSES } = await import('../src/music/shortlist.js');
+const { artistRootKey } = await import('../src/music/recency.js');
 const { getTimeContext, getClockContext, getDateContext } = await import('../src/context.js');
 
 // Two lanes on orthogonal CLAP axes. The track on air sits on the rock axis, so
@@ -290,4 +291,10 @@ test('journeyCompanions runs the Shortlist\'s companions, never the journey itse
   const unplaced = await journeyCompanions({ currentTrackId: 'hook', currentArtist: 'Pop Act', dominantMood: STATION_MOOD, scope: pickerScope({ audioWaypoint: waypoint }) });
   assert.deepEqual(unplaced.sourceRuns.map(run => [run.source, run.args.mood ?? null]).sort(), [['tracksByMood', STATION_MOOD], ['tracksThatSoundLikeThis', null]],
     'with nothing of the show\'s own to place it, the station mood stands in as before');
+  // Every soul act inside the guard's spacing window: the era pass still runs,
+  // and none of what it found may reach the review.
+  const spacingWindow = new Set(Array.from({ length: 20 }, (_, i) => artistRootKey(`Revue ${i}`)));
+  const spaced = await journeyCompanions({ ...base, recentArtistRoots: spacingWindow, scope: pickerScope({ audioWaypoint: waypoint }) });
+  assert.ok(spaced.sourceRuns.some(run => run.source === 'songsByEra' && run.accepted > 0), 'the era pass found the show\'s tracks');
+  assert.ok(spaced.candidates.length && !spaced.candidates.some(c => inLane(c.id)), 'never an act the guard would space out');
 });
