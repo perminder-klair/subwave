@@ -51,7 +51,7 @@ router.post('/stream-start', requireAdmin, async (req, res) => {
 });
 
 router.post('/auto-pick', requireAdmin, express.json(), (req, res) => {
-  if (typeof req.body?.on === 'boolean') queue.autoPick = req.body.on;
+  if (typeof req.body?.on === 'boolean') queue.setAutoPick(req.body.on);
   queue.log('scheduler', `auto-pick ${queue.autoPick ? 'enabled' : 'disabled'}`);
   res.json({ autoPick: queue.autoPick });
 });
