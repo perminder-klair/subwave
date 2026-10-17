@@ -557,15 +557,85 @@ function literalTracks(result: unknown): any[] {
 // name by its library name — so the ask is excused FIRST, by the listener's
 // words (asksForTrack, which reads abbreviations and typos) or by the run's
 // own named lookups (requestLookups, which carry the agent's reading of a
-// nickname). A substitution owned without a name ("can't do that one") is an
-// accepted miss: the track airs as it always did.
+// nickname). Nor is a word the request uses for something other than music
+// (unaskedSlots) evidence. A substitution owned without a name ("can't do
+// that one") is an accepted miss: the track airs as it always did.
 export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
   if ([ctx.requestText, ...(ctx.lookups ?? [])].some((asked) => asksForTrack(asked, ctx.track))) return false;
+  const unasked = unaskedSlots(ctx.requestText);
+  const asks = (c: LineClaim) => {
+    const keys = keysOf(c.text);
+    return !keys.every((k) => DAYS.has(k) || MINOR.has(k)) && !unasked.some((slot) => contains(slot, keys));
+  };
   for (const line of lines) {
     const read = lineClaims(line, ctx);
-    if (read.declines.length || misnamedOf(read).some((c) => c.source === 'request')) return true;
+    if (read.declines.some(asks) || misnamedOf(read).some((c) => c.source === 'request' && asks(c))) return true;
   }
   return false;
+}
+
+// Where a request's words name no music (#1979, read for stand-ins only): who
+// it is for, and the feel it asks for. "More of this for Sarah" answered
+// "This one's for Sarah!" says the listener's capitalised word over a track
+// the line does not name — the #1918 lie's shape — yet nothing was asked for
+// that a track could stand in for. Each row is a cue and where its slot sits:
+// after the cue, from it (the cue word included), or before it. A slot runs to
+// the clause's end, a SLOT_STOP word or SLOT_WORDS words. ENGLISH ONLY and as
+// short as DECLINES, for the same reason. A miss reads the word as an ask, and
+// the request costs a call and moves; a slot that swallows a real ask
+// ("looking for Prince", "some Prince vibes") leaves it exempt, where it
+// started.
+const UNASKED: Array<[RegExp, 'after' | 'from' | 'before']> = [
+  // "for Sarah", "for my friend Sarah Jones"
+  [/\bfor\s+/giu, 'after'],
+  // "dedicate this to Priya", "shout out to the night shift", "goes out to Jen"
+  [/\b(?:dedicat\w*|shout[\s-]?outs?|goes out|going out)\b[^,.;:!?\n]*?\bto\s+/giu, 'after'],
+  // "happy birthday Sarah", "happy Friday!" — the greeting whole
+  [/\bhappy\s+/giu, 'from'],
+  // "it's Sarah's birthday"
+  [/['’]s\s+b(?:irth)?day\b/giu, 'before'],
+  // "some Friday vibes", "a Sunday morning mood"
+  [/\s+(?:vibes?|mood|feels)\b/giu, 'before'],
+];
+const SLOT_WORDS = 4;
+const SLOT_STOP = new Set([
+  'please', 'pls', 'plz', 'play', 'by', 'from', 'off', 'but', 'or', 'with',
+  'some', 'something', 'anything', 'any', 'more', 'for', 'to',
+]);
+const CLAUSE_BREAK = /[,.;:!?…\n—–()]/u;
+// A day of the week names no music on its own ("it's Friday!").
+const DAYS = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'weekend']);
+
+function unaskedSlots(requestText: string | null | undefined): string[][] {
+  const text = normalizeListenerText(requestText);
+  const toks = tokenize(text);
+  const slots: string[][] = [];
+  for (const [cue, side] of UNASKED) {
+    for (const m of text.matchAll(cue)) {
+      const at = m.index ?? 0;
+      const slot: string[] = [];
+      if (side === 'before') {
+        let edge = at;
+        for (let i = toks.length - 1; i >= 0 && slot.length < SLOT_WORDS; i--) {
+          const t = toks[i]!;
+          if (t.end > at) continue;
+          if (SLOT_STOP.has(t.key) || CLAUSE_BREAK.test(text.slice(t.end, edge))) break;
+          slot.unshift(t.key);
+          edge = t.start;
+        }
+      } else {
+        let edge = side === 'after' ? at + m[0].length : at;
+        for (const t of toks) {
+          if (t.start < edge) continue;
+          if (slot.length >= SLOT_WORDS || SLOT_STOP.has(t.key) || CLAUSE_BREAK.test(text.slice(edge, t.start))) break;
+          slot.push(t.key);
+          edge = t.end;
+        }
+      }
+      if (slot.length) slots.push(slot);
+    }
+  }
+  return slots;
 }
 
 // A word as a listener might misspell it: one edit away (two from eight

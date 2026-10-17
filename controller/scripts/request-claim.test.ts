@@ -338,6 +338,29 @@ test('a request that names nothing is never a stand-in', () => {
   assert.equal(standInFor(ISLA, 'Michael Jackson please', "Can't do that one, Michael — here's La Isla Bonita."), false);
 });
 
+test('who a request is for, and the feel or the day it asks for, are never the ask', () => {
+  // Each line reads a capitalised word of the listener's back over a track it
+  // does not name — the #1918 lie's shape — but the word names no music.
+  for (const [text, line] of [
+    ['more of this for Sarah please', "This one's for Sarah, Michael!"],
+    ['something upbeat for my friend Sarah Jones', 'Something upbeat for your friend Sarah Jones!'],
+    ['can you dedicate this to Priya', 'Dedicated to Priya, with love!'],
+    ['shout out to the Night Shift crew', 'Big shout out to the Night Shift crew!'],
+    ['happy birthday Sarah!', 'A very happy birthday to Sarah from all of us!'],
+    ["it's Sarah's birthday, something fun", "Something fun for Sarah's big day!"],
+    ['some Friday vibes please', 'Here are your Friday vibes, Michael!'],
+    ['some Bollywood vibes please', 'Here are your Bollywood vibes, Michael!'],
+    ['happy friday! keep it going', 'Happy Friday to you too, Michael — keep it going!'],
+    ["it's friday, more of this", "It's Friday, Michael — more coming up."],
+  ]) {
+    assert.equal(standInFor(HOLIDAY, text, line), false, text);
+  }
+  // The ask beside a dedication is still the ask.
+  assert.equal(standInFor(ISLA, 'Michael Jackson for Sarah please', "No Michael Jackson tonight, but this one's for Sarah!"), true);
+  assert.equal(standInFor(ISLA, 'for Sarah, some Michael Jackson', "Here's Michael Jackson for Sarah!"), true);
+  assert.equal(standInFor(ISLA, 'dedicate some Michael Jackson to Sarah', "Couldn't find Michael Jackson — this one's for Sarah."), true);
+});
+
 test("asksForTrack: the request's words name the track, case-blind", () => {
   assert.equal(asksForTrack('play billie jean', BILLIE), true, 'title');
   assert.equal(asksForTrack('anything from Thriller', BILLIE), true, 'album');
@@ -941,6 +964,29 @@ test('#1979: an alias the run looked up in the listener\'s spelling is never spa
       // #1918's reading still replaces the ack-only misname with the plain
       // ack, at no cost; spacing adds nothing to it.
       assert.equal(result?.guard, 'claim-plain', c.label);
+    });
+  }
+});
+
+// An ask naming no music, with a dedication or an occasion read back in the
+// ack: the word is the listener's and the line names no track, but nothing was
+// asked for that the track could stand in for.
+test('#1979: an ask naming no music, read back with its dedication or its day, is never spaced', async () => {
+  for (const [text, ack] of [
+    ['more of this for Sarah please', "This one's for Sarah, Jen!"],
+    ['some Friday vibes please', 'Here are your Friday vibes, Jen!'],
+  ]) {
+    queue.current = { track: DANCETERIA } as any;
+    queue.upcoming = [];
+    const intro = "Here's Holiday, Jen.";
+    agentAnswers({ kind: 'track', id: HOLIDAY.id, ack, intro }, [HOLIDAY, ISLA, GIRLS]);
+    await withNetwork({ search: [], llm: [CYNDI] }, async (calls) => {
+      const result = await runRequest(queue, { requester: 'Jen', text });
+      assert.equal(calls.llm.length, 0, `${text}: no spacing call`);
+      assert.equal(queue.upcoming[0].track.id, HOLIDAY.id, `${text}: the pick airs`);
+      assert.equal(queue.upcoming[0].introScript, intro, text);
+      // #1918's reading still swaps the ack-only misname for the plain ack.
+      assert.equal(result?.guard, 'claim-plain', text);
     });
   }
 });
