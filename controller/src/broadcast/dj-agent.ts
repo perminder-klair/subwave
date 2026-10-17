@@ -44,7 +44,7 @@ import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, tr
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
-import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, requestStandIn, type MisnamedLine } from '../util/request-claim.js';
+import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, requestLookups, requestStandIn, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
 import { buildShortlist } from '../music/shortlist.js';
@@ -1718,8 +1718,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const runLines: Array<string | null | undefined> = [];
     const noteLines = (answer: any) => runLines.push(answer?.ack, autoVoiceAllowed() ? answer?.intro : null);
     noteLines(object);
+    // What the run looked up by name is the ask as the agent read it, so a
+    // nickname it resolved ("the King" → "Elvis Presley") is never a stand-in.
+    const lookups = requestLookups(toolCalls);
     const standIn = (track: any, pool: Map<string, any>) => requestStandIn(runLines, {
-      track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
+      track, requestText: text, requester, stationNames, lookups, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
     });
     // What a corrective call is offered: no stand-in by a recently-heard
     // artist, unless nothing fresh is left. Spacing rides the call the request

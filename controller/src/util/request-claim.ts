@@ -70,6 +70,9 @@ export interface ClaimContext {
   stationNames?: Iterable<string | null | undefined>;
   // Every OTHER candidate the run surfaced.
   others?: Iterable<ClaimTrack | null | undefined>;
+  // What the run itself looked up by name (requestLookups). Read only by
+  // requestStandIn: a track the agent's own lookup names is the ask.
+  lookups?: Iterable<string | null | undefined>;
 }
 
 export type ClaimSource = 'request' | 'candidate-artist' | 'candidate-title' | 'quoted-title';
@@ -480,6 +483,28 @@ export function claimLookupQuery(
   return best;
 }
 
+// What the run itself looked up by NAME (#1979): the library searches it ran,
+// the artists whose catalogue it walked, and the tracks identifyRequestedTrack
+// resolved a description to. The agent reads a nickname with the world
+// knowledge this module lacks — "the King" searched as "Elvis Presley" — so a
+// track its own lookup names is the ask as the agent understood it.
+const NAMED_LOOKUP_ARG = new Map([['searchLibrary', 'query'], ['topSongsByArtist', 'artist'], ['recentByArtist', 'artist']]);
+
+export function requestLookups(
+  toolCalls: ReadonlyArray<{ name?: string | null; args?: unknown; result?: unknown } | null | undefined> | null | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const c of toolCalls ?? []) {
+    const arg = c?.name ? NAMED_LOOKUP_ARG.get(c.name) : undefined;
+    const value = arg ? (c?.args as Record<string, unknown> | null)?.[arg] : undefined;
+    if (typeof value === 'string') out.push(value);
+    if (c?.name !== 'identifyRequestedTrack') continue;
+    const found = (c.result as { candidates?: unknown } | null)?.candidates;
+    for (const t of Array.isArray(found) ? found : []) out.push(`${t?.artist ?? ''} ${t?.title ?? ''}`);
+  }
+  return out;
+}
+
 // Is the track a STAND-IN for what the listener named (#1979)? Requests are
 // exempt from artist spacing because an explicit ask wins, and a stand-in is
 // not the ask: the listener named an artist or a title, the library could not
@@ -497,10 +522,15 @@ export function claimLookupQuery(
 // text's own capitals: a nickname, an abbreviation or a typo ("more MJ
 // please", "Madona") reads as an unmet name over the very artist asked for,
 // and a test wrong in that direction steers a genuine request away from its
-// artist. A substitution owned without a name ("can't do that one") is an
+// artist. The lie's evidence has the same blind spot — a line that reads the
+// listener's "MJ" back says the listener's words over a track it does not
+// name by its library name — so the ask is excused FIRST, by the listener's
+// words (asksForTrack, which reads abbreviations and typos) or by the run's
+// own named lookups (requestLookups, which carry the agent's reading of a
+// nickname). A substitution owned without a name ("can't do that one") is an
 // accepted miss: the track airs as it always did.
 export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
-  if (asksForTrack(ctx.requestText, ctx.track)) return false;
+  if ([ctx.requestText, ...(ctx.lookups ?? [])].some((asked) => asksForTrack(asked, ctx.track))) return false;
   for (const line of lines) {
     const read = lineClaims(line, ctx);
     if (read.declines.length || misnamedOf(read).some((c) => c.source === 'request')) return true;
@@ -508,21 +538,86 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   return false;
 }
 
+// A word as a listener might misspell it: one edit away (two from eight
+// letters) — a letter added, dropped, changed or a neighbouring pair swapped
+// ("Madona", "Micheal", "Beyonse"). Under four letters only an exact match
+// counts: a short word one letter off is just another word.
+function spelledLike(a: string, b: string): boolean {
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  if (shorter < 4) return false;
+  const max = shorter >= 8 ? 2 : 1;
+  if (Math.abs(a.length - b.length) > max) return false;
+  let before: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      let d = Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, before[j - 2]! + 1);
+      row.push(d);
+    }
+    before = prev;
+    prev = row;
+  }
+  return prev[b.length]! <= max;
+}
+
+// A request word naming this one: the same word, or a misspelling of it. A
+// filler word is never read as a misspelling ("play" is not the title "Plays").
+const saysWord = (said: string, word: string) => said === word || (!FILLER.has(said) && spelledLike(said, word));
+
+function containsSaid(req: string[], phrase: string[]): boolean {
+  if (!phrase.length || phrase.length > req.length) return false;
+  for (let i = 0; i + phrase.length <= req.length; i++) {
+    if (phrase.every((k, j) => saysWord(req[i + j]!, k))) return true;
+  }
+  return false;
+}
+
+// What a credit is abbreviated to: the first letter of every word, and of every
+// word that is not a connective ("Earth, Wind & Fire" is EWF).
+function initialsOf(phrase: string[]): string[] {
+  const first = (ks: string[]) => ks.map((k) => [...k][0]).join('');
+  return [first(phrase), first(phrase.filter((k) => !MINOR.has(k)))].filter((s) => s.length >= 2);
+}
+
+// The request's possible abbreviations: a short word ("MJ", "RHCP") or a run of
+// single letters ("M.J.", "R E M").
+function abbreviationsOf(req: string[]): Set<string> {
+  const out = new Set<string>();
+  let letters = '';
+  for (const k of [...req, '']) {
+    if (k.length === 1 && /\p{L}/u.test(k)) {
+      letters += k;
+      continue;
+    }
+    if (letters.length >= 2) out.add(letters);
+    letters = '';
+    if (k.length >= 2 && k.length <= 6 && !FILLER.has(k)) out.add(k);
+  }
+  return out;
+}
+
 // Do the listener's words name this track — a title form, the album, any
-// credited act, or one word of the credit ("some Elvis" for Elvis Presley)?
+// credited act, one word of the credit ("some Elvis" for Elvis Presley), the
+// credit's initials ("more MJ") — spelled right or a letter off ("Madona")?
 // Case-blind, because a listener's casing is no evidence ("madonna or michael
 // jackson"). A lone request word is not a title: "something by Michael
 // Jackson" does not ask for the Beatles' "Something". It errs wide on
 // purpose: a word shared by chance only leaves a request exempt from spacing,
-// which is where it started.
+// which is where it started, while a miss steers a genuine ask away from its
+// artist. A nickname no spelling rule can reach ("the King") is the run's own
+// lookups' to excuse (requestStandIn).
 export function asksForTrack(requestText: string | null | undefined, track: ClaimTrack | null | undefined): boolean {
   const req = keysOf(requestText);
   if (!req.length || !track) return false;
   const credit = artistPhrases(track.artist);
   const phrases = [...titlePhrases(track.title), ...credit, ...titlePhrases(track.album)];
-  if (phrases.some((p) => !(p.length === 1 && FILLER.has(p[0]!)) && contains(req, p))) return true;
-  const words = new Set(req);
-  return credit.some((p) => p.some((k) => k.length >= 3 && !FILLER.has(k) && words.has(k)));
+  if (phrases.some((p) => !(p.length === 1 && FILLER.has(p[0]!)) && containsSaid(req, p))) return true;
+  if (credit.some((p) => p.some((k) => k.length >= 3 && !FILLER.has(k) && req.some((w) => saysWord(w, k))))) return true;
+  const abbreviations = abbreviationsOf(req);
+  return credit.some((p) => p.length > 1 && initialsOf(p).some((i) => abbreviations.has(i)));
 }
 
 // Fixed copy for a request whose own lines could not be trusted: names the

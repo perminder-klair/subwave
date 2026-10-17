@@ -20,7 +20,7 @@ process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-request-claim-'));
 
 const {
   asksForTrack, claimEarnsRepick, claimLookupQuery, lineClaims, misnamedClaims, misnamedRequestLines, plainRequestAck, plainRequestIntro,
-  requestStandIn,
+  requestLookups, requestStandIn,
 } = await import('../src/util/request-claim.js');
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
@@ -346,6 +346,42 @@ test("asksForTrack: the request's words name the track, case-blind", () => {
   assert.equal(asksForTrack('Michael Jackson please', ISLA), false);
   assert.equal(asksForTrack('play something by Michael Jackson', SOMETHING), false, 'a lone request word is not a title');
   assert.equal(asksForTrack('', BILLIE), false);
+});
+
+test('asksForTrack reads the listener\'s spelling: initials and a letter off, never a near-miss filler word', () => {
+  assert.equal(asksForTrack('more MJ please', BILLIE), true, 'initials');
+  assert.equal(asksForTrack('M.J. please', BILLIE), true, 'initials spelled out');
+  assert.equal(asksForTrack('RHCP please', { title: 'Otherside', artist: 'Red Hot Chili Peppers' }), true);
+  assert.equal(asksForTrack('some EWF', { title: 'September', artist: 'Earth, Wind & Fire' }), true, 'connectives skipped');
+  assert.equal(asksForTrack('some Madona please', HOLIDAY), true, 'a letter dropped');
+  assert.equal(asksForTrack('Micheal Jakson please', BILLIE), true, 'a swapped pair, a letter dropped');
+  assert.equal(asksForTrack('play bilie jean', BILLIE), true, 'a title a letter off');
+  // Still no: what the incident asked for is not Madonna, by any spelling rule.
+  assert.equal(asksForTrack('Michael Jackson please', ISLA), false);
+  assert.equal(asksForTrack('MJ please', ISLA), false);
+  assert.equal(asksForTrack('play anything', { title: 'Plays', artist: 'Nobody' }), false, 'a filler word is not a misspelling');
+});
+
+test("the run's own named lookups excuse a nickname no spelling rule reaches", () => {
+  const ctx = { track: ELVIS, requestText: 'more of the King please', requester: 'Jen', others: [ISLA] };
+  const lines = ['More of the King, coming right up!'];
+  assert.equal(requestStandIn(lines, ctx), true, 'without a lookup the line reads as a claim');
+  assert.equal(requestStandIn(lines, { ...ctx, lookups: ['Elvis Presley'] }), false);
+  // A lookup that names someone else excuses nothing.
+  assert.equal(requestStandIn(["No Michael Jackson tonight, here's Madonna."], { ...incident, lookups: ['Michael Jackson'] }), true);
+});
+
+test('requestLookups: searches, catalogue walks, and what identifyRequestedTrack resolved', () => {
+  assert.deepEqual(requestLookups([
+    { name: 'searchLibrary', args: { query: 'Elvis Presley' } },
+    { name: 'topSongsByArtist', args: { artist: 'Madonna' } },
+    { name: 'recentByArtist', args: { artist: 'Prince' } },
+    { name: 'tracksLikeThis', args: { id: 'x' } },
+    { name: 'identifyRequestedTrack', args: { reference: 'that dune song' }, result: { candidates: [{ title: 'Paul\'s Dream', artist: 'Hans Zimmer' }] } },
+    { name: 'toString', args: {} },
+    null,
+  ]), ['Elvis Presley', 'Madonna', 'Prince', "Hans Zimmer Paul's Dream"]);
+  assert.deepEqual(requestLookups(undefined), []);
 });
 
 // --- the remedy, through runRequest ---------------------------------------------
@@ -804,4 +840,48 @@ test('#1979: a spacing window of 0 turns stand-in spacing off, as it does for pi
   } finally {
     await settings.update({ llm: { artistVarietyWindow: 5 } } as never);
   }
+});
+
+// A genuine ask the model reads back in the LISTENER's spelling — a nickname,
+// an abbreviation, a typo — names no track by its library name, so the line
+// carries the very "request claim" the #1918 lie does. The ask must still be
+// the ask: never spaced, never withheld from the corrective call.
+const HOUND_DOG = { id: 'elvis-hound', title: 'Hound Dog', artist: 'Elvis Presley', album: 'Elvis', duration: 136 };
+
+test('#1979: an ask read back as a nickname or a typo is never spaced away from its artist', async () => {
+  const cases: Array<{ label: string; onAir: any; text: string; pick: any; ack: string; toolCalls?: any[] }> = [
+    { label: 'abbreviation', onAir: BEAT_IT, text: 'more MJ please', pick: BILLIE, ack: 'More MJ coming right up, Jen!' },
+    { label: 'typo', onAir: DANCETERIA, text: 'some Madona please', pick: HOLIDAY, ack: "Here's some Madona for you, Jen!" },
+    {
+      label: 'nickname the run looked up by name', onAir: HOUND_DOG, text: 'more of the King please', pick: ELVIS,
+      ack: 'More of the King, coming right up!',
+      toolCalls: [{ name: 'searchLibrary', args: { query: 'Elvis Presley' }, result: [], round: 1 }],
+    },
+  ];
+  for (const c of cases) {
+    queue.current = { track: c.onAir } as any;
+    queue.upcoming = [];
+    const intro = `Here's ${c.pick.title}, Jen.`;
+    agentAnswers({ kind: 'track', id: c.pick.id, ack: c.ack, intro }, [c.pick, ISLA, GIRLS].filter((s, i, a) => a.indexOf(s) === i), c.toolCalls);
+    await withNetwork({ search: [], llm: [CYNDI] }, async (calls) => {
+      const result = await runRequest(queue, { requester: 'Jen', text: c.text });
+      assert.equal(calls.llm.length, 0, `${c.label}: no spacing call`);
+      assert.equal(queue.upcoming[0].track.id, c.pick.id, `${c.label}: the ask airs`);
+      assert.doesNotMatch(String(result?.guard ?? ''), /artist-spaced/, c.label);
+    });
+  }
+});
+
+test('#1979: a corrective call for an ask read back as an abbreviation still offers that artist', async () => {
+  queue.current = { track: BEAT_IT } as any;
+  // The intro misnames by #1918's reading, so the claim re-pick runs; the MJ
+  // candidate is the ask, not a stand-in, and stays on offer.
+  agentAnswers({ kind: 'track', id: BILLIE.id, ack: 'You got it, Jen!', intro: "Here's some more MJ for you, Jen." }, [BILLIE, ISLA, GIRLS]);
+  const billie = { id: BILLIE.id, ack: 'You got it, Jen!', intro: "Here's Billie Jean by Michael Jackson, Jen." };
+  await withNetwork({ search: [], llm: [billie] }, async (calls) => {
+    await runRequest(queue, { requester: 'Jen', text: 'more MJ please' });
+    assert.equal(calls.llm.length, 1);
+    assert.ok(offeredIds(calls.llm[0]).includes(BILLIE.id), 'the asked-for artist is offered');
+  });
+  assert.equal(queue.upcoming[0].track.id, BILLIE.id);
 });
