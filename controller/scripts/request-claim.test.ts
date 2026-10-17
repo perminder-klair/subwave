@@ -175,6 +175,29 @@ test('an honest substitution that declines the ask is not a claim (English cues)
   assert.equal(misnamedClaims('No tenemos a Michael Jackson esta noche, Jen.', ctx)[0]?.text, 'Michael Jackson');
 });
 
+test('every known lie is still caught after the tightening', () => {
+  // The verification probe's lies, each over a track it does not describe.
+  const dreams = { title: 'Dreams', artist: 'Fleetwood Mac', genre: 'Rock' };
+  const myGirl = { title: 'My Girl', artist: 'The Temptations', genre: 'Soul, Motown' };
+  const stationNames = ['Marlowe', 'SUB/WAVE'];
+  const lies: Array<[Record<string, unknown>, string]> = [
+    [{ track: ISLA, requestText: 'Michael Jackson please', requester: 'Jen' }, "Here's Michael Jackson for you, Jen!"],
+    [{ track: myGirl, requestText: 'some motown please', requester: 'Sam', others: [{ title: "Ain't No Mountain High Enough", artist: 'Marvin Gaye' }] }, "Here's Marvin Gaye for you, Sam!"],
+    [{ track: dreams, requestText: 'play Wonderwall', requester: 'Liam' }, "Here's 'Wonderwall', Liam."],
+    [{ track: dreams, requestText: 'play wonderwall by oasis', requester: 'Liam' }, 'Oasis coming right up with Wonderwall, Liam!'],
+    [{ track: ISLA, requestText: 'some upbeat Michael Jackson', requester: 'Jen' }, 'Some upbeat Michael Jackson coming right up!'],
+    [{ track: ISLA, requestText: 'some old school Michael Jackson please', requester: 'Jen' }, 'Got it — some old school Michael Jackson for you!'],
+    [{ track: ISLA, requestText: "play Michael Jackson's Thriller", requester: 'Jen' }, "Here's Michael Jackson's Thriller, Jen!"],
+    [{ track: ISLA, requestText: 'any Michael Jackson song', requester: 'Jen' }, "Here's a Michael Jackson song for you!"],
+    [incident, INCIDENT_INTRO],
+    [incident, INCIDENT_ACK],
+    [{ track: ISLA, requestText: 'Michael Jackson please', requester: 'Jen' }, "Something like Michael Jackson? Here's Michael Jackson, Jen!"],
+  ];
+  for (const [ctx, line] of lies) {
+    assert.notDeepEqual(misnamedClaims(line, { stationNames, ...ctx } as never), [], line);
+  }
+});
+
 test('a dedication in the request is excused once the line names the track', () => {
   const ctx = { track: ISLA, requestText: 'Madonna for my friend Sarah Jones please', requester: 'Tom', others: [] };
   assert.deepEqual(misnamedClaims('This one is for Sarah Jones, with love from Madonna.', ctx), []);
