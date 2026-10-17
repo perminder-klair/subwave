@@ -72,8 +72,9 @@ export type AlbumGuardOutcome<T> =
 // artist guard already CONCEDED (an anchor match that neither its re-pick nor
 // its pool rescue could move): excluding the anchor then cannot prevent that
 // repeat, only strip the other-album candidates and keep the on-air record
-// too. The album guard's own neighbour preference still steers away from the
-// anchor artist in that case, since the anchor is in `avoidArtistRoots`.
+// too. With the spacing window on, the album guard's own neighbour preference
+// still steers away from the anchor artist in that case, since the anchor is in
+// `avoidArtistRoots`; with it off (0) nothing does, exactly as before #1981.
 // `song` is the pick the artist guard left standing; a successful artist
 // re-pick is never by the anchor (the artist guard validates that), so the
 // re-pick still keeps its anchor exclusion.
