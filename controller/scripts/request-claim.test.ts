@@ -19,7 +19,7 @@ import { chatCompletionResponse } from './test-utils/llm.js';
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-request-claim-'));
 
 const {
-  claimLookupQuery, lineClaims, misnamedClaims, misnamedRequestLines, plainRequestAck, plainRequestIntro,
+  claimEarnsRepick, claimLookupQuery, lineClaims, misnamedClaims, misnamedRequestLines, plainRequestAck, plainRequestIntro,
 } = await import('../src/util/request-claim.js');
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
@@ -242,6 +242,13 @@ test('the lookup the agent skipped: the longest request claim, only when nothing
   // A mix-up between candidates is not a missed search.
   const mixUp = misnamedRequestLines({ intro: "Here's Cyndi Lauper!" }, incident);
   assert.equal(claimLookupQuery(mixUp, []), null);
+});
+
+test('only a misnamed intro earns the corrective re-pick', () => {
+  const both = misnamedRequestLines({ intro: INCIDENT_INTRO, ack: INCIDENT_ACK }, incident);
+  assert.equal(claimEarnsRepick(both), true);
+  assert.equal(claimEarnsRepick(both.filter((m) => m.field === 'ack')), false);
+  assert.equal(claimEarnsRepick([]), false);
 });
 
 test('plain copy names the queued track from metadata, and the listener only by a real name', () => {
@@ -482,6 +489,33 @@ test('honest lines cost nothing: no lookup, no extra model call, words untouched
     assert.deepEqual(calls.search, []);
     assert.equal(result?.guard, null);
     assert.equal(queue.upcoming[0].introScript, intro);
+  });
+});
+
+test('an ack-only misname is replaced in place: no corrective call, no lookup', async () => {
+  const intro = "Here's Madonna with La Isla Bonita, Michael.";
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro }, [ISLA, HOLIDAY, GIRLS]);
+  await withNetwork({ search: [BILLIE], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+    assert.equal(calls.llm.length, 0);
+    assert.deepEqual(calls.search, []);
+    assert.equal(result?.guard, 'claim-plain');
+    assert.equal(result?.track?.id, ISLA.id);
+    assert.equal(result?.ack, 'Coming up for you, Michael: La Isla Bonita by Madonna.');
+    assert.equal(queue.upcoming[0].introScript, intro, 'the intro was fine and airs as written');
+  });
+});
+
+test('with the station voice off the ack is the whole answer: a misname gets the plain ack, no call', async () => {
+  await settings.update({ tts: { enabled: false } } as never);
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK }, [ISLA, HOLIDAY, GIRLS]);
+  await withNetwork({ search: [BILLIE], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+    assert.equal(calls.llm.length, 0);
+    assert.deepEqual(calls.search, []);
+    assert.equal(result?.guard, 'claim-plain');
+    assert.equal(result?.ack, 'Coming up for you, Michael: La Isla Bonita by Madonna.');
+    assert.equal(queue.upcoming[0].introScript ?? null, null);
   });
 });
 

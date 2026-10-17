@@ -435,6 +435,17 @@ export function misnamedRequestLines(
   return out;
 }
 
+// Whether a misnamed answer earns the corrective re-pick, and with it the
+// lookup. Only the INTRO airs. An ack that misnames under a fine — or absent —
+// intro is read text, and the plain ack makes it true outright, so it costs no
+// model call and no library search: most of the false alarms left are
+// ack-shaped (a weekday, a dedication read back), and each one cost a call.
+// The price: an ack-only miss never reaches the lookup, so an asked-for artist
+// the library does have is not offered — the plain ack still says what plays.
+export function claimEarnsRepick(misnamed: MisnamedLine[]): boolean {
+  return misnamed.some((m) => m.field === 'intro');
+}
+
 // Tools that already look a NAMED artist or title up in the library.
 const LOOKUP_TOOLS = new Set(['searchLibrary', 'identifyRequestedTrack', 'topSongsByArtist', 'recentByArtist']);
 

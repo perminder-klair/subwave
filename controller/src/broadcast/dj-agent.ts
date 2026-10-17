@@ -44,7 +44,7 @@ import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, tr
 import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
-import { claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, type MisnamedLine } from '../util/request-claim.js';
+import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
 import { buildShortlist } from '../music/shortlist.js';
@@ -1724,9 +1724,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // this is the remedy. One corrective re-pick over the run's candidates
     // (plus the library lookup the agent skipped, when the lines repeat what
     // the listener asked for), checked again; still wrong, or no re-pick, and
-    // each misnamed line becomes plain copy naming the queued track. The
-    // unknown-id salvage above already spent this request's one corrective
-    // call when it replaced `object`. Never a breaker failure: the harness
+    // each misnamed line becomes plain copy naming the queued track. Only a
+    // misnamed intro earns the re-pick (claimEarnsRepick); a misnamed ack
+    // alone is replaced with the plain ack outright. The unknown-id salvage
+    // above already spent this request's one corrective call when it
+    // replaced `object`. Never a breaker failure: the harness
     // worked, the words did not.
     let claimGuard: string | null = null;
     let plainLines = new Set<MisnamedLine['field']>();
@@ -1742,7 +1744,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     );
     const firstMiss = misnamed(object, song, extras.seen);
     if (firstMiss.length) {
-      const canRepick = object === run.object;
+      // An ack-only miss goes straight to the plain ack: no call, no lookup.
+      const canRepick = object === run.object && claimEarnsRepick(firstMiss);
       const pool = new Map(extras.seen);
       const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
       if (lookup) {
