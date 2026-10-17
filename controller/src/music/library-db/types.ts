@@ -209,6 +209,9 @@ export interface FilterOpts {
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
+  // A compiled query-language WHERE (music/search-query). Only the admin browse
+  // route sets it, so no other caller's plain text is read as a query.
+  query?: { sql: string; params: unknown[] } | null;
   sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;

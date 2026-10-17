@@ -2,6 +2,7 @@
 
 import Database from 'better-sqlite3';
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { SEARCH_KEY_DDL, refreshSearchKeys } from './search-keys.js';
 import { ensureFacetStatus } from './facets.js';
 
 // Returns the dim track_vectors is actually created at (stored dim when
@@ -453,6 +454,21 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     const add = ['transition', 'transition_ask', 'transition_drops'].filter(c => !have.has(c));
     if (add.length) runDdl(d, add.map(c => `ALTER TABLE plays ADD COLUMN ${c} TEXT;`).join('\n'));
     d.pragma('user_version = 28');
+  }
+
+  if (userVersion < 29) {
+    // Library search keys (library-db/search-keys.ts): each track's folded name
+    // keys, genre runs and tag lists, so a query compares stored text with
+    // native LIKE/= instead of running JS per row. Plain nullable columns an
+    // older controller never names; the stale trigger is pure SQL, so its writes
+    // (and any other connection's) still mark rows for the next refresh. Filled
+    // here once, so the first search after the upgrade does not pay for it.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = SEARCH_KEY_DDL.columns.filter(c => !have.has(c));
+    if (add.length) runDdl(d, add.map(c => `ALTER TABLE tracks ADD COLUMN ${c} ${c === 'search_fresh' ? 'INTEGER' : 'TEXT'};`).join('\n'));
+    runDdl(d, `${SEARCH_KEY_DDL.trigger}\n${SEARCH_KEY_DDL.index}`);
+    refreshSearchKeys();
+    d.pragma('user_version = 29');
   }
 
   // Reconcile the requested embedding dim against what physically exists. The

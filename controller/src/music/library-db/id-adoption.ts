@@ -5,6 +5,7 @@
 import { requireDb } from './handle.js';
 import { moveFacetRows, syncTrackFacets } from './facets.js';
 import { canonicalId } from '../id-canonical.js';
+import { SEARCH_KEY_DDL } from './search-keys.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
 // metadata. columnPlan and the drift test require every column to be classified.
@@ -15,9 +16,14 @@ const NEVER_WRITTEN = ['id', 'genre'];
 // inserted row's copy is the current truth and adoption must leave it alone.
 // original_year / original_year_source are walk-written too but are NOT here —
 // they need the precedence rule below, not a blanket "new wins".
+// The search keys (search-keys.ts) belong here too: they are derived, and the
+// new row starts stale (search_fresh NULL, or reset by the stale trigger when
+// adoption carries tags onto it), so the next search re-keys it from the merged
+// sources. Carrying them could leave old keys marked fresh.
 const WALK_OWNED = [
   'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
+  ...SEARCH_KEY_DDL.columns,
 ];
 
 // Carry each writer's column group atomically unless the new row has its anchor. Analysis

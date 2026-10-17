@@ -291,14 +291,14 @@ test('the v28 migration adds the columns, and re-running it on a database that h
   await library.load();
   const cols = () => (db.getDb()!.prepare('PRAGMA table_info(plays)').all() as Array<{ name: string }>).map(c => c.name);
   for (const c of ['transition', 'transition_ask', 'transition_drops']) assert.ok(cols().includes(c), `${c} exists`);
-  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 28);
+  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 29);
 
   // Wound back below the step with the columns still present (a downgrade, a
   // hand repair): the step must add only what is missing, not throw.
   db.getDb()!.pragma('user_version = 27');
   library.shutdown();
   await library.load();
-  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 28);
+  assert.equal(db.getDb()!.pragma('user_version', { simple: true }), 29);
   assert.equal(cols().filter(c => c.startsWith('transition')).length, 3);
 });
 

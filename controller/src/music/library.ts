@@ -642,6 +642,7 @@ export interface FilterOpts {
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
+  query?: { sql: string; params: unknown[] } | null; // see library-db FilterOpts
   sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;

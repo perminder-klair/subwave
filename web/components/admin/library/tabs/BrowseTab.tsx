@@ -110,6 +110,9 @@ export default function BrowseTab({
         yearFrom={yearFrom} setYearFrom={setYearFrom}
         yearTo={yearTo} setYearTo={setYearTo}
         q={q} setQ={setQ}
+        // Feedback only for the text in the box now, not an older keystroke's.
+        queryError={browse?.searched === q.trim() ? browse.queryError ?? null : null}
+        readsAs={browse?.searched === q.trim() ? browse.readsAs ?? '' : ''}
         sort={sort} setSort={setSort}
       />
 

@@ -52,6 +52,11 @@ export interface LikedResponse { rows: Track[]; total: number }
 export interface BrowseResponse {
   rows: Track[];
   total: number;
+  // The search text was not a valid query and ran as plain text.
+  queryError?: { message: string; offset: number; kind: 'syntax' | 'meaning' } | null;
+  readsAs?: string;
+  // The search text the feedback above belongs to.
+  searched?: string;
   moodVocab: string[];
   stats: {
     total: number;
