@@ -3940,10 +3940,17 @@ class Queue {
 
     // Same gate as onTrackStarted's auto-DJ block: only re-pick when the slot is
     // genuinely empty, no pick is already running, and DJ calls are allowed.
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
-      this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
-      const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
-      this.runPickCycle({ isAutonomous });
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
+      if (djCallsAllowed()) {
+        this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
+        const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
+        this.runPickCycle({ isAutonomous });
+      } else if (this._coastHandover.held()) {
+        // Held, and the dropped pick was the last one queued: the coast takes
+        // over when the track on air ends, the handover onTrackStarted reports
+        // when the gate holds a boundary (#1975).
+        notifyCoastHandover();
+      }
     }
   }
 

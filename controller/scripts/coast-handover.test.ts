@@ -278,3 +278,38 @@ test('a full rotation rebuilds at the boundary where the listener gate stops the
     reset();
   }
 });
+
+test('a dropped last pick hands over too, when the listener gate holds its re-pick', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: true } } as never);
+  let handovers = 0;
+  onCoastHandover(() => { handovers++; });
+  const realRecovery = q._considerIdRotationRecovery;
+  q._considerIdRotationRecovery = async () => {};
+  q._resolveFailStreak = 0;
+  try {
+    listenersNow = 0;
+    await listeners.refresh();
+    assert.equal(listeners.djCallsAllowed(), false);
+    const [onAir, dropped] = catalogue;
+    q.current = { track: onAir, source: 'ai' };
+    const item = { track: dropped, aiPicked: true, sent: true };
+    q.upcoming = [item];
+    q._coastHandover.picked(); // the cycle that picked it
+    // Liquidsoap never resolved it, and nothing is queued behind it.
+    q.onPushResolveFailed(item);
+    assert.equal(q.upcoming.length, 0);
+    assert.equal(handovers, 1, 'the coast takes over when the track on air ends');
+    // The next boundary is a coast track: no second handover.
+    queue.onTrackStarted({ subsonic_id: catalogue[2].id, title: catalogue[2].title, artist: catalogue[2].artist } as never);
+    assert.equal(handovers, 1);
+  } finally {
+    q._considerIdRotationRecovery = realRecovery;
+    q._resolveFailStreak = 0;
+    listenersNow = 1;
+    await listeners.refresh();
+    // Let any rebuild still in flight land before the temp dir goes.
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
