@@ -53,6 +53,23 @@ export type AlbumGuardOutcome<T> =
   // Fired and the re-pick landed: use these in place of the original pick.
   | { kind: 'repicked'; object: { id?: string | null } & Record<string, unknown>; song: T };
 
+// Which artist an album re-pick may never land on: the pick ANCHOR's (the
+// track on air, or the queue head under pair drain), whatever the artist guard
+// decided. Passing it only after an artist RE-PICK left the common case open:
+// the artist guard KEPT a recent-window pick (every alternative was a recent
+// artist, so spacing yielded), the album guard then found that pick's album
+// recent, starved, waived the artist exclusion and re-picked the on-air
+// artist — Prefab Sprout straight after Prefab Sprout (trace 412fbc72). An
+// album repeat ten minutes on is milder than the same artist twice in a row,
+// so with only the anchor artist on another record the pick is kept.
+// An episode source runs no artist guard at all, by design: '' keeps it so.
+export function albumGuardAnchorRoot(
+  pickAnchor: CandidateLike | null | undefined,
+  episodeSource: boolean,
+): string {
+  return episodeSource ? '' : artistRootKey(pickAnchor || {});
+}
+
 // Everything injected — no queue, no settings, no model — so the "never spends
 // more than one re-pick" guarantee is an assertion counting injected calls.
 export interface AlbumGuardDeps<T> {

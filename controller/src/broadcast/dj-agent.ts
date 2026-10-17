@@ -14,13 +14,13 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
-import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
+import { recencyWindowsForLibrary } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, recentArtistsClause, runArtistGuard } from './dj-agent/artist-guard.js';
-import { runAlbumGuard } from './dj-agent/album-guard.js';
+import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import type { TransitionEffect } from '../settings/vocab.js';
@@ -908,9 +908,9 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       seen: extras.seen,
       recentAlbums: queue.recentAlbumKeys(albumHours),
       avoidArtistRoots: neighbourRoots,
-      // A successful artist re-pick must survive the softer album guard, even
-      // when its recent-artist preference is waived or the window is off.
-      avoidAnchorRoot: guarded.kind === 'repicked' ? artistRootKey(pickAnchor || {}) : '',
+      // The on-air (anchor) artist is never an album re-pick's destination,
+      // whatever the artist guard decided (album-guard.albumGuardAnchorRoot).
+      avoidAnchorRoot: albumGuardAnchorRoot(pickAnchor, !!episodeSource),
       // The run's `seen` values are the MODEL's projection and carry no
       // compilation flags (adding them would put them in a re-pick prompt), so
       // the key is resolved against the library — the same resolver the pool

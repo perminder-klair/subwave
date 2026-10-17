@@ -14,8 +14,9 @@
 // Run: npm test -- album-guard-run
 
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { alternativeAlbumCandidates, runAlbumGuard } from '../src/broadcast/dj-agent/album-guard.js';
+import { albumGuardAnchorRoot, alternativeAlbumCandidates, runAlbumGuard } from '../src/broadcast/dj-agent/album-guard.js';
 import { albumKey, artistRootKey } from '../src/music/recency.js';
 
 type Cand = {
@@ -116,6 +117,63 @@ for (const window of [0, 5]) {
     assert.equal(h.calls.repick, 0);
   });
 }
+
+// ── the anchor, whatever the artist guard decided (L2) ─────────────────────
+
+// Production, 8 Oct (trace 412fbc72), replayed: "Jesse James Bolero" by Prefab
+// Sprout on air (the pick anchor). The run's only discovery call returned the
+// on-air track's neighbours; the agent picked Cocosuma off "Reindeer Show The
+// Way", an album aired 10 min earlier. The artist guard KEPT it (Cocosuma was
+// a recent artist, every alternative too: spacing yielded). The album guard
+// then had one other-album candidate — Prefab Sprout — starved on the recent
+// window, waived the artist exclusion and aired Prefab Sprout twice in a row.
+const onAir: Cand = { id: 'p0', title: 'Jesse James Bolero', artist: 'Prefab Sprout', album: 'Jordan: The Comeback' };
+const cocosuma: Cand = { id: 'c0', title: 'Sparks', artist: 'Cocosuma', album: 'Reindeer Show The Way' };
+const cocosumaPick: Cand = { id: 'c2', title: 'Mocking Stars', artist: 'Cocosuma', album: 'Reindeer Show The Way' };
+const prefab: Cand = { id: 'p2', title: 'Earth, the Story So Far', artist: 'Prefab Sprout', album: 'Crimson/Red' };
+
+function replay(avoidAnchorRoot: string) {
+  const h = harness({ repick: (alt) => alt.get(prefab.id) ?? null });
+  return {
+    h,
+    out: runAlbumGuard<Cand>({
+      song: cocosumaPick, object: { id: cocosumaPick.id },
+      seen: seenOf(cocosumaPick, prefab),
+      recentAlbums: albumsOf(cocosuma),
+      avoidArtistRoots: rootsOf('Prefab Sprout', 'Cocosuma'),
+      avoidAnchorRoot, albumKeyOf: albumKey, hours: 12, ...h.deps,
+    }),
+  };
+}
+
+test('the old call-site rule reproduces the repeat: no artist re-pick, no anchor', async () => {
+  const { h, out } = replay('');
+  const r = await out;
+  assert.equal(r.kind, 'repicked');
+  assert.equal(r.kind === 'repicked' && r.song.artist, 'Prefab Sprout', 'the on-air artist again');
+  assert.equal(h.calls.repick, 1);
+});
+
+test('with the anchor always passed, the on-air artist is never the album re-pick', async () => {
+  const { h, out } = replay(albumGuardAnchorRoot(onAir, false));
+  const r = await out;
+  assert.equal(r.kind, 'kept', 'an album repeat beats the same artist twice in a row');
+  assert.equal(h.calls.repick, 0, 'and it costs no model call');
+});
+
+test('albumGuardAnchorRoot: the on-air artist on every agent pick, nothing for an episode', () => {
+  assert.equal(albumGuardAnchorRoot(onAir, false), artistRootKey('Prefab Sprout'));
+  assert.equal(albumGuardAnchorRoot(onAir, true), '', 'an episode runs no artist guard, by design');
+  assert.equal(albumGuardAnchorRoot(null, false), '', 'no anchor, no exclusion');
+  assert.equal(albumGuardAnchorRoot({ artist: 'The Clash' }, false), artistRootKey('Clash'));
+});
+
+test('the agent path wires the album guard through albumGuardAnchorRoot', () => {
+  // The bug lived at the call site, not in the guard, so pin the call site.
+  const src = readFileSync(new URL('../src/broadcast/dj-agent.ts', import.meta.url), 'utf8');
+  assert.match(src, /avoidAnchorRoot:\s*albumGuardAnchorRoot\(pickAnchor,\s*!!episodeSource\)/);
+  assert.doesNotMatch(src, /avoidAnchorRoot:\s*guarded\.kind === 'repicked'/, 'the old re-pick-only rule is gone');
+});
 
 // ── the guard ──────────────────────────────────────────────────────────────
 
