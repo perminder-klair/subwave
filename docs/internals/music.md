@@ -54,8 +54,15 @@ credits it as a "taste for" that phrase, so a sentence or clause that steers
 away ("Avoids stadium rock", "…, never metal", "Does not favour…", "…, except
 X") yields no phrase. It used to become one, through the noun-phrase fallback
 when nothing positive sat beside it. Negation that qualifies a preference keeps
-it ("records that are not overproduced", "dub with no vocals"), and "no wave"
-is a genre. There is no negative channel: the review prompt and its credit line
+it ("records that are not overproduced", "dub with no vocals"), but a qualifier
+with nothing before it ("…, with no metal") is an exclusion. "no wave" is a
+genre, idioms of fondness ("can't get enough of", "not least") are not
+negations, and the cue boundaries are Unicode-aware so "Noël" holds no "no".
+When unsure the reader drops rather than risk a negative becoming a phrase,
+and a list stops at its first negative item, so two losses are known: a
+Title Case name holding a cue word ("No Doubt", "Skip James", "The Seldom
+Scene") ends its list, and "warm but not twee indie pop" keeps only "warm".
+There is no negative channel: the review prompt and its credit line
 speak only of preferences to swap towards, and the Leanings-blind baseline
 would air an avoided track anyway, so a veto would promise an exclusion it
 cannot keep. The persona editor says so and points exclusions at show filters
