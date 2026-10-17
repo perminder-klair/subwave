@@ -45,6 +45,8 @@ const realFetch = globalThis.fetch;
 const DANCETERIA = { id: 'madonna-danceteria', title: 'Danceteria', artist: 'Madonna', album: 'Iconic By Mistake', duration: 240 };
 const HOLIDAY = { id: 'madonna-holiday', title: 'Holiday', artist: 'Madonna', album: 'Madonna', duration: 368, isDir: false };
 const GIRLS = { id: 'cyndi-girls', title: 'Girls Just Want to Have Fun', artist: 'Cyndi Lauper', album: "She's So Unusual", duration: 238, isDir: false };
+const CALIFORNIA = { id: '2pac-california', title: 'California Love', artist: '2Pac', album: 'All Eyez on Me', duration: 285 };
+const CHANGES = { id: '2pac-changes', title: 'Changes', artist: '2Pac', album: 'Greatest Hits', duration: 269, isDir: false };
 
 // The matcher's reading for an artist the library lacks.
 const LIKE_MJ = {
@@ -182,6 +184,42 @@ test('#1993: past the token cap there is no matcher reading, so a dedication or 
     assert.equal(record.pickSource, 'similar-to-current', text);
     assert.equal(record.guard, null, text);
     assert.deepEqual(boothLines(), [], text);
+  }
+});
+
+test('#1993 review: a search in the listener\'s own spelling found their ask, which is never spaced', async (t) => {
+  // "Tupac" is no spelling of the library's "2Pac", and 2Pac is on air. The
+  // artist path misses the name; the term search finds the library's credit.
+  queue.current = { track: CALIFORNIA } as any;
+  stubNetwork(t, {
+    matcher: { ...LIKE_MJ, search_terms: ['Tupac'], artist: 'Tupac', intent: 'Wants Tupac.' },
+    search: [CHANGES, GIRLS],
+  });
+  const { outcome, record } = await request('play some Tupac');
+  assert.equal(outcome.track?.title, 'Changes', 'the ask, not a stand-in for it');
+  assert.equal(record.pickSource, 'search');
+  assert.equal(record.guard, null);
+  assert.deepEqual(boothLines(), []);
+});
+
+test('#1993 review: "more like this" the matcher read as the on-air track is never spaced', async (t) => {
+  // The on-air title alone, and the request copied whole by a weak matcher:
+  // both point at the on-air track and name nobody else, so the similar
+  // rung's on-air artist is the ask.
+  for (const term of ['Danceteria', 'something like this for Sarah']) {
+    queue.upcoming = [];
+    queue.djLog = [];
+    stubNetwork(t, {
+      matcher: { ...LIKE_MJ, search_terms: [term], artist: null, intent: 'Wants more like the current track.' },
+      similar: [HOLIDAY, GIRLS],
+    });
+    const text = term === 'Danceteria' ? 'more like this please' : term;
+    const { outcome, record } = await request(text);
+    assert.equal(outcome.track?.title, 'Holiday', text);
+    assert.equal(record.pickSource, 'similar-to-current', text);
+    assert.equal(record.guard, null, text);
+    assert.deepEqual(boothLines(), [], text);
+    t.mock.restoreAll();
   }
 });
 

@@ -29,7 +29,7 @@ import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { shuffle } from '../util/shuffle.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
-import { matchedRequestStandIn } from '../util/request-claim.js';
+import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 
 export const router = express.Router();
@@ -466,12 +466,16 @@ async function resolveRequest(entry) {
   // one search term is the whole request, which no dedication, feel or "more
   // of this" slot can hold, so read as a name it spaced exactly the asks the
   // agent path exempts. Nothing then says a name was meant, and the draw is
-  // unspaced, as it was before #1993.
+  // unspaced, as it was before #1993. The reading is built once, and again
+  // only when 2c's search adds what it found in the listener's spelling.
   const named = matcherRan ? [matched.artist, ...terms] : [];
+  const standInReading = (lookups: string[] = []) =>
+    matchedRequestStandIn(named, { requestText: text, lookups, onAir: currentTrack });
+  let isStandIn = standInReading();
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
   const draw = (pool: any[]) => {
     const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
-    const drawn = drawRequestCandidate(pool, neighbourRoots, (s: any) => matchedRequestStandIn(named, { track: s, requestText: text }));
+    const drawn = drawRequestCandidate(pool, neighbourRoots, isStandIn);
     if (drawn.withheld) {
       flagGuard(entry, 'artist-spaced');
       queue.log('request-guard', `stand-in by recently-played artist "${drawn.withheld.artist}" set aside — drew "${drawn.pick?.title}" by ${drawn.pick?.artist} instead (${drawn.skipped} recent stand-in(s) passed over, spacing window ${varietyWindow} slots)`);
@@ -554,6 +558,7 @@ async function resolveRequest(entry) {
   if (!pick) {
     if (terms.length > 0) {
       let candidates: any[] = [];
+      const searches: Array<{ term: string; hits: any[] }> = [];
       for (const term of terms) {
         const songOffset = Math.floor(Math.random() * 3) * 25;
         let r = await subsonic.search(term, { songCount: 25, songOffset });
@@ -561,6 +566,7 @@ async function resolveRequest(entry) {
         if (r.length === 0 && songOffset > 0) {
           r = await subsonic.search(term, { songCount: 25 });
         }
+        searches.push({ term, hits: r });
         candidates = [...candidates, ...r];
       }
       const seen = new Set();
@@ -569,6 +575,10 @@ async function resolveRequest(entry) {
         seen.add(s.id);
         return true;
       });
+      // A search in the listener's own spelling found their ask in the
+      // library's ("Tupac" → 2Pac), so its credits are never stand-ins.
+      const lookups = matchedRequestLookups(searches, text);
+      if (lookups.length) isStandIn = standInReading(lookups);
       pick = randomFresh(unique);
       if (pick) pickSource = 'search';
     }

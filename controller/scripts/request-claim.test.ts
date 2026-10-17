@@ -19,8 +19,8 @@ import { chatCompletionResponse } from './test-utils/llm.js';
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-request-claim-'));
 
 const {
-  asksForTrack, claimEarnsRepick, claimLookupQuery, lineClaims, matchedRequestStandIn, misnamedClaims, misnamedRequestLines, plainRequestAck,
-  plainRequestIntro, requestLookups, requestStandIn,
+  asksForTrack, claimEarnsRepick, claimLookupQuery, lineClaims, matchedRequestLookups, matchedRequestStandIn, misnamedClaims, misnamedRequestLines,
+  plainRequestAck, plainRequestIntro, requestLookups, requestStandIn,
 } = await import('../src/util/request-claim.js');
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
@@ -532,7 +532,7 @@ test('a stand-in the run found by a lookup of other words, or by feel, is still 
 
 const JANET = { id: 'janet-nasty', title: 'Nasty', artist: 'Janet Jackson', album: 'Control' };
 const matchedFor = (track: any, requestText: string, ...named: Array<string | null>) =>
-  matchedRequestStandIn(named, { track, requestText });
+  matchedRequestStandIn(named, { requestText })(track);
 
 test('the cascade: a pool track for a name the library cannot meet is a stand-in', () => {
   // The incident through the cascade: the matcher read Michael Jackson, the
@@ -576,6 +576,57 @@ test('the cascade: an ask naming no music has nothing to stand in for', () => {
   assert.equal(matchedFor(HOLIDAY, 'happy birthday Sarah Jones!', null, 'Sarah Jones'), false);
   assert.equal(matchedFor(HOLIDAY, 'some Friday vibes please', null, 'Friday'), false);
   assert.equal(matchedFor(HOLIDAY, "it's friday, more of this", null, 'Friday'), false);
+});
+
+test('the cascade: what a search in the listener\'s own spelling found is the ask (#1993 review)', () => {
+  const CHANGES = { id: '2pac-changes', title: 'Changes', artist: '2Pac', album: 'Greatest Hits' };
+  const SO_WHAT = { id: 'pink-so-what', title: 'So What', artist: 'P!nk', album: 'Funhouse' };
+  // The matcher copied the listener's spelling and the library answered in its
+  // own, which no spelling rule reaches: alone, these read as stand-ins.
+  assert.equal(matchedFor(CHANGES, 'play some Tupac', 'Tupac', 'Tupac'), true);
+  assert.equal(matchedFor(SO_WHAT, 'play pink please', 'Pink', 'Pink'), true);
+  // What 2c's search for those words returned names the ask in the library's
+  // spelling, as a lookup in the listener's words does on the agent path.
+  const tupac = matchedRequestLookups([{ term: 'Tupac', hits: [CHANGES] }], 'play some Tupac');
+  assert.deepEqual(tupac, ['2Pac']);
+  assert.equal(matchedRequestStandIn(['Tupac', 'Tupac'], { requestText: 'play some Tupac', lookups: tupac })(CHANGES), false);
+  const pink = matchedRequestLookups([{ term: 'Pink', hits: [SO_WHAT, null] }, { term: 'Funhouse', hits: null }], 'play pink please');
+  assert.deepEqual(pink, ['P!nk']);
+  assert.equal(matchedRequestStandIn(['Pink', 'Pink'], { requestText: 'play pink please', lookups: pink })(SO_WHAT), false);
+  // A term in the matcher's own words is not the listener's spelling, so what
+  // its search found names only itself.
+  assert.deepEqual(matchedRequestLookups([{ term: 'Billie Jean', hits: [ISLA] }], 'that MJ one about the kid'), []);
+  // A lookup only ever excuses: a search for a dedication's name found an
+  // artist, and the ask still names no music.
+  assert.equal(
+    matchedRequestStandIn([null, 'Sarah'], { requestText: 'something upbeat for Sarah', lookups: ['Sarah McLachlan'] })(HOLIDAY),
+    false,
+  );
+});
+
+test('the cascade: "more of this" the matcher read as the on-air track names its credit (#1993 review)', () => {
+  const reading = (requestText: string, ...named: Array<string | null>) =>
+    matchedRequestStandIn(named, { requestText, onAir: HOLIDAY });
+  // The on-air title as the only term: the on-air artist is the ask.
+  assert.equal(reading('more like this please', null, 'Holiday')(ISLA), false);
+  // The request copied whole by a weak matcher points at the on-air track and
+  // names nothing else — the token cap's shape, from the live matcher.
+  assert.equal(reading('something like this for Sarah', null, 'something like this for Sarah')(ISLA), false);
+  assert.equal(matchedFor(ISLA, 'more of this please', null, 'more of this please'), false);
+  // A name beside the cue asked for someone else, so the on-air artist still
+  // stands in for it…
+  assert.equal(reading('keep it going with some Michael Jackson', 'Michael Jackson', 'Michael Jackson')(ISLA), true);
+  assert.equal(reading('more like this, but Michael Jackson', null, 'Holiday', 'Michael Jackson')(ISLA), true);
+  // …and the on-air title asked for without a cue is that one song.
+  assert.equal(reading('play Holiday please', null, 'Holiday')(ISLA), true);
+});
+
+test('the cascade: the reading is built once per request, then asked of each track (#1993 review)', () => {
+  let reads = 0;
+  const named = { *[Symbol.iterator]() { reads++; yield 'Michael Jackson'; } };
+  const isStandIn = matchedRequestStandIn(named, { requestText: 'Michael Jackson please' });
+  assert.deepEqual([ISLA, BILLIE, GIRLS, HOLIDAY].map(isStandIn), [true, false, true, true]);
+  assert.equal(reads, 1, 'the names are read when the reading is built, not per track');
 });
 
 // --- the remedy, through runRequest ---------------------------------------------

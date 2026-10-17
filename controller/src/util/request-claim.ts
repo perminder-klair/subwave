@@ -78,11 +78,13 @@ export interface ClaimContext {
   // (#1978). A line may say them without claiming a track. Unlike
   // stationNames they take no "DJ" form.
   references?: Iterable<string | null | undefined>;
-  // What the run itself looked up by name (requestLookups). Read only by
-  // requestStandIn: a track the agent's own lookup names is the ask.
+  // What the run itself looked up by name (requestLookups, or the cascade's
+  // matchedRequestLookups). Read only by the stand-in readings: a track the
+  // run's own lookup names is the ask.
   lookups?: Iterable<string | null | undefined>;
-  // The track on air when the listener asked. Read only by requestStandIn: an
-  // ask that points at it ("more of this", DEICTIC) names its credit.
+  // The track on air when the listener asked. Read only by the stand-in
+  // readings: an ask that points at it ("more of this", DEICTIC) names its
+  // credit.
   onAir?: ClaimTrack | null;
 }
 
@@ -594,17 +596,34 @@ export function requestLookups(
   for (const c of toolCalls ?? []) {
     const arg = c?.name ? NAMED_LOOKUP_ARG.get(c.name) : undefined;
     const value = arg ? (c?.args as Record<string, unknown> | null)?.[arg] : undefined;
-    if (typeof value === 'string') {
-      out.push(value);
-      if (inListenerWords(value, req)) {
-        for (const t of literalTracks(c?.result)) if (typeof t?.artist === 'string') out.push(t.artist);
-      }
-    }
+    if (typeof value === 'string') out.push(value, ...listenerWordCredits(value, literalTracks(c?.result), req));
     if (c?.name !== 'identifyRequestedTrack') continue;
     const found = (c.result as { candidates?: unknown } | null)?.candidates;
     for (const t of Array.isArray(found) ? found : []) out.push(`${t?.artist ?? ''} ${t?.title ?? ''}`);
   }
   return out;
+}
+
+// What the stateless cascade's term search found in the listener's own
+// spelling (#1993): requestLookups' rule for the searches routes/request.ts
+// step 2c runs. The matcher copies the listener's spelling into a term as a
+// local model copies it into a query ("Tupac", "Pink"), and search3 answers
+// in the library's ("2Pac", "P!nk"), which no spelling rule of asksForTrack
+// reaches; the credits such a search returned are the ask. A term in other
+// words — the matcher's own canonical spelling — names only itself.
+export function matchedRequestLookups(
+  searches: Iterable<{ term: string; hits: readonly unknown[] | null | undefined }>,
+  requestText: string | null | undefined,
+): string[] {
+  const req = keysOf(requestText);
+  return [...searches].flatMap(({ term, hits }) => listenerWordCredits(term, hits ?? [], req));
+}
+
+// The credits a lookup in the listener's own words answered with: the
+// library's spelling of what they asked for.
+function listenerWordCredits(query: string, tracks: readonly unknown[], req: string[]): string[] {
+  if (!inListenerWords(query, req)) return [];
+  return tracks.map((t) => (t as { artist?: unknown } | null)?.artist).filter((a): a is string => typeof a === 'string');
 }
 
 // A query is the listener's own words when every word in it, filler aside, is
@@ -669,34 +688,50 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   return false;
 }
 
-// Is the track a STAND-IN for what the stateless cascade's matcher read the
-// listener as naming (#1993)? routes/request.ts draws from a pool before any
-// line is written — its ack and intro come after the pick — so there are no
-// lines to read. Its evidence is the matcher's reading instead, `named`: the
-// artist and the artist names or song titles it searched for. That reading is
-// the cascade's own named lookup, the counterpart of requestLookups, so a
-// track any of it names is the ask, as is one the listener's words name
-// (asksForTrack, with its spellings, initials and joined credits). Any other
-// track stands in when the matcher named music at all: an ask naming none — a
-// mood, a genre, a language, "more of this" — has nothing a track could stand
-// in for, as on the agent path. A name the matcher read out of a dedication or
-// a feel, or a weekday, is no ask either (askedNameTest). There is no on-air
-// excusal for a "more of this" ask: the matcher is handed the on-air track, so
-// one it understood names that artist and is excused above, and one naming
-// someone else asked for them ("keep it going with some Michael Jackson") —
-// the case where a declining line outranks that excusal on the agent path.
+// The stand-in reading for the stateless cascade (#1993): is a pool track a
+// STAND-IN for what its matcher read the listener as naming? routes/request.ts
+// draws from a pool before any line is written — its ack and intro come after
+// the pick — so there are no lines to read. Its evidence is the matcher's
+// reading instead, `named`: the artist and the artist names or song titles it
+// searched for. That reading is the cascade's own named lookup, the
+// counterpart of requestLookups, so a track any of it names is the ask, as is
+// one the listener's words name (asksForTrack, with its spellings, initials
+// and joined credits) or one `lookups` names (matchedRequestLookups: what a
+// search in the listener's spelling found, which excuses and never asks). Any
+// other track stands in when the matcher named music at all: an ask naming
+// none — a mood, a genre, a language, "more of this" — has nothing a track
+// could stand in for, as on the agent path. A name the matcher read out of a
+// dedication or a feel, or a weekday, is no ask either (askedNameTest), nor
+// is a term that is itself "more of this": a weak matcher copies the request
+// whole ("something like this for Sarah"). An ask that points at what is on
+// air, read by the matcher as naming nothing but that track (its title alone,
+// or no name at all beside the copy), names its credit, as `onAir` does on the
+// agent path; one naming someone else ("keep it going with some Michael
+// Jackson") asked for them, and the on-air artist stands in for it — the case
+// where a declining line outranks that excusal on the agent path.
+//
+// Curried, because the draw asks it of every candidate by a recent artist,
+// and a pool of nothing but those is read whole: the names, the request's
+// unasked slots and the on-air reading are built once, then each track costs
+// only the excusal.
 export function matchedRequestStandIn(
   named: Iterable<string | null | undefined>,
-  ctx: Pick<ClaimContext, 'track' | 'requestText'>,
-): boolean {
+  ctx: Pick<ClaimContext, 'requestText' | 'lookups' | 'onAir'>,
+): (track: ClaimTrack | null | undefined) => boolean {
   const names = [...named];
-  if ([ctx.requestText, ...names].some((a) => asksForTrack(a, ctx.track))) return false;
-  return names.some(askedNameTest(ctx.requestText));
+  const asksName = askedNameTest(ctx.requestText);
+  const asks = names.filter((n) => asksName(n) && !pointsAtOnAir(n));
+  const onAir = ctx.onAir;
+  const onAirAsked = !!onAir && pointsAtOnAir(ctx.requestText) && asks.every((n) => asksForTrack(n, onAir));
+  const excusing = [ctx.requestText, ...names, ...(ctx.lookups ?? []), onAirAsked ? onAir?.artist : null];
+  return (track) => asks.length > 0 && !excusing.some((a) => asksForTrack(a, track));
 }
 
 // Is a name from the listener's words, as a line or the matcher spells it, an
 // ask? Not a weekday or a run of connectives, nor a word the request uses for
-// something other than music (unaskedSlots, read once per request).
+// something other than music. The request's unasked slots are read once per
+// test built: once per call of requestStandIn, once per request for the
+// cascade's curried reading.
 function askedNameTest(requestText: string | null | undefined): (name: string | null | undefined) => boolean {
   const unasked = unaskedSlots(requestText);
   return (name) => {
