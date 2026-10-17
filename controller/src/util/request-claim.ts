@@ -14,7 +14,8 @@
 // reading says whether the track is a STAND-IN for the ask at all
 // (requestStandIn, #1979), which is what puts it under artist spacing. Pure:
 // the orchestration (one corrective re-pick, then plain copy) is the request
-// agent's, in broadcast/dj-agent.ts.
+// agent's, in broadcast/dj-agent.ts. A pick's note is read by the same rule
+// (#1978, misnamedPickNote below).
 //
 // Three sources of a wrong name, each chosen because it needs no world
 // knowledge (the asked-for artist is often exactly the one the library lacks):
@@ -70,10 +71,20 @@ export interface ClaimContext {
   stationNames?: Iterable<string | null | undefined>;
   // Every OTHER candidate the run surfaced.
   others?: Iterable<ClaimTrack | null | undefined>;
+  // Names the writer was handed as context rather than to choose from — the
+  // track a pick follows, the recent plays, the show's own name and brief
+  // (#1978). A line may say them without claiming a track. Unlike
+  // stationNames they take no "DJ" form.
+  references?: Iterable<string | null | undefined>;
   // What the run itself looked up by name (requestLookups). Read only by
   // requestStandIn: a track the agent's own lookup names is the ask.
   lookups?: Iterable<string | null | undefined>;
 }
+
+// Which writer's line is read. A request line (#1918) keeps the rules its probe
+// measured; a pick NOTE (#1978) is read two ways wider, both for candidate
+// claims only — see possessiveLead and COMPARES.
+type ClaimMode = 'request' | 'pick-note';
 
 export type ClaimSource = 'request' | 'candidate-artist' | 'candidate-title' | 'quoted-title';
 
@@ -161,6 +172,25 @@ function nameLike(toks: Tok[]): boolean {
     if (t.capital === true && !t.sentenceStart) midCapital = true;
   }
   return midCapital;
+}
+
+// "Teardrop's hush…": a pick note opens on its subject, and a possessive is the
+// one sentence-start shape that reads as a name rather than an adjective
+// ("Smooth handoff…"). Pick notes only. Its price, measured: a common-word
+// title in the run ("Tonight") under a note opening "Tonight's mood…". The
+// same shape after an adverb or pronoun is a contraction, never a possessive
+// ("Here's a darker turn", "Something's off-kilter"), and real titles share
+// those words ("Here", "Something"), so they stay ambiguous like any other
+// lone sentence-start capital.
+const CONTRACTED = new Set([
+  'here', 'there', 'that', 'what', 'who', 'where', 'when', 'how', 'let',
+  'something', 'nothing', 'everything', 'anything', 'someone', 'everyone', 'somebody', 'everybody', 'nobody',
+]);
+
+function possessiveLead(text: string, toks: Tok[]): boolean {
+  if (toks.length === 1 && CONTRACTED.has(toks[0]!.key)) return false;
+  return toks.every((t) => MINOR.has(t.key) || t.capital === true)
+    && /^['’]s\b/u.test(text.slice(toks[toks.length - 1]!.end));
 }
 
 function occurrences(line: Tok[], phrase: string[]): number[] {
@@ -257,9 +287,23 @@ const DECLINES: Array<[RegExp | null, RegExp | null]> = [
   [null, /^(?:['’]s not|\s+(?:is|are)(?:n['’]?t| not)) in (?:the |my |our )?(?:crates?|library|collection)\b/iu],
 ];
 
-function declined(text: string, start: number, end: number): boolean {
-  return DECLINES.some(([before, after]) => (!before || before.test(text.slice(0, start)))
+// A pick note naming another act to COMPARE ("a Portishead-like gloom",
+// "harder than Def Leppard") says the pick is not that act, so the name is a
+// reference (#1978). Pick notes only: a request line that dodges the ask this
+// way still owes the listener the queued track's name. Same shape and the same
+// brevity rule as DECLINES.
+const COMPARES: Array<[RegExp | null, RegExp | null]> = [
+  [null, /^-(?:style|like|esque|adjacent|ish|inspired|tinged|sized)\b/iu],
+  [/\b(?:like|à la|a la|than|in the vein of|in the spirit of)(?:\s+the)?\s+$/iu, null],
+];
+
+function cued(table: Array<[RegExp | null, RegExp | null]>, text: string, start: number, end: number): boolean {
+  return table.some(([before, after]) => (!before || before.test(text.slice(0, start)))
     && (!after || after.test(text.slice(end))));
+}
+
+function declined(text: string, start: number, end: number): boolean {
+  return cued(DECLINES, text, start, end);
 }
 
 function surface(text: string, toks: Tok[]): string {
@@ -291,9 +335,15 @@ function quotedSpans(text: string): Array<{ start: number; end: number }> {
 
 // `declines` are the request names the line declines or uses as a reference
 // (DECLINES) — never claims, but the mark of a stand-in (requestStandIn).
-export function lineClaims(line: string | null | undefined, ctx: ClaimContext): {
+interface ReadClaims {
   claims: LineClaim[]; declines: LineClaim[]; titleNamed: boolean; artistNamed: boolean;
-} {
+}
+
+export function lineClaims(line: string | null | undefined, ctx: ClaimContext): ReadClaims {
+  return readClaims(line, ctx, 'request');
+}
+
+function readClaims(line: string | null | undefined, ctx: ClaimContext, mode: ClaimMode): ReadClaims {
   const text = normalizeListenerText(line);
   const toks = tokenize(text);
   const titles = titlePhrases(ctx.track?.title);
@@ -313,11 +363,16 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   // station's own (the host greets "hey DJ Marlowe" back), and "DJ" standalone
   // ("Your DJ has you covered" for "hey DJ, play something chill"). A span
   // inside one is not a claim; "DJ Shadow" is not inside ["dj"], so it still is.
+  // Then the writer's references — the track a pick follows, recent plays.
   const exempt: string[][] = [['dj']];
   if (isNamedRequester(ctx.requester)) exempt.push(keysOf(ctx.requester));
   for (const name of ctx.stationNames ?? []) {
     const keys = keysOf(name);
     if (keys.length) exempt.push(keys, ['dj', ...keys]);
+  }
+  for (const name of ctx.references ?? []) {
+    const keys = keysOf(name);
+    if (keys.length) exempt.push(keys);
   }
   const isExempt = (keys: string[]) => exempt.some((name) => contains(name, keys));
   const others = [...(ctx.others ?? [])];
@@ -385,7 +440,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     }
   }
 
-  // 2. Another candidate's artist or title.
+  // 2. Another candidate's artist or title. A pick note also opens on a
+  // possessive name and names acts to compare against (possessiveLead,
+  // COMPARES).
+  const pickNote = mode === 'pick-note';
   const ownIds = new Set(own.map((p) => p.join(' ')));
   const typed: Array<[ClaimSource, string[][]]> = [['candidate-artist', []], ['candidate-title', []]];
   for (const o of others) {
@@ -398,8 +456,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
       if (ownIds.has(p.join(' ')) || p.join('').length < 3) continue;
       for (const i of occurrences(toks, p)) {
         const span = toks.slice(i, i + p.length);
-        if (masked.slice(i, i + p.length).some(Boolean) || !nameLike(span)) continue;
+        if (masked.slice(i, i + p.length).some(Boolean)) continue;
+        if (!nameLike(span) && !(pickNote && possessiveLead(text, span))) continue;
         if (isExempt(p)) continue;
+        if (pickNote && cued(COMPARES, text, span[0]!.start, span[span.length - 1]!.end)) continue;
         add(source, span);
       }
     }
@@ -424,10 +484,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
 // queued title; the listener's own words, which could be either, by naming
 // either. Empty means the line may air.
 export function misnamedClaims(line: string | null | undefined, ctx: ClaimContext): LineClaim[] {
-  return misnamedOf(lineClaims(line, ctx));
+  return unexcused(lineClaims(line, ctx));
 }
 
-function misnamedOf({ claims, titleNamed, artistNamed }: ReturnType<typeof lineClaims>): LineClaim[] {
+function unexcused({ claims, titleNamed, artistNamed }: ReadClaims): LineClaim[] {
   return claims.filter((c) => {
     if (c.source === 'request') return !titleNamed && !artistNamed;
     if (c.source === 'candidate-artist') return !artistNamed;
@@ -458,6 +518,28 @@ export function misnamedRequestLines(
 // the library does have is not offered — the plain ack still says what plays.
 export function claimEarnsRepick(misnamed: MisnamedLine[]): boolean {
   return misnamed.some((m) => m.field === 'intro');
+}
+
+// The pick path's half of the rule (#1978). A pick's model writes its id and
+// its note in one answer, as the request agent does, and only the id was
+// checked: searchLibrary answers a named search with several tracks by that
+// artist, the harness accepts any of them, and the note can describe the
+// neighbour of the id it returned. The Booth shows that note under the queued
+// track, and the next pick reads it back as its memory of what aired.
+//
+// Read the MODEL'S words, never the controller's composed sentence: its
+// verified "“Title” by Artist" prefix would ground every line. There is no
+// request text, so the claims are the other candidates and quoted titles; the
+// track the pick follows and the recent plays are references, since "after
+// Porcelain's hush" is the commonest honest name in a note. The remedy is the
+// one claimEarnsRepick takes for an ack: a note is read, never aired, so a
+// misnamed one becomes the route's plain copy with no model call, and the
+// track — which passed every guard — stands.
+export function misnamedPickNote(
+  note: string | null | undefined,
+  ctx: Omit<ClaimContext, 'requestText' | 'requester'>,
+): LineClaim[] {
+  return unexcused(readClaims(note, { ...ctx, requestText: null, requester: null }, 'pick-note'));
 }
 
 // Tools that already look a NAMED artist or title up in the library.
@@ -573,7 +655,7 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   const byGenre = { ...ctx, others: [...(ctx.others ?? [])].map((o) => ({ genre: o?.genre })) };
   for (const line of lines) {
     const read = lineClaims(line, byGenre);
-    if (read.declines.some(asks) || misnamedOf(read).some((c) => c.source === 'request' && asks(c))) return true;
+    if (read.declines.some(asks) || unexcused(read).some((c) => c.source === 'request' && asks(c))) return true;
   }
   return false;
 }

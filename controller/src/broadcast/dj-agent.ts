@@ -47,7 +47,7 @@ import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.j
 import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, requestLookups, requestStandIn, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
-import { buildShortlist } from '../music/shortlist.js';
+import { buildShortlist, journeyCompanions } from '../music/shortlist.js';
 import { genreRun } from '../music/genre-run.js';
 import { djPick, FAVOURITES_INSIDE_SHOW, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
 import { shortlistOffers } from '../music/shortlist-offers.js';
@@ -56,6 +56,7 @@ import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
+import { groundPickNote, stationClaimNames } from './dj-agent/pick-note.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -497,6 +498,27 @@ export function selectionContextForPick(queue: any, ctx: any, { scope, wantLink 
   };
 }
 
+// The run's candidates plus the journey's Shortlist companions (#1977), for the
+// Leanings review only. A track the run already surfaced keeps the run's own
+// entry. Best effort: a failure leaves the review the run's candidates, as
+// before.
+async function withJourneyCompanions(
+  seen: Map<string, any>,
+  inputs: Parameters<typeof journeyCompanions>[0],
+  log: (line: string) => void,
+): Promise<Map<string, any>> {
+  try {
+    const { candidates, sourceRuns } = await timePhase('pick.journeyCompanions', () => journeyCompanions(inputs));
+    const merged = new Map(seen);
+    for (const candidate of candidates) if (!merged.has(candidate.id)) merged.set(candidate.id, candidate);
+    logEvent('pick.journeyCompanions', { sourceRuns, added: merged.size - seen.size });
+    return merged;
+  } catch (err) {
+    log(`journey companions for the Leanings review failed: ${(err as Error).message} — reviewing the run's own candidates`);
+    return seen;
+  }
+}
+
 export function shouldExplore({ inRun, audioWaypoint, strictPlaylist }: {
   inRun: boolean; audioWaypoint?: number[] | null; strictPlaylist?: boolean;
 }, random = Math.random): boolean {
@@ -523,6 +545,24 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     scope, wantLink, audioWaypoint, pickAnchor, predecessor, rankTarget, explore, useShortlist,
     showGenres: activeShow?.genres ?? scope.genreLock,
   });
+  // The show and anchor half of a Shortlist plan, shared by the Shortlist's own
+  // plan and the Agentic route's journey companions (#1977) so the two cannot
+  // plan one pick from different inputs. A function, so the spacing window is
+  // read where each plan runs.
+  const planningInputs = () => ({
+    scope,
+    currentTrackId: pickAnchor?.id ?? null,
+    currentArtist: pickAnchor?.artist ?? null,
+    moods: activeShow?.moods,
+    energies: activeShow?.energies,
+    genres: activeShow?.genres ?? scope.genreLock,
+    eras: activeShow?.eras,
+    dominantMood: ctx?.dominantMood,
+    // The guard's spacing window, so the list the model reads already leaves
+    // those acts out when anything fresher was found. A prepared episode is
+    // exempt inside buildShortlist, as it is from the guard.
+    recentArtistRoots: queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
+  });
   let steps: number;
   let toolCalls: any[];
   let extras: { seen: Map<string, any> };
@@ -541,15 +581,8 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // It deliberately never instantiates the tool-loop agent or a tool schema.
     const searches = await prepareShortlistSearches({ activeShow, context: ctx, showAt, episodeSource });
     const shortlist = await buildShortlist({
-      scope,
-      currentTrackId: pickAnchor?.id ?? null,
-      currentArtist: pickAnchor?.artist ?? null,
+      ...planningInputs(),
       discoveryPasses: settings.get().llm?.shortlistPasses ?? SHORTLIST_PASSES_DEFAULT,
-      moods: activeShow?.moods,
-      energies: activeShow?.energies,
-      genres: activeShow?.genres ?? scope.genreLock,
-      eras: activeShow?.eras,
-      dominantMood: ctx?.dominantMood,
       explore,
       searches,
       // A fresh draw per pick, like `explore`, so one anchor does not always
@@ -558,10 +591,6 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // Same target the pool's soft re-rank uses: the run's, else the
       // predecessor's own measured tempo and ending key.
       transitionTarget: rankTarget ?? anchorAnalysis,
-      // The guard's spacing window, so the list the model reads already leaves
-      // those acts out when anything fresher was found. A prepared episode is
-      // exempt inside buildShortlist, as it is from the guard.
-      recentArtistRoots: queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
     });
     steps = shortlist.sourceRuns.length;
     toolCalls = shortlist.sourceRuns;
@@ -725,16 +754,29 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     shortlistPreliminaryId = String(song.id);
   } else {
     agentPreliminaryId = String(song.id);
-    object = { ...object, reason: agenticDiscoverySelectionReason(song, object.reason) };
+    // Read the model's own note before the verified identity is prefixed to
+    // it (#1978): a note describing another candidate becomes plain copy.
+    const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, note) };
   }
   pickResolution.preliminary = agenticTrackRef(song);
+  // On an Agentic journey pick the run's candidates are the waypoint's
+  // neighbourhood alone (#1977): the event tells the model to call
+  // tracksTowardJourney, and it often calls nothing else. The Shortlist pairs
+  // the journey with the show's context and the anchor's continuity, so its
+  // review weighs more than one lane. This route's review gets the same
+  // companions, controller-run and only when a review could use them; the
+  // run's own `seen` stays as discovery left it for the guards and re-picks.
+  const reviewSeen = !useShortlist && audioWaypoint?.length && editorialLeanings.promptValue && !health.modelFailed
+    ? await withJourneyCompanions(extras.seen, planningInputs(), (line) => queue.log('picker', line))
+    : extras.seen;
   // A model that just failed the pick is not asked to review one: the review
   // is the same kind of structured call, and nothing model-chosen exists to
   // review.
   const leaningsPass = health.modelFailed ? { song, object, reviewed: false } : await runLeaningsReview({
     song,
     object,
-    seen: extras.seen,
+    seen: reviewSeen,
     editorialLeanings,
     lastfmTagsFor: (id) => library.get(id)?.lastfmTags,
     djName: session.onAirPersona()?.name ?? null,
@@ -950,6 +992,9 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       finalId: String(song.id),
       queued: true,
     });
+    // Nor name another candidate as this one (#1978). Grounded in place, so
+    // the queue-collision re-composition below reads the same clause.
+    object.musicalReason = groundPickNote(queue, object.musicalReason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'shortlist' });
     object.reason = replacementSurvivedGuards
       ? shortlistReasonForLeanings(object.reason, true, song)
       : shortlistClauseSelectionReason(song, object.musicalReason);
@@ -971,6 +1016,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // survived the guards. The definitive badge still waits for enqueue.
       queued: true,
     });
+    // A corrective re-pick's note arrives raw and is grounded here, in place
+    // (#1978); the first answer's was grounded above and already carries the
+    // verified identity, so this pass leaves it as it is.
+    object.reason = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
     object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
     agentPickResolution.final = agenticTrackRef(song);
     agentPickResolution.reason = object.reason ?? null;
@@ -1702,10 +1751,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 
     // Whoever voices this answer, the host and guests on the roster, and the
     // station: the lines may greet any of them without claiming a track.
-    const roster = settings.getOnAirRoster();
-    const stationNames = [
-      requestSpeech.persona?.name, roster.host?.name, ...roster.guests.map((g: any) => g?.name), settings.get().station,
-    ];
+    const stationNames = stationClaimNames(requestSpeech.persona);
     // Stand-in spacing (#1979). A request is exempt from artist spacing — an
     // explicit ask wins — but a STAND-IN for an ask the library could not
     // meet is the DJ's choice of artist, and #1918 aired Madonna straight
