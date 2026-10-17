@@ -121,14 +121,20 @@ let coastOnDisk: CoastContents | null = null;
 // so the station coasts on auto.m3u once this track ends (#1975). Rebuild the
 // file when it holds anything the queue aired since it was built. A full
 // rotation's always does; a sampled coast rarely does, and skipping it then
-// keeps a departure from costing a Navidrome fan-out for nothing. Returns
-// whether it rebuilt.
+// keeps a departure from costing a Navidrome fan-out for nothing. A build
+// still in flight is about to replace the file the stamp describes, and it read
+// the air history before this boundary, when the DJ's last pick was only
+// queued, so the stamp cannot vouch for it: rebuild behind it. Returns whether
+// it rebuilt.
 export async function refreshCoastOnHandover(): Promise<boolean> {
-  const repeats = coastOnDisk ? coastRepeats(coastOnDisk, queue.airedFromQueueSince(coastOnDisk.builtAt)) : null;
+  const inFlight = playlistRefresh.isBusy();
+  const repeats = coastOnDisk && !inFlight ? coastRepeats(coastOnDisk, queue.airedFromQueueSince(coastOnDisk.builtAt)) : null;
   if (repeats === 0) return false;
-  queue.log('scheduler', repeats === null
-    ? 'Auto-playlist: DJ picks paused (nobody listening) — fallback on disk predates this run, requesting a refresh'
-    : `Auto-playlist: DJ picks paused (nobody listening) — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
+  queue.log('scheduler', inFlight
+    ? 'Auto-playlist: DJ picks paused (nobody listening) — a fallback build in flight started before picking stopped, requesting a refresh behind it'
+    : repeats === null
+      ? 'Auto-playlist: DJ picks paused (nobody listening) — fallback on disk predates this run, requesting a refresh'
+      : `Auto-playlist: DJ picks paused (nobody listening) — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
   return (await refreshAutoPlaylist({ automatic: true })) === 'refreshed';
 }
 onCoastHandover(() => {

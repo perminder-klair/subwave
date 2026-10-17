@@ -46,6 +46,10 @@ const rotation = songs('rot', 109);
 const catalogue = songs('lib', 60);
 let listenersNow = 1;
 let libraryCalls = 0;
+// Holds a build at its catalogue fetch, after it has read the air history.
+let randomSongs: Song[] = catalogue;
+let holdRandom: Promise<void> | null = null;
+let reachedRandom: () => void = () => {};
 
 const realFetch = globalThis.fetch;
 globalThis.fetch = async input => {
@@ -57,9 +61,13 @@ globalThis.fetch = async input => {
   assert.equal(url.hostname, 'coast-library.invalid', 'no live service calls');
   libraryCalls++;
   const endpoint = url.pathname.split('/').at(-1);
+  if (endpoint === 'getRandomSongs' && holdRandom) {
+    reachedRandom();
+    await holdRandom;
+  }
   const data = endpoint === 'getPlaylists' ? { playlists: { playlist: [{ id: 'rotation', name: 'rotation' }] } }
     : endpoint === 'getPlaylist' ? { playlist: { entry: url.searchParams.get('id') === 'rotation' ? rotation : [] } }
-      : endpoint === 'getRandomSongs' ? { randomSongs: { song: catalogue } }
+      : endpoint === 'getRandomSongs' ? { randomSongs: { song: randomSongs } }
         : endpoint === 'getAlbumList2' ? { albumList2: { album: [] } }
           : endpoint === 'getStarred2' ? { starred2: { song: [] } } : {};
   return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...data } });
@@ -158,6 +166,47 @@ test('a coast holding none of what the queue aired is left alone, at no Navidrom
   assert.equal(await refreshCoastOnHandover(), true);
   assert.ok(!coastIds().includes(built[0]), 'the on-air pick steps out of the rebuilt coast');
   reset();
+});
+
+test('a build already in flight when picking stops cannot vouch for the file it lands', async () => {
+  reset();
+  await settings.update({ shows: [], scheduleOverride: null } as never);
+  assert.equal(await refreshAutoPlaylist(), 'refreshed');
+  const built = coastIds();
+  // The DJ's last picks, outside the file on disk: that stamp alone says "clean".
+  const outside = catalogue.filter(s => !built.includes(s.id));
+  const pick = outside[0];
+  const others = outside.slice(1, 8);
+  q.current = { track: others[0], source: 'ai' };
+  q.upcoming = [{ track: pick, aiPicked: true, sent: true }];
+
+  // The hourly rebuild reads the history while the pick is still only queued,
+  // which a default build does not exclude, then waits on the catalogue.
+  randomSongs = [pick, ...others.slice(1)];
+  let release!: () => void;
+  holdRandom = new Promise<void>(resolve => { release = resolve; });
+  const reached = new Promise<void>(resolve => { reachedRandom = resolve; });
+  const hourly = refreshAutoPlaylist({ automatic: true });
+  try {
+    await Promise.race([reached, new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('the build never reached its catalogue fetch')), 5000).unref())]);
+    // The pick reaches air and the gate holds the next one.
+    airedFromQueue(others[0]);
+    q.current = { track: pick, source: 'ai' };
+    q.upcoming = [];
+    const handover = refreshCoastOnHandover();
+    holdRandom = null;
+    release();
+    assert.equal(await hourly, 'refreshed');
+    assert.equal(await handover, true, 'rebuilt behind the build in flight');
+    assert.ok(!coastIds().includes(pick.id), 'the on-air pick is not left in the coast that lands');
+    assert.match(handoverLogs()[0].message, /in flight/);
+  } finally {
+    holdRandom = null;
+    release();
+    randomSongs = catalogue;
+    reset();
+  }
 });
 
 test('a full rotation rebuilds at the boundary where the listener gate stops the DJ', async () => {
