@@ -199,7 +199,11 @@ const EXCLUSION = /\s*,?\s*\b(?:except(?:\s+for)?|excluding|apart\s+from|other\s
 const CONTRAST = /\s*,?\s*(?:\b(?:but|yet|though|although|whereas|however)\b|\s[-–—]\s|[–—])/gi;
 
 function reversesPreference(text: string): boolean {
-  return NEGATIVE_CUE.test(text.replace(TRAILING_CONTEXT, '').replace(QUALIFYING_TAIL, ''));
+  const core = text.replace(TRAILING_CONTEXT, '');
+  // A qualifier needs something to qualify: "with no metal" standing alone is
+  // an exclusion, and kept it would be read as a taste for "no metal".
+  const tail = QUALIFYING_TAIL.exec(core);
+  return NEGATIVE_CUE.test(tail && /[\p{L}\p{N}]/u.test(core.slice(0, tail.index)) ? core.slice(0, tail.index) : core);
 }
 
 function positiveText(text: string): string {

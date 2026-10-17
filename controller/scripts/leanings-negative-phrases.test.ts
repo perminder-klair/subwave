@@ -51,6 +51,13 @@ test('a negative clause inside a positive sentence ends its list, and governs ev
   assert.deepEqual(phrases('Northern soul, Motown, never stadium rock.'), ['Northern soul', 'Motown'], 'the noun-phrase fallback reads the same way');
 });
 
+test('a qualifier with nothing before it to qualify is an exclusion, not a phrase', () => {
+  assert.deepEqual(phrases('Favours soul, with no metal.'), ['soul'], 'never the phrase "no metal"');
+  assert.deepEqual(phrases('Favours soul, which never includes metal.'), ['soul']);
+  assert.deepEqual(phrases('Northern soul, with no stadium rock.'), ['Northern soul'], 'the noun-phrase fallback reads the same way');
+  assert.deepEqual(phrases('Favours instrumental music with no vocals.'), ['instrumental music with no vocals'], 'one that qualifies a preference still keeps it');
+});
+
 test('a positive clause after a negative one still counts', () => {
   assert.deepEqual(phrases('Avoids stadium rock but loves Motown.'), ['Motown']);
   assert.deepEqual(phrases("Can't stand stadium rock; loves deep house."), ['deep house']);
