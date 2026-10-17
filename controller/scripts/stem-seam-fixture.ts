@@ -20,7 +20,7 @@ console.log(JSON.stringify({
   libraryPath: process.env.MUSIC_LIBRARY_PATH,
   uris: [
     getAnnotatedUri(track('P', 'p.flac', stationSec)),
-    getAnnotatedUri(track('X', 'x.flac', CLIP_SEAM_CROSS_SEC), { cueOutSec: cues.outCueSec }),
+    getAnnotatedUri(track('X', 'x.flac', CLIP_SEAM_CROSS_SEC), { cueOutSec: cues.outCueSec, clipLeadSec: CLIP_SEAM_CROSS_SEC }),
     getClipUri(y, `${process.env.MUSIC_LIBRARY_PATH}/clip.wav`, CLIP_SEAM_CROSS_SEC),
     getAnnotatedUri(y, { cueInSec: cues.inCueSec }),
   ],

@@ -916,7 +916,7 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -936,6 +936,10 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // configured crossfade) or a washout's 12s canvas outlives its transition.
   const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
   if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
+  // The outgoing side of a stem-blend clip seam: how far its cue-out sits past
+  // the clip's start (broadcast/stem-seam.ts). radio.liq buffers past it and
+  // aligns the clip on it; an older mixer ignores the key.
+  if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
   // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify
   // override parses. Applied before the ducking layers. Absent = unity.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
@@ -991,6 +995,9 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
     `subsonic_id="${escAnnotate(song.id)}"`,
     'subwave_clip="1"',
     `liq_cross_duration="${escAnnotate(crossSec)}"`,
+    // The cue lead both clip seams were cut with (broadcast/stem-seam.ts):
+    // radio.liq aligns the clip on it rather than on what `cross` buffered.
+    `liq_clip_lead="${escAnnotate(crossSec)}"`,
   ];
   // No liq_amplify: the render already gain-matched both sources, so a stamp
   // here would double-apply.
