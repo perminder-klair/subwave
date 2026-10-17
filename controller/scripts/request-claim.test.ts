@@ -362,17 +362,13 @@ test('who a request is for, and the feel or the day it asks for, are never the a
 });
 
 test("an ask's own \"for\" names what it wants; a dedication's names who it is for", () => {
-  // The incident through the commonest "for" phrasings: still a stand-in,
-  // under the lie and under an honest decline alike.
+  // The incident through the "for" of a verb that cannot introduce a person:
+  // still a stand-in, under the lie and under an honest decline alike.
   for (const text of [
     'looking for Michael Jackson please',
-    'asking for Michael Jackson',
-    'a request for Michael Jackson',
-    'requesting for Michael Jackson please',
     'in the mood for Michael Jackson',
     'craving for Michael Jackson',
     'hoping for Michael Jackson tonight',
-    'going for Michael Jackson',
   ]) {
     assert.equal(standInFor(ISLA, text, INCIDENT_INTRO, INCIDENT_ACK), true, text);
     assert.equal(standInFor(ISLA, text, "No Michael Jackson tonight — here's Madonna."), true, `${text}, declined`);
@@ -385,6 +381,18 @@ test("an ask's own \"for\" names what it wants; a dedication's names who it is f
     ['asking for a tune for my friend Sarah Jones', 'A tune for your friend Sarah Jones!'],
   ]) {
     assert.equal(standInFor(HOLIDAY, text, line), false, text);
+  }
+  // "Asking for" and "a request for" name a person as often as an artist, so
+  // their "for" stays a dedication: the person read back is no ask.
+  for (const text of [
+    'a request for my wife Sarah please',
+    'asking for my friend Sarah, something upbeat please',
+    'asking for Sarah, something upbeat',
+    'a request for Sarah, something upbeat',
+    'requesting for Sarah, she loves upbeat stuff',
+    'something upbeat for Sarah',
+  ]) {
+    assert.equal(standInFor(HOLIDAY, text, "This one's for Sarah!"), false, text);
   }
 });
 
@@ -1046,6 +1054,8 @@ test('#1979: an ask naming no music, read back with its dedication or its day, i
   for (const [text, ack] of [
     ['more of this for Sarah please', "This one's for Sarah, Jen!"],
     ['some Friday vibes please', 'Here are your Friday vibes, Jen!'],
+    ['a request for my wife Sarah please', "This one's for Sarah, Jen!"],
+    ['asking for my friend Sarah, something upbeat', "Something upbeat — this one's for Sarah!"],
   ]) {
     queue.current = { track: DANCETERIA } as any;
     queue.upcoming = [];

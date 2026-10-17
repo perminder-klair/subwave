@@ -702,10 +702,12 @@ function pointsAtOnAir(requestText: string | null | undefined): boolean {
 // the request costs a call and moves; a slot that swallows a real ask ("some
 // Prince vibes") leaves it exempt, where it started.
 const UNASKED: Array<[RegExp, 'after' | 'from' | 'before']> = [
-  // "for Sarah", "for my friend Sarah Jones" — not the ask's own "for":
-  // "looking for Prince", "a request for Prince", "in the mood for Prince"
-  // name what they want, and the incident's stand-in is spaced under them.
-  [/(?<!\b(?:look(?:s|ed|ing)?|ask(?:s|ed|ing)?|hop(?:e|es|ed|ing)|request(?:s|ed|ing)?|in\s+(?:the|a)\s+mood|crav(?:e|es|ed|ing)|go(?:es|ing)?)\s+)\bfor\s+/giu, 'after'],
+  // "for Sarah", "for my friend Sarah Jones" — not the ask's own "for" after a
+  // verb that cannot introduce a person: "looking for Prince", "in the mood
+  // for Prince" name what they want, and the incident's stand-in is spaced
+  // under them. "Asking for" and "a request for" name a person as often as an
+  // artist ("a request for my wife Sarah"), so their slot stays a dedication.
+  [/(?<!\b(?:look(?:s|ed|ing)?|hop(?:e|es|ed|ing)|in\s+(?:the|a)\s+mood|crav(?:e|es|ed|ing))\s+)\bfor\s+/giu, 'after'],
   // "dedicate this to Priya", "shout out to the night shift", "goes out to Jen"
   [/\b(?:dedicat\w*|shout[\s-]?outs?|goes out|going out)\b[^,.;:!?\n]*?\bto\s+/giu, 'after'],
   // "happy birthday Sarah", "happy Friday!" — the greeting whole
