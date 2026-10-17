@@ -4,6 +4,7 @@ export * from './library-db/handle.js';
 export * from './library-db/types.js';
 export * from './library-db/rows.js';
 export * from './library-db/stats.js';
+export * from './library-db/genre-inputs.js';
 export * from './library-db/schema.js';
 export * from './library-db/legacy.js';
 export * from './library-db/lifecycle.js';
