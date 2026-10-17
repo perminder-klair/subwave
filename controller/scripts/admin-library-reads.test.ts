@@ -209,6 +209,8 @@ test('a rival writer during the one-time index build does not fail open()', (t) 
   for (const name of NEW) d.exec(`DROP INDEX ${name}`);
   const expected = db.analysedCount();
   const warn = t.mock.method(console, 'warn', () => {});
+  const log = t.mock.method(console, 'log', () => {});
+  const logged = () => log.mock.calls.map(c => String(c.arguments[0]));
   const rival = new Database(join(stateDir, 'library.db'));
   d.pragma('busy_timeout = 50');
   try {
@@ -216,14 +218,24 @@ test('a rival writer during the one-time index build does not fail open()', (t) 
     assert.doesNotThrow(() => db.ensureStatsIndexes(), 'a locked build is skipped, not thrown');
     assert.deepEqual(present(), [], 'nothing was built under the lock');
     assert.equal(warn.mock.callCount(), 1, 'and the skip is logged');
+    assert.deepEqual(
+      logged(), ['[library-db] building count indexes (one-time, 4 missing)…'],
+      'the build announced itself and never claimed to finish',
+    );
     assert.equal(db.analysedCount(), expected, 'counts stay exact without the index');
   } finally {
     if (rival.inTransaction) rival.exec('ROLLBACK');
     rival.close();
     d.pragma('busy_timeout = 5000');
   }
+  log.mock.resetCalls();
   db.ensureStatsIndexes();
   assert.deepEqual(present(), [...NEW].sort(), 'the next open builds them');
+  assert.equal(logged().length, 2);
+  assert.match(logged()[1] ?? '', /^\[library-db\] count indexes built in \d+ms$/);
+  log.mock.resetCalls();
+  db.ensureStatsIndexes();
+  assert.deepEqual(logged(), [], 'an open that finds them all builds and logs nothing');
 });
 
 test('coverage counts are reused only while the library is unchanged', async (t) => {

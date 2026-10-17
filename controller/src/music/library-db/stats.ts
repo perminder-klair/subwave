@@ -156,18 +156,33 @@ export function pickStats(): PickStats {
 // (the tagger or analyzer child) waits on that build's write lock for the busy
 // timeout and then gets SQLITE_BUSY. A full disk fails it the same way. Warn,
 // keep what was built, and leave the rest to the next open.
+//
+// Each build is a full scan on the opener's thread, seconds on NAS-class
+// storage, so it is logged with its time rather than looking like a hang. One
+// sqlite_master read per open finds what is missing; with nothing missing,
+// nothing is built or logged.
+const STATS_INDEXES: Array<[name: string, sql: string]> = [
+  ['idx_tracks_tagged_artist', 'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL'],
+  ['idx_tracks_analysed', 'CREATE INDEX IF NOT EXISTS idx_tracks_analysed ON tracks(bpm) WHERE bpm IS NOT NULL'],
+  ['idx_tracks_vocal_measured', 'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))'],
+  ['idx_tracks_fail_count', 'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL'],
+  ['idx_tracks_stats', 'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL'],
+];
+
 export function ensureStatsIndexes(): void {
   const d = requireDb();
   try {
-    for (const sql of [
-      'CREATE INDEX IF NOT EXISTS idx_tracks_tagged_artist ON tracks(LOWER(TRIM(artist)), moods) WHERE moods IS NOT NULL',
-      'CREATE INDEX IF NOT EXISTS idx_tracks_analysed ON tracks(bpm) WHERE bpm IS NOT NULL',
-      'CREATE INDEX IF NOT EXISTS idx_tracks_vocal_measured ON tracks((vocal_ranges_json IS NOT NULL))',
-      'CREATE INDEX IF NOT EXISTS idx_tracks_fail_count ON tracks(analyze_fail_count) WHERE analyze_fail_count IS NOT NULL',
-      'CREATE INDEX IF NOT EXISTS idx_tracks_stats ON tracks(energy, source, tagged_at, artist, genres, moods) WHERE moods IS NOT NULL',
-    ]) {
-      d.prepare(sql).run();
-    }
+    const names = STATS_INDEXES.map(([name]) => name);
+    const present = new Set((d.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND name IN (${names.map(() => '?').join(', ')})`,
+    ).all(...names) as Array<{ name: string }>).map(r => r.name));
+    const missing = STATS_INDEXES.filter(([name]) => !present.has(name));
+    if (missing.length === 0) return;
+    const started = performance.now();
+    console.log(`[library-db] building count indexes (one-time, ${missing.length} missing)…`);
+    // Still IF NOT EXISTS: a rival opener may have built one since the read.
+    for (const [, sql] of missing) d.prepare(sql).run();
+    console.log(`[library-db] count indexes built in ${Math.round(performance.now() - started)}ms`);
   } catch (err) {
     console.warn(
       `[library-db] count indexes not built (${(err as Error).message}); ` +
