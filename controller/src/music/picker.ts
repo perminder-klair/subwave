@@ -26,6 +26,7 @@ import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
+import { groundPickNote } from '../broadcast/dj-agent/pick-note.js';
 
 // Raw Subsonic child, slimTrack library row, or Last.fm stub. A structural
 // superset of show-filter's FilterTrack and recency's CandidateLike.
@@ -875,7 +876,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   if (chosen.id) offered.delete(chosen.id);
   return {
     song: chosen,
-    reason: pickRaw.reason || null,
+    // A reason that names another candidate as this one (#1978) is dropped,
+    // and the session records the plain `Selected "<title>".` instead.
+    reason: groundPickNote(queue, pickRaw.reason, { track: chosen, candidates, pickAnchor: currentTrack, show: activeShow, route: 'pool' }) || null,
     source: chosen._source,
     // Present only when effects were active; applyMixTransition validates it.
     transition: pickRaw.transition ?? null,

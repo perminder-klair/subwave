@@ -655,9 +655,12 @@ export function clearAnalysisFailures(id?: string): number {
 }
 
 // How many tracks are out of scope for having failed too often (coverage badge).
+// The bare comparison, not analysisFailureExclusion()'s COALESCE, so it reads
+// idx_tracks_fail_count (#1937); same rows while MAX_ANALYSIS_FAILURES > 0,
+// since a NULL count is a 0.
 export function analysisFailedCount(): number {
   return (requireDb().prepare(
-    `SELECT COUNT(*) AS n FROM tracks WHERE COALESCE(analyze_fail_count, 0) >= ${MAX_ANALYSIS_FAILURES}`,
+    `SELECT COUNT(*) AS n FROM tracks WHERE analyze_fail_count >= ${MAX_ANALYSIS_FAILURES}`,
   ).get() as { n: number }).n;
 }
 

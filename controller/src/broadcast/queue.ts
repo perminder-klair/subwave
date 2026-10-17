@@ -151,6 +151,7 @@ import {
 } from './queue/voice-io.js';
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
+import { createHandoverEdge, notifyCoastHandover } from './coast-handover.js';
 
 // Everything the outside world is told about ONE spoken segment, held in a
 // single value because it is now read twice — once when the clip is committed
@@ -401,6 +402,7 @@ class Queue {
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
+  _coastHandover = createHandoverEdge(); // armed by every pick cycle, fired by the first boundary the listener gate holds (#1975)
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _handoffBoundaryTimer: NodeJS.Timeout | null = null;
   _handoffGenerationTimer: NodeJS.Timeout | null = null;
@@ -3615,8 +3617,12 @@ class Queue {
     // watcher still gets onTrackStarted events for those auto tracks, so the
     // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
-      this.runPickCycle({ isAutonomous });
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
+      if (djCallsAllowed()) this.runPickCycle({ isAutonomous });
+      // Held: the coast takes over when this track ends. The first such
+      // boundary after the DJ picked is where picking stopped, so the scheduler
+      // can check the fallback is not holding what the DJ just aired (#1975).
+      else if (this._coastHandover.held()) notifyCoastHandover();
     }
   }
 
@@ -3704,6 +3710,7 @@ class Queue {
       }
     }
     this.pickerBusy = true;
+    this._coastHandover.picked();
     (async () => {
       try {
         // The pick made now airs when the track it FOLLOWS ends, so near a show
@@ -3928,15 +3935,24 @@ class Queue {
     if (!repickAfterFailure(this._resolveFailStreak)) {
       this.log('scheduler',
         `${this._resolveFailStreak} unresolvable picks in a row — holding off on re-picks; the auto playlist covers the slot until the next track boundary`);
+      // Out of budget is still the handover moment when the gate holds (#1975).
+      if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && !djCallsAllowed() && this._coastHandover.held()) notifyCoastHandover();
       return;
     }
 
     // Same gate as onTrackStarted's auto-DJ block: only re-pick when the slot is
     // genuinely empty, no pick is already running, and DJ calls are allowed.
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
-      this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
-      const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
-      this.runPickCycle({ isAutonomous });
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
+      if (djCallsAllowed()) {
+        this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
+        const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
+        this.runPickCycle({ isAutonomous });
+      } else if (this._coastHandover.held()) {
+        // Held, and the dropped pick was the last one queued: the coast takes
+        // over when the track on air ends, the handover onTrackStarted reports
+        // when the gate holds a boundary (#1975).
+        notifyCoastHandover();
+      }
     }
   }
 
@@ -4292,6 +4308,22 @@ class Queue {
       ].filter((at): at is number => at != null);
       return times.length ? Math.max(...times) : null;
     };
+  }
+
+  // What the queue, not the coast, put on air at or after `sinceMs`: the
+  // on-air track and every play behind it, newest first. Coast plays are left
+  // out on purpose — the coast plays its own file as a shuffle pass and does not
+  // repeat inside one — so the scheduler's handover check (#1975) asks only
+  // about the DJ's picks, requests and studio pushes. Bounded by the 50-play
+  // history, which outlasts the hourly rebuild by about two hours of music.
+  airedFromQueueSince(sinceMs: number): CandidateLike[] {
+    const aired: CandidateLike[] = [];
+    if (this.current?.track && this.current.source !== 'auto') aired.push(this.current.track);
+    for (const item of this.history) {
+      if (Date.parse(item.endedAt ?? '') < sinceMs) break;
+      if (item.track && item.source !== 'auto') aired.push(item.track);
+    }
+    return aired;
   }
 
   queuedIds(): Set<string> {

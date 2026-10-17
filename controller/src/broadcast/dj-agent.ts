@@ -19,7 +19,7 @@ import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../musi
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
-import { ARTIST_VARIETY_WINDOW, recentArtistsClause, runArtistGuard } from './dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { runAlbumGuard } from './dj-agent/album-guard.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -28,7 +28,7 @@ import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed } from './clock-policy.js';
 import { pickerAgent, requestAgent } from './dj-agent/agents.js';
-import { pickerScope, type PickerScope } from '../llm/tools.js';
+import { buildPickerTools, pickerScope, PICKER_TOOL_TIMEOUT_MS, type PickerScope } from '../llm/tools.js';
 import {
   HANDOFF_MAX_AGE_MS,
   agentDeadline,
@@ -37,24 +37,26 @@ import {
   breakerSuccess,
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
-import { advanceRun, runActive } from './dj-agent/runs.js';
+import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
 import { prepareEpisodeContext, showPreparation } from './show-preparation.js';
 import { prepareShortlistSearches } from './shortlist-search-preparation.js';
 import { pickSchemaBase, pickSystem, requestSystem, resolveEditorialLeanings, transitionChoiceNudge, type EditorialLeaningsContext } from './dj-agent/schemas.js';
-import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
+import { agenticDiscoverySelectionReason, agenticSelectionReason, agenticTrackRef, plainAgenticSelectionReason, resolveAgenticLeaningsUsage, verifiedAgenticReason, type AgenticPickResolution } from './dj-agent/leanings-review.js';
 import { runLeaningsReview } from './dj-agent/leanings-pass.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
+import { claimEarnsRepick, claimLookupQuery, misnamedRequestLines, plainRequestAck, plainRequestIntro, requestLookups, requestStandIn, type MisnamedLine } from '../util/request-claim.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, SEED_NOT_A_PICK_CLAUSE, type PickFailure } from '../util/pick-seed.js';
-import { buildShortlist } from '../music/shortlist.js';
+import { buildShortlist, journeyCompanions } from '../music/shortlist.js';
 import { genreRun } from '../music/genre-run.js';
-import { djPick, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
+import { djPick, FAVOURITES_INSIDE_SHOW, shortlistClauseSelectionReason, shortlistConversation, shortlistPickPrompt, shortlistPickSchema, shortlistReasonForLeanings, shortlistSituation, type ShortlistPickResolution, type ShortlistSelectionContext } from './dj-agent/shortlist-pick.js';
 import { shortlistOffers } from '../music/shortlist-offers.js';
 import { SHORTLIST_PASSES_DEFAULT } from '../schemas/settings.js';
 import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
+import { groundPickNote, stationClaimNames } from './dj-agent/pick-note.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -141,7 +143,7 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
       // effects are active), so a corrective re-pick chooses a fresh transition
       // for its new track instead of settling into one effect.
       prompt: shortlistRepick
-        ? shortlistPickPrompt([...seen.values()], selectionContext) + `\n\n${why}`
+        ? shortlistPickPrompt([...seen.values()], selectionContext, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + `\n\n${why}`
         : JSON.stringify({
           ...(Array.isArray(selectionContext.recentTransitions) ? { context: { recentTransitions: selectionContext.recentTransitions } } : {}),
           ...(predecessor ? { predecessor } : {}),
@@ -183,8 +185,10 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
 // requestSchema()'s own wording and the same autoVoiceAllowed() gate for
 // `intro`, so a re-picked request is consistent with a first-try one. Returns
 // a result whose id is in `seen`, or null. Never throws.
-async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
-  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null }) {
+// `reason`, when given, replaces the bad-id framing — the claim guard (#1918)
+// reuses this call for a VALID id whose lines named another track.
+async function repickRequestFromSeen({ seen, badId, requester, text, persona, reason = null }:
+  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null; reason?: string | null }) {
   if (seen.size === 0) return null;
   const wantIntro = autoVoiceAllowed();
   const schema = modelTolerant(z.object({
@@ -198,7 +202,7 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
     const outcome: any = await djObject({
       system: requestSystem(persona),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". The id you returned (${badId ?? 'none'}) matches none of the candidates above. Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
+        + `\n\n${isNamedRequester(requester) ? `Listener "${requester}" asked` : 'An unnamed listener asked'}: "${text}". ${reason ?? `The id you returned (${badId ?? 'none'}) matches none of the candidates above.`} Choose the best candidate id from the list for this request, and write "ack"${wantIntro ? ' and "intro"' : ''} to match.`,
       schema,
       temperature: 0.3,
       kind: 'djAgentRequestRepick',
@@ -207,6 +211,30 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona }:
   } catch {
     return null;
   }
+}
+
+// The claim guard's corrective framing (#1918). Names the chosen track from
+// library metadata and never the claim itself: a request claim is the
+// listener's own words, and listener text reaches a prompt only as data.
+function misnamedRepickReason(song: any, misnamed: MisnamedLine[]): string {
+  const fields = misnamed.map((m) => `"${m.field}"`).join(' and ');
+  return `You chose "${song.title}" by ${song.artist}, but your ${fields} named a different artist or title as the one playing. `
+    + 'Whatever you write must name the track you choose by its real title and artist. If no candidate is what they asked for, say so and introduce the closest one as a stand-in — never present it as what they asked for.';
+}
+
+// The library lookup a request run skipped (#1918): the searchLibrary tool
+// itself, under the run's own scope, so its hits went through the same
+// recency/blocklist filtering and slim projection as every other candidate.
+// Bounded by the tool deadline; any failure only means no extra candidates.
+async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Map<string, any>> {
+  const { tools, seen } = buildPickerTools(scope);
+  const search = (tools as Record<string, any>).searchLibrary;
+  try {
+    await search?.execute?.({ query }, {
+      toolCallId: 'request-claim-lookup', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
+    });
+  } catch { /* no extra candidates */ }
+  return seen;
 }
 
 // Build the exact discovery scope used by a live next-track pick. Diagnostics
@@ -470,6 +498,27 @@ export function selectionContextForPick(queue: any, ctx: any, { scope, wantLink 
   };
 }
 
+// The run's candidates plus the journey's Shortlist companions (#1977), for the
+// Leanings review only. A track the run already surfaced keeps the run's own
+// entry. Best effort: a failure leaves the review the run's candidates, as
+// before.
+async function withJourneyCompanions(
+  seen: Map<string, any>,
+  inputs: Parameters<typeof journeyCompanions>[0],
+  log: (line: string) => void,
+): Promise<Map<string, any>> {
+  try {
+    const { candidates, sourceRuns } = await timePhase('pick.journeyCompanions', () => journeyCompanions(inputs));
+    const merged = new Map(seen);
+    for (const candidate of candidates) if (!merged.has(candidate.id)) merged.set(candidate.id, candidate);
+    logEvent('pick.journeyCompanions', { sourceRuns, added: merged.size - seen.size });
+    return merged;
+  } catch (err) {
+    log(`journey companions for the Leanings review failed: ${(err as Error).message} — reviewing the run's own candidates`);
+    return seen;
+  }
+}
+
 export function shouldExplore({ inRun, audioWaypoint, strictPlaylist }: {
   inRun: boolean; audioWaypoint?: number[] | null; strictPlaylist?: boolean;
 }, random = Math.random): boolean {
@@ -496,6 +545,24 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     scope, wantLink, audioWaypoint, pickAnchor, predecessor, rankTarget, explore, useShortlist,
     showGenres: activeShow?.genres ?? scope.genreLock,
   });
+  // The show and anchor half of a Shortlist plan, shared by the Shortlist's own
+  // plan and the Agentic route's journey companions (#1977) so the two cannot
+  // plan one pick from different inputs. A function, so the spacing window is
+  // read where each plan runs.
+  const planningInputs = () => ({
+    scope,
+    currentTrackId: pickAnchor?.id ?? null,
+    currentArtist: pickAnchor?.artist ?? null,
+    moods: activeShow?.moods,
+    energies: activeShow?.energies,
+    genres: activeShow?.genres ?? scope.genreLock,
+    eras: activeShow?.eras,
+    dominantMood: ctx?.dominantMood,
+    // The guard's spacing window, so the list the model reads already leaves
+    // those acts out when anything fresher was found. A prepared episode is
+    // exempt inside buildShortlist, as it is from the guard.
+    recentArtistRoots: queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
+  });
   let steps: number;
   let toolCalls: any[];
   let extras: { seen: Map<string, any> };
@@ -514,15 +581,8 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // It deliberately never instantiates the tool-loop agent or a tool schema.
     const searches = await prepareShortlistSearches({ activeShow, context: ctx, showAt, episodeSource });
     const shortlist = await buildShortlist({
-      scope,
-      currentTrackId: pickAnchor?.id ?? null,
-      currentArtist: pickAnchor?.artist ?? null,
+      ...planningInputs(),
       discoveryPasses: settings.get().llm?.shortlistPasses ?? SHORTLIST_PASSES_DEFAULT,
-      moods: activeShow?.moods,
-      energies: activeShow?.energies,
-      genres: activeShow?.genres ?? scope.genreLock,
-      eras: activeShow?.eras,
-      dominantMood: ctx?.dominantMood,
       explore,
       searches,
       // A fresh draw per pick, like `explore`, so one anchor does not always
@@ -531,10 +591,6 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // Same target the pool's soft re-rank uses: the run's, else the
       // predecessor's own measured tempo and ending key.
       transitionTarget: rankTarget ?? anchorAnalysis,
-      // The guard's spacing window, so the list the model reads already leaves
-      // those acts out when anything fresher was found. A prepared episode is
-      // exempt inside buildShortlist, as it is from the guard.
-      recentArtistRoots: queue.neighbourArtistRoots(settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW),
     });
     steps = shortlist.sourceRuns.length;
     toolCalls = shortlist.sourceRuns;
@@ -698,16 +754,35 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     shortlistPreliminaryId = String(song.id);
   } else {
     agentPreliminaryId = String(song.id);
-    object = { ...object, reason: agenticDiscoverySelectionReason(song, object.reason) };
+    // Read the model's own note before the verified identity is prefixed to
+    // it (#1978): a note describing another candidate becomes plain copy.
+    const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, note) };
+    // A note that names nothing on the queued track becomes plain copy too.
+    // Keep what the model wrote, so a formatting miss in the identity check
+    // can be told from a note about another track.
+    if (note?.trim() && object.reason === plainAgenticSelectionReason(song)) {
+      logEvent('pick.notePlain', { agent: 'pick', to: song.id ?? null, note: note.slice(0, 400) });
+    }
   }
   pickResolution.preliminary = agenticTrackRef(song);
+  // On an Agentic journey pick the run's candidates are the waypoint's
+  // neighbourhood alone (#1977): the event tells the model to call
+  // tracksTowardJourney, and it often calls nothing else. The Shortlist pairs
+  // the journey with the show's context and the anchor's continuity, so its
+  // review weighs more than one lane. This route's review gets the same
+  // companions, controller-run and only when a review could use them; the
+  // run's own `seen` stays as discovery left it for the guards and re-picks.
+  const reviewSeen = !useShortlist && audioWaypoint?.length && editorialLeanings.promptValue && !health.modelFailed
+    ? await withJourneyCompanions(extras.seen, planningInputs(), (line) => queue.log('picker', line))
+    : extras.seen;
   // A model that just failed the pick is not asked to review one: the review
   // is the same kind of structured call, and nothing model-chosen exists to
   // review.
   const leaningsPass = health.modelFailed ? { song, object, reviewed: false } : await runLeaningsReview({
     song,
     object,
-    seen: extras.seen,
+    seen: reviewSeen,
     editorialLeanings,
     lastfmTagsFor: (id) => library.get(id)?.lastfmTags,
     djName: session.onAirPersona()?.name ?? null,
@@ -923,6 +998,9 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       finalId: String(song.id),
       queued: true,
     });
+    // Nor name another candidate as this one (#1978). Grounded in place, so
+    // the queue-collision re-composition below reads the same clause.
+    object.musicalReason = groundPickNote(queue, object.musicalReason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'shortlist' });
     object.reason = replacementSurvivedGuards
       ? shortlistReasonForLeanings(object.reason, true, song)
       : shortlistClauseSelectionReason(song, object.musicalReason);
@@ -944,6 +1022,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // survived the guards. The definitive badge still waits for enqueue.
       queued: true,
     });
+    // A corrective re-pick's note arrives raw and is grounded here, in place
+    // (#1978); the first answer's was grounded above and already carries the
+    // verified identity, so this pass leaves it as it is.
+    object.reason = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
     object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
     agentPickResolution.final = agenticTrackRef(song);
     agentPickResolution.reason = object.reason ?? null;
@@ -1425,26 +1507,42 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // selection outright — no agent, no pool, and no mini-run or journey
     // steering, which is why it runs before advanceRun. Only the link still
     // costs a model call. False means it stood aside and today's paths run.
-    if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) return;
+    // A walked pick still records its show, so the next advanceRun sees the
+    // show change it crossed (#1911).
+    if (await pickInOrder(queue, ctx, { wantLink, pickAnchor, showAt, eventText })) {
+      notePickShow(settings.resolveActiveShow(showAt ?? undefined));
+      return;
+    }
 
     const djMode = !!settings.getEffectivePersona()?.djMode;
+    // The show this pick will air in, on the same look-ahead clock as the pick
+    // brief (pickSystem) and the discovery locks (livePickerScope). A run
+    // belongs to one show, and a journey heads somewhere inside it (#1911).
+    const pickShow = settings.resolveActiveShow(showAt ?? undefined);
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
     // waypoint for the pool's audio anchor.
-    const { rankTarget, audioWaypoint } = timePhase('pick.advanceRun', () => advanceRun(djMode, pickAnchor));
+    const { rankTarget, audioWaypoint, endedForShow } = await timePhase('pick.advanceRun', () => advanceRun(djMode, pickAnchor, { show: pickShow }));
+    if (endedForShow) queue.log('picker', `show change — the DJ-mode run ends here; this pick is chosen for ${pickShow ? `"${pickShow.name}"` : 'the autonomous block'}`);
     const inRun = runActive();
 
     // Selection steering stays in this prompt, but it no longer shares a
-    // response schema with listener speech.
+    // response schema with listener speech. With a show on air both clauses
+    // defer to its brief (#1911): each is the last concrete instruction in the
+    // pick event, and a small model followed "keep the energy moving" over the
+    // brief in its system prompt. With no show they are byte-identical to before.
+    const showFirst = pickShow ? ', inside this show\'s brief — the brief outranks the run' : '';
     const runClause = inRun
-      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'}).`
+      ? ` You're mid-run — keep the energy moving in the same direction (a touch ${energyForDaypart().speed >= 1 ? 'brisker' : 'mellower'})${showFirst}.`
       : '';
     // Gated on the waypoint itself, not inRun: on a run's final pick the run
     // state is already cleared (advanceRun) but the last waypoint — the
     // destination itself — is still the one to land on.
-    const journeyClause = audioWaypoint && audioWaypoint.length
-      ? ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.'
-      : '';
+    const journeyClause = !(audioWaypoint && audioWaypoint.length)
+      ? ''
+      : pickShow
+        ? ' A sonic journey is active, heading somewhere inside this show: call tracksTowardJourney and lean toward one of its tracks that fits the show\'s brief — each carries the sound a step along the arc. The brief outranks the arc: never take a track the brief rules out to follow it, and "same energy" or "same era" is no reason to leave it. If nothing fits, pick via the library mood/genre/audio tools inside the brief. Never mention the journey on air.'
+        : ' A sonic journey is active: call tracksTowardJourney and lean toward one of its tracks — each carries the sound a step toward where this arc is heading. If it comes back thin, pick via the library mood/genre/audio tools and keep the energy heading the same way. Never mention the journey on air.';
     // Surface the expected predecessor's real Subsonic id so similarSongs /
     // tracksLikeThis actually have one
     // to pass. Without it the agent fabricates a slug from the title/artist
@@ -1471,6 +1569,10 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // multiplies across the window. Mirrored by the pool picker's listener-liked
     // source so both paths lean the same way — a lean, never a lock.
     const favClause = timePhase('pick.favouritesClause', () => likes.favouritesClause(settings.get()?.likes));
+    // With a show on air a favourite is a lean inside its brief, never a reason
+    // to leave it (#1911): a reported off-brief pick cited a favourite and the
+    // outgoing show's mood, not the incoming brief.
+    const favShowClause = favClause && pickShow ? FAVOURITES_INSIDE_SHOW : '';
     // Exploration nudge (ε-greedy seed break, music/airing.ts): every pick
     // seeding discovery from the expected predecessor is a random walk that never
     // leaves its similarity cluster, so a fraction of picks steer the round
@@ -1488,7 +1590,16 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
     // Keep its id model-facing so similarity tools can use it without showing
     // a raw id in the operator-facing event text.
     const anchorIdClause = explicitPickAnchor && pickAnchor?.id ? ` [id: ${pickAnchor.id}]` : '';
-    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${effectClause}${runClause}${journeyClause}${exploreClause}`;
+    // The changeover pick (#1911): under the look-ahead clock the incoming
+    // show's first track is picked while the live session, and so the whole
+    // window, still belongs to the outgoing show. The system prompt already
+    // carries the incoming brief; say which show this track airs in, last, so
+    // the outgoing history is not read as the show to pick for.
+    const liveShowId = session.getSession()?.show?.id ?? null;
+    const changeoverClause = (pickShow?.id ?? null) !== liveShowId
+      ? ` This track airs in ${pickShow ? `the show "${pickShow.name}"` : 'the autonomous block'}, which follows what is on air now: pick it for ${pickShow ? 'that show\'s brief' : 'that block'}, not for what is ending.`
+      : '';
+    const promptSuffix = `${predecessorPrompt(predecessor)}${anchorIdClause}${favClause}${favShowClause}${effectClause}${runClause}${journeyClause}${exploreClause}${changeoverClause}`;
     timePhase('pick.appendTurn', () => session.appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},
@@ -1612,9 +1723,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // A request runs with recency only — no show locks. An explicit listener
     // ask wins over the show's strict filters, which is why the scope stops
     // here rather than being built from the active show.
+    const scope = pickerScope({ recentIds });
     const run = await requestAgent.run({
       messages,
-      scope: pickerScope({ recentIds }),
+      scope,
       persona: requestSpeech.persona,
     });
     const { toolCalls, extras } = run;
@@ -1643,6 +1755,41 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
     }
 
+    // Whoever voices this answer, the host and guests on the roster, and the
+    // station: the lines may greet any of them without claiming a track.
+    const stationNames = stationClaimNames(requestSpeech.persona);
+    // Stand-in spacing (#1979). A request is exempt from artist spacing — an
+    // explicit ask wins — but a STAND-IN for an ask the library could not
+    // meet is the DJ's choice of artist, and #1918 aired Madonna straight
+    // after Madonna for "Michael Jackson please". util/request-claim.ts says
+    // whether a track is a stand-in, from every line this run writes;
+    // artist-guard.ts says what spacing does about it. The window is read
+    // once, after the run, so a pick that landed while the agent ran is in it.
+    const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+    const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
+    const runLines: Array<string | null | undefined> = [];
+    const noteLines = (answer: any) => runLines.push(answer?.ack, autoVoiceAllowed() ? answer?.intro : null);
+    noteLines(object);
+    // What the run looked up by name is the ask as the agent read it, so a
+    // nickname it resolved ("the King" → "Elvis Presley") is never a stand-in,
+    // and nor is what a lookup in the listener's own spelling found. The track
+    // the tail named as playing is what a "more of this" ask names.
+    const lookups = requestLookups(toolCalls, text);
+    const standIn = (track: any, pool: Map<string, any>) => requestStandIn(runLines, {
+      track, requestText: text, requester, stationNames, lookups, onAir: cur, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
+    });
+    // What a corrective call is offered: no stand-in by a recently-heard
+    // artist, unless nothing fresh is left. Spacing rides the call the request
+    // was already spending, so it never costs one of its own here.
+    const spacedOffer = (pool: Map<string, any>) => {
+      const { alt, dropped } = requestRepickCandidates(pool, neighbourRoots, (c) => standIn(c, pool));
+      if (dropped) queue.log('request-guard', `${dropped} stand-in(s) by recently-played artists withheld from the corrective call (spacing window ${varietyWindow} slots)`);
+      return alt;
+    };
+    // The request's ONE corrective model call: the unknown-id salvage, the
+    // claim re-pick, or the stand-in spacing re-pick — whichever comes first.
+    let corrected = false;
+
     let song = object?.id ? extras.seen.get(object.id) : null;
     // Near-miss repair, same as the pick path: an unambiguous prefix /
     // clear-winner edit-distance match against the run's own candidates
@@ -1661,8 +1808,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // caller's stateless matcher cascade is still the fallback when this
     // misses too (empty seen, or the re-pick call itself fails).
     if (!song && extras.seen.size) {
+      corrected = true;
       const repicked = await repickRequestFromSeen({
-        seen: extras.seen, badId: object?.id ?? null, requester, text,
+        seen: spacedOffer(extras.seen), badId: object?.id ?? null, requester, text,
         persona: requestSpeech.persona,
       });
       if (repicked) {
@@ -1670,6 +1818,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
         object = repicked;
         song = extras.seen.get(repicked.id);
+        noteLines(repicked);
       }
     }
     if (!song) {
@@ -1690,6 +1839,107 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       throw new Error(`request agent returned unknown id ${object?.id}`);
     }
 
+    // Claim guard (#1918): a REAL candidate id under lines that name another
+    // artist or title — "Michael Jackson please" queued Madonna under a
+    // "Billie Jean" intro. util/request-claim.ts decides what a wrong name is;
+    // this is the remedy. One corrective re-pick over the run's candidates
+    // (plus the library lookup the agent skipped, when the lines repeat what
+    // the listener asked for), checked again; still wrong, or no re-pick, and
+    // each misnamed line becomes plain copy naming the queued track. Only a
+    // misnamed intro earns the re-pick (claimEarnsRepick); a misnamed ack
+    // alone is replaced with the plain ack outright. The unknown-id salvage
+    // above already spent this request's one corrective call when it ran.
+    // Never a breaker failure: the harness worked, the words did not.
+    let claimGuard: string | null = null;
+    let plainLines = new Set<MisnamedLine['field']>();
+    const misnamed = (answer: any, track: any, pool: Map<string, any>) => misnamedRequestLines(
+      { ack: answer?.ack, intro: autoVoiceAllowed() ? answer?.intro : null },
+      { track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
+    );
+    const firstMiss = misnamed(object, song, extras.seen);
+    if (firstMiss.length) {
+      // An ack-only miss goes straight to the plain ack: no call, no lookup.
+      const canRepick = !corrected && claimEarnsRepick(firstMiss);
+      const pool = new Map(extras.seen);
+      const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
+      if (lookup) {
+        for (const [id, hit] of await lookupRequestClaim(lookup, scope)) if (!pool.has(id)) pool.set(id, hit);
+      }
+      const claimed = [...new Set(firstMiss.flatMap((m) => m.claims.map((c) => `"${c.text}"`)))].join(', ');
+      queue.log('request-guard', `agent ${firstMiss.map((m) => m.field).join('+')} named ${claimed} over "${song.title}" by ${song.artist}${lookup ? ` — looked up "${lookup}"` : ''}`);
+      if (canRepick) corrected = true;
+      const repicked = canRepick
+        ? await repickRequestFromSeen({
+          seen: spacedOffer(pool), badId: object?.id ?? null, requester, text,
+          persona: requestSpeech.persona, reason: misnamedRepickReason(song, firstMiss),
+        })
+        : null;
+      const from = song.id;
+      let stillMisnamed = firstMiss;
+      if (repicked) {
+        object = repicked;
+        song = pool.get(repicked.id);
+        noteLines(repicked);
+        stillMisnamed = misnamed(object, song, pool);
+      }
+      plainLines = new Set(stillMisnamed.map((m) => m.field));
+      claimGuard = plainLines.size ? 'claim-plain' : 'claim-repicked';
+      logEvent('pick.misnamed', {
+        agent: 'request', from, to: song.id, lines: firstMiss, lookup, candidates: pool.size, outcome: claimGuard,
+      });
+      queue.log('request-guard', plainLines.size
+        ? `request ${[...plainLines].join('+')} replaced with plain copy for "${song.title}" by ${song.artist}`
+        : `request re-picked "${song.title}" by ${song.artist} with lines that name it`);
+    }
+
+    // Stand-in spacing (#1979), on the track the claim guard left standing.
+    // With the corrective call unspent, a stand-in by a recently-heard artist
+    // goes through the normal artist guard: spacing only (no pick anchor, so
+    // never the pool rescue — a pool pick is not this listener's request),
+    // which yields to the run when nothing fresher was surfaced. What the
+    // listener asked for is exempt from the re-pick's narrowing too. A spent
+    // call means the corrective pick was already offered spaced candidates;
+    // whatever it left stands, as spacing does on a failed re-pick.
+    let spacingGuard: string | null = null;
+    if (neighbourRoots.size && standIn(song, extras.seen)) {
+      if (!corrected) {
+        const spaced = await runArtistGuard<any>({
+          song, object, pickAnchor: null,
+          seen: extras.seen,
+          recentRoots: neighbourRoots,
+          window: varietyWindow,
+          exempt: (c) => !standIn(c, extras.seen),
+          repick: (alt, reason) => {
+            corrected = true;
+            return repickRequestFromSeen({
+              seen: alt, badId: null, requester, text, persona: requestSpeech.persona,
+              reason: `${reason} If no candidate is what they asked for, own the substitution — never present a stand-in as their ask.`,
+            });
+          },
+          // Unreachable: with no anchor the only cause is spacing.
+          poolRescue: async () => 'empty',
+          log: (line) => queue.log('request-guard', `stand-in by ${line}`),
+          logEvent: (name, payload) => logEvent(name, { agent: 'request', ...payload }),
+        });
+        if (spaced.kind === 'repicked') {
+          object = spaced.object;
+          song = spaced.song;
+          spacingGuard = 'artist-spaced';
+          // The new answer's lines get the claim check, never another call.
+          // The first answer's verdict described lines that no longer air.
+          plainLines = new Set(misnamed(object, song, extras.seen).map((m) => m.field));
+          claimGuard = plainLines.size ? 'claim-plain' : null;
+          if (plainLines.size) queue.log('request-guard', `request ${[...plainLines].join('+')} replaced with plain copy for "${song.title}" by ${song.artist}`);
+        }
+      } else if (artistGuardCause(artistRootKey(song), '', neighbourRoots, song.artist) === 'recent') {
+        logEvent('pick.artistGuard', {
+          agent: 'request', cause: 'recent', basis: 'recent-window', relaxed: true, reason: 'call-spent',
+          artist: song.artist, window: varietyWindow,
+        });
+        queue.log('request-guard', `stand-in by recently-played artist "${song.artist}" allowed — the request's one corrective call is spent (spacing window ${varietyWindow} slots)`);
+      }
+    }
+
     // Repeat cooldown (B6) — mirrors the cascade path. `refused` is what tells
     // the caller nothing was queued: it returns a track (the one it declined,
     // so the ack and the operator log can name it), and without the flag the
@@ -1698,7 +1948,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
-      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: null, refused: 'cooldown' };
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -1709,11 +1959,22 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // session then records the ack rather than a line that never aired.
     // Echo guard (A2): a script that reads the request back is regenerated
     // with the request text withheld — it can't echo what it never saw.
-    const rawIntro = autoVoiceAllowed() && typeof object.intro === 'string' ? object.intro.trim() : '';
-    const guarded = await guardIntro(rawIntro || null, echoTexts, () => dj.generateIntro({
+    // Plain copy (claim guard above) stands in for a line that misnamed the
+    // track. It is composed English, so where that cannot air — a persona that
+    // speaks another language, a name in a script the frame can't carry — the
+    // metadata-only intro the echo guard regenerates with stands in instead.
+    const regenerateIntro = () => dj.generateIntro({
       track: trackFields(song), context: null, requestedBy: requester,
       persona: requestSpeech.persona,
-    }));
+    });
+    const modelIntro = typeof object.intro === 'string' ? object.intro.trim() : '';
+    let rawIntro = '';
+    if (autoVoiceAllowed()) {
+      rawIntro = !plainLines.has('intro') ? modelIntro
+        : plainRequestIntro(song, requester, requestSpeech.persona)
+          || String((await regenerateIntro().catch(() => null)) ?? '').trim();
+    }
+    const guarded = await guardIntro(rawIntro || null, echoTexts, regenerateIntro);
     if (guarded.guard) queue.log('request-guard', `agent intro echoed request text — ${guarded.guard}`);
     const currentSpeech = session.finalizeAutomaticHostSpeech(guarded.script, requestSpeech);
     const intro = currentSpeech.text || '';
@@ -1722,14 +1983,15 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // is never falsy and a downstream `||` is unreachable. Threading it in here
     // means the listener gets the named line in both cases the fallback covers
     // — the model wrote nothing, and the model echoed their own text back.
-    const screened = screenAck(object.ack, echoTexts, isNamedRequester(requester)
+    const screened = screenAck(plainLines.has('ack') ? plainRequestAck(song, requester) : object.ack, echoTexts, isNamedRequester(requester)
       ? `Coming up for you, ${requester}.`
       : 'Coming up for you.');
     if (screened.guard) queue.log('request-guard', `agent ack echoed request text — replaced`);
     const ack = screened.ack;
-    // Both guards can fire on one request (the model echoed in the ack AND in
-    // the intro) — join rather than let one verdict hide the other.
-    const guardVerdict = [guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    // Several guards can fire on one request (the model echoed in the ack AND
+    // in the intro, after misnaming the track) — join rather than let one
+    // verdict hide another.
+    const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
