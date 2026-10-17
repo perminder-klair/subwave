@@ -415,6 +415,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           headers: headerMap(form.llm.fallback.headers),
           compatibleMode: form.llm.fallback.compatibleMode,
           reasoning: form.llm.fallback.reasoning,
+          toolChoice: form.llm.fallback.toolChoice,
           ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
@@ -1155,6 +1156,29 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
 
               {fallbackKeyVar && (
                 <KeyStatus envVar={fallbackKeyVar} present={!!data.env?.[fallbackKeyVar]} />
+              )}
+
+              {form.llm.fallback.provider === 'openai-compatible' && (
+                <div className="field">
+                  <Label>Backup forced tool calls</Label>
+                  <Seg
+                    accent
+                    value={form.llm.fallback.toolChoice === 'auto' ? 'auto' : 'required'}
+                    options={[
+                      { id: 'required', label: 'Required' },
+                      { id: 'auto', label: 'Auto' },
+                    ]}
+                    onChange={v =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, toolChoice: v } } }))
+                    }
+                  />
+                  <div className="field-hint">
+                    The backup&rsquo;s own setting, as for the primary above: <code>Required</code>{' '}
+                    (default) is the reliable path for local models; switch to <code>Auto</code> only
+                    if this backup&rsquo;s server crashes on a tool call. It moves with the leg when
+                    you swap the primary and backup.
+                  </div>
+                </div>
               )}
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
