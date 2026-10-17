@@ -62,12 +62,24 @@ export type AlbumGuardOutcome<T> =
 // artist — Prefab Sprout straight after Prefab Sprout (trace 412fbc72). An
 // album repeat ten minutes on is milder than the same artist twice in a row,
 // so with only the anchor artist on another record the pick is kept.
-// An episode source runs no artist guard at all, by design: '' keeps it so.
+// Two exceptions return ''. An episode source runs no artist guard at all, by
+// design. And a `song` that is itself by the anchor artist is a repeat the
+// artist guard already CONCEDED (an anchor match that neither its re-pick nor
+// its pool rescue could move): excluding the anchor then cannot prevent that
+// repeat, only strip the other-album candidates and keep the on-air record
+// too. The album guard's own neighbour preference still steers away from the
+// anchor artist in that case, since the anchor is in `avoidArtistRoots`.
+// `song` is the pick the artist guard left standing; a successful artist
+// re-pick is never by the anchor (the artist guard validates that), so the
+// re-pick still keeps its anchor exclusion.
 export function albumGuardAnchorRoot(
   pickAnchor: CandidateLike | null | undefined,
+  song: CandidateLike | null | undefined,
   episodeSource: boolean,
 ): string {
-  return episodeSource ? '' : artistRootKey(pickAnchor || {});
+  if (episodeSource) return '';
+  const anchorRoot = artistRootKey(pickAnchor || {});
+  return artistCreditsOverlap(artistRootKey(song || {}), anchorRoot) ? '' : anchorRoot;
 }
 
 // Everything injected — no queue, no settings, no model — so the "never spends
@@ -81,7 +93,7 @@ export interface AlbumGuardDeps<T> {
   recentAlbums: Set<string>;
   /** queue.neighbourArtistRoots(window). */
   avoidArtistRoots: Set<string>;
-  /** Preserve a successful artist re-pick's anchor exclusion. Not relaxable. */
+  /** The pick anchor's artist (albumGuardAnchorRoot). Not relaxable. */
   avoidAnchorRoot?: string;
   albumKeyOf: AlbumKeyOf<T>;
   /** settings.picker.albumHours, carried only for the log text. */

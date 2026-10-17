@@ -956,9 +956,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       seen: extras.seen,
       recentAlbums: queue.recentAlbumKeys(albumHours),
       avoidArtistRoots: neighbourRoots,
-      // The on-air (anchor) artist is never an album re-pick's destination,
-      // whatever the artist guard decided (album-guard.albumGuardAnchorRoot).
-      avoidAnchorRoot: albumGuardAnchorRoot(pickAnchor, !!episodeSource),
+      // The pick-anchor artist is never an album re-pick's destination, unless
+      // `song` (the pick the artist guard left standing) is already a repeat of
+      // it that guard conceded (album-guard.albumGuardAnchorRoot).
+      avoidAnchorRoot: albumGuardAnchorRoot(pickAnchor, song, !!episodeSource),
       // The run's `seen` values are the MODEL's projection and carry no
       // compilation flags (adding them would put them in a re-pick prompt), so
       // the key is resolved against the library — the same resolver the pool
