@@ -3,7 +3,7 @@
 // this module owns which candidates a re-pick may choose from and whether the
 // guard fires at all, so both are testable without a model call.
 
-import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
+import { artistCreditsOverlap, artistRootKey, creditedActKeys, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
 // Re-exported so the guard's tests read its comparison key from here rather
 // than reaching past into music/recency.
@@ -96,6 +96,43 @@ export function alternativeCandidates<T extends CandidateLike>(
   return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false };
 }
 
+// How many slots ago a credit was last heard (queue.neighbourArtistDistances):
+// its NEAREST act, matched the way the window matches. Not in the window:
+// Infinity.
+export function creditDistance(song: CandidateLike | string, distances: Map<string, number>): number {
+  let best = Infinity;
+  for (const act of creditedActKeys(song)) {
+    const hit = distances.get(act);
+    if (hit !== undefined) { best = Math.min(best, hit); continue; }
+    for (const [key, d] of distances) if (d < best && artistCreditsOverlap(act, key)) best = d;
+  }
+  return best;
+}
+
+// When spacing has to relax (every candidate's artist is inside the window),
+// the candidate whose artist was heard LONGEST ago, if it was heard longer ago
+// than the pick's. Without it the guard kept the model's pick, which could be
+// the artist from two slots back while a candidate from eleven slots back sat
+// in the same run (Katerine, 10 Oct). No model call: the run already chose its
+// candidates, and the model's taste is the tiebreak — the first-listed wins.
+// Never the anchor artist, whatever the window says.
+export function leastRecentAlternative<T extends CandidateLike>(
+  alt: Map<string, T>,
+  pick: CandidateLike,
+  distances: Map<string, number> | undefined,
+  anchorRoot: string,
+): { song: T; from: number; to: number } | null {
+  if (!distances?.size) return null;
+  const from = creditDistance(pick, distances);
+  let best: { song: T; from: number; to: number } | null = null;
+  for (const song of alt.values()) {
+    if (anchorRoot && artistCreditsOverlap(artistRootKey(song), anchorRoot)) continue;
+    const to = creditDistance(song, distances);
+    if (to > from && (!best || to > best.to)) best = { song, from, to };
+  }
+  return best;
+}
+
 // What the guard did, split by OUTCOME not cause: the call site only needs
 // "did the pick change, and does the slot still need filling". Every relaxation
 // reason is logged here.
@@ -125,6 +162,9 @@ export interface ArtistGuardDeps<T> {
   // queue.neighbourArtistRoots(window) — passed in rather than fetched, so the
   // caller owns every queue read. `window` is carried only for the log text.
   recentRoots: Set<string>;
+  // queue.neighbourArtistDistances(window): how many slots ago each act in
+  // `recentRoots` was heard. Absent, a relaxation keeps the pick, as before.
+  recentDistances?: Map<string, number>;
   window: number;
   // A constrained re-pick over `alt`. Returns the model's object, or null when
   // the call failed or answered with an id outside the set it was offered.
@@ -160,8 +200,24 @@ export async function runArtistGuard<T extends CandidateLike>(
 
   // Spacing yields to the run: no fresher artist exists to re-pick, so don't
   // spend a re-pick plus a pool rescue arriving back here. An anchor match
-  // still escalates through both.
+  // still escalates through both. Yielding takes the candidate heard longest
+  // ago when that beats the pick (leastRecentAlternative), else keeps it.
   if (cause === 'recent' && (starved || !alt.size)) {
+    const older = starved ? leastRecentAlternative(alt, song, deps.recentDistances, anchorRoot) : null;
+    if (older) {
+      logEvent('pick.artistGuard', {
+        ...telemetry, relaxed: true, reason: 'all-recent', swapped: 'least-recent',
+        from: song.artist, to: older.song.artist, fromSlots: older.from, toSlots: older.to,
+        candidates: alt.size, window,
+      });
+      log(`recently-played artist "${song.artist}" (${older.from} slot(s) ago) swapped for "${older.song.title}" by ${older.song.artist} (${older.to} slots ago) — every candidate was inside the spacing window (${window} slots), so the one heard longest ago plays`);
+      return {
+        kind: 'repicked',
+        // The model's note and transition were written for the other track.
+        object: { id: String(older.song.id), reason: '', musicalReason: '', transition: null },
+        song: older.song,
+      };
+    }
     logEvent('pick.artistGuard', {
       ...telemetry, relaxed: true, reason: alt.size ? 'all-recent' : 'no-other-artist',
       artist: song.artist, candidates: alt.size, window,

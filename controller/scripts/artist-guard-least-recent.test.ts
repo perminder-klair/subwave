@@ -1,0 +1,157 @@
+// L3: when spacing has to relax, the artist heard LONGEST ago plays.
+//
+// Seen on air 10 Oct, show "Sunrise On The Beach" (strict filters): Katerine
+// "Jesus Christ mon amour" on air, then Norah Jones queued (pair drain, so the
+// pick anchor was the queue head), then Katerine again at 06:08. The run's
+// candidates were all inside the 12-slot window, so the guard yielded and kept
+// the model's pick: the artist from two slots back, while candidates heard far
+// longer ago sat in the same run. Now the guard takes the candidate whose
+// artist is furthest back, with no model call; with none further back than the
+// pick, the pick stands as before.
+// Run: npm test -- artist-guard-least-recent
+
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import {
+  artistRootKey,
+  creditDistance,
+  leastRecentAlternative,
+  runArtistGuard,
+} from '../src/broadcast/dj-agent/artist-guard.js';
+import { queue } from '../src/broadcast/queue.js';
+
+type Cand = { id: string; title: string; artist: string };
+
+const katerine: Cand = { id: 'k2', title: 'Copenhague', artist: 'Katerine' };
+const norah: Cand = { id: 'n1', title: 'To Live', artist: 'Norah Jones' };
+const air: Cand = { id: 'a1', title: 'La femme d\'argent', artist: 'Air' };
+const zero7: Cand = { id: 'z1', title: 'Destiny', artist: 'Zero 7' };
+const bebel: Cand = { id: 'b1', title: 'Samba', artist: 'Bebel Gilberto' };
+
+const seenOf = (...songs: Cand[]) => new Map(songs.map((s) => [s.id, s]));
+// Distances as queue.neighbourArtistDistances returns them: 1 = queue tail.
+const dist = (...pairs: [string, number][]) => new Map(pairs.map(([a, d]) => [artistRootKey(a), d]));
+// The 10 Oct window: Norah Jones queued (1), Katerine on air (2), then plays.
+const window10Oct = dist(['Norah Jones', 1], ['Katerine', 2], ['Bebel Gilberto', 4], ['Zero 7', 7], ['Air', 11]);
+const rootsOf = (d: Map<string, number>) => new Set(d.keys());
+
+function harness() {
+  const calls = { repick: 0, poolRescue: 0 };
+  const lines: string[] = [];
+  const events: Record<string, unknown>[] = [];
+  return {
+    calls, lines, events,
+    deps: {
+      repick: async () => { calls.repick++; return null; },
+      poolRescue: async () => { calls.poolRescue++; return 'empty' as const; },
+      log: (line: string) => { lines.push(line); },
+      logEvent: (_name: string, payload: Record<string, unknown>) => { events.push(payload); },
+    },
+  };
+}
+
+const run = (h: ReturnType<typeof harness>, o: {
+  song: Cand; pickAnchor: Cand | null; seen: Map<string, Cand>;
+  distances?: Map<string, number>; roots?: Set<string>;
+}) => runArtistGuard<Cand>({
+  song: o.song,
+  object: { id: o.song.id, reason: 'written for the original pick', transition: 'sweep' },
+  pickAnchor: o.pickAnchor,
+  seen: o.seen,
+  recentRoots: o.roots ?? rootsOf(o.distances ?? window10Oct),
+  recentDistances: o.distances,
+  window: 12,
+  ...h.deps,
+});
+
+test('the 10 Oct case: Katerine two slots back gives way to the artist heard longest ago', async () => {
+  const h = harness();
+  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, bebel, air, zero7), distances: window10Oct });
+  assert.equal(out.kind, 'repicked');
+  assert.equal(out.kind === 'repicked' && out.song.artist, 'Air', '11 slots back beats 7 and 4');
+  assert.deepEqual(h.calls, { repick: 0, poolRescue: 0 }, 'no model call, no pool call');
+  assert.equal(h.events.at(-1)?.reason, 'all-recent');
+  assert.equal(h.events.at(-1)?.swapped, 'least-recent');
+  assert.equal(h.events.at(-1)?.fromSlots, 2);
+  assert.equal(h.events.at(-1)?.toSlots, 11);
+  assert.match(h.lines.at(-1)!, /swapped for "La femme d'argent" by Air \(11 slots ago\)/);
+});
+
+test('a swapped pick carries none of the model\'s note or transition', async () => {
+  const out = await run(harness(), { song: katerine, pickAnchor: norah, seen: seenOf(katerine, air), distances: window10Oct });
+  assert.equal(out.kind, 'repicked');
+  if (out.kind !== 'repicked') return;
+  assert.deepEqual(out.object, { id: 'a1', reason: '', musicalReason: '', transition: null });
+});
+
+test('the pick stands when no candidate was heard longer ago than it', async () => {
+  const h = harness();
+  const d = dist(['Norah Jones', 1], ['Bebel Gilberto', 2], ['Katerine', 9]);
+  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, bebel), distances: d });
+  assert.equal(out.kind, 'kept');
+  assert.match(h.lines.at(-1)!, /no fresher artist/);
+  assert.equal(h.events.at(-1)?.swapped, undefined);
+});
+
+test('the anchor artist is never the swap, even when it is furthest back in the window', async () => {
+  // A held pair-drain anchor can sit far back in the window's history too.
+  const d = dist(['Bebel Gilberto', 1], ['Katerine', 2], ['Norah Jones', 12]);
+  const out = await run(harness(), { song: katerine, pickAnchor: norah, seen: seenOf(katerine, norah, bebel), distances: d });
+  assert.equal(out.kind, 'kept', 'Norah Jones is the anchor; Bebel is nearer than the pick');
+});
+
+test('ties keep the run\'s own order', () => {
+  const d = dist(['Katerine', 2], ['Air', 8], ['Zero 7', 8]);
+  const best = leastRecentAlternative(seenOf(zero7, air), katerine, d, '');
+  assert.equal(best?.song.artist, 'Zero 7', 'first listed wins a tie');
+});
+
+test('without distances the guard behaves exactly as before', async () => {
+  const h = harness();
+  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, air), roots: rootsOf(window10Oct) });
+  assert.equal(out.kind, 'kept');
+  assert.match(h.lines.at(-1)!, /no fresher artist/);
+});
+
+test('a re-pick with fresh artists available is untouched: the swap is only for the relaxed case', async () => {
+  const h = harness();
+  const fresh: Cand = { id: 'f1', title: 'Fresh', artist: 'Nouvelle Vague' };
+  const out = await run(h, { song: katerine, pickAnchor: norah, seen: seenOf(katerine, air, fresh), distances: window10Oct });
+  assert.equal(h.calls.repick, 1, 'the model re-pick still runs');
+  assert.equal(out.kind, 'kept', 'this harness re-pick fails, so the pick is kept as before');
+});
+
+test('creditDistance: a credit is as recent as its nearest act', () => {
+  const d = dist(['Marvin Gaye', 3], ['Tammi Terrell', 9]);
+  assert.equal(creditDistance({ artist: 'Marvin Gaye' }, d), 3);
+  assert.equal(creditDistance({ artist: 'Prince' }, d), Infinity);
+  assert.equal(creditDistance({ artist: 'The Marvin Gaye' }, d), 3, 'matched like the window matches');
+});
+
+test('queue.neighbourArtistDistances: queue tail first, then on air, then plays newest first', () => {
+  // Reaches the queue's private fields to stage a window without a live station.
+  type Staged = '_recentPlays' | 'current' | 'upcoming';
+  const q = queue as unknown as Omit<typeof queue, Staged> & Record<Staged, unknown>;
+  const saved = { plays: q._recentPlays, current: q.current, upcoming: q.upcoming };
+  try {
+    q.upcoming = [{ track: { id: 'u1', artist: 'Zero 7' } }, { track: { id: 'u2', artist: 'Norah Jones' } }];
+    q.current = { track: { id: 'c1', artist: 'Katerine' } };
+    q._recentPlays = [
+      { id: 'p1', title: 'One', artist: 'Bebel Gilberto' },
+      { id: 'p1', title: 'One', artist: 'Bebel Gilberto' }, // a duplicate row is one play
+      { id: 'p2', title: 'Two', artist: 'Air' },
+      { id: 'p3', title: 'Three', artist: 'Zero 7' },
+    ];
+    const d = q.neighbourArtistDistances(12) as Map<string, number>;
+    assert.equal(d.get(artistRootKey('Norah Jones')), 1);
+    assert.equal(d.get(artistRootKey('Zero 7')), 2, 'nearest occurrence wins');
+    assert.equal(d.get(artistRootKey('Katerine')), 3);
+    assert.equal(d.get(artistRootKey('Bebel Gilberto')), 4);
+    assert.equal(d.get(artistRootKey('Air')), 5);
+    // Same acts as the window the guard tests against.
+    assert.deepEqual(new Set(d.keys()), q.neighbourArtistRoots(12));
+    assert.equal(q.neighbourArtistDistances(0).size, 0, 'window off: no distances');
+  } finally {
+    q._recentPlays = saved.plays; q.current = saved.current; q.upcoming = saved.upcoming;
+  }
+});

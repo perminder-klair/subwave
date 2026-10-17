@@ -4419,6 +4419,38 @@ class Queue {
     return [...out.values()];
   }
 
+  // The same window as neighbourArtistRoots, as how many slots before the NEW
+  // pick each act was heard: 1 is the queue tail the pick will follow, then
+  // back through the queue, the track on air and the distinct recent plays.
+  // The nearest occurrence wins. The artist guard reads it to relax onto the
+  // artist heard LONGEST ago when every candidate is inside the window (L3).
+  neighbourArtistDistances(n = 0): Map<string, number> {
+    const out = new Map<string, number>();
+    if (!Number.isFinite(n) || n <= 0) return out;
+    let slot = 0;
+    const add = (artist: string | null | undefined) => {
+      slot++;
+      for (const key of creditedActKeys({ artist })) if (!out.has(key)) out.set(key, slot);
+    };
+    for (const item of this.upcoming.slice(-n).reverse()) add(item?.track?.artist);
+    add(this.current?.track?.artist);
+    const seenIds = new Set<string>();
+    const seenKeys = new Set<string>();
+    // Walked exactly as neighbourArtistCredits walks it, so the two windows
+    // cover the same plays; a play counted twice only offsets older slots.
+    let distinct = 0;
+    for (const p of this._recentPlays) {
+      if (distinct >= n) break;
+      const k = trackKey(p);
+      if ((p.id && seenIds.has(p.id)) || (k && seenKeys.has(k))) continue;
+      distinct++;
+      if (p.id) seenIds.add(p.id);
+      if (k) seenKeys.add(k);
+      add(p.artist);
+    }
+    return out;
+  }
+
   // The window as act names for the Agentic pick event: every act the guard
   // will refuse, deduped across credits (recency.creditedActNames).
   neighbourArtistActs(n = 0): string[] {
