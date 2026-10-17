@@ -8,8 +8,8 @@
 //     nonzero window below 8192;
 //   - code-specialised names always warn, small models only when picks is
 //     agentic;
-//   - thinking-mandatory models reject forced calls; toolChoice "auto" on the
-//     leg weakens the agent loop;
+//   - it makes no judgement DJ Doc does not: a thinking-mandatory model or a
+//     leg on toolChoice "auto" raises nothing here, as it raises nothing there;
 //   - the agent deadline compares measured p90 against the station deadline,
 //     needing ≥ 5 successful rows from the same model;
 //   - null/undefined input degrades to the shipped all-agentic default.
@@ -97,16 +97,11 @@ test('model class: code name always warns; small model only when picks is agenti
 });
 
 // --- 5 -------------------------------------------------------------------
-test('tool calling: thinking-mandatory rejects forced calls; toolChoice auto weakens', () => {
+test('no tool-calling judgement: DJ Doc makes none of the primary either', () => {
   const claude = llmSwapFit(llm({ provider: 'anthropic', model: 'claude-sonnet-5-5' }));
-  const tc = claude.warnings.filter(w => w.check === 'tool calling');
-  assert.equal(tc.length, 1);
-  assert.ok(tc[0].detail.includes('rejects forced tool calls'));
-
+  assert.deepEqual(claude.warnings, []);
   const auto = llmSwapFit(llm({ provider: 'openai', model: 'gpt-5-mini', toolChoice: 'auto' }));
-  const tc2 = auto.warnings.filter(w => w.check === 'tool calling');
-  assert.equal(tc2.length, 1);
-  assert.ok(tc2[0].detail.includes('"auto"'));
+  assert.deepEqual(auto.warnings, []);
 });
 
 // --- 6 -------------------------------------------------------------------
