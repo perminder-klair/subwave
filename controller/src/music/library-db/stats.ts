@@ -237,9 +237,13 @@ function computePickStats(): PickStats {
   return { total, mirrorTotal, distinctArtists, withEmbedding, withAudioEmbedding, hasMoodCoverage, hasEnergyCoverage, byMood };
 }
 
-export function stats(): LibraryStats {
+// `fresh` skips the TTL, never the token, so the value is never older than the
+// last commit. For a caller that caches what it builds on changeToken()
+// (genre-suggest, #1976): a TTL-held value from before a commit, stored under a
+// token read after it, would be served until the next commit.
+export function stats(opts: { fresh?: boolean } = {}): LibraryStats {
   const now = Date.now();
-  if (statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
+  if (!opts.fresh && statsCache && now - statsCache.at < STATS_TTL_MS) return statsCache.value;
   // Read before the compute, so a commit landing mid-compute leaves a token
   // the next call no longer matches.
   const token = changeToken();

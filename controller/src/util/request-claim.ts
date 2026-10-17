@@ -10,9 +10,12 @@
 // be confused with — what the listener asked for, another candidate the run
 // surfaced, a quoted title — only if it ALSO names the queued track. A line that
 // names nothing at all is vague, not wrong, and passes; so does one that owns a
-// substitution ("no Michael Jackson tonight, but here's Madonna"). Pure: the
-// orchestration (one corrective re-pick, then plain copy) is the request
-// agent's, in broadcast/dj-agent.ts.
+// substitution ("no Michael Jackson tonight, but here's Madonna"). The same
+// reading says whether the track is a STAND-IN for the ask at all
+// (requestStandIn, #1979), which is what puts it under artist spacing. Pure:
+// the orchestration (one corrective re-pick, then plain copy) is the request
+// agent's, in broadcast/dj-agent.ts. A pick's note is read by the same rule
+// (#1978, misnamedPickNote below).
 //
 // Three sources of a wrong name, each chosen because it needs no world
 // knowledge (the asked-for artist is often exactly the one the library lacks):
@@ -68,7 +71,23 @@ export interface ClaimContext {
   stationNames?: Iterable<string | null | undefined>;
   // Every OTHER candidate the run surfaced.
   others?: Iterable<ClaimTrack | null | undefined>;
+  // Names the writer was handed as context rather than to choose from — the
+  // track a pick follows, the recent plays, the show's own name and brief
+  // (#1978). A line may say them without claiming a track. Unlike
+  // stationNames they take no "DJ" form.
+  references?: Iterable<string | null | undefined>;
+  // What the run itself looked up by name (requestLookups). Read only by
+  // requestStandIn: a track the agent's own lookup names is the ask.
+  lookups?: Iterable<string | null | undefined>;
+  // The track on air when the listener asked. Read only by requestStandIn: an
+  // ask that points at it ("more of this", DEICTIC) names its credit.
+  onAir?: ClaimTrack | null;
 }
+
+// Which writer's line is read. A request line (#1918) keeps the rules its probe
+// measured; a pick NOTE (#1978) is read two ways wider, both for candidate
+// claims only — see possessiveLead and COMPARES.
+type ClaimMode = 'request' | 'pick-note';
 
 export type ClaimSource = 'request' | 'candidate-artist' | 'candidate-title' | 'quoted-title';
 
@@ -156,6 +175,25 @@ function nameLike(toks: Tok[]): boolean {
     if (t.capital === true && !t.sentenceStart) midCapital = true;
   }
   return midCapital;
+}
+
+// "Teardrop's hush…": a pick note opens on its subject, and a possessive is the
+// one sentence-start shape that reads as a name rather than an adjective
+// ("Smooth handoff…"). Pick notes only. Its price, measured: a common-word
+// title in the run ("Tonight") under a note opening "Tonight's mood…". The
+// same shape after an adverb or pronoun is a contraction, never a possessive
+// ("Here's a darker turn", "Something's off-kilter"), and real titles share
+// those words ("Here", "Something"), so they stay ambiguous like any other
+// lone sentence-start capital.
+const CONTRACTED = new Set([
+  'here', 'there', 'that', 'what', 'who', 'where', 'when', 'how', 'let',
+  'something', 'nothing', 'everything', 'anything', 'someone', 'everyone', 'somebody', 'everybody', 'nobody',
+]);
+
+function possessiveLead(text: string, toks: Tok[]): boolean {
+  if (toks.length === 1 && CONTRACTED.has(toks[0]!.key)) return false;
+  return toks.every((t) => MINOR.has(t.key) || t.capital === true)
+    && /^['’]s\b/u.test(text.slice(toks[toks.length - 1]!.end));
 }
 
 function occurrences(line: Tok[], phrase: string[]): number[] {
@@ -252,9 +290,23 @@ const DECLINES: Array<[RegExp | null, RegExp | null]> = [
   [null, /^(?:['’]s not|\s+(?:is|are)(?:n['’]?t| not)) in (?:the |my |our )?(?:crates?|library|collection)\b/iu],
 ];
 
-function declined(text: string, start: number, end: number): boolean {
-  return DECLINES.some(([before, after]) => (!before || before.test(text.slice(0, start)))
+// A pick note naming another act to COMPARE ("a Portishead-like gloom",
+// "harder than Def Leppard") says the pick is not that act, so the name is a
+// reference (#1978). Pick notes only: a request line that dodges the ask this
+// way still owes the listener the queued track's name. Same shape and the same
+// brevity rule as DECLINES.
+const COMPARES: Array<[RegExp | null, RegExp | null]> = [
+  [null, /^-(?:style|like|esque|adjacent|ish|inspired|tinged|sized)\b/iu],
+  [/\b(?:like|à la|a la|than|in the vein of|in the spirit of)(?:\s+the)?\s+$/iu, null],
+];
+
+function cued(table: Array<[RegExp | null, RegExp | null]>, text: string, start: number, end: number): boolean {
+  return table.some(([before, after]) => (!before || before.test(text.slice(0, start)))
     && (!after || after.test(text.slice(end))));
+}
+
+function declined(text: string, start: number, end: number): boolean {
+  return cued(DECLINES, text, start, end);
 }
 
 function surface(text: string, toks: Tok[]): string {
@@ -284,9 +336,17 @@ function quotedSpans(text: string): Array<{ start: number; end: number }> {
   return out;
 }
 
-export function lineClaims(line: string | null | undefined, ctx: ClaimContext): {
-  claims: LineClaim[]; titleNamed: boolean; artistNamed: boolean;
-} {
+// `declines` are the request names the line declines or uses as a reference
+// (DECLINES) — never claims, but the mark of a stand-in (requestStandIn).
+interface ReadClaims {
+  claims: LineClaim[]; declines: LineClaim[]; titleNamed: boolean; artistNamed: boolean;
+}
+
+export function lineClaims(line: string | null | undefined, ctx: ClaimContext): ReadClaims {
+  return readClaims(line, ctx, 'request');
+}
+
+function readClaims(line: string | null | undefined, ctx: ClaimContext, mode: ClaimMode): ReadClaims {
   const text = normalizeListenerText(line);
   const toks = tokenize(text);
   const titles = titlePhrases(ctx.track?.title);
@@ -294,7 +354,8 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   const own = [...titles, ...artists, ...titlePhrases(ctx.track?.album)];
   const titleNamed = names(toks, titles);
   const artistNamed = names(toks, artists);
-  if (!toks.length) return { claims: [], titleNamed, artistNamed };
+  const declines: LineClaim[] = [];
+  if (!toks.length) return { claims: [], declines, titleNamed, artistNamed };
 
   // The queued track's own names, masked out before anything is read as a claim.
   const masked = new Array<boolean>(toks.length).fill(false);
@@ -305,11 +366,16 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
   // station's own (the host greets "hey DJ Marlowe" back), and "DJ" standalone
   // ("Your DJ has you covered" for "hey DJ, play something chill"). A span
   // inside one is not a claim; "DJ Shadow" is not inside ["dj"], so it still is.
+  // Then the writer's references — the track a pick follows, recent plays.
   const exempt: string[][] = [['dj']];
   if (isNamedRequester(ctx.requester)) exempt.push(keysOf(ctx.requester));
   for (const name of ctx.stationNames ?? []) {
     const keys = keysOf(name);
     if (keys.length) exempt.push(keys, ['dj', ...keys]);
+  }
+  for (const name of ctx.references ?? []) {
+    const keys = keysOf(name);
+    if (keys.length) exempt.push(keys);
   }
   const isExempt = (keys: string[]) => exempt.some((name) => contains(name, keys));
   const others = [...(ctx.others ?? [])];
@@ -352,7 +418,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     const span = toks.slice(a, b + 1);
     if (!nameLike(span)) return;
     if (isExempt(span.map((t) => t.key))) return;
-    if (declined(text, span[0]!.start, span[span.length - 1]!.end)) return;
+    if (declined(text, span[0]!.start, span[span.length - 1]!.end)) {
+      declines.push({ source: 'request', text: surface(text, span) });
+      return;
+    }
     add('request', span);
   };
   for (let i = 0; i < toks.length; i++) {
@@ -374,7 +443,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     }
   }
 
-  // 2. Another candidate's artist or title.
+  // 2. Another candidate's artist or title. A pick note also opens on a
+  // possessive name and names acts to compare against (possessiveLead,
+  // COMPARES).
+  const pickNote = mode === 'pick-note';
   const ownIds = new Set(own.map((p) => p.join(' ')));
   const typed: Array<[ClaimSource, string[][]]> = [['candidate-artist', []], ['candidate-title', []]];
   for (const o of others) {
@@ -387,8 +459,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
       if (ownIds.has(p.join(' ')) || p.join('').length < 3) continue;
       for (const i of occurrences(toks, p)) {
         const span = toks.slice(i, i + p.length);
-        if (masked.slice(i, i + p.length).some(Boolean) || !nameLike(span)) continue;
+        if (masked.slice(i, i + p.length).some(Boolean)) continue;
+        if (!nameLike(span) && !(pickNote && possessiveLead(text, span))) continue;
         if (isExempt(p)) continue;
+        if (pickNote && cued(COMPARES, text, span[0]!.start, span[span.length - 1]!.end)) continue;
         add(source, span);
       }
     }
@@ -405,7 +479,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     add('quoted-title', span);
   }
 
-  return { claims, titleNamed, artistNamed };
+  return { claims, declines, titleNamed, artistNamed };
 }
 
 // The claims that make a line wrong about the queued track. A wrong ARTIST is
@@ -413,7 +487,10 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
 // queued title; the listener's own words, which could be either, by naming
 // either. Empty means the line may air.
 export function misnamedClaims(line: string | null | undefined, ctx: ClaimContext): LineClaim[] {
-  const { claims, titleNamed, artistNamed } = lineClaims(line, ctx);
+  return unexcused(lineClaims(line, ctx));
+}
+
+function unexcused({ claims, titleNamed, artistNamed }: ReadClaims): LineClaim[] {
   return claims.filter((c) => {
     if (c.source === 'request') return !titleNamed && !artistNamed;
     if (c.source === 'candidate-artist') return !artistNamed;
@@ -446,6 +523,28 @@ export function claimEarnsRepick(misnamed: MisnamedLine[]): boolean {
   return misnamed.some((m) => m.field === 'intro');
 }
 
+// The pick path's half of the rule (#1978). A pick's model writes its id and
+// its note in one answer, as the request agent does, and only the id was
+// checked: searchLibrary answers a named search with several tracks by that
+// artist, the harness accepts any of them, and the note can describe the
+// neighbour of the id it returned. The Booth shows that note under the queued
+// track, and the next pick reads it back as its memory of what aired.
+//
+// Read the MODEL'S words, never the controller's composed sentence: its
+// verified "“Title” by Artist" prefix would ground every line. There is no
+// request text, so the claims are the other candidates and quoted titles; the
+// track the pick follows and the recent plays are references, since "after
+// Porcelain's hush" is the commonest honest name in a note. The remedy is the
+// one claimEarnsRepick takes for an ack: a note is read, never aired, so a
+// misnamed one becomes the route's plain copy with no model call, and the
+// track — which passed every guard — stands.
+export function misnamedPickNote(
+  note: string | null | undefined,
+  ctx: Omit<ClaimContext, 'requestText' | 'requester'>,
+): LineClaim[] {
+  return unexcused(readClaims(note, { ...ctx, requestText: null, requester: null }, 'pick-note'));
+}
+
 // Tools that already look a NAMED artist or title up in the library.
 const LOOKUP_TOOLS = new Set(['searchLibrary', 'identifyRequestedTrack', 'topSongsByArtist', 'recentByArtist']);
 
@@ -467,6 +566,294 @@ export function claimLookupQuery(
     }
   }
   return best;
+}
+
+// What the run itself looked up by NAME (#1979): the library searches it ran,
+// the artists whose catalogue it walked, and the tracks identifyRequestedTrack
+// resolved a description to. The agent reads a nickname with the world
+// knowledge this module lacks — "the King" searched as "Elvis Presley" — so a
+// track its own lookup names is the ask as the agent understood it.
+//
+// A lookup in the LISTENER's spelling also names what it found. Local models
+// copy the listener's words into the query ("Moosewala", "Tupac"), and the
+// library answers in its own spelling — searchLibrary's artist retry exists
+// for exactly that — so with `requestText` the credits such a call returned
+// are lookups too. Never searchLibrary's vibe fallback (`via: 'vibe'`): those
+// are lookalikes, and an absent artist's lookalikes can include the very
+// artist on air — the #1918 shape, which must stay a stand-in.
+const NAMED_LOOKUP_ARG = new Map([['searchLibrary', 'query'], ['topSongsByArtist', 'artist'], ['recentByArtist', 'artist']]);
+
+export function requestLookups(
+  toolCalls: ReadonlyArray<{ name?: string | null; args?: unknown; result?: unknown } | null | undefined> | null | undefined,
+  requestText?: string | null,
+): string[] {
+  const req = keysOf(requestText);
+  const out: string[] = [];
+  for (const c of toolCalls ?? []) {
+    const arg = c?.name ? NAMED_LOOKUP_ARG.get(c.name) : undefined;
+    const value = arg ? (c?.args as Record<string, unknown> | null)?.[arg] : undefined;
+    if (typeof value === 'string') {
+      out.push(value);
+      if (inListenerWords(value, req)) {
+        for (const t of literalTracks(c?.result)) if (typeof t?.artist === 'string') out.push(t.artist);
+      }
+    }
+    if (c?.name !== 'identifyRequestedTrack') continue;
+    const found = (c.result as { candidates?: unknown } | null)?.candidates;
+    for (const t of Array.isArray(found) ? found : []) out.push(`${t?.artist ?? ''} ${t?.title ?? ''}`);
+  }
+  return out;
+}
+
+// A query is the listener's own words when every word in it, filler aside, is
+// one they wrote — or a letter off one.
+function inListenerWords(query: string, req: string[]): boolean {
+  const words = keysOf(query).filter((k) => !FILLER.has(k));
+  return words.length > 0 && words.every((k) => req.some((w) => saysWord(w, k)));
+}
+
+// The tracks a lookup answered with: a plain list, or a labelled one whose
+// literal matches were all filtered — but not a vibe search's neighbours.
+function literalTracks(result: unknown): any[] {
+  if (Array.isArray(result)) return result;
+  const labelled = result as { tracks?: unknown; via?: unknown } | null;
+  return labelled?.via !== 'vibe' && Array.isArray(labelled?.tracks) ? labelled.tracks : [];
+}
+
+// Is the track a STAND-IN for what the listener named (#1979)? Requests are
+// exempt from artist spacing because an explicit ask wins, and a stand-in is
+// not the ask: the listener named an artist or a title, the library could not
+// meet it, and the agent chose something else — in #1918, Madonna straight
+// after Madonna for "Michael Jackson please". Whose track stands in is the
+// DJ's choice, so the DJ's spacing rule applies to it
+// (broadcast/dj-agent/artist-guard.ts); the listener's own ask never does.
+//
+// The evidence is the run's OWN lines — every ack and intro it wrote, replaced
+// ones included — read against the track by this module's rules: a line that
+// declines a name the listener used or uses it as a reference (DECLINES, the
+// honest substitution the frame prompt asks for), or one that names the
+// listener's words over a track it does not name (the #1918 lie, which still
+// says what they asked for after plain copy has replaced it). Not the request
+// text's own capitals: a nickname, an abbreviation or a typo ("more MJ
+// please", "Madona") reads as an unmet name over the very artist asked for,
+// and a test wrong in that direction steers a genuine request away from its
+// artist. The lie's evidence has the same blind spot — a line that reads the
+// listener's "MJ" back says the listener's words over a track it does not
+// name by its library name — so the ask is excused FIRST, by the listener's
+// words (asksForTrack, which reads abbreviations and typos) or by the run's
+// own named lookups (requestLookups, which carry the agent's reading of a
+// nickname), or — for an ask that points at what is playing ("more of this")
+// — by the on-air credit, so no word a line reads back can space an answer
+// by that artist. A line that DECLINES a name of the listener's still does:
+// it says they asked for someone else ("keep it going with some Michael
+// Jackson" answered "No Michael Jackson tonight"), the #1918 shape. Nor is a
+// word the request uses for something other than music (unaskedSlots)
+// evidence. A substitution owned without a name ("can't do that one") is an
+// accepted miss: the track airs as it always did.
+export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
+  const asked = [ctx.requestText, ...(ctx.lookups ?? [])];
+  if (asked.some((a) => asksForTrack(a, ctx.track))) return false;
+  const onAirAsked = !!ctx.onAir && pointsAtOnAir(ctx.requestText) && asksForTrack(ctx.onAir.artist, ctx.track);
+  const unasked = unaskedSlots(ctx.requestText);
+  const asks = (c: LineClaim) => {
+    const keys = keysOf(c.text);
+    return !keys.every((k) => DAYS.has(k) || MINOR.has(k)) && !unasked.some((slot) => contains(slot, keys));
+  };
+  // Only the request's own words are evidence, so the other candidates count
+  // only for their genre tags; their names would be read as claims nobody
+  // looks at, once per candidate the spacing pass asks about.
+  const byGenre = { ...ctx, others: [...(ctx.others ?? [])].map((o) => ({ genre: o?.genre })) };
+  for (const line of lines) {
+    const read = lineClaims(line, byGenre);
+    if (read.declines.some(asks) || (!onAirAsked && unexcused(read).some((c) => c.source === 'request' && asks(c)))) return true;
+  }
+  return false;
+}
+
+// An ask that points at what is playing (#1979): "more of this", "more like
+// that", "another one like this", "same again", "more of the same", "keep it
+// going". It names the on-air track as surely as its title would, and a
+// "more of this" answer is by the on-air artist, so it is always inside the
+// spacing window: read only by its lines, any capitalised word of the
+// listener's read back — "Greetings back to Leeds!", "Up the Arsenal!" —
+// spaced it. ENGLISH ONLY and as short as DECLINES, for the same reason. Not
+// "no more of this", which points away; and before a capital "this"/"that"
+// is a determiner ("more of that Prince stuff"), so the name after it is the
+// ask and the line reading stands.
+const DEICTIC = /(?<!\b(?:no|not|any)\s+)\b(?:more\s+(?:of\s+|like\s+)?(?:this|that|these|those)|(?:another(?:\s+one)?|one\s+more|something|anything)\s+like\s+(?:this|that|these|those)|more\s+of\s+the\s+same|same\s+again|keep\s+(?:it|this|them|em|['’]em|the\s+vibes?)\s+(?:going|coming|rolling))\b/giu;
+const DEMONSTRATIVE_END = /(?:this|that|these|those)$/iu;
+
+function pointsAtOnAir(requestText: string | null | undefined): boolean {
+  const text = normalizeListenerText(requestText);
+  for (const m of text.matchAll(DEICTIC)) {
+    const next = /^\s+([\p{L}\p{N}]+)/u.exec(text.slice((m.index ?? 0) + m[0].length))?.[1] ?? '';
+    // A lone "I" is no name: "more of this I love it".
+    if (DEMONSTRATIVE_END.test(m[0]) && next.length > 1 && /^\p{Lu}/u.test(next)) continue;
+    return true;
+  }
+  return false;
+}
+
+// Where a request's words name no music (#1979, read for stand-ins only): who
+// it is for, and the feel it asks for. "More of this for Sarah" answered
+// "This one's for Sarah!" says the listener's capitalised word over a track
+// the line does not name — the #1918 lie's shape — yet nothing was asked for
+// that a track could stand in for. Each row is a cue and where its slot sits:
+// after the cue, from it (the cue word included), or before it. A slot runs to
+// the clause's end, a SLOT_STOP word or SLOT_WORDS words. ENGLISH ONLY and as
+// short as DECLINES, for the same reason. A miss reads the word as an ask, and
+// the request costs a call and moves; a slot that swallows a real ask ("some
+// Prince vibes") leaves it exempt, where it started.
+const UNASKED: Array<[RegExp, 'after' | 'from' | 'before']> = [
+  // "for Sarah", "for my friend Sarah Jones" — not the ask's own "for" after a
+  // verb that cannot introduce a person: "looking for Prince", "in the mood
+  // for Prince" name what they want, and the incident's stand-in is spaced
+  // under them. "Asking for" and "a request for" name a person as often as an
+  // artist ("a request for my wife Sarah"), so their slot stays a dedication.
+  [/(?<!\b(?:look(?:s|ed|ing)?|hop(?:e|es|ed|ing)|in\s+(?:the|a)\s+mood|crav(?:e|es|ed|ing))\s+)\bfor\s+/giu, 'after'],
+  // "dedicate this to Priya", "shout out to the night shift", "goes out to Jen"
+  [/\b(?:dedicat\w*|shout[\s-]?outs?|goes out|going out)\b[^,.;:!?\n]*?\bto\s+/giu, 'after'],
+  // "happy birthday Sarah", "happy Friday!" — the greeting whole
+  [/\bhappy\s+/giu, 'from'],
+  // "it's Sarah's birthday"
+  [/['’]s\s+b(?:irth)?day\b/giu, 'before'],
+  // "some Friday vibes", "a Sunday morning mood"
+  [/\s+(?:vibes?|mood|feels)\b/giu, 'before'],
+];
+const SLOT_WORDS = 4;
+const SLOT_STOP = new Set([
+  'please', 'pls', 'plz', 'play', 'by', 'from', 'off', 'but', 'or', 'with',
+  'some', 'something', 'anything', 'any', 'more', 'for', 'to',
+]);
+const CLAUSE_BREAK = /[,.;:!?…\n—–()]/u;
+// A day of the week names no music on its own ("it's Friday!").
+const DAYS = new Set(['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'weekend']);
+
+function unaskedSlots(requestText: string | null | undefined): string[][] {
+  const text = normalizeListenerText(requestText);
+  const toks = tokenize(text);
+  const slots: string[][] = [];
+  for (const [cue, side] of UNASKED) {
+    for (const m of text.matchAll(cue)) {
+      const at = m.index ?? 0;
+      const slot: string[] = [];
+      if (side === 'before') {
+        let edge = at;
+        for (let i = toks.length - 1; i >= 0 && slot.length < SLOT_WORDS; i--) {
+          const t = toks[i]!;
+          if (t.end > at) continue;
+          if (SLOT_STOP.has(t.key) || CLAUSE_BREAK.test(text.slice(t.end, edge))) break;
+          slot.unshift(t.key);
+          edge = t.start;
+        }
+      } else {
+        let edge = side === 'after' ? at + m[0].length : at;
+        for (const t of toks) {
+          if (t.start < edge) continue;
+          if (slot.length >= SLOT_WORDS || SLOT_STOP.has(t.key) || CLAUSE_BREAK.test(text.slice(edge, t.start))) break;
+          slot.push(t.key);
+          edge = t.end;
+        }
+      }
+      if (slot.length) slots.push(slot);
+    }
+  }
+  return slots;
+}
+
+// A word as a listener might misspell it: one edit away (two from eight
+// letters) — a letter added, dropped, changed or a neighbouring pair swapped
+// ("Madona", "Micheal", "Beyonse"). Under four letters only an exact match
+// counts: a short word one letter off is just another word.
+function spelledLike(a: string, b: string): boolean {
+  if (a === b) return true;
+  const shorter = Math.min(a.length, b.length);
+  if (shorter < 4) return false;
+  const max = shorter >= 8 ? 2 : 1;
+  if (Math.abs(a.length - b.length) > max) return false;
+  let before: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      let d = Math.min(prev[j]! + 1, row[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, before[j - 2]! + 1);
+      row.push(d);
+    }
+    before = prev;
+    prev = row;
+  }
+  return prev[b.length]! <= max;
+}
+
+// A request word naming this one: the same word, or a misspelling of it. A
+// filler word is never read as a misspelling ("play" is not the title "Plays").
+const saysWord = (said: string, word: string) => said === word || (!FILLER.has(said) && spelledLike(said, word));
+
+function containsSaid(req: string[], phrase: string[]): boolean {
+  if (!phrase.length || phrase.length > req.length) return false;
+  for (let i = 0; i + phrase.length <= req.length; i++) {
+    if (phrase.every((k, j) => saysWord(req[i + j]!, k))) return true;
+  }
+  return false;
+}
+
+// What a credit is abbreviated to: the first letter of every word, and of every
+// word that is not a connective ("Earth, Wind & Fire" is EWF).
+function initialsOf(phrase: string[]): string[] {
+  const first = (ks: string[]) => ks.map((k) => [...k][0]).join('');
+  return [first(phrase), first(phrase.filter((k) => !MINOR.has(k)))].filter((s) => s.length >= 2);
+}
+
+// Every run of two or more words of a credit, written as one: how a listener
+// spells a split name they have only heard ("Moosewala", "Fleetwoodmac"). Six
+// letters at least, so a join never matches a short word by chance.
+function joinedRuns(phrase: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < phrase.length; i++) {
+    for (let j = i + 2; j <= phrase.length; j++) out.push(phrase.slice(i, j).join(''));
+  }
+  return out.filter((w) => w.length >= 6);
+}
+
+// The request's possible abbreviations: a short word ("MJ", "RHCP") or a run of
+// single letters ("M.J.", "R E M").
+function abbreviationsOf(req: string[]): Set<string> {
+  const out = new Set<string>();
+  let letters = '';
+  for (const k of [...req, '']) {
+    if (k.length === 1 && /\p{L}/u.test(k)) {
+      letters += k;
+      continue;
+    }
+    if (letters.length >= 2) out.add(letters);
+    letters = '';
+    if (k.length >= 2 && k.length <= 6 && !FILLER.has(k)) out.add(k);
+  }
+  return out;
+}
+
+// Do the listener's words name this track — a title form, the album, any
+// credited act, one word of the credit ("some Elvis" for Elvis Presley), the
+// credit written as one word ("more Moosewala" for Sidhu Moose Wala), the
+// credit's initials ("more MJ") — spelled right or a letter off ("Madona")?
+// Case-blind, because a listener's casing is no evidence ("madonna or michael
+// jackson"). A lone request word is not a title: "something by Michael
+// Jackson" does not ask for the Beatles' "Something". It errs wide on
+// purpose: a word shared by chance only leaves a request exempt from spacing,
+// which is where it started, while a miss steers a genuine ask away from its
+// artist. A nickname no spelling rule can reach ("the King") is the run's own
+// lookups' to excuse (requestStandIn).
+export function asksForTrack(requestText: string | null | undefined, track: ClaimTrack | null | undefined): boolean {
+  const req = keysOf(requestText);
+  if (!req.length || !track) return false;
+  const credit = artistPhrases(track.artist);
+  const phrases = [...titlePhrases(track.title), ...credit, ...titlePhrases(track.album)];
+  if (phrases.some((p) => !(p.length === 1 && FILLER.has(p[0]!)) && containsSaid(req, p))) return true;
+  if (credit.some((p) => p.some((k) => k.length >= 3 && !FILLER.has(k) && req.some((w) => saysWord(w, k))))) return true;
+  if (credit.some((p) => joinedRuns(p).some((j) => req.some((w) => saysWord(w, j))))) return true;
+  const abbreviations = abbreviationsOf(req);
+  return credit.some((p) => p.length > 1 && initialsOf(p).some((i) => abbreviations.has(i)));
 }
 
 // Fixed copy for a request whose own lines could not be trusted: names the

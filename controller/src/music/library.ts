@@ -557,11 +557,11 @@ export function pickStats(): db.PickStats {
   return db.pickStats();
 }
 
-export function stats() {
+export function stats(opts: { fresh?: boolean } = {}) {
   if (!loaded) {
     return { total: 0, mirrorTotal: 0, distinctArtists: 0, byMood: {}, byEnergy: {}, byGenre: {}, updatedAt: null, embeddingMeta: null };
   }
-  const s = db.stats();
+  const s = db.stats(opts);
   return {
     total: s.total,
     // Every row, tagged or not — NOT `total`, which counts only what the
