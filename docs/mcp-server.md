@@ -260,14 +260,17 @@ prompt.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:7700/api`. |
+| `SUBWAVE_API_URL` | auto-detected | Controller base URL. Unset: the first of `http://localhost:7701` (dev) and `http://localhost:7700/api` (prod behind Caddy) whose `/health` answers, else `:7701`. |
 | `SUBWAVE_ADMIN_USER` | — | Matches the controller's `ADMIN_USER`. |
 | `SUBWAVE_ADMIN_PASS` | — | Matches the controller's `ADMIN_PASS`. |
 | `SUBWAVE_STATION_PASSWORD` | — | Matches `settings.privacy.password`. Only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 In dev the controller is exposed directly on `:7701`. In prod only Caddy binds
 a host port, so the server must target `:7700/api` — the `handle_path` rule
-strips the `/api` prefix before the controller sees the route.
+strips the `/api` prefix before the controller sees the route. With the variable
+unset the stdio server probes both once at launch, so the repo's `.mcp.json`
+works against either stack; a stack that is down at launch leaves it on `:7701`
+until the MCP server is restarted. Set the variable for any other host.
 
 ---
 

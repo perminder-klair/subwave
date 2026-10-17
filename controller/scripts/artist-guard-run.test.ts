@@ -330,3 +330,34 @@ test('every firing names its cause and window, so the two are separable in the l
   assert.equal(h2.events[0].basis, 'recent-window');
   assert.equal(h2.events[0].window, 9, 'the configured window rides the event');
 });
+
+// ── a listener request's stand-in (#1979) ──────────────────────────────────
+
+test('with no pick anchor only spacing can fire, and an exempt candidate is still offered', async () => {
+  // The request path's shape: a stand-in by a recently-heard artist, no
+  // anchor (so never the pool rescue — a pool pick is not the listener's
+  // request), and the listener's own ask exempt from the narrowing.
+  const offered: string[][] = [];
+  const h = harness({ repick: (alt) => { offered.push([...alt.keys()].sort()); return alt.get('c1') ?? null; } });
+  const out = await runArtistGuard<Cand>({
+    song: marvin, object: { id: marvin.id }, pickAnchor: null,
+    seen: seenOf(marvin, clash, sly),
+    recentRoots: rootsOf('Marvin Gaye', 'The Clash'),
+    window: 5,
+    exempt: (s) => s.id === 'c1',
+    ...h.deps,
+  });
+  assert.equal(out.kind, 'repicked');
+  assert.equal(out.kind === 'repicked' && out.song.id, 'c1');
+  assert.deepEqual(offered, [['c1', 's1']], 'the recent but exempt candidate is offered beside the fresh one');
+  assert.equal(h.calls.poolRescue, 0);
+  assert.equal(h.events.at(-1)?.cause, 'recent');
+
+  const idle = harness({ poolRescue: 'queued' });
+  const kept = await runArtistGuard<Cand>({
+    song: marvin, object: { id: marvin.id }, pickAnchor: null,
+    seen: seenOf(marvin, marvinTammi), recentRoots: rootsOf('Marvin Gaye'), window: 5, ...idle.deps,
+  });
+  assert.equal(kept.kind, 'kept', 'a single-artist run yields');
+  assert.deepEqual(idle.calls, { repick: 0, poolRescue: 0 });
+});

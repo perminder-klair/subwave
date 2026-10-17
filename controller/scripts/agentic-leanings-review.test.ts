@@ -27,6 +27,7 @@ const {
   agenticLeaningsSelectionReason,
   compactAgenticReviewCandidate,
   eligibleAgenticLeanings,
+  plainAgenticSelectionReason,
   resolveAgenticLeaningsUsage,
   selectAgenticReviewCandidates,
   validateAgenticLeaningsReplacement,
@@ -463,4 +464,49 @@ test('Agentic presentation never attaches one track\'s note to another track', (
     ),
     "Thundercat featuring Steve Lacy, Steve Arrington & Childish Gambino with Black Qualls fits the current low-energy vibe.",
   );
+});
+
+test('an Agentic note that names the core of a credited title is kept', () => {
+  const khaled = { id: 'khaled', title: 'Final Warning (feat. Bun B, Shawty Lo, Bloodraw, Ace Hood, Brisco, Bali, Lil Scrappy, R. City)', artist: 'DJ Khaled' };
+  const named = 'DJ Khaled — Final Warning keeps the posse-cut energy rolling out of the last record.';
+  assert.equal(agenticSelectionReason(khaled, named), named, 'a bracketed feature list need not be repeated');
+  const bohemia = { id: 'bohemia', title: 'Bumpin My Song Feat. J.Hind', artist: 'Bohemia' };
+  const bumpin = '“Bumpin My Song” by Bohemia carries the Punjabi rap thread forward.';
+  assert.equal(agenticSelectionReason(bohemia, bumpin), bumpin, 'an inline Feat. credit need not be repeated');
+  const kendrick = { id: 'alien', title: 'Alien Girl (Today W/ Her)', artist: 'Kendrick Lamar' };
+  const alien = 'Kendrick Lamar’s Alien Girl slows the tempo into something dreamier.';
+  assert.equal(agenticSelectionReason(kendrick, alien), alien, 'an edition tag in brackets need not be repeated');
+  const remaster = { id: 'rm', title: 'Heroes - 2017 Remaster', artist: 'David Bowie' };
+  const heroes = 'David Bowie — Heroes lifts the room with its slow-building wall of sound.';
+  assert.equal(agenticSelectionReason(remaster, heroes), heroes, 'a dashed edition suffix need not be repeated');
+  const featArtist = { id: 'fa', title: 'Tadow', artist: 'Masego feat. FKJ' };
+  const tadow = 'Masego — Tadow keeps the late-night sax glow going.';
+  assert.equal(agenticSelectionReason(featArtist, tadow), tadow, 'an artist credit\'s feature need not be repeated');
+});
+
+test('the core-title match still refuses a note about another track', () => {
+  const khaled = { id: 'khaled', title: 'Final Warning (feat. Bun B)', artist: 'DJ Khaled' };
+  assert.equal(
+    agenticSelectionReason(khaled, 'DJ Khaled — All I Do Is Win keeps the posse-cut energy rolling.'),
+    '“Final Warning (feat. Bun B)” by DJ Khaled offers a strong musical fit with the current flow.',
+    'naming the artist alone with another title is still plain copy',
+  );
+  const up = { id: 'up', title: 'Up (Radio Edit)', artist: 'Shania Twain' };
+  assert.equal(
+    agenticSelectionReason(up, 'Shania Twain — an upbeat country-pop lift for the hour.'),
+    plainAgenticSelectionReason(up),
+    'a short one-word core is not matched inside another word, or on its own',
+  );
+  assert.equal(
+    agenticSelectionReason(
+      { id: 'sam', title: 'How Do You Sleep? (Acoustic)', artist: 'Sam Smith' },
+      'Porcupine Tree — Of the New Day keeps the atmosphere moving.',
+    ),
+    '“How Do You Sleep? (Acoustic)” by Sam Smith offers a strong musical fit with the current flow.',
+  );
+});
+
+test('a discarded Agentic note is recorded with what the model wrote', () => {
+  assert.match(pickSource, /object\.reason === plainAgenticSelectionReason\(song\)\) \{\n\s+logEvent\('pick\.notePlain', \{ agent: 'pick', to: song\.id \?\? null, note: note\.slice\(0, 400\) \}\);/,
+    'the first answer\'s note is logged when it becomes plain copy');
 });

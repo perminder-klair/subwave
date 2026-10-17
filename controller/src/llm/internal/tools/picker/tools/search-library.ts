@@ -75,13 +75,17 @@ export default definePickerTool({
         // are lookalikes, not the thing that was named, so they carry the same
         // note emptyResult would give; on the request path that is what lets
         // the DJ say "that one just played" instead of substituting silently.
+        // `via: 'vibe'` marks them either way: the request path's stand-in
+        // check (#1979, util/request-claim.ts requestLookups) reads a literal
+        // hit as the library's spelling of what the listener named, and a
+        // neighbour by feel is not that.
         const filteredNote = songs.length > 0 ? emptyResult(songs.length, 'these are the closest matches by feel instead, not literal matches for what was searched').note : null;
         if (embeddings.isAvailable()) {
           await library.load();
           const vec = await embeddings.embedQueryText(query.trim(), library.embeddingIndexTextMode(), { abortSignal });
           if (vec) {
             const sem = collect(library.tracksByVector(vec, candidateLimit(20), { excludeIds: knnExclude }));
-            if (sem.length > 0) return filteredNote ? { tracks: sem, note: filteredNote } : sem;
+            if (sem.length > 0) return filteredNote ? { tracks: sem, note: filteredNote, via: 'vibe' } : { tracks: sem, via: 'vibe' };
           }
         }
         return emptyResult(songs.length, 'this search matches literal titles/artists/genres first and the vibe index found nothing — choose from your other tool results this round');
