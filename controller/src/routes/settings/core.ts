@@ -277,7 +277,11 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
 router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
   try {
     await settings.load();
-    res.json(llmSwapFit(settings.get().llm, recentCalls));
+    const llm = settings.get().llm;
+    res.json(llmSwapFit(llm, recentCalls, {
+      backup: llm.fallback ? llmProvider.legLabel(llm.fallback) : undefined,
+      primary: llmProvider.legLabel(llm),
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

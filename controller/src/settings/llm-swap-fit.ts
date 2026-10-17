@@ -15,8 +15,9 @@
 // (maxOutputTokens) is station-wide and does not move with a swap, so it is DJ
 // Doc's to report, not this dialog's.
 //
-// Pure apart from its inputs: the caller passes the stored llm block and the
-// recent call telemetry.
+// Pure apart from its inputs: the caller passes the stored llm block, the
+// recent call telemetry and the two legs' telemetry labels (llm/provider.js
+// legLabel()).
 import { settingsAgentRoutes } from '../schemas/settings.js';
 import {
   AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR,
@@ -38,15 +39,16 @@ export interface SwapFit {
   warnings: SwapFitWarning[];
 }
 
+/** The `provider:modelId` each leg's telemetry rows carry (legLabel()). */
+export interface SwapFitLabels {
+  backup?: string;
+  primary?: string;
+}
+
 type Leg = Record<string, unknown> | undefined;
 type Call = { ok?: boolean; ms?: number; model?: string } | null | undefined;
 
-/** True when a telemetry row was served by `model` (rows carry either the bare
- *  model id or a leg label that contains it). */
-function servedBy(call: Call, model: string): boolean {
-  const m = typeof call?.model === 'string' ? call.model : '';
-  return !!model && (m === model || m.includes(model));
-}
+const UNSET = ':(unset)';
 
 /**
  * What the backup (about to become primary) may not suit, for every agentic
@@ -55,6 +57,7 @@ function servedBy(call: Call, model: string): boolean {
 export function llmSwapFit(
   llm: { trackSelection?: unknown; requestMatching?: unknown; segmentRuntime?: unknown; agentTimeoutMs?: unknown; fallback?: Leg } | null | undefined,
   recentCalls: readonly Call[] = [],
+  labels: SwapFitLabels = {},
 ): SwapFit {
   const routes = settingsAgentRoutes(llm);
   const agenticRoutes = [
@@ -68,6 +71,12 @@ export function llmSwapFit(
   const out: SwapFit = { agenticRoutes, target: { provider, model }, warnings: [] };
   if (!routes.any) return out;
 
+  // The resolved label names a blank-model leg (an Ollama leg on
+  // config.ollama.model) the way its calls do; DJ Doc classifies the live
+  // primary by its label too.
+  const backupLabel = labels.backup && !labels.backup.endsWith(UNSET) ? labels.backup : '';
+  const shown = model || (backupLabel.startsWith(`${provider}:`) ? backupLabel.slice(provider.length + 1) : '');
+
   const nc = contextWindowTooSmall(provider, leg.numCtx);
   if (nc !== null) {
     out.warnings.push({
@@ -76,28 +85,34 @@ export function llmSwapFit(
     });
   }
 
-  const concern = modelClassConcern(model, routes.picks);
+  const concern = modelClassConcern(backupLabel || model, routes.picks);
   if (concern?.kind === 'code') {
     out.warnings.push({
       check: 'model class',
-      detail: `${model} looks code-specialised, which tends to fail structured picks and tool calls`,
+      detail: `${shown} looks code-specialised, which tends to fail structured picks and tool calls`,
     });
   } else if (concern?.kind === 'small') {
     out.warnings.push({
       check: 'model class',
-      detail: `${model} looks like a ~${concern.sizeB}B model; Agentic Tools track selection wants a ~12B-class or capable cloud model`,
+      detail: `${shown} looks like a ~${concern.sizeB}B model; Agentic Tools track selection wants a ~12B-class or capable cloud model`,
     });
   }
 
-  // Agent deadline against what this model has measured (it served calls as
-  // the backup). Same p90 and 80 % threshold as DJ Doc.
-  const p90 = latencyP90(recentCalls, c => servedBy(c, model));
-  const ratio = p90 === null ? null : agentDeadlineRatio(p90, llm?.agentTimeoutMs);
-  if (p90 !== null && ratio !== null && ratio >= AGENT_DEADLINE_WARN_RATIO) {
-    out.warnings.push({
-      check: 'agent deadline',
-      detail: `its recent calls ran ${(p90 / 1000).toFixed(1)}s at p90 against the ${Math.round(Number(llm?.agentTimeoutMs) / 1000)}s agent deadline, so agent runs would time out into their fallbacks`,
-    });
+  // Agent deadline against what this leg has measured while it served calls as
+  // the backup. Rows carry only the leg LABEL, so they are matched to it
+  // exactly (a substring would also count `gpt-5-mini` rows as `gpt-5`'s), and
+  // when both legs share one label (the same model on two hosts) no row can be
+  // told apart: the check stays silent rather than charge the primary's
+  // latency to the backup.
+  if (backupLabel && backupLabel !== labels.primary) {
+    const p90 = latencyP90(recentCalls, c => c.model === backupLabel);
+    const ratio = p90 === null ? null : agentDeadlineRatio(p90, llm?.agentTimeoutMs);
+    if (p90 !== null && ratio !== null && ratio >= AGENT_DEADLINE_WARN_RATIO) {
+      out.warnings.push({
+        check: 'agent deadline',
+        detail: `its recent calls ran ${(p90 / 1000).toFixed(1)}s at p90 against the ${Math.round(Number(llm?.agentTimeoutMs) / 1000)}s agent deadline, so agent runs would time out into their fallbacks`,
+      });
+    }
   }
 
   return out;

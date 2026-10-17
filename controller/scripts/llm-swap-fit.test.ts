@@ -11,7 +11,10 @@
 //   - it makes no judgement DJ Doc does not: a thinking-mandatory model or a
 //     leg on toolChoice "auto" raises nothing here, as it raises nothing there;
 //   - the agent deadline compares measured p90 against the station deadline,
-//     needing ≥ 5 successful rows from the same model;
+//     needing ≥ 5 successful rows carrying the backup's EXACT leg label — a
+//     prefix model's rows are not its rows, and when both legs share one label
+//     no row can be attributed, so the check stays silent;
+//   - a blank-model Ollama backup is judged by its resolved label;
 //   - null/undefined input degrades to the shipped all-agentic default.
 //
 // Pure function, no credentials, no external host.
@@ -20,7 +23,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { llmSwapFit } from '../src/settings/llm-swap-fit.js';
+import { llmSwapFit, type SwapFitLabels } from '../src/settings/llm-swap-fit.js';
 
 const llm = (
   fallback: Record<string, unknown>,
@@ -105,24 +108,52 @@ test('no tool-calling judgement: DJ Doc makes none of the primary either', () =>
 });
 
 // --- 6 -------------------------------------------------------------------
+const LABELS = { backup: 'openai:gpt-5-mini', primary: 'ollama:qwen3:32b' };
+const rows = (n: number, ms: number, model: string, ok = true) =>
+  Array.from({ length: n }, () => ({ ok, ms, model }));
+
 test('agent deadline: p90 ≥ 80 % of station deadline warns; guards filter correctly', () => {
-  const rows40 = Array.from({ length: 6 }, () => ({ ok: true, ms: 40000, model: 'gpt-5-mini' }));
-  const warn = llmSwapFit(llm(FINE), rows40);
+  const warn = llmSwapFit(llm(FINE), rows(6, 40000, 'openai:gpt-5-mini'), LABELS);
   assert.equal(warn.warnings.length, 1);
   assert.equal(warn.warnings[0].check, 'agent deadline');
   assert.ok(warn.warnings[0].detail.includes('45s'));
 
-  const rows10 = Array.from({ length: 6 }, () => ({ ok: true, ms: 10000, model: 'gpt-5-mini' }));
-  assert.equal(llmSwapFit(llm(FINE), rows10).warnings.filter(w => w.check === 'agent deadline').length, 0);
+  const deadline = (calls: ReturnType<typeof rows>, labels: SwapFitLabels = LABELS) =>
+    llmSwapFit(llm(FINE), calls, labels).warnings.filter(w => w.check === 'agent deadline').length;
+  assert.equal(deadline(rows(6, 10000, 'openai:gpt-5-mini')), 0, 'fast enough');
+  assert.equal(deadline(rows(6, 40000, 'ollama:qwen3:32b')), 0, "the primary's rows");
+  assert.equal(deadline(rows(4, 40000, 'openai:gpt-5-mini')), 0, 'too few rows');
+  assert.equal(deadline(rows(6, 40000, 'openai:gpt-5-mini', false)), 0, 'failed rows');
+  assert.equal(deadline(rows(6, 40000, 'openai:gpt-5-mini'), {}), 0, 'no label to match');
+});
 
-  const other = Array.from({ length: 6 }, () => ({ ok: true, ms: 40000, model: 'other-model' }));
-  assert.equal(llmSwapFit(llm(FINE), other).warnings.filter(w => w.check === 'agent deadline').length, 0);
+test("agent deadline: a prefix model's rows are not the backup's", () => {
+  // Backup gpt-5, primary gpt-5-mini: a substring match counted the primary's.
+  const fit = llmSwapFit(
+    llm({ provider: 'openai', model: 'gpt-5' }),
+    rows(6, 40000, 'openai:gpt-5-mini'),
+    { backup: 'openai:gpt-5', primary: 'openai:gpt-5-mini' },
+  );
+  assert.equal(fit.warnings.filter(w => w.check === 'agent deadline').length, 0);
+});
 
-  const few = Array.from({ length: 4 }, () => ({ ok: true, ms: 40000, model: 'gpt-5-mini' }));
-  assert.equal(llmSwapFit(llm(FINE), few).warnings.filter(w => w.check === 'agent deadline').length, 0);
+test('agent deadline: both legs on one label (same model, two hosts) stays silent', () => {
+  // The busy primary host's slow calls carry the same label as the backup's.
+  const same = 'ollama:qwen3:32b';
+  const fit = llmSwapFit(
+    llm({ provider: 'ollama', model: 'qwen3:32b', ollamaUrl: 'http://spare:11434' }),
+    rows(6, 40000, same),
+    { backup: same, primary: same },
+  );
+  assert.equal(fit.warnings.filter(w => w.check === 'agent deadline').length, 0);
+});
 
-  const failed = Array.from({ length: 6 }, () => ({ ok: false, ms: 40000, model: 'gpt-5-mini' }));
-  assert.equal(llmSwapFit(llm(FINE), failed).warnings.filter(w => w.check === 'agent deadline').length, 0);
+test('a blank-model Ollama backup is judged by its resolved label', () => {
+  const labels = { backup: 'ollama:qwen2.5-coder:7b', primary: 'openai:gpt-5-mini' };
+  const fit = llmSwapFit(llm({ provider: 'ollama', model: '' }), rows(6, 40000, labels.backup), labels);
+  const checks = fit.warnings.map(w => w.check).sort();
+  assert.deepEqual(checks, ['agent deadline', 'model class']);
+  assert.ok(fit.warnings.find(w => w.check === 'model class')!.detail.startsWith('qwen2.5-coder:7b '));
 });
 
 // --- 7 -------------------------------------------------------------------
