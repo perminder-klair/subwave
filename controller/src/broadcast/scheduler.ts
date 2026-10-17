@@ -31,7 +31,7 @@ import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotation
 import { knownDurationSec } from './queue/pure.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
-import { coastContents, coastRepeats, onCoastHandover, type CoastContents } from './coast-handover.js';
+import { coastContents, coastRepeats, HANDOVER_REASON_TEXT, onCoastHandover, type CoastContents, type HandoverReason } from './coast-handover.js';
 import { isIdle } from './stream-idle.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
@@ -117,28 +117,29 @@ const autoPlaylistBuild = createShowBuildTracker();
 // the handover check below cannot vouch for it and rebuilds.
 let coastOnDisk: CoastContents | null = null;
 
-// The auto-DJ stopped picking at a track boundary because nobody is listening,
-// so the station coasts on auto.m3u once this track ends (#1975). Rebuild the
-// file when it holds anything the queue aired since it was built. A full
-// rotation's always does; a sampled coast rarely does, and skipping it then
-// keeps a departure from costing a Navidrome fan-out for nothing. A build
-// still in flight is about to replace the file the stamp describes, and it read
-// the air history before this boundary, when the DJ's last pick was only
-// queued, so the stamp cannot vouch for it: rebuild behind it. Returns whether
-// it rebuilt.
-export async function refreshCoastOnHandover(): Promise<boolean> {
+// The auto-DJ stopped picking — nobody listening, the daily token cap's hard
+// tier, or auto-pick switched off — so the station coasts on auto.m3u once the
+// track on air ends (#1975, #1992). Rebuild the file when it holds anything the
+// queue aired since it was built. A full rotation's always does; a sampled
+// coast rarely does, and skipping it then keeps a departure from costing a
+// Navidrome fan-out for nothing. A build still in flight is about to replace
+// the file the stamp describes, and it read the air history before this
+// boundary, when the queue's last pick was only queued, so the stamp cannot
+// vouch for it: rebuild behind it. Returns whether it rebuilt.
+export async function refreshCoastOnHandover(reason: HandoverReason): Promise<boolean> {
   const inFlight = playlistRefresh.isBusy();
   const repeats = coastOnDisk && !inFlight ? coastRepeats(coastOnDisk, queue.airedFromQueueSince(coastOnDisk.builtAt)) : null;
   if (repeats === 0) return false;
+  const paused = `Auto-playlist: DJ picks paused (${HANDOVER_REASON_TEXT[reason]})`;
   queue.log('scheduler', inFlight
-    ? 'Auto-playlist: DJ picks paused (nobody listening) — a fallback build in flight started before picking stopped, requesting a refresh behind it'
+    ? `${paused} — a fallback build in flight started before picking stopped, requesting a refresh behind it`
     : repeats === null
-      ? 'Auto-playlist: DJ picks paused (nobody listening) — fallback on disk predates this run, requesting a refresh'
-      : `Auto-playlist: DJ picks paused (nobody listening) — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
+      ? `${paused} — fallback on disk predates this run, requesting a refresh`
+      : `${paused} — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
   return (await refreshAutoPlaylist({ automatic: true })) === 'refreshed';
 }
-onCoastHandover(() => {
-  void refreshCoastOnHandover().catch(err => queue.log('error', `Fallback refresh at DJ pause failed: ${err.message}`));
+onCoastHandover(reason => {
+  void refreshCoastOnHandover(reason).catch(err => queue.log('error', `Fallback refresh at DJ pause failed: ${err.message}`));
 });
 
 // Rebuild the fallback only when the resolved active show is not the one
