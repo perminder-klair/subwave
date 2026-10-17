@@ -5,8 +5,9 @@
 //   - every per-leg field moves, and swapping twice is the identity — run
 //     through the REAL settings.update(), because its leg patch MERGES
 //     providerBaseUrls and resolves redacted headers against the target leg;
-//   - LLM_LEG_FIELDS covers every field applyLlmLegPatch writes, so a new
-//     per-leg field cannot be added and left out of the swap;
+//   - LLM_LEG_FIELDS is exactly the set of keys applyLlmLegPatch READS (a
+//     recording Proxy, not a hand-written fixture), and every per-leg DEFAULTS
+//     entry, so a new per-leg field cannot be added and left out of the swap;
 //   - API keys and station-wide fields stay put (keys are per PROVIDER);
 //   - an embedding leg that inherits from the primary keeps its connection,
 //     while one the operator set in the Library tagger is untouched;
@@ -25,6 +26,7 @@ process.env.STATE_DIR = stateRoot;
 delete process.env.EMBEDDING_API_KEY;
 
 const settings = await import('../src/settings.js');
+const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { applyLlmLegPatch } = await import('../src/settings/vocab.js');
 const { buildLlmSwapPatch, LLM_LEG_FIELDS, LlmSwapError } = await import('../src/settings/llm-swap.js');
 const { resolveEmbeddingCfg } = await import('../src/llm/provider.js');
@@ -115,18 +117,22 @@ test('API keys and station-wide fields stay put', async () => {
   assert.equal(after.agentTimeoutMs, 60000);
 });
 
-test('LLM_LEG_FIELDS covers every field applyLlmLegPatch writes', () => {
-  const full = {
-    provider: 'openai-compatible', model: 'm', compatibleMode: 'local', ollamaUrl: 'http://x',
-    providerBaseUrls: { 'openai-compatible': 'http://y' }, baseUrl: 'http://y', headers: { 'x-a': 'b' },
-    reasoning: true, numCtx: 8192, repeatPenalty: 1.2, geminiSafety: {}, discoverySteps: 2, toolChoice: 'auto',
-    apiKey: 'k',
-  };
-  const target: Record<string, unknown> = {};
-  applyLlmLegPatch(target, full, 'llm');
-  const derived = new Set(['baseUrl']);
-  const missing = Object.keys(target).filter(k => !derived.has(k) && !(LLM_LEG_FIELDS as readonly string[]).includes(k));
-  assert.deepEqual(missing, [], 'a per-leg field the swap would leave behind');
+test('LLM_LEG_FIELDS is every field applyLlmLegPatch reads, less the derived baseUrl', () => {
+  // Record what the patch handler LOOKS AT: it writes a key only when the patch
+  // carries it, so a hand-written fixture would miss a field added to the
+  // handler but not to the fixture.
+  const read = new Set<string>();
+  const recorder = new Proxy({}, {
+    get(_t, key) { if (typeof key === 'string') read.add(key); return undefined; },
+    has(_t, key) { if (typeof key === 'string') read.add(key); return false; },
+  });
+  applyLlmLegPatch({}, recorder, 'llm');
+  read.delete('baseUrl');
+  assert.deepEqual([...read].sort(), [...LLM_LEG_FIELDS].sort(), 'a per-leg field the swap would leave behind');
+
+  // The three-edits rule gives every per-leg field a DEFAULTS entry too.
+  const perLeg = Object.keys(DEFAULTS.llm.fallback).filter(k => !['enabled', 'apiKey', 'baseUrl'].includes(k));
+  assert.deepEqual(perLeg.sort(), [...LLM_LEG_FIELDS].sort());
 });
 
 test('an embedding leg inheriting the primary keeps its connection', async () => {
