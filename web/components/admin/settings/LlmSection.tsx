@@ -172,6 +172,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
     setSwapFit(null);
     setSwapOpen(true);
     try {
+      // admin-query-imperative: llm-swap-fit-preview
       const r = await adminResponse(adminFetch, '/settings/llm/swap/fit');
       setSwapFit(await r.json() as SwapFit);
     } catch {
