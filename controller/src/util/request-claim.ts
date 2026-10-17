@@ -567,8 +567,12 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
     const keys = keysOf(c.text);
     return !keys.every((k) => DAYS.has(k) || MINOR.has(k)) && !unasked.some((slot) => contains(slot, keys));
   };
+  // Only the request's own words are evidence, so the other candidates count
+  // only for their genre tags; their names would be read as claims nobody
+  // looks at, once per candidate the spacing pass asks about.
+  const byGenre = { ...ctx, others: [...(ctx.others ?? [])].map((o) => ({ genre: o?.genre })) };
   for (const line of lines) {
-    const read = lineClaims(line, ctx);
+    const read = lineClaims(line, byGenre);
     if (read.declines.some(asks) || misnamedOf(read).some((c) => c.source === 'request' && asks(c))) return true;
   }
   return false;

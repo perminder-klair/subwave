@@ -275,6 +275,19 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
   assert.deepEqual([...alt.keys()].sort(), ['m1', 's1'], 'an exempt candidate is offered however recently its artist played');
   assert.equal(dropped, 0, 'nothing else was recent');
 }
+// …and only a candidate the narrowing would drop is asked: on the request
+// path `exempt` is the stand-in reading, too costly to run over a whole pool.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const asked: string[] = [];
+  const { alt, dropped, starved } = alternativeCandidates(
+    seenOf(marvin, marvinTammi, sly, clash), artistRootKey('The Clash'), recent, '', (s) => { asked.push(s.id); return s.id === 'm2'; },
+  );
+  assert.deepEqual(asked, ['m1', 'm2'], 'the fresh candidate is never asked');
+  assert.deepEqual([...alt.keys()].sort(), ['m2', 's1']);
+  assert.equal(dropped, 1);
+  assert.equal(starved, false);
+}
 
 // A corrective REQUEST call (#1979): stand-ins by a recently-heard artist are
 // withheld, what the listener asked for stays whoever played it last, and no

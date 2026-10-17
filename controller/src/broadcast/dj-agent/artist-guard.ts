@@ -78,7 +78,10 @@ function alternativeArtist(song: CandidateLike, avoidRoot: string, anchorRoot: s
 }
 
 // `exempt` marks candidates the recency narrowing never removes — a listener
-// request's own ask (#1979). Absent, every candidate is subject to it.
+// request's own ask (#1979). Absent, every candidate is subject to it. It is
+// asked only of a candidate by a recent artist: on the request path it is the
+// stand-in reading, a pass over every line the run wrote, and a pool of a
+// hundred candidates asking it of each one stalled the event loop.
 export function alternativeCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   avoidRoot: string,
@@ -90,9 +93,8 @@ export function alternativeCandidates<T extends CandidateLike>(
   if (!base.length || !recentRoots.size) return { alt: new Map(base), dropped: 0, starved: false };
 
   const fresh = base.filter(([, s]) => {
-    if (exempt(s)) return true;
     const root = artistRootKey(s);
-    return !root || !creditInRoots(s, recentRoots);
+    return !root || !creditInRoots(s, recentRoots) || exempt(s);
   });
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
