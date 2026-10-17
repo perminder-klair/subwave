@@ -361,6 +361,41 @@ test('who a request is for, and the feel or the day it asks for, are never the a
   assert.equal(standInFor(ISLA, 'dedicate some Michael Jackson to Sarah', "Couldn't find Michael Jackson — this one's for Sarah."), true);
 });
 
+test('an ask that points at what is playing names the on-air artist, whatever else the line reads back', () => {
+  const DANCETERIA_ON_AIR = { title: 'Danceteria', artist: 'Madonna', album: 'Iconic By Mistake' };
+  const pointed = (track: any, requestText: string, line: string, onAir: any = DANCETERIA_ON_AIR, requester: string | null = 'Jen') =>
+    requestStandIn([line], { track, requestText, requester, onAir, others: [ISLA, HOLIDAY, GIRLS].filter((c) => c.id !== track.id) });
+  // A greeting, a place, a self-introduction, a chant, an occasion: each line
+  // reads a capitalised word of the listener's back over a track it does not
+  // name, which the line reading alone takes for the #1918 lie.
+  for (const [text, line, requester] of [
+    ['greetings from Leeds, more of this please', 'Greetings back to Leeds, Jen!'],
+    ['hello from Toronto! more of this', 'Hello Toronto — more coming up!'],
+    ['love from London, more like this', 'Love back to London, Jen!'],
+    ["hey it's Jen, more of this please", 'You got it, Jen!', null],
+    ['more of this please, Go Arsenal!', 'Up the Arsenal, Jen — more coming!'],
+    ['Merry Christmas everyone! more of this', 'Merry Christmas to you too, Jen!'],
+    ['same again please, big love from Leeds', 'Big love to Leeds, Jen!'],
+    ['another one like this, big up Leeds!', 'Big up Leeds, Jen!'],
+    ["keep 'em coming! Hi from Glasgow", 'Hi Glasgow!'],
+  ] as Array<[string, string, (string | null)?]>) {
+    const who = requester === undefined ? 'Jen' : requester;
+    assert.equal(pointed(HOLIDAY, text, line, null, who), true, `${text}: the line reading alone spaces it`);
+    assert.equal(pointed(HOLIDAY, text, line, DANCETERIA_ON_AIR, who), false, text);
+  }
+  // Only the on-air credit is excused: another artist's track still answers
+  // to its lines.
+  assert.equal(pointed(GIRLS, 'greetings from Leeds, more of this please', 'Greetings back to Leeds, Jen!'), true);
+  // Before a capital, "that" is a determiner and the name is the ask; "no more
+  // of this" points away. Both stay the incident.
+  const declineMJ = "No Michael Jackson tonight — here's Madonna.";
+  assert.equal(pointed(ISLA, 'more of that Michael Jackson please', declineMJ), true);
+  assert.equal(pointed(ISLA, 'no more of this, Michael Jackson please', declineMJ), true);
+  assert.equal(pointed(ISLA, 'Michael Jackson please', declineMJ), true);
+  // A lone "I" is no name.
+  assert.equal(pointed(HOLIDAY, 'more of this I love it, greetings from Leeds', 'Greetings back to Leeds, Jen!'), false);
+});
+
 test("asksForTrack: the request's words name the track, case-blind", () => {
   assert.equal(asksForTrack('play billie jean', BILLIE), true, 'title');
   assert.equal(asksForTrack('anything from Thriller', BILLIE), true, 'album');
@@ -998,6 +1033,37 @@ test('#1979: an ask naming no music, read back with its dedication or its day, i
       assert.equal(result?.guard, 'claim-plain', text);
     });
   }
+});
+
+// "More of this" is answered by the on-air artist, so the answer is always
+// inside the spacing window, and the ack reads back a place the listener
+// greeted from. Before the on-air credit was excused this aired Cyndi Lauper
+// for a corrective call (the ack), or withheld every Madonna track from the
+// claim re-pick (the intro).
+test('#1979: "greetings from Leeds, more of this" is never spaced away from the on-air artist', async () => {
+  const text = 'greetings from Leeds, more of this please';
+  queue.current = { track: DANCETERIA } as any;
+  agentAnswers({ kind: 'track', id: HOLIDAY.id, ack: 'Greetings back to Leeds, Jen!', intro: "Here's Holiday, Jen." }, [HOLIDAY, ISLA, GIRLS]);
+  await withNetwork({ search: [], llm: [CYNDI] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Jen', text });
+    assert.equal(calls.llm.length, 0, 'no spacing call');
+    assert.equal(queue.upcoming[0].track.id, HOLIDAY.id, 'more of this airs');
+    assert.equal(result?.guard, 'claim-plain', "#1918's reading still swaps the ack-only misname");
+  });
+
+  // The intro misnames by #1918's reading, so the claim re-pick runs, and the
+  // on-air artist is the ask, not a stand-in: it stays on offer.
+  queue.current = { track: DANCETERIA } as any;
+  queue.upcoming = [];
+  agentAnswers({ kind: 'track', id: HOLIDAY.id, ack: 'You got it, Jen!', intro: 'Big love to Leeds, Jen — more coming up.' }, [HOLIDAY, ISLA, GIRLS]);
+  const holiday = { id: HOLIDAY.id, ack: 'You got it, Jen!', intro: "Here's Holiday by Madonna, Jen." };
+  await withNetwork({ search: [], llm: [holiday] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Jen', text });
+    assert.equal(calls.llm.length, 1, 'the claim re-pick is the only call');
+    assert.deepEqual(offeredIds(calls.llm[0]), [ISLA.id, HOLIDAY.id, GIRLS.id], 'Madonna is offered');
+    assert.equal(result?.guard, 'claim-repicked');
+  });
+  assert.equal(queue.upcoming[0].track.id, HOLIDAY.id);
 });
 
 test("#1979: the incident's lookup that found only vibe neighbours still spaces the stand-in", async () => {

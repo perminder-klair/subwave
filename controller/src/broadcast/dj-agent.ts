@@ -1766,10 +1766,11 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     noteLines(object);
     // What the run looked up by name is the ask as the agent read it, so a
     // nickname it resolved ("the King" → "Elvis Presley") is never a stand-in,
-    // and nor is what a lookup in the listener's own spelling found.
+    // and nor is what a lookup in the listener's own spelling found. The track
+    // the tail named as playing is what a "more of this" ask names.
     const lookups = requestLookups(toolCalls, text);
     const standIn = (track: any, pool: Map<string, any>) => requestStandIn(runLines, {
-      track, requestText: text, requester, stationNames, lookups, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
+      track, requestText: text, requester, stationNames, lookups, onAir: cur, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
     });
     // What a corrective call is offered: no stand-in by a recently-heard
     // artist, unless nothing fresh is left. Spacing rides the call the request

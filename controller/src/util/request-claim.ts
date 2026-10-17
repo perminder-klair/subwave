@@ -79,6 +79,9 @@ export interface ClaimContext {
   // What the run itself looked up by name (requestLookups). Read only by
   // requestStandIn: a track the agent's own lookup names is the ask.
   lookups?: Iterable<string | null | undefined>;
+  // The track on air when the listener asked. Read only by requestStandIn: an
+  // ask that points at it ("more of this", DEICTIC) names its credit.
+  onAir?: ClaimTrack | null;
 }
 
 // Which writer's line is read. A request line (#1918) keeps the rules its probe
@@ -639,11 +642,15 @@ function literalTracks(result: unknown): any[] {
 // name by its library name — so the ask is excused FIRST, by the listener's
 // words (asksForTrack, which reads abbreviations and typos) or by the run's
 // own named lookups (requestLookups, which carry the agent's reading of a
-// nickname). Nor is a word the request uses for something other than music
-// (unaskedSlots) evidence. A substitution owned without a name ("can't do
-// that one") is an accepted miss: the track airs as it always did.
+// nickname), or — for an ask that points at what is playing ("more of this")
+// — by the on-air credit, so nothing a line reads back can space an answer
+// by that artist. Nor is a word the request uses for something other than
+// music (unaskedSlots) evidence. A substitution owned without a name ("can't
+// do that one") is an accepted miss: the track airs as it always did.
 export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
-  if ([ctx.requestText, ...(ctx.lookups ?? [])].some((asked) => asksForTrack(asked, ctx.track))) return false;
+  const asked = [ctx.requestText, ...(ctx.lookups ?? [])];
+  if (ctx.onAir && pointsAtOnAir(ctx.requestText)) asked.push(ctx.onAir.artist);
+  if (asked.some((a) => asksForTrack(a, ctx.track))) return false;
   const unasked = unaskedSlots(ctx.requestText);
   const asks = (c: LineClaim) => {
     const keys = keysOf(c.text);
@@ -656,6 +663,30 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   for (const line of lines) {
     const read = lineClaims(line, byGenre);
     if (read.declines.some(asks) || unexcused(read).some((c) => c.source === 'request' && asks(c))) return true;
+  }
+  return false;
+}
+
+// An ask that points at what is playing (#1979): "more of this", "more like
+// that", "another one like this", "same again", "more of the same", "keep it
+// going". It names the on-air track as surely as its title would, and a
+// "more of this" answer is by the on-air artist, so it is always inside the
+// spacing window: read only by its lines, any capitalised word of the
+// listener's read back — "Greetings back to Leeds!", "Up the Arsenal!" —
+// spaced it. ENGLISH ONLY and as short as DECLINES, for the same reason. Not
+// "no more of this", which points away; and before a capital "this"/"that"
+// is a determiner ("more of that Prince stuff"), so the name after it is the
+// ask and the line reading stands.
+const DEICTIC = /(?<!\b(?:no|not|any)\s+)\b(?:more\s+(?:of\s+|like\s+)?(?:this|that|these|those)|(?:another(?:\s+one)?|one\s+more|something|anything)\s+like\s+(?:this|that|these|those)|more\s+of\s+the\s+same|same\s+again|keep\s+(?:it|this|them|em|['’]em|the\s+vibes?)\s+(?:going|coming|rolling))\b/giu;
+const DEMONSTRATIVE_END = /(?:this|that|these|those)$/iu;
+
+function pointsAtOnAir(requestText: string | null | undefined): boolean {
+  const text = normalizeListenerText(requestText);
+  for (const m of text.matchAll(DEICTIC)) {
+    const next = /^\s+([\p{L}\p{N}]+)/u.exec(text.slice((m.index ?? 0) + m[0].length))?.[1] ?? '';
+    // A lone "I" is no name: "more of this I love it".
+    if (DEMONSTRATIVE_END.test(m[0]) && next.length > 1 && /^\p{Lu}/u.test(next)) continue;
+    return true;
   }
   return false;
 }
