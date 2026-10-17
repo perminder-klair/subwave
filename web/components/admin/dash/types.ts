@@ -73,7 +73,15 @@ export interface DashStatus {
 // Subset of /stats (admin) the health strip reads. Polled slower than live
 // status: the figures move slowly and the endpoint is heavier.
 export interface HealthStats {
-  llm?: { count?: number; latency?: { p95?: number }; agentTimeoutMs?: number };
+  llm?: {
+    count?: number;
+    ok?: number;
+    failed?: number;
+    latency?: { p95?: number };
+    /** Successful calls only; absent on an older controller. */
+    okLatency?: { p95?: number };
+    agentTimeoutMs?: number;
+  };
   trackSelection?: 'agentic' | 'shortlist';
   shortlist?: { count?: number; latency?: { p95?: number }; warningMs?: number; warmingUp?: boolean };
   tts?: { count?: number; fallbackRate?: number | null };

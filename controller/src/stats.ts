@@ -165,6 +165,11 @@ export function summarizeLlm(calls) {
     failed: calls.length - ok.length,
     successRate: calls.length ? ok.length / calls.length : null,
     latency: latencyStats(calls.map(c => c.ms).filter(n => typeof n === 'number')),
+    // Successful calls only, for the Dash DJ Latency gauge: a failed call's
+    // duration is how long it took to give up (a timeout, a retry budget),
+    // not how long the DJ takes to answer, and it would hold the gauge up
+    // until it left the ring. `latency` above stays all-calls for Stats.
+    okLatency: latencyStats(ok.map(c => c.ms).filter(n => typeof n === 'number')),
     tokens: anyTokens ? tokens : null,
     cost: anyTokens ? { usd: cost, complete: allPriced } : null,
     byKind,

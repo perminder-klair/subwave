@@ -15,6 +15,9 @@ export interface HealthMetrics {
    *  /stats loads, in which case the gauge uses its default scale. */
   latencyDeadlineMs: number | null;
   latencyAdaptive?: boolean;
+  /** Failed calls / calls in the LLM log ring, or null when none failed.
+   *  The gauge itself reads successful calls only. */
+  llmFailedCalls?: { failed: number; total: number } | null;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
   /** broadcast online? null before the first poll resolves */
@@ -318,8 +321,15 @@ export default function StationHeader({
               0
             </span>
             <span className="hs-u">ms</span>
-            <span className="hs-x">
-              {metrics.latencyAdaptive ? 'warning' : 'redline'} <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
+            <span className="hs-x flex flex-col items-end">
+              {metrics.llmFailedCalls && (
+                <span title="Failed LLM calls / calls in the log queue. The gauge counts successful calls only.">
+                  failed <b>{metrics.llmFailedCalls.failed} / {metrics.llmFailedCalls.total}</b>
+                </span>
+              )}
+              <span>
+                {metrics.latencyAdaptive ? 'warning' : 'redline'} <b>{Math.round(latencyScale(metrics.latencyDeadlineMs).redline / 1000)}k</b>
+              </span>
             </span>
           </div>
         </div>
