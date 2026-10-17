@@ -313,3 +313,34 @@ test('a dropped last pick hands over too, when the listener gate holds its re-pi
     reset();
   }
 });
+
+test('a dropped last pick past the re-pick budget still hands over when the gate holds', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: true } } as never);
+  let handovers = 0;
+  onCoastHandover(() => { handovers++; });
+  const realRecovery = q._considerIdRotationRecovery;
+  q._considerIdRotationRecovery = async () => {};
+  // Three failures already in a row: this drop is the one past the budget.
+  q._resolveFailStreak = 3;
+  try {
+    listenersNow = 0;
+    await listeners.refresh();
+    assert.equal(listeners.djCallsAllowed(), false);
+    const [onAir, dropped] = catalogue;
+    q.current = { track: onAir, source: 'ai' };
+    const item = { track: dropped, aiPicked: true, sent: true };
+    q.upcoming = [item];
+    q._coastHandover.picked();
+    q.onPushResolveFailed(item);
+    assert.equal(q._resolveFailStreak, 4);
+    assert.equal(handovers, 1, 'the coast takes over when the track on air ends, budget or not');
+  } finally {
+    q._considerIdRotationRecovery = realRecovery;
+    q._resolveFailStreak = 0;
+    listenersNow = 1;
+    await listeners.refresh();
+    await refreshAutoPlaylist();
+    reset();
+  }
+});

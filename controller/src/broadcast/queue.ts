@@ -3935,6 +3935,8 @@ class Queue {
     if (!repickAfterFailure(this._resolveFailStreak)) {
       this.log('scheduler',
         `${this._resolveFailStreak} unresolvable picks in a row — holding off on re-picks; the auto playlist covers the slot until the next track boundary`);
+      // Out of budget is still the handover moment when the gate holds (#1975).
+      if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && !djCallsAllowed() && this._coastHandover.held()) notifyCoastHandover();
       return;
     }
 
