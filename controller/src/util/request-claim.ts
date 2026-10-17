@@ -643,14 +643,17 @@ function literalTracks(result: unknown): any[] {
 // words (asksForTrack, which reads abbreviations and typos) or by the run's
 // own named lookups (requestLookups, which carry the agent's reading of a
 // nickname), or — for an ask that points at what is playing ("more of this")
-// — by the on-air credit, so nothing a line reads back can space an answer
-// by that artist. Nor is a word the request uses for something other than
-// music (unaskedSlots) evidence. A substitution owned without a name ("can't
-// do that one") is an accepted miss: the track airs as it always did.
+// — by the on-air credit, so no word a line reads back can space an answer
+// by that artist. A line that DECLINES a name of the listener's still does:
+// it says they asked for someone else ("keep it going with some Michael
+// Jackson" answered "No Michael Jackson tonight"), the #1918 shape. Nor is a
+// word the request uses for something other than music (unaskedSlots)
+// evidence. A substitution owned without a name ("can't do that one") is an
+// accepted miss: the track airs as it always did.
 export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: ClaimContext): boolean {
   const asked = [ctx.requestText, ...(ctx.lookups ?? [])];
-  if (ctx.onAir && pointsAtOnAir(ctx.requestText)) asked.push(ctx.onAir.artist);
   if (asked.some((a) => asksForTrack(a, ctx.track))) return false;
+  const onAirAsked = !!ctx.onAir && pointsAtOnAir(ctx.requestText) && asksForTrack(ctx.onAir.artist, ctx.track);
   const unasked = unaskedSlots(ctx.requestText);
   const asks = (c: LineClaim) => {
     const keys = keysOf(c.text);
@@ -662,7 +665,7 @@ export function requestStandIn(lines: Iterable<string | null | undefined>, ctx: 
   const byGenre = { ...ctx, others: [...(ctx.others ?? [])].map((o) => ({ genre: o?.genre })) };
   for (const line of lines) {
     const read = lineClaims(line, byGenre);
-    if (read.declines.some(asks) || unexcused(read).some((c) => c.source === 'request' && asks(c))) return true;
+    if (read.declines.some(asks) || (!onAirAsked && unexcused(read).some((c) => c.source === 'request' && asks(c)))) return true;
   }
   return false;
 }

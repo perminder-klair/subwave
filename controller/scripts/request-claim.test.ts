@@ -427,6 +427,16 @@ test('an ask that points at what is playing names the on-air artist, whatever el
   assert.equal(pointed(ISLA, 'more of that Michael Jackson please', declineMJ), true);
   assert.equal(pointed(ISLA, 'no more of this, Michael Jackson please', declineMJ), true);
   assert.equal(pointed(ISLA, 'Michael Jackson please', declineMJ), true);
+  // A line that declines a name of the listener's says they asked for someone
+  // else, so the on-air artist stays a stand-in beside a pointing cue.
+  for (const text of [
+    'keep it going with some Michael Jackson',
+    'more of this, Michael Jackson please',
+    'something like that by Michael Jackson',
+  ]) {
+    assert.equal(pointed(ISLA, text, declineMJ, null), true, `${text}: the line reading alone spaces it`);
+    assert.equal(pointed(ISLA, text, declineMJ), true, text);
+  }
   // A lone "I" is no name.
   assert.equal(pointed(HOLIDAY, 'more of this I love it, greetings from Leeds', 'Greetings back to Leeds, Jen!'), false);
 });
