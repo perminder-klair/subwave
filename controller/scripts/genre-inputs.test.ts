@@ -12,7 +12,9 @@
 //     that writes it also calls touchGenreInputs();
 //   - a library.db from before the table gets it, triggers included, on open.
 //   - an open that finds them all in place writes nothing, so it never waits
-//     on another connection's write lock.
+//     on another connection's write lock;
+//   - an open that cannot put them in place still opens, and until one does
+//     the token is the one that moves on every commit, never a frozen version.
 //
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- genre-inputs`.
 
@@ -173,18 +175,69 @@ test('every src/ function that writes track_vectors also bumps the version', () 
   }
 });
 
-test('an open with everything in place takes no write lock', () => {
+test('an open with everything in place takes no write lock', (t) => {
   // Every process opens through migrate(), and a tagger or analyzer child opens
   // while another connection may be mid-write for seconds. A write here would
-  // wait out the busy timeout and fail that child's open().
+  // wait out the busy timeout, and the ensure would give up on what it found.
+  const warn = t.mock.method(console, 'warn', () => {});
   other.prepare('BEGIN IMMEDIATE').run();
   const opener = new Database(db.DB_PATH, { timeout: 0 });
   try {
-    db.ensureGenreInputs(opener);
+    assert.equal(db.ensureGenreInputs(opener), true, 'everything was found in place');
   } finally {
     opener.close();
     other.prepare('ROLLBACK').run();
   }
+  assert.equal(warn.mock.callCount(), 0);
+});
+
+// What open() runs, on the open handle, while another connection holds a write
+// for longer than the busy timeout. user_version is current, so the ensure is
+// the only step that would write.
+async function migrateUnderAHeldWrite() {
+  other.prepare('BEGIN IMMEDIATE').run();
+  d().pragma('busy_timeout = 20');
+  try {
+    await db.migrate(4, false, true);
+  } finally {
+    other.prepare('ROLLBACK').run();
+  }
+}
+
+test('an upgrade open that cannot take the write lock still opens, on the token that moves on everything', async (t) => {
+  // open() sets the handle before migrate(), so a throw here was never retried:
+  // the next load() found the handle set and skipped migrate(), leaving the
+  // process without the table, every editor open answering 500 and every
+  // vector writer throwing after its write.
+  d().exec(`DROP TRIGGER genre_inputs_tracks_insert; DROP TRIGGER genre_inputs_tracks_update;
+            DROP TRIGGER genre_inputs_tracks_delete; DROP TABLE genre_inputs;`);
+  const warn = t.mock.method(console, 'warn', () => {});
+  await migrateUnderAHeldWrite();
+  assert.ok(warn.mock.calls.some((c) => /genre_inputs not ensured/.test(String(c.arguments[0]))), 'the failure is logged');
+  const token = db.genreInputsToken();
+  assert.match(token, /^any\./);
+  db.upsertTrackVector('t11', [0.3, 0.3, 0.3, 1], null);
+  assert.notEqual(db.genreInputsToken(), token, 'a vector write still moves it');
+  const live = liveIds();
+  live.delete('t11');
+  assert.equal(db.pruneMissingTracks(live), 1, 'a prune is not rolled back by its bump');
+  t.mock.restoreAll();
+  await library.reload();
+  assert.doesNotMatch(db.genreInputsToken(), /^any\./, 'the next open puts the table back');
+});
+
+test('a trigger the open could not put back leaves the token on every commit, never frozen', async (t) => {
+  // The table and its row are in place, but nothing bumps the version on a
+  // genres update any more: trusting it would serve one walk forever.
+  d().exec('DROP TRIGGER genre_inputs_tracks_update');
+  t.mock.method(console, 'warn', () => {});
+  await migrateUnderAHeldWrite();
+  const token = db.genreInputsToken();
+  other.prepare('UPDATE tracks SET genres = ? WHERE id = ?').run(JSON.stringify(['Unbumped']), 't9');
+  assert.notEqual(db.genreInputsToken(), token, 'a genres update still moves it');
+  t.mock.restoreAll();
+  await library.reload();
+  assert.doesNotMatch(db.genreInputsToken(), /^any\./, 'the next open puts the trigger back');
 });
 
 test('a trigger missing on its own is put back on open', async () => {

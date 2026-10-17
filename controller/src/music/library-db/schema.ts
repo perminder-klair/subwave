@@ -457,6 +457,9 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   }
 
   // Before the vector reconcile below, which bumps it when it drops vectors.
+  // Never throws. Its update trigger names tracks.genres and tracks.moods, and
+  // SQLite refuses to DROP COLUMN either while it exists: a migration above
+  // that drops one must DROP TRIGGER genre_inputs_tracks_update first.
   ensureGenreInputs(d);
 
   // Reconcile the requested embedding dim against what physically exists. The
