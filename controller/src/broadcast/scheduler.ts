@@ -31,6 +31,7 @@ import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotation
 import { knownDurationSec } from './queue/pure.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
+import { coastContents, coastRepeats, onCoastHandover, type CoastContents } from './coast-handover.js';
 import { isIdle } from './stream-idle.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
@@ -111,6 +112,29 @@ export const flushPendingAutoPlaylist = playlistRefresh.flushPending;
 // Which show the file on disk holds (#1111); rules in auto-playlist-show.ts.
 const autoPlaylistBuild = createShowBuildTracker();
 
+// Which tracks the file on disk holds, stamped by the build that wrote it.
+// null until one lands in this process: the file is then a previous run's, so
+// the handover check below cannot vouch for it and rebuilds.
+let coastOnDisk: CoastContents | null = null;
+
+// The auto-DJ stopped picking at a track boundary because nobody is listening,
+// so the station coasts on auto.m3u once this track ends (#1975). Rebuild the
+// file when it holds anything the queue aired since it was built. A full
+// rotation's always does; a sampled coast rarely does, and skipping it then
+// keeps a departure from costing a Navidrome fan-out for nothing. Returns
+// whether it rebuilt.
+export async function refreshCoastOnHandover(): Promise<boolean> {
+  const repeats = coastOnDisk ? coastRepeats(coastOnDisk, queue.airedFromQueueSince(coastOnDisk.builtAt)) : null;
+  if (repeats === 0) return false;
+  queue.log('scheduler', repeats === null
+    ? 'Auto-playlist: DJ picks paused (nobody listening) — fallback on disk predates this run, requesting a refresh'
+    : `Auto-playlist: DJ picks paused (nobody listening) — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
+  return (await refreshAutoPlaylist({ automatic: true })) === 'refreshed';
+}
+onCoastHandover(() => {
+  void refreshCoastOnHandover().catch(err => queue.log('error', `Fallback refresh at DJ pause failed: ${err.message}`));
+});
+
 // Rebuild the fallback only when the resolved active show is not the one
 // auto.m3u holds. Called from rollSessionNow, the shared boundary sequence
 // every show transition runs through — never a second cron. Returns whether it
@@ -163,6 +187,9 @@ onCacheChange(() => {
 });
 
 async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<RefreshResult> {
+  // Before any air history is read, so a play that ends mid-build counts as
+  // after it for the handover check.
+  const builtAt = Date.now();
   const epoch = autoPlaylistPolicyEpoch;
   const policyKey = autoPlaylistPolicyKey();
   const ctx = await prepareEpisodeContext(await getFullContext());
@@ -558,6 +585,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Small IPC file: synchronous atomic commit leaves no policy-change gap
   // between the freshness check and rename. Catalogue work stays asynchronous.
   writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  coastOnDisk = coastContents(pool, builtAt);
   // The atomic rename swaps the inode, so the inotify watch can orphan itself
   // and loop a stale snapshot forever (#874). Force a telnet reload;
   // best-effort, so an unreachable mixer never fails the refresh.
