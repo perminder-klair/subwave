@@ -151,7 +151,7 @@ import {
 } from './queue/voice-io.js';
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
-import { createHandoverEdge, notifyCoastHandover } from './coast-handover.js';
+import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './coast-handover.js';
 
 // Everything the outside world is told about ONE spoken segment, held in a
 // single value because it is now read twice — once when the clip is committed
@@ -402,7 +402,7 @@ class Queue {
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
-  _coastHandover = createHandoverEdge(); // armed by every pick cycle, fired by the first boundary the listener gate holds (#1975)
+  _coastHandover = createHandoverEdge(); // armed by a queued track starting, fired by the first moment picking stops (#1975, #1992)
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _handoffBoundaryTimer: NodeJS.Timeout | null = null;
   _handoffGenerationTimer: NodeJS.Timeout | null = null;
@@ -3454,6 +3454,9 @@ class Queue {
       const introPublication = this._introPublications.get(item);
       if (introPublication) this.trackIntroPublication(this.current, introPublication);
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
+      // Something the queue put on air: a coast that predates it can hold it,
+      // so the next moment picking stops checks the file (#1992).
+      this._coastHandover.aired();
       // A tracked item matched → controller and Liquidsoap are in sync; clear any
       // dj_queue-empty desync streak accumulated from prior untracked plays.
       this._emptyDjQueueStreak = 0;
@@ -3617,13 +3620,37 @@ class Queue {
     // watcher still gets onTrackStarted events for those auto tracks, so the
     // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
-      if (djCallsAllowed()) this.runPickCycle({ isAutonomous });
-      // Held: the coast takes over when this track ends. The first such
-      // boundary after the DJ picked is where picking stopped, so the scheduler
-      // can check the fallback is not holding what the DJ just aired (#1975).
-      else if (this._coastHandover.held()) notifyCoastHandover();
+    if (this.upcoming.length === 0 && !this.pickerBusy) {
+      const closed = this.pickGateClosed();
+      if (!closed) this.runPickCycle({ isAutonomous });
+      // Closed: the coast takes over when this track ends, so the scheduler can
+      // check the fallback is not holding what the queue just aired (#1975).
+      else this.handOverToCoast(closed);
     }
+  }
+
+  // Why the auto-DJ will not pick into an empty slot now, or null when it will:
+  // the one gate every empty-slot path asks (#1992). The daily token cap's hard
+  // tier is not here: the cycle still runs under it (session roll, programme,
+  // handoff) and only its pick stands down, so runPickCycle reports that one.
+  pickGateClosed(): HandoverReason | null {
+    if (!this.autoPick) return 'auto-pick-off';
+    return djCallsAllowed() ? null : 'listeners';
+  }
+
+  // Picking has stopped with nothing queued, so the coast takes over when the
+  // track on air ends. Reports it once per stretch: the edge fires only if a
+  // queued track started since the last report (#1975, #1992).
+  handOverToCoast(reason: HandoverReason) {
+    if (this._coastHandover.held()) notifyCoastHandover(reason);
+  }
+
+  // The operator's auto-pick switch (POST /auto-pick). Turned off with nothing
+  // queued and no pick in flight, the track on air is already the last thing
+  // the queue will play, and no boundary comes before the coast (#1992).
+  setAutoPick(on: boolean) {
+    this.autoPick = on;
+    if (!on && this.upcoming.length === 0 && !this.pickerBusy) this.handOverToCoast('auto-pick-off');
   }
 
   async runArmedBoundaryHandoff({
@@ -3710,7 +3737,6 @@ class Queue {
       }
     }
     this.pickerBusy = true;
-    this._coastHandover.picked();
     (async () => {
       try {
         // The pick made now airs when the track it FOLLOWS ends, so near a show
@@ -3808,13 +3834,17 @@ class Queue {
         } catch (err) {
           this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
         }
-        await djAgent.runTrackEvent(this, pickCtx, {
+        const outcome = await djAgent.runTrackEvent(this, pickCtx, {
           // The mic-pass owns this seam; an outgoing link cannot follow it.
           wantLink: wantLink && !finalTrackHandoff,
           showAt,
           pickAnchor: pickAnchorItem?.track ?? null,
           anchorPrior: pickAnchorItem ? (this.current?.track ?? null) : null,
         });
+        // The hard cap made no pick. With nothing queued the coast takes over
+        // when the track on air ends; a held anchor still has to air first, and
+        // its own start re-arms the edge for the capped cycle after it (#1992).
+        if (outcome === 'capped' && this.upcoming.length === 0) this.handOverToCoast('token-cap');
       } catch (err) {
         this.log('error', `DJ track event failed: ${(err as Error).message}`);
       } finally {
@@ -3835,7 +3865,7 @@ class Queue {
   // away. Past the hard deadline the window closes and drainToLiquidsoap's
   // intrinsic path owns the endgame.
   maybeDeadlinePick() {
-    if (!this.autoPick || this.pickerBusy || !djCallsAllowed()) return;
+    if (this.pickerBusy || this.pickGateClosed()) return;
     if (!this.pairDrainActive()) return;
     const rem = this.remainingSecOnAir();
     if (!shouldDeadlinePick(rem)) return;
@@ -3932,27 +3962,25 @@ class Queue {
     // A whole origin being down fails every re-pick the same way, and each one
     // costs an LLM call to queue a track that cannot air. Past the budget the
     // auto playlist keeps the station on air until the next natural pick.
-    if (!repickAfterFailure(this._resolveFailStreak)) {
+    const repick = repickAfterFailure(this._resolveFailStreak);
+    if (!repick) {
       this.log('scheduler',
         `${this._resolveFailStreak} unresolvable picks in a row — holding off on re-picks; the auto playlist covers the slot until the next track boundary`);
-      // Out of budget is still the handover moment when the gate holds (#1975).
-      if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && !djCallsAllowed() && this._coastHandover.held()) notifyCoastHandover();
-      return;
     }
 
     // Same gate as onTrackStarted's auto-DJ block: only re-pick when the slot is
-    // genuinely empty, no pick is already running, and DJ calls are allowed.
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy) {
-      if (djCallsAllowed()) {
-        this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
-        const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
-        this.runPickCycle({ isAutonomous });
-      } else if (this._coastHandover.held()) {
-        // Held, and the dropped pick was the last one queued: the coast takes
-        // over when the track on air ends, the handover onTrackStarted reports
-        // when the gate holds a boundary (#1975).
-        notifyCoastHandover();
-      }
+    // genuinely empty, no pick is already running, and the gate is open; the
+    // re-pick budget is a test inside the open arm. Closed, the dropped item was
+    // the last one queued, so the coast takes over when the track on air ends,
+    // budget or not: the handover onTrackStarted reports at a boundary (#1975).
+    if (this.upcoming.length > 0 || this.pickerBusy) return;
+    const closed = this.pickGateClosed();
+    if (closed) {
+      this.handOverToCoast(closed);
+    } else if (repick) {
+      this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
+      const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
+      this.runPickCycle({ isAutonomous });
     }
   }
 

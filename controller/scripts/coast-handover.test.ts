@@ -1,5 +1,5 @@
-// The coast at the moment the DJ stops picking (#1975) — broadcast/coast-handover.ts,
-// the queue boundary that reports it, and the scheduler rebuild it triggers.
+// The coast at the moment the DJ stops picking (#1975, #1992) — broadcast/coast-handover.ts,
+// the queue moments that report it, and the scheduler rebuild it triggers.
 //
 // THE DEFECT. With `llm.pauseWhenEmpty` the DJ stops picking when the room
 // empties and the station coasts on auto.m3u until the next rebuild, up to an
@@ -11,6 +11,12 @@
 // The chain test drives the REAL queue.onTrackStarted with the listener gate
 // closed by a real (stubbed-Icecast) poll, and the REAL refreshAutoPlaylist
 // against a stubbed Navidrome, a temp library.db and a fake mixer.
+//
+// Three things stop picking (#1992): the listener gate, the daily token cap's
+// hard tier and the operator's auto-pick switch. The edge is armed by a track
+// the queue put on air STARTING, never by a pick cycle running: a capped cycle
+// runs at every coast boundary and picks nothing. The token-cap test drives the
+// REAL runPickCycle and runTrackEvent with the day's usage over the cap.
 //
 // Run: npm test -- coast-handover
 
@@ -36,6 +42,7 @@ const listeners = await import('../src/broadcast/listeners.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { refreshAutoPlaylist, refreshCoastOnHandover } = await import('../src/broadcast/scheduler.js');
 const { coastContents, coastRepeats, createHandoverEdge, onCoastHandover } = await import('../src/broadcast/coast-handover.js');
+const { addDailyUsage } = await import('../src/llm/internal/telemetry/budget.js');
 
 type Song = { id: string; title: string; artist: string; duration: number };
 const songs = (prefix: string, n: number): Song[] =>
@@ -126,25 +133,26 @@ test('coastRepeats counts aired tracks the coast holds, by id or by title|artist
   assert.equal(coastRepeats(coast, [{ id: 'a' }, { title: 'Beta', artist: 'Two' }, { id: 'x' }]), 2);
 });
 
-test('the handover edge fires once per stretch of held boundaries, and only after a pick', () => {
+test('the handover edge fires once per stretch of held boundaries, and only after a queued track aired', () => {
   const edge = createHandoverEdge();
   assert.equal(edge.held(), false, 'a boot into an empty room has nothing to hand over');
-  edge.picked();
-  edge.picked();
-  assert.equal(edge.held(), true, 'the first held boundary after picking');
+  edge.aired();
+  edge.aired();
+  assert.equal(edge.held(), true, 'the first held boundary after the queue aired something');
   assert.equal(edge.held(), false, 'every coast track after it');
   assert.equal(edge.held(), false);
-  edge.picked();
-  assert.equal(edge.held(), true, 're-armed by the next pick');
+  edge.aired();
+  assert.equal(edge.held(), true, 're-armed by the next queued track');
 });
 
-test('every pick cycle arms the edge, and only the held branch of the auto-DJ gate fires it', () => {
+test('a pick cycle never arms the edge: only a queued track starting does', () => {
   const src = readFileSync(new URL('../src/broadcast/queue.ts', import.meta.url), 'utf8');
   const cycle = src.slice(src.indexOf('  runPickCycle({'), src.indexOf('  maybeDeadlinePick() {'));
-  assert.ok(cycle.indexOf('this._coastHandover.picked();') > 0, 'runPickCycle arms the edge');
-  assert.ok(cycle.indexOf('this._coastHandover.picked();') < cycle.indexOf('(async () => {'),
-    'armed synchronously, before the pick can fail or be awaited');
-  assert.match(src, /if \(djCallsAllowed\(\)\) this\.runPickCycle\(\{ isAutonomous \}\);\n(\s*\/\/.*\n)*\s*else if \(this\._coastHandover\.held\(\)\) notifyCoastHandover\(\);/);
+  assert.ok(cycle.length > 0);
+  assert.ok(!cycle.includes('this._coastHandover.aired()'), 'a capped cycle at every coast boundary would re-arm it');
+  assert.equal(src.split('this._coastHandover.aired()').length - 1, 1, 'one arming site');
+  const started = src.slice(src.indexOf('  onTrackStarted('), src.indexOf('    } else {\n      // Not a tracked request'));
+  assert.ok(started.includes('this._coastHandover.aired();'), 'armed where a queued item is matched as it starts');
 });
 
 test('a coast holding none of what the queue aired is left alone, at no Navidrome cost', async () => {
@@ -157,13 +165,13 @@ test('a coast holding none of what the queue aired is left alone, at no Navidrom
   airedFromQueue(outside[0]);
   q.current = { track: outside[1], source: 'ai' };
   const calls = libraryCalls;
-  assert.equal(await refreshCoastOnHandover(), false);
+  assert.equal(await refreshCoastOnHandover('listeners'), false);
   assert.equal(libraryCalls, calls, 'no rebuild, so no fan-out');
   assert.deepEqual(coastIds(), built);
 
   // The DJ's last pick IS in the file: the coast would replay it.
   q.current = { track: byId(built[0]), source: 'ai' };
-  assert.equal(await refreshCoastOnHandover(), true);
+  assert.equal(await refreshCoastOnHandover('listeners'), true);
   assert.ok(!coastIds().includes(built[0]), 'the on-air pick steps out of the rebuilt coast');
   reset();
 });
@@ -194,7 +202,7 @@ test('a build already in flight when picking stops cannot vouch for the file it 
     airedFromQueue(others[0]);
     q.current = { track: pick, source: 'ai' };
     q.upcoming = [];
-    const handover = refreshCoastOnHandover();
+    const handover = refreshCoastOnHandover('listeners');
     holdRandom = null;
     release();
     assert.equal(await hourly, 'refreshed');
@@ -225,9 +233,9 @@ test('a full rotation rebuilds at the boundary where the listener gate stops the
   onCoastHandover(() => { handovers++; });
   const realCycle = q.runPickCycle;
   let picks = 0;
-  // The real cycle runs the whole DJ agent. Its first effect on the edge is
-  // pinned by the scrape above; this stands in for it.
-  q.runPickCycle = () => { picks++; q._coastHandover.picked(); };
+  // The real cycle runs the whole DJ agent, and never touches the edge (the
+  // scrape above): the queued track starting is what arms it.
+  q.runPickCycle = () => { picks++; };
   const start = (song: Song, picked = true) => {
     if (picked) q.upcoming = [{ track: song, aiPicked: true, sent: true }];
     queue.onTrackStarted({ subsonic_id: song.id, title: song.title, artist: song.artist } as never);
@@ -268,7 +276,7 @@ test('a full rotation rebuilds at the boundary where the listener gate stops the
     listenersNow = 0;
     await listeners.refresh();
     start(byId(after1[3]));
-    assert.equal(handovers, 2, 're-armed by the pick');
+    assert.equal(handovers, 2, 're-armed by the pick starting');
   } finally {
     q.runPickCycle = realCycle;
     listenersNow = 1;
@@ -295,7 +303,7 @@ test('a dropped last pick hands over too, when the listener gate holds its re-pi
     q.current = { track: onAir, source: 'ai' };
     const item = { track: dropped, aiPicked: true, sent: true };
     q.upcoming = [item];
-    q._coastHandover.picked(); // the cycle that picked it
+    q._coastHandover.aired(); // the on-air pick started from the queue
     // Liquidsoap never resolved it, and nothing is queued behind it.
     q.onPushResolveFailed(item);
     assert.equal(q.upcoming.length, 0);
@@ -331,7 +339,7 @@ test('a dropped last pick past the re-pick budget still hands over when the gate
     q.current = { track: onAir, source: 'ai' };
     const item = { track: dropped, aiPicked: true, sent: true };
     q.upcoming = [item];
-    q._coastHandover.picked();
+    q._coastHandover.aired();
     q.onPushResolveFailed(item);
     assert.equal(q._resolveFailStreak, 4);
     assert.equal(handovers, 1, 'the coast takes over when the track on air ends, budget or not');
@@ -343,4 +351,230 @@ test('a dropped last pick past the re-pick budget still hands over when the gate
     await refreshAutoPlaylist();
     reset();
   }
+});
+
+// Records what the queue reports, with why.
+function handoverRecorder() {
+  const reasons: string[] = [];
+  onCoastHandover(reason => { reasons.push(reason); });
+  return reasons;
+}
+const startQueued = (song: Song, extra: Record<string, unknown> = { aiPicked: true }) => {
+  q.upcoming = [{ track: song, sent: true, ...extra }];
+  queue.onTrackStarted({ subsonic_id: song.id, title: song.title, artist: song.artist } as never);
+};
+const startCoast = (song: Song) =>
+  queue.onTrackStarted({ subsonic_id: song.id, title: song.title, artist: song.artist } as never);
+
+test('the daily token cap hands over at the capped cycle after a queued track starts, once per stretch', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false, dailyTokenCap: 1000 }, shows: [], scheduleOverride: null } as never);
+  addDailyUsage(5000);
+  listenersNow = 1;
+  await listeners.refresh();
+  assert.equal(listeners.djCallsAllowed(), true, 'the room is not why picking stops');
+  const reasons = handoverRecorder();
+  assert.equal(await refreshAutoPlaylist(), 'refreshed');
+  const built = coastIds();
+  const cycleDone = () => waitFor(() => !q.pickerBusy);
+  try {
+    // The DJ's last pick (in the coast) starts; its cycle is the real one, and
+    // runTrackEvent makes no model call at the hard cap.
+    startQueued(byId(built[0]));
+    assert.equal(q.pickerBusy, true, 'the gate is open, so the cycle still runs');
+    await cycleDone();
+    assert.equal(q.upcoming.length, 0, 'capped: nothing queued');
+    assert.deepEqual(reasons, ['token-cap'], 'the coast takes over when this track ends');
+    assert.ok(q.djLog.some((e: { message: string }) => e.message.includes('daily LLM token cap reached')));
+    await waitFor(() => !coastIds().includes(built[0]));
+    assert.match(handoverLogs()[0].message, /DJ picks paused \(daily token cap reached\) — fallback holds 1 track\(s\)/);
+
+    // Every coast boundary runs another capped cycle; none of them re-arms.
+    const after1 = coastIds();
+    for (const id of after1.slice(0, 3)) {
+      startCoast(byId(id));
+      await cycleDone();
+    }
+    assert.deepEqual(reasons, ['token-cap'], 'one check per stretch, not one per capped cycle');
+
+    // A request can still reach the queue under the cap (llm.exemptRequests):
+    // the queue put it on air, so the capped cycle at its start checks again.
+    startQueued(byId(after1[3]), { requestedBy: 'Sam' });
+    await cycleDone();
+    assert.deepEqual(reasons, ['token-cap', 'token-cap']);
+  } finally {
+    await settings.update({ llm: { dailyTokenCap: 0 } } as never);
+    await waitFor(() => !q.pickerBusy);
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('a capped cycle with a held anchor leaves the handover to that anchor', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false, dailyTokenCap: 1000 }, shows: [], scheduleOverride: null } as never);
+  addDailyUsage(5000);
+  listenersNow = 1;
+  await listeners.refresh();
+  const reasons = handoverRecorder();
+  const [onAir, held] = catalogue;
+  try {
+    q.current = { track: onAir, source: 'ai', startedAt: new Date().toISOString() };
+    q._coastHandover.aired();
+    const anchor = { track: held, aiPicked: true, sent: false };
+    q.upcoming = [anchor];
+    // The pair-drain deadline pick for what follows the held track.
+    q.runPickCycle({ isAutonomous: true, pickAnchorItem: anchor });
+    await waitFor(() => !q.pickerBusy);
+    assert.deepEqual(reasons, [], 'the held track still airs before the coast');
+  } finally {
+    await settings.update({ llm: { dailyTokenCap: 0 } } as never);
+    reset();
+  }
+});
+
+test('auto-pick off hands over where the last queued track starts, and at the switch when nothing is queued', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null } as never);
+  listenersNow = 1;
+  await listeners.refresh();
+  const reasons = handoverRecorder();
+  const realCycle = q.runPickCycle;
+  let picks = 0;
+  q.runPickCycle = () => { picks++; };
+  const [a, b, c, d, e] = catalogue;
+  try {
+    assert.equal(await refreshAutoPlaylist(), 'refreshed');
+    // Off with a track still queued: the operator's own queue plays out first.
+    q.current = { track: a, source: 'ai' };
+    q.upcoming = [{ track: b, aiPicked: true, sent: true }];
+    queue.setAutoPick(false);
+    assert.deepEqual(reasons, []);
+    startQueued(b);
+    assert.equal(picks, 0, 'no pick with auto-pick off');
+    assert.deepEqual(reasons, ['auto-pick-off'], 'the last queued track is on air; the coast follows it');
+    startCoast(c);
+    assert.deepEqual(reasons, ['auto-pick-off'], 'no second check for the coast\'s own tracks');
+
+    // A studio push under the operator's hand arms it again.
+    startQueued(d, { requestedBy: 'studio', operator: true });
+    assert.deepEqual(reasons, ['auto-pick-off', 'auto-pick-off']);
+
+    // Back on, a pick that starts and finds no successor (its cycle failed)...
+    queue.setAutoPick(true);
+    startQueued(e);
+    assert.equal(picks, 1);
+    // ...is already the last thing queued when the switch goes off: no boundary
+    // comes before the coast, so the switch reports it.
+    queue.setAutoPick(false);
+    assert.deepEqual(reasons, ['auto-pick-off', 'auto-pick-off', 'auto-pick-off']);
+    queue.setAutoPick(false);
+    assert.equal(reasons.length, 3, 'once per stretch');
+    assert.equal(queue.autoPick, false);
+  } finally {
+    q.runPickCycle = realCycle;
+    queue.setAutoPick(true);
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('auto-pick off rebuilds the coast only when it holds what the operator aired', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null } as never);
+  listenersNow = 1;
+  await listeners.refresh();
+  queue.setAutoPick(false);
+  try {
+    assert.equal(await refreshAutoPlaylist(), 'refreshed');
+    const built = coastIds();
+    const outside = catalogue.find(s => !built.includes(s.id))!;
+    const calls = libraryCalls;
+    startQueued(outside, { requestedBy: 'studio', operator: true });
+    // The check runs on a microtask; give it the same chance a rebuild gets.
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal(libraryCalls, calls, 'clean coast: no rebuild under the operator\'s hand');
+    assert.deepEqual(coastIds(), built);
+
+    startQueued(byId(built[0]), { requestedBy: 'studio', operator: true });
+    await waitFor(() => !coastIds().includes(built[0]));
+    assert.match(handoverLogs()[0].message, /DJ picks paused \(auto-pick off\) — fallback holds \d+ track\(s\)/);
+  } finally {
+    queue.setAutoPick(true);
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('a dropped push with auto-pick off is the handover moment too', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false } } as never);
+  listenersNow = 1;
+  await listeners.refresh();
+  const reasons = handoverRecorder();
+  const realRecovery = q._considerIdRotationRecovery;
+  q._considerIdRotationRecovery = async () => {};
+  const realCycle = q.runPickCycle;
+  let picks = 0;
+  q.runPickCycle = () => { picks++; };
+  q._resolveFailStreak = 0;
+  try {
+    const [onAir, dropped] = catalogue;
+    q.current = { track: onAir, source: 'request' };
+    q._coastHandover.aired();
+    const item = { track: dropped, requestedBy: 'studio', operator: true, sent: true };
+    q.upcoming = [item];
+    queue.setAutoPick(false);
+    assert.deepEqual(reasons, [], 'still queued at the switch');
+    q.onPushResolveFailed(item);
+    assert.equal(picks, 0, 'no re-pick with auto-pick off');
+    assert.deepEqual(reasons, ['auto-pick-off']);
+  } finally {
+    q._considerIdRotationRecovery = realRecovery;
+    q.runPickCycle = realCycle;
+    q._resolveFailStreak = 0;
+    queue.setAutoPick(true);
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('a request and a recovered pick airing into an empty room arm the edge; a coast track does not', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: true } } as never);
+  const reasons = handoverRecorder();
+  const [a, b, c, d] = catalogue;
+  try {
+    listenersNow = 0;
+    await listeners.refresh();
+    assert.equal(listeners.djCallsAllowed(), false);
+    // A request into the empty room: no pick cycle ever ran.
+    startQueued(a, { requestedBy: 'Sam' });
+    assert.deepEqual(reasons, ['listeners']);
+    startCoast(b);
+    assert.deepEqual(reasons, ['listeners']);
+
+    // A pick recovered from queue.json: a fresh process, so the edge starts
+    // unarmed and no cycle in it picked this track.
+    q._coastHandover = createHandoverEdge();
+    startCoast(c);
+    assert.deepEqual(reasons, ['listeners'], 'a boot into an empty room has nothing to hand over');
+    startQueued(d);
+    assert.deepEqual(reasons, ['listeners', 'listeners'], 'the recovered pick airing is what the coast can hold');
+  } finally {
+    listenersNow = 1;
+    await listeners.refresh();
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('onPushResolveFailed asks one gate, with the re-pick budget inside its open arm', () => {
+  const src = readFileSync(new URL('../src/broadcast/queue.ts', import.meta.url), 'utf8');
+  const fn = src.slice(src.indexOf('  onPushResolveFailed(item: QueueItem) {'), src.indexOf('  async reconcileWithDjQueue() {'));
+  assert.ok(fn.length > 0);
+  assert.equal(fn.split('this.pickGateClosed()').length - 1, 1, 'one gate');
+  assert.equal(fn.split('this.handOverToCoast(').length - 1, 1, 'one handover arm');
+  assert.ok(!fn.includes('djCallsAllowed()') && !fn.includes('this.autoPick'), 'the gate is not restated');
+  assert.ok(fn.indexOf('} else if (repick) {') > fn.indexOf('this.handOverToCoast('), 'the budget test sits in the open arm');
 });
