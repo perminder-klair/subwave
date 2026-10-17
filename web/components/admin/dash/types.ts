@@ -80,6 +80,8 @@ export interface HealthStats {
     latency?: { p95?: number };
     /** Successful calls only; absent on an older controller. */
     okLatency?: { p95?: number };
+    /** Failed calls that ran out the agent deadline; absent on an older controller. */
+    deadlineHits?: number | null;
     agentTimeoutMs?: number;
   };
   trackSelection?: 'agentic' | 'shortlist';

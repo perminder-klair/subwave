@@ -46,7 +46,7 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
-import { djLatencyMs, failedCallsNote } from './dash/latency-gauge';
+import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
   ActResponse,
@@ -363,6 +363,7 @@ export default function DashPanel() {
     listeners: lCurrent,
     listenersPeak: lPeak,
     latencyMs: djLatencyMs(stats),
+    latencyFallbacks: deadlineFallbacks(stats),
     llmFailedCalls: failedCallsNote(stats),
     // Redline at the DJ-agent deadline so the gauge tracks the model in use.
     // Null until /stats loads.
