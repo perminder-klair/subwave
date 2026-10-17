@@ -1461,20 +1461,22 @@ export function effectEventClause(historyNote = ''): string {
 // FIFO predecessor across later awaits. The anchor flows through the event,
 // mini-run, pool re-rank and link back-announce target. `anchorPrior` supplies
 // its context. Omitted means the cycle anchors to queue.current/history.
+// Resolves 'capped' when the hard cap stood the pick down, so the queue can
+// report the coast handover (#1992); undefined on every other path.
 export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickAnchor = null, anchorPrior = null }: {
   wantLink: boolean;
   showAt?: Date | null;
   pickAnchor?: any | null;
   anchorPrior?: any | null;
-}) {
-  return withTrace({ kind: 'track-event', wantLink }, async () => {
+}): Promise<'capped' | undefined> {
+  return withTrace({ kind: 'track-event', wantLink }, async (): Promise<'capped' | undefined> => {
     // Daily token cap. At the hard cap we make NO model call: skip the pick and
     // let Liquidsoap fall through to the LLM-free auto playlist (music keeps
     // playing). In the soft tier we still pick — the stream needs a next track —
     // but cheaply: the stateless pool picker, and no link.
     if (!budget.picksAllowed()) {
       queue.log('budget', 'daily LLM token cap reached — coasting on the auto playlist');
-      return;
+      return 'capped';
     }
     const cheap = budget.preferCheapPicker();
     // Resolve once for the complete logical selection: the prompt event, main
