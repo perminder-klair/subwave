@@ -277,6 +277,29 @@ one-shot prompt via `shortlistPickPrompt`'s `showOnAir`), and
 With no show on air every one of those texts is unchanged. Pinned by
 `scripts/journey-follows-show.test.ts`.
 
+**The Leanings review on a journey pick (#1977).** The Agentic pick event tells
+the model to call `tracksTowardJourney`, and on a journey it usually calls
+nothing else, often several times. The run's candidate map is then the
+waypoint's neighbourhood alone, and the review chooses only from that map. With
+Leanings pointing at the show's lane it ran and kept, because none of the tracks
+those Leanings favour were in its set. The Shortlist never had this gap: on a
+journey its plan pairs the journey with the show's context lane and the anchor's
+continuity lane. The Agentic review now gets those same companions.
+`journeyCompanions` (`music/shortlist.ts`) runs the Shortlist planner without
+the journey tool for `JOURNEY_COMPANION_PASSES` (what the default plan spends
+beside the journey), through the pick's own scope, with no prepared searches and
+no model call. It runs only on an Agentic journey pick with Leanings on air.
+The companions join the review's pool only; the run's `seen` stays as discovery
+left it for the guards and re-picks. Only tracks the artist guard would accept
+are offered, so a replacement cannot buy a corrective re-pick. Two other skips
+on journey picks are the design, not a gap. Leanings the journey lane shares
+with the pick (a broad genre both carry) cannot distinguish a challenger. And
+"avoid that lane" written in a persona's Soul is not a Leaning: the Soul is
+voice, never programming input (#1678), and the review verifies positive
+preferences only. A show keeps a pick in its lane through its brief and filters,
+which #1911 put ahead of the journey. Pinned by
+`scripts/leanings-on-journeys.test.ts`.
+
 Conversation continuity uses the same `promptRecapEntries` selector as
 `queue.getDjRecap`. Both read the live `djBehaviour.recapLimit`, `recapMinutes`
 and `recapChars` controls (defaults 10/120/140), the shared voice-kind registry
