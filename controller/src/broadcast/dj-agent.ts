@@ -56,6 +56,7 @@ import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
+import { groundPickNote, stationClaimNames } from './dj-agent/pick-note.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -725,7 +726,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     shortlistPreliminaryId = String(song.id);
   } else {
     agentPreliminaryId = String(song.id);
-    object = { ...object, reason: agenticDiscoverySelectionReason(song, object.reason) };
+    // Read the model's own note before the verified identity is prefixed to
+    // it (#1978): a note describing another candidate becomes plain copy.
+    const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, note) };
   }
   pickResolution.preliminary = agenticTrackRef(song);
   // A model that just failed the pick is not asked to review one: the review
@@ -950,6 +954,9 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       finalId: String(song.id),
       queued: true,
     });
+    // Nor name another candidate as this one (#1978). Grounded in place, so
+    // the queue-collision re-composition below reads the same clause.
+    object.musicalReason = groundPickNote(queue, object.musicalReason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'shortlist' });
     object.reason = replacementSurvivedGuards
       ? shortlistReasonForLeanings(object.reason, true, song)
       : shortlistClauseSelectionReason(song, object.musicalReason);
@@ -971,6 +978,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       // survived the guards. The definitive badge still waits for enqueue.
       queued: true,
     });
+    // A corrective re-pick's note arrives raw and is grounded here, in place
+    // (#1978); the first answer's was grounded above and already carries the
+    // verified identity, so this pass leaves it as it is.
+    object.reason = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
     object.reason = verifiedAgenticReason(agenticSelectionReason(song, object.reason), leaningsReplacementSurvivedGuards, song);
     agentPickResolution.final = agenticTrackRef(song);
     agentPickResolution.reason = object.reason ?? null;
@@ -1763,10 +1774,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     let plainLines = new Set<MisnamedLine['field']>();
     // Whoever voices this answer, the host and guests on the roster, and the
     // station: the lines may greet any of them without claiming a track.
-    const roster = settings.getOnAirRoster();
-    const stationNames = [
-      requestSpeech.persona?.name, roster.host?.name, ...roster.guests.map((g: any) => g?.name), settings.get().station,
-    ];
+    const stationNames = stationClaimNames(requestSpeech.persona);
     const misnamed = (answer: any, track: any, pool: Map<string, any>) => misnamedRequestLines(
       { ack: answer?.ack, intro: autoVoiceAllowed() ? answer?.intro : null },
       { track, requestText: text, requester, stationNames, others: [...pool.values()].filter((c: any) => c?.id !== track.id) },
