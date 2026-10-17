@@ -1719,8 +1719,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const noteLines = (answer: any) => runLines.push(answer?.ack, autoVoiceAllowed() ? answer?.intro : null);
     noteLines(object);
     // What the run looked up by name is the ask as the agent read it, so a
-    // nickname it resolved ("the King" → "Elvis Presley") is never a stand-in.
-    const lookups = requestLookups(toolCalls);
+    // nickname it resolved ("the King" → "Elvis Presley") is never a stand-in,
+    // and nor is what a lookup in the listener's own spelling found.
+    const lookups = requestLookups(toolCalls, text);
     const standIn = (track: any, pool: Map<string, any>) => requestStandIn(runLines, {
       track, requestText: text, requester, stationNames, lookups, others: [...pool.values()].filter((c: any) => c?.id !== track?.id),
     });

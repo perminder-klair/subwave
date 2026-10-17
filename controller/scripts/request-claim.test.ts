@@ -384,6 +384,41 @@ test('requestLookups: searches, catalogue walks, and what identifyRequestedTrack
   assert.deepEqual(requestLookups(undefined), []);
 });
 
+test("requestLookups: what a lookup of the listener's own words found, never its vibe neighbours", () => {
+  const SO_HIGH = { id: 'smw-sohigh', title: 'So High', artist: 'Sidhu Moose Wala' };
+  const CALI = { id: '2pac-cali', title: 'California Love', artist: '2Pac' };
+  // The listener's spelling, resolved by the library: the credits it found.
+  assert.deepEqual(requestLookups([
+    { name: 'searchLibrary', args: { query: 'Moosewala' }, result: [SO_HIGH] },
+    { name: 'topSongsByArtist', args: { artist: 'tupac' }, result: [CALI] },
+  ], 'more Moosewala and Tupac please'), ['Moosewala', 'Sidhu Moose Wala', 'tupac', '2Pac']);
+  // A filtered literal hit still names the library's spelling.
+  assert.deepEqual(requestLookups([
+    { name: 'recentByArtist', args: { artist: 'Moosewala' }, result: { tracks: [SO_HIGH], note: 'n' } },
+  ], 'more Moosewala please'), ['Moosewala', 'Sidhu Moose Wala']);
+  // searchLibrary's vibe fallback found lookalikes, not the ask: the #1918
+  // shape, an absent artist whose neighbours include the one on air.
+  assert.deepEqual(requestLookups([
+    { name: 'searchLibrary', args: { query: 'Michael Jackson' }, result: { tracks: [ISLA, HOLIDAY], via: 'vibe' } },
+  ], 'Michael Jackson please'), ['Michael Jackson']);
+  // A query the listener never wrote finds nothing of theirs.
+  assert.deepEqual(requestLookups([
+    { name: 'searchLibrary', args: { query: 'dance pop' }, result: [ISLA, GIRLS] },
+  ], 'Michael Jackson please'), ['dance pop']);
+  // Without the request text, only the queries.
+  assert.deepEqual(requestLookups([{ name: 'searchLibrary', args: { query: 'Moosewala' }, result: [SO_HIGH] }]), ['Moosewala']);
+});
+
+test('a stand-in the run found by a lookup of other words, or by feel, is still a stand-in', () => {
+  const honest = ["No Michael Jackson in the crates tonight — here's Madonna with 'La Isla Bonita'."];
+  for (const toolCalls of [
+    [{ name: 'searchLibrary', args: { query: 'Michael Jackson' }, result: { tracks: [ISLA, HOLIDAY], via: 'vibe' } }],
+    [{ name: 'searchLibrary', args: { query: 'dance pop' }, result: [ISLA, GIRLS] }],
+  ]) {
+    assert.equal(requestStandIn(honest, { ...incident, lookups: requestLookups(toolCalls, incident.requestText) }), true);
+  }
+});
+
 // --- the remedy, through runRequest ---------------------------------------------
 
 // `text` answers a plain-text call (no tools offered: generateIntro) without
@@ -870,6 +905,59 @@ test('#1979: an ask read back as a nickname or a typo is never spaced away from 
       assert.doesNotMatch(String(result?.guard ?? ''), /artist-spaced/, c.label);
     });
   }
+});
+
+// An alias no spelling rule reaches, which the run looked up as the listener
+// wrote it: what that lookup found is the library's spelling of the ask, so
+// it is the ask too. Its vibe neighbours are not (the next case).
+const SMW_295 = { id: 'smw-295', title: '295', artist: 'Sidhu Moose Wala', album: 'Moosetape', duration: 270 };
+const SO_HIGH = { id: 'smw-sohigh', title: 'So High', artist: 'Sidhu Moose Wala', album: 'So High', duration: 230 };
+const CHANGES = { id: '2pac-changes', title: 'Changes', artist: '2Pac', album: 'Greatest Hits', duration: 269 };
+const CALI = { id: '2pac-cali', title: 'California Love', artist: '2Pac', album: 'All Eyez on Me', duration: 285 };
+
+test('#1979: an alias the run looked up in the listener\'s spelling is never spaced away from what it found', async () => {
+  const cases: Array<{ label: string; onAir: any; text: string; pick: any; ack: string; toolCalls: any[] }> = [
+    {
+      label: 'more Moosewala', onAir: SMW_295, text: 'more Moosewala please', pick: SO_HIGH,
+      ack: 'More Moosewala coming right up, Jen!',
+      toolCalls: [{ name: 'searchLibrary', args: { query: 'Moosewala' }, result: [SO_HIGH], round: 1 }],
+    },
+    {
+      label: 'more Tupac', onAir: CHANGES, text: 'more Tupac please', pick: CALI,
+      ack: 'You got it — more Tupac!',
+      toolCalls: [{ name: 'topSongsByArtist', args: { artist: 'Tupac' }, result: [CALI], round: 1 }],
+    },
+  ];
+  for (const c of cases) {
+    queue.current = { track: c.onAir } as any;
+    queue.upcoming = [];
+    const intro = `Here's ${c.pick.title}, Jen.`;
+    agentAnswers({ kind: 'track', id: c.pick.id, ack: c.ack, intro }, [c.pick, ISLA, GIRLS], c.toolCalls);
+    await withNetwork({ search: [], llm: [CYNDI] }, async (calls) => {
+      const result = await runRequest(queue, { requester: 'Jen', text: c.text });
+      assert.equal(calls.llm.length, 0, `${c.label}: no spacing call`);
+      assert.equal(queue.upcoming[0].track.id, c.pick.id, `${c.label}: the ask airs`);
+      assert.equal(queue.upcoming[0].introScript, intro, c.label);
+      // #1918's reading still replaces the ack-only misname with the plain
+      // ack, at no cost; spacing adds nothing to it.
+      assert.equal(result?.guard, 'claim-plain', c.label);
+    });
+  }
+});
+
+test("#1979: the incident's lookup that found only vibe neighbours still spaces the stand-in", async () => {
+  queue.current = { track: DANCETERIA } as any;
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: 'Closest I have, Michael!', intro: HONEST_INTRO }, [ISLA, HOLIDAY, GIRLS], [
+    { name: 'searchLibrary', args: { query: 'Michael Jackson' }, result: { tracks: [ISLA, HOLIDAY], via: 'vibe' }, round: 1 },
+  ]);
+  const result = await withNetwork({ search: [], llm: [CYNDI] }, async (calls) => {
+    const out = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+    assert.equal(calls.llm.length, 1, 'exactly one corrective call');
+    assert.deepEqual(offeredIds(calls.llm[0]), [GIRLS.id], 'no Madonna is offered');
+    return out;
+  });
+  assert.equal(result?.track?.id, GIRLS.id);
+  assert.equal(result?.guard, 'artist-spaced');
 });
 
 test('#1979: a corrective call for an ask read back as an abbreviation still offers that artist', async () => {

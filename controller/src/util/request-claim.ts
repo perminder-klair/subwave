@@ -488,21 +488,51 @@ export function claimLookupQuery(
 // resolved a description to. The agent reads a nickname with the world
 // knowledge this module lacks — "the King" searched as "Elvis Presley" — so a
 // track its own lookup names is the ask as the agent understood it.
+//
+// A lookup in the LISTENER's spelling also names what it found. Local models
+// copy the listener's words into the query ("Moosewala", "Tupac"), and the
+// library answers in its own spelling — searchLibrary's artist retry exists
+// for exactly that — so with `requestText` the credits such a call returned
+// are lookups too. Never searchLibrary's vibe fallback (`via: 'vibe'`): those
+// are lookalikes, and an absent artist's lookalikes can include the very
+// artist on air — the #1918 shape, which must stay a stand-in.
 const NAMED_LOOKUP_ARG = new Map([['searchLibrary', 'query'], ['topSongsByArtist', 'artist'], ['recentByArtist', 'artist']]);
 
 export function requestLookups(
   toolCalls: ReadonlyArray<{ name?: string | null; args?: unknown; result?: unknown } | null | undefined> | null | undefined,
+  requestText?: string | null,
 ): string[] {
+  const req = keysOf(requestText);
   const out: string[] = [];
   for (const c of toolCalls ?? []) {
     const arg = c?.name ? NAMED_LOOKUP_ARG.get(c.name) : undefined;
     const value = arg ? (c?.args as Record<string, unknown> | null)?.[arg] : undefined;
-    if (typeof value === 'string') out.push(value);
+    if (typeof value === 'string') {
+      out.push(value);
+      if (inListenerWords(value, req)) {
+        for (const t of literalTracks(c?.result)) if (typeof t?.artist === 'string') out.push(t.artist);
+      }
+    }
     if (c?.name !== 'identifyRequestedTrack') continue;
     const found = (c.result as { candidates?: unknown } | null)?.candidates;
     for (const t of Array.isArray(found) ? found : []) out.push(`${t?.artist ?? ''} ${t?.title ?? ''}`);
   }
   return out;
+}
+
+// A query is the listener's own words when every word in it, filler aside, is
+// one they wrote — or a letter off one.
+function inListenerWords(query: string, req: string[]): boolean {
+  const words = keysOf(query).filter((k) => !FILLER.has(k));
+  return words.length > 0 && words.every((k) => req.some((w) => saysWord(w, k)));
+}
+
+// The tracks a lookup answered with: a plain list, or a labelled one whose
+// literal matches were all filtered — but not a vibe search's neighbours.
+function literalTracks(result: unknown): any[] {
+  if (Array.isArray(result)) return result;
+  const labelled = result as { tracks?: unknown; via?: unknown } | null;
+  return labelled?.via !== 'vibe' && Array.isArray(labelled?.tracks) ? labelled.tracks : [];
 }
 
 // Is the track a STAND-IN for what the listener named (#1979)? Requests are
