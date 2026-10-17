@@ -152,6 +152,7 @@ import {
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
 import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './coast-handover.js';
+import { picksAllowed } from './dj-budget.js';
 
 // Everything the outside world is told about ONE spoken segment, held in a
 // single value because it is now read twice — once when the clip is committed
@@ -3647,7 +3648,8 @@ class Queue {
 
   // The operator's auto-pick switch (POST /auto-pick). Turned off with nothing
   // queued and no pick in flight, the track on air is already the last thing
-  // the queue will play, and no boundary comes before the coast (#1992).
+  // the queue will play, and no boundary comes before the coast (#1992). A pick
+  // in flight reports it from its own tail if it ends without one.
   setAutoPick(on: boolean) {
     this.autoPick = on;
     if (!on && this.upcoming.length === 0 && !this.pickerBusy) this.handOverToCoast('auto-pick-off');
@@ -3738,6 +3740,7 @@ class Queue {
     }
     this.pickerBusy = true;
     (async () => {
+      let outcome: 'capped' | undefined;
       try {
         // The pick made now airs when the track it FOLLOWS ends, so near a show
         // boundary the rules to pick by are the NEXT show's. PICK_SHOW_LOOKAHEAD
@@ -3834,21 +3837,26 @@ class Queue {
         } catch (err) {
           this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
         }
-        const outcome = await djAgent.runTrackEvent(this, pickCtx, {
+        outcome = await djAgent.runTrackEvent(this, pickCtx, {
           // The mic-pass owns this seam; an outgoing link cannot follow it.
           wantLink: wantLink && !finalTrackHandoff,
           showAt,
           pickAnchor: pickAnchorItem?.track ?? null,
           anchorPrior: pickAnchorItem ? (this.current?.track ?? null) : null,
         });
-        // The hard cap made no pick. With nothing queued the coast takes over
-        // when the track on air ends; a held anchor still has to air first, and
-        // its own start re-arms the edge for the capped cycle after it (#1992).
-        if (outcome === 'capped' && this.upcoming.length === 0) this.handOverToCoast('token-cap');
       } catch (err) {
         this.log('error', `DJ track event failed: ${(err as Error).message}`);
       } finally {
         this.pickerBusy = false;
+        // Ended with nothing queued after picking stopped: the hard cap stood
+        // this pick down, or the gate closed while it was in flight and it
+        // ended without one, thrown or not. No boundary comes before the coast,
+        // so this is the moment. A held anchor airs first and re-arms the edge
+        // itself; a pick that failed with the gate open reports nothing (#1992).
+        if (this.upcoming.length === 0) {
+          const stopped = outcome === 'capped' ? 'token-cap' : this.pickGateClosed();
+          if (stopped) this.handOverToCoast(stopped);
+        }
       }
     })();
   }
@@ -3973,6 +3981,7 @@ class Queue {
     // re-pick budget is a test inside the open arm. Closed, the dropped item was
     // the last one queued, so the coast takes over when the track on air ends,
     // budget or not: the handover onTrackStarted reports at a boundary (#1975).
+    // A pick in flight reports it from its own tail instead.
     if (this.upcoming.length > 0 || this.pickerBusy) return;
     const closed = this.pickGateClosed();
     if (closed) {
@@ -3981,6 +3990,10 @@ class Queue {
       this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
       const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
       this.runPickCycle({ isAutonomous });
+    } else if (!picksAllowed()) {
+      // Past the budget at the hard cap: no capped cycle runs to report the
+      // cap, so the drop is the handover moment too (#1992).
+      this.handOverToCoast('token-cap');
     }
   }
 

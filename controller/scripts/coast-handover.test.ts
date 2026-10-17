@@ -490,8 +490,14 @@ test('auto-pick off rebuilds the coast only when it holds what the operator aire
     const built = coastIds();
     const outside = catalogue.find(s => !built.includes(s.id))!;
     const calls = libraryCalls;
+    const reasons = handoverRecorder();
+    const logs = handoverLogs().length;
     startQueued(outside, { requestedBy: 'studio', operator: true });
-    // The check runs on a microtask; give it the same chance a rebuild gets.
+    // The handover fires and the check runs, synchronously: a rebuild would
+    // have written its booth line before its first await.
+    assert.deepEqual(reasons, ['auto-pick-off'], 'the operator\'s queue ran dry: the coast is checked');
+    assert.equal(handoverLogs().length, logs, 'and found clean, so no refresh is requested');
+    // Give a rebuild that started anyway the same chance to reach Navidrome.
     await new Promise(resolve => setTimeout(resolve, 50));
     assert.equal(libraryCalls, calls, 'clean coast: no rebuild under the operator\'s hand');
     assert.deepEqual(coastIds(), built);
@@ -539,7 +545,11 @@ test('a dropped push with auto-pick off is the handover moment too', async () =>
   }
 });
 
-test('a request and a recovered pick airing into an empty room arm the edge; a coast track does not', async () => {
+// The recovered pick is modelled, not recovered: queue.recover() also arms a
+// reconcile timer and the handoff fallbacks. What matters is the branch it
+// reaches, a queued item matched as it starts with no cycle behind it in this
+// process, which is the same branch whoever queued the item.
+test('a request and a pick no cycle here made, airing into an empty room, arm the edge; a coast track does not', async () => {
   reset();
   await settings.update({ llm: { pauseWhenEmpty: true } } as never);
   const reasons = handoverRecorder();
@@ -554,8 +564,8 @@ test('a request and a recovered pick airing into an empty room arm the edge; a c
     startCoast(b);
     assert.deepEqual(reasons, ['listeners']);
 
-    // A pick recovered from queue.json: a fresh process, so the edge starts
-    // unarmed and no cycle in it picked this track.
+    // A pick recovered from queue.json: a fresh process, so a fresh edge that
+    // starts unarmed, and no cycle in it picked the item.
     q._coastHandover = createHandoverEdge();
     startCoast(c);
     assert.deepEqual(reasons, ['listeners'], 'a boot into an empty room has nothing to hand over');
@@ -569,12 +579,112 @@ test('a request and a recovered pick airing into an empty room arm the edge; a c
   }
 });
 
+test('a cycle in flight when picking stops hands over as it ends without a pick', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: true }, shows: [], scheduleOverride: null } as never);
+  listenersNow = 1;
+  await listeners.refresh();
+  const reasons = handoverRecorder();
+  // The cycle's last step before the pick, past all of its awaits: throwing
+  // there ends the real cycle with no pick, at a point the test controls.
+  const realConfirm = q.confirmOnAirBoundaryHandoff;
+  q.confirmOnAirBoundaryHandoff = () => { throw new Error('no pick this cycle'); };
+  const [a, b, c, d] = catalogue;
+  try {
+    // Gate open: a pick that failed is not picking stopping.
+    startQueued(a);
+    assert.equal(q.pickerBusy, true);
+    await waitFor(() => !q.pickerBusy);
+    assert.deepEqual(reasons, [], 'the next boundary picks again');
+
+    // Switched off while B's cycle is in flight. The switch cannot report it
+    // (a pick may still land), and no queued track is left to start.
+    startQueued(b);
+    assert.equal(q.pickerBusy, true);
+    queue.setAutoPick(false);
+    assert.deepEqual(reasons, []);
+    await waitFor(() => !q.pickerBusy);
+    assert.deepEqual(reasons, ['auto-pick-off'], 'reported as the cycle ends, before the first coast track');
+    startCoast(c);
+    assert.deepEqual(reasons, ['auto-pick-off'], 'once per stretch');
+    queue.setAutoPick(true);
+
+    // The room empties while D's cycle is in flight. runPickCycle never reads
+    // the gate, so a cycle started into a room already empty stands for it.
+    q.current = { track: d, source: 'ai' };
+    q.upcoming = [];
+    q._coastHandover.aired();
+    listenersNow = 0;
+    await listeners.refresh();
+    q.runPickCycle({ isAutonomous: true });
+    await waitFor(() => !q.pickerBusy);
+    assert.deepEqual(reasons, ['auto-pick-off', 'listeners']);
+  } finally {
+    q.confirmOnAirBoundaryHandoff = realConfirm;
+    queue.setAutoPick(true);
+    listenersNow = 1;
+    await listeners.refresh();
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
+test('a dropped last push past the re-pick budget hands over at the hard cap', async () => {
+  reset();
+  await settings.update({ llm: { pauseWhenEmpty: false, dailyTokenCap: 0 }, shows: [], scheduleOverride: null } as never);
+  listenersNow = 1;
+  await listeners.refresh();
+  const reasons = handoverRecorder();
+  const realRecovery = q._considerIdRotationRecovery;
+  q._considerIdRotationRecovery = async () => {};
+  const realCycle = q.runPickCycle;
+  let picks = 0;
+  q.runPickCycle = () => { picks++; };
+  const [onAir, dropped] = catalogue;
+  // A request is the push a capped station still queues (llm.exemptRequests).
+  const dropLastPush = () => {
+    // Three failures already in a row: this drop is the one past the budget.
+    q._resolveFailStreak = 3;
+    q.current = { track: onAir, source: 'request' };
+    q._coastHandover.aired();
+    const item = { track: dropped, requestedBy: 'Sam', sent: true };
+    q.upcoming = [item];
+    q.onPushResolveFailed(item);
+    assert.equal(q._resolveFailStreak, 4);
+    assert.equal(picks, 0, 'past the budget: no re-pick');
+  };
+  try {
+    // No cap: picking has not stopped, and the next boundary picks again.
+    dropLastPush();
+    assert.deepEqual(reasons, []);
+
+    // At the hard cap, no capped cycle runs to report it.
+    await settings.update({ llm: { dailyTokenCap: 1000 } } as never);
+    addDailyUsage(5000);
+    dropLastPush();
+    assert.deepEqual(reasons, ['token-cap']);
+  } finally {
+    q._considerIdRotationRecovery = realRecovery;
+    q.runPickCycle = realCycle;
+    q._resolveFailStreak = 0;
+    await settings.update({ llm: { dailyTokenCap: 0 } } as never);
+    await refreshAutoPlaylist();
+    reset();
+  }
+});
+
 test('onPushResolveFailed asks one gate, with the re-pick budget inside its open arm', () => {
   const src = readFileSync(new URL('../src/broadcast/queue.ts', import.meta.url), 'utf8');
   const fn = src.slice(src.indexOf('  onPushResolveFailed(item: QueueItem) {'), src.indexOf('  async reconcileWithDjQueue() {'));
   assert.ok(fn.length > 0);
   assert.equal(fn.split('this.pickGateClosed()').length - 1, 1, 'one gate');
-  assert.equal(fn.split('this.handOverToCoast(').length - 1, 1, 'one handover arm');
   assert.ok(!fn.includes('djCallsAllowed()') && !fn.includes('this.autoPick'), 'the gate is not restated');
-  assert.ok(fn.indexOf('} else if (repick) {') > fn.indexOf('this.handOverToCoast('), 'the budget test sits in the open arm');
+  const closedArm = fn.indexOf('this.handOverToCoast(closed)');
+  const repickArm = fn.indexOf('} else if (repick) {');
+  const cappedArm = fn.indexOf('} else if (!picksAllowed()) {');
+  assert.ok(closedArm > 0 && repickArm > closedArm, 'the budget test sits in the open arm');
+  // The cap is dj-budget's call, made after the re-pick that would report it.
+  assert.ok(cappedArm > repickArm, 'past the budget, the cap is asked of dj-budget');
+  assert.ok(!/dailyTokenCap|budgetMode|currentMode|dailyTokensUsed/.test(fn), 'no cap policy inline');
+  assert.equal(fn.split('this.handOverToCoast(').length - 1, 2, 'a closed gate and the cap past the budget');
 });
