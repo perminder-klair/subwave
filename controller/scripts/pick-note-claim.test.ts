@@ -101,6 +101,12 @@ test("the measured price of reading a note's opening possessive", () => {
   );
   // And the accepted miss on the other side: a bare sentence-initial title.
   assert.deepEqual(misnamedPickNote('Teardrop keeps the hush going', ctx), []);
+  // An opening contraction is not a possessive, even when a candidate shares
+  // its word.
+  const contracted = { ...ctx, others: [...ctx.others, { title: 'Here', artist: 'Alessia Cara' }, { title: 'Something', artist: 'The Beatles' }] };
+  for (const note of ["Here's a darker turn after Porcelain", 'Something’s heavier underneath the hush']) {
+    assert.deepEqual(misnamedPickNote(note, contracted), [], note);
+  }
 });
 
 test('request lines keep the #1918 rules', () => {

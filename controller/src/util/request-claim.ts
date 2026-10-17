@@ -172,8 +172,18 @@ function nameLike(toks: Tok[]): boolean {
 // "Teardrop's hush…": a pick note opens on its subject, and a possessive is the
 // one sentence-start shape that reads as a name rather than an adjective
 // ("Smooth handoff…"). Pick notes only. Its price, measured: a common-word
-// title in the run ("Tonight") under a note opening "Tonight's mood…".
+// title in the run ("Tonight") under a note opening "Tonight's mood…". The
+// same shape after an adverb or pronoun is a contraction, never a possessive
+// ("Here's a darker turn", "Something's off-kilter"), and real titles share
+// those words ("Here", "Something"), so they stay ambiguous like any other
+// lone sentence-start capital.
+const CONTRACTED = new Set([
+  'here', 'there', 'that', 'what', 'who', 'where', 'when', 'how', 'let',
+  'something', 'nothing', 'everything', 'anything', 'someone', 'everyone', 'somebody', 'everybody', 'nobody',
+]);
+
 function possessiveLead(text: string, toks: Tok[]): boolean {
+  if (toks.length === 1 && CONTRACTED.has(toks[0]!.key)) return false;
   return toks.every((t) => MINOR.has(t.key) || t.capital === true)
     && /^['’]s\b/u.test(text.slice(toks[toks.length - 1]!.end));
 }
