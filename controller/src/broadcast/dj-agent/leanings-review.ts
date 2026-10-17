@@ -188,13 +188,15 @@ const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'r
 // and credits it as "<owner>'s taste for <phrase>", so a line written to steer
 // away has nowhere to go: read as a phrase it becomes a taste for the very
 // thing it rules out. Every reading below drops it instead. "no wave" is a
-// genre, and a hyphenated "no-frills" or "hate-fuelled" is one word. The
+// genre, and a hyphenated "no-frills" or "hate-fuelled" is one word. Idioms
+// that speak of a fondness ("can't get enough of", "never tires of", "not
+// least", "not to mention", "no matter") are not negations either. The
 // boundaries are Unicode-aware, since \b reads "Noël" and "Ōno" as holding
 // the word "no".
-const NEGATIVE_CUE = /(?<![\p{L}\p{N}])(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never|not(?!\s+(?:just|only|merely|simply)\b)|nor|neither|no(?!\s+wave\b)|cannot|[a-z]+n['’]t|rarely|seldom|hardly)(?![\p{L}\p{N}-])/iu;
+const NEGATIVE_CUE = /(?<![\p{L}\p{N}])(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never(?!\s+(?:tires?|tired|gets?\s+tired|fails?)\b)|not(?!\s+(?:just|only|merely|simply|least|to\s+mention)\b)|nor|neither|no(?!\s+(?:wave|matter)\b)|(?:cannot|[a-z]+n['’]t)(?!\s+(?:get\s+enough|resist)\b)|rarely|seldom|hardly)(?![\p{L}\p{N}-])/iu;
 // A cue inside one of these qualifies the preference rather than reversing it:
 // "records that never outstay their welcome", "dub with no vocals".
-const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+or\s+)?no)\b.*$/i;
+const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+(?:or|to)\s+)?no|with\s+hardly\s+any)\b.*$/i;
 // An exclusion always ends a sentence's positive text; a contrast ends it only
 // when the clause it opens steers away ("anything but metal" stays one phrase).
 const EXCLUSION = /\s*,?\s*\b(?:except(?:\s+for)?|excluding|apart\s+from|other\s+than)\b/i;
@@ -204,8 +206,12 @@ const CONTRAST = /\s*,?\s*(?:\b(?:but|yet|though|although|whereas|however)\b|\s[
 // particle between two capitalised words, never a negation.
 const NAME_PARTICLE = /(?<=(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{N}'’-]*\s+)no(?=\s+\p{Lu})/gu;
 
+// "rarely heard deep cuts" describes the records, not the presenter: an
+// adverb on a participle that opens a noun phrase belongs to that phrase.
+const RARE_RECORDS = /^\s*(?:rarely|seldom|hardly)\s+(?=(?:heard|played|aired|seen|known|spun|released)\s+(?!(?:on|in|at|by|to|for|here|there|now|anymore|much|often|ever|any)\b)[\p{L}\p{N}])/iu;
+
 function negates(text: string): boolean {
-  return NEGATIVE_CUE.test(text.replace(NAME_PARTICLE, ' '));
+  return NEGATIVE_CUE.test(text.replace(RARE_RECORDS, '').replace(NAME_PARTICLE, ' '));
 }
 
 function reversesPreference(text: string): boolean {

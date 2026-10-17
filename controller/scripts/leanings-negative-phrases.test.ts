@@ -78,6 +78,21 @@ test('a negation that qualifies a preference keeps it, so positive Leanings read
   assert.deepEqual(phrases('patient dub'), ['patient dub']);
 });
 
+test('an idiom of fondness, or a cue word describing the records, is not a negation', () => {
+  assert.deepEqual(phrases('Favours British jazz, not least Shabaka Hutchings and Nubya Garcia.'), ['British jazz', 'not least Shabaka Hutchings', 'Nubya Garcia']);
+  assert.deepEqual(phrases('Loves soul, not to mention funk and disco.'), ['soul', 'not to mention funk', 'disco']);
+  assert.deepEqual(phrases('Favours soul no matter the hour.'), ['soul no matter the hour']);
+  assert.deepEqual(phrases("Can't get enough of dub and krautrock."), ["Can't get enough of dub", 'krautrock']);
+  assert.deepEqual(phrases('Never tires of northern soul and Motown.'), ['Never tires of northern soul', 'Motown']);
+  assert.deepEqual(phrases('Favours instrumental tracks with little to no vocals.'), ['instrumental tracks with little to no vocals']);
+  assert.deepEqual(phrases('Favours ambient with hardly any percussion and long drones.'), ['ambient with hardly any percussion', 'long drones']);
+  assert.deepEqual(phrases('Loves rarely played soul 45s and northern soul.'), ['rarely played soul 45s', 'northern soul']);
+  assert.deepEqual(phrases('Favours obscure B-sides and seldom heard library music.'), ['obscure B-sides', 'seldom heard library music']);
+  assert.deepEqual(phrases('Favours soul. Metal rarely played.'), ['soul'], 'a participle that closes the clause still steers away');
+  assert.deepEqual(phrases('Favours soul, rarely played on air metal.'), ['soul']);
+  assert.deepEqual(phrases('Favours soul, rarely metal.'), ['soul']);
+});
+
 test('a non-English name is not read as holding a negation', () => {
   assert.deepEqual(phrases('Favours French jazz: Noël Akchoté and Django Reinhardt.'), ['French jazz: Noël Akchoté', 'Django Reinhardt']);
   assert.deepEqual(phrases('Favours Japanese jazz, Yūji Ōno and Ryo Fukui.'), ['Japanese jazz', 'Yūji Ōno', 'Ryo Fukui']);
