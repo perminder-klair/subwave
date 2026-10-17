@@ -11,6 +11,8 @@
 //   - track_vectors is vec0, which takes no trigger, so every src/ function
 //     that writes it also calls touchGenreInputs();
 //   - a library.db from before the table gets it, triggers included, on open.
+//   - an open that finds them all in place writes nothing, so it never waits
+//     on another connection's write lock.
 //
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- genre-inputs`.
 
@@ -169,6 +171,31 @@ test('every src/ function that writes track_vectors also bumps the version', () 
   for (const f of ['tracks.ts', 'id-adoption.ts', 'audio-moods.ts', 'schema.ts']) {
     assert.ok(hits.some((h) => h.at.startsWith(`music/library-db/${f}:`)), `${f} is scanned`);
   }
+});
+
+test('an open with everything in place takes no write lock', () => {
+  // Every process opens through migrate(), and a tagger or analyzer child opens
+  // while another connection may be mid-write for seconds. A write here would
+  // wait out the busy timeout and fail that child's open().
+  other.prepare('BEGIN IMMEDIATE').run();
+  const opener = new Database(db.DB_PATH, { timeout: 0 });
+  try {
+    db.ensureGenreInputs(opener);
+  } finally {
+    opener.close();
+    other.prepare('ROLLBACK').run();
+  }
+});
+
+test('a trigger missing on its own is put back on open', async () => {
+  d().exec('DROP TRIGGER genre_inputs_tracks_update');
+  await library.reload();
+  assert.ok(d().prepare(
+    `SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'genre_inputs_tracks_update'`,
+  ).get());
+  const token = db.genreInputsToken();
+  db.upsertTrackMeta('t11', { title: 't11', genres: ['Put Back'] });
+  assert.notEqual(db.genreInputsToken(), token);
 });
 
 test('a library.db from before the version table gets it, triggers included', async () => {

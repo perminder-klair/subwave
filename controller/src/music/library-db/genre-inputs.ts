@@ -11,19 +11,35 @@
 // statement that writes it is paired with touchGenreInputs() in the same
 // function; scripts/genre-inputs.test.ts holds src/ to that.
 //
-// Outside the user_version chain, like track_facet_status, and created on every
-// open with IF NOT EXISTS: a migration that rebuilds tracks drops its triggers
-// with the table, and the next ensure puts them back. A changed definition
-// needs a new trigger name, since IF NOT EXISTS never replaces one.
+// Outside the user_version chain, like track_facet_status, and checked on every
+// open: a migration that rebuilds tracks drops its triggers with the table, and
+// the next ensure puts them back. A changed definition needs a new trigger
+// name, since IF NOT EXISTS never replaces one.
 
 import Database from 'better-sqlite3';
 import { getDbNonce, requireDb } from './handle.js';
 import { changeToken } from './stats.js';
 
 const BUMP = 'UPDATE genre_inputs SET version = version + 1 WHERE pk = 1;';
+const TRIGGERS = ['genre_inputs_tracks_insert', 'genre_inputs_tracks_update', 'genre_inputs_tracks_delete'];
 
+// Reads first and writes only when something is missing. Every process opens
+// through here, and INSERT OR IGNORE takes the write lock even when the row is
+// there: a tagger or analyzer child opening while another connection holds a
+// long write would wait out the busy timeout and fail its open(). One
+// transaction, so the table never stands without the triggers that move it.
 export function ensureGenreInputs(d: Database.Database): void {
-  d.exec(`
+  const present = new Set((d.prepare(
+    `SELECT name FROM sqlite_master
+      WHERE (type = 'table' AND name = 'genre_inputs')
+         OR (type = 'trigger' AND name IN (${TRIGGERS.map(() => '?').join(', ')}))`,
+  ).all(...TRIGGERS) as Array<{ name: string }>).map((r) => r.name));
+  if (
+    present.has('genre_inputs') &&
+    TRIGGERS.every((name) => present.has(name)) &&
+    d.prepare('SELECT 1 FROM genre_inputs WHERE pk = 1').get()
+  ) return;
+  d.transaction(() => d.exec(`
     CREATE TABLE IF NOT EXISTS genre_inputs (
       pk      INTEGER PRIMARY KEY CHECK (pk = 1),
       version INTEGER NOT NULL
@@ -42,7 +58,7 @@ export function ensureGenreInputs(d: Database.Database): void {
     CREATE TRIGGER IF NOT EXISTS genre_inputs_tracks_delete AFTER DELETE ON tracks BEGIN
       ${BUMP}
     END;
-  `);
+  `)).immediate();
 }
 
 // For a writer of track_vectors, inside the same transaction as its write.
