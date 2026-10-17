@@ -27,7 +27,7 @@ import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
-import { buildLlmSwapPatch, LlmSwapError } from '../../settings/llm-swap.js';
+import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
 
@@ -267,42 +267,60 @@ router.post('/settings', requireAdmin, validateSettingsBody(), async (req, res) 
   }
 });
 
-// "Swap with primary": the backup leg becomes the primary and vice versa, in
-// one save through settings.update(). Built here, not in the browser, because
-// the admin UI only ever sees a leg's headers redacted. settings/llm-swap.ts
-// owns what moves and what stays.
+// "Swap with primary" (settings/llm-swap.ts owns what moves and what stays).
+// The preview and the write both plan from the stored settings here, so what
+// the confirm dialog says will be pinned is exactly what the swap pins.
+function planSwap() {
+  return planLlmSwap(
+    settings.get(),
+    llmProvider.resolveEmbeddingCfg(),
+    !!process.env.EMBEDDING_API_KEY,
+  );
+}
+
 // What the backup may not suit once it is primary, for the swap's confirm
 // dialog: the agentic routes are set in Music selection / DJ behaviour, not on
-// the LLM page. Read-only, and a warning only — settings/llm-swap-fit.ts.
+// the LLM page. Read-only, and a warning only — settings/llm-swap-fit.ts. Also
+// previews which inherited Library-tagger values the swap would pin.
 router.get('/settings/llm/swap/fit', requireAdmin, async (_req, res) => {
   try {
     await settings.load();
     const llm = settings.get().llm;
-    res.json(llmSwapFit(llm, recentCalls, {
+    const fit = llmSwapFit(llm, recentCalls, {
       backup: llm.fallback ? llmProvider.legLabel(llm.fallback) : undefined,
       primary: llmProvider.legLabel(llm),
-    }));
+    });
+    let embedding: { pinned: string[]; keyNotPinned: boolean } = { pinned: [], keyNotPinned: false };
+    try {
+      const { pinned, keyNotPinned } = planSwap();
+      embedding = { pinned, keyNotPinned };
+    } catch (err) {
+      if (!(err instanceof LlmSwapError)) throw err;
+    }
+    res.json({ ...fit, embedding });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// The swap itself: the backup leg becomes the primary and vice versa, in one
+// save through settings.update(). Built here, not in the browser, because the
+// admin UI only ever sees a leg's headers redacted. Answers only the receipt —
+// never update()'s raw `saved`, which carries unredacted keys and header values.
 router.post('/settings/llm/swap', requireAdmin, async (_req, res) => {
   try {
     await settings.load();
-    const patch = buildLlmSwapPatch(
-      settings.get(),
-      llmProvider.resolveEmbeddingCfg(),
-      !!process.env.EMBEDDING_API_KEY,
-    );
-    const result = await settings.update(patch);
+    const plan = planSwap();
+    const result = await settings.update(plan.patch);
     const llm = result.saved.llm;
+    const pinNote = plan.pinned.length ? ` · Library tagger pinned: ${plan.pinned.join(', ')}` : '';
+    const keyNote = plan.keyNotPinned ? ' · embedding key NOT pinned (too long for the Library tagger)' : '';
     queue.log(
       'scheduler',
-      `LLM legs swapped · primary → ${llm.provider}${llm.model ? ` / ${llm.model}` : ''} · backup → ${llm.fallback.provider}${llm.fallback.model ? ` / ${llm.fallback.model}` : ''}`,
+      `LLM legs swapped · primary → ${llm.provider}${llm.model ? ` / ${llm.model}` : ''} · backup → ${llm.fallback.provider}${llm.fallback.model ? ` / ${llm.fallback.model}` : ''}${pinNote}${keyNote}`,
     );
     void logCompatDetection();
-    res.json(result);
+    res.json({ requiresRestart: result.requiresRestart, pinned: plan.pinned, keyNotPinned: plan.keyNotPinned });
   } catch (err) {
     res.status(err instanceof LlmSwapError ? 409 : 400).json({ error: err.message });
   }

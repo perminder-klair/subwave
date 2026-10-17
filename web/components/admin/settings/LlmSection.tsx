@@ -20,6 +20,7 @@ import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
+import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
 import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS, NowBanner,
   headerMap,
@@ -1407,7 +1408,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             {' '}the backup. Each keeps its own settings, and the change is saved at once.
           </>
         }
-        details={<SwapFitNotice fit={swapFit} />}
+        details={<><SwapFitNotice fit={swapFit} /><SwapPinNotice fit={swapFit} /></>}
         confirmLabel="swap"
         cancelLabel="cancel"
         onConfirm={() => { void confirmSwap(); }}
@@ -1441,11 +1442,48 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   );
 }
 
-/** GET /settings/llm/swap/fit (controller settings/llm-swap-fit.ts). */
+/** GET /settings/llm/swap/fit (controller settings/llm-swap-fit.ts, plus the
+ *  route's preview of the embedding pins). */
 interface SwapFit {
   agenticRoutes: string[];
   target: { provider: string; model: string };
   warnings: { check: string; detail: string }[];
+  embedding?: SwapEmbeddingPreview;
+}
+
+/** The swap dialog's Library-tagger line. A pin is written once and stays:
+ *  swapping back restores the two LLM legs, not the embedding leg's
+ *  inheritance, so the operator is told before it happens. */
+function SwapPinNotice({ fit }: { fit: SwapFit | 'error' | null }) {
+  if (fit === null) return null;
+  if (fit === 'error' || !fit.embedding) {
+    return (
+      <div className="mt-3 text-[12px] leading-[1.5] text-muted">
+        Library tagger values inherited from the primary are pinned to their current values, so the
+        library&rsquo;s vectors keep their model.
+      </div>
+    );
+  }
+  const { pinned, keyNotPinned } = fit.embedding;
+  if (!pinned.length && !keyNotPinned) return null;
+  return (
+    <div role="note" className="mt-3 text-[12px] leading-[1.5]">
+      {pinned.length > 0 && (
+        <div>
+          The Library tagger follows the primary for its {pinnedFieldNames(pinned)}. The swap
+          pins {pinned.length === 1 ? 'it' : 'them'} to today&rsquo;s values so the library&rsquo;s
+          vectors keep their model. Swapping back does not undo this: clear the field in Library
+          tagger to follow the primary again.
+        </div>
+      )}
+      {keyNotPinned && (
+        <div className={pinned.length > 0 ? 'mt-1' : undefined}>
+          The primary&rsquo;s API key is too long for the Library tagger to store, so it is not
+          pinned. If embeddings stop working after the swap, set an embedding key in Library tagger.
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** The swap dialog's warning: which agentic routes the incoming primary may

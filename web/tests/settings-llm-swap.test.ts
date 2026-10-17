@@ -10,7 +10,9 @@
 //     baseline, so the LLM page shows the new legs and a later Library tagger
 //     save posts the pinned embedding values instead of the stale inherited
 //     blanks that would un-pin them — while the operator's own unsaved edits
-//     (elsewhere, or made during the request) survive and stay dirty.
+//     (elsewhere, or made during the request) survive and stay dirty;
+//   - the confirm dialog names the embedding fields the swap will pin (#1970
+//     review, finding 7), in the Library tagger's words.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -20,6 +22,7 @@ import {
   adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
 } from '../components/admin/settings/form-reconciliation';
 import { LLM_PROVIDER_FORM_KEYS, sectionById } from '../components/admin/settings/registry';
+import { pinnedFieldNames } from '../components/admin/settings/llm-swap-copy';
 
 const PRE = {
   station: 'Station',
@@ -128,4 +131,14 @@ test('only a read that reflects the committed swap is adopted', () => {
   const failed = { refreshAfter: 300 };
   assert.equal(committedReadReady(failed, 0), false, 'the stale envelope a failed read leaves');
   assert.equal(committedReadReady(failed, 301), true, 'a later successful poll');
+});
+
+test('the confirm dialog names the pinned Library-tagger fields in its own words', () => {
+  assert.equal(pinnedFieldNames([]), '');
+  assert.equal(pinnedFieldNames(['provider']), 'provider');
+  assert.equal(pinnedFieldNames(['provider', 'ollamaUrl']), 'provider and Ollama URL');
+  assert.equal(
+    pinnedFieldNames(['provider', 'providerBaseUrls', 'headers', 'apiKey']),
+    'provider, base URL, custom headers and API key',
+  );
 });

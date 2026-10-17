@@ -279,6 +279,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       if (j.requiresRestart) setPendingRestart(true);
       if (j.refreshError) notify.err(`swapped, but refresh failed: ${j.refreshError}`);
       else notify.ok('swapped: the backup is now the primary');
+      if (j.keyNotPinned) {
+        notify.err('swapped, but the Library tagger could not keep the primary’s API key (too long to store): if embeddings stop working, set an embedding key in Library tagger');
+      }
       return true;
     } catch (e) {
       notify.err(`swap failed: ${errorMessage(e)}`);

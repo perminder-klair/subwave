@@ -19,9 +19,13 @@
 // Ollama URL, headers or key all read the chat leg's). A swap must not move the
 // library's vectors to another model, so every value the embedding leg was
 // inheriting is pinned to what it resolved to before the swap. Anything the
-// operator set explicitly in the Library tagger is left alone.
+// operator set explicitly in the Library tagger is left alone. A pin is
+// written once and stays: swapping back restores the two LLM legs, not the
+// embedding leg's inheritance — so the confirm dialog names what will be
+// pinned (planLlmSwap's `pinned`, previewed by GET /settings/llm/swap/fit).
 
 import { DEFAULTS } from './defaults.js';
+import { EMBEDDING_API_KEY_MAX } from './vocab.js';
 
 /** Every per-leg connection field, i.e. every field applyLlmLegPatch writes on
  *  both legs apart from the derived flat `baseUrl` and the inline `apiKey`
@@ -80,17 +84,33 @@ function legPatch(from: Leg | undefined, fromDefaults: Leg, onto: Leg | undefine
 
 export class LlmSwapError extends Error {}
 
+/** Embedding fields a swap can pin, in the order the dialog names them. */
+export type EmbeddingPin = 'provider' | 'providerBaseUrls' | 'ollamaUrl' | 'headers' | 'apiKey';
+
+export interface LlmSwapPlan {
+  /** The settings.update() patch. */
+  patch: Record<string, unknown>;
+  /** Embedding fields the swap pins because they were inheriting the primary's. */
+  pinned: EmbeddingPin[];
+  /** The embedding leg inherits the primary's inline key, but the key is longer
+   *  than `embedding.apiKey` holds (EMBEDDING_API_KEY_MAX), so it is NOT pinned:
+   *  pinning it would make update() refuse the whole swap over a field the
+   *  operator never touched. Once the primary moves, embeddings may lose that
+   *  key — the caller says so. */
+  keyNotPinned: boolean;
+}
+
 /**
- * The settings.update() patch for a swap. `stored` is settings.get() (raw, not
- * redacted). `embedding` is the embedding leg as resolved BEFORE the swap and
+ * The swap, planned. `stored` is settings.get() (raw, not redacted).
+ * `embedding` is the embedding leg as resolved BEFORE the swap and
  * `embeddingEnvKey` whether EMBEDDING_API_KEY is set (the env key outranks an
  * inherited chat key, so there is nothing to pin when it is).
  */
-export function buildLlmSwapPatch(
+export function planLlmSwap(
   stored: { llm?: Leg & { fallback?: Leg; keys?: Record<string, string> }; embedding?: Leg },
   embedding: ResolvedEmbedding,
   embeddingEnvKey = false,
-): Record<string, unknown> {
+): LlmSwapPlan {
   const llm = stored.llm ?? {};
   const fb = llm.fallback;
   if (!fb?.enabled) throw new LlmSwapError('no backup LLM is enabled, so there is nothing to swap with');
@@ -104,9 +124,18 @@ export function buildLlmSwapPatch(
     },
   };
 
-  const pin = embeddingPins(llm, stored.embedding ?? {}, embedding, embeddingEnvKey);
+  const { pin, keyNotPinned } = embeddingPins(llm, stored.embedding ?? {}, embedding, embeddingEnvKey);
   if (Object.keys(pin).length) patch.embedding = pin;
-  return patch;
+  return { patch, pinned: Object.keys(pin) as EmbeddingPin[], keyNotPinned };
+}
+
+/** planLlmSwap's patch alone. */
+export function buildLlmSwapPatch(
+  stored: Parameters<typeof planLlmSwap>[0],
+  embedding: ResolvedEmbedding,
+  embeddingEnvKey = false,
+): Record<string, unknown> {
+  return planLlmSwap(stored, embedding, embeddingEnvKey).patch;
 }
 
 /** Freeze every value the embedding leg inherits from the primary leg. */
@@ -115,8 +144,8 @@ function embeddingPins(
   own: Leg,
   resolved: ResolvedEmbedding,
   envKey: boolean,
-): Leg {
-  const pin: Leg = {};
+): { pin: Partial<Record<EmbeddingPin, unknown>>; keyNotPinned: boolean } {
+  const pin: Partial<Record<EmbeddingPin, unknown>> = {};
   const blank = (v: unknown) => typeof v !== 'string' || !v.trim();
   if (blank(own.provider)) pin.provider = resolved.provider;
   const provider = (pin.provider ?? own.provider) as string;
@@ -132,9 +161,11 @@ function embeddingPins(
   // Only the chat leg's INLINE key (llm.keys) moves with the chat provider. A
   // provider's own env var still resolves after the swap, and is never copied
   // into settings.json.
+  let keyNotPinned = false;
   const chatInlineKey = llm.keys?.[(llm.provider as string) ?? ''];
   if (blank(own.apiKey) && !envKey && chatInlineKey && resolved.apiKey === chatInlineKey) {
-    pin.apiKey = resolved.apiKey;
+    if (chatInlineKey.trim().length > EMBEDDING_API_KEY_MAX) keyNotPinned = true;
+    else pin.apiKey = resolved.apiKey;
   }
-  return pin;
+  return { pin, keyNotPinned };
 }
