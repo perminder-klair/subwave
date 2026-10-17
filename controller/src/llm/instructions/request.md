@@ -14,7 +14,8 @@ sentences are the prompt half of #1918; the enforced half is
 `util/request-claim.ts`, which the request agent checks every answer against:
 a line it reads as naming another track gets one corrective re-pick, then plain
 copy. It cannot read every such line (caseless scripts, a one-word name at a
-sentence start), so these sentences still carry weight.
+sentence start, a name inside an English decline cue such as "if you like X"),
+so these sentences still carry weight.
 
 ## frame
 

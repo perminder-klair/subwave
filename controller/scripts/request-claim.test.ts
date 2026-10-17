@@ -147,6 +147,34 @@ test("a word in the run's own genre tags is a genre, not a name", () => {
   }).map((c) => c.text), ['Michael Jackson']);
 });
 
+test('an honest substitution that declines the ask is not a claim (English cues)', () => {
+  // What the frame prompt asks for when the library lacks the ask, often
+  // without naming the stand-in.
+  const ctx = { ...incident, requester: 'Jen' };
+  for (const line of [
+    'No Michael Jackson in the crates tonight, Jen — but I have something close!',
+    "We don't have any Michael Jackson, Jen, but this one is in the same spirit.",
+    "I couldn't find Michael Jackson tonight, Jen — here's something close.",
+    "Sadly Michael Jackson isn't in the library, Jen, so here is a stand-in.",
+    "Jen, Michael Jackson's not in the crates tonight — this one's close.",
+    'Not Michael Jackson tonight, but this one brings the same energy, Jen!',
+    'Something like Michael Jackson for you, Jen!',
+    'If you like Michael Jackson, Jen, this one should land.',
+  ]) assert.deepEqual(misnamedClaims(line, ctx), [], line);
+  // The cue must sit right against the name, and "no" must decline it rather
+  // than qualify a noun.
+  for (const line of [
+    "No Michael Jackson fan can resist this — here's Billie Jean, Jen!",
+    "No problem, Jen — here's Michael Jackson!",
+    'No doubt about it, Michael Jackson is the king — here he is, Jen!',
+    "I didn't have to look far: Michael Jackson, coming up for Jen!",
+  ]) assert.equal(misnamedClaims(line, ctx)[0]?.text, 'Michael Jackson', line);
+  // Only the listener's own words are excused: a quoted title is still a claim.
+  assert.deepEqual(misnamedClaims("No 'Billie Jean' tonight, Jen.", ctx), [{ source: 'quoted-title', text: 'Billie Jean' }]);
+  // English only: another language's decline still reads as a claim.
+  assert.equal(misnamedClaims('No tenemos a Michael Jackson esta noche, Jen.', ctx)[0]?.text, 'Michael Jackson');
+});
+
 test('a dedication in the request is excused once the line names the track', () => {
   const ctx = { track: ISLA, requestText: 'Madonna for my friend Sarah Jones please', requester: 'Tom', others: [] };
   assert.deepEqual(misnamedClaims('This one is for Sarah Jones, with love from Madonna.', ctx), []);
@@ -448,6 +476,18 @@ test('a run that already searched gets no second lookup', async () => {
 test('honest lines cost nothing: no lookup, no extra model call, words untouched', async () => {
   const intro = "No Michael Jackson in the crates, Michael — here's Madonna with 'La Isla Bonita' instead.";
   agentAnswers({ kind: 'track', id: ISLA.id, ack: 'Closest I have, Michael!', intro }, [ISLA, HOLIDAY, GIRLS]);
+  await withNetwork({ search: [BILLIE], llm: [] }, async (calls) => {
+    const result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
+    assert.equal(calls.llm.length, 0);
+    assert.deepEqual(calls.search, []);
+    assert.equal(result?.guard, null);
+    assert.equal(queue.upcoming[0].introScript, intro);
+  });
+});
+
+test('an honest substitution that names no stand-in keeps its words', async () => {
+  const intro = 'No Michael Jackson in the crates tonight, Michael — but this one is in the same spirit.';
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: "Couldn't find Michael Jackson, Michael — closest I have!", intro }, [ISLA, HOLIDAY, GIRLS]);
   await withNetwork({ search: [BILLIE], llm: [] }, async (calls) => {
     const result = await runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' });
     assert.equal(calls.llm.length, 0);

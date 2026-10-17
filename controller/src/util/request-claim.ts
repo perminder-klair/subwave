@@ -21,9 +21,12 @@
 //                    the proper names in it — the incident's "Michael Jackson".
 //                    A lowercase word splits a run rather than disqualifying
 //                    it, so "some upbeat Michael Jackson" read back still yields
-//                    the name. A dodge without naming the track trips it: the
-//                    corrected line will then say what is really playing, which
-//                    is the point.
+//                    the name. A name the line declines or uses as a reference
+//                    ("no Michael Jackson tonight", "something like Daft
+//                    Punk" — English cues only, see DECLINES) is not
+//                    one. Any other dodge without naming the track trips it:
+//                    the corrected line will then say what is really playing,
+//                    which is the point.
 //   candidate-*      another candidate's artist or title — the model describing
 //                    the neighbour of the id it returned.
 //   quoted-title     a quoted, title-cased span — "'Billie Jean'" — which radio
@@ -226,6 +229,34 @@ function names(line: Tok[], phrases: string[][]): boolean {
   return phrases.some((p) => occurrences(line, p).some((i) => p.length > 1 || line[i]!.capital !== false));
 }
 
+// An honest substitution names the ask to decline it or to use it as a
+// reference, and the frame prompt asks for exactly that: "no Michael Jackson
+// tonight", "we don't have any Prince", "couldn't find Adele", "Adele isn't in
+// the crates", "not Beyoncé, but…", "something like Daft Punk", "if you like
+// Coldplay". A request claim in one of those slots is not a claim. ENGLISH
+// ONLY, and deliberately this short: a cue list grows into an NLP heuristic,
+// and another language's "no tenemos a X" still reads as a claim — a false
+// alarm costing a corrective call, never a lie let through. Each row is the
+// text right before the name and right after it (null: anything).
+const DECLINES: Array<[RegExp | null, RegExp | null]> = [
+  // "don't have any Prince", "couldn't find Adele", "something like Daft
+  // Punk", "if you like the Beatles" — a filler word may sit between.
+  [/\b(?:don['’]?t have|do not have|(?:couldn['’]?t|could not|can['’]?t|cannot) find|something like|if you like)(?:\s+(?:any|some|more|the))*\s+$/iu, null],
+  // "no Michael Jackson tonight". "No" is a determiner as often as a decline
+  // ("no Michael Jackson fan can resist…"), so only where the name ends the
+  // clause or "tonight", "in the crates" and the like follow.
+  [/\bno(?:\s+more)?\s+$/iu, /^(?:\s*(?:[,.;:!?—–…]|$)|\s+(?:tonight|today|in|on|here|for|but)\b)/iu],
+  // "not Beyoncé tonight, but…"
+  [/\bnot\s+$/iu, /^\W*(?:(?:tonight|today)\W+)?but\b/iu],
+  // "Adele isn't in the crates", "Michael Jackson's not in the library"
+  [null, /^(?:['’]s not|\s+(?:is|are)(?:n['’]?t| not)) in (?:the |my |our )?(?:crates?|library|collection)\b/iu],
+];
+
+function declined(text: string, start: number, end: number): boolean {
+  return DECLINES.some(([before, after]) => (!before || before.test(text.slice(0, start)))
+    && (!after || after.test(text.slice(end))));
+}
+
 function surface(text: string, toks: Tok[]): string {
   return toks.length ? text.slice(toks[0]!.start, toks[toks.length - 1]!.end) : '';
 }
@@ -321,6 +352,7 @@ export function lineClaims(line: string | null | undefined, ctx: ClaimContext): 
     const span = toks.slice(a, b + 1);
     if (!nameLike(span)) return;
     if (isExempt(span.map((t) => t.key))) return;
+    if (declined(text, span[0]!.start, span[span.length - 1]!.end)) return;
     add('request', span);
   };
   for (let i = 0; i < toks.length; i++) {
