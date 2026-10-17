@@ -29,6 +29,8 @@ import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { shuffle } from '../util/shuffle.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
+import { matchedRequestStandIn } from '../util/request-claim.js';
+import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 
 export const router = express.Router();
 
@@ -439,11 +441,45 @@ async function resolveRequest(entry) {
   for (const id of queue.queuedIds()) recentIds.add(id);
   await library.load();
 
+  // What the matcher read the listener as naming: artist names and song titles
+  // only (search_terms), so a term repeating the mood, genre or language is a
+  // vibe it misfiled. Step 2c searches these; stand-in spacing reads them too.
+  const terms = (matched.search_terms || []).filter((t: string) => {
+    if (!t || typeof t !== 'string') return false;
+    if (matched.mood && t.toLowerCase() === matched.mood.toLowerCase()) return false;
+    if (matched.genre && t.toLowerCase() === matched.genre.toLowerCase()) return false;
+    if (matched.language && t.toLowerCase() === matched.language.toLowerCase()) return false;
+    return true;
+  });
+
+  // Stand-in spacing (#1993). A request is exempt from artist spacing — an
+  // explicit ask wins — but when the listener named an artist or a title the
+  // library cannot meet, the pool the cascade falls to stands in for it, and
+  // whose track that is is the DJ's choice: #1979 aired Madonna straight after
+  // Madonna for "Michael Jackson please". util/request-claim.ts says whether a
+  // pool track is a stand-in, from the matcher's reading; artist-guard.ts says
+  // how a draw is spaced, as a preference that never costs the request its
+  // slot. Every pool draws through it; the artist path (2a) is the ask itself.
+  // The window is read at the draw, so a pick that landed while the pools were
+  // fetched is in it.
+  const named = [matched.artist, ...terms];
+  const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  const draw = (pool: any[]) => {
+    const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
+    const drawn = drawRequestCandidate(pool, neighbourRoots, (s: any) => matchedRequestStandIn(named, { track: s, requestText: text }));
+    if (drawn.withheld) {
+      flagGuard(entry, 'artist-spaced');
+      queue.log('request-guard', `stand-in by recently-played artist "${drawn.withheld.artist}" set aside — drew "${drawn.pick?.title}" by ${drawn.pick?.artist} instead (${drawn.skipped} recent stand-in(s) passed over, spacing window ${varietyWindow} slots)`);
+    } else if (drawn.starved) {
+      queue.log('request-guard', `stand-in by recently-played artist "${drawn.pick?.artist}" allowed — every candidate in its pool was one (spacing window ${varietyWindow} slots)`);
+    }
+    return drawn.pick;
+  };
+
   const randomFresh = (pool: any[]) => {
     if (!pool || pool.length === 0) return null;
     const fresh = pool.filter((s: any) => s?.id && !recentIds.has(s.id));
-    const choose = fresh.length > 0 ? fresh : pool;
-    return choose[Math.floor(Math.random() * choose.length)] || null;
+    return draw(fresh.length > 0 ? fresh : pool);
   };
 
   let pick: any = null;
@@ -500,7 +536,7 @@ async function resolveRequest(entry) {
         // Strict-fresh: with a tiny text-match pool, falling back to recently
         // played candidates just dedup-dies downstream, so treat it as a miss.
         const fresh = (r || []).filter((s: any) => s?.id && !recentIds.has(s.id));
-        pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
+        pick = fresh.length ? draw(fresh) : null;
         if (pick) pickSource = `language-search:${matched.language}`;
       } catch (err) {
         queue.log('error', `language search pick failed: ${err.message}`);
@@ -511,13 +547,6 @@ async function resolveRequest(entry) {
   // 2c. Search by terms: artist names / song titles only. A random page offset
   // keeps repeat requests off the same top-25 search3 hits.
   if (!pick) {
-    const terms = (matched.search_terms || []).filter((t: string) => {
-      if (!t || typeof t !== 'string') return false;
-      if (matched.mood && t.toLowerCase() === matched.mood.toLowerCase()) return false;
-      if (matched.genre && t.toLowerCase() === matched.genre.toLowerCase()) return false;
-      if (matched.language && t.toLowerCase() === matched.language.toLowerCase()) return false;
-      return true;
-    });
     if (terms.length > 0) {
       let candidates: any[] = [];
       for (const term of terms) {
