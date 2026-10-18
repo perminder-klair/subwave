@@ -239,20 +239,22 @@ async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Ma
   return seen;
 }
 
-// The genre guard's one extra discovery call (#1897): sound-alikes of the
-// on-air feel, through the same tool and scope as the agent's own calls, so
-// recency, show locks, the blocklist and the track-length floor all apply. The
-// guard then filters out the run's genre. No model call. Without an audio
-// index it asks the mood/lyric index instead. Any failure only means no extra
-// candidates, and the guard keeps the original pick. New tracks join `seen` so
-// later note grounding can resolve them.
-async function steerAwayCandidates(scope: PickerScope, seedId: string | null, seen: Map<string, any>): Promise<Map<string, any>> {
+// The genre guard's one extra discovery call (#1897), seeded from the track on
+// air. Through the picker's own tools and scope, so recency, show locks, the
+// blocklist and the track-length floor all apply; the guard then drops the
+// run's genre from the results. No model call. A track-seeded sound-alike
+// lookup (the mood/lyric index when there is no audio index). New tracks join `seen` so later
+// note grounding can resolve them.
+async function steerAwayCandidates(
+  scope: PickerScope, onAir: { id?: string } | null, seen: Map<string, any>,
+): Promise<Map<string, any>> {
   const found = new Map<string, any>();
+  const seedId = onAir?.id ?? null;
   if (!seedId) return found;
   const { tools, seen: fresh } = buildPickerTools(scope);
-  const tool = (tools as Record<string, any>).tracksThatSoundLikeThis ?? (tools as Record<string, any>).tracksLikeThis;
+  const t = tools as Record<string, any>;
   try {
-    await tool?.execute?.({ songId: seedId }, {
+    await (t.tracksThatSoundLikeThis ?? t.tracksLikeThis)?.execute?.({ songId: seedId }, {
       toolCallId: 'genre-guard-steer', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
     });
   } catch { /* no extra candidates */ }
@@ -1037,8 +1039,10 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       genreKeysOf, recentRoots: neighbourRoots,
       avoidAnchorRoot: artistRootKey(pickAnchor || {}),
       repick: guardRepick,
+      recentAlbums: albumHours > 0 ? queue.recentAlbumKeys(albumHours) : undefined,
+      albumKeyOf: albumKeyFor,
       // Only called when no candidate lies outside the run's genre family.
-      steer: () => steerAwayCandidates(scope, pickAnchor?.id ?? queue.current?.track?.id ?? null, extras.seen),
+      steer: () => steerAwayCandidates(scope, queue.current?.track ?? null, extras.seen),
       log: line => queue.log('picker', line),
       logEvent,
     });

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GENRE_FAMILIES, genreFamilyOf, genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
+import { GENRE_FAMILIES, familyForm, genreFamilyOf, genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
 import { aliasMapOf, sceneKey } from '../src/music/scene-vocab.js';
 
 const none = new Map<string, string>();
@@ -10,9 +10,10 @@ test('the family map is small, normalized, and puts each label in one family', (
   for (const [family, labels] of Object.entries(GENRE_FAMILIES)) {
     assert.ok(labels.length >= 2, `${family} has a reason to exist`);
     for (const label of labels) {
-      assert.equal(label, sceneKey(label), `${label} is written in its normalized form`);
-      assert.equal(seen.get(label), undefined, `${label} appears in ${seen.get(label)} and ${family}`);
-      seen.set(label, family);
+      assert.equal(label, sceneKey(label), `${label} is written lower case`);
+      const form = familyForm(label);
+      assert.equal(seen.get(form), undefined, `${label} appears in ${seen.get(form)} and ${family}`);
+      seen.set(form, family);
     }
   }
   assert.ok(Object.keys(GENRE_FAMILIES).length <= 15, 'a signal to look again if this grows');
@@ -41,4 +42,16 @@ test('keys keep the label and add one family token per labelled family', () => {
 test('scene aliases resolve first, then the family applies', () => {
   const aliases = aliasMapOf([{ from: 'jamaican roots', to: 'Roots Reggae', at: '' }]);
   assert.deepEqual([...genreKeysWithFamilies(['Jamaican Roots'], aliases)].sort(), ['family:reggae', 'roots reggae']);
+});
+
+test('separators and ampersands do not hide a family', () => {
+  for (const label of ['Hip-Hop', 'hip/hop', 'Hip  Hop', 'HIP_HOP', 'Hip Hop.']) assert.equal(genreFamilyOf(label), 'hip hop', label);
+  assert.equal(genreFamilyOf('Drum & Bass'), 'drum and bass');
+  assert.equal(genreFamilyOf('drum-n-bass'), null, 'only separators fold, not spellings');
+  assert.equal(genreFamilyOf('Alt Country'), 'country');
+  assert.equal(genreFamilyOf('Avant Garde Jazz'), 'jazz');
+  assert.equal(genreFamilyOf('Oi!'), 'punk');
+  assert.ok(genreKeysWithFamilies(['Hip-Hop'], none).has('family:hip hop'));
+  assert.ok(genreKeysWithFamilies(['Lovers-Rock'], none).has('family:reggae'));
+  assert.deepEqual([...genreKeysWithFamilies(['Hip-Hop'], none)].sort(), ['family:hip hop', 'hip-hop'], 'label keys keep their sceneKey form');
 });

@@ -23,24 +23,31 @@ export const GENRE_FAMILIES: Readonly<Record<string, readonly string[]>> = {
   gospel: ['gospel', 'southern gospel', 'traditional gospel', 'contemporary gospel'],
   house: ['house', 'deep house', 'tech house', 'progressive house', 'acid house', 'funky house', 'chicago house'],
   techno: ['techno', 'minimal techno', 'detroit techno', 'acid techno', 'dub techno'],
-  'drum and bass': ['drum and bass', 'drum & bass', 'jungle', 'liquid funk', 'neurofunk'],
+  'drum and bass': ['drum and bass', 'jungle', 'liquid funk', 'neurofunk'],
 };
 
 // Family tokens ride in the same Set as label keys, so the run logic
 // (intersection, overlap) needs no second code path. The prefix marks them.
 export const FAMILY_PREFIX = 'family:';
 
+// Family matching ignores separators and the ampersand: "Hip-Hop", "hip hop",
+// "Hip/Hop" and "drum & bass" all land on one form. This is for family lookup
+// only. Label keys stay `sceneKey` forms, as scene aliases use them.
+export function familyForm(label: string): string {
+  return sceneKey(label).replace(/&/g, ' and ').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
 const FAMILY_OF: ReadonlyMap<string, string> = (() => {
   const map = new Map<string, string>();
   for (const [family, labels] of Object.entries(GENRE_FAMILIES)) {
-    for (const label of labels) map.set(sceneKey(label), family);
+    for (const label of labels) map.set(familyForm(label), family);
   }
   return map;
 })();
 
-/** The family a normalized label key belongs to, or null. */
-export function genreFamilyOf(labelKey: string): string | null {
-  return FAMILY_OF.get(sceneKey(labelKey)) ?? null;
+/** The family a label belongs to, or null. */
+export function genreFamilyOf(label: string): string | null {
+  return FAMILY_OF.get(familyForm(label)) ?? null;
 }
 
 /**
@@ -54,7 +61,7 @@ export function genreKeysWithFamilies(labels: readonly unknown[], aliases: Scene
     const key = sceneKey(aliasValue(label, aliases));
     if (!key) continue;
     out.add(key);
-    const family = FAMILY_OF.get(key);
+    const family = FAMILY_OF.get(familyForm(key));
     if (family) out.add(FAMILY_PREFIX + family);
   }
   return out;

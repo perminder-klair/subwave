@@ -236,3 +236,33 @@ test('no run means no steer call', async () => {
   });
   assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });
 });
+
+test('album cooldown: a fresh-album alternative beats a recent-album one; with none left the cooldown relaxes', async () => {
+  const recentAlbum = { ...other, id: 'recent-album', genres: ['Soul'], album: 'Old Record' };
+  const freshAlbum = { ...other, id: 'fresh-album', genres: ['Funk'], album: 'New Record' };
+  const albumOf = (s: Song & { album?: string }) => s.album ?? '';
+  const offered: string[][] = [];
+  const base = {
+    albumKeyOf: albumOf, recentAlbums: new Set(['Old Record']),
+    repick: async (alt: Map<string, Song>) => { offered.push([...alt.keys()]); return { id: [...alt.keys()][0] }; },
+  };
+  const a = fam({ ...base, seen: new Map([ska, recentAlbum, freshAlbum].map(s => [s.id, s])) });
+  assert.equal((await runGenreGuard(a.deps)).kind, 'repicked');
+  assert.deepEqual(offered.pop(), ['fresh-album']);
+  assert.equal(a.events[0].albumRelaxed, false);
+
+  const b = fam({ ...base, seen: new Map([ska, recentAlbum].map(s => [s.id, s])) });
+  assert.equal((await runGenreGuard(b.deps)).kind, 'repicked');
+  assert.deepEqual(offered.pop(), ['recent-album'], 'never starve: the cooldown yields');
+  assert.equal(b.events[0].albumRelaxed, true);
+
+  // Steered candidates are held to the same rule.
+  const c = fam({ ...base, seen: new Map([[ska.id, ska]]), steer: async () => new Map([recentAlbum, freshAlbum].map(s => [s.id, s])) });
+  assert.equal((await runGenreGuard(c.deps)).kind, 'repicked');
+  assert.deepEqual(offered.pop(), ['fresh-album']);
+
+  // Cooldown off (no recent albums) changes nothing.
+  const d = fam({ albumKeyOf: albumOf, recentAlbums: new Set(), seen: new Map([ska, recentAlbum, freshAlbum].map(s => [s.id, s])), repick: base.repick });
+  assert.equal((await runGenreGuard(d.deps)).kind, 'repicked');
+  assert.deepEqual(offered.pop(), ['recent-album', 'fresh-album']);
+});

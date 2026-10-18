@@ -52,12 +52,17 @@ export interface GenreGuardDeps<T> {
   // run (for example sound-alikes of the current feel). The guard filters
   // them the same way as `seen`. Absent or empty means keep the pick.
   steer?: () => Promise<Map<string, T> | null | undefined>;
+  // Album cooldown, when it is on. Outside-run candidates on a recently aired
+  // album are set aside while any fresh-album one exists, so this guard cannot
+  // undo the album guard. With none left, the cooldown relaxes (never starve).
+  recentAlbums?: ReadonlySet<string>;
+  albumKeyOf?: (song: T) => string;
   log: (line: string) => void;
   logEvent: (name: string, payload: Record<string, unknown>) => void;
 }
 
 export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDeps<T>): Promise<GenreGuardOutcome<T>> {
-  const { song, seen, recentGenres, window, genreKeysOf, recentRoots, avoidAnchorRoot = '', repick, steer, log, logEvent } = deps;
+  const { song, seen, recentGenres, window, genreKeysOf, recentRoots, avoidAnchorRoot = '', repick, steer, recentAlbums, albumKeyOf, log, logEvent } = deps;
   // Off is a true no-op: no metadata lookups, candidate walks or telemetry.
   if (window <= 0) return { kind: 'none' };
   const runLabels = runGenreKeys(recentGenres, window);
@@ -69,8 +74,18 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
     const keys = genreKeysOf(s);
     return keys.size > 0 && !labelsOverlap(keys, runLabels);
   });
-  // Reuse the artist policy, including its never-starve spacing relaxation.
-  let { alt, starved: artistStarved } = alternativeCandidates(outsideRun(seen), '', recentRoots, avoidAnchorRoot);
+  let albumRelaxed = false;
+  const narrow = (candidates: Iterable<[string, T]>) => {
+    let pool = outsideRun(candidates);
+    if (recentAlbums?.size && albumKeyOf) {
+      const fresh = pool.filter(([, s]) => { const key = albumKeyOf(s); return !key || !recentAlbums.has(key); });
+      if (fresh.length) pool = fresh;
+      else if (pool.length) albumRelaxed = true;
+    }
+    // Reuse the artist policy, including its never-starve spacing relaxation.
+    return alternativeCandidates(pool, '', recentRoots, avoidAnchorRoot);
+  };
+  let { alt, starved: artistStarved } = narrow(seen);
   // Every candidate is in the run's genre: make the one steer-away call, then
   // judge its results by the same rules. Never called when an outside
   // candidate already exists.
@@ -81,14 +96,14 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
     let extra: Map<string, T> | null | undefined = null;
     try { extra = await steer(); } catch { extra = null; }
     steerReturned = extra?.size ?? 0;
-    if (extra?.size) ({ alt, starved: artistStarved } = alternativeCandidates(outsideRun(extra), '', recentRoots, avoidAnchorRoot));
+    if (extra?.size) ({ alt, starved: artistStarved } = narrow(extra));
   }
   if (alt.size) {
     const repicked = await repick(alt,
       `The last ${window} aired tracks all carry these genre labels: ${JSON.stringify(genres.map(describeRunKey))}. Your pick carries at least one of them and would extend that run. Choose a track carrying none of those labels from the candidates above, keeping the transition smooth.`);
     const altSong = repicked?.id ? alt.get(repicked.id) : null;
     if (altSong && repicked) {
-      logEvent('pick.genreGuard', { relaxed: false, genres, window, from: song.title, to: altSong.title, candidates: alt.size, artistStarved, steered });
+      logEvent('pick.genreGuard', { relaxed: false, genres, window, from: song.title, to: altSong.title, candidates: alt.size, artistStarved, albumRelaxed, steered });
       log(`genre run "${label}" avoided — re-picked "${altSong.title}" by ${altSong.artist} after ${window} same-genre airings${steered ? ' (from one steer-away search)' : ''}${artistStarved ? ' (artist spacing waived)' : ''}`);
       return { kind: 'repicked', object: repicked, song: altSong };
     }
