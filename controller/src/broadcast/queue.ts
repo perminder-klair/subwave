@@ -2216,6 +2216,7 @@ class Queue {
             cueOutSec: earlyEnds.length ? Math.min(...earlyEnds) : null,
             cueInSec: item.cueInSec ?? null,
             resolveProbeId: item.resolveProbeId,
+            clipLeadSec: item.stemBlend ? stemBlend.CLIP_SEAM_CROSS_SEC : null,
           });
         };
         if (trim.cueInSec != null || trim.cueOutSec != null) {

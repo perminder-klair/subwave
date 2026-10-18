@@ -11,8 +11,10 @@
 //  2. The three guards' DIRECTIONS. Every one of them is a "cut less than the
 //     measurement said" rule, and each fails silently in the expensive
 //     direction — a min-gap that stops filtering eats a segued album's
-//     deliberate space, a lost margin cuts the attack, a lost ceiling lets one
-//     bad measurement halve a song.
+//     deliberate space, a lost margin cuts the attack, a lost head ceiling lets
+//     one bad measurement halve a song. The tail ceiling is not that bound: it
+//     caps a wider tail search, and today's tail window (OUTRO_SECONDS, 20 s)
+//     reads a gap that fills it as None, so by default it never binds.
 //
 // No audio, no library DB: tracks carry their own measurements so the library
 // fallback is never reached HERE. That fallback is the path every real caller
@@ -92,16 +94,32 @@ test('the min-gap dial is a floor, not a hint', async () => {
   assert.equal(resolveSilenceTrim(GAPPY).cueOutSec, 191.25);
 });
 
-test('the ceiling bounds one bad measurement', async () => {
+test('the head ceiling bounds one bad measurement', async () => {
   await coldLoad({ enabled: true, minGapMs: 1_500 });
-  // 5 minutes of "silence" on a 600s track is a broken measurement. It is
-  // still acted on — but only up to MAX_TRIM_SEC, so the damage is bounded at
-  // 30s rather than five minutes.
-  const t = resolveSilenceTrim({
-    duration: 600, leadSilenceMs: 300_000, tailSilenceMs: 300_000, tailStartMs: 300_000,
-  });
+  // 5 minutes of "silence" before the music on a 600s track is a broken
+  // measurement. It is still acted on — but only up to MAX_LEAD_TRIM_SEC, so
+  // the damage is bounded at 30s rather than five minutes.
+  const t = resolveSilenceTrim({ duration: 600, leadSilenceMs: 300_000 });
   assert.equal(t.cueInSec, 30);
-  assert.equal(t.cueOutSec, 570);
+  assert.equal(t.cueOutSec, null);
+});
+
+test('a long silent ending is cut whole, up to the tail ceiling', async () => {
+  await coldLoad({ enabled: true, minGapMs: 1_500 });
+  // A hidden-track gap: the music stops at 107.5s and 354.9s of silence run
+  // to the end of the file. Nothing plays after it, so the cut lands at the
+  // music's end (plus the margin), not 30s before the file's end.
+  const hidden = resolveSilenceTrim({ duration: 462.4, tailSilenceMs: 354_900, tailStartMs: 107_500 });
+  assert.equal(hidden.cueOutSec, 107.75);
+  // Past MAX_TAIL_TRIM_SEC (600s) the cut stops at the ceiling.
+  const huge = resolveSilenceTrim({ duration: 1_000, tailSilenceMs: 900_000, tailStartMs: 100_000 });
+  assert.equal(huge.cueOutSec, 400);
+  // The head ceiling still applies to the same track's head.
+  const both = resolveSilenceTrim({
+    duration: 600, leadSilenceMs: 300_000, tailSilenceMs: 200_000, tailStartMs: 400_000,
+  });
+  assert.equal(both.cueInSec, 30);
+  assert.equal(both.cueOutSec, 400.25);
 });
 
 test('a degenerate pair yields no cue_out rather than an empty request', async () => {

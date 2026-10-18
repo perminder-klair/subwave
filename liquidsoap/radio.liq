@@ -112,8 +112,9 @@ station_name = ref("SUB/WAVE")
 # holds in AUDIO time under any clock (wall-clock envelopes drift).
 #
 # Engine constraints, all measured — do not "simplify" past them:
-#   * v2.4.5 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
-#     every effect transition (see Dockerfile.broadcast).
+#   * v2.4.6 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
+#     every effect transition, and 2.4.5 drops a partial frame after every
+#     `cross` (see Dockerfile.broadcast).
 #   * comb, NOT echo: native `echo` (incl. ping_pong) type-checks then passes
 #     audio through bit-for-bit on 2.2.5 and 2.4.4.
 #   * filter.rc, NOT the SVF `filter` (unstable near sr/4, collapses to
@@ -409,7 +410,12 @@ music = cue_cut(music)
 # INVARIANT: fade.out/fade.in span the ENTIRE cross() buffer so the tracks curve
 # past each other at ~-6 dB midpoint and sum to ~unity. A shorter fade leaves the
 # outgoing at full level while the incoming ramps: +6 dB, audible doubling. To
-# vary the blend, vary the cross BUFFER, never the fade inside it.
+# vary the blend, vary the cross BUFFER, never the fade inside it. Two measured
+# exceptions in dj_transition: the chop's incoming fade (the outgoing is already
+# gone), and a stem-blend clip seam, where both sides fade over the cue lead
+# inside a slightly longer buffer (CLIP SEAM ALIGNMENT). The delayed side is
+# silent until it enters, so both fades share one window and the +6 dB hazard
+# can't arise.
 #
 # Low-level `cross`, NOT the `crossfade` wrapper: crossfade(smart=false) routes
 # through its internal simple_transition and ignores a custom callback. `a`/`b`
@@ -428,6 +434,14 @@ music = cue_cut(music)
 # distinguishes new airings of the same local file, including repeated jingles;
 # fallback metadata replay keeps that request ID and reuses its stamps.
 cross_prev_end = ref(crossfade_duration())
+# CLIP SEAM SLACK — a stem-blend clip seam (`liq_clip_lead` stamped on the
+# outgoing track and on the clip) buffers this much MORE than its cue lead.
+# `cross` buffers whole frames, so the buffer it reports can land a frame
+# (20ms on 2.4.5: 0.28s measured for a 0.3s stamp) short of the stamp, while
+# the controller's cues assume the overlap is exactly the lead. With the slack
+# the buffer always covers the lead, and dj_transition delays the incoming
+# side by the excess (CLIP SEAM ALIGNMENT). Five frames of margin.
+clip_seam_slack = 0.1
 cross_last_file = ref("")
 cross_last_rid = ref("")
 cross_last_stamps = ref([])
@@ -442,6 +456,8 @@ def cross_stamps(m) =
   else
     own = float_of_string(default=crossfade_duration(), m["liq_cross_duration"])
     own = if own < 0. then crossfade_duration() else own end
+    lead = float_of_string(default=-1., m["liq_clip_lead"])
+    own = if lead >= 0. then lead + clip_seam_slack else own end
     stamps = [
       ("liq_cross_start_duration", string(cross_prev_end())),
       ("liq_cross_end_duration", string(own)),
@@ -489,6 +505,40 @@ def dj_transition(a, b) =
   if abs(d - stamp) > 0.25 then
     log(label="cross.size", level=2, "transition buffer #{d}s differs from the outgoing stamp #{stamp}s — fading over the buffer")
   end
+  # CLIP SEAM ALIGNMENT. At a stem-blend clip seam (either side is the clip)
+  # the controller cues X out, and Y in, `liq_clip_lead` seconds outside the
+  # clip's edges, so the two sides line up only if the incoming side starts
+  # exactly `lead` before the outgoing one ends. The buffer is `d`, which
+  # cross_stamps sized past the lead by clip_seam_slack: the outgoing side
+  # starts `d` before its end, the incoming side waits `d - lead`, and both
+  # reach the same instant of the music whatever whole number of frames
+  # `cross` buffered. Without it each clip seam was off by the frame cross
+  # dropped (~20ms flam, scripts/stem-seam-test.sh). Both fades run over the
+  # lead, from the clip's entry, so they end together and sum to unity.
+  # The delay is a blank(), which is sample-accurate on 2.4.6 only: on 2.4.5 a
+  # transition that starts mid-frame counts its partial first frame whole, so
+  # the clip arrives up to one frame early (savonet/liquidsoap#5296's family).
+  clip_meta =
+    if b.metadata["subwave_clip"] == "1" then b.metadata
+    elsif a.metadata["subwave_clip"] == "1" then a.metadata
+    else [] end
+  clip_lead = float_of_string(default=-1., clip_meta["liq_clip_lead"])
+  # Bounded: cross_stamps buffers a clip seam lead + slack, give or take one
+  # frame. A larger buffer means the seam was sized by something else (a
+  # non-clip stamp between X and the clip would hold the clip back ~9.7s), so
+  # it is logged and left as a plain crossfade rather than delayed.
+  clip_max_d = clip_lead + clip_seam_slack + frame.duration()
+  b_delay =
+    if clip_lead >= 0. and d > clip_lead and d <= clip_max_d then d - clip_lead
+    else 0. end
+  if clip_lead >= 0. then
+    log(label="clip.seam", level=3, "buffered #{d}s, cue lead #{clip_lead}s: incoming waits #{b_delay}s")
+    if d < clip_lead then
+      log(label="clip.seam", level=2, "buffer #{d}s is shorter than the cue lead #{clip_lead}s — this seam is #{clip_lead - d}s off")
+    elsif d > clip_max_d then
+      log(label="clip.seam", level=2, "buffer #{d}s is past the cue lead #{clip_lead}s + slack — not aligned, plain crossfade")
+    end
+  end
   # EFFECT ARMING. Every effect is APPLIED to the outgoing branch, but which
   # track carries the FLAG differs, which is why there is no arming state and no
   # remaining() watcher:
@@ -531,15 +581,20 @@ def dj_transition(a, b) =
   # stab at full level. Loop takes NO fader here: it captures the raw outgoing
   # bar and applies its own complementary ride after the cascade; the hot fade
   # made every loop transition jump in level at its start.
+  # A delayed clip seam (b_delay > 0) fades the outgoing side over the lead
+  # too, so both fades start where the clip enters and sum to unity; over the
+  # full d it was already down to (d - b_delay)/d when the clip came in (0.75,
+  # -2.5 dB, at the 0.4s/0.3s clip seam; arithmetic for linear fades).
+  a_fade = d - b_delay
   a_source =
     if washing then
-      fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, type="exp", initial_metadata=a.metadata, a.source)
     elsif sweeping or chopping then
-      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, type="log", initial_metadata=a.metadata, a.source)
     elsif looping then
       a.source
     else
-      fade.out(duration=d, initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, initial_metadata=a.metadata, a.source)
     end
   # SWEEP ENVELOPE — riding the filter out of a track. Cutoffs move in
   # LOG-frequency space (pow) throughout; linear Hz ramps read as
@@ -1006,6 +1061,9 @@ def dj_transition(a, b) =
   # outgoing still up when the incoming arrives; here it is already gone. For
   # d <= 10, chop_dd == d and the render is byte-identical.
   b_fade = if chopping then chop_dd else d end
+  # A clip seam's incoming side waits b_delay (CLIP SEAM ALIGNMENT above) and
+  # fades over the lead, so both fades still end together.
+  b_fade = if b_delay > 0. then d - b_delay else b_fade end
   b_source = fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
   # INCOMING SIDE. Every effect here releases by driving WETNESS to 0, never by
   # parking the cutoff open: an RC filter at its open cutoff is still not
@@ -1079,6 +1137,12 @@ def dj_transition(a, b) =
              filter.rc(frequency=surf_cut, mode="low", wetness=surf_wet, in_src))
       bs_low = filter.rc(frequency=160., mode="low", wetness=1., bs)
       add(normalize=false, [bs, amplify(bass_amt, bs_low)])
+    else
+      b_source
+    end
+  b_source =
+    if b_delay > 0. then
+      sequence(merge=true, [blank(duration=b_delay), b_source])
     else
       b_source
     end
