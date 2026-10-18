@@ -21,7 +21,7 @@ import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-n
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
-import { genreLabelKeys, runGenreGuard } from './dj-agent/genre-guard.js';
+import { genreKeysWithFamilies, runGenreGuard } from './dj-agent/genre-guard.js';
 import * as sceneVocab from '../music/scene-vocab.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -237,6 +237,31 @@ async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Ma
     });
   } catch { /* no extra candidates */ }
   return seen;
+}
+
+// The genre guard's one extra discovery call (#1897): sound-alikes of the
+// on-air feel, through the same tool and scope as the agent's own calls, so
+// recency, show locks, the blocklist and the track-length floor all apply. The
+// guard then filters out the run's genre. No model call. Without an audio
+// index it asks the mood/lyric index instead. Any failure only means no extra
+// candidates, and the guard keeps the original pick. New tracks join `seen` so
+// later note grounding can resolve them.
+async function steerAwayCandidates(scope: PickerScope, seedId: string | null, seen: Map<string, any>): Promise<Map<string, any>> {
+  const found = new Map<string, any>();
+  if (!seedId) return found;
+  const { tools, seen: fresh } = buildPickerTools(scope);
+  const tool = (tools as Record<string, any>).tracksThatSoundLikeThis ?? (tools as Record<string, any>).tracksLikeThis;
+  try {
+    await tool?.execute?.({ songId: seedId }, {
+      toolCallId: 'genre-guard-steer', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
+    });
+  } catch { /* no extra candidates */ }
+  for (const [id, song] of fresh) {
+    if (id === seedId) continue;
+    found.set(id, song);
+    if (!seen.has(id)) seen.set(id, song);
+  }
+  return found;
 }
 
 // Build the exact discovery scope used by a live next-track pick. Diagnostics
@@ -1003,7 +1028,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       const labels = rec?.genres ?? (Array.isArray(track?.genres)
         ? subsonic.songGenres(track)
         : subsonic.songGenres(track).flatMap(label => label.split(', ')));
-      return genreLabelKeys(labels, aliases);
+      return genreKeysWithFamilies(labels, aliases);
     };
     const genreGuarded = await runGenreGuard<any>({
       song, seen: extras.seen, window: genreWindow,
@@ -1012,6 +1037,8 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       genreKeysOf, recentRoots: neighbourRoots,
       avoidAnchorRoot: artistRootKey(pickAnchor || {}),
       repick: guardRepick,
+      // Only called when no candidate lies outside the run's genre family.
+      steer: () => steerAwayCandidates(scope, pickAnchor?.id ?? queue.current?.track?.id ?? null, extras.seen),
       log: line => queue.log('picker', line),
       logEvent,
     });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { genreGuardCause, genreLabelKeys, runGenreKeys, runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
+import { genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
 import { aliasMapOf } from '../src/music/scene-vocab.js';
 
 const aliases = aliasMapOf(['Roots Reggae', 'Dub', 'Rocksteady'].map(from => ({ from: from.toLowerCase(), to: 'Reggae', at: '' })));
@@ -124,4 +125,114 @@ test('artist spacing may relax but a successful anchor exclusion survives', asyn
   const blocked = fixture({ avoidAnchorRoot: 'other artist' });
   assert.equal((await runGenreGuard(blocked.deps)).kind, 'kept');
   assert.equal(blocked.calls.length, 0);
+});
+
+// Family rule: a shared label OR the same small built-in family.
+const famKeys = (labels: readonly string[]) => genreKeysWithFamilies(labels, new Map());
+const ska: Song = { id: 'ska', title: 'Ska', artist: 'Ska Artist', genres: ['Ska'] };
+const lovers: Song = { id: 'lovers', title: 'Lovers', artist: 'Lovers Artist', genres: ['Lovers Rock'] };
+const fam = (patch: Partial<GenreGuardDeps<Song>> = {}) => fixture({
+  song: ska, seen: new Map([ska, lovers, other].map(s => [s.id, s])),
+  recentGenres: [['Reggae'], ['Roots Reggae'], ['Dub'], ['Rocksteady']].map(famKeys),
+  genreKeysOf: s => famKeys(s.genres), ...patch,
+});
+
+test('same family with no shared label still forms a run, and a pick in the family extends it', async () => {
+  const { deps, calls, events } = fam();
+  assert.deepEqual([...runGenreKeys(deps.recentGenres, 4)], ['family:reggae']);
+  assert.equal((await runGenreGuard(deps)).kind, 'repicked');
+  assert.deepEqual([...calls[0].keys()], [other.id], 'only the outside-family candidate is offered');
+  assert.deepEqual(events[0].genres, ['family:reggae']);
+  assert.equal(events[0].steered, false);
+});
+
+test('a mixed-family window is not a run; a shared label alone still is', () => {
+  const history = [['Reggae'], ['Roots Reggae'], ['Soul'], ['Dub']].map(famKeys);
+  assert.deepEqual([...runGenreKeys(history, 4)], []);
+  const soulRun = Array.from({ length: 4 }, () => famKeys(['Soul']));
+  assert.deepEqual([...runGenreKeys(soulRun, 4)], ['soul'], 'unknown labels fall back to label overlap');
+});
+
+test('unknown labels: a different unknown label is outside the run, an unlabelled track is not an alternative', async () => {
+  const soul = { ...other, id: 'soul', genres: ['Soul'] };
+  const blank = { ...other, id: 'blank', genres: [] };
+  const offered: string[][] = [];
+  const { deps } = fam({
+    seen: new Map([ska, soul, blank].map(s => [s.id, s])),
+    repick: async alt => { offered.push([...alt.keys()]); return { id: 'soul' }; },
+  });
+  assert.equal((await runGenreGuard(deps)).kind, 'repicked');
+  assert.deepEqual(offered, [['soul']]);
+});
+
+test('every candidate in the family: one steer call, then the re-pick draws from its results', async () => {
+  let steerCalls = 0;
+  const { deps, calls, events, lines } = fam({
+    seen: new Map([ska, lovers].map(s => [s.id, s])),
+    steer: async () => { steerCalls++; return new Map([[lovers.id, lovers], [other.id, other]]); },
+  });
+  const out = await runGenreGuard(deps);
+  assert.equal(out.kind, 'repicked');
+  assert.equal(steerCalls, 1);
+  assert.deepEqual([...calls[0].keys()], [other.id], 'steered in-family tracks are filtered out too');
+  assert.equal(events[0].steered, true);
+  assert.match(lines[0], /steer-away/);
+});
+
+test('the steer call is skipped when an outside candidate already exists', async () => {
+  let steerCalls = 0;
+  const { deps } = fam({ steer: async () => { steerCalls++; return new Map(); } });
+  assert.equal((await runGenreGuard(deps)).kind, 'repicked');
+  assert.equal(steerCalls, 0);
+});
+
+for (const [name, result] of [['empty', new Map<string, Song>()], ['null', null], ['all in family', new Map([[lovers.id, lovers]])]] as const) {
+  test(`steer returns ${name}: keep the original pick and log it`, async () => {
+    let repicks = 0;
+    const { deps, events, lines } = fam({
+      seen: new Map([ska, lovers].map(s => [s.id, s])),
+      steer: async () => result, repick: async () => { repicks++; return { id: other.id }; },
+    });
+    assert.deepEqual(await runGenreGuard(deps), { kind: 'kept' });
+    assert.equal(repicks, 0);
+    assert.equal(events[0].reason, 'steer-empty');
+    assert.equal(events[0].steered, true);
+    assert.match(lines[0], /allowed/);
+  });
+}
+
+test('a throwing steer call keeps the original pick', async () => {
+  const { deps, events } = fam({
+    seen: new Map([[ska.id, ska]]),
+    steer: async () => { throw new Error('index offline'); },
+  });
+  assert.deepEqual(await runGenreGuard(deps), { kind: 'kept' });
+  assert.equal(events[0].reason, 'steer-empty');
+});
+
+test('a steered candidate the model cannot land keeps the original pick', async () => {
+  const { deps, events } = fam({
+    seen: new Map([[ska.id, ska]]),
+    steer: async () => new Map([[other.id, other]]), repick: async () => null,
+  });
+  assert.deepEqual(await runGenreGuard(deps), { kind: 'kept' });
+  assert.equal(events[0].reason, 'repick-failed');
+  assert.equal(events[0].steered, true);
+});
+
+test('off makes no steer call and no reads', async () => {
+  const { deps, events } = fam({
+    window: 0, steer: async () => { throw new Error('must not call'); },
+    genreKeysOf: () => { throw new Error('must not read'); },
+  });
+  assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });
+  assert.deepEqual(events, []);
+});
+
+test('no run means no steer call', async () => {
+  const { deps } = fam({
+    recentGenres: [['Reggae'], ['Soul'], ['Dub'], ['Ska']].map(famKeys),
+    steer: async () => { throw new Error('must not call'); },
+  });
+  assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });
 });

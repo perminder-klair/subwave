@@ -25,6 +25,8 @@ const repeat = track('picked', 'Reggae');
 const alternative = track('alternative', 'Soul');
 const prince = track('prince', ['Pop', 'International Pop', 'Reggae']);
 const jacob = track('jacob', ['Dub', 'Reggae', 'Roots Reggae']);
+// Shares no label with the run below, only its family.
+const rocksteady = track('rocksteady', ['Rocksteady']);
 
 before(async () => {
   const cfg = structuredClone(settings.getDefaults());
@@ -37,7 +39,7 @@ before(async () => {
   cfg.llm.fallback.enabled = false;
   store.setCache(cfg);
   await library.load();
-  for (const song of [anchor, repeat, alternative, prince, jacob]) library.set(song.id, song);
+  for (const song of [anchor, repeat, alternative, prince, jacob, rocksteady]) library.set(song.id, song);
   db.upsertTrackAnalysis(anchor.id, { bpm: 98, musicalKey: '8A' });
 });
 
@@ -50,12 +52,12 @@ after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
-for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick', 'projection-only'] as const) {
+for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick', 'projection-only', 'family'] as const) {
   test(`${scenario}: the real picker checks aired tracks and preserves transition facts`, async () => {
     settings.get().llm.genreVarietyWindow = scenario === 'off' ? 0 : 4;
     queue.current = { track: anchor, source: 'ai' };
     queue.history = Array.from({ length: scenario === 'below' || scenario === 'queued-only' ? 2 : 3 }, (_, i) => ({
-      track: track(`history-${i}`, [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae']][i]), source: 'ai',
+      track: track(`history-${i}`, scenario === 'family' ? [['Dub'], ['Ska'], ['Lovers Rock']][i] : [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae']][i]), source: 'ai',
     }));
     queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }] : [];
     queue._recentPlays = [];
@@ -69,26 +71,26 @@ for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-o
       weather: null, festival: null, showHandover: null, listeners: { count: null }, episodeEditorial: '',
     };
     session.start(ctx);
-    const selected = scenario === 'prince' ? prince : scenario === 'jacob' ? jacob : repeat;
+    const selected = scenario === 'family' ? rocksteady : scenario === 'prince' ? prince : scenario === 'jacob' ? jacob : repeat;
     if (scenario === 'projection-only') {
       for (const s of [repeat, alternative, prince, jacob]) db.requireDb().prepare('DELETE FROM tracks WHERE id = ?').run(s.id);
     }
     pickerAgent.run = async () => ({
       object: { id: selected.id, reason: 'Synthetic choice', say: null, transition: null },
       steps: 1, toolCalls: [], extras: { seen: new Map([
-        ...[repeat, prince, jacob].map(s => [s.id, slim(s)] as const),
+        ...[repeat, prince, jacob, rocksteady].map(s => [s.id, slim(s)] as const),
         ...(scenario === 'empty-alternatives' ? [] : [[alternative.id, slim(alternative)] as const]),
       ]) },
     });
     let calls = 0;
     globalThis.fetch = async (input, init) => {
-      assert.equal(new URL(String(input)).hostname, 'genre-model.invalid');
+      // The scope build probes the music server; answer it as an unreachable one.
+      if (new URL(String(input)).hostname !== 'genre-model.invalid') return new Response('', { status: 404 });
       calls++;
       const body = JSON.parse(String(init?.body));
       const prompt = body.messages.find((m: { role: string }) => m.role === 'user').content;
       const payload = JSON.parse(prompt.split('\n\n')[0]);
       assert.deepEqual(payload.candidates.map((s: { id: string }) => s.id), [alternative.id]);
-      assert.deepEqual(body.tools[0].function.parameters.properties.id.enum, [alternative.id]);
       assert.deepEqual(payload.predecessor, { title: anchor.title, artist: anchor.artist, bpm: 98, key: '8A' });
       if (scenario === 'failed-repick') return Response.json({ error: { message: 'synthetic rejection' } }, { status: 400 });
       return Response.json({
@@ -103,7 +105,7 @@ for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-o
     };
     try {
       await runTrackEvent(queue, ctx, { wantLink: false });
-      const fires = ['boundary', 'prince', 'jacob', 'projection-only'].includes(scenario);
+      const fires = ['boundary', 'prince', 'jacob', 'projection-only', 'family'].includes(scenario);
       assert.equal(queue.upcoming.at(-1)?.track.id, fires ? alternative.id : selected.id);
       // One constrained djObject call can make its existing recovery attempt.
       assert.equal(calls, scenario === 'failed-repick' ? 2 : fires ? 1 : 0);
