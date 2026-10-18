@@ -260,6 +260,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         headers: headerRows(v.llm?.fallback?.headers),
         compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
+        toolChoice: v.llm?.fallback?.toolChoice === 'auto' ? 'auto' : 'required',
       },
     },
     search: {

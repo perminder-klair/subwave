@@ -46,6 +46,7 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
+import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
   ActResponse,
@@ -361,9 +362,9 @@ export default function DashPanel() {
   const healthMetrics: HealthMetrics = {
     listeners: lCurrent,
     listenersPeak: lPeak,
-    latencyMs: shortlistSelected
-      ? (stats?.shortlist?.count ? (stats.shortlist.latency?.p95 ?? null) : null)
-      : (stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null),
+    latencyMs: djLatencyMs(stats),
+    latencyFallbacks: deadlineFallbacks(stats),
+    llmFailedCalls: failedCallsNote(stats),
     // Redline at the DJ-agent deadline so the gauge tracks the model in use.
     // Null until /stats loads.
     latencyDeadlineMs: shortlistSelected ? (stats?.shortlist?.warningMs ?? 30_000) : (stats?.llm?.agentTimeoutMs ?? null),

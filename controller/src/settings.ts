@@ -37,6 +37,7 @@ import {
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
   DjPromptEntry,
+  EMBEDDING_API_KEY_MAX,
   FESTIVAL_DEFAULTS,
   KOKORO_LANGS,
   KOKORO_LANG_RE,
@@ -2303,7 +2304,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }
     if (e.apiKey !== undefined && e.apiKey !== 'set') {
       const v = String(e.apiKey).trim();
-      if (v.length > 200) throw new Error('embedding.apiKey must be 0-200 chars');
+      if (v.length > EMBEDDING_API_KEY_MAX) throw new Error(`embedding.apiKey must be 0-${EMBEDDING_API_KEY_MAX} chars`);
       next.embedding.apiKey = v;
     }
     if (e.headers !== undefined) {
