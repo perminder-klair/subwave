@@ -173,6 +173,22 @@ test('the swap never lands on an act heard one slot ago under another credit', (
   assert.deepEqual(h.calls, { repick: 0, poolRescue: 0 });
 }));
 
+// #1983 folds an in-word hyphen in artistRootKey. The distances key the same
+// raw credits the window does, so "SCSI-9" is the "SCSI 9" two slots back: read
+// as never heard (Infinity), it would out-rank every candidate in the window.
+test('the swap reads a hyphenated credit as the spaced act in the window (#1983)', () => staged({
+  upcoming: [{ track: { id: 'u1', artist: 'Norah Jones' } }],
+  current: { track: { id: 'c1', artist: 'SCSI 9' } },
+  plays: [play('p1', 'Air')],
+}, () => {
+  const d = q.neighbourArtistDistances(12);
+  const scsi: Cand = { id: 's1', title: 'Spiral', artist: 'SCSI-9' };
+  assert.equal(creditDistance(scsi, d), 2);
+  assert.ok(q.neighbourArtistRoots(12).has(artistRootKey(scsi)), 'the window agrees');
+  const best = leastRecentAlternative(seenOf(scsi, air), norah, d, '');
+  assert.equal(best?.song.artist, 'Air', 'three slots back beats SCSI-9 at two');
+}));
+
 test('queue.neighbourArtistDistances: queue tail first, then on air, then plays newest first', () => staged({
   upcoming: [{ track: { id: 'u1', artist: 'Zero 7' } }, { track: { id: 'u2', artist: 'Norah Jones' } }],
   current: { track: { id: 'c1', artist: 'Katerine' } },
