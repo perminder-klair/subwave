@@ -1,8 +1,9 @@
 // Pick-anchor and spacing artist guard policy — pure, unit-pinned
 // (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute,
-// and on a listener request's stand-in in runRequestViaAgent (#1979); this
-// module owns which candidates a re-pick may choose from and whether the guard
-// fires at all, so both are testable without a model call.
+// and on a listener request's stand-in in runRequestViaAgent (#1979) and the
+// stateless request cascade (#1993); this module owns which candidates a
+// re-pick may choose from and whether the guard fires at all, so both are
+// testable without a model call.
 
 import { artistCreditsOverlap, artistRootKey, creditedActKeys, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
@@ -92,10 +93,7 @@ export function alternativeCandidates<T extends CandidateLike>(
   const base = [...seen].filter(([, s]) => alternativeArtist(s, avoidRoot, anchorRoot));
   if (!base.length || !recentRoots.size) return { alt: new Map(base), dropped: 0, starved: false };
 
-  const fresh = base.filter(([, s]) => {
-    const root = artistRootKey(s);
-    return !root || !creditInRoots(s, recentRoots) || exempt(s);
-  });
+  const fresh = base.filter(([, s]) => !spacedOut(s, recentRoots, exempt));
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
   if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
@@ -103,12 +101,19 @@ export function alternativeCandidates<T extends CandidateLike>(
   return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false };
 }
 
+// Does the recency narrowing remove this candidate? Its credit is in the
+// window and it is not exempt; `exempt` is asked last, for the reason above.
+function spacedOut<T extends CandidateLike>(song: T, recentRoots: Set<string>, exempt: (song: T) => boolean): boolean {
+  return !!artistRootKey(song) && creditInRoots(song, recentRoots) && !exempt(song);
+}
+
 // How many slots ago a credit was last heard (queue.neighbourArtistDistances):
 // its NEAREST act, matched the way the window matches. Not in the window:
-// Infinity. Unlike the window's yes/no test (artistRootIn), an exact hit does
-// not end the search: "pixies" can sit nine slots back while "pixies • black
-// francis" sits one back, and stopping at the exact key read the act as nine
-// slots ago — the very candidate the swap then chose, straight after itself.
+// Infinity. Unlike the window's yes/no test (spacedOut, through artistRootIn),
+// an exact hit does not end the search: "pixies" can sit nine slots back while
+// "pixies • black francis" sits one back, and stopping at the exact key read
+// the act as nine slots ago — the very candidate the swap then chose, straight
+// after itself.
 export function creditDistance(song: CandidateLike | string, distances: Map<string, number>): number {
   let best = Infinity;
   for (const act of creditedActKeys(song)) {
@@ -157,6 +162,50 @@ export function requestRepickCandidates<T extends CandidateLike>(
   isStandIn: (song: T) => boolean,
 ): AlternativePool<T> {
   return alternativeCandidates(seen, '', recentRoots, '', (song) => !isStandIn(song));
+}
+
+export interface RequestDraw<T> {
+  pick: T | null;
+  // The first draw, when spacing set it aside for `pick`.
+  withheld: T | null;
+  // How many recent stand-ins the draw passed over to reach `pick`.
+  skipped: number;
+  // Every candidate was a recent stand-in, so the first draw stood.
+  starved: boolean;
+}
+
+// One draw from a STATELESS listener-request pool (#1993). The request
+// cascade in routes/request.ts has no model call to re-pick with, so spacing a
+// stand-in is a matter of which pool member it draws: a stand-in by a
+// recently-heard artist is passed over, by the test requestRepickCandidates
+// narrows a corrective call's offer with. What the listener asked for stays
+// in however recently it played, and a pool holding nothing but recent
+// stand-ins draws as it always did, so spacing never costs a request its slot.
+// Nor does it take the least-recent swap (leastRecentAlternative), which is
+// the pick path's alone (ArtistGuardDeps.recentDistances).
+// It redraws without replacement until a candidate passes rather than
+// filtering first: a cascade pool can be a whole mood's slice of the library,
+// and reading every candidate measured ~70 ms on 20k. The pick is the same,
+// uniform over the candidates that pass.
+export function drawRequestCandidate<T extends CandidateLike>(
+  pool: readonly T[],
+  recentRoots: Set<string>,
+  isStandIn: (song: T) => boolean,
+  random: () => number = Math.random,
+): RequestDraw<T> {
+  const passes = (song: T) => !spacedOut(song, recentRoots, (s) => !isStandIn(s));
+  const first = pool[Math.floor(random() * pool.length)] ?? null;
+  if (!first || passes(first)) return { pick: first, withheld: null, skipped: 0, starved: false };
+  const rest = pool.filter((s) => s && s !== first);
+  let skipped = 1;
+  for (let left = rest.length; left > 0; left--) {
+    const i = Math.floor(random() * left);
+    const song = rest[i]!;
+    rest[i] = rest[left - 1]!;
+    if (passes(song)) return { pick: song, withheld: first, skipped, starved: false };
+    skipped++;
+  }
+  return { pick: first, withheld: null, skipped: 0, starved: true };
 }
 
 // What the guard did, split by OUTCOME not cause: the call site only needs
