@@ -192,8 +192,9 @@ const UNHELPFUL_SINGLE_WORDS = new Set(['music', 'track', 'tracks', 'record', 'r
 // that speak of a fondness ("can't get enough of", "never tires of", "not
 // least", "not to mention", "no matter") are not negations either. The
 // boundaries are Unicode-aware, since \b reads "Noël" and "Ōno" as holding
-// the word "no".
-const NEGATIVE_CUE = /(?<![\p{L}\p{N}])(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never(?!\s+(?:tires?|tired|gets?\s+tired|fails?)\b)|not(?!\s+(?:just|only|merely|simply|least|to\s+mention)\b)|nor|neither|no(?!\s+(?:wave|matter)\b)|(?:cannot|[a-z]+n['’]t)(?!\s+(?:get\s+enough|resist)\b)|rarely|seldom|hardly)(?![\p{L}\p{N}-])/iu;
+// the word "no". "refused" and "nothing" stay off the list: each is also a
+// band, and a cue costs any list that names one.
+const NEGATIVE_CUE = /(?<![\p{L}\p{N}])(?:avoid(?:s|ed|ing)?|dislik(?:e|es|ed|ing)|hat(?:e|es|ed|ing)|detest(?:s|ed|ing)?|loath(?:e|es|ed|ing)|shun(?:s|ned|ning)?|skip(?:s|ped|ping)?|exclud(?:e|es|ed)|refus(?:e|es|ing)|steer(?:s|ed|ing)?\s+(?:clear|away)|(?:stay|keep)(?:s|ing)?\s+away|(?:stayed|kept)\s+away|never(?!\s+(?:tires?|tired|gets?\s+tired|fails?)\b)|not(?!\s+(?:just|only|merely|simply|least|to\s+mention)\b)|nor|neither|no(?!\s+(?:wave|matter)\b)|(?:cannot|[a-z]+n['’]t)(?!\s+(?:get\s+enough|resist)\b)|rarely|seldom|hardly)(?![\p{L}\p{N}-])/iu;
 // A cue inside one of these qualifies the preference rather than reversing it:
 // "records that never outstay their welcome", "dub with no vocals".
 const QUALIFYING_TAIL = /\b(?:that|which|who|whose|where|with\s+(?:little\s+(?:or|to)\s+)?no|with\s+hardly\s+any)\b.*$/i;
@@ -208,10 +209,18 @@ const NAME_PARTICLE = /(?<=(?<![\p{L}\p{N}])\p{Lu}[\p{L}\p{N}'’-]*\s+)no(?=\s+
 
 // "rarely heard deep cuts" describes the records, not the presenter: an
 // adverb on a participle that opens a noun phrase belongs to that phrase.
-const RARE_RECORDS = /^\s*(?:rarely|seldom|hardly)\s+(?=(?:heard|played|aired|seen|known|spun|released)\s+(?!(?:on|in|at|by|to|for|here|there|now|anymore|much|often|ever|any)\b)[\p{L}\p{N}])/iu;
+const RARE_RECORDS = /^\s*(?:(?:the|a|an|some|those|these|their|its)\s+)?(?:rarely|seldom|hardly)\s+(?=(?:heard|played|aired|seen|known|spun|released)\s+(?!(?:on|in|at|by|to|for|here|there|now|anymore|much|often|ever|any)\b)[\p{L}\p{N}])/iu;
+
+// An example is a name: after "like", "such as", "including", "especially" or
+// "e.g." a run of capitalised words ("The Seldom Scene", "No Doubt") is an act,
+// not a negation. Nobody writes "soul like Never Metal", and a lowercase cue is
+// never read this way. Elsewhere a capitalised cue still ends its list, since
+// "Rancid, No Doubt" and "Soul, No Metal" cannot be told apart from the text.
+// No `i` flag: under it \p{Lu} matches lowercase letters too.
+const EXAMPLE_NAME = /(?<=(?<![\p{L}\p{N}])(?:[Ll]ike|[Ss]uch\s+as|[Ii]ncluding|[Ee]specially|[Ee]\.g\.?)\s+)\p{Lu}[\p{L}\p{N}'’-]*(?:\s+\p{Lu}[\p{L}\p{N}'’-]*)+/gu;
 
 function negates(text: string): boolean {
-  return NEGATIVE_CUE.test(text.replace(RARE_RECORDS, '').replace(NAME_PARTICLE, ' '));
+  return NEGATIVE_CUE.test(text.replace(RARE_RECORDS, '').replace(NAME_PARTICLE, ' ').replace(EXAMPLE_NAME, ' '));
 }
 
 function reversesPreference(text: string): boolean {
@@ -232,25 +241,47 @@ function positiveText(text: string): string {
   return text.slice(0, end);
 }
 
+// A whole item that names no taste at all: "anything", "all genres", "open to
+// anything". The trigger is allowed for the noun-phrase fallback, which reads
+// "Loves anything" with its verb.
+const UNIVERSAL = new RegExp(String.raw`^\s*(?:(?:and|or|plays?|(?:(?:is|are)\s+)?open\s+to|${LEANINGS_TRIGGER.source})\s+)?(?:anything|everything|whatever|all|any)(?:\s+(?:genres?|styles?|kinds?|sorts?|types?|music|sounds?|records?|tracks?|songs?))?\s*$`, 'i');
+
 // A list stops at its first item that steers away: in "soul, never stadium
-// rock and metal" the "never" governs every item after it.
+// rock and metal" the "never" governs every item after it. Once anything is
+// dropped, a universal item goes too: "anything except metal" kept as
+// "anything" would be a taste that covers metal.
 function positiveItems(text: string, separator: RegExp): string[] {
+  const kept = positiveText(text);
+  let dropped = kept.length < text.length;
   const items: string[] = [];
-  for (const item of positiveText(text).split(separator)) {
-    if (reversesPreference(item)) break;
+  for (const item of kept.split(separator)) {
+    if (reversesPreference(item)) {
+      dropped = true;
+      break;
+    }
     items.push(item);
   }
-  return items;
+  return dropped ? items.filter((item) => !UNIVERSAL.test(item)) : items;
 }
+
+// What a negation left hanging needs to finish it: "Does not, and will never,
+// enjoy metal", "Doesn't, and never will, …", "Never once, in years, …".
+const DANGLING = /(?<![\p{L}\p{N}])(?:will|would|shall|should|can|could|may|might|must|do|does|did|ever|once)\s*$/iu;
 
 // "Does not favour …" and "He never enjoys …" negate the trigger itself. A
 // contrast before it opens a new clause, so "Avoids X but loves Y" keeps Y,
 // and so does "Doesn't favour X but loves Y": the sentence is read from its
-// first trigger that is not negated.
+// first trigger that is not negated. A comma or "and" opens one too ("Hates X,
+// loves Y", "Avoids X and loves Y"), unless the negation before it is still
+// waiting for its verb: "Never, ever enjoys metal", "Doesn't, frankly, enjoy
+// metal".
 function negatedTrigger(sentence: string, trigger: RegExpExecArray): boolean {
   const head = sentence.slice(0, trigger.index);
   const opening = [...head.matchAll(CONTRAST)].at(-1);
-  return negates(opening ? head.slice(opening.index + opening[0].length) : head);
+  const clauses = (opening ? head.slice(opening.index + opening[0].length) : head).split(/,|\band\b/i);
+  if (negates(clauses.at(-1)!)) return true;
+  const negated = clauses.slice(0, -1).reverse().find(negates)?.trim();
+  return negated !== undefined && (DANGLING.test(negated) || negates(negated.split(/\s+/).at(-1)!));
 }
 
 function cleanLeaningsPhrase(value: string): string | null {
@@ -279,7 +310,9 @@ function phrasesFromSource(source: string): string[] {
     const phrase = cleanLeaningsPhrase(rawPart);
     if (phrase && !phrases.some((item) => comparable(item) === comparable(phrase))) phrases.push(phrase);
   };
-  const sentences = source.split(/[.!?;]+/).map((sentence) => sentence.trim());
+  // The dots of "e.g." do not end a sentence: the examples after it belong to
+  // the preference before it.
+  const sentences = source.split(/(?:(?!(?<=(?<![\p{L}\p{N}])e)\.g\.)(?<!(?<![\p{L}\p{N}])e\.g)\.|[!?;])+/iu).map((sentence) => sentence.trim());
   for (const sentence of sentences) {
     const trigger = [...sentence.matchAll(LEANINGS_TRIGGER)].find((match) => !negatedTrigger(sentence, match));
     if (!trigger) continue;
