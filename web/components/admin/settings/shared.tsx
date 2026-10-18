@@ -141,6 +141,8 @@ export interface LlmFallbackForm {
   headers: LlmHeaderRow[];
   compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // Per-leg, like the primary's: a swap moves it between the legs.
+  toolChoice: string;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
 }

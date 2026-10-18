@@ -6,13 +6,16 @@ import { definePickerTool } from '../defs.js';
 // Only registered while a sonic journey is active (the event message tells the
 // agent when that is). Closes over the journey's current waypoint, so calling it
 // returns the tracks that carry the sound one step along the arc toward the
-// destination vibe.
+// destination vibe. The description says "prefer when it fits", not "strongly
+// prefer" (#1911): a waypoint between the current track and the destination
+// can sit outside a soft show's lane, and the tool must never outrank the
+// show brief in the system prompt.
 export default definePickerTool({
   name: 'tracksTowardJourney',
   available: ({ scope, hasAudioEmbeddings }) =>
     !!(scope.audioWaypoint && scope.audioWaypoint.length && hasAudioEmbeddings),
   build: ({ collect, candidateLimit, emptyResult, scope, knnExclude }) => tool({
-    description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and strongly prefer one of its tracks: each one moves the sound a step along the arc. Takes no input.',
+    description: 'Tracks nearest the active sonic journey\'s CURRENT waypoint — the station is mid-arc, drifting its sound toward a destination vibe over the next few picks. When the event says a journey is active, call this and prefer one of its tracks that fits the moment and, when a show is on, the show\'s brief: each one moves the sound a step along the arc. Takes no input.',
     inputSchema: z.object({}),
     // Pull a wide KNN (60) around the waypoint: the nearest neighbours cluster
     // tightly and many will be recently-played, so a small k left the agent with

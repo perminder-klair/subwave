@@ -9,7 +9,7 @@ import * as subsonic from '../../music/subsonic.js';
 import * as settings from '../../settings.js';
 import { isInstrumental } from '../../music/lyric-vocal.js';
 import { soundKnnWidth } from '../../util/similar-tracks.js';
-import { buildGenreSuggest } from '../../music/genre-suggest.js';
+import { genreSuggest } from '../../music/genre-suggest.js';
 import { parseList, parseIntSafe } from './params.js';
 
 export const router = express.Router();
@@ -212,11 +212,12 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
 });
 
 // Genres by track count plus, per genre, its nearest genres by embedding cosine.
-// Cached until the library changes.
+// Answered from the last walk; a changed library is re-read behind the response,
+// or before it once that walk is past the max age (music/genre-suggest.ts).
 router.get('/library/genres/related', requireAdmin, async (_req, res) => {
   try {
     await library.load();
-    res.json(buildGenreSuggest());
+    res.json(await genreSuggest());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

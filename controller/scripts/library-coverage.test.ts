@@ -48,7 +48,7 @@ test('every percentage is capped at 100, not just floored', async () => {
   // Navidrome walk, and they drift by design — a 1413-track db against a
   // 48-song server rendered "2943% tagged".
   const src = codeOnly(await readFile(SRC, 'utf8'));
-  const body = src.slice(src.indexOf('const pctOf'), src.indexOf('const embeddedMeta'));
+  const body = src.slice(src.indexOf('const pctOf'), src.indexOf('const currentEmbeddingModel'));
   assert.match(body, /Math\.min\(\s*100/, 'the percentage helper must cap at 100');
   assert.match(body, /Math\.floor/, 'and must still floor — 100% has to mean truly complete');
   for (const field of ['percent', 'analysedPercent', 'audioEmbeddedPercent', 'vocalAnalyzedPercent']) {

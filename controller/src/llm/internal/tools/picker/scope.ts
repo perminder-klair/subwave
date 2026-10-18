@@ -22,8 +22,9 @@ export interface PickerScope {
   recentKeys: Set<string>;
   // Count-based HARD no-repeat set (last N distinct plays), non-relaxable: a
   // track here survives the starvation cascade, so the agent cannot re-pick a
-  // just-played song. From queue.recentlyPlayedByCount(N); empty on the request
-  // path (requests exempt).
+  // just-played song. From show-recency.hardRecentFor: the last N distinct
+  // plays, or a full rotation's own airings (#1919); empty on the request path
+  // (requests exempt).
   hardRecentIds: Set<string>;
   // lowercased "title|artist" — blocks id-less backfilled plays
   hardRecentKeys: Set<string>;

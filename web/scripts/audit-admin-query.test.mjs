@@ -69,6 +69,10 @@ const validImperativeFixtures = {
   // admin-query-imperative: generation-job-poll
   return fetcher(\`/playlists/generate/jobs/\${id}\`);
 }\n`,
+  'settings/LlmSection.tsx': `export async function run(adminFetch) {
+  // admin-query-imperative: llm-swap-fit-preview
+  return adminResponse(adminFetch, '/settings/llm/swap/fit');
+}\n`,
   'settings/LibrarySection.tsx': `export async function run(adminFetch, url) {
   // admin-query-imperative: locca-discovery-probe
   return adminResponse(adminFetch, \`/settings/llm/discover?baseUrl=\${url}\`);

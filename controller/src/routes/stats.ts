@@ -27,12 +27,15 @@ function transitionsOrNull() {
 
 router.get('/stats', requireAdmin, (req, res) => {
   try {
-    const llm: any = summarizeLlm(recentCalls);
+    // Mirror of agentDeadline() in broadcast/dj-agent.ts. The dash anchors its
+    // latency redline to it and goes red on `deadlineHits`, the failed calls
+    // that ran it out, so "red" still means "hitting the fallbacks": the needle
+    // reads successful calls only, which finish under the deadline.
+    const agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
+    const llm: any = summarizeLlm(recentCalls, { agentTimeoutMs });
     llm.provider = llmProvider.providerName();
     llm.activeModel = llmProvider.activeModelLabel();
-    // Mirror of agentDeadline() in broadcast/dj-agent.ts — the dash anchors its
-    // latency redline to it, so "red" means "hitting the pool-picker fallback".
-    llm.agentTimeoutMs = settings.get().llm?.agentTimeoutMs ?? 45000;
+    llm.agentTimeoutMs = agentTimeoutMs;
     // Durable per-UTC-day tally, unlike the rings above. enabled:false with no cap.
     llm.budget = budgetStatus();
     llm.contextWindows = contextMeasurements.snapshot();

@@ -2,7 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { settingsForm } from './settings/form-state';
-import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors } from './settings/form-diff';
+import { atPath, samePath, sameForm, countLeafDiffs, dirtyPaths, restorePaths, ownsErrorPath, mergePatchErrors, unsavedAnywhere } from './settings/form-diff';
 import { archivesSavePayload, dangerSavePayload } from './settings/save-payload';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -53,12 +53,14 @@ import { ListenersSection } from './settings/ListenersSection';
 import { NavidromeSection } from './settings/NavidromeSection';
 import { MusicSelectionSection } from './settings/MusicSelectionSection';
 import {
+  useLlmSwapMutation,
   useSettingsMutation,
   useSettingsQuery,
 } from './settings/queries';
 import {
   cloudSaveSnapshot, cloudSaveReadReady, rebaselineSavedPatch, reconcileSavedCloud,
-  type PendingCloudSave,
+  adoptServerPaths, committedReadReady, LLM_SWAP_FORM_KEYS,
+  type PendingCloudSave, type PendingCommittedRead,
 } from './settings/form-reconciliation';
 
 // Operator copy for the shared transition vocabulary. The drift test keeps
@@ -132,6 +134,9 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const appliedRevisionRef = useRef(0);
   const pendingFormRevisionRef = useRef<{ revision: number; form: FormState } | null>(null);
   const [pendingCloudSave, setPendingCloudSave] = useState<PendingCloudSave | null>(null);
+  // A committed LLM swap whose llm/embedding keys still have to be adopted from
+  // a read that reflects it (see the hydration effect).
+  const [pendingSwapRead, setPendingSwapRead] = useState<PendingCommittedRead | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -156,7 +161,8 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
   const refresh = async () => { await settingsQuery.refetch(); };
 
   const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
-  const busy = commandBusy || saveMutation.isPending;
+  const swapMutation = useLlmSwapMutation<SettingsData>({ adminFetch });
+  const busy = commandBusy || saveMutation.isPending || swapMutation.isPending;
 
   // Jingles / SFX / Beds now live on /admin/imaging; their old ?section
   // deep-links are forwarded so existing bookmarks survive. Read through
@@ -199,6 +205,17 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
       formBaselineRef.current = reconciled.baseline;
       setPendingCloudSave(null);
     }
+    // The swap wrote llm/embedding on the server. Adopt them now even when
+    // another section's unsaved edit is holding this revision back: left
+    // stale, the LLM page would show the pre-swap legs and the next save of
+    // either section would post them straight back over the swap.
+    if (displayed && formBaselineRef.current && pendingSwapRead
+      && committedReadReady(pendingSwapRead, revision)) {
+      const adopted = adoptServerPaths(formBaselineRef.current, displayed, nextForm, LLM_SWAP_FORM_KEYS);
+      displayed = adopted.form;
+      formBaselineRef.current = adopted.baseline;
+      setPendingSwapRead(null);
+    }
     const baseline = formBaselineRef.current;
     const clean = !displayed || !baseline || sameForm(displayed, baseline);
     if (!clean) {
@@ -211,7 +228,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
     formBaselineRef.current = pending.form;
     appliedRevisionRef.current = pending.revision;
     pendingFormRevisionRef.current = null;
-  }, [data, form, settingsQuery.dataUpdatedAt, pendingCloudSave]);
+  }, [data, form, settingsQuery.dataUpdatedAt, pendingCloudSave, pendingSwapRead]);
 
   const saveSettings: SaveSettings = async (patch) => {
     const submitted = form;
@@ -245,6 +262,29 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         : undefined;
       setFieldErrors((prev) => mergePatchErrors(prev, patch, body?.fieldErrors));
       notify.err(errorMessage(e));
+      return false;
+    }
+  };
+
+  /**
+   * "Swap with primary". The controller builds and saves the swap, so there is
+   * no submitted patch to re-baseline: the swapped keys are adopted from the
+   * authoritative read instead (pendingSwapRead, applied in the hydration
+   * effect, or by a later poll if that read failed).
+   */
+  const swapLlmLegs = async (): Promise<boolean> => {
+    try {
+      const j = await swapMutation.mutateAsync();
+      setPendingSwapRead({ refreshedAt: j.refreshedAt, refreshAfter: Date.now() });
+      if (j.requiresRestart) setPendingRestart(true);
+      if (j.refreshError) notify.err(`swapped, but refresh failed: ${j.refreshError}`);
+      else notify.ok('swapped: the backup is now the primary');
+      if (j.keyNotPinned) {
+        notify.err('swapped, but the Library tagger could not keep the primary’s API key (too long to store): if embeddings stop working, set an embedding key in Library tagger');
+      }
+      return true;
+    } catch (e) {
+      notify.err(`swap failed: ${errorMessage(e)}`);
       return false;
     }
   };
@@ -521,6 +561,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               <LlmSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} fieldErrors={fieldErrors} adminFetch={adminFetch} refresh={refresh}
+                unsavedChanges={unsavedAnywhere(form, baseline, hasLocalDirty)} swapLegs={swapLlmLegs}
               />
             )}
             {activeSection === 'search' && (
