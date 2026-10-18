@@ -16,8 +16,13 @@ const MARGIN_MS = 250;
 const MAX_LEAD_TRIM_SEC = 30;
 // The tail is measured back from the file's proven end to the last frame above
 // the absolute floor, so all of it is trailing silence with nothing after it.
-// Real files end in far more than 30 s of it (hidden-track gaps, DJ sets): 33
-// of 50 measured on one library ran 30-456 s. 600 s bounds a wider tail search.
+// Real files end in far more than 30 s of it (hidden-track gaps, DJ sets — 33
+// of 50 such endings on one library ran 30-456 s, measured outside the
+// analyzer, which cannot see past its window). 600 s bounds a wider tail
+// search. With the default analyzer it never binds: the tail window is
+// ANALYZE_OUTRO_SECONDS (20 s) and a gap that fills it is stored as no
+// measurement. It acts only when that window is raised past ~30 s, or a
+// header understates the decodable file by more than ~10 s.
 const MAX_TAIL_TRIM_SEC = 600;
 
 export interface SilenceTrimTrack {

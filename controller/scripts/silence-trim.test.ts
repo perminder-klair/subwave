@@ -11,8 +11,10 @@
 //  2. The three guards' DIRECTIONS. Every one of them is a "cut less than the
 //     measurement said" rule, and each fails silently in the expensive
 //     direction — a min-gap that stops filtering eats a segued album's
-//     deliberate space, a lost margin cuts the attack, a lost ceiling lets one
-//     bad measurement halve a song.
+//     deliberate space, a lost margin cuts the attack, a lost head ceiling lets
+//     one bad measurement halve a song. The tail ceiling is not that bound: it
+//     caps a wider tail search, and today's tail window (OUTRO_SECONDS, 20 s)
+//     reads a gap that fills it as None, so by default it never binds.
 //
 // No audio, no library DB: tracks carry their own measurements so the library
 // fallback is never reached HERE. That fallback is the path every real caller
