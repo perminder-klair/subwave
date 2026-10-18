@@ -31,7 +31,7 @@ console.log(`stream.geoipDbPath     : ${setting || '(empty)'}`);
 
 const status = geoipStatus();
 if (status.source === 'none') {
-  console.log('\n=> No GeoIP path configured: the database link never runs. Set Admin → Settings → Danger zone → Listener country → GeoIP database.');
+  console.log('\n=> No GeoIP path configured: the database link never runs. Set Admin → Settings → Broadcast & mixer → Listener country → GeoIP database.');
   process.exit(0);
 }
 console.log(`\npath the controller uses: ${status.path} (from ${status.source === 'env' ? 'GEOIP_DB_PATH' : 'the setting'})`);

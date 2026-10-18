@@ -232,12 +232,31 @@ export function capabilitiesFor(provider: string | undefined): ProviderCapabilit
   return (provider && CAPS[provider]) || DEFAULT_CAPS;
 }
 
+// A Claude model id: only ever served by Anthropic or a proxy/gateway in front
+// of it, which is what makes sending it a reasoning level safe.
+const CLAUDE_MODEL_RE = /(?:^|\/)claude-/i;
+
+// A hosted OpenAI-compatible endpoint gets a plain body (#1693): strict APIs
+// such as Mistral reject fields they do not know, so no reasoning level is
+// sent, leaving the service's default. The one exception is a Claude model
+// behind a proxy (CLIProxyAPI, LiteLLM): those translate `reasoning_effort`
+// into Claude's thinking setting, and left unset the model thinks before every
+// answer — measured on a Track Shortlist call, 1,700–2,000 hidden output tokens
+// and ~9s against ~135 tokens and ~1.5s with reasoning off. A proxied Claude
+// model is therefore driven exactly like the native anthropic provider,
+// including the 'minimal' floor for generations whose thinking cannot be
+// disabled (which 400 on 'none' through the proxy too).
+const HOSTED_COMPAT_CAPS: ProviderCapabilities = {
+  ...DEFAULT_CAPS,
+  reasoningLevel: (a) => (CLAUDE_MODEL_RE.test(a.modelId) ? CAPS.anthropic.reasoningLevel(a) : undefined),
+};
+
 // Hosted OpenAI-compatible APIs can provide native structured output and do not
 // understand llama.cpp's chat_template_kwargs / repeat_penalty extensions.
 // The historical local mode remains the default for existing stations.
 function capabilitiesForCfg(cfg: any): ProviderCapabilities {
   if (cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted') {
-    return DEFAULT_CAPS;
+    return HOSTED_COMPAT_CAPS;
   }
   return capabilitiesFor(cfg?.provider);
 }
@@ -301,6 +320,15 @@ export function runDiscoverySteps(cfg: any, followProvider: boolean): number {
 export function forcedToolChoice(cfg: any): 'required' | 'auto' {
   if (cfg?.toolChoice === 'auto' || thinkingMandatoryModel(cfg?.model)) return 'auto';
   return 'required';
+}
+
+// tool_choice for step 0 of the native pass, which also carries the output
+// schema. A hosted OpenAI-compatible endpoint stays open: Mistral rejects
+// json_schema with a forced tool (#1693 case D), so that leg keeps the old
+// behaviour.
+export function nativeFirstStepToolChoice(cfg: any): 'required' | 'auto' {
+  if (cfg?.provider === 'openai-compatible' && cfg?.compatibleMode === 'hosted') return 'auto';
+  return forcedToolChoice(cfg);
 }
 
 // Per-call safety thresholds for the native `google` provider, as ai-sdk

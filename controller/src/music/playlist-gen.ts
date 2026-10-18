@@ -5,6 +5,7 @@
 // token-budget gated.
 
 import { z } from 'zod';
+import { isInstrumental } from './lyric-vocal.js';
 import type { PlaylistGenerationResult } from '../schemas/playlist.js';
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
@@ -86,9 +87,7 @@ function clampCount(n: number): number {
 function norm(r: any, source: string, baseScore: number): PoolTrack {
   const instrumental =
     typeof r.instrumental === 'boolean' ? r.instrumental
-      : Array.isArray(r.vocalRanges) ? r.vocalRanges.length === 0
-        : r.vocalRanges === null ? null
-          : null;
+      : isInstrumental(r.vocalRanges, r.vocalRangesInvalid);
   const yearNum = typeof r.year === 'number' ? r.year : parseInt(String(r.year ?? ''), 10);
   return {
     id: String(r.id),

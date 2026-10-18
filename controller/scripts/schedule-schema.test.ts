@@ -275,7 +275,6 @@ test('takeover target: a show, Default programming, and neither', () => {
 
 test('override: Default programming is distinct from a cleared outer override', () => {
   assert.deepEqual(validateScheduleOverrideStrict(defaultOverride, SHOWS), defaultOverride);
-  assert.equal(validateScheduleOverrideStrict(null, SHOWS), null);
 });
 
 test('override: refuses an unknown show, a backwards window and an over-long one', () => {

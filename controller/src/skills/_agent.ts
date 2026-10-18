@@ -21,7 +21,7 @@ import * as session from '../broadcast/session.js';
 import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
-import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
+import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase, onAirLocationGrounding } from '../llm/dj.js';
 import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
@@ -226,11 +226,12 @@ function availableCapabilities(ctx, now: Date) {
 // tool exploration are conveyed through the AI SDK's own channels (tool and
 // schema field descriptions, the done tool, the buildSituation() user message),
 // same principle as pickSystem.
-function directorSystem(persona, caps, freq: string, sfxCatalog) {
+export function directorSystem(persona, caps, freq: string, sfxCatalog) {
   const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
 
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
 
@@ -268,6 +269,10 @@ export const directorAgent = defineAgent({
   // widening is opt-in precisely so it can't override this; the director does
   // not opt in.
   maxSteps: 2,
+  // Deciding to stay silent reads no data, so a native "air: false" with no
+  // tool call is a finished answer, not a miss. Only silence: a line that
+  // airs may need a data tool, and the forced agents never opt in.
+  settledWithoutTools: (object) => object?.air === false,
   // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
   // done-tool recovery into a multi-step stall (#555) and hang the tick; the
   // deadline turns that into a clean throw, handled as silence below.
@@ -320,10 +325,9 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
   return situation;
 }
 
-// Simple (non-agentic) director, the pool-mode counterpart of directorAgent.
-// `settings.llm.pickerAgent` off is the operator's signal that the model can't
-// be trusted with tool loops, so the segment path must not be the one place
-// still running one. Code picks the capability, calls its data tool directly,
+// Simple (non-agentic) director, the direct-mode counterpart of directorAgent.
+// The explicit `settings.llm.segmentRuntime` choice keeps the segment path
+// independent from the track picker. Code picks the capability, calls its data tool directly,
 // inlines the result and asks for the same {air, text, sfx} decision, so the
 // model still gets to choose silence. Everything downstream is shared with
 // agenticTick.
@@ -364,6 +368,7 @@ export function simpleSegmentSchema() {
 
 export function simpleSystem(persona, cap, freq: string, sfxCatalog) {
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay silent. You are NOT choosing music. ${stationTone(freq)}
 
@@ -486,7 +491,7 @@ export async function agenticTick(ctx) {
     let exchange: { kind: string; lines: Array<{ persona: any; text: string }>; castNames: string[] } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
-    if (!settings.get().llm?.pickerAgent) {
+    if (settings.get().llm?.segmentRuntime === 'direct') {
       ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
       // Brief the agent with aired curiosity so a pool-exhausted fallback
@@ -633,6 +638,7 @@ export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: {
     ? 'write it from the source data you were given, and nothing else. If that data is empty, or turns out to be about something other than what this segment covers, set "air" to false and say nothing — standing down is the right answer, and a fabricated line is far worse than no segment. Never fill the gap from memory, from what you said earlier in the show, or from what sounds plausible.'
     : 'you must produce a line, silence is not an option.';
   return `${settings.agentPersonaPreamble(persona)}
+${onAirLocationGrounding()}
 
 The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are NOT choosing music.
 
@@ -765,7 +771,7 @@ export async function runCapability(
   };
 
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
-  if (!settings.get().llm?.pickerAgent) {
+  if (settings.get().llm?.segmentRuntime === 'direct') {
     // Pool mode: fetch the data directly, one structured call. A skill that
     // writes from the moment survives a failed fetch (it writes from the brief
     // and the moment alone); a GROUNDED skill does not, since its whole segment

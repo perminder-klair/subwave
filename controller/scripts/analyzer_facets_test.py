@@ -330,6 +330,29 @@ def t_vocal_and_stems_share_one_separation_and_shift_tail_ranges():
     assert out["stems"] == {"status": "ok", "data": {"stems_cached": True, "tail_stems": True}}, out
 
 
+def t_tail_only_request_can_carry_tail_vocals():
+    calls = []
+
+    class Detector:
+        def separate(self, y):
+            calls.append("separate")
+            return {"vocals": y}
+
+        def detect(self, y, sr, librosa, min_loud=None, stems=None):
+            return [{"startMs": 1000, "endMs": 3000}]
+
+    y = np.concatenate([tone(12.0), silence(8.0)])
+    with Patched(get_vocal_detector=lambda force=False: Detector(), log=lambda *_a: None):
+        plain = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["tail"])
+    assert calls == [], calls  # no Demucs unless asked
+    assert "vocalRanges" not in plain["tail"]["data"]["outro"], plain
+    with Patched(get_vocal_detector=lambda force=False: Detector(), log=lambda *_a: None):
+        out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["tail"], want_tail_vocals=True)
+    assert calls == ["separate"], calls  # the tail window only
+    # Absolute ranges, shifted by the tail window's offset (200 - 20 s), as the flat response.
+    assert out["tail"]["data"]["outro"]["vocalRanges"] == [{"startMs": 181000, "endMs": 183000}], out
+
+
 def t_a_facet_failure_stays_in_its_facet():
     def boom(*_a, **_k):
         raise RuntimeError("loudness meter exploded")
@@ -537,6 +560,7 @@ test("head + loudness share one decode and load no model", t_head_only_never_loa
 test("an unmeasurable tail says why", t_tail_reports_why_it_is_unmeasurable)
 test("a measured tail lifts the silence fields like the flat response", t_tail_ok_lifts_silence_fields_like_the_flat_response)
 test("FileSource refuses to prove the end of a capped or unprovable file", t_file_source_tail_gates)
+test("a tail-only request carries tail vocals only when asked", t_tail_only_request_can_carry_tail_vocals)
 test("a failure in one facet does not fail the others", t_a_facet_failure_stays_in_its_facet)
 test("a head decode failure keeps independent tail/CLAP facets", t_head_decode_failure_keeps_independent_facets)
 test("a tail dependency failure returns only requested facets", t_tail_dependency_failure_returns_only_requested_facets)

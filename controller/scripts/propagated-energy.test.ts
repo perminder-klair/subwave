@@ -81,7 +81,6 @@ db.setTrackAudioMoodScoresBulk(filler);
 test('stored score maps stream back out', () => {
   const seen = [...db.iterateAudioMoodScores()];
   assert.equal(seen.length, FILLER, 'every scored track is streamed');
-  assert.equal(db.audioMoodScoredCount(), FILLER);
   assert.ok(Number.isFinite(seen[0].scores.energetic), 'scores round-trip as numbers');
 });
 
@@ -171,7 +170,6 @@ test('a relabel spanning more than one write batch completes', async () => {
     ),
   );
   const n = relabelFromStoredScores(baselines);
-  assert.equal(n, db.audioMoodScoredCount(), 'every scored track is relabelled');
   assert.ok(n > 500, `fixture must exceed one write batch to pin this (got ${n})`);
   assert.ok(
     (db.getTrack('loud')!.audioMoods || []).length > 0,

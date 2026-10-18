@@ -82,7 +82,7 @@ export function candidateSet(shape: 'baseline' | 'analysed' | 'same-artist-trap'
   if (shape === 'same-artist-trap') {
     // 9 candidates by the artist who just played twice, 1 by someone else —
     // measures whether the model follows the VARIETY criterion under pressure.
-    const trap = LIBRARY.slice(0, 9).map((s, i) => src({ ...s, artist: 'Sidhu Moose Wala' }, 'similar'));
+    const trap = LIBRARY.slice(0, 9).map((s) => src({ ...s, artist: 'Sidhu Moose Wala' }, 'similar'));
     return [...trap, src(LIBRARY[10], 'random')];
   }
   // big — the full pool-cap of 18

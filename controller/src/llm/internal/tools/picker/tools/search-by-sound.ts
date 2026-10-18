@@ -13,7 +13,7 @@ import { definePickerTool } from '../defs.js';
 export default definePickerTool({
   name: 'searchBySound',
   available: ({ hasAudioEmbeddings }) => hasAudioEmbeddings && analyzer.textEmbeddingAvailable() !== false,
-  build: ({ collect, emptyResult, knnExclude }) => tool({
+  build: ({ collect, candidateLimit, emptyResult, knnExclude }) => tool({
     description: 'Describe a SOUND in words and get tracks whose actual audio matches — e.g. "dusty late-night jazz with brushed drums", "warm acoustic fingerpicking". For timbre/instrumentation/energy asks the mood vocab can\'t express; searchByLyrics matches THEMES instead.',
     // No k input, same rationale as the other similarity tools: wide fixed
     // KNN (60), collect() caps to 8 fresh ones.
@@ -33,8 +33,8 @@ export default definePickerTool({
         if (!vecs || !vecs[0]) {
           return { error: 'sound search unavailable right now — use tracksByMood, searchByLyrics or similarSongs' };
         }
-        const list = library.tracksByAudioVector(vecs[0], 60, { excludeIds: knnExclude });
-        const out = collect(list);
+        const list = library.tracksByAudioVector(vecs[0], candidateLimit(60), { excludeIds: knnExclude });
+        const out = collect(list, 8, { similarity: { kind: 'audio', reference: query.trim() } });
         return out.length ? out : emptyResult(list.length, 'nothing in the library sounds like that — choose from your other tool results this round');
       }
       catch (err) { return { error: (err as Error).message }; }

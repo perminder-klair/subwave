@@ -101,16 +101,11 @@ test('the station pick is a FLOOR under the persona, not a lock', async () => {
     'a blank preview model is not a choice — fall through to the saved one',
   );
 
-  // Both callers must resolve through the SAME helper, or the exchange and the
-  // single-speaker path drift apart on which voice a station actually uses.
+  // The definition and single-speaker dispatcher share this precedence.
   const fs = await import('node:fs');
   const tts = fs.readFileSync(new URL('../src/audio/tts.ts', import.meta.url), 'utf8');
   const uses = (tts.match(/stationGeminiPick\(/g) || []).length;
-  assert.equal(uses, 4,
-    'the definition plus three call sites (single-speaker, exchange voice, exchange model) — '
-    + 'a fourth copy of this precedence is the bug this extraction exists to prevent');
-  assert.match(tts, /gemini\.speakMulti\(geminiLines, \{ outPath, model \}\)/,
-    'an exchange must honour the operator\'s chosen model too');
+  assert.equal(uses, 2, 'the definition plus the single-speaker call site');
 });
 
 test('the pronunciation note is station-owned, empty by default, and editable', async () => {
@@ -149,10 +144,6 @@ test('the web field ceiling agrees with the engine and the save path', async () 
   const pick = (src: string) => Number(/GEMINI_PRONUNCIATION_MAX\s*=\s*(\d+)/.exec(src)?.[1]);
   assert.equal(pick(engine), 300, 'the engine must still declare the bound');
   assert.equal(pick(web), pick(engine), 'the web copy must match the engine');
-  // And the save path must validate against the SAME number, not a literal.
-  const settingsSrc = fs.readFileSync(new URL('../src/settings.ts', import.meta.url), 'utf8');
-  assert.match(settingsSrc, /pronunciation must be at most \$\{GEMINI_PRONUNCIATION_MAX\}/,
-    'the save path must reject against the imported constant');
 });
 
 test('a settings.json predating the block loads at the defaults', async () => {

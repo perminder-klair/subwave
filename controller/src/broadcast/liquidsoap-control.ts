@@ -134,7 +134,10 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
 // Force auto.m3u to re-read from disk. The playlist's reload_mode="watch"
 // inotify watch orphans itself because the controller rewrites the file by
 // atomic rename (new inode), and a missed watch loops the last snapshot forever
-// (#874). Best-effort: errors are swallowed so a refresh never fails here.
+// (#874). Liquidsoap 2.4.6 fixed the orphaned watch upstream (#3343), so on
+// that image the watch and this reload BOTH fire; keep both (the extra watch
+// reload is one harmless reshuffle, and older mixers still need this one).
+// Best-effort: errors are swallowed so a refresh never fails here.
 export async function reloadAutoPlaylist(): Promise<boolean> {
   try {
     await sendCommand('auto.reload', 2000);

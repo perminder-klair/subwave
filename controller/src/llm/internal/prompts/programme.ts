@@ -9,6 +9,7 @@ import { djObject } from '../strategy/object.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { clipText } from '../core/pure.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471); the dedicated weather skill owns that beat.
@@ -133,6 +134,10 @@ export function featureKindsClause(skillKinds: { kind: string; desc: string }[] 
   }\nA feature whose topic needs specific facts — dates, credits, releases, news, anything the host would otherwise have to recall — must name a capability. Leave "kind" null only for a topic the host can honestly carry from the brief and the moment alone.`;
 }
 
+export function programmePlanSystem(): string {
+  return `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.\n\n${onAirLocationGrounding()}`;
+}
+
 // `skillKinds` is the capability menu the plan may build features from
 // (already filtered to enabled + host-owned + ready by the caller). When the
 // show pins `segmentSkill`, the caller passes just that one and the plan is
@@ -150,7 +155,7 @@ export async function generateProgrammePlan({
 
   const kindsClause = featureKindsClause(skillKinds, pinnedKind);
 
-  const system = `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.`;
+  const system = programmePlanSystem();
 
   const promptLines = [
     `The show: "${show.name}"${spanHours > 1 ? ` — ${spanHours} hours on air` : ' — one hour on air'}.`,
@@ -300,6 +305,7 @@ Rules:
 - Each speaker stays in THEIR OWN character per the voice notes.
 - ${beatTask}
 - Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.
+- ${onAirLocationGrounding()}
 - ${PROGRAMME_GROUNDING_RULE}${langClause}${settings.castHouseRulesBlock()}`;
 }
 

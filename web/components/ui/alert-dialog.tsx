@@ -18,6 +18,9 @@ export interface V3AlertDialogProps {
   onOpenChange: (open: boolean) => void;
   title?: ReactNode;
   description?: ReactNode;
+  /** Block content under the description (lists, notices). Kept out of
+   *  `description`, which renders as a paragraph. */
+  details?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -29,6 +32,7 @@ export function V3AlertDialog({
   onOpenChange,
   title,
   description,
+  details,
   confirmLabel = 'confirm',
   cancelLabel = 'cancel',
   danger = false,
@@ -52,6 +56,7 @@ export function V3AlertDialog({
             <AlertDialog.Description className="m-0 text-[13px] leading-[1.6] text-ink">
               {description}
             </AlertDialog.Description>
+            {details}
           </div>
           <div className="flex justify-end gap-2 border-t border-ink px-5 py-3">
             <AlertDialog.Cancel className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink">

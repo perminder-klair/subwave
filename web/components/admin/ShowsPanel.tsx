@@ -60,6 +60,7 @@ import {
 import { useSettingsQuery } from './settings/queries';
 import {
   patchShowSettings,
+  showKeys,
   useCommunityShowsQuery,
   useShowGenresQuery,
   useShowPlaylistsQuery,
@@ -246,8 +247,11 @@ export default function ShowsPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ show: showPayload(show) }),
     }),
-    onDone: (result, _vars, client) => {
+    onDone: async (result, { show }, client) => {
       if (result.shows) patchShowSettings(client, { shows: result.shows });
+      // A save can turn Play in order on or off, or change the anchor that
+      // decides where the walk stands — so the position line must re-ask.
+      await client.invalidateQueries({ queryKey: showKeys.playlistPosition(show.id), exact: true });
     },
     toastOnError: false,
   });
@@ -275,7 +279,7 @@ export default function ShowsPanel() {
       themeId: '', genres: [], eras: [], energies: [], vocals: '',
       filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
       fadeAtShowEnd: null,
-      playlistIds: [], playlistStrict: false, playlistExhaust: false, excludedPlaylistIds: [],
+      playlistIds: [], playlistStrict: false, playlistExhaust: false, playlistInOrder: false, excludedPlaylistIds: [],
       programme: false, segmentSkill: '', preparationSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new

@@ -77,6 +77,43 @@ export function patchSettingsAudio(
 }
 
 /**
+ * The one authoritative redacted GET after a COMMITTED settings write. A 3s
+ * settings poll may already be in flight with a pre-write envelope, so its
+ * exact cancellation is awaited before the read starts and fetchQuery cannot
+ * dedupe onto that promise. If the read (or `before`) fails, the write still
+ * committed: the last redacted envelope stays usable but is marked stale so the
+ * next observer retries instead of treating it as a fresh source of truth, and
+ * the caller gets an honest partial-success receipt to re-baseline from.
+ */
+async function readAfterCommittedWrite<TSettings>(
+  client: QueryClient,
+  adminFetch: AdminFetch,
+  previous: TSettings | undefined,
+  before?: () => Promise<void>,
+): Promise<Pick<SettingsSaveReceipt, 'refreshedAt' | 'refreshError'>> {
+  try {
+    await before?.();
+    await client.cancelQueries(
+      { queryKey: settingsKeys.detail(), exact: true },
+      { silent: true },
+    );
+    await client.fetchQuery<TSettings>({
+      queryKey: settingsKeys.detail(),
+      queryFn: ({ signal }) => adminJson<TSettings>(adminFetch, '/settings', undefined, signal),
+      staleTime: 0,
+    });
+    return { refreshedAt: client.getQueryState(settingsKeys.detail())?.dataUpdatedAt };
+  } catch (error) {
+    if (previous !== undefined) {
+      client.setQueryData<TSettings>(settingsKeys.detail(), previous, { updatedAt: 0 });
+    } else {
+      client.removeQueries({ queryKey: settingsKeys.detail(), exact: true });
+    }
+    return { refreshError: errorMessage(error) };
+  }
+}
+
+/**
  * Sensitive settings writes keep both the patch and the raw POST response out
  * of TanStack state. MutationCache sees void variables/data; the short-lived
  * refs are cleared in finally after one mandatory redacted GET. A committed
@@ -106,7 +143,7 @@ export function useSettingsMutation<TSettings>({
         body: JSON.stringify(patch),
       });
       receiptRef.current = { requiresRestart: result.requiresRestart };
-      try {
+      const read = await readAfterCommittedWrite<TSettings>(client, adminFetch, previous, async () => {
         // This POST committed even if the redacted refresh below fails. Reset
         // default-dependent catalogue pages before another browse can reuse a
         // cursor from the old language. Rejected saves never reach this step.
@@ -114,37 +151,8 @@ export function useSettingsMutation<TSettings>({
         if (ttsPatch?.gemini?.libraryLanguage !== undefined) {
           await resetGeminiLibraryDefaults(client);
         }
-        // A 3s settings poll may already be in flight with a pre-write
-        // envelope. Await its exact cancellation before starting the
-        // authoritative read so fetchQuery cannot dedupe onto that promise.
-        await client.cancelQueries(
-          { queryKey: settingsKeys.detail(), exact: true },
-          { silent: true },
-        );
-        await client.fetchQuery<TSettings>({
-          queryKey: settingsKeys.detail(),
-          queryFn: ({ signal }) => adminJson<TSettings>(adminFetch, '/settings', undefined, signal),
-          staleTime: 0,
-        });
-        receiptRef.current = {
-          ...receiptRef.current,
-          refreshedAt: client.getQueryState(settingsKeys.detail())?.dataUpdatedAt,
-        };
-      } catch (error) {
-        // The POST committed. Keep the last redacted envelope usable, but mark
-        // it stale so the next observer retries instead of treating it as a
-        // fresh source of truth. Callers receive an honest partial-success
-        // receipt and can re-baseline the exact fields they submitted.
-        if (previous !== undefined) {
-          client.setQueryData<TSettings>(settingsKeys.detail(), previous, { updatedAt: 0 });
-        } else {
-          client.removeQueries({ queryKey: settingsKeys.detail(), exact: true });
-        }
-        receiptRef.current = {
-          ...receiptRef.current,
-          refreshError: errorMessage(error),
-        };
-      }
+      });
+      receiptRef.current = { ...receiptRef.current, ...read };
     },
   });
   const runMutation = mutation.mutateAsync;
@@ -160,5 +168,49 @@ export function useSettingsMutation<TSettings>({
       receiptRef.current = null;
     }
   }, [runMutation]);
+  return { isPending: mutation.isPending, mutateAsync };
+}
+
+export interface LlmSwapReceipt extends SettingsSaveReceipt {
+  /** Embedding fields the swap pinned (they were inheriting the primary's). */
+  pinned?: string[];
+  /** The inherited chat key was too long for the Library tagger to hold. */
+  keyNotPinned?: boolean;
+}
+
+/**
+ * "Swap with primary": POST /settings/llm/swap, then the same authoritative
+ * read a settings save gets. The controller builds and saves the swap (the
+ * browser only ever sees a leg's headers redacted), so the caller re-baselines
+ * the swapped form keys from that read (form-reconciliation adoptServerPaths).
+ * The receipt carries no secrets — the route answers only it.
+ */
+export function useLlmSwapMutation<TSettings>({
+  adminFetch,
+}: {
+  adminFetch: AdminFetch;
+}): {
+  isPending: boolean;
+  mutateAsync: () => Promise<LlmSwapReceipt>;
+} {
+  const client = useQueryClient();
+  const mutation = useMutation<LlmSwapReceipt, Error, void>({
+    mutationKey: ['settings', 'llm-swap'],
+    mutationFn: async () => {
+      const previous = client.getQueryData<TSettings>(settingsKeys.detail());
+      const result = await adminJson<Omit<LlmSwapReceipt, 'refreshedAt' | 'refreshError'>>(
+        adminFetch, '/settings/llm/swap', { method: 'POST' },
+      );
+      const read = await readAfterCommittedWrite<TSettings>(client, adminFetch, previous);
+      return {
+        requiresRestart: result.requiresRestart,
+        pinned: result.pinned,
+        keyNotPinned: result.keyNotPinned,
+        ...read,
+      };
+    },
+  });
+  const runMutation = mutation.mutateAsync;
+  const mutateAsync = useCallback(() => runMutation(), [runMutation]);
   return { isPending: mutation.isPending, mutateAsync };
 }

@@ -10,13 +10,16 @@
 # mixer and correctly fails on a checkout missing the required fix.
 #
 # Needs controller/node_modules (npm ci), Python with numpy + soundfile
-# (or ANALYZER_IMAGE), and savonet/liquidsoap:v2.4.5 (or LIQ_BIN).
+# (or ANALYZER_IMAGE), and savonet/liquidsoap:v2.4.6 (or LIQ_BIN).
 # Output: scripts/.fx-render/stemseam/ or STEM_SEAM_WORK.
-# Residual: frame-boundary cross buffering can leave up to one 20ms frame
-# of beat error. SEAM_TOLERANCE_MS defaults to 25ms.
+# Frame-boundary buffering: `cross` can buffer a frame (20ms) less than a
+# seam's stamp. radio.liq's clip seam alignment absorbs that, so the beat grid
+# must hold to SEAM_TOLERANCE_MS (default 5ms) across both seams; a mixer
+# without it shows one ~20ms interval per seam and fails. The buffer-size
+# check tolerates the frame and the alignment slack separately.
 set -euo pipefail
 
-IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.5}"
+IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.6}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 WORK="${STEM_SEAM_WORK:-$HERE/.fx-render/stemseam}"
@@ -62,34 +65,45 @@ plan=$(py prepare /work /repo)
 echo "   worker: $plan"
 read -r blend in_cue clip_sec < <(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); print(p["blend_start_sec"], p["in_cue_sec"], p["clip_sec"])' "$plan")
 
+# STEM_SEAM_P_TRIMS: predecessor trims in samples, swept across a 20 ms frame
+# (882 samples at 44.1 kHz) so the seams land at different frame phases. A
+# 60 s predecessor ends on a frame boundary, the one phase where `cross` drops
+# no partial frame, so testing only that case hides the loss.
+trims="${STEM_SEAM_P_TRIMS:-0 1 44 221 441 661 881}"
+modes="${STEM_SEAM_MODES:-verbatim controller}"
+stations="${STEM_SEAM_STATIONS:-0 0.1 $default_cross}"
 verdict=0
-for station in 0 0.1 "$default_cross"; do
-  for mode in verbatim controller; do
-    name="$mode-$station"
-    echo "== $name: production station crossfade ${station}s"
-    STATE_DIR="$WORK/controller-state" MUSIC_LIBRARY_PATH="$WORK" \
-      "$TSX" "$ROOT/controller/scripts/stem-seam-fixture.ts" "$mode" "$station" "$blend" "$in_cue" > "$WORK/fixture-$name.json"
-    py render-script /work "$name" "$station" "/work/fixture-$name.json"
-    rm -f "$WORK/seam-$name.wav"
-    if ! liq "seam-$name.liq" > "$WORK/seam-$name.log"; then
-      tail -20 "$WORK/seam-$name.log"
-      echo "STEMSEAM FAIL: Liquidsoap failed ($name)"
-      exit 1
-    fi
-    grep 'STEMSEAM:' "$WORK/seam-$name.log"
-    if py analyse-render "/work/seam-$name.wav" "/work/seam-$name.log" "/work/fixture-$name.json" "$clip_sec" "${SEAM_TOLERANCE_MS:-25}"; then
-      echo "   $name: beat grid intact"
-    else
-      echo "   $name: wrong buffer or broken beat grid"
-      if [ "$mode" = controller ]; then verdict=1; fi
-    fi
+for trim in $trims; do
+  py predecessor /work "$trim"
+  export STEM_SEAM_P_TRIM="$trim"
+  for station in $stations; do
+    for mode in $modes; do
+      name="$mode-$station-p$trim"
+      echo "== $name: production station crossfade ${station}s, predecessor ${trim} samples short"
+      STATE_DIR="$WORK/controller-state" MUSIC_LIBRARY_PATH="$WORK" \
+        "$TSX" "$ROOT/controller/scripts/stem-seam-fixture.ts" "$mode" "$station" "$blend" "$in_cue" > "$WORK/fixture-$name.json"
+      py render-script /work "$name" "$station" "/work/fixture-$name.json"
+      rm -f "$WORK/seam-$name.wav"
+      if ! liq "seam-$name.liq" > "$WORK/seam-$name.log"; then
+        tail -20 "$WORK/seam-$name.log"
+        echo "STEMSEAM FAIL: Liquidsoap failed ($name)"
+        exit 1
+      fi
+      grep -E 'STEMSEAM:|clip\.seam' "$WORK/seam-$name.log"
+      if py analyse-render "/work/seam-$name.wav" "/work/seam-$name.log" "/work/fixture-$name.json" "$clip_sec" "${SEAM_TOLERANCE_MS:-5}"; then
+        echo "   $name: beat grid intact"
+      else
+        echo "   $name: wrong buffer or broken beat grid"
+        if [ "$mode" = controller ]; then verdict=1; fi
+      fi
+    done
   done
 done
 
 if [ "$verdict" = 0 ]; then
-  echo "STEMSEAM PASS: controller cues passed 0, 0.1 and default station crossfades"
+  echo "STEMSEAM PASS: controller cues held ${SEAM_TOLERANCE_MS:-5}ms at station crossfades [$stations], predecessor trims [$trims] ($IMAGE)"
 else
-  echo "STEMSEAM FAIL: use #1774's mixer fix before shipping these cues at short crossfades"
+  echo "STEMSEAM FAIL: controller cues missed ${SEAM_TOLERANCE_MS:-5}ms ($IMAGE; the clip seam's blank() delay is sample-accurate on Liquidsoap 2.4.6 only)"
 fi
 echo "Renders and logs: $WORK"
 exit "$verdict"

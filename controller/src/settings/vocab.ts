@@ -30,7 +30,6 @@ import {
   PERSONA_LIMIT as PERSONA_LIMIT_VALUE,
   PERSONA_LINK_STYLES,
   PERSONA_SCRIPT_LENGTHS,
-  PERSONA_SKILLS_LIMIT,
   PERSONA_SOUL_MAX,
   TTS_CHATTERBOX_VOICE_RE,
   TTS_CLOUD_PROVIDERS as TTS_CLOUD_PROVIDER_VALUES,
@@ -147,8 +146,9 @@ export const TTS_ENGINES: readonly string[] = TTS_ENGINE_VALUES;
 // re-exported: ttsVoiceSlotSchema's `allowInherit` is the only way in.
 export { PERSONA_TTS_INHERIT };
 
-// DJ-voice trim in dB via Liquidsoap's `liq_amplify` annotation. A manual dial,
-// not auto-normalisation.
+// DJ-voice trim in dB via Liquidsoap's `liq_amplify` annotation. The operator's
+// manual dial; opt-in clip levelling (audio/clip-level.ts) is added to it,
+// and the total stays inside this same range.
 export const TTS_GAIN_CLAMP_DB = TTS_GAIN_CLAMP_DB_VALUE;
 
 // Finite number clamped to ±TTS_GAIN_CLAMP_DB and rounded to 0.1 dB; garbage
@@ -248,6 +248,11 @@ export const LLM_PROVIDERS = [
   'deepseek',
   'gateway',
 ];
+
+// Longest inline `embedding.apiKey` update() accepts. A chat leg's inline key
+// may run to 1000 (applyInlineKey), so whatever copies one into the embedding
+// leg (the LLM swap's pin, settings/llm-swap.ts) must check this first.
+export const EMBEDDING_API_KEY_MAX = 200;
 
 // Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522).
 export const EMBEDDING_PROVIDERS = [
@@ -350,8 +355,8 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
     target.model = v;
   }
   if (l.compatibleMode !== undefined) {
-    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted') {
-      throw new Error(`${label}.compatibleMode must be "local" or "hosted"`);
+    if (l.compatibleMode !== 'local' && l.compatibleMode !== 'hosted' && l.compatibleMode !== 'auto') {
+      throw new Error(`${label}.compatibleMode must be "local", "hosted" or "auto"`);
     }
     target.compatibleMode = l.compatibleMode;
   }
@@ -446,11 +451,19 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
   const prov = target.provider as string | undefined;
   target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
-  // Per-task model overrides ({ [kind]: model }). Whole-map REPLACE (not a
-  // merge) so clearing a task in the editor actually clears it. Keys are task
-  // kinds the callers pass to primaryLeg(); values are trimmed model ids,
-  // each 0-100 chars like `model`; an empty value drops the entry (blank =
-  // "use the primary model").
+}
+
+// Per-task model overrides ({ [kind]: model }). Primary-only (not on fallback,
+// so kept out of applyLlmLegPatch — which LLM_LEG_FIELDS pins to per-leg keys).
+// Whole-map REPLACE (not a merge) so clearing a task in the editor actually
+// clears it. Keys are task kinds the callers pass to primaryLeg(); values are
+// trimmed model ids, each 0-100 chars like `model`; an empty value drops the
+// entry (blank = "use the primary model").
+export function applyModelOverridesPatch(
+  target: Record<string, unknown>,
+  l: Record<string, unknown>,
+  label = 'llm',
+): void {
   if (l.modelOverrides !== undefined) {
     if (!l.modelOverrides || typeof l.modelOverrides !== 'object' || Array.isArray(l.modelOverrides)) {
       throw new Error(`${label}.modelOverrides must be an object map of task → model`);
@@ -840,9 +853,6 @@ export { GUESTS_PER_SHOW, PLAYLISTS_PER_SHOW, EXCLUDED_PLAYLISTS_PER_SHOW };
 // name every library tag it wants. Keep in lockstep with FILTER_VALUES_MAX in
 // web/components/admin/shows/types.ts.
 export { SHOW_FILTER_VALUES_MAX };
-// Must comfortably exceed a realistic skill library: unticking one skill on an
-// "all skills" (null) persona materialises the full catalog minus one.
-export const SKILLS_PER_PERSONA_LIMIT = PERSONA_SKILLS_LIMIT;
 // djPrompts text bounds; keep in lockstep with PROMPT_MIN/PROMPT_MAX in
 // web/components/admin/personas/constants.ts.
 export const DJ_PROMPT_LIMIT = DJ_PROMPT_LIMIT_VALUE;
@@ -930,6 +940,9 @@ export interface NormalizedShow {
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor
    *  airs once before any of them repeats. Inert without it. */
   playlistExhaust: boolean;
+  /** Play in order: with playlistStrict on, picks walk the anchor in its own
+   *  order and resume across airings. Inert without it. */
+  playlistInOrder: boolean;
   excludedPlaylistIds: string[];
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */

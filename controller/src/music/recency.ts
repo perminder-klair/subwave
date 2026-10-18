@@ -54,9 +54,10 @@ interface CandidateFilterState {
   // from the library — without it the exemption is dead on a raw Subsonic
   // candidate. Injected rather than imported so this module stays pure.
   albumKeyOf?: (song: CandidateLike) => string;
-  // Count-based hard no-repeat guard, from queue.recentlyPlayedByCount(N).
-  // Checked OUTSIDE the relaxation cascade, so the last N distinct plays can't
-  // re-air even once the relaxable track guard is dropped. Empty = off.
+  // Count-based hard no-repeat guard, from show-recency.hardRecentFor (the
+  // last N distinct plays, or a full rotation's own airings). Checked OUTSIDE
+  // the relaxation cascade, so the last N distinct plays can't re-air even
+  // once the relaxable track guard is dropped. Empty = off.
   hardRecentIds?: Set<string>;
   hardRecentKeys?: Set<string>;
   seenIds?: Set<string>;
@@ -103,10 +104,26 @@ const APOSTROPHES = /[‘’ʼ´`]/g;
 // it, so "The The" keys as "the".
 const LEADING_ARTICLE = /^the\s+/;
 
+// A hyphen or dash BETWEEN two letters/digits spells the same act as a space
+// does: one server credits "SCSI-9", another "SCSI 9" (seen back to back on
+// air), "Jay-Z"/"Jay Z", "A-ha"/"A ha", "The-Dream"/"The Dream". Only inside a
+// word: " - " joining two credits is untouched, and so are dots (initialisms
+// like "M.I.A." and "Booker T. & the M.G.'s" keep their keys) and "/"
+// ("AC/DC"). Nothing feeding the never-play blocklist (nameKey,
+// artistParticipantKeys) folds this way. It DOES reach `blockedArtists`, the
+// guard-rescue set filterPickerCandidates hard-drops: two different acts
+// named apart only by a hyphen would both leave that one rescue pool call.
+// Accepted because that pair is vanishingly rare, the drop lasts one call,
+// and it over-matches, which every caller reads as "pick someone else".
+const IN_NAME_SEPARATOR = /(?<=[\p{L}\p{N}])[-‐‑‒–](?=[\p{L}\p{N}])/gu;
+
 // Exact full-name aliases for acts whose tags alternate between a named lead
 // and their ensemble credit. Never make this a generic suffix strip: "The Beta
 // Band" and "Kronos Quartet" are complete act names, and a false equivalence
 // here reaches `blockedArtists`, which is a HARD filter. Verified aliases only.
+// Looked up after the separator fold and the article strip, so write a key in
+// that folded form: no leading "the", a space for an in-word hyphen. A key
+// with a hyphen in it would never match.
 const ARTIST_ROOT_ALIASES = new Map<string, string>([
   ['jimi hendrix experience', 'jimi hendrix'],
   ['glenn miller orchestra', 'glenn miller'],
@@ -138,12 +155,16 @@ export const artistNameKey = nameKey;
 //   "Sly & the Family Stone"       → "sly & the family stone"   (unchanged)
 //
 // Also folds the variants one act picks up across multi-source tagging (#1406):
-// leading article, exact full-name aliases, apostrophes. The `the …` exception
+// leading article, exact full-name aliases, apostrophes, and a hyphen or dash
+// inside a word spelled as a space ("SCSI-9" = "SCSI 9"). The `the …` exception
 // on the join keeps band names whole ("X & the Y" is one act); everything else
 // after a join is a second credited act — imperfect on "Hall & Oates"-shaped
 // duos, but a wrong key here can only over-match, which every caller reads as
 // "pick someone else". Only the LEAD is normalised, so "Tammi Terrell" and
 // "Marvin Gaye & Tammi Terrell" still key apart.
+//
+// Key a RAW credit, never a key: the hyphen fold runs after the splits, so a
+// key can re-split ("Jay-and-Silent-Bob" → "jay and silent bob" → "jay").
 //
 // NOT a replacement for `artistKey`, which is an IDENTITY key feeding
 // `trackKey` and must stay byte-identical to the `title|artist` keys
@@ -163,13 +184,17 @@ export function artistRootKey(song: CandidateLike | string): string {
     if (tail && !/^the\b/.test(tail)) root = root.slice(0, join.index).trim();
   }
 
-  // Article and alias come AFTER the splits, so the join's `the …` exception
-  // still sees the tail it protects and the alias is judged against the LEAD.
+  // Separator fold, article and alias come AFTER the splits, so a hyphen never
+  // changes where a credit splits, the join's `the …` exception still sees the
+  // tail it protects, and the alias is judged against the LEAD. The fold runs
+  // before the article strip so "The-Dream" loses its article as "The Dream"
+  // does.
+  root = root.replace(IN_NAME_SEPARATOR, ' ');
   const unarticled = root.replace(LEADING_ARTICLE, '').trim();
   if (unarticled) root = unarticled;
   root = ARTIST_ROOT_ALIASES.get(root) ?? root;
 
-  return root || base;
+  return root || base.replace(IN_NAME_SEPARATOR, ' ');
 }
 
 // Do two artist MATCHING keys (artistRootKey) name the same act, or does one
@@ -211,6 +236,84 @@ export function artistCreditsOverlap(a: string, b: string): boolean {
     if (delimitedAt(long, i - 1, -1) && delimitedAt(long, i + short.length, 1)) return true;
   }
   return false;
+}
+
+// Every act a credit names that the SPACING guards should see, not only its
+// lead (#1251 keys on the lead alone). artistRootKey drops everything after the
+// first join, so "Daljit Chahal & Karan Aujla" keyed as "daljit chahal" and
+// walked past a window holding "karan aujla" — seen live: three Karan Aujla
+// credits in 13 minutes, two back to back. Comma-joined acts were already
+// reachable through artistCreditsOverlap's delimiters; "&", "+", "and" and
+// "x" sit inside real act names, so they were not.
+//
+// A tail act counts only when the LIBRARY knows it as an act of its own: some
+// credit there leads with it. That is the guard against band names — "Earth,
+// Wind & Fire" offers "fire", which counts only if an act called Fire leads a
+// credit in this library. "X & the Y" never splits (artistRootKey's rule).
+// Without a provider (tests, a library not loaded yet) only the lead counts,
+// which is exactly the old behaviour: the failure direction is the status quo.
+//
+// SPACING only. Never a blocklist key: that list is absolute, and these keys
+// are deliberately allowed to over-match.
+const ACT_JOIN = /\s+(?:&|\+|and|x)\s+(?!the\b)|\s*,\s*/i;
+
+let knownActs: (() => ReadonlySet<string>) | null = null;
+
+// library.ts registers its act index here; recency stays free of a library import.
+export function setKnownActsProvider(fn: (() => ReadonlySet<string>) | null): void {
+  knownActs = fn;
+}
+
+export function creditedActKeys(song: CandidateLike | string): string[] {
+  const root = artistRootKey(song);
+  if (!root) return [];
+  const known = knownActs?.();
+  if (!known?.size) return [root];
+  const raw = typeof song === 'string' ? song : (song?.artist || '');
+  const out = [root];
+  for (const segment of artistNameKey(raw).split(FEATURE_SPLIT)) {
+    for (const part of segment.split(ACT_JOIN)) {
+      const key = artistRootKey(dropOrphanCloser(part).trim());
+      if (key && !out.includes(key) && known.has(key)) out.push(key);
+    }
+  }
+  return out;
+}
+
+// The same acts as display names, for prompts: the Agentic pick event lists
+// them so the model can step around what the guard will refuse. A whole
+// credit there read as one act ("Amantej Hundal & Karan Aujla"), and the
+// model proposed Karan Aujla twice more for the guard to catch. The lead group
+// stays whole, commas and all (the guard's lead key covers each comma-joined
+// name by delimiter); a tail act is named only when the library knows it,
+// exactly as creditedActKeys counts it. With no act index: the whole credit.
+const ACT_JOIN_NAMED = /\s+(?:&|\+|and|x)\s+(?!the\b)/i;
+
+export function creditedActNames(song: CandidateLike | string): string[] {
+  const raw = String(typeof song === 'string' ? song : (song?.artist || '')).replace(/\s+/g, ' ').trim();
+  if (!artistRootKey(raw)) return [];
+  const known = knownActs?.();
+  if (!known?.size) return [raw];
+  const out = new Map<string, string>();
+  raw.split(FEATURE_SPLIT).forEach((segment, si) => {
+    segment.split(ACT_JOIN_NAMED).forEach((part, pi) => {
+      const lead = si === 0 && pi === 0;
+      const pieces = lead ? [part] : part.split(/\s*,\s*/);
+      for (const piece of pieces) {
+        const name = dropOrphanCloser(piece).trim();
+        const key = artistRootKey(name);
+        if (key && !out.has(key) && (lead || known.has(key))) out.set(key, name);
+      }
+    });
+  });
+  return out.size ? [...out.values()] : [raw];
+}
+
+// Does any act this credit names fall in a spacing window? The window side is
+// built from creditedActKeys too (queue.neighbourArtistRoots), so a shared
+// tail act meets from either direction.
+export function creditInRoots(song: CandidateLike | string, roots: Iterable<string>): boolean {
+  return creditedActKeys(song).some(act => artistRootIn(act, roots));
 }
 
 // artistCreditsOverlap against a set of keys (queue.neighbourArtistRoots): an
@@ -459,7 +562,7 @@ export function filterPickerCandidates<T extends CandidateLike>(
       // answer a block on "Marvin Gaye".
       if (key && (blockedArtists.has(key) || artistRootIn(artistRootKey(song), blockedArtists))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
-      if (mode.recentArtists && artistRootIn(artistRootKey(song), recentArtistRoots)) continue;
+      if (mode.recentArtists && creditInRoots(song, recentArtistRoots)) continue;
       if (key) {
         const count = nextArtistCounts.get(key) || 0;
         if (count >= maxPerArtist) continue;

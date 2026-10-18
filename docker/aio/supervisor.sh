@@ -745,6 +745,12 @@ render_icecast() {
 				echo '        <authentication type="url">'
 				echo "            <option name=\"listener_add\" value=\"$AUTH_URL_XML\"/>"
 				echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+				# The station has ONE shared password and the username is ignored, so many
+				# listeners present the same name (docs suggest `listener`). icecast-kh admits
+				# one connection per username unless told otherwise: the second gets a 403,
+				# or hangs unanswered when it arrives while the first is still closing, which
+				# is what an iOS player's range probe followed by its real request does.
+				echo '            <option name="allow_duplicate_users" value="1"/>'
 				echo '        </authentication>'
 			fi
 			echo '    </mount>'

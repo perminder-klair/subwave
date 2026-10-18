@@ -7,6 +7,7 @@ import { djObject } from '../strategy/object.js';
 import { modelTolerant } from '../core/pure.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { REQUEST_TEXT_MAX } from '../../../schemas/request.js';
+import { onAirLocationGrounding } from './grounding.js';
 
 // Worked-example "ack" values must be concrete, speakable lines — never
 // <placeholder> meta-text. Weak models copy examples verbatim (the same
@@ -128,7 +129,7 @@ export function requestMatcherSystem(persona: unknown): string {
   // persona clause) — repeating it last is what makes it stick.
   const lang = String(p?.language || '').trim() || 'English';
   const langSuffix = `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. For that spoken field only: ${settings.spokenProperNounDirective(persona)} Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`;
-  return REQUEST_SYSTEM + personaSuffix + langSuffix;
+  return REQUEST_SYSTEM + personaSuffix + '\n\n' + onAirLocationGrounding() + langSuffix;
 }
 
 export async function matchRequest(

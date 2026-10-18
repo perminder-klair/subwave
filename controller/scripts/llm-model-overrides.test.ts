@@ -31,7 +31,7 @@ process.env.STATE_DIR = stateRoot;
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { primaryLeg } = await import('../src/llm/internal/provider/legs.js');
-const { applyLlmLegPatch } = await import('../src/settings/vocab.js');
+const { applyModelOverridesPatch } = await import('../src/settings/vocab.js');
 
 const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
@@ -70,9 +70,9 @@ test('patch replaces the whole map so clearing a task clears it', async () => {
 
 test('patch rejects non-objects and over-long model ids', async () => {
   await coldLoad({});
-  assert.throws(() => applyLlmLegPatch({}, { modelOverrides: ['x'] }, 'llm'), /modelOverrides must be an object/);
+  assert.throws(() => applyModelOverridesPatch({}, { modelOverrides: ['x'] }, 'llm'), /modelOverrides must be an object/);
   assert.throws(
-    () => applyLlmLegPatch({}, { modelOverrides: { a: 'x'.repeat(101) } }, 'llm'),
+    () => applyModelOverridesPatch({}, { modelOverrides: { a: 'x'.repeat(101) } }, 'llm'),
     /0-100 chars/,
   );
 });
@@ -109,3 +109,47 @@ test('the Script Generation override reaches BOTH segment paths', async () => {
     assert.equal(primaryLeg(kind).cfg.model, 'big-pro', `${kind} must resolve the Script Generation override`);
   }
 });
+
+test('applyLlmLegPatch only reads LLM_LEG_FIELDS so swap parity holds', async () => {
+  const { applyLlmLegPatch } = await import('../src/settings/vocab.js');
+  const { LLM_LEG_FIELDS } = await import('../src/settings/llm-swap.js');
+  const read = new Set<string>();
+  const recorder = new Proxy({}, {
+    get(_t, key) { if (typeof key === 'string') read.add(key); return undefined; },
+    has(_t, key) { if (typeof key === 'string') read.add(key); return false; },
+  });
+  applyLlmLegPatch({}, recorder, 'llm');
+  read.delete('baseUrl');
+  assert.deepEqual([...read].sort(), [...LLM_LEG_FIELDS].sort());
+});
+
+test('sticky primary-down window holds across tasks with and without modelOverrides', async () => {
+  const { withFailover, resetFailoverStickyForTest, failoverRoutingSnapshot } = await import('../src/llm/internal/core/failover.js');
+  resetFailoverStickyForTest();
+  await coldLoad({
+    modelOverrides: { djAgentPick: 'big-pro' },
+    fallback: { enabled: true, provider: 'openai-compatible', model: 'backup-model', baseUrl: 'http://127.0.0.1:8081/v1' },
+  });
+  const attempts: string[] = [];
+  // Overridden task hits a down primary and starts the sticky window.
+  await withFailover('djAgentPick', () => ({}), async (leg) => {
+    attempts.push(leg.label);
+    if (leg.label === 'openai-compatible:big-pro') {
+      throw Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:8080'), { code: 'ECONNREFUSED' });
+    }
+    return { value: 'backup-1', via: 'test' };
+  });
+  assert.ok(failoverRoutingSnapshot()?.retryPrimaryAt, 'overridden task started the sticky window');
+  // Next call is an un-overridden task: must honour the sticky window instead of clearing it.
+  await withFailover('matchRequest', () => ({}), async (leg) => {
+    attempts.push(leg.label);
+    return { value: 'backup-2', via: 'test' };
+  });
+  assert.deepEqual(attempts, [
+    'openai-compatible:big-pro',
+    'openai-compatible:backup-model',
+    'openai-compatible:backup-model',
+  ]);
+  resetFailoverStickyForTest();
+});
+

@@ -18,6 +18,10 @@ export interface TakeOpts {
   // set, so a narrow pinned playlist inside the recency window would coast
   // entirely off-playlist. Dedup and the artist cap still apply on the retry.
   neverStarve?: boolean;
+  // Skip the recency window for THIS source: one that carries its own (a full
+  // playlist rotation's longest-waiting order, #1919). Re-filtered by the
+  // station's trackHours, a 109-track rotation came out as a 2-track loop.
+  ignoreRecency?: boolean;
   // Lift the artist cap for THIS source only — a strict-playlist show pinned an
   // exact set, so a single-artist playlist is the point. Scoped per take()
   // because the other sources still run on such a show, and an uncapped
@@ -65,8 +69,8 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
 
   const take = (label: string, items: any[], cap: number, takeOpts: TakeOpts = {}) => {
     const artistCap = takeOpts.maxPerArtist ?? maxPerArtist;
-    const n = pull(label, items, cap, false, artistCap);
-    if (n === 0 && takeOpts.neverStarve) pull(label, items, cap, true, artistCap);
+    const n = pull(label, items, cap, !!takeOpts.ignoreRecency, artistCap);
+    if (n === 0 && takeOpts.neverStarve && !takeOpts.ignoreRecency) pull(label, items, cap, true, artistCap);
   };
 
   return { pool, fromSource, take };

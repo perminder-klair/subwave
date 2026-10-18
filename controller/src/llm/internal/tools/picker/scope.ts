@@ -1,4 +1,4 @@
-// Pass one PickerScope from pickViaAgent to every tool. Field-by-field handoffs
+// Pass one PickerScope from pickViaSelectionRoute to every tool. Field-by-field handoffs
 // previously dropped vocalLock silently (#1300 FR 13); add constraints to this shape.
 
 import * as library from '../../../../music/library.js';
@@ -13,14 +13,18 @@ import { slim } from './slim.js';
 import { intersectEpisodeSource, type ArtistEpisodeSource } from '../../../../music/episode-source.js';
 
 export interface PickerScope {
+  // Resolved once through the cached OpenSubsonic extension probe. False on
+  // requests and unsupported servers, so no discovery pass hits a dead tool.
+  sonicSimilarity: boolean;
   episodeSource: ArtistEpisodeSource | null;
   recentIds: Set<string>;
   // lowercased "title|artist" — backfilled entries lack ids
   recentKeys: Set<string>;
   // Count-based HARD no-repeat set (last N distinct plays), non-relaxable: a
   // track here survives the starvation cascade, so the agent cannot re-pick a
-  // just-played song. From queue.recentlyPlayedByCount(N); empty on the request
-  // path (requests exempt).
+  // just-played song. From show-recency.hardRecentFor: the last N distinct
+  // plays, or a full rotation's own airings (#1919); empty on the request path
+  // (requests exempt).
   hardRecentIds: Set<string>;
   // lowercased "title|artist" — blocks id-less backfilled plays
   hardRecentKeys: Set<string>;
@@ -50,9 +54,24 @@ export interface PickerScope {
   // The show's playlist union tracks; registers the showPlaylistTracks tool. Set
   // in BOTH strict (with playlistLock) and soft (prompt preference only) modes.
   playlistTracks: any[] | null;
+  // A strict-filter show's whole eligible catalogue (music/show-recency.ts
+  // strictShowLibraryPool), before recency. Registers showPoolTracks when it is
+  // small enough to hand over whole. null when the show is not strict, or when
+  // a strict playlist or a prepared episode already names the source; not set
+  // on the request path.
+  showPool: any[] | null;
+  // Configured pins, including an unresolved playlist anchor.
+  hasPlaylistAnchor: boolean;
+  hasPinnedMoods: boolean;
   // Ids from the show's excluded playlists, dropped from every tool's results so
   // the agent never sees a blocklisted track. null = no exclusions.
   excludedIds: Set<string> | null;
+  // Tracks listeners liked recently (likes.djFavourites — the likes.influenceDj
+  // opt-in, windowed and capped by likes.windowDays/maxTracks); registers the
+  // listenerFavourites tool. A preference source, never a lock: the tracks still
+  // pass every lock and recency guard in collect(). null on the request path,
+  // where the listener's own ask is the only steer.
+  listenerFavourites: Array<{ track: any; count: number }> | null;
   // The active sonic journey's waypoint vector. When present the
   // tracksTowardJourney tool is registered closing over it, so the agent sees
   // only the tracks near it.
@@ -65,6 +84,7 @@ export interface PickerScope {
 // Every field defaults to "no constraint". Spread over a partial so there is
 // exactly one place a new field's default lives.
 const NO_SCOPE: PickerScope = {
+  sonicSimilarity: false,
   episodeSource: null,
   recentIds: new Set(),
   recentKeys: new Set(),
@@ -79,7 +99,11 @@ const NO_SCOPE: PickerScope = {
   maxTrackSec: null,
   playlistLock: null,
   playlistTracks: null,
+  showPool: null,
+  hasPlaylistAnchor: false,
+  hasPinnedMoods: false,
   excludedIds: null,
+  listenerFavourites: null,
   audioWaypoint: null,
   resolveReferences: false,
 };
@@ -91,12 +115,21 @@ export function pickerScope(partial: Partial<PickerScope> = {}): PickerScope {
 // What each tool module is handed: the scope plus the shared machinery — the
 // `seen` accumulator, the filter/slim/record pipeline, the empty-result note
 // builder, and the index-coverage flags the conditional tools gate on.
+type CollectOptions = {
+  maxPerArtist?: number;
+  order?: 'source';
+  preferredEnergy?: string;
+  similarity?: { kind: 'audio' | 'text'; reference: string };
+};
+
 export interface PickerContext {
   scope: PickerScope;
   // id → slim song across all tool calls; the picker resolves the agent's final
   // id choice against this.
   seen: Map<string, any>;
-  collect(list: any, cap?: number, opts?: { maxPerArtist?: number }): any[];
+  collect(list: any, cap?: number, opts?: CollectOptions): any[];
+  // Widen source fetches under strict show locks, before collect's hard filter.
+  candidateLimit(limit: number): number;
   emptyResult(matched: number, hint: string): { tracks: any[]; note: string; rule: string };
   seedSimilarity(songId: string, primary: 'audio' | 'text'): { tracks: any[]; matched: number; fellBack: boolean };
   // Id-level union of the recency sets, pushed INTO KNN queries. The key-based
@@ -122,6 +155,13 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
 
   const seen = new Map<string, any>();
 
+  // #1655: only ~7% of the reported library passed instrumental + low energy.
+  // A bounded 5x fetch gives the hard filters more neighbours to work with,
+  // without increasing the model's cap or adding retries.
+  // Unlocked/request runs retain their historical source sizes.
+  const hasDiscoveryLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || vocalLock || playlistLock);
+  const candidateLimit = (limit: number) => hasDiscoveryLock ? limit * 5 : limit;
+
   // Pushed into every KNN query so a heavily-aired cluster answers with its next
   // neighbours out instead of thinning toward empty.
   const knnExclude: Set<string> = new Set([...recentIds, ...hardRecentIds]);
@@ -139,21 +179,24 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // tools (topSongsByArtist, recentByArtist) opt out. A strict PLAYLIST show opts
   // out wholesale — playlistLock has already intersected the pool with the
   // operator's pinned set, and a single-artist playlist is the point of pinning.
-  const collect = (list: any, cap = 8, opts: { maxPerArtist?: number } = {}) => {
+  const collect = (list: any, cap = 8, opts: CollectOptions = {}) => {
     // Strict show: filter BEFORE recency + cap, so the 8 the agent sees are
     // genre-/era-/mood-/energy-pure. Each lock is HARD (starve:true) — a tool
     // with no match contributes nothing and emptyResult steers the model
     // elsewhere. Dead-air is guarded at wider scopes: a run with zero candidates
     // falls to the pool picker, and behind that the auto.m3u coast. The locks are
-    // pre-resolved and coverage-gated in pickViaAgent, so an un-analysed library
+    // pre-resolved and coverage-gated in pickViaSelectionRoute, so an un-analysed library
     // can't starve every tool for the whole show.
     //
     // Ordering is a freshness-biased shuffle (music/airing.ts): a KNN tool's
     // top-60 must not reach the model in similarity order, or the cap of 8 pins
     // the same neighbours every pick. Randomness stays dominant; with no play
-    // history this is a plain shuffle.
+    // history this is a plain shuffle. recentByArtist keeps source order so
+    // its newest eligible releases survive the cap.
     const items: any[] = Array.isArray(list) ? list : [];
-    let pool = applyStrictLocks(freshnessBiasedOrder(intersectEpisodeSource(items, scope.episodeSource), library.lastAiredInfo(), Date.now()), {
+    const source = intersectEpisodeSource(items, scope.episodeSource);
+    const ordered = opts.order === 'source' ? source : freshnessBiasedOrder(source, library.lastAiredInfo(), Date.now());
+    let pool = applyStrictLocks(ordered, {
       genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock, vocals: vocalLock,
     }, { starve: true });
     // Minimum track length (#1573): hard, and BEFORE the playlist lock, so a
@@ -166,6 +209,13 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     // the anchor. No never-starve: a show that excludes its whole pool leaves
     // `seen` empty and the LLM pick is skipped, with the auto.m3u coast behind it.
     if (excludedIds) pool = pool.filter((s: any) => s?.id && !excludedIds.has(s.id));
+    // A mood's energy request is a preference: matches first, then the same
+    // mood fills remaining slots. Explicit locks above still exclude bands.
+    // One collector preserves the per-artist cap across both groups.
+    if (opts.preferredEnergy) {
+      const matches = (s: any) => (s.energy ?? library.get(s.id)?.energy) === opts.preferredEnergy;
+      pool = [...pool.filter(matches), ...pool.filter(s => !matches(s))];
+    }
     const accepted = filterPickerCandidates(pool, {
       recentIds,
       recentKeys,
@@ -177,7 +227,11 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     });
     const out: any[] = [];
     for (const s of accepted) {
-      const slimmed = slim(s);
+      const score = s._similarity;
+      const similarity = opts.similarity && typeof score === 'number' && Number.isFinite(score)
+        && score >= -1 && score <= 1
+        ? { ...opts.similarity, score: Math.round(score * 10000) / 10000 } : null;
+      const slimmed = slim({ ...s, ...(similarity ? { similarity } : {}) });
       seen.set(s.id, slimmed);
       out.push(slimmed);
     }
@@ -202,11 +256,12 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     rule: `Never invent a song id — only ids returned by a tool are valid picks. ${SEED_NOT_A_PICK_CLAUSE}`,
   });
 
-  // Index counts snapshotted once at tool-build time; pickViaAgent awaits
+  // Index counts snapshotted once at tool-build time; pickViaSelectionRoute awaits
   // library.load() first, so stats() never returns its empty-sentinel zeros
   // here. Tools whose backing index is empty are conditionally registered —
   // offering a dead tool spends the discovery call on a guaranteed-empty result.
-  const stats = library.stats();
+  // pickStats(), not the dashboard's stats(): this runs on every pick (#1723).
+  const stats = library.pickStats();
   const hasTextEmbeddings = (stats.withEmbedding ?? 0) > 0;
   const hasAudioEmbeddings = (stats.withAudioEmbedding ?? 0) > 0;
   const hasEmbeddingProvider = embeddings.isAvailable();
@@ -224,20 +279,23 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // primary that matched but was filtered by recency keeps emptyResult, whose
   // note steers correctly and describes a different situation.
   const seedSimilarity = (songId: string, primary: 'audio' | 'text') => {
-    const K = 60;
+    const K = candidateLimit(60);
+    const seed = library.get(songId);
+    const reference = seed?.title
+      ? `seed track: “${seed.title}”${seed.artist ? ` by ${seed.artist}` : ''}` : 'discovery seed';
     const audioFirst = primary === 'audio';
     const lookup = (which: 'audio' | 'text') =>
       which === 'audio'
         ? library.tracksLikeThisAudio(songId, K, { excludeIds: knnExclude })
         : library.tracksLikeThis(songId, K, { excludeIds: knnExclude });
     const list = lookup(primary);
-    if (list.length) return { tracks: collect(list), matched: list.length, fellBack: false };
+    if (list.length) return { tracks: collect(list, 8, { similarity: { kind: primary, reference } }), matched: list.length, fellBack: false };
     const other = audioFirst ? 'text' : 'audio';
     const otherIndexed = audioFirst ? hasTextEmbeddings : hasAudioEmbeddings;
     if (otherIndexed) {
       const alt = lookup(other);
       if (alt.length) {
-        const rescued = collect(alt);
+        const rescued = collect(alt, 8, { similarity: { kind: other, reference } });
         // Only report the rescue if something SURVIVED the recency/lock filters.
         // A raw alt count with empty tracks would render emptyResult's matched>0
         // note about an index the model never asked, glued to a "no embedding
@@ -248,5 +306,5 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     return { tracks: [] as any[], matched: 0, fellBack: false };
   };
 
-  return { scope, seen, collect, emptyResult, seedSimilarity, knnExclude, stats, hasTextEmbeddings, hasAudioEmbeddings, hasEmbeddingProvider, textIndexDegraded };
+  return { scope, seen, collect, candidateLimit, emptyResult, seedSimilarity, knnExclude, stats, hasTextEmbeddings, hasAudioEmbeddings, hasEmbeddingProvider, textIndexDegraded };
 }

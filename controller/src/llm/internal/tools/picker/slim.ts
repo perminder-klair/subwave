@@ -6,9 +6,11 @@
 
 import * as subsonic from '../../../../music/subsonic.js';
 import * as library from '../../../../music/library.js';
+import { isInstrumental } from '../../../../music/lyric-vocal.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';
 import { resolveEraYear } from '../../../../music/show-filter.js';
+import { shiftOnsetMs } from '../../../../music/silence-trim.js';
 
 export function slim(s: any) {
   // Surface the editorial tags + measured acoustic facts when known — merged
@@ -52,15 +54,17 @@ export function slim(s: any) {
   // `duration`, library `durationSec`), so it's present even for an un-tagged
   // Subsonic track whose library lookup came back empty.
   const durationSec = durationSeconds(s) ?? durationSeconds(rec);
-  // vocalRanges: [] = no vocal regions (instrumental), null/undefined = not
+  // vocalRanges: classify measured sung duration; null/undefined = not
   // computed (unknown — omit rather than guess "has vocals").
-  const vocalRanges = Array.isArray(s.vocalRanges) ? s.vocalRanges : rec?.vocalRanges;
-  const instrumental = Array.isArray(vocalRanges) ? vocalRanges.length === 0 : null;
+  const vocalSource = Array.isArray(s.vocalRanges) ? s : rec;
+  const instrumental = isInstrumental(vocalSource?.vocalRanges, vocalSource?.vocalRangesInvalid);
   // realBpm: a non-positive bpm means unknown — never emitted, never allowed
   // to mask the analyzed value.
   const bpm = library.realBpm(rec?.bpm) ?? library.realBpm(s.bpm);
   const key = rec?.musicalKey ?? s.musicalKey ?? null;
-  const introMs = rec?.introMs ?? s.introMs ?? null;
+  const rawIntroMs = rec?.introMs ?? s.introMs;
+  const introMs = typeof rawIntroMs === 'number' && rawIntroMs >= 0
+    ? shiftOnsetMs(s, rawIntroMs) : null;
   const pace = rec?.paceMean ?? s.paceMean ?? null;
   const sections = library.sectionCount(rec) ?? library.sectionCount(s);
   // Airing memory (music/airing.ts): true when the station has provably never
@@ -83,8 +87,15 @@ export function slim(s: any) {
   const daysAgo = (ms: number) => Math.max(0, Math.round((Date.now() - ms) / 86400000));
   const songStats = library.trackPlayStatsFor(s);
   const artistStats = library.artistPlayStatsFor(s.artist);
+  const evidence = s.similarity;
+  const similarity = evidence && (evidence.kind === 'audio' || evidence.kind === 'text')
+    && typeof evidence.reference === 'string' && evidence.reference.length > 0
+    && typeof evidence.score === 'number' && Number.isFinite(evidence.score)
+    && evidence.score >= -1 && evidence.score <= 1
+    ? { kind: evidence.kind, reference: evidence.reference, score: evidence.score } : null;
   return {
     ...base,
+    ...(similarity ? { similarity } : {}),
     ...(moods.length ? { moods } : {}),
     ...(energy != null ? { energy } : {}),
     ...(durationSec != null ? { duration_sec: durationSec } : {}),

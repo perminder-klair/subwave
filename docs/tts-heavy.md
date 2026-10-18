@@ -230,7 +230,9 @@ Remove the line to return to the CPU analyzer. This remains opt-in because the
 GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
-cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
+torch/torchaudio 2.7.1 cu128 wheels, including RTX 50-series Blackwell support)
+and hands it the GPU. See the [PyTorch 2.7 release notes](https://pytorch.org/blog/pytorch-2-7/).
+Requirements: the NVIDIA driver +
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 — nothing else; the CUDA runtime rides inside the image. The worker picks the
 device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
@@ -239,11 +241,17 @@ is irrelevant while the overlay is applied — the image is overridden outright.
 
 Running the **all-in-one** container instead? It has no `analyzer` service to
 swap, so there's no overlay: pull the `subwave-aio-cuda` tag (the heavy AIO built
-on the same cu124 wheels) and hand the container the GPU directly. Steps for
+on the same cu128 wheels) and hand the container the GPU directly. Steps for
 Unraid, including the driver plugin and the extra parameters, are in
 [unraid.md](unraid.md#acoustic-analysis-default-on--expressive-voices-opt-in);
 anywhere else it's `--gpus all` on your `docker run`. Everything below about
 device selection and VRAM applies there unchanged.
+
+For in-container analyzer maintenance, `pip` now targets the analyzer venv in
+both images. For example, `docker exec subwave pip list` on an AIO container
+named `subwave`, or `docker exec sub-wave-analyzer pip list` on the split stack.
+The AIO keeps system `python3` first on PATH; to run Python with analyzer
+packages, use `/opt/analyzer/venv/bin/python` explicitly.
 
 Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
 minutes with no CLAP/Demucs use it drops its models out of VRAM and reloads

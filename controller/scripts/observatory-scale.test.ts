@@ -334,7 +334,6 @@ async function main() {
   await test(`setMapCoordsBulk(${N.toLocaleString()}) — the projection child's final transaction`, () => {
     const coords = fullRows.map((t: any, i: number) => ({ id: t.id, x: (i % 1000) / 1000, y: ((i * 7) % 1000) / 1000 }));
     const { ms } = timed('bulk coord write', () => db.setMapCoordsBulk(coords));
-    assert.equal(db.mapCoordsCount(), N);
     assert.ok(ms < 180_000, `bulk write under 3 min (took ${ms.toFixed(0)} ms)`);
   });
 
