@@ -33,12 +33,19 @@ test('a hyphen or dash inside a name keys like a space', () => {
     ['SCSI–9', 'SCSI 9'], // en dash
     ['SCSI‐9', 'SCSI 9'], // U+2010 hyphen
     ['SCSI‑9', 'SCSI 9'], // U+2011 non-breaking hyphen
+    ['SCSI‒9', 'SCSI 9'], // U+2012 figure dash
     ['Χάρη-Αλεξίου', 'Χάρη Αλεξίου'],
+    // The fold runs before the article strip, so a hyphenated article goes too.
+    ['The-Dream', 'The Dream'],
+    ['The‐Dream', 'The Dream'], // U+2010, MusicBrainz's spelling
   ];
   for (const [a, b] of same) {
     assert.equal(k(a), k(b), `${a} vs ${b}`);
     assert.equal(artistCreditsOverlap(k(a), k(b)), true, `${a} vs ${b} overlap`);
   }
+  assert.equal(k('The-Dream'), 'dream');
+  // A single-act key re-keys to itself.
+  for (const name of ['The-Dream', 'SCSI-9', 'Jay-Z', 'A-ha']) assert.equal(k(k(name)), k(name), name);
 });
 
 test('separators that are not inside a word are left alone', () => {
@@ -65,6 +72,8 @@ test('names that only share letters still key apart', () => {
 test('the production case: the agent guard and the pool picker catch SCSI 9 after SCSI-9', () => {
   // Spacing window holding the track just played.
   assert.equal(artistGuardCause(k('SCSI 9'), k('Phillip Boa'), new Set([k('SCSI-9')])), 'recent');
+  // The production call shape: no anchor, the raw credit as pickCredit.
+  assert.equal(artistGuardCause(k('SCSI 9'), '', new Set([k('SCSI-9')]), 'SCSI 9'), 'recent');
   // Pick anchor: the on-air track itself.
   assert.equal(artistGuardCause(k('SCSI 9'), k('SCSI-9'), new Set()), 'onair');
   // The guard's re-pick set drops the other spelling too.
