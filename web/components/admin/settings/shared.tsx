@@ -76,6 +76,7 @@ export interface TtsForm {
   // false = music only: no script is generated at all. Jingles are unaffected
   // (jingleRatio owns those) and manual segment triggers still fire.
   enabled: boolean;
+  voiceLevelling: boolean;
   defaultEngine: string;
   // Operator-chosen rescue voice. When on, this engine AND voice speaks for a
   // persona whose own engine is unavailable or fails mid-render, ahead of the
@@ -138,10 +139,18 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // Per-leg, like the primary's: a swap moves it between the legs.
+  toolChoice: string;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
+}
+
+export interface CompatDetectionView {
+  mode: 'local' | 'hosted' | null;
+  server: string | null;
+  evidence: string;
 }
 
 export interface LlmForm {
@@ -152,10 +161,16 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
+  trackSelection: 'agentic' | 'shortlist';
+  shortlistPasses: number;
+  shortlistSearchPreparation: boolean;
+  guestMusicalLeanings: boolean;
+  requestMatching: 'agentic' | 'direct';
+  segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
   requestWebResolve: boolean;
@@ -464,6 +479,7 @@ export interface SettingsData {
     };
     tts?: {
       enabled?: boolean;
+      voiceLevelling?: boolean;
       defaultEngine?: string;
       fallback?: Partial<TtsFallbackForm>;
       kokoro?: { voice?: string; lang?: string };
@@ -557,6 +573,11 @@ export interface SettingsData {
   llm?: {
     providers?: string[];
     active?: string;
+    // What an `auto` connection mode resolved to, per leg; null until probed.
+    compatDetection?: {
+      primary?: CompatDetectionView | null;
+      fallback?: CompatDetectionView | null;
+    };
   };
   embedding?: {
     providers?: string[];
@@ -606,6 +627,23 @@ export type FormUpdater = (updater: (f: FormState) => FormState) => void;
  * mirror exists to prevent.
  */
 export type SettingsFieldErrors = Record<string, string>;
+
+/**
+ * The red "… now" block that opens a section's main card: what the station is
+ * running right now, from the SAVED config, so an unsaved edit below it never
+ * reads as live. LLM provider, TTS voice and Music selection all lead with one.
+ */
+export function NowBanner({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+      <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+      <div className="grid min-w-0 gap-0.5">
+        <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">{label}</span>
+        <span className="text-[14px] leading-[1.5] text-muted">{children}</span>
+      </div>
+    </div>
+  );
+}
 
 export interface SectionProps {
   data: SettingsData;

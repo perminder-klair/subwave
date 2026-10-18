@@ -22,7 +22,7 @@ The user has authorised free action on this hot path — `scripts/setup.sh`, `gi
 
 4. **The IPC between Controller and Broadcast (liquidsoap side) is file-based** through the shared `state/` (mounted at `/var/sub-wave`). When you recreate one of them, in-flight `next.txt`/`say.txt`/`now-playing.json` may be mid-write — accept a few-second blip; don't keep recreating to "fix" it. **But there is a worse failure here, and it has bitten in production:** a near-simultaneous recreate of *both* `controller` and `broadcast` (which is exactly what `up -d --build controller web` triggers, because the `depends_on` graph also recreates `broadcast`) can have Liquidsoap pick up a bad/empty IPC request and **wedge a source into a `fail`/`blank` loop**. The result is silent but invisible: `/api/health` still says `on-air`, `/stream.mp3` still flows bytes, `/api/now-playing` still rotates tracks — but the audio is digital silence (~-91 dB). The cure is a plain `docker compose ... restart` (no rebuild — code is already baked in); it clears the wedged source state. The detector is an **audio-level probe**, not the health endpoint — see Step 5.
 
-5. **Compose dependency ordering will recreate more than you asked for.** Asking to recreate `controller` and `web` will also recreate `broadcast` because of the `depends_on` graph. That's fine — same image, no source change means no behaviour change. Don't be surprised by it and don't fight it.
+5. **Compose rebuilds dependencies, but should no longer recreate them.** `up -d --build controller` also BUILDS `broadcast` (the controller `depends_on` it). Before the compose files set `provenance: false` / `sbom: false`, BuildKit's per-build attestation gave that unchanged, cached image a new id on the containerd image store, so compose recreated the mixer and dropped every listener on a controller-only deploy. With the attestation off the rebuild is byte-identical and broadcast stays up. If broadcast IS recreated with no `liquidsoap/`, `sounds/` or `docker/` change, compare `docker inspect sub-wave-broadcast -f '{{.Image}}'` before and after — a new id with an old `Created` time means the build stopped being reproducible again.
 
 ## Workflow
 
@@ -312,7 +312,7 @@ What healthy looks like:
 
 Things that look like failure but aren't:
 - `HEAD /stream.mp3` returns `400 Bad Request`. That's normal — Icecast only answers `GET`, not `HEAD`. Use `curl -sI` only to confirm the route exists; don't treat `400` as broken.
-- Liquidsoap also gets recreated when you only asked for controller/web. That's compose dependency ordering, not a regression (see Fact #5).
+- Broadcast recreated on a controller-only deploy with no broadcast-side change: no longer expected (see Fact #5). The audio probe still decides whether it matters; the cause is worth a look.
 - A few seconds of "Empty queue" or silence right after recreating Liquidsoap — the controller will re-feed `next.txt` on the next 1-second poll. (A *few seconds* — not a steady ~−91 dB. Persistent silence is the wedged-source bug in Fact #4, not this.)
 - On a brand-new install: an empty `nowPlaying.title` for the first minute. The controller is still discovering the library and rendering the first DJ link. Wait one cycle (~10-30s).
 

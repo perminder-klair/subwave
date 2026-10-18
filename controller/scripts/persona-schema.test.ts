@@ -96,7 +96,6 @@ test('settings/vocab.ts ALIASES the schema constants rather than restating them'
   // comparison on the day it was copied and fail silently a year later.
   assert.equal(vocab.PERSONA_LIMIT, PERSONA_LIMIT);
   assert.equal(vocab.SOUL_MAX, PERSONA_SOUL_MAX);
-  assert.equal(vocab.SKILLS_PER_PERSONA_LIMIT, PERSONA_SKILLS_LIMIT);
   assert.equal(vocab.DIAL_NEUTRAL, PERSONA_DIAL_NEUTRAL);
   assert.equal(vocab.DJ_PROMPT_LIMIT, DJ_PROMPT_LIMIT);
   assert.equal(vocab.DJ_PROMPT_NAME_MAX, DJ_PROMPT_NAME_MAX);

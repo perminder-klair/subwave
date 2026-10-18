@@ -1,5 +1,97 @@
+diff --git a/node_modules/react-native-track-player/android/proguard-rules.txt b/node_modules/react-native-track-player/android/proguard-rules.txt
+index 1b5bf6f..896ae54 100644
+--- a/node_modules/react-native-track-player/android/proguard-rules.txt
++++ b/node_modules/react-native-track-player/android/proguard-rules.txt
+@@ -1,3 +1,9 @@
+ 
+ # Ignore "not found" errors for libraries
+ -dontwarn com.google.android.exoplayer2.**
++
++# RNTP's live song clock adapts the session-facing player in KotlinAudio 2.1.0.
++-keepclassmembers class com.doublesymmetry.kotlinaudio.notification.NotificationManager {
++    com.google.android.exoplayer2.Player player;
++    com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector mediaSessionConnector;
++}
+diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/NowPlayingProgress.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/NowPlayingProgress.kt
+new file mode 100644
+index 0000000..f3dd73c
+--- /dev/null
++++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/model/NowPlayingProgress.kt
+@@ -0,0 +1,72 @@
++package com.doublesymmetry.trackplayer.model
++
++import android.os.SystemClock
++import android.support.v4.media.session.PlaybackStateCompat
++import com.doublesymmetry.kotlinaudio.notification.NotificationManager
++import com.google.android.exoplayer2.C
++import com.google.android.exoplayer2.ForwardingPlayer
++import com.google.android.exoplayer2.Player
++import com.google.android.exoplayer2.ext.mediasession.MediaSessionConnector
++
++/** Song time for the media session, independent of the continuous stream's position. */
++class NowPlayingProgress(private val manager: NotificationManager) {
++    // KotlinAudio 2.1.0 exposes no session-player adapter. These two pinned
++    // fields are kept by consumer ProGuard rules; the audio player is untouched.
++    private fun sessionField(name: String): Any =
++        NotificationManager::class.java.getDeclaredField(name).let {
++            it.isAccessible = true
++            it.get(manager)!!
++        }
++
++    private val connector = sessionField("mediaSessionConnector") as MediaSessionConnector
++    private val source = sessionField("player") as Player
++    private var durationMs: Long? = null
++    private var elapsedMs: Long? = null
++    private var updatedAt = SystemClock.elapsedRealtime()
++    private var running = source.isPlaying
++    private var speed = source.playbackParameters.speed
++    private var enabled = false
++
++    private fun position(): Long {
++        val elapsed = elapsedMs ?: return PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN
++        val delta = if (running) ((SystemClock.elapsedRealtime() - updatedAt) * speed).toLong() else 0L
++        return (elapsed + delta).coerceAtMost(durationMs ?: Long.MAX_VALUE)
++    }
++
++    private val sessionPlayer = object : ForwardingPlayer(source) {
++        override fun getCurrentPosition(): Long = if (enabled) position() else super.getCurrentPosition()
++        override fun getBufferedPosition(): Long = if (enabled) position() else super.getBufferedPosition()
++        override fun getDuration(): Long = if (enabled) durationMs ?: C.TIME_UNSET else super.getDuration()
++    }
++
++    init {
++        source.addListener(object : Player.Listener {
++            override fun onEvents(player: Player, events: Player.Events) {
++                if (elapsedMs != null) elapsedMs = position()
++                updatedAt = SystemClock.elapsedRealtime()
++                running = source.isPlaying
++                speed = source.playbackParameters.speed
++            }
++        })
++        // Preserve KotlinAudio's Play/Pause/Stop interception and listener wiring.
++        connector.setPlayer(sessionPlayer)
++    }
++
++    fun update(duration: Double?, elapsed: Double?) {
++        enabled = true
++        durationMs = duration?.takeIf { it.isFinite() && it > 0 }?.let { (it * 1000).toLong() }
++        elapsedMs = elapsed?.takeIf { it.isFinite() && it >= 0 && durationMs != null }
++            ?.let { (it * 1000).toLong() }
++        updatedAt = SystemClock.elapsedRealtime()
++        running = source.isPlaying
++        speed = source.playbackParameters.speed
++        connector.invalidateMediaSessionPlaybackState()
++    }
++
++    fun clear() {
++        enabled = false
++        durationMs = null
++        elapsedMs = null
++        connector.invalidateMediaSessionPlaybackState()
++    }
++}
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
-index b2409a0..fe7284f 100644
+index b2409a0..301f0ee 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/module/MusicModule.kt
 @@ -18,6 +18,7 @@ import com.doublesymmetry.trackplayer.utils.RejectionException
@@ -78,7 +170,7 @@ index b2409a0..fe7284f 100644
              if (verifyServiceBoundOrReject(callback)) return@launch
  
              if (index < 0 || index >= musicService.tracks.size) {
-@@ -348,7 +357,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+@@ -348,23 +357,23 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
          }
  
      @ReactMethod
@@ -86,8 +178,20 @@ index b2409a0..fe7284f 100644
 +    fun updateNowPlayingMetadata(map: ReadableMap?, callback: Promise) = launch {
          if (verifyServiceBoundOrReject(callback)) return@launch
  
-         if (musicService.tracks.isEmpty())
-@@ -364,7 +373,7 @@ class MusicModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaM
+-        if (musicService.tracks.isEmpty())
++        if (musicService.tracks.isEmpty()) {
+             callback.reject("no_current_item", "There is no current item in the player")
++            return@launch
++        }
+ 
+-        val context: ReactContext = context
+         Arguments.toBundle(map)?.let {
+-            val track = bundleToTrack(it)
+-            musicService.updateNowPlayingMetadata(track)
++            musicService.updateNowPlayingMetadata(it)
+         }
+ 
+         callback.resolve(null)
      }
  
      @ReactMethod
@@ -358,10 +462,17 @@ index b2409a0..fe7284f 100644
          callback.resolve(Arguments.fromBundle(musicService.getPlayerStateBundle(musicService.state)))
      }
 diff --git a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-index afa6b0f..67e046e 100644
+index afa6b0f..422e568 100644
 --- a/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
 +++ b/node_modules/react-native-track-player/android/src/main/java/com/doublesymmetry/trackplayer/service/MusicService.kt
-@@ -30,7 +30,9 @@ import com.doublesymmetry.trackplayer.module.MusicEvents.Companion.METADATA_PAYL
+@@ -24,13 +24,16 @@ import com.doublesymmetry.trackplayer.extensions.find
+ import com.doublesymmetry.trackplayer.model.MetadataAdapter
+ import com.doublesymmetry.trackplayer.model.PlaybackMetadata
+ import com.doublesymmetry.trackplayer.model.Track
++import com.doublesymmetry.trackplayer.model.NowPlayingProgress
+ import com.doublesymmetry.trackplayer.model.TrackAudioItem
+ import com.doublesymmetry.trackplayer.module.MusicEvents
+ import com.doublesymmetry.trackplayer.module.MusicEvents.Companion.METADATA_PAYLOAD_KEY
  import com.doublesymmetry.trackplayer.utils.BundleUtils
  import com.doublesymmetry.trackplayer.utils.BundleUtils.setRating
  import com.facebook.react.HeadlessJsTaskService
@@ -371,7 +482,69 @@ index afa6b0f..67e046e 100644
  import com.facebook.react.jstasks.HeadlessJsTaskConfig
  import com.facebook.react.modules.core.DeviceEventManagerModule
  import com.google.android.exoplayer2.ui.R as ExoPlayerR
-@@ -739,9 +741,21 @@ class MusicService : HeadlessJsTaskService() {
+@@ -46,6 +49,8 @@ class MusicService : HeadlessJsTaskService() {
+     private val binder = MusicBinder()
+     private val scope = MainScope()
+     private var progressUpdateJob: Job? = null
++    private var nowPlayingMetadata: Bundle? = null
++    private var nowPlayingProgress: NowPlayingProgress? = null
+ 
+     /**
+      * Use [appKilledPlaybackBehavior] instead.
+@@ -302,6 +307,8 @@ class MusicService : HeadlessJsTaskService() {
+ 
+     @MainThread
+     fun load(track: Track) {
++        nowPlayingMetadata = null
++        nowPlayingProgress?.clear()
+         player.load(track.toAudioItem())
+     }
+ 
+@@ -322,6 +329,8 @@ class MusicService : HeadlessJsTaskService() {
+ 
+     @MainThread
+     fun clear() {
++        nowPlayingMetadata = null
++        nowPlayingProgress?.clear()
+         player.clear()
+     }
+ 
+@@ -432,8 +441,32 @@ class MusicService : HeadlessJsTaskService() {
+     }
+ 
+     @MainThread
+-    fun updateNowPlayingMetadata(track: Track) {
+-        player.notificationManager.overrideMetadata(track.toAudioItem())
++    fun updateNowPlayingMetadata(metadata: Bundle) {
++        val incoming = Bundle(metadata).apply {
++            // RNTP's JS wrapper adds an empty artwork field to progress-only calls.
++            if (getBoolean("isLiveStream", false) && !containsKey("title")) remove("artwork")
++        }
++        val merged = Bundle(nowPlayingMetadata ?: Bundle()).apply { putAll(incoming) }
++        if (merged.get("artwork") == "") merged.remove("artwork")
++        // Live updates are progress snapshots: omission clears the old song clock.
++        if (metadata.getBoolean("isLiveStream", false)) {
++            if (!metadata.containsKey("duration")) merged.remove("duration")
++            if (!metadata.containsKey("elapsedTime")) merged.remove("elapsedTime")
++            if (nowPlayingProgress == null) {
++                nowPlayingProgress = NowPlayingProgress(player.notificationManager)
++            }
++            nowPlayingProgress?.update(
++                BundleUtils.getDoubleOrNull(merged, "duration"),
++                BundleUtils.getDoubleOrNull(merged, "elapsedTime")
++            )
++        }
++        // Progress-only refreshes must not dispose/reload the artwork bitmap.
++        val displayKeys = listOf("title", "artist", "album", "artwork", "duration")
++        if (nowPlayingMetadata == null || displayKeys.any { merged.get(it) != nowPlayingMetadata?.get(it) }) {
++            val track = Track(this, merged, ratingType)
++            player.notificationManager.overrideMetadata(track.toAudioItem())
++        }
++        nowPlayingMetadata = merged
+     }
+ 
+     @MainThread
+@@ -739,9 +772,21 @@ class MusicService : HeadlessJsTaskService() {
          return bundle
      }
  
@@ -394,7 +567,7 @@ index afa6b0f..67e046e 100644
              ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
              ?.emit(event, data?.let { Arguments.fromBundle(it) })
      }
-@@ -751,7 +765,7 @@ class MusicService : HeadlessJsTaskService() {
+@@ -751,7 +796,7 @@ class MusicService : HeadlessJsTaskService() {
          val payload = Arguments.createArray()
          data.forEach { payload.pushMap(Arguments.fromBundle(it)) }
  
@@ -403,3 +576,52 @@ index afa6b0f..67e046e 100644
              ?.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
              ?.emit(event, payload)
      }
+diff --git a/node_modules/react-native-track-player/ios/RNTrackPlayer/Utils/Metadata.swift b/node_modules/react-native-track-player/ios/RNTrackPlayer/Utils/Metadata.swift
+index 70c094d..ece903f 100644
+--- a/node_modules/react-native-track-player/ios/RNTrackPlayer/Utils/Metadata.swift
++++ b/node_modules/react-native-track-player/ios/RNTrackPlayer/Utils/Metadata.swift
+@@ -14,7 +14,6 @@ struct Metadata {
+     private static var currentImageTask: URLSessionDataTask?
+ 
+     static func update(for player: AudioPlayer, with metadata: [String: Any]) {
+-        currentImageTask?.cancel()
+         var ret: [NowPlayingInfoKeyValue] = []
+         
+         if let title = metadata["title"] as? String {
+@@ -29,12 +28,17 @@ struct Metadata {
+             ret.append(MediaItemProperty.albumTitle(album))
+         }
+         
+-        if let duration = metadata["duration"] as? Double {
+-            ret.append(MediaItemProperty.duration(duration))
+-        }
+-        
+-        if let elapsedTime = metadata["elapsedTime"] as? Double {
+-            ret.append(NowPlayingInfoProperty.elapsedPlaybackTime(elapsedTime))
++        if metadata["isLiveStream"] as? Bool == true {
++            // A live song-clock snapshot omits unknown values and clears stale ones.
++            ret.append(MediaItemProperty.duration(metadata["duration"] as? Double))
++            ret.append(NowPlayingInfoProperty.elapsedPlaybackTime(metadata["elapsedTime"] as? Double))
++        } else {
++            if let duration = metadata["duration"] as? Double {
++                ret.append(MediaItemProperty.duration(duration))
++            }
++            if let elapsedTime = metadata["elapsedTime"] as? Double {
++                ret.append(NowPlayingInfoProperty.elapsedPlaybackTime(elapsedTime))
++            }
+         }
+ 
+         if let isLiveStream = metadata["isLiveStream"] as? Bool {
+@@ -43,7 +47,11 @@ struct Metadata {
+         
+         player.nowPlayingInfoController.set(keyValues: ret)
+         
+-        if let artworkURL = MediaURL(object: metadata["artwork"]) {
++        // A progress-only update leaves the current image and download intact.
++        if metadata["isLiveStream"] as? Bool == true && metadata["title"] == nil { return }
++        currentImageTask?.cancel()
++        if metadata["artwork"] as? String != "",
++           let artworkURL = MediaURL(object: metadata["artwork"]) {
+             currentImageTask = URLSession.shared.dataTask(with: artworkURL.value, completionHandler: { [weak player] (data, _, error) in
+                 if let data = data, let image = UIImage(data: data), error == nil {
+                     let artwork = MPMediaItemArtwork(boundsSize: image.size, requestHandler: { (size) -> UIImage in

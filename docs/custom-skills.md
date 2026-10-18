@@ -178,9 +178,9 @@ skills, including ones with no `cohosts` field, keep the existing one-speaker
 path.
 
 If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
-way every other segment does: the skill's own tool loop when `llm.pickerAgent`
-is on, and a code-driven fetch plus one structured call when it is off (pool
-mode, for models that aren't trusted with tool loops). Data-backed skills must
+way every other segment does: the skill's own tool loop when `llm.segmentRuntime`
+is `agentic`, and a code-driven fetch plus one structured call when it is
+`direct` (for models that aren't trusted with tool loops). Data-backed skills must
 obtain usable source data before anyone speaks; `{ available: false }` or a tool
 error stands the whole exchange down instead of letting several personas amplify
 an invented fact.
@@ -647,8 +647,8 @@ The restore response lists what was skipped and which skills wait for review.
 
 A show's **Episode preparation skill** runs its `tool.mjs` before automatic music
 selection. The controller saves the result for that airing and supplies its
-research to the DJ. An artist result also restricts the agent picker, pool picker,
-and `auto.m3u` fallback to that artist's catalogue.
+research to the DJ. An artist result also restricts both selection routes (Agentic
+Tools and Track Shortlist), the pool fallback, and `auto.m3u` to that artist's catalogue.
 
 1. Copy [`random-artist-pick`](./examples/skills/random-artist-pick) into
    `state/skills/random-artist-pick/`.

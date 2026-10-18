@@ -67,7 +67,7 @@ test('public pools preserve payloads and required acoustic values', () => {
   assert.deepEqual(energy, { ...mood, originalYear: 1990, isCompilation: true,
     yearUntrusted: true, audioMoods: ['reflective', 'Custom'], bpm: 120, musicalKey: '8A',
     introMs: 200, loudnessLufs: -12, structure: [{ startMs: 0, endMs: 100, kind: 'intro' }],
-    vocalRanges: [{ startMs: 10, endMs: 20 }], paceMean: 0.123 });
+    vocalRanges: [{ startMs: 10, endMs: 20 }], vocalRangesInvalid: true, paceMean: 0.123 });
   assert.deepEqual(db.getTrack('payload')!.beats, [1, 2, 3]);
   assert.deepEqual(library.songsByEnergy('invalid'), []);
 });
@@ -273,8 +273,10 @@ test('energy projection preserves unmeasured and defensively parsed acoustic sta
     vocal_ranges_json='broken', pace_json='broken' WHERE id='unmeasured'`).run();
   energy = library.songsByEnergy('low').find(r => r.id === 'unmeasured');
   assert.equal(energy.structure, null);
-  assert.deepEqual(energy.vocalRanges, []);
+  assert.equal(energy.vocalRanges, null);
+  assert.equal(energy.vocalRangesInvalid, false);
   assert.equal(energy.paceMean, null);
   assert.equal(db.getTrack('unmeasured')!.structure, null);
-  assert.deepEqual(db.getTrack('unmeasured')!.vocalRanges, []);
+  assert.equal(db.getTrack('unmeasured')!.vocalRanges, null);
+  assert.equal(library.filter({ q: 'unmeasured' }).rows[0].instrumental, null);
 });

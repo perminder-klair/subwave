@@ -65,6 +65,7 @@ every listener connect, so:
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
+  Several listeners can use the same username at once.
 - **Anything that can't do userinfo URLs** — append the token instead:
   `https://your-station.example/stream.mp3?auth=PASSWORD`.
 - **SUB/WAVE app** — asks for the password when it opens a station with

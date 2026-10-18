@@ -43,6 +43,12 @@ function armingLine(flag: string): string {
   return line;
 }
 
+test('a jingle\'s seam is a sequence, never the blend', () => {
+  assert.match(radio, /^ {2}jingle_in = b\.metadata\["subwave_jingle"\] == "true"$/m, 'the seam reads the INCOMING side too');
+  assert.match(radio, /if jingle_in or jingle_out then\s+\(sequence\(\[\(if jingle_out then a\.source else a_source end\), b\.source\]\) : source\)/,
+    'either side being a jingle takes the dry seam, and an outgoing jingle is not faded');
+});
+
 test('every incoming-side gesture stands down on a jingle\'s seam', () => {
   assert.match(radio, /^ {2}jingle_out = a\.metadata\["subwave_jingle"\] == "true"$/m,
     'the guard reads the OUTGOING track');

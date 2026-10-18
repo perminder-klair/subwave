@@ -9,24 +9,6 @@ import { cn } from "@/lib/cn";
 import { ChevronDownIcon, SearchIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 
-export type TaskItemFileProps = ComponentProps<"div">;
-
-export const TaskItemFile = ({
-  children,
-  className,
-  ...props
-}: TaskItemFileProps) => (
-  <div
-    className={cn(
-      "inline-flex items-center gap-1 rounded-md border bg-secondary px-1.5 py-0.5 text-xs text-foreground",
-      className
-    )}
-    {...props}
-  >
-    {children}
-  </div>
-);
-
 export type TaskItemProps = ComponentProps<"div">;
 
 export const TaskItem = ({ children, className, ...props }: TaskItemProps) => (

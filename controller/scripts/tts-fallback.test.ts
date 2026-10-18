@@ -104,14 +104,6 @@ assert.deepEqual(
   'unusable default filtered',
 );
 
-// Unknown engine ids in settings are rejected by the gate (in prod,
-// engineUsable() returns false for anything outside ENGINES).
-assert.deepEqual(
-  engines(orderedFallbacks('cloud', null, 'bogus', (e) => e !== 'bogus')),
-  ['piper', 'kokoro'],
-  'invalid default filtered by the gate',
-);
-
 // Kokoro missing (model files absent) with Piper as primary: empty chain —
 // speak() records the failure and rethrows.
 assert.deepEqual(

@@ -2,7 +2,7 @@
 // shadows. Read-only. Two questions:
 //
 //   1. Rows: does every stored facet row match what deriveFacetRows() makes of
-//      the track's columns today (status, attempts), with no orphans?
+//      the columns and explicit unmeasurable answers (status, attempts), with no orphans?
 //   2. Scopes: does each facet's "needs work" set equal the legacy scope query
 //      the analysis pass uses today (needsAnalysisIds, unanalysedAudioIds,
 //      needsVocalIds with tail widening, needsStemsIds)?
@@ -51,15 +51,15 @@ export function checkFacets(sample = 10): FacetCheckReport {
   const clap = new Set(
     (d.prepare('SELECT id FROM track_audio_vectors').all() as Array<{ id: string }>).map(r => r.id),
   );
-  const stored = new Map<string, Map<string, { status: string; attempts: number }>>();
+  const stored = new Map<string, Map<db.Facet, { status: string; version: number; attempts: number; unmeasurable_reason: string | null }>>();
   let rows = 0;
   for (const r of d
-    .prepare('SELECT track_id, facet, status, attempts FROM track_facet_status')
-    .all() as Array<{ track_id: string; facet: string; status: string; attempts: number }>) {
+    .prepare('SELECT track_id, facet, status, version, attempts, unmeasurable_reason FROM track_facet_status')
+    .all() as Array<{ track_id: string; facet: db.Facet; status: string; version: number; attempts: number; unmeasurable_reason: string | null }>) {
     rows += 1;
     let m = stored.get(r.track_id);
     if (!m) stored.set(r.track_id, (m = new Map()));
-    m.set(r.facet, { status: r.status, attempts: r.attempts });
+    m.set(r.facet, r);
   }
 
   const drift: FacetDrift[] = [];
@@ -67,10 +67,14 @@ export function checkFacets(sample = 10): FacetCheckReport {
   const known = new Set<string>();
   for (const t of tracks) {
     known.add(t.id);
-    const want = new Map(db.deriveFacetRows(t, clap.has(t.id)).map(r => [r.facet, r]));
-    const have = stored.get(t.id) ?? new Map();
+    const have = stored.get(t.id);
+    const unmeasurable: Partial<Record<db.Facet, string>> = {};
+    for (const [facet, r] of have ?? []) {
+      if (r.unmeasurable_reason != null) unmeasurable[facet] = r.unmeasurable_reason;
+    }
+    const want = new Map(db.deriveFacetRows(t, clap.has(t.id), { unmeasurable }).map(r => [r.facet, r]));
     for (const facet of db.FACETS) {
-      const a = have.get(facet);
+      const a = have?.get(facet);
       const b = want.get(facet);
       // A tail's 'unmeasurable' reason depends on the pass that wrote it, so
       // status + attempts is the contract; reasons are informational.
@@ -88,7 +92,12 @@ export function checkFacets(sample = 10): FacetCheckReport {
     ['stems', 'needsStemsIds()', () => db.needsStemsIds()],
   ];
   const scopes: ScopeDiff[] = legacy.map(([facet, name, q]) => {
-    const a = new Set(q());
+    // Legacy columns cannot represent an explicit terminal facet answer.
+    const a = new Set(q().filter(id => {
+      const cell = stored.get(id)?.get(facet);
+      return !(cell?.status === 'unmeasurable' && cell.unmeasurable_reason != null
+        && cell.version >= db.FACET_VERSIONS[facet]);
+    }));
     const b = new Set(db.facetNeedsIds(facet));
     const onlyLegacy = [...a].filter(id => !b.has(id));
     const onlyFacet = [...b].filter(id => !a.has(id));

@@ -17,7 +17,7 @@
 // No credentials and no network — everything runs against a throwaway STATE_DIR.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -31,7 +31,6 @@ process.env.STATE_DIR = stateRoot;
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 // Three providers with a key on file; two of them are the legs. openrouter is
 // the control — it is neither leg, and its key was never at risk.
@@ -42,12 +41,7 @@ const THREE_KEYS = {
 };
 
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm })).llm; }
 
 async function coldLoadThreeKeys() {
   return coldLoad({

@@ -18,7 +18,8 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { fetchWithTimeout } from '../../util/fetch-timeout.js';
-import { probeFishKey } from '../../llm/speech.js';
+import { elevenLabsTtsModelIds, probeFishKey } from '../../llm/speech.js';
+import { elevenLabsKey } from '../../audio/elevenlabs.js';
 
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
@@ -468,6 +469,22 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         models = Array.isArray(data?.data)
           ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
           : [];
+        break;
+      }
+
+      // Cloud TTS only: the model field under Settings → TTS.
+      case 'elevenlabs': {
+        // Same resolution as voice discovery and speech: a key saved in
+        // Settings counts when ElevenLabs is the cloud provider, else the env.
+        await settings.load();
+        const apiKey = elevenLabsKey().trim();
+        if (!apiKey) throw new Error('ElevenLabs API key not set');
+        const r = await fetch('https://api.elevenlabs.io/v1/models', {
+          signal: ctrl.signal,
+          headers: { 'xi-api-key': apiKey },
+        });
+        if (!r.ok) throw new Error(`ElevenLabs HTTP ${r.status}`);
+        models = elevenLabsTtsModelIds(await r.json());
         break;
       }
 

@@ -8,7 +8,7 @@ A separate **Expo SDK 57 / React Native** project (own `package.json`, `node_mod
 
 Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/docs/TESTING.md) before touching native config:
 
-- **New Architecture is mandatory** (RN 0.86 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files); without it Android crashes on the first playback event.
+- **New Architecture is mandatory** (RN 0.86 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix; without it Android crashes on the first playback event. The patch also fixes live media-session progress (#857). When changing the patch or upgrading RNTP/KotlinAudio, read the adapter and device-check rules in [`app/docs/TESTING.md`](docs/TESTING.md).
 - **The Live Activity is native, so OTA can't reach it.** The on-air card (Lock
   Screen, Dynamic Island, and — the point — the **Apple Watch Smart Stack**, which
   iOS 18+ mirrors it into for free) is a widget extension in `targets/live-activity/`

@@ -390,6 +390,13 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // The window is counted AFTER strict locks and excluded playlists, in
       // music/show-recency.ts.
       playlistExhaust: showBool(),
+      // Play in order: picks walk the anchor top to bottom (several playlists
+      // back to back, in playlistIds order), resume where the last airing left
+      // off and wrap at the end. A NO-OP without `playlistStrict`, for the same
+      // reason as playlistExhaust: a soft anchor mixes other tracks in, so a
+      // running order has nothing to be true of. Supersedes playlistExhaust
+      // when on. The walk and its position live in music/playlist-order.ts.
+      playlistInOrder: showBool(),
       excludedPlaylistIds: showStringList({
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,

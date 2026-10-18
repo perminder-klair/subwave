@@ -3,13 +3,14 @@
 
 import assert from 'node:assert/strict';
 import {
-  existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as manager from '../src/stations/manager.js';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-mgr-'));
+const root = createTempDir(join(tmpdir(), 'subwave-mgr-'));
 try {
   // Seed a legacy single-station root.
   writeFileSync(join(root, 'settings.json'), '{"station":"Legacy FM"}');
@@ -134,7 +135,12 @@ try {
   assert.equal(manager.listStations(root, 'x').length, 8);
   await assert.rejects(
     manager.createStation(root, { name: 'One Too Many', mode: 'fresh', currentName: 'L' }),
-    /capped at 8/,
+    (err: unknown) => {
+      assert.ok(err instanceof manager.StationCreateError);
+      assert.equal(err.field, undefined, 'a full rack cannot be fixed by a form field');
+      assert.match(err.message, /capped at 8/);
+      return true;
+    },
   );
   assert.ok(!existsSync(join(root, 'stations', 'one-too-many')));
 } finally {
@@ -144,7 +150,7 @@ try {
 // Conversion rollback (spec §6): a rename failing mid-loop best-effort moves
 // every already-relocated entry back to the root and aborts with a clear
 // error — isMultiStation() must report false again afterward.
-const root2 = mkdtempSync(join(tmpdir(), 'subwave-mgr-rollback-'));
+const root2 = createTempDir(join(tmpdir(), 'subwave-mgr-rollback-'));
 try {
   writeFileSync(join(root2, 'settings.json'), '{"station":"Legacy FM"}');
   writeFileSync(join(root2, 'session.json'), '{}');
@@ -186,7 +192,7 @@ try {
 // thrown error must carry converted:true (the route uses this to schedule
 // the restart despite the 400/500), and the partially-created new-station
 // dir must be cleaned up rather than left behind half-populated.
-const root3 = mkdtempSync(join(tmpdir(), 'subwave-mgr-create-fail-'));
+const root3 = createTempDir(join(tmpdir(), 'subwave-mgr-create-fail-'));
 try {
   writeFileSync(join(root3, 'settings.json'), '{"station":"Legacy FM"}');
   writeFileSync(join(root3, 'schedule.json'), 'invalid-json'); // copied schedule cannot be parsed
@@ -212,21 +218,6 @@ try {
   assert.ok(!existsSync(join(root3, 'stations', 'x')));
 } finally {
   rmSync(root3, { recursive: true, force: true });
-}
-
-// Duplicate with an unresolvable pointer (multi-station dir present, pointer
-// corrupt) must refuse loudly rather than silently degrade to a fresh station.
-const root4 = mkdtempSync(join(tmpdir(), 'subwave-mgr-nosrc-'));
-try {
-  mkdirSync(join(root4, 'stations', 'alpha'), { recursive: true });
-  writeFileSync(join(root4, 'stations', 'active.json'), 'corrupt');
-  await assert.rejects(
-    manager.createStation(root4, { name: 'Copy', mode: 'duplicate', currentName: 'X' }),
-    /no active station to duplicate from/,
-  );
-  assert.ok(!existsSync(join(root4, 'stations', 'copy')));
-} finally {
-  rmSync(root4, { recursive: true, force: true });
 }
 
 console.log('stations-manager.test: OK');

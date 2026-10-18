@@ -3,7 +3,7 @@ name: subwave-llm-bench
 description: >-
   Benchmark and compare LLM models for SUB/WAVE's on-air calls — track picks,
   segments, listener requests, DJ scripts, banter, and programme beats — in
-  both candidate-pool and agent modes, using controller/scripts/llm-bench (the
+  pool, agent and Track Shortlist modes, using controller/scripts/llm-bench (the
   matrix harness) or the legacy picker-only controller/scripts/picker-test.mjs.
   Use this skill whenever the user wants to assess, benchmark, compare, or test
   which LLM model to run the station on — phrases like "which model should I
@@ -24,7 +24,8 @@ station's real LLM calls before trusting it on air.
 
 - **`llm-bench`** (`controller/scripts/llm-bench/`, `npm run llm-bench`) — the
   primary harness. A matrix runner over **every on-air call kind**: pool picks
-  (`pickNextTrack`), agent picks (`djAgentPick`), pool + agent segments
+  (`pickNextTrack`), agent picks (`djAgentPick`), Track Shortlist picks
+  (`djShortlistPick`), pool + agent segments
   (`generateSegment` / `djAgentSegment`), request matching (`matchRequest` /
   `djAgentRequest`), the free-text scripts (intro, link, station ID, hourly),
   banter, and the programme family (plan, beats, exchanges). Scores
@@ -84,10 +85,13 @@ Flags:
   requesty | gateway.
 - `--kinds` — groups (`pick,segment,request,scripts,banter,programme`) or
   exact kind names. Default: all.
-- `--modes` — `pool,agent` (default both). Mode-independent kinds run once
-  either way. **If the operator runs pool mode live (Agentic picker off),
-  `--modes pool` is the honest benchmark** — agent cells they'll never use
-  just add noise and cost.
+- `--modes` — `pool,agent,shortlist` (default all three). Mode-independent
+  kinds run once either way. `shortlist` adds only the `djShortlistPick` kind:
+  the live source plan run over the synthetic tools, then the one bounded
+  choice. Match the modes to the station's routes (`llm.trackSelection`,
+  `requestMatching`, `segmentRuntime`): **comparing the two pickers is
+  `--kinds pick --modes agent,shortlist`**, and cells for a route the operator
+  never uses just add noise and cost.
 - `--iterations` — per scenario. 1 to smoke, 3 to screen (default), 5+ to
   confirm a winner. Full matrix ≈ 32 scenario cells, so ~100 calls per model
   at 3 iterations.
@@ -122,9 +126,14 @@ Judge in this order:
 3. **Latency** — p50 per cell; a pick has a whole track of slack so even 20 s
    works, but segments and links air sooner. Watch for retry-rescued cells
    (pass with 100×-median wall clock).
-4. **Pool vs agent gap** — a model that's clean in pool cells but falls apart
-   in agent cells is a "candidate pool" model; that's a valid deployment, just
-   say so in the recommendation.
+4. **Shortlist/pool vs agent gap** — a model that's clean in shortlist or
+   pool cells but falls apart in agent cells is a Track Shortlist model;
+   that's a valid deployment, just say so in the recommendation. Shortlist
+   cells also flag `reason-unavailable` / `reason-rejected` (the Booth reason
+   was missing or failed the controller's safety check) and `near-miss-id`
+   (an id slip the live `nearestId` repair would save, unlike
+   `hallucinated-id`). Compare tokens per pick from the report JSON: one
+   Shortlist call carries no tool loop or session window.
 
 Reports are JSON with every run record — keep old ones to diff a model across
 prompt changes or across model updates.
@@ -134,11 +143,13 @@ prompt changes or across model updates.
 1. A compact table: one row per provider+model, columns for thrown rate,
    violation rate, p50 latency, and the dominant failure.
 2. A clear call naming the best **provider + model + mode** ("gemma via
-   OpenRouter, pool mode — clean structured output, agent cells time out").
+   OpenRouter, Track Shortlist — clean structured output, agent cells time
+   out"). Pool cells exercise the fallback picker every station keeps; they
+   are not a selectable route, so recommend Shortlist or Agentic Tools.
 3. Call out disqualifiers and deferrals (5xx throughout = re-test later).
 
 Do **not** apply the change. The operator sets `llm.provider` + `llm.model`
-(and the Agentic picker toggle) in admin Settings — those are global, their
+(and the Music selection route, Agentic Tools or Track Shortlist) in admin Settings — those are global, their
 call.
 
 ## Legacy: picker-test.mjs deep-dive

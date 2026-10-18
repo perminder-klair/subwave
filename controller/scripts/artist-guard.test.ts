@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import { artistKey, artistRootKey, filterPickerCandidates } from '../src/music/recency.js';
-import { ARTIST_VARIETY_WINDOW, alternativeCandidates, artistGuardCause } from '../src/broadcast/dj-agent/artist-guard.js';
+import { ARTIST_VARIETY_WINDOW, alternativeCandidates, artistGuardCause, drawRequestCandidate, requestRepickCandidates } from '../src/broadcast/dj-agent/artist-guard.js';
 import { queue } from '../src/broadcast/queue.js';
 
 // ── artistRootKey: collaborations collapse, band names don't ────────────────
@@ -263,6 +263,129 @@ const sly = { id: 's1', title: 'Fun', artist: 'Sly & the Family Stone' };
     new Set([artistRootKey('The Clash')]),
   );
   assert.equal(alt.size, 0, 'a single-artist run still reports no alternatives');
+}
+
+// A candidate marked exempt survives the recency narrowing — a listener
+// request's own ask (#1979) — while the rejected artist stays excluded.
+{
+  const recent = new Set(['the beatles', 'marvin gaye'].map((a) => artistRootKey(a)));
+  const { alt, dropped } = alternativeCandidates(
+    seenOf(marvin, sly, clash), artistRootKey('The Clash'), recent, '', (s) => s.id === 'm1',
+  );
+  assert.deepEqual([...alt.keys()].sort(), ['m1', 's1'], 'an exempt candidate is offered however recently its artist played');
+  assert.equal(dropped, 0, 'nothing else was recent');
+}
+// …and only a candidate the narrowing would drop is asked: on the request
+// path `exempt` is the stand-in reading, too costly to run over a whole pool.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const asked: string[] = [];
+  const { alt, dropped, starved } = alternativeCandidates(
+    seenOf(marvin, marvinTammi, sly, clash), artistRootKey('The Clash'), recent, '', (s) => { asked.push(s.id); return s.id === 'm2'; },
+  );
+  assert.deepEqual(asked, ['m1', 'm2'], 'the fresh candidate is never asked');
+  assert.deepEqual([...alt.keys()].sort(), ['m2', 's1']);
+  assert.equal(dropped, 1);
+  assert.equal(starved, false);
+}
+
+// A corrective REQUEST call (#1979): stand-ins by a recently-heard artist are
+// withheld, what the listener asked for stays whoever played it last, and no
+// artist is avoided outright — nothing has been rejected yet.
+{
+  const recent = new Set(['marvin gaye', 'the clash'].map((a) => artistRootKey(a)));
+  const standIn = (s: Cand) => s.id !== 'm2';
+  const { alt, dropped, starved } = requestRepickCandidates(seenOf(marvin, marvinTammi, clash, sly), recent, standIn);
+  assert.deepEqual([...alt.keys()].sort(), ['m2', 's1'], 'the ask stays; recent stand-ins go; a fresh stand-in stays');
+  assert.equal(dropped, 2);
+  assert.equal(starved, false);
+}
+// …and a set with nothing fresh left is handed back whole: the call still answers.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const { alt, starved } = requestRepickCandidates(seenOf(marvin, marvinTammi), recent, () => true);
+  assert.deepEqual([...alt.keys()].sort(), ['m1', 'm2']);
+  assert.equal(starved, true);
+}
+// No recency data → the run's candidates, untouched.
+{
+  const { alt, dropped } = requestRepickCandidates(seenOf(marvin, clash), new Set(), () => true);
+  assert.deepEqual([...alt.keys()].sort(), ['c1', 'm1']);
+  assert.equal(dropped, 0);
+}
+
+// A STATELESS request pool's draw (#1993): the cascade has no model to
+// re-pick with, so a stand-in by a recently-heard artist is redrawn by the
+// same test. `seq` scripts the draws: each value picks that fraction of the
+// way into what is left to draw from.
+const seq = (...values: number[]) => () => values.shift() ?? 0;
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const pool = [marvin, marvinTammi, sly, clash];
+  // The first draw lands on a recent stand-in; the redraw passes over the
+  // other one (Marvin with Tammi) to a fresh artist.
+  const drawn = drawRequestCandidate(pool, recent, () => true, seq(0, 0, 0));
+  assert.equal(drawn.withheld?.id, 'm1', 'the recent stand-in is set aside');
+  assert.equal(drawn.pick?.id, 'c1');
+  assert.equal(drawn.skipped, 2);
+  assert.equal(drawn.starved, false);
+  // A first draw that passes is the pick, and nothing is redrawn.
+  const fresh = drawRequestCandidate(pool, recent, () => true, seq(0.5));
+  assert.deepEqual([fresh.pick?.id, fresh.withheld, fresh.skipped], ['s1', null, 0]);
+}
+// What the listener asked for is drawn however recently its artist played.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const drawn = drawRequestCandidate([marvin, sly], recent, (s) => s.id !== 'm1', seq(0));
+  assert.deepEqual([drawn.pick?.id, drawn.withheld], ['m1', null]);
+}
+// A pool of nothing but recent stand-ins draws as it always did: the request
+// keeps its slot.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const drawn = drawRequestCandidate([marvin, marvinTammi], recent, () => true, seq(0.5, 0));
+  assert.equal(drawn.pick?.id, 'm2', 'the first draw stands');
+  assert.deepEqual([drawn.withheld, drawn.skipped, drawn.starved], [null, 0, true]);
+}
+// No spacing window (artistVarietyWindow 0), or an empty pool: a plain draw.
+{
+  const asked: string[] = [];
+  const drawn = drawRequestCandidate([marvin, clash], new Set(), (s) => { asked.push(s.id); return true; }, seq(0));
+  assert.deepEqual([drawn.pick?.id, drawn.withheld, asked], ['m1', null, []]);
+  assert.deepEqual(drawRequestCandidate([], new Set(['marvin gaye']), () => true), { pick: null, withheld: null, skipped: 0, starved: false });
+}
+// A cascade pool can be a whole mood's slice of the library, so the draw
+// never reads every candidate: the stand-in reading is asked of the draws it
+// makes, and a fresh first draw costs no reading at all.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const pool = [marvin, ...Array.from({ length: 5000 }, (_, i) => ({ id: `x${i}`, title: `Track ${i}`, artist: `Act ${i}` }))];
+  const asked: string[] = [];
+  const drawn = drawRequestCandidate(pool, recent, (s) => { asked.push(s.id); return true; }, seq(0, 0.5));
+  assert.deepEqual(asked, ['m1'], 'only the recent draw was read');
+  assert.equal(drawn.withheld?.id, 'm1');
+  assert.match(drawn.pick?.id ?? '', /^x/);
+}
+// Over many draws the pick is uniform over what passes, and never a recent
+// stand-in: the same pick drawing from requestRepickCandidates' set would make.
+{
+  const recent = new Set([artistRootKey('Marvin Gaye')]);
+  const pool = [marvin, marvinTammi, sly, clash];
+  const counts = new Map<string, number>();
+  // mulberry32: a seeded, reproducible stand-in for Math.random.
+  let state = 7;
+  const rand = () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let i = 0; i < 4000; i++) {
+    const id = drawRequestCandidate(pool, recent, () => true, rand).pick!.id;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  assert.deepEqual([...counts.keys()].sort(), ['c1', 's1']);
+  assert.ok(Math.abs((counts.get('c1') ?? 0) - 2000) < 200, `uniform over the fresh pair (${[...counts]})`);
 }
 
 assert(ARTIST_VARIETY_WINDOW >= 2, 'the window must span at least the every-other-slot shape it was filed for');

@@ -3,6 +3,7 @@
 // Run: npm test -- pool-picker-prompt
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +19,9 @@ await settings.update({
   llm: {
     provider: 'openai-compatible',
     model: 'fixture-model',
+    // Pinned: the test reads the captured prompt, and an `auto` connection
+    // would send its detection probes to this stub first.
+    compatibleMode: 'local',
     baseUrl: 'http://127.0.0.1:9/v1',
     fallback: { enabled: false },
   },
@@ -37,14 +41,8 @@ const realFetch = globalThis.fetch;
 globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
   const body = JSON.parse(String(init?.body || '{}')) as ModelRequest;
   requests.push(body);
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-pool-prompt',
-    object: 'chat.completion',
-    created: 1,
-    model: 'fixture-model',
-    choices: [{
-      index: 0,
-      message: {
+  return chatCompletionResponse({ id: 'chatcmpl-pool-prompt',
+    message: {
         role: 'assistant',
         content: null,
         tool_calls: [{
@@ -60,10 +58,7 @@ globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) =
           },
         }],
       },
-      finish_reason: 'tool_calls',
-    }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }) as typeof fetch;
 
 after(() => {
