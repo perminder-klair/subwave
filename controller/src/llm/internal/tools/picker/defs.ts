@@ -3,6 +3,8 @@
 import type { Tool } from 'ai';
 import type { PickerContext } from './scope.js';
 
+export const PICKER_TOOL_TIMEOUT_MS = 10_000;
+
 export interface PickerToolModule {
   // The name the model sees. Must be unique across the registry in index.ts.
   name: string;

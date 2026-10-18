@@ -232,15 +232,7 @@ test('a persona whose clone sample is GONE is refused, not shipped mute', async 
 
 // ── Import ───────────────────────────────────────────────────────────────────
 
-test('re-importing the same DJ is refused by the SHARED duplicate-name rule', async () => {
-  const outcome = await applyPersonaBundle(exported);
-  assert.equal(outcome.ok, false);
-  assert.equal((outcome as any).status, 409);
-  assert.match((outcome as any).error, /already in the roster/);
-  // Refused BEFORE any audio landed — a refused import must not litter the
-  // state dirs with files the operator cannot see.
-  assert.deepEqual(readdirSync(VOICES).sort(), ['nova.wav']);
-});
+
 
 test('a station backup is named as such rather than refused generically', async () => {
   const zip = new AdmZip();
@@ -434,6 +426,7 @@ test('a duplicate name refuses without writing the audio that came with it', asy
   ));
   assert.equal(outcome.ok, false);
   assert.equal((outcome as any).status, 409);
+  assert.match((outcome as any).error, /already in the roster/);
   assert.equal(stateSnapshot(), before);
 });
 

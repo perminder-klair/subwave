@@ -77,3 +77,16 @@ test('the verbatim (pre-fix) cues lose the overlap at both seams', () => {
 test('stem-blend re-exports the same seam length its clip URI is stamped with', () => {
   assert.equal(stemBlend.CLIP_SEAM_CROSS_SEC, CLIP_SEAM_CROSS_SEC);
 });
+
+test('the clip and its outgoing track carry the cue lead radio.liq aligns on', async () => {
+  // `cross` buffers whole frames, so the overlap it builds can fall a frame
+  // short of the stamp. radio.liq buffers past `liq_clip_lead` and starts the
+  // incoming side exactly that far before the outgoing one ends, which only
+  // works if the lead it reads is the one the cues above were computed with.
+  const { getAnnotatedUri, getClipUri } = await import('../src/music/subsonic.js');
+  const song = { id: 'y', title: 'Y', artist: 'A', album: 'B', path: 'y.flac', crossSec: CLIP_SEAM_CROSS_SEC };
+  const lead = `liq_clip_lead="${CLIP_SEAM_CROSS_SEC}"`;
+  assert.ok(getClipUri(song, '/tmp/clip.wav', CLIP_SEAM_CROSS_SEC).includes(lead), 'clip');
+  assert.ok(getAnnotatedUri(song, { cueOutSec: 200, clipLeadSec: CLIP_SEAM_CROSS_SEC }).includes(lead), 'outgoing');
+  assert.ok(!getAnnotatedUri(song, { cueOutSec: 200 }).includes('liq_clip_lead'), 'an ordinary track carries none');
+});

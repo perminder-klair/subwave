@@ -6,21 +6,11 @@
 // Also pins the availability gates: on a forced-tool provider the single
 // discovery call spent on a guaranteed-empty tool corners the model.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PICKER_TOOLS } from '../src/llm/internal/tools/picker/index.js';
 import { buildPickerContext, pickerScope } from '../src/llm/internal/tools/picker/scope.js';
 import type { PickerContext } from '../src/llm/internal/tools/picker/scope.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
 
 // A context with no library/index coverage — the shape a fresh install has.
 const bareCtx = (over: Partial<PickerContext> = {}): PickerContext => ({
@@ -33,8 +23,6 @@ const bareCtx = (over: Partial<PickerContext> = {}): PickerContext => ({
 
 const namesOf = (ctx: PickerContext) =>
   PICKER_TOOLS.filter(m => !m.available || m.available(ctx)).map(m => m.name);
-
-console.log('registry integrity:');
 
 test('every module declares a name and a build', () => {
   for (const m of PICKER_TOOLS) {
@@ -60,8 +48,6 @@ test('every tool carries a description the model can act on', () => {
     assert.ok(built.inputSchema, `${m.name} has no inputSchema`);
   }
 });
-
-console.log('\navailability gating:');
 
 test('the always-on core is offered on a bare install', () => {
   // No embedding index, playlist anchor or journey needed, so a fresh station
@@ -92,12 +78,19 @@ test('a text index alone lights up tracksLikeThis but not searchByLyrics', () =>
 
 test('path-scoped tools are off unless their scope field is set', () => {
   const bare = namesOf(bareCtx());
-  for (const n of ['showPlaylistTracks', 'tracksTowardJourney', 'identifyRequestedTrack']) {
+  for (const n of ['showPlaylistTracks', 'tracksTowardJourney', 'identifyRequestedTrack', 'listenerFavourites']) {
     assert.ok(!bare.includes(n), `${n} must be off without its scope field`);
   }
   const withPlaylist = buildPickerContext(pickerScope({ playlistTracks: [{ id: 'x' }] }));
   assert.ok(namesOf({ ...withPlaylist, hasTextEmbeddings: false, hasAudioEmbeddings: false, hasEmbeddingProvider: false })
     .includes('showPlaylistTracks'));
+  // Likes that influence the DJ, with something liked: the gate is the scope
+  // value livePickerScope resolves from likes.djFavourites.
+  const withFavourites = buildPickerContext(pickerScope({ listenerFavourites: [{ track: { id: 'x' }, count: 1 }] }));
+  assert.ok(namesOf({ ...withFavourites, hasTextEmbeddings: false, hasAudioEmbeddings: false, hasEmbeddingProvider: false })
+    .includes('listenerFavourites'));
+  assert.ok(!namesOf(bareCtx({ scope: pickerScope({ listenerFavourites: [] }) })).includes('listenerFavourites'),
+    'an empty favourites list must not offer a tool that can only return []');
 });
 
 test('deepCuts needs the library mirror, not an embedding index', () => {
@@ -127,9 +120,3 @@ test('the journey tool needs BOTH a waypoint and an audio index', () => {
   assert.ok(namesOf({ ...waypointOnly, hasAudioEmbeddings: true, hasTextEmbeddings: false, hasEmbeddingProvider: false })
     .includes('tracksTowardJourney'));
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall tests passed');

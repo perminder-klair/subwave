@@ -4,6 +4,7 @@
 
 import { requireDb } from './handle.js';
 import { moveFacetRows, syncTrackFacets } from './facets.js';
+import { touchGenreInputs } from './genre-inputs.js';
 import { canonicalId } from '../id-canonical.js';
 
 // Carry physical track columns by default, excluding ID/generated columns and walk-owned
@@ -232,6 +233,7 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
       syncTrackFacets(neu);
       applied.push([old, neu]);
     }
+    if (applied.length) touchGenreInputs(d);
   });
   run(pairs);
 

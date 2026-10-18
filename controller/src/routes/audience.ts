@@ -29,11 +29,6 @@ export function beaconAllowed(key: string, now = Date.now()): boolean {
   return true;
 }
 
-// Test seam.
-export function resetBeaconLimiter(): void {
-  beaconHistory.clear();
-}
-
 router.post('/beacon', (req, res) => {
   // Analytics must never break a listener — swallow everything, always 204.
   try {

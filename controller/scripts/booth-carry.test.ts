@@ -15,10 +15,9 @@
 // Run: npm test -- booth-carry
 
 import assert from 'node:assert/strict';
+import { listen as listenHttp } from './test-utils/http.js';
 import { after, test, type TestContext } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -332,10 +331,8 @@ test('GET /session serves carry, separator and live turns; the session header is
 
   const app = express();
   app.use(publicRouter);
-  const server: Server = createServer(app);
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const { port } = server.address() as AddressInfo;
+  const { port, close } = await listenHttp(app);
+  t.after(close);
 
   const body = await (await fetch(`http://127.0.0.1:${port}/session`)).json() as any;
   assert.deepEqual(body.session, {

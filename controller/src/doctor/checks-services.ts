@@ -18,16 +18,26 @@ import {
   probeLegReachable,
   providerName,
   activeModelLabel,
+  detectCompatibleMode,
+  type CompatDetection,
+  type Leg,
 } from '../llm/provider.js';
-import { recentCalls, generationHealthSnapshot } from '../llm/log.js';
+import { recentCalls, generationHealthSnapshot, failoverRoutingSnapshot } from '../llm/log.js';
 import type { Finding, StationSettings } from './types.js';
-import { classifyModel, isSchemaFailure } from './util.js';
+import { isSchemaFailure } from './util.js';
+import { settingsAgentRoutes } from '../schemas/settings.js';
+import { modelClassConcern } from './agent-fit.js';
 
 // ---------------------------------------------------------------------------
 // Sections
 // ---------------------------------------------------------------------------
 
-export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
+// `candidatePoolMigrated` is passed in rather than read here, so the check
+// stays a function of its arguments (settings.migratedFromCandidatePool()).
+export async function checkLlm(
+  s: StationSettings | null,
+  { candidatePoolMigrated = false }: { candidatePoolMigrated?: boolean } = {},
+): Promise<Finding[]> {
   const out: Finding[] = [];
 
   // Primary leg. probeLegReachable returns true for cloud providers (no cheap
@@ -41,14 +51,14 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       detail: `${providerName()} · ${activeModelLabel()}${ok ? ' · reachable' : ' · unreachable'}`,
       hint: ok
         ? undefined
-        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM.',
+        : 'Without the LLM the DJ falls back to a stateless picker and skips spoken links. Check the provider, model and host in Settings → LLM provider.',
     });
   } catch (err) {
     out.push({
       label: 'provider',
       status: 'fail',
       detail: err?.message || 'not configured',
-      hint: 'Pick a provider + model in Settings → LLM.',
+      hint: 'Pick a provider + model in Settings → LLM provider.',
     });
   }
 
@@ -67,6 +77,24 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
     }
   } catch { /* fallback is best-effort */ }
 
+  // openai-compatible connection mode, per leg: is the server driven the way
+  // it wants to be? Probed fresh here (the doctor is occasional), never cached
+  // stale from a call path.
+  for (const [label, legOf] of [
+    ['connection mode', primaryLeg],
+    ['fallback connection mode', fallbackLeg],
+  ] as const) {
+    try {
+      const leg = legOf();
+      if (leg?.cfg?.provider !== 'openai-compatible') continue;
+      // The operator's own choice: resolveCompatibleMode keeps 'auto' here
+      // when it rewrote compatibleMode to the detected value.
+      const setting = leg.cfg.compatibleModeSetting ?? leg.cfg.compatibleMode;
+      const detection = await detectCompatibleMode(leg.cfg);
+      out.push(compatModeFinding(label, setting, detection, agentRecoveryRate(leg, recentCalls)));
+    } catch { /* a leg that cannot be built is reported by the provider rows */ }
+  }
+
   // Reachability cannot diagnose a provider whose generation slot is stuck.
   // Keep this finding independent of probes and cached/LLM-generated reviews.
   const generation = generationHealthSnapshot();
@@ -78,6 +106,22 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       ? 'An observed generation is stale or recently timed out. Check the provider and requestTimeoutMs; client abort does not guarantee release of the remote inference slot. /doctor/llm has live target details.'
       : generation.status === 'idle' ? 'No observed generation failure; endpoint capacity is not measured.' : undefined,
   });
+
+  // Calls going to the backup instead of the primary — the same record /debug
+  // shows. Inside a sticky window those calls carry no failover record of
+  // their own, so this is where the operator learns why.
+  const routing = failoverRoutingSnapshot();
+  if (routing) {
+    const next = typeof routing.retryPrimaryAt === 'number'
+      ? `primary tried again in ${Math.max(1, Math.ceil((routing.retryPrimaryAt - Date.now()) / 1000))} s`
+      : 'the next call tries the primary first';
+    out.push({
+      label: 'backup routing',
+      status: 'warn',
+      detail: `${routing.reason} — ${routing.calls} call${routing.calls === 1 ? '' : 's'} sent to ${routing.model}${routing.lastOk === false ? ', which failed too' : ''}; ${next}`,
+      hint: 'Calls return to the primary as soon as it answers. A refused connection is probed every 30 s; a 5xx or a hung model is retried after 90 s, or at once if the backup also fails.',
+    });
+  }
 
   // Recent error rate from the in-memory ring.
   const recent = recentCalls.slice(0, 20);
@@ -112,37 +156,45 @@ export async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
       status: schemaFails.length >= 3 ? 'fail' : 'warn',
       detail: `${schemaFails.length} schema-validation failure(s)${kinds.length ? ` · ${kinds.join(', ')}` : ''}`,
       hint:
-        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning reasoning OFF — “thinking” output can corrupt the JSON.',
+        'The model is returning JSON that does not match the required shape, so these features fall back or go silent (DJ Doc’s own AI review is one of them). It’s the classic sign of a model that’s weak at schema-constrained output — usually a code-specialised or very small model. Switch Settings → LLM provider to a general instruction-tuned model (a ~12B+ local or a capable cloud model), and try turning Chain-of-thought OFF in Settings → LLM provider — “thinking” output can corrupt the JSON.',
     });
   }
 
   // Model class — weigh the chosen model's *name* against how it's being used.
   // Heuristic only (name-based), so it never fails, only warns: a code-specialised
   // model is tuned for programming rather than DJ links / structured picks, and a
-  // small model paired with the agentic picker tends to time out into the pool.
-  const cls = classifyModel(activeModelLabel());
-  if (cls.code) {
+  // small model driving Agentic Tools tends to time out into the pool.
+  const routes = settingsAgentRoutes(s?.llm);
+  const concern = modelClassConcern(activeModelLabel(), routes.picks);
+  if (concern?.kind === 'code') {
     out.push({
       label: 'model class',
       status: 'warn',
       detail: `${activeModelLabel()} looks code-specialised`,
-      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM.',
+      hint: 'Code models are tuned for programming, not natural-language DJ links or schema-constrained JSON — they tend to write stiff intros and fail structured picks (the request matcher, Track Shortlist, the pool picker and this very report). Prefer a general instruction-tuned model in Settings → LLM provider.',
     });
-  } else if (cls.sizeB !== null && cls.sizeB < 11 && s?.llm?.pickerAgent !== false) {
+  } else if (concern?.kind === 'small') {
     out.push({
       label: 'model class',
       status: 'warn',
-      detail: `~${cls.sizeB}B model with the agentic picker on`,
-      hint: 'The agentic picker wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or turn the agentic picker OFF (Settings → LLM) to use the simpler, more forgiving pool picker.',
+      detail: `~${concern.sizeB}B model with Agentic Tools selected`,
+      hint: 'Agentic Tools wants a ~12B-class (or good cloud) model; smaller models often time out into the pool fallback or fail structured picks. Either pick a larger model, or switch Settings → Music selection to Track Shortlist, where the controller builds the shortlist and the model makes one bounded choice.',
     });
   }
 
-  // Picker agent toggle — off is valid (stateless picker) but worth surfacing.
-  // DJ Doc weighs this against the model size + host resources in its review.
+  // Track selection route. Both are supported choices, so neither warns; DJ Doc
+  // weighs the route against the model size + host resources in its review.
   out.push({
-    label: 'picker agent',
-    status: s?.llm?.pickerAgent === false ? 'warn' : 'ok',
-    detail: s?.llm?.pickerAgent === false ? 'off — stateless pool picker' : 'on — session DJ agent (wants ~12B+ / good cloud model)',
+    label: 'track selection',
+    status: 'ok',
+    detail: routes.picks
+      ? 'Agentic Tools — model-led library search (wants ~12B+ / good cloud model)'
+      : 'Track Shortlist — controller-built shortlist, one bounded model choice',
+    // Not a fault (Shortlist is a supported route), but the one upgrade that
+    // changed behaviour unasked, so it is named until a save records it.
+    hint: candidatePoolMigrated
+      ? 'This station used the retired Candidate Pool and was moved to Track Shortlist, its replacement. Keep it, or switch to Agentic Tools in Settings → Music selection; saving any setting records the choice and clears this note.'
+      : undefined,
   });
 
   // Chain-of-thought (reasoning) — on costs latency + tokens; only worth it on a
@@ -180,7 +232,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
     detail: p.ok ? `${config.navidrome.url} · authenticated` : p.reason || 'unreachable',
     hint: p.ok
       ? undefined
-      : 'The picker has no music source without Navidrome. Check the URL / username / password in setup, and that Navidrome is up.',
+      : 'The picker has no music source without Navidrome. Check the URL / username / password in Settings → Music source, and that Navidrome is up.',
   });
 
   // Recent call error rate across all endpoints.
@@ -233,7 +285,7 @@ export async function checkNavidrome(): Promise<Finding[]> {
       status: flag ? 'warn' : 'ok',
       detail: `${adv.provider}:${adv.model}${flag ? ' · heavy for a local host' : ''}`,
       hint: flag
-        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
+        ? 'This is a large local embedding model — roughly 3–4× the size and 2–3× slower per track than the default nomic-embed-text, with bigger vectors (slower KNN, more RAM). On a CPU / NAS host it dominates re-embed time and can thrash Ollama when RAM is tight (it reloads the model between calls). Unless you specifically need its multilingual / long-context quality, switch Settings → Library tagger → Embedding server → Model to nomic-embed-text, then re-embed (Library → Maintenance → Re-embed all tracks).'
         : undefined,
     });
   } catch { /* embedding cfg unavailable — skip silently */ }
@@ -342,7 +394,7 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
     hint:
       unavailable.length === 0
         ? undefined
-        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available one in Settings.',
+        : 'A configured voice engine is unavailable, so the DJ speaks in the Piper fallback voice. Enable the engine (e.g. the tts-heavy profile / cloud key) or pick an available Engine in Settings → TTS voice.',
   });
 
   // Is the current persona's voice silently routing through a fallback?
@@ -360,4 +412,81 @@ export async function checkTts(s: StationSettings | null): Promise<Finding[]> {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Connection mode (openai-compatible)
+// ---------------------------------------------------------------------------
 
+export interface AgentRecoveryRate {
+  agentCalls: number;
+  recoveries: number;
+}
+
+// How often this leg's recent tool-loop calls needed the done-only recovery
+// ("agent stopped without calling done"). On a hosted API driven in local mode
+// that is nearly every multi-round call, which is the runtime half of the
+// evidence; the probe is the other half.
+export function agentRecoveryRate(leg: Pick<Leg, 'label'>, calls: ReadonlyArray<any>): AgentRecoveryRate {
+  const agent = calls.filter(c => c?.model === leg.label && typeof c?.via === 'string' && c.via.startsWith('ai-sdk:agent'));
+  return { agentCalls: agent.length, recoveries: agent.filter(c => c.via.endsWith(':recovery')).length };
+}
+
+// A recovery on most of a handful of agent calls is a pattern, not a blip.
+const RECOVERY_MIN_CALLS = 4;
+const RECOVERY_SHARE = 0.5;
+
+function recoveryPattern(r: AgentRecoveryRate): boolean {
+  return r.agentCalls >= RECOVERY_MIN_CALLS && r.recoveries / r.agentCalls >= RECOVERY_SHARE;
+}
+
+function recoveryClause(r: AgentRecoveryRate): string {
+  return r.agentCalls ? ` · ${r.recoveries}/${r.agentCalls} recent agent calls needed the done-only recovery` : '';
+}
+
+const MODE_NAME: Record<string, string> = {
+  local: 'Self-hosted server',
+  hosted: 'Hosted API or proxy',
+  auto: 'Auto-detect',
+};
+
+// Pure: the setting, what the probe saw and the runtime recovery rate in, one
+// finding out. Warns only on a mismatch with evidence behind it; an undecided
+// probe is never a warning on its own.
+export function compatModeFinding(
+  label: string,
+  setting: unknown,
+  detection: CompatDetection,
+  recovery: AgentRecoveryRate,
+): Finding {
+  const mode = setting === 'hosted' || setting === 'auto' ? setting : 'local';
+  const seen = detection.mode ? `${detection.server ?? detection.mode} (${detection.evidence})` : `undetected (${detection.evidence})`;
+
+  if (mode === 'auto') {
+    return {
+      label,
+      status: 'ok',
+      detail: `${MODE_NAME.auto} → ${detection.mode ?? 'local'} · ${seen}${recoveryClause(recovery)}`,
+      hint: detection.mode ? undefined : 'Auto-detect found no positive evidence, so the connection runs as a self-hosted server. If it is a cloud API or proxy, set the mode to Hosted API or proxy.',
+    };
+  }
+  if (mode === 'local' && (detection.mode === 'hosted' || (!detection.mode && recoveryPattern(recovery)))) {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.local}, but this looks like a hosted API · ${seen}${recoveryClause(recovery)}`,
+      hint: 'Self-hosted mode forces the final tool call and sends llama.cpp sampling extras. A hosted API or proxy does not honour the forced call after several tool rounds, so agent runs stop without committing and fall to the recovery path (slower, more tokens). Set Settings → LLM provider → connection mode to Auto-detect or Hosted API or proxy.',
+    };
+  }
+  if (mode === 'hosted' && detection.mode === 'local') {
+    return {
+      label,
+      status: 'warn',
+      detail: `${MODE_NAME.hosted}, but the server identifies as ${seen}`,
+      hint: 'Hosted mode drops the forced tool call and the repeat-penalty / context-size extras that small self-hosted models depend on, so structured picks can fail or loop. Set Settings → LLM provider → connection mode to Auto-detect or Self-hosted server.',
+    };
+  }
+  return {
+    label,
+    status: 'ok',
+    detail: `${MODE_NAME[mode]} · ${seen}${recoveryClause(recovery)}`,
+  };
+}

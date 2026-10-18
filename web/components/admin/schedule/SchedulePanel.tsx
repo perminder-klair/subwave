@@ -632,6 +632,7 @@ export default function SchedulePanel() {
           folded={folded}
           onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
           todayKey={nowDay}
+          nowMinute={nowHour * 60 + stationMinute}
           colorOf={colorOf}
           hoursOf={hoursOf}
           onPick={pick}

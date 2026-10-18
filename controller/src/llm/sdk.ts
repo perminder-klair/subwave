@@ -6,4 +6,5 @@
 export { djText } from './internal/strategy/text.js';
 export { djObject } from './internal/strategy/object.js';
 export { djAgent } from './internal/strategy/agent.js';
+export { withDeadline } from './internal/core/retry.js';
 export { isUnreachable, isQuotaOrAuthError, errReason, nearestId, stripThinking, modelTolerant } from './internal/core/pure.js';

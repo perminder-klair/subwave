@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw, X, Ban } from 'lucide-react';
 import { Card, Btn } from '../ui';
 import { cn } from '../../../lib/cn';

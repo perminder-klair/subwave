@@ -41,8 +41,9 @@ import { ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS } from './form-state';
 import { decideCloudSave } from './cloudSavePayload';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
+import { fieldAria } from '../../../lib/form';
 import {
-  SectionHeader, SaveBar,
+  SectionHeader, SaveBar, NowBanner,
   KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps, type FormState, type FormUpdater, type CloudTtsCfg,
   type TtsFallbackForm, type TtsForm,
@@ -480,6 +481,7 @@ interface TtsSectionProps extends SectionProps {
 }
 
 export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: TtsSectionProps) {
+  const levellingAria = fieldAria('tts-voice-levelling', undefined, { hasDescription: true });
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
@@ -678,6 +680,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         // Always sent — the server clamps and drops unknown keys. Keyed by engine
         // id, `pocket-tts` with the hyphen.
         gainDb: form.tts.gainDb,
+        voiceLevelling: form.tts.voiceLevelling,
         // Same contract as gainDb; inert for the engines that ignore speed.
         speed: form.tts.speed,
       },
@@ -741,6 +744,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
   const savedTts: {
     enabled?: boolean;
+    voiceLevelling?: boolean;
     defaultEngine?: string;
     kokoro?: { voice?: string; lang?: string };
     chatterbox?: { referenceVoice?: string };
@@ -790,6 +794,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     // Absent reads as ON, matching the controller's coercion — so an untouched
     // pre-upgrade settings.json never shows up as dirty.
     form.tts.enabled !== (savedTts.enabled !== false)
+    || form.tts.voiceLevelling !== (savedTts.voiceLevelling === true)
     || form.tts.defaultEngine !== savedEngine
     || (form.tts.kokoro?.voice || '') !== savedKokoroVoice
     || (form.kokoroLang || '') !== savedKokoroLang
@@ -899,20 +904,12 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
       <Card title="Voice engine" sub="active default">
         <div className="grid gap-[18px]">
-          <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
-            <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
-            <div className="grid min-w-0 gap-0.5">
-              <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
-                Default engine now · {savedEngineLabel}
-              </span>
-              <span className="text-[14px] leading-[1.5] text-muted">
-                {activeDetail} {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
-                {savedEngineMissing && (
-                  <span className="text-[var(--danger)]"> This engine isn’t installed in this build, so segments fall back to Piper. See the setup steps below.</span>
-                )}
-              </span>
-            </div>
-          </div>
+          <NowBanner label={<>Default engine now · {savedEngineLabel}</>}>
+            {activeDetail} {ttsDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}
+            {savedEngineMissing && (
+              <span className="text-[var(--danger)]"> This engine isn’t installed in this build, so segments fall back to Piper. See the setup steps below.</span>
+            )}
+          </NowBanner>
 
           <div className="field">
             <div className="flex items-center gap-2">
@@ -938,6 +935,19 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 ? <>Engine changed. Hit "Save TTS settings" below to make <strong>{formEngineLabel}</strong> the new default.</>
                 : <>The station default. Renders jingles and is the fallback when a persona’s own engine fails. Per-segment voice still comes from the persona on air.</>}
             </div>
+          </div>
+
+          <div className="field">
+            <Label {...levellingAria.labelledByProps}>Voice levelling</Label>
+            <Seg
+              {...levellingAria.groupProps}
+              value={form.tts.voiceLevelling ? 'on' : 'off'}
+              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+              onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, voiceLevelling: v === 'on' } }))}
+            />
+            <p {...levellingAria.descriptionProps} className="field-hint">
+              Lifts quiet takes and cuts loud ones toward -18 LUFS.
+            </p>
           </div>
 
         {form.tts.defaultEngine === 'piper' && (
@@ -1387,20 +1397,27 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                         value={form.tts.cloud.model}
                         onChange={v => setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: v } } }))}
                         placeholder="Select a model"
+                        allowCustom
                       />
                     ) : (
-                      <Input
-                        value={form.tts.cloud.model}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
-                        }
-                        placeholder={
-                          isCompat
-                            ? 'chatterbox'
-                            : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
-                        }
-                        className="max-w-[360px]"
-                      />
+                      <>
+                        <Input
+                          list="cloud-tts-models"
+                          value={form.tts.cloud.model}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                            setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, model: e.target.value } } }))
+                          }
+                          placeholder={
+                            isCompat
+                              ? 'chatterbox'
+                              : (CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS]?.[0] || 'gpt-4o-mini-tts')
+                          }
+                          className="max-w-[360px]"
+                        />
+                        <datalist id="cloud-tts-models">
+                          {(CLOUD_MODELS[form.tts.cloud.provider as keyof typeof CLOUD_MODELS] || []).map(model => <option key={model} value={model} />)}
+                        </datalist>
+                      </>
                     )}
                     {ttsDiscovery.loading
                       ? <span className="animate-pulse text-[11px] whitespace-nowrap text-muted">discovering…</span>

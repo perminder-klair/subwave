@@ -26,6 +26,7 @@ import {
 } from '../../../util/google-key-pool.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
+import { resolveCompatibleMode } from './compat-detect.js';
 
 // Built clients, keyed by a signature covering every field captured at
 // construction, so a settings edit is picked up with no explicit invalidation.
@@ -56,7 +57,9 @@ export function llmCfg() {
   // The stored `apiKey` slot is legacy (always '' after settings.load()); the
   // active key is resolved per-provider from settings.llm.keys (#657). Empty →
   // the provider cases below fall through to their env var.
-  return { ...llm, apiKey: settings.llmKeyFor(llm.provider) };
+  // `auto` resolves to the detected mode here, so every downstream reader
+  // (capabilities, the client builder, its cache signature) sees local|hosted.
+  return resolveCompatibleMode({ ...llm, apiKey: settings.llmKeyFor(llm.provider) });
 }
 
 // Single raw-request capture point, wired into every provider's `fetch` option

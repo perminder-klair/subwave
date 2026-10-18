@@ -62,6 +62,7 @@ import {
   streamPatchSchema,
   timezoneSchema,
   transitionsPatchSchema,
+  ttsPatchSchema,
   uiPatchSchema,
   weatherMoodsSchema,
   weatherPatchSchema,
@@ -242,6 +243,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   timezone: timezoneSchema,
   privacy: privacyPatchSchema,
   requests: requestsPatchSchema,
+  tts: ttsPatchSchema,
   // Both are validated by the SAME schema update() reaches through
   // validatePersonasStrict / validateDjPromptsStrict. Their branches are NOT
   // switched to parseSettingsPatchKey, because both need a server-only step the

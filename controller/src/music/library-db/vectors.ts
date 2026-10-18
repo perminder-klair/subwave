@@ -153,12 +153,6 @@ export function setMapCoordsBulk(coords: { id: string; x: number; y: number }[])
   tx(coords);
 }
 
-export function mapCoordsCount(): number {
-  return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE map_x IS NOT NULL').get() as {
-    n: number;
-  }).n;
-}
-
 export function getMapProjectionMeta(): { algo: string; space: string; count: number; setAt: string } | null {
   const row = requireDb()
     .prepare('SELECT algo, space, count, set_at FROM map_projection_meta WHERE pk = 1')

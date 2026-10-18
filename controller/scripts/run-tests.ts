@@ -11,8 +11,16 @@
 //
 // Concurrency is pinned to 1 — these files reach for shared ground (a temp
 // state dir, the library DB, env vars).
+//
+// STATE_DIR is always a fresh temp dir, whatever the calling shell exports.
+// Most files set their own before importing the controller, but one that does
+// not falls through config.ts to the repo-local state/ — which on a host
+// running the station is the live state root, and the Navidrome migration
+// writes there on import. Overriding rather than defaulting means an exported
+// STATE_DIR pointing at a real station cannot leak in either.
 
-import { readdirSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -35,6 +43,8 @@ console.log(`Running ${files.length} test file(s)${filter ? ` matching "${filter
 
 // `--import tsx` loads .ts directly and is inherited by each subprocess. The
 // spec reporter is forced so a non-TTY doesn't fall back to TAP.
+const stateDir = mkdtempSync(join(tmpdir(), 'subwave-test-state-'));
+
 const { status } = spawnSync(
   process.execPath,
   [
@@ -45,7 +55,8 @@ const { status } = spawnSync(
     '--test-reporter=spec',
     ...files.map((f) => join(scriptsDir, f)),
   ],
-  { stdio: 'inherit' },
+  { stdio: 'inherit', env: { ...process.env, STATE_DIR: stateDir } },
 );
 
+rmSync(stateDir, { recursive: true, force: true });
 process.exit(status ?? 1);

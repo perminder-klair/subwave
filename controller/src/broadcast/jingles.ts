@@ -7,6 +7,7 @@ import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { basename as pathBasename } from 'node:path';
 import { speak } from '../audio/tts.js';
+import type { TtsVoiceSlot } from '../schemas/persona.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
@@ -17,6 +18,8 @@ import { JINGLE_FILENAME_RE, JINGLE_NAME_MAX, uniqueFilename } from '../personas
 const DIR = `${STATE_DIR}/jingles`;
 const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
 const META = `${STATE_DIR}/jingles.json`;
+// radio.liq mixes at 44.1 kHz; its MP3/FLAC/AAC outputs use that rate too.
+const JINGLE_SAMPLE_RATE = 44_100;
 
 const DEFAULT_IDENT = {
   filename: 'station_ident_default.wav',
@@ -91,7 +94,7 @@ export function jingleUri(path: string): string {
   return `annotate:subwave_kind="jingle":${path}`;
 }
 
-export async function create(text: string, { builtin = false }: { builtin?: boolean } = {}) {
+export async function create(text: string, { builtin = false, tts }: { builtin?: boolean; tts?: TtsVoiceSlot } = {}) {
   if (!text || !text.trim()) throw new Error('Empty jingle text');
   await mkdir(DIR, { recursive: true });
 
@@ -99,7 +102,21 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   const filename = builtin ? DEFAULT_IDENT.filename : `jingle_${id}.wav`;
   const outPath = `${DIR}/${filename}`;
 
-  await speak(text, { kind: 'jingle', outPath });
+  await speak(text, { kind: 'jingle', outPath, persona: tts ? { tts } : undefined });
+
+  // Levelled like an uploaded jingle. A TTS stinger renders well under the
+  // normalised tracks it plays between (9 dB on one cloud voice), and this is
+  // the one step both rotates share. A failed pass keeps the file as rendered.
+  if (await hasFfmpeg()) {
+    try {
+      await transcodeAudio(await readFile(outPath), {
+        outPath, format: 'wav', loudnorm: true,
+        sampleRate: JINGLE_SAMPLE_RATE, channels: 2,
+      });
+    } catch (err: any) {
+      console.warn(`[jingles] could not level ${filename}: ${err?.message || err}`);
+    }
+  }
 
   const meta = await loadMeta();
   meta.items[filename] = {
@@ -112,7 +129,7 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   return { filename, text: text.trim(), outPath };
 }
 
-// Import an operator-supplied audio file. Transcoded to WAV + loudness-levelled
+// Import an operator-supplied audio file. Transcoded to 44.1 kHz stereo WAV + loudness-levelled
 // when ffmpeg is available, otherwise stored as-is with its original extension.
 export async function importAudio(
   buffer: Buffer,
@@ -128,7 +145,10 @@ export async function importAudio(
   let filename: string;
   if (await hasFfmpeg()) {
     filename = `jingle_${id}.wav`;
-    await transcodeAudio(buffer, { outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true });
+    await transcodeAudio(buffer, {
+      outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true,
+      sampleRate: JINGLE_SAMPLE_RATE, channels: 2,
+    });
   } else {
     filename = `jingle_${id}.${extOf(originalName) || 'mp3'}`;
     await writeFile(`${DIR}/${filename}`, buffer);

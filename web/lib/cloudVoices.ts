@@ -39,7 +39,7 @@ export const CLOUD_VOICES: Record<CloudProvider, CloudVoice[]> = {
 // "gpt-4o-mini-tts" is invalid against ElevenLabs. First entry is the default.
 export const CLOUD_MODELS: Record<CloudProvider, string[]> = {
   openai: ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'],
-  elevenlabs: ['eleven_flash_v2_5', 'eleven_multilingual_v2', 'eleven_turbo_v2_5'],
+  elevenlabs: ['eleven_flash_v2_5', 'eleven_v4_turbo', 'eleven_v4', 'eleven_v3_conversational', 'eleven_v3', 'eleven_multilingual_v2'],
   'fish-audio': ['s2.1-pro', 's2.1-pro-free'],
   // Server-specific model ids. Free text only.
   'openai-compatible': [],

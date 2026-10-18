@@ -346,7 +346,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
             />
             <div className="field-hint">
               Icecast checks every listener connect against the controller, on every
-              mount. Turning this on or off needs a mixer restart (danger zone) to
+              mount. Turning this on or off needs a mixer restart (Broadcast & mixer) to
               re-render the Icecast config; password changes apply live. While it&apos;s
               on, the tune-in files (<code>/listen.pls</code>, <code>/listen.m3u</code>)
               are disabled, and if the controller is down new listeners can&apos;t

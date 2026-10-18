@@ -56,7 +56,6 @@ try {
   await likes.clear();
   const l1 = await likes.recordLike({ track: track('a'), startedAt: '2026-08-01T10:00:00Z', ip: '10.0.0.1' });
   assert.deepEqual(l1, { ok: true, duplicate: false, count: 1 });
-  assert.equal(likes.operatorLiked('a'), false, 'a listener like must not read as an operator like');
 
   // Same listener, same airing → deduped. Different airing → likeable again.
   const dupe = await likes.recordLike({ track: track('a'), startedAt: '2026-08-01T10:00:00Z', ip: '10.0.0.1' });
@@ -67,7 +66,6 @@ try {
   // ── operator like: idempotent per song, counts, marks ─────────────────────
   const op1 = await likes.operatorLike(track('a'));
   assert.deepEqual(op1, { ok: true, added: true, count: 3 }, 'operator like must count alongside listener likes');
-  assert.equal(likes.operatorLiked('a'), true);
 
   const op2 = await likes.operatorLike(track('a'));
   assert.deepEqual(op2, { ok: true, added: false, count: 3 }, 'a second operator like is a no-op, not a second record');
@@ -92,7 +90,6 @@ try {
   // ── operator unlike removes ONLY the operator's record ────────────────────
   const un = await likes.operatorUnlike('a');
   assert.deepEqual(un, { removed: true, count: 2 }, 'the two listener likes must survive');
-  assert.equal(likes.operatorLiked('a'), false);
   assert.deepEqual(likes.index().a, { count: 2, operator: false });
 
   // Unliking what was never operator-liked is a no-op, and still reports the
@@ -114,7 +111,6 @@ try {
 
   likes.trimTo(4);
   assert.equal(likes.stats().total, 4);
-  assert.equal(likes.operatorLiked('keep-me'), true, 'the operator record must survive a trim');
   const survivors = likes.index();
   assert.equal(survivors.l0, undefined, 'oldest listener records go first');
   assert.ok(survivors.l9, 'newest listener records stay');

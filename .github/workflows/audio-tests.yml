@@ -1,0 +1,80 @@
+name: Audio tests
+
+# Runs the tests that call ffmpeg on the ffmpeg each image ships, not the one
+# on a developer's machine. A newer ffmpeg can accept options the images' build
+# rejects (`ebur128=framelog=quiet` did), so a test can pass locally and fail,
+# or mis-measure, in the image. The matrix follows the images by hand:
+#   docker/Dockerfile.controller  node:22-bookworm-slim, apt ffmpeg 5.1
+#   docker/Dockerfile.aio         Liquidsoap base on Debian 13, ffmpeg 7.1
+# The first step fails if either Dockerfile has moved on from that base.
+#
+# Security note: no untrusted user input flows into any `run:` step.
+
+on:
+  pull_request:
+    paths: &paths
+      - 'controller/**'
+      - 'docker/Dockerfile.controller'
+      - 'docker/Dockerfile.aio'
+      - '.github/workflows/audio-tests.yml'
+  push:
+    branches:
+      - main
+      - develop
+    paths: *paths
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audio-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  audio:
+    name: audio tests (${{ matrix.debian }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - debian: bookworm
+            dockerfile: docker/Dockerfile.controller
+            base: '^FROM node:22-bookworm-slim'
+          - debian: trixie
+            dockerfile: docker/Dockerfile.aio
+            base: '^FROM savonet/liquidsoap:v2\.4\.'
+    container: node:22-${{ matrix.debian }}-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the image still uses this base
+        run: grep -Eq '${{ matrix.base }}' '${{ matrix.dockerfile }}'
+
+      # python3, make and g++: better-sqlite3 builds from source when its
+      # prebuilt binary cannot be fetched, and the slim images have no toolchain.
+      - name: Install ffmpeg
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ffmpeg python3 make g++
+          ffmpeg -version | head -n 1
+
+      - run: npm ci --no-audit --no-fund
+        working-directory: controller
+
+      # Each of these skips itself when ffmpeg is missing; here it never is,
+      # so a skip would hide the very run this job exists for.
+      - name: Run the ffmpeg tests
+        working-directory: controller
+        shell: bash
+        run: |
+          set -u
+          for t in jingle-level jingle-import; do
+            echo "::group::$t"
+            npx tsx "scripts/$t.test.ts" | tee "/tmp/$t.log"
+            echo "::endgroup::"
+            if grep -Eq '^# skipped [1-9]' "/tmp/$t.log"; then
+              echo "::error::$t skipped tests although ffmpeg is installed"
+              exit 1
+            fi
+          done

@@ -82,7 +82,7 @@ here stays complete and free either way.
 - **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks — and the mood vocabulary itself is yours to edit on a dedicated admin page (words, "sounds like" descriptions, and which mood each moment of the day leans into).
 - **Ending-aware transitions.** The bundled analyzer measures BPM, key, loudness, and how every track actually ends, so crossfades size themselves to the material: a real fade rides out long, a cold ending cuts tight. Vocal detection keeps the DJ from talking over a sung intro, and opt-in stem blends mix the outgoing tail into the incoming head for a produced-sounding seam. DJ speech ducks the music and lifts it back up.
 - **Playlist builder.** Describe a playlist in plain language at `/admin/playlists` and the builder turns it into a recipe, resolves it against your library, and keeps recipe-backed playlists topped up as new music lands.
-- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio.
+- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio. See [jingle import formats and existing-file recovery](docs/jingle-audio.md).
 - **Player skins + themes.** Eight player faces — Classic, Unit SW-9, Platter, Drift, Subamp, TTY, AXO-1 and Cipher-3 — with a station default and a per-listener override, plus a theme editor with live preview for colours and type.
 - **Private station mode.** Two independent locks over one station password: hide the web player behind a prompt, and/or require listener auth on every stream mount.
 - **Multi-station profiles.** Keep several stations in one install — each with its own library pool, DJ roster, schedule, and settings — and switch which one is live from the admin.
@@ -202,8 +202,10 @@ The next `docker compose up -d` removes it and it stays gone. This is a Compose
 setting, so it does nothing on the all-in-one image, which runs the analyzer
 in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
-run, layer the `docker-compose.analyzer-gpu.yml` overlay:
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. The CUDA
+images use torch/torchaudio 2.7.1 with CUDA 12.8 wheels, including support for
+RTX 50-series Blackwell GPUs. For a one-off run, layer the
+`docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
@@ -340,7 +342,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/updating.md`](docs/updating.md):** updating on every install shape, and the half people need at 2am — how to roll back to a previous version, and how to recover a broken login, a silent stream or a restart-looping controller.
-- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, candidate pool vs the agent picker, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
+- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, Track Shortlist vs Agentic Tools, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
 - **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes — including [public stream, LAN-only admin](docs/reverse-proxy.md#public-stream-lan-only-admin).
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
@@ -354,6 +356,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
+- **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
 - **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.

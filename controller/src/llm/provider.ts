@@ -4,11 +4,9 @@
 // importing from `llm/provider.js` unchanged.
 
 export {
-  languageModel,
   activeModelLabel,
   providerName,
   activeOllamaUrl,
-  loccaBaseUrl,
   DEFAULT_LOCCA_BASE_URL,
   DEFAULT_REQUESTY_BASE_URL,
   OPENROUTER_APP_HEADERS,
@@ -16,8 +14,14 @@ export {
   noThinkFetch,
 } from './internal/provider/registry.js';
 
-export { primaryLeg, fallbackLeg, probeLegReachable, promptDiscoverySteps } from './internal/provider/legs.js';
+export { primaryLeg, fallbackLeg, legLabel, probeLegReachable, warmCompatDetection } from './internal/provider/legs.js';
 export type { Leg } from './internal/provider/legs.js';
+
+export {
+  detectCompatibleMode,
+  cachedCompatDetection,
+} from './internal/provider/compat-detect.js';
+export type { CompatDetection } from './internal/provider/compat-detect.js';
 
 export {
   embeddingModel,
@@ -26,6 +30,7 @@ export {
   embeddingEnabled,
   embeddingProviderInfo,
   embeddingInfoOf,
+  embeddingBaseUrl,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
   isHeavyEmbeddingModel,

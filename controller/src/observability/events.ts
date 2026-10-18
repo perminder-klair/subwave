@@ -89,6 +89,33 @@ export async function pruneOldEvents(maxAgeDays = EVENTS_MAX_AGE_DAYS): Promise<
   return removed;
 }
 
+// Time one step of the current trace as a `trace.phase` event (#1723).
+// `syncMs` is how long `fn` held the thread before returning; for an async step
+// `ms` also counts the awaited time. A large syncMs is an event-loop stall: time
+// the controller served nothing else (/dj, /state, admin). Never alters what
+// `fn` returns or throws.
+export function timePhase<T>(phase: string, fn: () => T): T {
+  const t0 = performance.now();
+  let syncMs = 0;
+  const emit = () => logEvent('trace.phase', {
+    phase, syncMs, ms: Math.round(performance.now() - t0),
+  });
+  let out: T;
+  try {
+    out = fn();
+  } catch (err) {
+    syncMs = Math.round(performance.now() - t0);
+    emit();
+    throw err;
+  }
+  syncMs = Math.round(performance.now() - t0);
+  if (out && typeof (out as any).then === 'function') {
+    return (out as any).finally(emit) as T;
+  }
+  emit();
+  return out;
+}
+
 // Run `fn` inside a fresh trace scope, emitting `trace.start`/`trace.end`.
 // Errors are re-thrown unchanged so caller fallback logic still triggers.
 export async function withTrace<T>(meta: any = {}, fn: () => Promise<T>): Promise<T> {

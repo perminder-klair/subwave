@@ -14,7 +14,7 @@ import { writeEnvFile } from '../util.ts';
 import { cliImageTag } from '../version.ts';
 import { runStartCommand } from './start.ts';
 import {
-  banner, header, ok, warn, err, info, muted, p, pc, exitIfCancelled, pauseForEnter,
+  banner, header, ok, warn, info, muted, p, pc, exitIfCancelled, pauseForEnter,
 } from '../ui.ts';
 
 type Mode = 'prod' | 'prod-byo';

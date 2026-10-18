@@ -14,7 +14,8 @@
 //   --models      comma list of provider:model (REQUIRED; first colon splits)
 //   --kinds       comma list of groups (pick|segment|request|scripts|banter|programme)
 //                 or exact kind names; default all
-//   --modes       pool,agent (default both). 'any' kinds always run once.
+//   --modes       pool,agent,shortlist (default all three). 'any' kinds always
+//                 run once; 'shortlist' only adds the Track Shortlist pick kind.
 //   --iterations  runs per scenario (default 3)
 //   --reasoning   on | off | both — the thinking toggle as a matrix axis;
 //                 'both' runs every model twice, labelled [r:on]/[r:off].
@@ -56,7 +57,7 @@ function parseArgs(argv: string[]) {
 function usage(msg?: string): never {
   if (msg) console.error(`error: ${msg}\n`);
   console.error('Usage: npm run llm-bench -- --models provider:model[,provider:model...] '
-    + '[--kinds pick,segment,...] [--modes pool,agent] [--iterations N] [--out file.json]');
+    + '[--kinds pick,segment,...] [--modes pool,agent,shortlist] [--iterations N] [--out file.json]');
   console.error(`Groups: ${[...new Set(ALL_SPECS.map(s => s.group))].join(' | ')}`);
   console.error(`Kinds:  ${ALL_SPECS.map(s => s.kind).join(', ')}`);
   process.exit(2);
@@ -72,8 +73,8 @@ async function main() {
     return { spec, provider: spec.slice(0, i), model: spec.slice(i + 1) };
   });
 
-  const modes = new Set((args.modes || 'pool,agent').split(',').map(s => s.trim()).filter(Boolean));
-  for (const m of modes) if (!['pool', 'agent'].includes(m)) usage(`bad mode "${m}"`);
+  const modes = new Set((args.modes || 'pool,agent,shortlist').split(',').map(s => s.trim()).filter(Boolean));
+  for (const m of modes) if (!['pool', 'agent', 'shortlist'].includes(m)) usage(`bad mode "${m}"`);
 
   const kindFilter = args.kinds ? new Set(args.kinds.split(',').map(s => s.trim()).filter(Boolean)) : null;
   const specs = ALL_SPECS.filter(s =>

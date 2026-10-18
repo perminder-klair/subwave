@@ -3,6 +3,7 @@
 // go through it.
 
 import { embedMany } from 'ai';
+import { isInstrumental } from './lyric-vocal.js';
 import {
   embeddingModel,
   activeEmbeddingModelLabel,
@@ -46,9 +47,10 @@ export interface TrackAcoustics {
   musicalKey?: string | null;      // Camelot code, e.g. '8A'
   // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
   audioMoods?: string[] | null;
-  // tracks.vocal_ranges. [] = measured instrumental, non-empty = has vocals,
+  // tracks.vocal_ranges. Total sung duration determines instrumental status;
   // null/undefined = not computed.
   vocalRanges?: unknown[] | null;
+  vocalRangesInvalid?: boolean;
   // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
   // fixed threshold stamp one word on ~everything.
 }
@@ -57,7 +59,8 @@ export interface TrackAcoustics {
 // embedding_meta.text_format; legacy rows read as 1.
 //   1  head line + Last.fm tags + lyric excerpt
 //   2  ... + the Sound: descriptor line + the Era: decade line (#1246)
-export const EMBED_TEXT_VERSION = 2;
+//   3  tolerate short vocal bleed in the instrumental descriptor (#1655)
+export const EMBED_TEXT_VERSION = 3;
 
 // Tempo as a word, not a number: "128" embeds as an arbitrary token.
 function tempoWord(bpm: number): string | null {
@@ -90,7 +93,7 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
   if (mode) words.push(mode);
   // [] is a measurement ("no vocals found"), null is its absence.
-  if (Array.isArray(acoustics.vocalRanges) && acoustics.vocalRanges.length === 0) {
+  if (isInstrumental(acoustics.vocalRanges, acoustics.vocalRangesInvalid) === true) {
     words.push('instrumental');
   }
   return words;

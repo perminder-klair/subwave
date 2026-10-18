@@ -51,7 +51,8 @@ export interface TrackRecord {
   loudnessLufs: number | null; // integrated LUFS (BS.1770); null → unity gain
   peakDb: number | null;       // sample peak in dBFS over the analysis window
   structure: TrackSection[] | null; // structural sections over the analysed window
-  vocalRanges: TrackSection[] | null; // vocal-presence ranges; [] = instrumental, null = not computed
+  vocalRanges: TrackSection[] | null; // clean timing spans; classify through isInstrumental
+  vocalRangesInvalid: boolean;       // invalid stored spans cannot earn instrumental eligibility
   pace: TrackPaceSpan[] | null;     // perceptual energy curve (0..1 per span)
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
@@ -81,7 +82,7 @@ export interface TrackOutro {
   bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;    // tail beat grid (ms)
   bars: number[] | null;     // tail downbeat grid (ms)
-  // Tail vocal-activity spans, absolute ms. [] = analysed instrumental tail,
+  // Tail vocal-activity spans, absolute ms. [] = no detected tail vocals,
   // null/absent = not computed. Optional because the analyzer OMITS the key when
   // not computed (the backfill probes the raw JSON for it); parseOutroJson
   // materialises it as null on read.
@@ -202,7 +203,7 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
-  // 'instrumental' = empty vocal-ranges array, 'vocal' = at least one range. NULL
+  // Shared lyric-vocal duration classification. NULL
   // matches neither, so the facet only covers analysed tracks.
   vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
@@ -235,7 +236,7 @@ export type MoodPoolRecord = Pick<TrackRecord,
   'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'>;
 export type EnergyPoolRecord = MoodPoolRecord & Pick<TrackRecord,
   'originalYear' | 'isCompilation' | 'yearUntrusted' | 'audioMoods' | 'bpm' |
-  'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'pace'>;
+  'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'vocalRangesInvalid' | 'pace'>;
 export type MoodPoolRow = Pick<TrackRow,
   'id' | 'title' | 'artist' | 'album' | 'album_id' | 'artist_id' | 'year' |
   'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec'>;

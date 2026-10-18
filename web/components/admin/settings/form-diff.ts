@@ -50,6 +50,24 @@ export function dirtyPaths(
   return paths.filter(path => !samePath(form, baseline, path));
 }
 
+export function restorePaths(form: FormState, baseline: FormState, paths: readonly string[]): FormState {
+  const next = structuredClone(form);
+  for (const path of paths) {
+    const keys = path.split('.');
+    const leaf = keys.pop()!;
+    let target = next as unknown as Record<string, unknown>;
+    for (const key of keys) {
+      const child = target[key];
+      if (!child || typeof child !== 'object') target[key] = {};
+      target = target[key] as Record<string, unknown>;
+    }
+    const value = atPath(baseline, path);
+    if (value === undefined) delete target[leaf];
+    else target[leaf] = structuredClone(value);
+  }
+  return next;
+}
+
 /**
  * Settings keys a save posts under a name the FormState does NOT use.
  *
@@ -95,3 +113,12 @@ export function mergePatchErrors(
 }
 
 export const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Unsaved edits ANYWHERE in Settings, not just the section on screen: the
+ * condition under which the panel holds a new server revision back. An action
+ * that writes settings from the server side (the LLM swap) waits on this, not
+ * on the active section's own dirtiness.
+ */
+export const unsavedAnywhere = (form: FormState | null, baseline: FormState | null, localDirty: boolean) =>
+  localDirty || (!!form && !!baseline && !sameForm(form, baseline));
