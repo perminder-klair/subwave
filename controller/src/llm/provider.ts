@@ -14,7 +14,7 @@ export {
   noThinkFetch,
 } from './internal/provider/registry.js';
 
-export { primaryLeg, fallbackLeg, probeLegReachable, warmCompatDetection } from './internal/provider/legs.js';
+export { primaryLeg, fallbackLeg, legLabel, probeLegReachable, warmCompatDetection } from './internal/provider/legs.js';
 export type { Leg } from './internal/provider/legs.js';
 
 export {
@@ -30,6 +30,7 @@ export {
   embeddingEnabled,
   embeddingProviderInfo,
   embeddingInfoOf,
+  embeddingBaseUrl,
   resolveEmbeddingCfg,
   buildEmbeddingModel,
   isHeavyEmbeddingModel,

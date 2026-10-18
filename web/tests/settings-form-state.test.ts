@@ -28,6 +28,14 @@ test('cold hydration preserves defaults and independent primary/fallback fields'
   assert.deepEqual(form.llm.headers, [{ name: 'X-Route', value: 'set' }]);
   assert.deepEqual(form.llm.fallback.headers, [{ name: 'X-Other', value: 'set' }]);
 
+  // Tool choice is per leg: neither leg's value leaks into the other, so a
+  // swap that moves an 'auto' onto the backup shows up on the backup's control.
+  assert.equal(form.llm.fallback.toolChoice, 'required');
+  const auto = settingsForm({ llm: { toolChoice: 'required', fallback: { toolChoice: 'auto' } } });
+  assert.equal(auto.llm.toolChoice, 'required');
+  assert.equal(auto.llm.fallback.toolChoice, 'auto');
+  assert.equal(settingsForm({ llm: { toolChoice: 'auto' } }).llm.fallback.toolChoice, 'required');
+
   const shortlist = settingsForm({ llm: {
     trackSelection: 'shortlist', shortlistPasses: 5, shortlistSearchPreparation: true, guestMusicalLeanings: true,
     requestMatching: 'direct', segmentRuntime: 'direct',

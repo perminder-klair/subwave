@@ -23,9 +23,10 @@ import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, una
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import { allowsMoodPlaylistDiscovery } from './discovery-policy.js';
-import { showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
+import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
+import { groundPickNote } from '../broadcast/dj-agent/pick-note.js';
 
 // Raw Subsonic child, slimTrack library row, or Last.fm stub. A structural
 // superset of show-filter's FilterTrack and recency's CandidateLike.
@@ -695,7 +696,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     },
   );
   const effN = noRepeat.window;
-  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
+  // Same history as the agent path: a full rotation's own airings (#1919).
+  const { ids: hardRecentIds, keys: hardRecentKeys } = hardRecentFor(noRepeat, queue);
   // Pinned anchor resolved to nothing: same warning as the agent path.
   if (activeShow?.playlistIds?.length && !playlistPool) {
     queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
@@ -874,7 +876,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   if (chosen.id) offered.delete(chosen.id);
   return {
     song: chosen,
-    reason: pickRaw.reason || null,
+    // A reason that names another candidate as this one (#1978) is dropped,
+    // and the session records the plain `Selected "<title>".` instead.
+    reason: groundPickNote(queue, pickRaw.reason, { track: chosen, candidates, pickAnchor: currentTrack, show: activeShow, route: 'pool' }) || null,
     source: chosen._source,
     // Present only when effects were active; applyMixTransition validates it.
     transition: pickRaw.transition ?? null,

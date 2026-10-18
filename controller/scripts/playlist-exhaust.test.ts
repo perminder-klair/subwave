@@ -4,7 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { showNoRepeatGuard } from '../src/music/show-recency.js';
+import { hardRecentFor, rotationHardSet, showNoRepeatGuard, type AirTimeOf } from '../src/music/show-recency.js';
 import { exhaustiveNoRepeatWindow } from '../src/music/recency.js';
 
 type Track = {
@@ -89,11 +89,13 @@ test('the window is the rotation size less two, and both slots are load-bearing'
 });
 
 test('a 40-track anchor takes a 38-track window, ignoring the configured N', () => {
-  assert.deepEqual(
-    guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(40)),
-    { window: 38, exhaustive: true },
-    'the rotation sizes its own window',
-  );
+  const tracks = makeTracks(40);
+  const { window, exhaustive, rotation } = guard({ playlistStrict: true, playlistExhaust: true }, tracks);
+  assert.equal(window, 38, 'the rotation sizes its own window');
+  assert.equal(exhaustive, true);
+  // The window is measured over this set's own airings (#1919), so the guard
+  // hands the set over with it.
+  assert.deepEqual(rotation?.map((t) => t.id), tracks.map((t) => t.id), 'the airable rotation rides with the window');
 });
 
 test('the library-fraction ceiling and the minimum-effective floor do not apply', () => {
@@ -117,11 +119,9 @@ test('strict music filters narrow the rotation before it is counted', () => {
   // 40 tracks, 25 of them Jazz. A strict Jazz show rotates 25, not 40 — sizing
   // the window against the raw playlist would withhold tracks the show was
   const tracks = makeTracks(40, { genre: (i) => (i < 25 ? 'Jazz' : 'Rock') });
-  assert.deepEqual(
-    guard({ playlistStrict: true, playlistExhaust: true, filtersStrict: true, genres: ['Jazz'] }, tracks),
-    { window: 23, exhaustive: true },
-    '25 in-filter tracks → a 23-track window',
-  );
+  const jazz = guard({ playlistStrict: true, playlistExhaust: true, filtersStrict: true, genres: ['Jazz'] }, tracks);
+  assert.equal(jazz.window, 23, '25 in-filter tracks → a 23-track window');
+  assert.equal(jazz.rotation?.length, 25, 'and the rotation it is measured over is those 25');
   // The genre lock is the RESOLVED one, exactly as the pick paths resolve it.
   assert.equal(
     guard(
@@ -198,6 +198,8 @@ test('a filter that empties the playlist leaves the relaxable cascade in charge'
 // A faithful stand-in for queue.recentlyPlayedByCount(n): the last n DISTINCT
 // ended plays, plus the track currently on air — which is not in the sidecar,
 // because a play is appended when it ENDS. That "plus one" is one of the two
+// headroom slots. It is what a full rotation was measured over before #1919,
+// and is kept for the counterfactuals below.
 function blockedSet(endedNewestFirst: string[], onAir: string | null, n: number): Set<string> {
   const blocked = new Set<string>();
   if (onAir) blocked.add(onAir);
@@ -214,29 +216,125 @@ function blockedSet(endedNewestFirst: string[], onAir: string | null, n: number)
   return blocked;
 }
 
+// A station for the simulations: one tick per play, and an air-time reader that
+// answers the way queue.rotationAirTimes() does — the newest airing, Infinity
+// for the track on air. `ended` is the station-wide sidecar, newest first.
+function station() {
+  let clock = 0;
+  let onAir: string | null = null;
+  const lastAired = new Map<string, number>();
+  const ended: string[] = [];
+  const airTimeOf: AirTimeOf = (t) => (t.id === onAir ? Infinity : lastAired.get(t.id!) ?? null);
+  return {
+    ended,
+    airTimeOf,
+    onAir: () => onAir,
+    play(id: string) {
+      if (onAir) ended.unshift(onAir);
+      onAir = id;
+      lastAired.set(id, ++clock);
+    },
+  };
+}
+
+// The real hard set, through the one function both pick paths call. The
+// station-wide window must not be consulted for a full rotation at all.
+function rotationBlocked(s: ReturnType<typeof station>, show: Record<string, unknown>, tracks: Track[]): Set<string> {
+  const { ids } = hardRecentFor(guard(show, tracks), {
+    recentlyPlayedByCount: () => { throw new Error('a full rotation must not read the station-wide window'); },
+    rotationAirTimes: () => s.airTimeOf,
+  });
+  return ids;
+}
+
+// Seeded, so a failure reproduces. The pick among eligible tracks is RANDOM on
+// purpose: the window alone has to carry the rotation, whatever the model picks.
+function prng(seed: number) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// The promise itself: a track airs again only once every other track in the
+// rotation has aired since its last airing. Returns the violations.
+function rotationBreaks(aired: string[], size: number): string[] {
+  const breaks: string[] = [];
+  const last = new Map<string, number>();
+  aired.forEach((id, i) => {
+    const prev = last.get(id);
+    if (prev != null) {
+      const waiting = size - 1 - new Set(aired.slice(prev + 1, i)).size;
+      if (waiting > 0) breaks.push(`${id} at airing ${i + 1} with ${waiting} still waiting`);
+    }
+    last.set(id, i);
+  });
+  return breaks;
+}
+
 test('a 40-track anchor plays 40 distinct tracks before any repeat', () => {
   const tracks = makeTracks(40);
   const show = { playlistStrict: true, playlistExhaust: true };
-  const ended: string[] = [];
-  let onAir: string | null = null;
+  const s = station();
+  const random = prng(1612);
   const aired: string[] = [];
 
-  // 41 picks: the 41st is where a repeat becomes legal, and must be the track
-  // that has waited longest rather than an arbitrary one.
-  for (let pick = 0; pick < 41; pick++) {
-    const { window } = guard(show, tracks);
-    const blocked = blockedSet(ended, onAir, window);
+  // Two full turns and one more: the 41st airing is where a repeat becomes
+  // legal, and must be the track that has waited longest.
+  for (let pick = 0; pick < 81; pick++) {
+    const blocked = rotationBlocked(s, show, tracks);
     const eligible = tracks.filter((t) => !blocked.has(t.id));
     assert.ok(eligible.length > 0, `pick ${pick + 1}: the rotation must never leave an empty pool`);
-    // The oldest eligible track — the pool's freshness ordering picks this one
-    const chosen = eligible[0];
-    if (onAir) ended.unshift(onAir);
-    onAir = chosen.id;
+    const chosen = eligible[Math.floor(random() * eligible.length)];
+    s.play(chosen.id);
     aired.push(chosen.id);
   }
 
   assert.equal(new Set(aired.slice(0, 40)).size, 40, 'the first 40 airings are 40 distinct tracks');
   assert.equal(aired[40], aired[0], 'the 41st airing is the track that has waited longest');
+  assert.deepEqual(rotationBreaks(aired, 40), []);
+});
+
+test('other shows airing in between do not push the rotation out of its own window (#1919)', () => {
+  // The reported station: a 109-track rotation sharing the day with other
+  // shows. Measured over the STATION's last 107 plays, a five-hour show the
+  // night before filled the window with its own tracks, so the playlist's
+  // tracks heard just before the break came round again while others had not
+  // aired at all. Measured over the rotation's own airings, it cannot.
+  const tracks = makeTracks(109);
+  const others = Array.from({ length: 400 }, (_, i) => `other${i + 1}`);
+  const show = { playlistStrict: true, playlistExhaust: true };
+
+  const run = (blocked: (s: ReturnType<typeof station>) => Set<string>) => {
+    const s = station();
+    const random = prng(1919);
+    const aired: string[] = [];
+    let other = 0;
+    while (aired.length < 330) {
+      // A 12-pick stretch of this show, then a 75-track show of someone else's.
+      for (let pick = 0; pick < 12; pick++) {
+        const held = blocked(s);
+        const eligible = tracks.filter((t) => !held.has(t.id));
+        assert.ok(eligible.length > 0, 'the rotation must never leave an empty pool');
+        const chosen = eligible[Math.floor(random() * eligible.length)];
+        s.play(chosen.id);
+        aired.push(chosen.id);
+      }
+      for (let i = 0; i < 75; i++) s.play(others[other++ % others.length]);
+    }
+    return aired;
+  };
+
+  const own = run((s) => rotationBlocked(s, show, tracks));
+  assert.deepEqual(rotationBreaks(own, 109), [], 'every repeat waits for the whole rotation');
+
+  // The counterfactual pins that the schedule above really is the bug: the
+  // same picks against the station-wide window repeat with tracks still waiting.
+  const { window } = guard(show, tracks);
+  const stationWide = run((s) => blockedSet(s.ended, s.onAir(), window));
+  assert.ok(rotationBreaks(stationWide, 109).length > 0, 'the station-wide window breaks the rotation');
 });
 
 test('the same show with the switch off repeats inside those 40', () => {
@@ -260,6 +358,45 @@ test('the same show with the switch off repeats inside those 40', () => {
   assert.ok(new Set(aired).size < 40, 'the station-wide window lets a track repeat inside the playlist');
 });
 
+test('the rotation window counts its own airings only, wherever they aired', () => {
+  const tracks = makeTracks(5);
+  const at = new Map<string, number>([['t1', 10], ['t2', 40], ['t3', 30], ['t4', 20]]);
+  const airTimeOf: AirTimeOf = (t) => at.get(t.id!) ?? null;
+  const ids = (window: number) => [...rotationHardSet(tracks, airTimeOf, window).ids].sort();
+
+  // window + 1 newest: the +1 is the slot the on-air track always took.
+  assert.deepEqual(ids(2), ['t2', 't3', 't4'], 'the three most recently aired, whatever aired between them');
+  // t5 has never aired: it stays eligible however wide the window.
+  assert.deepEqual(ids(10), ['t1', 't2', 't3', 't4'], 'a never-aired track is never withheld');
+  assert.equal(rotationHardSet(tracks, airTimeOf, 0).ids.size, 0, 'a zero window is off');
+
+  // On air and queued are Infinity: committed to air, so spent first.
+  at.set('t1', Infinity);
+  at.set('t5', Infinity);
+  assert.deepEqual(ids(1), ['t1', 't5'], 'the on-air and queued tracks take the window first');
+});
+
+test('a duplicate rip shares its twin\'s history and slot', () => {
+  const tracks = [...makeTracks(3), { id: 't1-rip', title: 'Track 1', artist: 'Artist 1', genres: ['Jazz'] }];
+  // Only the rip has aired; the identity is spent all the same.
+  const airTimeOf: AirTimeOf = (t) => (t.id === 't1-rip' ? 50 : t.id === 't2' ? 10 : null);
+  const { ids, keys } = rotationHardSet(tracks, airTimeOf, 1);
+  assert.deepEqual([...ids].sort(), ['t1', 't1-rip', 't2'], 'both rows of the newest identity, then the next');
+  assert.ok(keys.has('track 1|artist 1'), 'blocked by key too, for an id-less candidate');
+});
+
+test('every other show keeps the station-wide window', () => {
+  const asked: number[] = [];
+  const history = {
+    recentlyPlayedByCount: (n: number) => { asked.push(n); return { ids: new Set(['x']), keys: new Set<string>() }; },
+    rotationAirTimes: (): AirTimeOf => { throw new Error('only a full rotation reads air times'); },
+  };
+  assert.deepEqual([...hardRecentFor(guard({ playlistStrict: true }, makeTracks(400)), history).ids], ['x']);
+  assert.deepEqual([...hardRecentFor(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(2)), history).ids], ['x'],
+    'a rotation too small for its window is not a rotation');
+  assert.deepEqual(asked, [CONFIGURED, 0]);
+});
+
 // ---------------------------------------------------------------------------
 // Wiring. The policy only reaches the air if both paths ask it, and the pool
 
@@ -276,6 +413,16 @@ test('both pick paths resolve the floor before they size the window', () => {
     assert.match(source, /resolvedGenres:/, `${file} must use its resolved genre lock for show capacity`);
     assert.match(source, /minTrackSec,?\s*maxTrackSec,?\s*\}/,
       `${file} must hand the floor to the guard`);
+  }
+});
+
+test('both pick paths take their hard set from hardRecentFor', () => {
+  // A path that went back to queue.recentlyPlayedByCount would measure a full
+  // rotation over the station's history again — #1919, on one path only.
+  for (const file of ['../src/music/picker.ts', '../src/broadcast/dj-agent.ts']) {
+    const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.match(source, /hardRecentFor\(noRepeat, queue\)/, `${file} must ask the shared policy for its hard set`);
+    assert.doesNotMatch(source, /queue\.recentlyPlayedByCount\(/, `${file} must not read the station-wide window directly`);
   }
 });
 

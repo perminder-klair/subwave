@@ -77,9 +77,20 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const total = (
     d.prepare(`SELECT COUNT(*) AS n FROM tracks ${whereSql}`).get(...params) as { n: number }
   ).n;
-  const rows = d
-    .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as TrackRow[];
+  // Page the ids, then read only the page's wide rows (#1937). `SELECT *`
+  // straight into the ORDER BY puts every matching row's analysis JSON through
+  // the sorter, which on a 150k library read most of the file for one page.
+  // Same WHERE, ORDER BY and LIMIT/OFFSET, so the same ids in the same order.
+  const ids = (
+    d.prepare(`SELECT id FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as Array<{ id: string }>
+  ).map(r => r.id);
+  if (ids.length === 0) return { total, rows: [] };
+  const byId = new Map(
+    (d.prepare(`SELECT * FROM tracks WHERE id IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as TrackRow[]).map(r => [r.id, r]),
+  );
+  const rows = ids.map(id => byId.get(id)).filter((r): r is TrackRow => r !== undefined);
   return { total, rows: rows.map(rowToTrack) };
 }
 

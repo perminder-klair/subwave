@@ -1,7 +1,9 @@
 // Pick-anchor and spacing artist guard policy — pure, unit-pinned
-// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute;
-// this module owns which candidates a re-pick may choose from and whether the
-// guard fires at all, so both are testable without a model call.
+// (#1124 / #1187 / #1251 / #1406). The guard runs in dj-agent.pickViaSelectionRoute,
+// and on a listener request's stand-in in runRequestViaAgent (#1979) and the
+// stateless request cascade (#1993); this module owns which candidates a
+// re-pick may choose from and whether the guard fires at all, so both are
+// testable without a model call.
 
 import { artistCreditsOverlap, artistRootKey, creditInRoots, type CandidateLike } from '../../music/recency.js';
 
@@ -76,24 +78,91 @@ function alternativeArtist(song: CandidateLike, avoidRoot: string, anchorRoot: s
   return !artistCreditsOverlap(root, avoidRoot) && !artistCreditsOverlap(root, anchorRoot);
 }
 
+// `exempt` marks candidates the recency narrowing never removes — a listener
+// request's own ask (#1979). Absent, every candidate is subject to it. It is
+// asked only of a candidate by a recent artist: on the request path it is the
+// stand-in reading, a pass over every line the run wrote, and a pool of a
+// hundred candidates asking it of each one stalled the event loop.
 export function alternativeCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   avoidRoot: string,
   recentRoots: Set<string> = new Set(),
   anchorRoot = '',
+  exempt: (song: T) => boolean = () => false,
 ): AlternativePool<T> {
   const base = [...seen].filter(([, s]) => alternativeArtist(s, avoidRoot, anchorRoot));
   if (!base.length || !recentRoots.size) return { alt: new Map(base), dropped: 0, starved: false };
 
-  const fresh = base.filter(([, s]) => {
-    const root = artistRootKey(s);
-    return !root || !creditInRoots(s, recentRoots);
-  });
+  const fresh = base.filter(([, s]) => !spacedOut(s, recentRoots, exempt));
   // Every alternative is recently heard. Hand back the unnarrowed set: a repeat
   // one slot later is worse than a repeat five slots later.
   if (!fresh.length) return { alt: new Map(base), dropped: 0, starved: true };
 
   return { alt: new Map(fresh), dropped: base.length - fresh.length, starved: false };
+}
+
+// Does the recency narrowing remove this candidate? Its credit is in the
+// window and it is not exempt; `exempt` is asked last, for the reason above.
+function spacedOut<T extends CandidateLike>(song: T, recentRoots: Set<string>, exempt: (song: T) => boolean): boolean {
+  return !!artistRootKey(song) && creditInRoots(song, recentRoots) && !exempt(song);
+}
+
+// The candidates a corrective LISTENER-REQUEST call may choose from (#1979).
+// A request is exempt from spacing because an explicit ask wins, but a
+// stand-in for an ask the library could not meet is the DJ's choice of
+// artist, so a corrective call — the request path's one model call after the
+// run — is not offered a stand-in by a recently-heard artist. What the
+// listener asked for always stays, whoever played it last. No artist is being
+// rejected yet, so none is avoided outright, and a set with nothing fresh left
+// is handed back whole, as above: the call still gets to answer.
+export function requestRepickCandidates<T extends CandidateLike>(
+  seen: Iterable<[string, T]>,
+  recentRoots: Set<string>,
+  isStandIn: (song: T) => boolean,
+): AlternativePool<T> {
+  return alternativeCandidates(seen, '', recentRoots, '', (song) => !isStandIn(song));
+}
+
+export interface RequestDraw<T> {
+  pick: T | null;
+  // The first draw, when spacing set it aside for `pick`.
+  withheld: T | null;
+  // How many recent stand-ins the draw passed over to reach `pick`.
+  skipped: number;
+  // Every candidate was a recent stand-in, so the first draw stood.
+  starved: boolean;
+}
+
+// One draw from a STATELESS listener-request pool (#1993). The request
+// cascade in routes/request.ts has no model call to re-pick with, so spacing a
+// stand-in is a matter of which pool member it draws: a stand-in by a
+// recently-heard artist is passed over, by the test requestRepickCandidates
+// narrows a corrective call's offer with. What the listener asked for stays
+// in however recently it played, and a pool holding nothing but recent
+// stand-ins draws as it always did, so spacing never costs a request its slot.
+// It redraws without replacement until a candidate passes rather than
+// filtering first: a cascade pool can be a whole mood's slice of the library,
+// and reading every candidate measured ~70 ms on 20k. The pick is the same,
+// uniform over the candidates that pass.
+export function drawRequestCandidate<T extends CandidateLike>(
+  pool: readonly T[],
+  recentRoots: Set<string>,
+  isStandIn: (song: T) => boolean,
+  random: () => number = Math.random,
+): RequestDraw<T> {
+  const passes = (song: T) => !spacedOut(song, recentRoots, (s) => !isStandIn(s));
+  const first = pool[Math.floor(random() * pool.length)] ?? null;
+  if (!first || passes(first)) return { pick: first, withheld: null, skipped: 0, starved: false };
+  const rest = pool.filter((s) => s && s !== first);
+  let skipped = 1;
+  for (let left = rest.length; left > 0; left--) {
+    const i = Math.floor(random() * left);
+    const song = rest[i]!;
+    rest[i] = rest[left - 1]!;
+    if (passes(song)) return { pick: song, withheld: first, skipped, starved: false };
+    skipped++;
+  }
+  return { pick: first, withheld: null, skipped: 0, starved: true };
 }
 
 // What the guard did, split by OUTCOME not cause: the call site only needs
@@ -126,6 +195,8 @@ export interface ArtistGuardDeps<T> {
   // caller owns every queue read. `window` is carried only for the log text.
   recentRoots: Set<string>;
   window: number;
+  // Candidates the recency narrowing never removes (alternativeCandidates).
+  exempt?: (song: T) => boolean;
   // A constrained re-pick over `alt`. Returns the model's object, or null when
   // the call failed or answered with an id outside the set it was offered.
   repick: (
@@ -143,7 +214,7 @@ export interface ArtistGuardDeps<T> {
 export async function runArtistGuard<T extends CandidateLike>(
   deps: ArtistGuardDeps<T>,
 ): Promise<ArtistGuardOutcome<T>> {
-  const { song, pickAnchor, seen, recentRoots, window, repick, poolRescue, log, logEvent } = deps;
+  const { song, pickAnchor, seen, recentRoots, window, exempt, repick, poolRescue, log, logEvent } = deps;
 
   const pickRoot = artistRootKey(song);
   const anchorRoot = artistRootKey(pickAnchor || {});
@@ -151,7 +222,7 @@ export async function runArtistGuard<T extends CandidateLike>(
   if (!cause) return { kind: 'none' };
 
   const avoidAnchorRoot = cause === 'onair' ? anchorRoot : '';
-  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots, avoidAnchorRoot);
+  const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots, avoidAnchorRoot, exempt);
   const label = cause === 'onair' ? 'pick-anchor artist' : 'recently-played artist';
   const telemetry = {
     cause,
