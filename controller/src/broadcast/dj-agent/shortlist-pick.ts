@@ -200,7 +200,14 @@ export function shortlistConversation(entries: readonly PromptMemoryEntry[], now
   return conversation.length ? { conversation } : {};
 }
 
-export function shortlistPickPrompt(candidates: PickerCandidate[], context: ShortlistSelectionContext = {}): string {
+// With a show on air a listener favourite is a lean inside its brief, never a
+// reason to leave it (#1911). Shared with the Agentic pick event's clause.
+export const FAVOURITES_INSIDE_SHOW = ' With a show on air, a favourite counts only when it fits the show\'s brief.';
+
+// `showOnAir`: a show is on air at the pick's look-ahead clock. The run,
+// journey and favourites steers then defer to the show's brief, as the Agentic
+// pick event's do (#1911); without one the prompt is unchanged.
+export function shortlistPickPrompt(candidates: PickerCandidate[], context: ShortlistSelectionContext = {}, { showOnAir = false }: { showOnAir?: boolean } = {}): string {
   const situationInstruction = context.situation
     ? ' Use situation as a soft steer for the time, weather and festival mood; the active show and supplied candidates remain authoritative.'
     : '';
@@ -220,16 +227,20 @@ export function shortlistPickPrompt(candidates: PickerCandidate[], context: Shor
     : '';
   const favouritesInstruction = context.listenerFavourites?.length
     ? ' listenerFavourites are the tracks listeners have liked most on this station recently: when one in the shortlist fits the moment, treat it as a strong preference, but keep variety and never loop the same favourites back to back.'
+      + (showOnAir ? FAVOURITES_INSIDE_SHOW : '')
     : '';
   const genreRunInstruction = context.genreRun
     ? ` genreRun says the last ${context.genreRun.plays} tracks have all been ${context.genreRun.genre}, while the show also covers other genres: unless the moment clearly calls for staying, choose a shortlist track from a different genre, keeping the flow smooth.`
     : '';
   const mixRunInstruction = context.mixRun
     ? ' A DJ-mode mix run is active: keep the energy moving toward mixRun, favouring a tempo near its bpm (or half or double) and a key beside it on the Camelot wheel.'
+      + (showOnAir ? ' The show\'s brief outranks the run.' : '')
     : '';
-  const journeyInstruction = context.journeyActive
-    ? ' A sonic journey is active: prefer a fitting tracksTowardJourney track to advance the arc. If none fits, keep its energy direction.'
-    : '';
+  const journeyInstruction = !context.journeyActive
+    ? ''
+    : showOnAir
+      ? ' A sonic journey is active, heading somewhere inside this show: prefer a tracksTowardJourney track that fits the show\'s brief to advance the arc. The brief outranks the arc, and "same energy" or "same era" is no reason to leave it; if none fits, choose by the brief.'
+      : ' A sonic journey is active: prefer a fitting tracksTowardJourney track to advance the arc. If none fits, keep its energy direction.';
   const explorationInstruction = context.explore && !context.journeyActive && !context.mixRun
     ? ' This is an exploration pick: favour an unaired or long-unplayed deepCuts track when it fits the flow.'
     : '';
@@ -265,7 +276,7 @@ export async function djPick({
   // controller-resolved track and safe Booth reason.
   const selection: z.infer<ReturnType<typeof shortlistPickSchema>> = await djObject({
     system: pickSystem(showAt, playlistResolved, true, { host: null, guest: null, promptValue: null }),
-    prompt: shortlistPickPrompt(candidates, context),
+    prompt: shortlistPickPrompt(candidates, context, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }),
     schema: shortlistPickSchema(ids),
     temperature: 0.5,
     kind: 'djShortlistPick',

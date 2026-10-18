@@ -13,6 +13,9 @@ import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
 import { settingsAgentRoutes } from '../schemas/settings.js';
+import {
+  AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
+} from './agent-fit.js';
 
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
@@ -153,20 +156,16 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // are silently timing out into their fallbacks.
   const routes = settingsAgentRoutes(llm);
   if (routes.any) {
-    const lat = recentCalls
-      .filter((c) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
-      .map((c) => c.ms as number)
-      .sort((a, b) => a - b);
-    const deadlineMs = Number(llm.agentTimeoutMs);
-    if (lat.length >= 5 && Number.isFinite(deadlineMs) && deadlineMs > 0) {
-      const p90 = lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.9))];
-      const ratio = p90 / deadlineMs;
+    const p90 = latencyP90(recentCalls);
+    const ratio = p90 === null ? null : agentDeadlineRatio(p90, llm.agentTimeoutMs);
+    if (p90 !== null && ratio !== null) {
+      const deadlineMs = Number(llm.agentTimeoutMs);
       out.push({
         label: 'agent deadline vs latency',
-        status: ratio >= 1 ? 'fail' : ratio >= 0.8 ? 'warn' : 'ok',
+        status: ratio >= 1 ? 'fail' : ratio >= AGENT_DEADLINE_WARN_RATIO ? 'warn' : 'ok',
         detail: `p90 model latency ${(p90 / 1000).toFixed(1)}s vs ${Math.round(deadlineMs / 1000)}s deadline`,
         hint:
-          ratio >= 0.8
+          ratio >= AGENT_DEADLINE_WARN_RATIO
             ? 'Recent calls are running close to (or past) the agent deadline, so agent runs (Agentic Tools picks, agent-assisted requests or agentic segments) are probably timing out into their fallbacks — you lose the work you’re paying for. Raise Settings → Music selection → Agent deadline, or switch to a faster/smaller model (or turn reasoning OFF). Track Shortlist and direct runtimes avoid the tool loop entirely.'
             : undefined,
       });
@@ -174,14 +173,14 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   }
 
   // --- Context window too small for an agent tool loop (Ollama only) ---
-  if (llm.provider === 'ollama' && routes.any) {
-    const nc = Number(llm.numCtx);
-    if (Number.isFinite(nc) && nc > 0 && nc < 8192) {
+  if (routes.any) {
+    const nc = contextWindowTooSmall(llm.provider, llm.numCtx);
+    if (nc !== null) {
       out.push({
         label: 'context window',
         status: 'warn',
         detail: `Context window ${nc} — tight for an agent tool loop`,
-        hint: 'An agent run (Agentic Tools picks, agent-assisted requests, agentic segments) sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back. Raise Settings → LLM provider → Provider → Context window (num_ctx) to ≥8192 (16384 is the default; Stats shows the size your own calls need), or switch those routes to Track Shortlist / direct.',
+        hint: `An agent run (Agentic Tools picks, agent-assisted requests, agentic segments) sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back. Raise Settings → LLM provider → Provider → Context window (num_ctx) to ≥${AGENT_NUM_CTX_FLOOR} (16384 is the default; Stats shows the size your own calls need), or switch those routes to Track Shortlist / direct.`,
       });
     }
   }

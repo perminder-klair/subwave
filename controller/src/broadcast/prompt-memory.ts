@@ -9,7 +9,22 @@ export interface PromptMemoryTurn {
   role: string;
   kind: string;
   text: string;
-  meta?: { personaId?: string; personaName?: string; [k: string]: unknown };
+  meta?: { personaId?: string; personaName?: string; verbatim?: boolean; [k: string]: unknown };
+}
+
+// Words the station aired that no model wrote (#1908): a RAW POST /dj/say (the
+// admin Say box, MCP's subwave_dj_announce and Connect agents all reach it) and
+// a jingle's own script, which the on-demand play exists to air as an
+// announcement. The turn still lands in the session, so the booth, GET /session
+// and the booth carry show it, and djLog keeps its line; no prompt reads it.
+// Negative context is still context: listed under "already said, do not
+// repeat", an operator's emergency notice became the next banter's topic. The
+// session's two prompt readers, promptMemoryEntries() below and
+// session.windowMessages(), both ask withheldFromPrompts().
+export const VERBATIM_META = { verbatim: true } as const;
+
+export function withheldFromPrompts(turn: { meta?: { verbatim?: unknown } | null } | null | undefined): boolean {
+  return turn?.meta?.verbatim === true;
 }
 
 export interface PromptMemoryEntry {
@@ -27,6 +42,7 @@ export function promptMemoryEntries(
   const out: PromptMemoryEntry[] = [];
   for (const turn of turns) {
     if (turn?.role !== 'segment') continue;
+    if (withheldFromPrompts(turn)) continue;
     // recover() validates the array but not each turn, and getDjRecap() runs
     // synchronously inside request/DJ routes: a hand-edited state file must
     // not turn into a 500.

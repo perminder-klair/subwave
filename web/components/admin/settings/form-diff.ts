@@ -113,3 +113,12 @@ export function mergePatchErrors(
 }
 
 export const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Unsaved edits ANYWHERE in Settings, not just the section on screen: the
+ * condition under which the panel holds a new server revision back. An action
+ * that writes settings from the server side (the LLM swap) waits on this, not
+ * on the active section's own dirtiness.
+ */
+export const unsavedAnywhere = (form: FormState | null, baseline: FormState | null, localDirty: boolean) =>
+  localDirty || (!!form && !!baseline && !sameForm(form, baseline));

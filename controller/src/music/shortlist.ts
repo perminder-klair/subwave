@@ -5,7 +5,7 @@
 
 import { PICKER_TOOL_TIMEOUT_MS } from '../llm/internal/tools/picker/defs.js';
 import { buildPickerTools, type PickerScope } from '../llm/tools.js';
-import { SHORTLIST_PASSES_BOUNDS } from '../schemas/settings.js';
+import { SHORTLIST_PASSES_BOUNDS, SHORTLIST_PASSES_DEFAULT } from '../schemas/settings.js';
 import * as library from './library.js';
 import { mixCompat, type Analysis } from './mix.js';
 import { artistCreditsOverlap, artistRootKey, creditInRoots, filterPickerCandidates } from './recency.js';
@@ -373,6 +373,47 @@ export async function buildShortlist(context: ShortlistPlanningContext, offers: 
     ...result,
     candidates: orderByTransitionFit(result.candidates, context.transitionTarget, (candidate) => library.bpmKeyFor(candidate), offers),
   };
+}
+
+// How many sources journeyCompanions runs: what the Shortlist's default plan
+// spends beside tracksTowardJourney on the same pick.
+export const JOURNEY_COMPANION_PASSES = SHORTLIST_PASSES_DEFAULT - 1;
+
+// The Shortlist's companions to a sonic journey, for the Agentic Leanings
+// review (#1977). On a journey this plan pairs tracksTowardJourney with the
+// show's context lane and the anchor's continuity lane. The Agentic model is
+// told to call the journey tool and does, often several times, so its own
+// candidate map holds the waypoint's neighbourhood and nothing else: the
+// review could only weigh one lane, and never the show's tracks a host's
+// Leanings point at. This runs the companions controller-side, through the
+// same scope and planner, with no prepared searches (preparing those is a
+// model call). Only tracks the artist guard would accept are returned, since
+// a review replacement it refused would cost a corrective model call.
+export async function journeyCompanions(
+  context: Omit<ShortlistPlanningContext, 'discoveryPasses' | 'searches' | 'explore' | 'rotationSeed' | 'transitionTarget'>,
+): Promise<{ candidates: PickerCandidate[]; sourceRuns: ShortlistSourceRun[] }> {
+  if (!context.scope.audioWaypoint?.length) return { candidates: [], sourceRuns: [] };
+  const { tools, seen } = buildPickerTools(context.scope);
+  const sources = new Set(Object.keys(tools));
+  sources.delete('tracksTowardJourney');
+  // With no show moods the planner lets the station's own mood (weather, time
+  // of day — always set on a live pick) stand in, ahead of the show's genres,
+  // eras and energies. A journey fixes the plan's order, so that stand-in took
+  // the context pass on every pick and the show's lane never ran. The review
+  // needs the show's lane, so a show that places itself keeps its own.
+  const energies = strings(context.energies).filter(value => ENERGY_VALUES.has(value));
+  const genres = strings(context.genres?.length ? context.genres : context.scope.genreLock);
+  const showPlaced = !!(context.scope.playlistTracks?.length || energies.length || genres.length
+    || hasEraBound(context.eras ?? context.scope.eraLock ?? []));
+  const dominantMood = showPlaced && !strings(context.moods).length ? null : context.dominantMood;
+  const plan = planShortlistSources({ ...context, dominantMood, discoveryPasses: JOURNEY_COMPANION_PASSES }, sources);
+  const { sourceRuns } = await executeShortlistPlan(tools as PickerToolSet, seen, plan);
+  const maxPerArtist = context.scope.playlistLock || context.scope.episodeSource ? Infinity : 3;
+  const { fresh } = withRecentSpacing(
+    withoutArtist(balanceShortlist([...seen.values()], maxPerArtist), artistRootKey(shortlistAvoidArtist(context) || '')),
+    context.scope.episodeSource ? undefined : context.recentArtistRoots,
+  );
+  return { candidates: fresh, sourceRuns };
 }
 
 // The pick-anchor artist guard rejects the anchor's artist after the model

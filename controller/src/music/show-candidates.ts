@@ -15,7 +15,9 @@ function hasMusicFilter(show: any): boolean { return !!(show?.genres?.length || 
 function filtered(rows: Candidate[], locks: Locks): Candidate[] { return applyStrictLocks(rows, locks, { starve: true }); }
 function exclude(rows: Candidate[], ids: Set<string> | null): Candidate[] { return ids?.size ? rows.filter(row => row.id && !ids.has(row.id)) : rows; }
 
-export function candidateCoverage(rows: Candidate[]): CandidateCoverage {
+// Typed by the four fields it reads, so a row from any source (the journey
+// destination's included) can ask without being a full Candidate.
+export function candidateCoverage<T extends Pick<Candidate, 'moods' | 'audioMoods' | 'energy' | 'vocalRanges'>>(rows: readonly T[]): CandidateCoverage {
   let mood = false;
   let energy = false;
   let vocal = false;
