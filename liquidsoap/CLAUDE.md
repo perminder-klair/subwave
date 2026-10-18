@@ -5,7 +5,7 @@
 ## Pipeline, in order
 
 1. `music` = `fallback([dj_queue, auto_slot])`: controller requests first, else the `auto.m3u` coast. `auto_slot` is a `source.dynamic`. The `auto.reload` telnet command reloads the on-air playlist in place or replaces an off-air one, and `auto.ready` reports whether it has a track. One radio.liq-owned file watch reloads in place only contents no reload has read yet; it never replaces the instance.
-2. `cue_cut`: the length cap, the silence trim and the show-boundary fade.
+2. No cut stage: `liq_cue_in`/`liq_cue_out` (the length cap, the silence trim, the show-boundary fade, a stem blend's cut) apply at request resolution. `cue_cut` is a deprecated no-op on 2.4.x, so the script does not call it.
 3. `music_meta`: the pre-cross capture that `on_meta` (`now-playing.json`, the ICY title) and the starve guard read.
 4. The automatic jingle `rotate` (built only when `jingle_ratio` > 0), then the track-sensitive `music_with_jingle_now` switch, with the on-demand `jingle_now_queue` as its first choice.
 5. Per-track `liq_amplify`, then `cross_stamps`, then `cross(dj_transition)`.
@@ -39,6 +39,7 @@ Each one records a measured failure.
 - Fade duration equals the buffer (`d` is what is actually buffered); shorter fades in a fixed buffer sum to +6 dB. There are two measured exceptions: the chop's incoming fade runs on `chop_dd`, and a stem-blend clip seam fades both sides over the cue lead.
 - `cross_stamps` is the only translator of a track's `liq_cross_duration` into end/start durations, and `strip_cross_stamps` removes them from `dj_transition`'s output. Keep the controller's contract: one stamp per track, governing that track's own end.
 - A clip seam aligns on its cue lead by delaying the incoming side. That is sample-accurate on 2.4.6 only (`scripts/stem-seam-test.sh`).
+- A `liq_cue_in` lands on the next codec frame at or after the cue, not on it. Only clip → Y compensates: the drain stamps `liq_clip_cue_late` on Y and `dj_transition` delays Y by it, reading the stamp only when the outgoing side is the clip (#2003). The per-codec rules are measurements of this decoder, so a decoder-priority change or an image bump re-runs `scripts/stem-seam-test.sh cuein`.
 - A show-boundary cut (`liq_show_fade`) is a plain crossfade. Every arming line carries `not boundary_fading`, and `controller/scripts/show-boundary-drain.test.ts` checks it.
 - Loop: apply `loop_gain` after the comb cascade and never add global makeup; snap `bar` to the frame and hold the dry gate one extra frame.
 - Dissolve: sum the four combs and subtract the dry once, never per tap. Everything runs on one streaming thread (#1565). A host that still can't afford it switches off `transitions.effects.dissolve` rather than thinning the wash.

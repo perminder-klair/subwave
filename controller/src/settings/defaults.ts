@@ -727,8 +727,8 @@ export const DEFAULTS = {
   },
   // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
   // rip's leading blank or a long mastering gap doesn't air as silence
-  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
-  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; Liquidsoap cuts
+  // at request resolution). OFF by default: it acts on a MEASUREMENT, and
   // an upgrade must sound byte-identical until the operator asks for this.
   // Controller-side only — no mixer restart.
   silenceTrim: {

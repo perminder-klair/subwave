@@ -122,8 +122,8 @@ facts:
   disposes.
 - **Liquidsoap 2.4.5** supports per-track cross duration (`liq_cross_duration`,
   already used on every track) and cue points (`liq_cue_out` already used for
-  the length cap; `liq_cue_in` is currently unused but is a small `radio.liq`
-  change — `cue_cut` at the top of the chain takes both labels).
+  the length cap; `liq_cue_in` is currently unused). Both are applied at
+  request resolution on 2.4.x, see the resolved design points below.
 
 ### Constraints to design within
 
@@ -246,8 +246,8 @@ station crossfades of 0 or 0.1 seconds can shorten a clip seam below its
 0.3-second stamp, so compensating for 0.3 seconds still leaves a stutter.
 
 `bash scripts/stem-seam-test.sh` renders synthetic tracks through the real
-worker and the production annotation writers, `cue_cut`, `dj_transition`
-and `cross` wiring. It lifts mixer code directly from `liquidsoap/radio.liq`
+worker and the production annotation writers (cues applied at request
+resolution, as on air), `dj_transition` and `cross` wiring. It lifts mixer code directly from `liquidsoap/radio.liq`
 and checks 0, 0.1 and the mixer default, including an ordinary predecessor
 whose duration stamp can affect a broken mixer's buffers. It checks both
 buffer sizes and beat intervals.
@@ -263,7 +263,8 @@ incoming side by whatever was buffered beyond it, so the clip starts
 exactly one lead before X's cut whatever the frame phase. Both fades run over
 the lead from the clip's entry, so the seam holds unity level. On Liquidsoap
 2.4.6 the harness holds the beat grid to 5ms (`SEAM_TOLERANCE_MS`) at every
-frame phase it sweeps: X -> clip 0.2ms and clip -> Y 2.9ms at predecessor
+frame phase it sweeps: X -> clip 0.2ms and clip -> Y 0.1ms (2.9ms before the
+cue-in landing fix below) at predecessor
 trims of 0, 1, 44, 221, 441, 661 and 881 samples, station crossfades 0, 0.1
 and the default. Buffer sizes may sit one frame under the stamp or up to the
 slack over it; a buffer past lead + slack + one frame is left unaligned and
@@ -273,9 +274,97 @@ the clip enters early by the unused part of that frame — 20/19/15/10ms at
 trims 1/44/221/441, 0.2ms only where X starts on a frame boundary. That is
 the same 2.4.5 partial-frame family as savonet/liquidsoap#5296, and 2.4.6
 fixes both (a standalone `blank(duration=0.08)` after a track ending
-mid-frame gives 67.0ms of silence on 2.4.5, 80.0ms on 2.4.6). The clip -> Y
-seam holds 2.9ms on both. A mixer without the alignment ignores the key and
+mid-frame gives 67.0ms of silence on 2.4.5, 80.0ms on 2.4.6). Before the cue-in
+landing fix the clip -> Y seam sat 2.9ms off on both versions. A mixer without the alignment ignores the key and
 keeps the old frame residual.
+
+#### Cue-in landing (#2003)
+
+With the frame residual gone, the clip -> Y seam still sat 126 samples
+(2.86 ms) off at every frame phase, on 2.4.5 and 2.4.6. That is not the
+mixer: Liquidsoap 2.4.x applies `liq_cue_in` once, at request resolution,
+through the ffmpeg decoder (priority 10, above native flac/mad), which drops
+every packet before the cue and emits the first one at or after it **whole**.
+Y starts on the next codec-frame boundary: `ceil(cue·sr / block)·block −
+cue·sr` samples late, 0 to one block. The harness cue 11.7 s happens to land
+126 samples before a boundary on 4096, 4608 and 1152 grids alike; real files
+land anywhere up to ~93 ms (4096-sample FLAC). The clip's tail is Y's own head
+stems, so the seam crossfades near-identical audio: 2.86 ms is a comb filter
+(notches near 172, 517, 862 Hz; a 165 Hz pad dipped ~24 dB mid-crossfade),
+tens of ms a flam. The 5 ms beat grid saw neither.
+
+The fix runs on the controller side and is applied by the mixer.
+`music/cue-landing.ts` runs `ffprobe` on the packets around Y's cue (the local
+file, else the `format=raw` stream) when a stem seam's Y drains, and
+`getAnnotatedUri` stamps the result as `liq_clip_cue_late` (6 dp). In
+`dj_transition`, at clip -> Y only (the outgoing side is the clip), the
+aligned lead becomes `liq_clip_lead − late`, so Y waits `late` longer and its
+first sample meets the clip at the same instant of Y. The reader accepts
+`0 < late < min(lead, 0.15 s)` and logs anything else. Without a stamp the
+URI and the seam are unchanged. Codecs that were not validated, a probe
+failure and the 2-second timeout all mean no stamp.
+
+`bash scripts/stem-seam-test.sh cuein` measures it. It encodes one
+non-periodic reference into every format below, renders
+`annotate:liq_cue_in="c",liq_cue_out="c+2.5"` with no transition (no
+`cue_cut`) at 10 cues (four exactly on codec-frame boundaries, one 1 ms past
+one), cross-correlates each render against the source PCM, and compares the
+result with the controller's probe through `controller/scripts/cue-landing-cli.ts`.
+"Needed" is where Y really starts on the analyzer's decode timeline
+(soundfile when it opens the file, else the ffmpeg pre-decode, as
+`analyze_worker` does), which is the timeline the clip's stems come from.
+`CUEIN_FILES=/a.flac:/b.mp3` adds real library files, and `CUEIN_FORMATS`
+narrows the matrix. Results on `savonet/liquidsoap:v2.4.6`, 44.1 kHz output:
+
+| Format (encoder) | Liquidsoap decoder | Where Y starts (10 cues) | `CODEC_RULES` |
+| --- | --- | --- | --- |
+| FLAC: libsndfile (4096), ffmpeg default (4608), `-frame_size` 4096 / 1152 | ffmpeg | First packet with pts ≥ cue, exact (0.0 samples) at every cue incl. boundaries | `flac` |
+| FLAC 48 kHz (resampled to 44.1 kHz) | ffmpeg | Same rule, within 0.4 samples (measured at 44.1 kHz) | `flac` |
+| FLAC named `.mp3` (what `proto_subhttp` saves a non-local download as) | ffmpeg (content sniffed) | Same as FLAC, exact | `flac` |
+| ALAC in M4A | ffmpeg | First packet with pts ≥ cue, exact | `alac` |
+| AAC-LC in M4A | ffmpeg | First packet with pts **>** cue: a packet exactly on the cue is dropped too (1024 samples at 10.24/20.48/40.96 s); exact elsewhere | `aac` (exclusive boundary) |
+| MP3 LAME CBR 320 / V0 (Xing/LAME header) | ffmpeg | Packet rule minus `start_time` (the 1105-sample LAME delay): pts count it, the gapless analyzer decode does not, and Liquidsoap does not skip it after a seek. 9 of 10 cues land **early** (−1105…−277 samples), 40.961 s lands 2.9 late | `mp3` (start_time subtracted; early = no stamp) |
+| MP3 without Xing header | ffmpeg | `start_time` 0, and the analyzer keeps the delay too: packet rule exact | `mp3` |
+| Ogg Vorbis, Ogg Opus | native ogg | −8641…+8770 samples off, not predictable from packets | none |
+| WAV (pcm_s16le) | ffmpeg | 0 or ~4052 samples, not the packet rule | none |
+
+Every codec with a rule is predicted within 1 sample at every cue (CUEIN
+PASS). With the static FFmpeg 5.1.1 `ffprobe`, standing in for the controller
+image's Debian 12 build, all the `flac`/`alac`/`aac`/`mp3` predictions are
+identical. On **2.4.5** everything matches except AAC on an exact boundary:
+2.4.5 keeps that packet, so the run fails on those three cues. 2.4.5 is
+report-only, as for the clip delay. After a seek an MP3 also starts with up
+to 748 (CBR) / 1375 (V0) samples of decoded silence (the bit reservoir,
+savonet/liquidsoap#3971). FLAC, ALAC and AAC start with none.
+
+**MP3 Y is not compensated in practice.** It lands early by the encoder delay
+less the frame offset, and a delay cannot pull Y earlier. It could be fixed
+by lengthening the lead within `clip_seam_slack`, but that is outside #2003.
+`STEM_SEAM_Y_FORMATS=mp3` shows that case failing placement. A decoder-priority
+change (e.g. native libFLAC, which seeks sample-accurately) or a Liquidsoap
+image bump changes these rules, so re-run `cuein` for either.
+
+The stem-seam run itself now also checks **sample-level placement at
+clip -> Y**. It cross-correlates the last pure second of the clip and the
+first pure second of Y (outside the crossfade buffer, first-differenced so the
+click grid and not a pad period wins) against `y.flac`, and fails when the two
+Y-timeline mappings differ by more than `SEAM_PLACEMENT_SAMPLES` (default 2).
+Y is rendered twice: as `y.flac` (126 samples late) and as `y-3600.flac`
+(3600-sample blocks, 2430 samples = 55 ms late), so an error that only shows
+at large offsets is caught too. Before the fix the check fails at +126 and
++2430 samples on every trim and station crossfade.
+After the fix, on 2.4.6, all 42 controller renders (trims 0, 1, 44, 221, 441,
+661, 881 × station crossfades 0, 0.1, default × both Y encodings) place Y
+**+1 sample** from the clip, and the beat grid holds X -> clip 0.2 ms and
+clip -> Y 0.1 ms (it was 2.9 ms). With the pre-fix mixer
+(`STEM_SEAM_RADIO_REF=7cb507f`) the same 42 renders fail placement at +126 and
++2430 samples (clip -> Y beat error 2.9 and 55.1 ms). On **2.4.5** the
+compensation is frame-quantized, the same `blank()` partial-frame limit as the
+clip delay: Y still sits +126 (`y.flac`) and +666 (`y-3600.flac`, 2430 mod
+882) samples off. That is report-only, like X -> clip there. An MP3 Y
+(`STEM_SEAM_Y_FORMATS=mp3`, trim 0, default crossfade) gets no stamp and sits
+−979 samples (−22.2 ms) off, with a 22.1 ms beat error. That is an existing
+flam on MP3 libraries that this change does not address (see above).
 
 For combined validation before either PR is merged, fetch the final #1774
 commit and run `STEM_SEAM_RADIO_REF=<commit-sha> bash scripts/stem-seam-test.sh`.

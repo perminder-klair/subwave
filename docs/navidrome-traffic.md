@@ -43,6 +43,7 @@ Entering idle also does not cancel downloads or maintenance already in flight.
 | Producer | Navidrome work | Trigger / limits |
 | --- | --- | --- |
 | Liquidsoap `proto_subhttp` | Whole-track `stream` download through curl | Tracks resolved for playback, including prefetch; local music mounts avoid these HTTP downloads. |
+| Controller cue-landing probe | An `ffprobe` read of the incoming track's `stream` (`format=raw`) around its cue-in, seeking where the server allows it, else up to the cue plus one second | Only when a stem-blend clip seam's incoming track drains (#2003), once per seam, 2-second timeout. Local music mounts probe the file instead. |
 | Fallback playlist builder | Random songs, playlists, genres, a sample of recent/frequent albums, starred songs and ReplayGain lookups | Boot, periodic refresh, show changes and explicit refreshes. Automatic builds defer while programme-idle; an explicit refresh still runs. The period defaults to 60 minutes. |
 | DJ picker | Discovery API calls and optional ReplayGain lookups | Picks while autonomous DJ work is allowed; explicit requests/operator actions have their own rules. |
 | Library count | Album pages and one `getAlbum` per album | Count-library command and the guarded start/end of a tagging run. Coverage GETs and library reset do not start a count, per #1570. |

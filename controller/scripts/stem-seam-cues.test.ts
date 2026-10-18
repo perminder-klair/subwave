@@ -90,3 +90,52 @@ test('the clip and its outgoing track carry the cue lead radio.liq aligns on', a
   assert.ok(getAnnotatedUri(song, { cueOutSec: 200, clipLeadSec: CLIP_SEAM_CROSS_SEC }).includes(lead), 'outgoing');
   assert.ok(!getAnnotatedUri(song, { cueOutSec: 200 }).includes('liq_clip_lead'), 'an ordinary track carries none');
 });
+
+// CUE-IN LANDING (#2003): Liquidsoap 2.4.x starts Y on the first codec frame
+// at or after its liq_cue_in, so the controller stamps how late
+// (`liq_clip_cue_late`) and the mixer delays Y by it at clip → Y only.
+
+test('Y carries its probed cue-in landing at six decimals, not rounded to ms', async () => {
+  const { getAnnotatedUri } = await import('../src/music/subsonic.js');
+  const song = { id: 'y', title: 'Y', artist: 'A', album: 'B', path: 'y.flac', crossSec: 10 };
+  // 126 samples at 44.1 kHz: ms rounding would stamp 0.003 (6 samples off).
+  const uri = getAnnotatedUri(song, { cueInSec: 11.7, clipCueLateSec: 126 / 44100 });
+  assert.ok(uri.includes('liq_clip_cue_late="0.002857"'), uri);
+  assert.ok(uri.includes('liq_cue_in="11.7"'), uri);
+});
+
+test('no landing stamp without a probe, or outside the bound the mixer accepts', async () => {
+  const { getAnnotatedUri } = await import('../src/music/subsonic.js');
+  const song = { id: 'y', title: 'Y', artist: 'A', album: 'B', path: 'y.flac', crossSec: 10 };
+  const plain = getAnnotatedUri(song, { cueInSec: 11.7 });
+  assert.ok(!plain.includes('liq_clip_cue_late'), plain);
+  for (const v of [null, 0, -0.01, 0.15, 0.4, Number.NaN]) {
+    assert.ok(!getAnnotatedUri(song, { cueInSec: 11.7, clipCueLateSec: v }).includes('liq_clip_cue_late'), String(v));
+  }
+  // Identical to an URI built before the option existed (the stream URL's
+  // auth salt is fresh per call, so compare up to the query).
+  const noAuth = (u: string) => u.replace(/\?.*$/, '');
+  assert.equal(noAuth(getAnnotatedUri(song, { cueInSec: 11.7, clipCueLateSec: null })), noAuth(plain));
+});
+
+test('radio.liq reads the landing only when the outgoing side is the clip, bounded by the lead', async () => {
+  const { readFileSync } = await import('node:fs');
+  const radio = readFileSync(new URL('../../liquidsoap/radio.liq', import.meta.url), 'utf8');
+  const subsonicSrc = readFileSync(new URL('../src/music/subsonic.ts', import.meta.url), 'utf8');
+  assert.ok(subsonicSrc.includes('liq_clip_cue_late='), 'the writer emits the key radio.liq reads');
+  const reads = radio.match(/\w+\.metadata\["liq_clip_cue_late"\]/g) ?? [];
+  assert.deepEqual(reads, ['b.metadata["liq_clip_cue_late"]'], 'read once, off the incoming side');
+  const gate = /cue_late =\s*\n\s*if a\.metadata\["subwave_clip"\] == "1" then\s*\n\s*float_of_string\(default=0\., b\.metadata\["liq_clip_cue_late"\]\)\s*\n\s*else 0\. end/;
+  assert.match(radio, gate, 'X → clip (incoming clip) never reads it');
+  assert.match(radio, /cue_late > 0\. and cue_late < min\(clip_lead, 0\.15\) then\s*\n\s*clip_lead - cue_late/,
+    'bounded by the clip lead and 0.15 s, and only shortens the lead');
+  assert.match(radio, /d > seam_lead and d <= clip_max_d then d - seam_lead/, 'Y waits the landing longer');
+  assert.match(radio, /clip_max_d = clip_lead \+ clip_seam_slack \+ frame\.duration\(\)/, 'buffer bound unchanged');
+});
+
+test('radio.liq no longer calls the removed cue_cut', async () => {
+  const { readFileSync } = await import('node:fs');
+  const radio = readFileSync(new URL('../../liquidsoap/radio.liq', import.meta.url), 'utf8');
+  const code = radio.split('\n').filter(l => !l.trim().startsWith('#')).join('\n');
+  assert.ok(!/cue_cut\(/.test(code), 'cue_cut is a deprecated no-op on 2.4.x; cues apply at request resolution');
+});

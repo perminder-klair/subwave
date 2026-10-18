@@ -10,6 +10,7 @@ import * as blocklist from './blocklist.js';
 import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
+import { CUE_LATE_MAX_SEC } from './cue-landing.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -943,7 +944,7 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null; clipCueLateSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -967,6 +968,14 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // the clip's start (broadcast/stem-seam.ts). radio.liq buffers past it and
   // aligns the clip on it; an older mixer ignores the key.
   if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
+  // The incoming side of a stem-blend clip seam: how late Y's liq_cue_in will
+  // really land (music/cue-landing.ts, #2003). radio.liq delays Y by it at the
+  // clip -> Y seam only. Six decimals, NOT ms: rounding to ms would bring back
+  // up to 22 samples of the comb filter this removes. Bounded like the reader.
+  if (opts.clipCueLateSec != null && Number.isFinite(opts.clipCueLateSec)
+    && opts.clipCueLateSec > 0 && opts.clipCueLateSec < CUE_LATE_MAX_SEC) {
+    fields.push(`liq_clip_cue_late="${opts.clipCueLateSec.toFixed(6)}"`);
+  }
   // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify
   // override parses. Applied before the ducking layers. Absent = unity.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
@@ -990,9 +999,9 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   if (song.chop) fields.push('liq_chop="true"');
   if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
   // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` and
-  // radio.liq's `cue_cut` stops the track there. Only the capped paths set it
-  // (autonomous picks + auto.m3u); listener requests pass null and play in
-  // full. Callers pass the cap only for a track that runs past it
+  // Liquidsoap stops the track there (cues apply at request resolution). Only
+  // the capped paths set it (autonomous picks + auto.m3u); listener requests
+  // pass null and play in full. Callers pass the cap only for a track that runs past it
   // (track-floor.capCueOutSec): a cue_out past the end is NOT a no-op when the
   // decoder cannot measure the stream, it defeats the crossfade. An explicit cueOutSec (a
   // stem blend's start in the OUTGOING track) competes with the cap and the

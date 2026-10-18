@@ -14,6 +14,7 @@ import * as lyricsSources from '../music/lyrics-sources.js';
 import * as loudness from '../music/loudness.js';
 import { aboveKnownTrackCeiling } from '../music/track-duration.js';
 import * as silenceTrim from '../music/silence-trim.js';
+import * as cueLanding from '../music/cue-landing.js';
 import { capCueOutSec } from '../music/track-floor.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
@@ -2207,6 +2208,29 @@ class Queue {
         // that leaves no audio played twice.
         const cueInCandidates = positiveCues([item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]);
         item.cueInSec = cueInCandidates.length ? Math.max(...cueInCandidates) : undefined;
+        // CUE-IN LANDING (#2003): Liquidsoap 2.4.x starts Y on the first codec
+        // frame at or after its cue, up to ~93ms late, and at a clip -> Y seam
+        // both sides are Y's own audio (a comb filter, or a flam). Probe how
+        // late, once, and stamp it so the mixer delays Y by the same amount.
+        // Only for a stem seam whose cue-in IS the clip's hand-off; any
+        // failure is fail-open (no stamp = the seam aligns on the cue as before).
+        let clipCueLate: { cueSec: number; lateSec: number } | null = null;
+        if (item.stemSeam && item.stemCueInSec && item.cueInSec === item.stemCueInSec) {
+          const cueSec = item.cueInSec;
+          let source: string | null = null;
+          try {
+            source = subsonic.getLocalPath(item.track) || (item.track.id ? subsonic.getRawStreamUrl(item.track.id) : null);
+          } catch { /* no Subsonic config: no probe */ }
+          const landing: cueLanding.CueLanding = source
+            ? await cueLanding.probeCueLanding(source, cueSec, { timeoutMs: 2000 })
+            : { ok: false, codec: null, reason: 'no source' };
+          if (landing.ok) {
+            clipCueLate = { cueSec, lateSec: landing.lateSec };
+            this.log('mix', `stem seam cue-in lands +${(landing.lateSec * 1000).toFixed(1)}ms late (${landing.codec}) — clip→Y lead shortened`);
+          } else {
+            this.log('mix', `cue landing unknown (${landing.codec ?? 'n/a'}: ${landing.reason}) — clip→Y aligned on the stamped cue`);
+          }
+        }
         const uri = () => {
           const liveMax = item.requestedBy ? null : settings.effectiveTrackLengthLimits().playbackMaxSec;
           // The annotation and queue clock must resolve the same live cap.
@@ -2228,6 +2252,8 @@ class Queue {
             cueInSec: item.cueInSec ?? null,
             resolveProbeId: item.resolveProbeId,
             clipLeadSec: item.stemBlend ? stemBlend.CLIP_SEAM_CROSS_SEC : null,
+            // Only while the cue it was probed for is still the live one.
+            clipCueLateSec: clipCueLate && item.cueInSec === clipCueLate.cueSec ? clipCueLate.lateSec : null,
           });
         };
         if (trim.cueInSec != null || trim.cueOutSec != null) {

@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
-# Offline P -> X -> rendered clip -> Y validation using production annotations,
-# cue_cut, the full dj_transition and the cross wiring lifted from radio.liq.
-# Checks station crossfades 0, 0.1 and the default. Controller cues must pass
-# every case; verbatim worker cues are the known-bad comparison.
+# Offline P -> X -> rendered clip -> Y validation using production annotations
+# (liq_cue_in/liq_cue_out apply at request resolution; no cue_cut, which
+# Liquidsoap removed in 2.2.4), the full dj_transition and the cross wiring
+# lifted from radio.liq. Checks station crossfades 0, 0.1 and the default.
+# Controller cues must pass every case; verbatim worker cues are the known-bad
+# comparison. Two checks per render: the click beat grid (SEAM_TOLERANCE_MS)
+# and, at clip -> Y, sample-level placement (SEAM_PLACEMENT_SAMPLES, default
+# 2): both sides of that seam are Y's audio, so an offset the beat grid
+# tolerates is still a comb filter (#2003). Placement needs ffprobe on PATH
+# for the controller's cue-landing probe, and ffmpeg for Y's re-encodes.
+#
+# `stem-seam-test.sh cuein` is a separate measurement mode: where
+# liq_cue_in really lands per format, against the controller's prediction.
 #
 # Requires #1774's mixer buffer fix for short station crossfades. To validate
 # both PRs without merging commits, set STEM_SEAM_RADIO_REF to the pinned
@@ -51,6 +60,49 @@ py() {
   fi
 }
 
+# CUE-IN LANDING MODE (#2003): `stem-seam-test.sh cuein`. Renders
+# annotate:liq_cue_in with no transition across the formats Navidrome's
+# format=raw can hand Liquidsoap (CUEIN_FORMATS="flac-ffmpeg mp3-v0 ..." to
+# narrow, CUEIN_FILES=/a.flac:/b.mp3 to add real library files), measures where
+# each render starts and compares it with the controller's probe
+# (controller/src/music/cue-landing.ts). Exit non-zero if a codec that has a
+# CODEC_RULES entry is mispredicted by more than one sample. Re-run it after a
+# decoder-priority change or a Liquidsoap image bump.
+if [ "${1:-}" = cuein ]; then
+  echo "== cue-in landing: preparing the format matrix"
+  py cuein-prepare /work > /dev/null
+  cases=$(python3 -c 'import json,sys; print(" ".join(c["case"] for c in json.load(open(sys.argv[1]))["cases"]))' "$WORK/cuein/manifest.json")
+  cues=$(python3 -c 'import json,sys; print(" ".join(str(c) for c in json.load(open(sys.argv[1]))["cues"]))' "$WORK/cuein/manifest.json")
+  : > "$WORK/cuein/predictions.jsonl"
+  for c in $cases; do
+    file=$(python3 -c 'import json,sys,os; m=json.load(open(sys.argv[1])); print(os.path.join(sys.argv[3], "cuein", [x for x in m["cases"] if x["case"]==sys.argv[2]][0]["file"]))' "$WORK/cuein/manifest.json" "$c" "$WORK")
+    # shellcheck disable=SC2086
+    "$TSX" "$ROOT/controller/scripts/cue-landing-cli.ts" "$file" $cues | sed "s/^{/{\"case\":\"$c\",/" >> "$WORK/cuein/predictions.jsonl"
+    py cuein-script /work "$c"
+    rm -f "$WORK"/cuein/out-"$c"-*.wav
+    if ! liq "cuein/cuein-$c.liq" > "$WORK/cuein/cuein-$c.log"; then
+      tail -20 "$WORK/cuein/cuein-$c.log"
+      echo "CUEIN FAIL: Liquidsoap failed ($c)"
+      exit 1
+    fi
+    echo "   $c: $(grep -o 'Trying decoder "[a-z0-9]*"' "$WORK/cuein/cuein-$c.log" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
+  done
+  python3 -c '
+import json, sys
+out = {}
+for line in open(sys.argv[1]):
+    p = json.loads(line)
+    out[p["case"] + "|" + str(float(p["cue"]))] = p
+json.dump(out, open(sys.argv[2], "w"))' "$WORK/cuein/predictions.jsonl" "$WORK/cuein/predictions.json"
+  liq_label="${LIQ_BIN:+$($LIQ_BIN --version 2>/dev/null | head -1)}"
+  if py cuein-analyse /work /work/cuein/predictions.json "${liq_label:-$IMAGE}"; then
+    echo "CUEIN PASS: every codec with a rule predicted within 1 sample"
+    exit 0
+  fi
+  echo "CUEIN FAIL: a codec with a rule was mispredicted (or a render is missing)"
+  exit 1
+fi
+
 if [ -n "${STEM_SEAM_RADIO_REF:-}" ]; then
   radio_commit=$(git -C "$ROOT" rev-parse --verify "$STEM_SEAM_RADIO_REF^{commit}")
   git -C "$ROOT" show "$radio_commit:liquidsoap/radio.liq" > "$WORK/radio-source.liq"
@@ -72,14 +124,23 @@ read -r blend in_cue clip_sec < <(python3 -c 'import json,sys; p=json.loads(sys.
 trims="${STEM_SEAM_P_TRIMS:-0 1 44 221 441 661 881}"
 modes="${STEM_SEAM_MODES:-verbatim controller}"
 stations="${STEM_SEAM_STATIONS:-0 0.1 $default_cross}"
+# STEM_SEAM_Y_FORMATS: Y's encodings. `flac` (libsndfile, 4096-sample blocks)
+# lands the cue 126 samples late; `flac-3600` 2430 samples (55 ms), so a
+# regression that only shows at large offsets is caught too. `mp3` is opt-in
+# and expected to fail placement: an MP3 lands EARLY (encoder delay), which a
+# delay cannot correct (docs/stem-transitions-research.md).
+yformats="${STEM_SEAM_Y_FORMATS:-flac flac-3600}"
 verdict=0
-for trim in $trims; do
+for yformat in $yformats; do
+ yfile=$(py y-format /work "$yformat")
+ export STEM_SEAM_Y_FILE="$yfile"
+ for trim in $trims; do
   py predecessor /work "$trim"
   export STEM_SEAM_P_TRIM="$trim"
   for station in $stations; do
     for mode in $modes; do
-      name="$mode-$station-p$trim"
-      echo "== $name: production station crossfade ${station}s, predecessor ${trim} samples short"
+      name="$mode-$station-p$trim-$yformat"
+      echo "== $name: production station crossfade ${station}s, predecessor ${trim} samples short, Y $yfile"
       STATE_DIR="$WORK/controller-state" MUSIC_LIBRARY_PATH="$WORK" \
         "$TSX" "$ROOT/controller/scripts/stem-seam-fixture.ts" "$mode" "$station" "$blend" "$in_cue" > "$WORK/fixture-$name.json"
       py render-script /work "$name" "$station" "/work/fixture-$name.json"
@@ -91,19 +152,20 @@ for trim in $trims; do
       fi
       grep -E 'STEMSEAM:|clip\.seam' "$WORK/seam-$name.log"
       if py analyse-render "/work/seam-$name.wav" "/work/seam-$name.log" "/work/fixture-$name.json" "$clip_sec" "${SEAM_TOLERANCE_MS:-5}"; then
-        echo "   $name: beat grid intact"
+        echo "   $name: beat grid intact, clip -> Y placed"
       else
-        echo "   $name: wrong buffer or broken beat grid"
+        echo "   $name: wrong buffer, broken beat grid or clip -> Y misplaced"
         if [ "$mode" = controller ]; then verdict=1; fi
       fi
     done
   done
+ done
 done
 
 if [ "$verdict" = 0 ]; then
-  echo "STEMSEAM PASS: controller cues held ${SEAM_TOLERANCE_MS:-5}ms at station crossfades [$stations], predecessor trims [$trims] ($IMAGE)"
+  echo "STEMSEAM PASS: controller cues held ${SEAM_TOLERANCE_MS:-5}ms and clip -> Y placement ${SEAM_PLACEMENT_SAMPLES:-2} samples at station crossfades [$stations], predecessor trims [$trims], Y [$yformats] ($IMAGE)"
 else
-  echo "STEMSEAM FAIL: controller cues missed ${SEAM_TOLERANCE_MS:-5}ms ($IMAGE; the clip seam's blank() delay is sample-accurate on Liquidsoap 2.4.6 only)"
+  echo "STEMSEAM FAIL: controller cues missed ${SEAM_TOLERANCE_MS:-5}ms or clip -> Y placement ${SEAM_PLACEMENT_SAMPLES:-2} samples ($IMAGE; the clip seam's blank() delay is sample-accurate on Liquidsoap 2.4.6 only)"
 fi
 echo "Renders and logs: $WORK"
 exit "$verdict"
