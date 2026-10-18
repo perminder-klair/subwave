@@ -53,20 +53,34 @@ Leanings are positive-only (#1994): the review swaps only towards a phrase and
 credits it as a "taste for" that phrase, so a sentence or clause that steers
 away ("Avoids stadium rock", "…, never metal", "Does not favour…", "…, except
 X") yields no phrase. It used to become one, through the noun-phrase fallback
-when nothing positive sat beside it. Negation that qualifies a preference keeps
-it ("records that are not overproduced", "dub with no vocals"), but a qualifier
-with nothing before it ("…, with no metal") is an exclusion. "no wave" is a
-genre, idioms of fondness ("can't get enough of", "not least") are not
-negations, and the cue boundaries are Unicode-aware so "Noël" holds no "no".
-When unsure the reader drops rather than risk a negative becoming a phrase,
-and a list stops at its first negative item, so two losses are known: a
-Title Case name holding a cue word ("No Doubt", "Skip James", "The Seldom
-Scene") ends its list, and "warm but not twee indie pop" keeps only "warm".
-There is no negative channel: the review prompt and its credit line
-speak only of preferences to swap towards, and the Leanings-blind baseline
-would air an avoided track anyway, so a veto would promise an exclusion it
-cannot keep. The persona editor says so and points exclusions at show filters
-and Library blocking rules. Pinned by `scripts/leanings-negative-phrases.test.ts`.
+when nothing positive sat beside it. A contrast, comma or "and" before a
+trigger opens a new clause, so "Hates X, loves Y" keeps Y, unless the negation
+before it is still waiting for its verb ("Never, ever enjoys…", "Doesn't,
+frankly, enjoy…"). An item that names no taste ("anything", "all genres") goes
+with whatever was excluded after it: "anything except metal" kept as
+"anything" would be a taste that covers metal. Negation that qualifies a
+preference keeps it ("records that are not overproduced", "dub with no
+vocals"), but a qualifier with nothing before it ("…, with no metal") is an
+exclusion. "no wave" is a genre, idioms of fondness ("can't get enough of",
+"not least") are not negations, a capitalised name given as an example after
+like / such as / including / especially / e.g. ("ska punk like No Doubt") is an
+act, and the cue boundaries are Unicode-aware so "Noël" holds no "no". When
+unsure the reader drops rather than risk a negative becoming a phrase, and a
+list stops at its first negative item, so some losses are known, for example:
+a Title Case name holding a cue word anywhere else ends its list ("Rancid, No
+Doubt and The Specials" keeps only Rancid, "ska punk: No Doubt, Rancid" keeps
+nothing); "warm but not twee indie pop" keeps only "warm"; a list of clauses
+stops at its first negative one ("Loves soul, avoids metal, enjoys funk" keeps
+only soul); and idioms that read as negation ("Can't stop playing Motown",
+"Doesn't just love soul") yield nothing. Nor is the cue list complete the other
+way: a verb it does not know ("Bans stadium rock"), "nothing" and "refused"
+(each also a band), and an aside that ends on a noun ("Not in a million years,
+enjoys metal") still leave a phrase. There is no negative channel: the review
+prompt and its credit line speak only of preferences to swap towards, and the
+Leanings-blind baseline would air an avoided track anyway, so a veto would
+promise an exclusion it cannot keep. The persona editor says so and points
+exclusions at show filters and the Library's Blocked (never play) rules.
+Pinned by `scripts/leanings-negative-phrases.test.ts`.
 `dj-agent/leanings-review.ts` owns extraction, source priority, evidence
 validation and reason filtering. A viable host match, including the baseline,
 excludes guest evidence; a guest can nudge only when no viable host match exists.
