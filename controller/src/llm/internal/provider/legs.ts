@@ -18,7 +18,11 @@ export interface Leg {
   label: string;  // `provider:modelId` for /debug records
 }
 
-function labelFor(cfg: any): string {
+// The `provider:modelId` label a leg's telemetry rows carry (`model` on every
+// recentCalls row), resolved the same way the call itself resolves its model —
+// so a reader matching rows to a leg compares like with like (a blank Ollama
+// model is config.ollama.model here too).
+export function legLabel(cfg: any): string {
   try {
     return `${cfg.provider}:${resolveModelId(cfg)}`;
   } catch {
@@ -31,7 +35,7 @@ function labelFor(cfg: any): string {
 // the caller surfaces, not something to silently route around.
 export function primaryLeg(): Leg {
   const cfg = llmCfg();
-  return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: labelFor(cfg) };
+  return { cfg, model: languageModel(cfg), noThinkModel: languageModel(cfg, { forceNoThink: true }), label: legLabel(cfg) };
 }
 
 // The optional backup leg, or null when no usable fallback is configured.
@@ -46,7 +50,7 @@ export function fallbackLeg(): Leg | null {
   // fallback.apiKey slot is legacy/empty now. Empty → its env var, as before.
   const fb = resolveCompatibleMode({ ...stored, apiKey: settings.llmKeyFor(stored.provider) });
   try {
-    return { cfg: fb, model: languageModel(fb), noThinkModel: languageModel(fb, { forceNoThink: true }), label: labelFor(fb) };
+    return { cfg: fb, model: languageModel(fb), noThinkModel: languageModel(fb, { forceNoThink: true }), label: legLabel(fb) };
   } catch {
     return null;
   }

@@ -230,10 +230,13 @@ test('searchLibrary: a named track filtered out keeps saying so when the vibe in
   assert.deepEqual(filtered.tracks.map((s: any) => s.id), ['vibe1']);
   assert.match(filtered.note, /1 matching track\(s\) exist but were all played recently/);
   assert.match(filtered.note, /not literal matches for what was searched/);
+  assert.equal(filtered.via, 'vibe');
 
+  // A pure vibe query is marked too, with no note: the request path's
+  // stand-in check (#1979) must not read lookalikes as the thing searched for.
   const vibe = await exec(buildPickerTools(ctxScope).tools.searchLibrary, { query: 'nothing literal matches' });
-  assert.ok(Array.isArray(vibe), 'a pure vibe query still returns plain tracks');
-  assert.deepEqual(vibe.map((s: any) => s.id), ['vibe1']);
+  assert.deepEqual(vibe, { tracks: vibe.tracks, via: 'vibe' });
+  assert.deepEqual(vibe.tracks.map((s: any) => s.id), ['vibe1']);
 });
 
 test('empty discovery answers carry a note and the rule, never a bare []', async () => {

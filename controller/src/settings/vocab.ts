@@ -249,6 +249,11 @@ export const LLM_PROVIDERS = [
   'gateway',
 ];
 
+// Longest inline `embedding.apiKey` update() accepts. A chat leg's inline key
+// may run to 1000 (applyInlineKey), so whatever copies one into the embedding
+// leg (the LLM swap's pin, settings/llm-swap.ts) must check this first.
+export const EMBEDDING_API_KEY_MAX = 200;
+
 // Subset of LLM_PROVIDERS that can produce text embeddings (#493, #522).
 export const EMBEDDING_PROVIDERS = [
   'ollama',

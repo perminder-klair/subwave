@@ -18,6 +18,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { setTimeout as delay } from 'node:timers/promises';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+import { mock } from 'node:test';
 import { envInt, envStr } from '../src/util/env.js';
 
 const N = envInt('ADMIN_SCALE_N', 20000, { min: 1000 });
@@ -153,6 +155,11 @@ console.log(JSON.stringify({
 // One committed no-op write: moves changeToken(), as every tagger batch does,
 // so a cache keyed on it cannot flatter a measurement.
 const touch = () => d.prepare("UPDATE tracks SET title = title WHERE id = 'tr-0000000'").run();
+// Genre suggestions are cached on genreInputsToken() (#1991), which a no-op
+// write does not move: flip one track's genres instead.
+let genreFlip = false;
+const touchGenres = () => d.prepare("UPDATE tracks SET genres = ? WHERE id = 'tr-0000000'")
+  .run(JSON.stringify([(genreFlip = !genreFlip) ? 'Bench A' : 'Bench B']));
 
 function time(label: string, fn: () => unknown, runs = 3, opts: { warm?: boolean } = {}) {
   const ms: number[] = [];
@@ -166,10 +173,10 @@ function time(label: string, fn: () => unknown, runs = 3, opts: { warm?: boolean
 }
 
 // 'write' moves the token only; 'cold' also drops the in-process count caches.
-async function timeAsync(label: string, fn: () => Promise<unknown>, mode: 'cold' | 'write' | 'warm') {
+async function timeAsync(label: string, fn: () => Promise<unknown>, mode: 'cold' | 'write' | 'warm', write = touch) {
   const ms: number[] = [];
   for (let i = 0; i < 3; i++) {
-    if (mode !== 'warm') touch();
+    if (mode !== 'warm') write();
     if (mode === 'cold') db.invalidateStats();
     const s = performance.now();
     await fn();
@@ -209,7 +216,48 @@ time('browse: filter page at offset 50%', () => library.filter({ sort: 'artist',
 time('browse: filter by mood, sorted by bpm', () => library.filter({ moods: ['night'], sort: 'bpm', limit: 50, offset: 0 }));
 time('scenes: sceneVocabulary', () => db.sceneVocabulary());
 time('analysis-failures: list 200', () => db.analysisFailures(200));
-time('genre suggest: genreCentroids (cold, on a library change)', () => db.genreCentroids(), 1);
+// Show-editor genre suggestions (#1976). The one-call walk is what every
+// request on a changed library used to block for. The route now answers from
+// the last result and walks in slices, so what to watch is the request time and
+// the longest event-loop block while a walk runs, not the walk's total.
+time('genre suggest: genreCentroids, the whole walk in one call', () => db.genreCentroids(), 1);
+const suggest = await import('../src/music/genre-suggest.js');
+async function timeWalk(label: string, fn: () => Promise<unknown>) {
+  const lag = monitorEventLoopDelay({ resolution: 1 });
+  lag.enable();
+  const s = performance.now();
+  await fn();
+  const ms = Math.round(performance.now() - s);
+  // A block just before fn() settled is only recorded once the loop turns.
+  await delay(20);
+  lag.disable();
+  console.log(JSON.stringify({ label, ms, longestBlockMs: Math.round(lag.max / 1e6) }));
+}
+touchGenres();
+await timeWalk('genre suggest: first request, waits for the sliced walk', () => suggest.genreSuggest());
+await timeAsync('genre suggest: request, library unchanged', () => suggest.genreSuggest(), 'warm');
+await timeAsync('genre suggest: request after a write, inside the refresh floor', () => suggest.genreSuggest(), 'write', touchGenres);
+mock.timers.enable({ apis: ['Date'], now: Date.now() });
+mock.timers.tick(suggest.GENRE_SUGGEST_REFRESH_FLOOR_MS);
+touchGenres();
+await timeWalk('genre suggest: request after a write past the floor, then its background walk', async () => {
+  const s = performance.now();
+  await suggest.genreSuggest();
+  console.log(JSON.stringify({ label: 'genre suggest: that request (answered from the last walk)', ms: Math.round(performance.now() - s) }));
+  await suggest.genreSuggestIdle();
+});
+// Past the max age a changed library is no longer answered from the last walk
+// (#1991): the request waits for the re-read, which still yields between slices.
+// A play is not a change to it, so an open after hours on air does not wait.
+mock.timers.tick(suggest.GENRE_SUGGEST_MAX_AGE_MS);
+db.recordPlay({
+  trackId: 'tr-0000000', title: 'bench', artist: null, album: null, playedAt: new Date().toISOString(),
+  source: 'auto', requestedBy: null, showId: null, showName: null,
+});
+await timeWalk('genre suggest: request after plays only, past the max age (no walk)', () => suggest.genreSuggest());
+touchGenres();
+await timeWalk('genre suggest: request after a genre write past the max age, waits for the re-read', () => suggest.genreSuggest());
+mock.timers.reset();
 db.close();
 // Imported modules may hold timers; a bench must never linger.
 process.exit(0);
