@@ -15,13 +15,19 @@ Two things travel with the base-image swap, both under the encoders:
   every listener is recorded with the proxy's container address and countries
   disappear. Both Dockerfiles now add the DMO source explicitly (keyring
   hash-checked) and pin it to `icecast2` alone, and the build fails if the
-  installed Icecast is not KH.
+  installed Icecast is not KH. The keyring pin needs a manual bump when DMO
+  rotates its keyring: their pool keeps only the current
+  `deb-multimedia-keyring` package, so a source build fails at the `ADD` until
+  the URL and both hashes are updated.
 - **Liquidsoap's codec stack changes shape.** The old image decoded and encoded
-  through DMO's dynamically linked FFmpeg 7.1.4 (with DMO libfdk-aac 2.0.3);
-  the stock 2.4.6 executable bundles a static FFmpeg 8 and links no libav* at
-  all. The images' apt state is no longer part of Liquidsoap's codec behaviour,
-  and the DMO pin above keeps even that apt state on Debian's packages (the
-  AIO's CLI `ffmpeg` in particular).
+  through DMO's dynamically linked FFmpeg 7.1.4, with DMO's libfdk-aac 2.0.3 and
+  DMO's lame. The stock 2.4.6 executable bundles a static FFmpeg 8 and fdk-aac,
+  but still links Debian's libmp3lame0, libopus0, libflac and libvorbis
+  dynamically, so the image's apt state is still part of the MP3, Opus and FLAC
+  encoders. DMO also ships libmp3lame0 (`1:3.100-dmo3`), and the DMO pin above
+  keeps it on Debian's build (`3.100-6`), as it does the AIO's CLI `ffmpeg`.
+  MP3 encoding therefore moves from DMO's lame to Debian's, both the same
+  upstream 3.100.
 
 2.4.6 is the minimum, for two upstream fixes:
 
