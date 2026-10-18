@@ -510,3 +510,44 @@ test('a discarded Agentic note is recorded with what the model wrote', () => {
   assert.match(pickSource, /object\.reason === plainAgenticSelectionReason\(song\)\) \{\n\s+logEvent\('pick\.notePlain', \{ agent: 'pick', to: song\.id \?\? null, note: note\.slice\(0, 400\) \}\);/,
     'the first answer\'s note is logged when it becomes plain copy');
 });
+
+// The notes below are the model's own words from a live station's
+// pick.notePlain events: accurate notes the capitalised-name read discarded.
+test('an Agentic note naming known names keeps its reasoning', () => {
+  const refs = ['Bejeweled (Mixed)', 'Taylor Swift', 'Sunday Slow Cooker', 'Punjabi', 'Indian Folk', 'Indian Pop', 'Soul', 'Regional Indian'];
+  const kept = (track: any, note: string) => {
+    const out = agenticDiscoverySelectionReason(track, note, refs);
+    assert.ok(out.endsWith(/[.!?]$/.test(note) ? note : `${note}.`), `${note} → ${out}`);
+    assert.doesNotMatch(out, /strong musical fit/);
+  };
+  kept({ title: 'Chunni (From "Lahoriye" Soundtrack)', artist: 'Amrinder Gill & Jatinder Shah', genre: 'Punjabi' },
+    'Warm, rarely aired Amrinder Gill softens the set after two punchy tracks');
+  kept({ title: 'Home Care', artist: 'MXRCI & Kahlon', genre: 'Regional Indian' },
+    'Rarely aired calm Regional Indian track, eases down after the bright pop burst');
+  kept({ title: 'Laayi Rakhin Sohneya', artist: 'Avkash Mann, Noor Chahal, Happy Raikoti & Bilal Wajid', genre: 'Punjabi' },
+    'unaired film song, softer warmth after the Taylor Swift and club-leaning detour');
+  kept({ title: 'Jhelum Naina', artist: 'Babul Supriyo & Jeet Gannguli', album: 'Very Best of Coke Studio Vol. 1', genre: 'Indian Pop' },
+    'Matching 89.1 bpm, Coke Studio soulful texture, rarely heard artist');
+  kept({ title: 'Athru Te Akhan', artist: 'Hustinder, Punam Gill, Manwinder Mann & Savraj', genre: 'Punjabi' },
+    'Fresh Punjabi artists, low-energy reflective romance, long and unhurried for the slow cooker.');
+  kept({ title: 'Mera Pind', artist: 'Gagan Kokri, Bohemia, MXRCI & Rym Gill', genres: ['Punjabi'] },
+    'Fresh Punjabi voices, low energy, gentle tempo drop from a frantic-feeling predecessor');
+});
+
+test('a capitalised name nothing accounts for still becomes plain copy', () => {
+  const refs = ['Sunday Slow Cooker', 'Punjabi', 'Regional Indian'];
+  const track = { title: 'Pyaar', artist: 'SIDAK', genre: 'Punjabi' };
+  const plain = plainAgenticSelectionReason(track);
+  assert.equal(agenticDiscoverySelectionReason(track, 'Elliott Smith’s Rose Parade is calm and reflective, with a close key.', refs), plain,
+    'a recalled track the model never searched is not attached to the pick');
+  assert.equal(agenticDiscoverySelectionReason(track, 'Massive Attack keeps the late-night hush going after the last record.', refs), plain,
+    'a sentence-opening act is not excused by its capital');
+  assert.equal(agenticDiscoverySelectionReason(track, 'Warm Regional Indian lift, closer to Diljit Dosanjh than the last pick.', refs), plain,
+    'a known genre does not excuse an unknown act in the same note');
+  assert.equal(agenticDiscoverySelectionReason(track, 'Fresh Punjabi warmth with a softer “Teardrop” hush to it.', refs), plain,
+    'a quoted title is still a claim');
+});
+
+test('the Agentic route hands the capitalised-name read its context names', () => {
+  assert.match(pickSource, /agenticDiscoverySelectionReason\(song, note, pickNoteReferences\(queue, pickAnchor, activeShow\)\)/);
+});

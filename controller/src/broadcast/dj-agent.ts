@@ -56,7 +56,7 @@ import { shortlistSourceHint } from '../music/shortlist-presentation.js';
 import type { Persona } from './queue/types.js';
 import { recordShortlistPick } from '../stats.js';
 import { predecessorContext, predecessorPrompt } from './dj-agent/pick-context.js';
-import { groundPickNote, stationClaimNames } from './dj-agent/pick-note.js';
+import { groundPickNote, pickNoteReferences, stationClaimNames } from './dj-agent/pick-note.js';
 
 // Re-exported so every existing `from './dj-agent.js'` import keeps working —
 // including scripts/llm-bench, which sits outside tsconfig's include and so
@@ -757,7 +757,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     // Read the model's own note before the verified identity is prefixed to
     // it (#1978): a note describing another candidate becomes plain copy.
     const note = groundPickNote(queue, object.reason, { track: song, candidates: extras.seen.values(), pickAnchor, show: activeShow, route: 'pick' });
-    object = { ...object, reason: agenticDiscoverySelectionReason(song, note) };
+    object = { ...object, reason: agenticDiscoverySelectionReason(song, note, pickNoteReferences(queue, pickAnchor, activeShow)) };
     // A note that names nothing on the queued track becomes plain copy too.
     // Keep what the model wrote, so a formatting miss in the identity check
     // can be told from a note about another track.
