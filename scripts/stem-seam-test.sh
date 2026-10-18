@@ -107,4 +107,3 @@ else
 fi
 echo "Renders and logs: $WORK"
 exit "$verdict"
-exit "$verdict"

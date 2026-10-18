@@ -409,7 +409,12 @@ music = cue_cut(music)
 # INVARIANT: fade.out/fade.in span the ENTIRE cross() buffer so the tracks curve
 # past each other at ~-6 dB midpoint and sum to ~unity. A shorter fade leaves the
 # outgoing at full level while the incoming ramps: +6 dB, audible doubling. To
-# vary the blend, vary the cross BUFFER, never the fade inside it.
+# vary the blend, vary the cross BUFFER, never the fade inside it. Two measured
+# exceptions in dj_transition: the chop's incoming fade (the outgoing is already
+# gone), and a stem-blend clip seam, where both sides fade over the cue lead
+# inside a slightly longer buffer (CLIP SEAM ALIGNMENT). The delayed side is
+# silent until it enters, so both fades share one window and the +6 dB hazard
+# can't arise.
 #
 # Low-level `cross`, NOT the `crossfade` wrapper: crossfade(smart=false) routes
 # through its internal simple_transition and ignores a custom callback. `a`/`b`
