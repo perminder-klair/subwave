@@ -15,7 +15,8 @@
 // this process; the assignment below hides it otherwise.
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { STATE_DIR_PREFIX } from './stale-state-dirs.js';
 import { createTempDir } from './temp-dir.js';
 
 process.env.SUBWAVE_TEST_INHERITED_STATE_DIR = process.env.STATE_DIR ?? '';
-process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-test-state-'));
+process.env.STATE_DIR = createTempDir(join(tmpdir(), STATE_DIR_PREFIX));

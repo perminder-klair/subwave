@@ -34,6 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseRunArgs, type RunArgs } from './test-utils/run-args.js';
+import { STATE_DIR_PREFIX, sweepStaleStateDirs } from './test-utils/stale-state-dirs.js';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
@@ -61,8 +62,10 @@ console.log(`Running ${files.length} test file(s)${filter ? ` matching "${filter
 
 // `--import tsx` loads .ts directly and is inherited by each subprocess, as is
 // the state-dir preload. The spec reporter is forced so a non-TTY doesn't fall
-// back to TAP.
-const stateDir = mkdtempSync(join(tmpdir(), 'subwave-test-state-'));
+// back to TAP. Dirs a killed run left behind are swept first.
+const swept = sweepStaleStateDirs(tmpdir());
+if (swept.length > 0) console.log(`Removed ${swept.length} stale test STATE_DIR(s) left by a killed run.\n`);
+const stateDir = mkdtempSync(join(tmpdir(), STATE_DIR_PREFIX));
 
 const { status } = spawnSync(
   process.execPath,
