@@ -9,7 +9,9 @@
 // Deliberately narrow: only the top level of the given dir, only a directory
 // (never followed through a symlink) whose WHOLE name is the prefix plus
 // mkdtemp's six-character suffix, and only one untouched for a day, so a run
-// still going in another checkout is never swept.
+// still going in another checkout is never swept. It must also be owned by
+// this user: the default tmpdir() is a shared /tmp, where anyone can create a
+// dir by that name and backdate it, and one another user owns is never ours.
 import { lstatSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -17,7 +19,9 @@ export const STATE_DIR_PREFIX = 'subwave-test-state-';
 const STATE_DIR_NAME = new RegExp(`^${STATE_DIR_PREFIX}[A-Za-z0-9]{6}$`);
 const STALE_MS = 24 * 60 * 60 * 1000;
 
-export function sweepStaleStateDirs(root: string, now = Date.now()): string[] {
+// `uid` is undefined where the platform has none (Windows), and then ownership
+// is not checked.
+export function sweepStaleStateDirs(root: string, now = Date.now(), uid = process.getuid?.()): string[] {
   let names: string[];
   try {
     names = readdirSync(root);
@@ -30,7 +34,7 @@ export function sweepStaleStateDirs(root: string, now = Date.now()): string[] {
     const path = join(root, name);
     try {
       const stat = lstatSync(path);
-      if (!stat.isDirectory() || now - stat.mtimeMs < STALE_MS) continue;
+      if (!stat.isDirectory() || (uid !== undefined && stat.uid !== uid) || now - stat.mtimeMs < STALE_MS) continue;
       rmSync(path, { recursive: true, force: true });
       removed.push(path);
     } catch {

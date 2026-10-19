@@ -1,6 +1,7 @@
 // The runner's start-of-run sweep (test-utils/stale-state-dirs.ts) removes only
 // a day-old top-level dir named exactly like a test STATE_DIR — never a file, a
-// symlink, a near-miss name, something nested, or a dir another run still uses.
+// symlink, a near-miss name, something nested, a dir another run still uses, or
+// one another user owns.
 import assert from 'node:assert/strict';
 import { existsSync, lutimesSync, mkdirSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,6 +44,19 @@ test('only a day-old top-level dir named like a test STATE_DIR is swept', () => 
     'subwave-test-state-Link01', 'target']) {
     assert.ok(existsSync(at(kept)), `${kept} is kept`);
   }
+});
+
+// A dir another user owns cannot be made without root, so the sweep is told this
+// one belongs to someone else instead.
+test('a stale dir another user owns is never swept', { skip: process.getuid === undefined }, () => {
+  const root = createTempDir(join(tmpdir(), 'subwave-sweep-test-'));
+  const dir = join(root, 'subwave-test-state-NotOur');
+  mkdirSync(dir);
+  utimesSync(dir, then, then);
+
+  assert.deepEqual(sweepStaleStateDirs(root, now, process.getuid!() + 1), []);
+  assert.ok(existsSync(dir), 'another user\'s dir is kept');
+  assert.deepEqual(sweepStaleStateDirs(root, now), [dir], 'the same dir is swept as its owner\'s');
 });
 
 test('a missing root sweeps nothing and does not throw', () => {
