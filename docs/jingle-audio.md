@@ -23,7 +23,9 @@ lead-in, through the same light duck as a DJ link (`ducking.intro`, default
 `0.30`). A song carrying a DJ link or solo intro is reserved for that voice
 even after its handoff file has disappeared. Queued/aired speech, pending talk,
 manual jingles, beds, pause-and-talk, idle/off-air and starvation all prevent
-an overlay. The mixer checks again when it consumes the offer. A short song,
+an overlay. The mixer checks again when it consumes the offer and throughout
+playback. Entering idle or going off air cancels an accepted ID and its silent
+lead-in; resuming never restarts that ID alongside newly queued speech. A short song,
 an ID that cannot finish before the outgoing crossfade or measured vocal entry,
 or an unmeasurable audio import is skipped. A controller restart does not insert
 an ID into an already-running song.

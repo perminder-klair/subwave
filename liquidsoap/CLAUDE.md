@@ -12,6 +12,12 @@ unsafe optional ID is dropped, never queued behind speech. Its actual-start
 hook writes `jingle-playing.json` with `placement: over`; it never updates the
 song's now-playing/ICY metadata. `over` and `both` require the running mixer
 ratio to be zero; `both` moves the between-song draw to the controller too.
+Accepted IDs and their lead-ins carry one cancellation generation. Idle and
+off-air commands invalidate it before either gate changes. A synchronous intro
+metadata hook and per-frame gain gate recheck generation, song and competing
+speech; invalid audio is muted and skipped, including prefetched requests that
+are no longer in `queue()`. Wall-clock expiry during a pause cannot revive an
+ID. Ordinary DJ intros keep their existing path.
 
 Pipeline in order:
 

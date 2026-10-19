@@ -3418,6 +3418,11 @@ class Queue {
       if (windowMs >= VOICE_HOLD_MAX_MS) return;
       const mixer = await this._overlayMixerStatus();
       if (!mixer) return;
+      // This song's stamp governs its EXIT. The previous song's stamp above
+      // only governs when its opening clears; adaptive stamps can differ even
+      // with a zero station default. Unstamped songs use the running mixer.
+      const exitCrossfadeMs = item.track.crossSec != null && item.track.crossSec >= 0
+        ? item.track.crossSec * 1000 : mixer.crossfadeMs;
       const checkedAt = Date.now();
       const stillSafe = () => {
         const live = settings.get();
@@ -3431,7 +3436,7 @@ class Queue {
             elapsedMs: Date.now() - boundary.at,
             windowMs: windowMs + HANDOFF_TO_AIR_MS,
             remainingMs: mixer.remainingMs - (Date.now() - checkedAt),
-            exitCrossfadeMs: Math.max(crossfadeMs, mixer.crossfadeMs),
+            exitCrossfadeMs,
             runwayMs: vocalRunwayMs(item.track),
           });
       };

@@ -186,7 +186,7 @@ export async function airVoice(
   return {
     voiceId,
     clipMs,
-    aired: airMarkerPromise ?? awaitVoiceAir(voiceId),
+    aired: airMarkerPromise ?? awaitVoiceAir(voiceId, undefined, { requireMarker: jingleOverlay }),
   };
 }
 

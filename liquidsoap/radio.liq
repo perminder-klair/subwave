@@ -1278,6 +1278,53 @@ music = cross(
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
 
+# Gates that remain meaningful DURING an overlay, excluding its own intro
+# queue and voice_until deadline. Rechecked on every audio frame, not just at
+# the file handoff: idle/off-air freezes audio, but wall-clock holds expire.
+def jingle_overlay_environment_safe() =
+  stream_on() and not idle_mode() and not music_starved() and
+  source.is_ready(music_meta) and not bed_on_air() and not pause_talk_on_air() and
+  not jingle_now_on_air() and source.remaining(voice_queue) <= 0. and
+  list.length(voice_queue.queue()) == 0 and list.length(jingle_now_queue.queue()) == 0 and
+  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
+  not file.exists("#{state_dir}/jingle-now.txt")
+end
+
+# One generation for BOTH the lead-in and ID, including requests already
+# prefetched out of queue(). Cancellation is permanent, even on same-song
+# resume. Ordinary DJ intros carry no generation and keep their usual path.
+jingle_overlay_epoch = ref(0)
+intro_overlay_metadata = ref([])
+
+def cancel_jingle_overlay() =
+  jingle_overlay_epoch := jingle_overlay_epoch() + 1
+end
+
+def jingle_overlay_valid(epoch, song_stamp) =
+  epoch == "#{jingle_overlay_epoch()}" and
+  song_stamp == "#{overlay_music_timestamp()}" and jingle_overlay_environment_safe()
+end
+
+intro_queue.on_metadata(synchronous=true, fun(m) -> intro_overlay_metadata := m)
+
+def intro_overlay_gain() =
+  m = intro_overlay_metadata()
+  if m["subwave_jingle_overlay"] != "true" then
+    1.
+  elsif jingle_overlay_valid(m["subwave_overlay_epoch"], m["subwave_overlay_track_at"]) then
+    1.
+  else
+    if m["subwave_overlay_epoch"] == "#{jingle_overlay_epoch()}" then
+      cancel_jingle_overlay()
+    end
+    # Skip only from the audio pull for this annotated request. A background
+    # poll using last metadata could skip a following ordinary DJ intro after
+    # the cancelled request ended but before that intro emitted its metadata.
+    intro_queue.skip()
+    0.
+  end
+end
+
 def pause_voice_delivery_id(uri) =
   matches = string.extract(pattern="subwave_pause_delivery=\\\"([^\\\"]+)\\\"", uri)
   list.assoc(default="", 1, matches)
@@ -1318,7 +1365,8 @@ def voice_marker(channel, tmp_dir) =
   fun (m) ->
     begin
       voice_id = m["subwave_voice"]
-      if voice_id != "" then
+      if voice_id != "" and (m["subwave_jingle_overlay"] != "true" or
+        jingle_overlay_valid(m["subwave_overlay_epoch"], m["subwave_overlay_track_at"])) then
         # ONE clock read for both jobs, taken before either: re-reading time()
         # after the work below would skew the live-edge stamp.
         now = time()
@@ -1438,14 +1486,8 @@ thread.run(every=0.5, poll_voice)
 # wins the race costs the optional ID, never its slot. Do not use is_ready on
 # voice queues: it latches true after their first push (see voice_until).
 def jingle_overlay_safe() =
-  stream_on() and not idle_mode() and not music_starved() and
-  source.is_ready(music_meta) and not bed_on_air() and not pause_talk_on_air() and
-  not jingle_now_on_air() and time() > voice_until() and
-  source.remaining(voice_queue) <= 0. and source.remaining(intro_queue) <= 0. and
-  list.length(voice_queue.queue()) == 0 and list.length(intro_queue.queue()) == 0 and
-  list.length(jingle_now_queue.queue()) == 0 and
-  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
-  not file.exists("#{state_dir}/jingle-now.txt")
+  jingle_overlay_environment_safe() and time() > voice_until() and
+  source.remaining(intro_queue) <= 0. and list.length(intro_queue.queue()) == 0
 end
 
 def poll_intro() =
@@ -1460,10 +1502,18 @@ def poll_intro() =
     )) then
       # Protect the lead-in until voice_marker installs the measured deadline.
       # Same 2s poll/duck slack as the clip marker above.
-      if overlay then voice_until := max(voice_until(), time() + 2.) end
+      if overlay then
+        voice_until := max(voice_until(), time() + 2.)
+        cancel_jingle_overlay()
+      end
+      epoch = "#{jingle_overlay_epoch()}"
+      contents = if overlay then
+        string.replace(pattern="^annotate:", fun(_) -> "annotate:subwave_overlay_epoch=\"#{epoch}\",", contents)
+      else contents end
       log("DJ talk-over: #{contents}")
       if has_leadin then
-        ignore(intro_queue.push(request.create(leadin_path)))
+        leadin = if overlay then "annotate:subwave_jingle_overlay=\"true\",subwave_overlay_epoch=\"#{epoch}\",subwave_overlay_track_at=\"#{song_stamp}\":#{leadin_path}" else leadin_path end
+        ignore(intro_queue.push(request.create(leadin)))
       end
       ignore(intro_queue.push(request.create(contents)))
     end
@@ -1526,7 +1576,7 @@ end
 # music bus. BEFORE mic_chain so the fixed-threshold compressor sees a levelled
 # input; the un-annotated lead-in plays at unity.
 voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
-intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(amplify(intro_overlay_gain, intro_queue))))
 
 # SAFETY — the dead-air guard. `emergency` is an always-ready, non-silent
 # single, so the broadcast never has nothing to pull.
@@ -2136,6 +2186,7 @@ server.register(
   usage="stream_off",
   fun(_) -> begin
     log("Stream taken off air via server command")
+    cancel_jingle_overlay()
     stream_down()
     "OK"
   end
@@ -2147,6 +2198,7 @@ server.register(
   usage="stream_on",
   fun(_) -> begin
     log("Stream brought back on air via server command")
+    cancel_jingle_overlay()
     stream_up()
     "OK"
   end
@@ -2169,6 +2221,7 @@ server.register(
     if not idle_mode() then
       log("Idle gate ON via server command — programme paused, mounts stay up")
     end
+    cancel_jingle_overlay()
     idle_mode := true
     "OK"
   end
@@ -2182,6 +2235,7 @@ server.register(
     if idle_mode() then
       log("Idle gate OFF via server command — programme resumed")
     end
+    cancel_jingle_overlay()
     idle_mode := false
     "OK"
   end

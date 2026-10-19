@@ -32,6 +32,15 @@ TTS engine routing, personas, guests, programmes and the policy switches
   after the voice marker confirms air. The draw shares anti-repeat memory with
   manual/controller jingles, and consults the latest marker when taking over
   from mixer rotation. See [operator settings](../jingle-audio.md).
+  The opening wait uses the previous song's transition; the fit budget uses
+  the current song's stamped exit duration, falling back to the running mixer
+  default. Accepted lead-in/ID requests share a mixer cancellation generation:
+  idle/off-air entry invalidates it, and playback rechecks the generation,
+  target song and competing speech on every frame. Cancelled requests are
+  muted and skipped, including prefetched requests invisible to `queue()`;
+  resuming after wall-clock holds expire never revives them. Verified overlays
+  poll for actual start even before the first voice marker exists, so the
+  first ID earns the same post-air bookkeeping as later IDs.
 
 - **Speech corrections (#1669)**: `tts.corrections` allows **500 rows** on
   save/load and in the web editor (was 100, which one station filled with year

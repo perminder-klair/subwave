@@ -168,12 +168,13 @@ queue._airVoice = (async (_file, path, _text, _gain, opts) => {
   return { voiceId: 'test', clipMs: 10, aired: Promise.resolve(Date.now()) };
 }) as typeof airVoice;
 queue._overlayMixerStatus = async () => ({ remainingMs: 100_000, crossfadeMs: 10_000 });
+const { pollVoiceMarker, resetVoiceMarkers } = await import('../src/broadcast/queue/voice-marker.js');
 let sequence = 0;
-function startSong(introKind?: string) {
+function startSong(introKind?: string, elapsedMs = 10_100) {
   const id = `song-${++sequence}`;
   queue.upcoming = [{ track: { id, title: id, artist: 'Artist', duration: 180 }, sent: true,
     ...(introKind ? { introKind, introScript: 'Already aired', introAired: true } : {}) }];
-  queue.onTrackStarted({ subsonic_id: id, title: id, artist: 'Artist', timestamp: Date.now() / 1000 - 10.1 });
+  queue.onTrackStarted({ subsonic_id: id, title: id, artist: 'Artist', timestamp: (Date.now() - elapsedMs) / 1000 });
 }
 function reset() {
   handed = [];
@@ -253,4 +254,58 @@ test('an overlay marker holds speech for its actual clip and never labels the mu
     placement: 'over', startedAt: now / 1000, durationSec: 6 }));
   assert.equal(jingleWindow().windowMs, 7000);
   assert.equal(interposedSince(now - 20_000, now + 1), null);
+});
+
+test('fit uses the current song exit stamp, independently of its incoming crossfade', async () => {
+  const status = queue._overlayMixerStatus;
+  try {
+    for (const [incoming, stamp, remainingMs, expected] of [
+      [0, 6, 7000, 0], [10, 0, 7000, 1], [10, undefined, 7000, 0], [10, undefined, 13000, 1],
+    ] as const) {
+      reset(); startSong(undefined, incoming * 1000 + 100);
+      // A zero station setting can still have a positive adaptive exit stamp.
+      setCache({ ...settings.get(), crossfadeDuration: 0 });
+      queue.history[0].track.crossSec = incoming;
+      queue.current!.track.crossSec = stamp;
+      queue._overlayMixerStatus = async () => ({ remainingMs, crossfadeMs: incoming * 1000 });
+      await queue.maybeAirJingleOverlay();
+      assert.equal(handed.length, expected, `exit stamp ${stamp}, remaining ${remainingMs}`);
+    }
+  } finally { queue._overlayMixerStatus = status; }
+});
+
+test('the first overlay waits for its first voice marker and earns post-air bookkeeping', async () => {
+  reset(); startSong();
+  resetVoiceMarkers();
+  rmSync(config.liquidsoap.voicePlayingFile, { force: true });
+  rmSync(config.liquidsoap.jinglePlayingFile, { force: true });
+  const stub = queue._airVoice;
+  const spoken = queue.onSpoken;
+  let booked = 0;
+  queue._airVoice = realAirVoice;
+  queue.onSpoken = async (...args) => { booked++; return spoken.apply(queue, args); };
+  const startedAt = Date.now() / 1000;
+  // Simulate the mixer's first actual start AFTER consuming the handoff.
+  const mixer = setInterval(() => {
+    if (!existsSync(config.liquidsoap.introFile)) return;
+    const uri = readFileSync(config.liquidsoap.introFile, 'utf8');
+    const voiceId = uri.match(/subwave_voice="([^"\n]+)"/)?.[1];
+    if (!voiceId) return;
+    rmSync(config.liquidsoap.introFile);
+    writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId, startedAt, channel: 'intro' }));
+    pollVoiceMarker();
+    clearInterval(mixer);
+  }, 40);
+  try {
+    await queue.maybeAirJingleOverlay();
+    assert.equal(booked, 1, 'the first ID must be recorded after its measured start');
+    assert.equal(queue.djLog[0]?.kind, 'jingle');
+  } finally {
+    clearInterval(mixer);
+    queue._airVoice = stub;
+    queue.onSpoken = spoken;
+    resetVoiceMarkers();
+    rmSync(config.liquidsoap.introFile, { force: true });
+    await new Promise(resolve => setTimeout(resolve, 1600));
+  }
 });
