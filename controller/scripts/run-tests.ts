@@ -19,9 +19,9 @@
 // writes there on import. Overriding rather than defaulting means an exported
 // STATE_DIR pointing at a real station cannot leak in either.
 //
-// Concurrency defaults to 1, and CI keeps that. Parallel runs are opt-in, and
-// they are safe because nothing is shared between files: each runs in its own
-// process (env vars and module state stay apart), and test-utils/state-dir.ts,
+// Concurrency defaults to 1, and parallel runs are opt-in. They are safe because
+// nothing is shared between files: each runs in its own process (env vars and
+// module state stay apart), and test-utils/state-dir.ts,
 // preloaded below, gives each process its OWN temp STATE_DIR on top of the
 // run's one. Without that preload every file would share the run's dir, and
 // parallel files would race on its settings.json, library.db and handoffs.
