@@ -1,4 +1,41 @@
-# Jingle audio imports
+# Jingles: placement and audio imports
+
+In **Admin → Imaging → Jingles**, choose an automatic placement, save, then
+**restart the mixer** from Settings → Broadcast & mixer.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| `jinglePlacement` | `between` | `between`: full-level IDs between songs; `over`: light-ducked IDs over song openings; `both`: both placements |
+| `jingleRatio` | `30` | Offer one automatic ID every N music tracks; `0` disables automatic IDs |
+| `jingleRotate` | `mixer` | Who counts between-song IDs in `between` mode; `controller` lets the talk planner place them |
+
+`over` and `both` always use the controller, sharing the existing library and
+no-immediate-repeat draw. The saved `jingleRotate` preference is retained for
+switching back to `between`. In `both`, **each placement** uses `jingleRatio`,
+so it can offer up to two IDs per N tracks. Unsafe overlay offers are skipped,
+with the next offer N tracks later; they are never banked for mid-song playback.
+The on-demand `POST /jingles/:filename/play` command always queues the full-level
+ID at the next safe boundary, regardless of automatic placement or frequency.
+The Imaging page's audio preview remains a local audition.
+
+An overlay starts after the opening crossfade and the normal silent voice
+lead-in, through the same light duck as a DJ link (`ducking.intro`, default
+`0.30`). A song carrying a DJ link or solo intro is reserved for that voice
+even after its handoff file has disappeared. Queued/aired speech, pending talk,
+manual jingles, beds, pause-and-talk, idle/off-air and starvation all prevent
+an overlay. The mixer checks again when it consumes the offer. A short song,
+an ID that cannot finish before the outgoing crossfade or measured vocal entry,
+or an unmeasurable audio import is skipped. A controller restart does not insert
+an ID into an already-running song.
+
+The mixer reads the ratio file only at startup. `over` and `both` write it as
+`0`, disabling its independent between-song rotation; `both` runs that rotation
+through the controller's talk planner instead. Overlays require the updated
+broadcast image and a mixer restart: an old, unreachable or still-rotating mixer
+cannot prove safety, so no overlays are sent. The default `between` mode keeps
+the existing station behavior.
+
+## Audio imports
 
 With ffmpeg installed, Imaging uploads convert to 16-bit PCM WAV at 44.1 kHz
 stereo, matching the Liquidsoap mixer. The loudness pass still targets -16 LUFS.

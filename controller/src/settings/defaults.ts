@@ -21,6 +21,7 @@ import {
   LOUDNESS_TARGET_LUFS_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
+  type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -39,6 +40,7 @@ import {
 } from './vocab.js';
 
 export const DEFAULTS = {
+  jinglePlacement: 'between' as JinglePlacement,
   jingleRatio: 30, // 1 jingle per N music tracks
   // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
   // radio.liq's own rotate draws the stinger and the controller finds out

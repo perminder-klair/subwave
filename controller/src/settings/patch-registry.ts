@@ -45,6 +45,7 @@ import {
   fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
+  jinglePlacementSchema,
   jingleRotateSchema,
   likesPatchSchema,
   localeSchema,
@@ -110,6 +111,7 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
   'jingleRotate',
+  'jinglePlacement',
   'crossfadeDuration',
   'ducking',
   'handover',
@@ -208,6 +210,7 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
   jingleRotate: jingleRotateSchema,
+  jinglePlacement: jinglePlacementSchema,
   crossfadeDuration: crossfadeDurationSchema,
   ducking: duckingPatchSchema,
   handover: handoverPatchSchema,

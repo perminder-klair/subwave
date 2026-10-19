@@ -2835,6 +2835,12 @@ export const jingleRatioSchema = settingsIntLike(
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
 
+export const JINGLE_PLACEMENTS = ['between', 'over', 'both'] as const;
+export type JinglePlacement = (typeof JINGLE_PLACEMENTS)[number];
+export const jinglePlacementSchema = z.enum(JINGLE_PLACEMENTS, {
+  error: `jinglePlacement must be one of ${JINGLE_PLACEMENTS.join(', ')}`,
+});
+
 /**
  * WHO counts the tracks between jingles (#1619).
  *

@@ -17,7 +17,7 @@ import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
-import { jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
+import { jinglePlacement, jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
@@ -956,6 +956,7 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
     const s = settings.get();
     return rotateJingleDue({
       owner: jingleRotateOwner(s),
+      placement: jinglePlacement(s),
       ratio: Number(s?.jingleRatio) || 0,
       tracksSinceJingle: queue.rotateJingleTracksSince(),
     });

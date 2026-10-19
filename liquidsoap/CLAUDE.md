@@ -4,6 +4,15 @@ Loaded when working under `liquidsoap/`. The controller↔Liquidsoap file-IPC co
 
 ### Liquidsoap (`liquidsoap/radio.liq`)
 
+Optional over-music IDs use the existing `intro_queue`, silent lead-in and mic
+chain. The controller owns their placement (`jinglePlacement`, default
+`between`); `jingle_overlay_status` exposes the running ratio and safety gates,
+and `poll_intro` rechecks those gates for `subwave_jingle_overlay` offers. An
+unsafe optional ID is dropped, never queued behind speech. Its actual-start
+hook writes `jingle-playing.json` with `placement: over`; it never updates the
+song's now-playing/ICY metadata. `over` and `both` require the running mixer
+ratio to be zero; `both` moves the between-song draw to the controller too.
+
 Pipeline in order:
 
 1. `dj_queue` (controller-fed `request.queue`) **fallback→** `auto_playlist` (`playlist(reload_mode="watch")`) → base `music`.

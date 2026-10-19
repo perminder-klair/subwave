@@ -561,7 +561,7 @@ test('the converted keys are exactly the ones with schemas', () => {
     'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
     'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
-    'handover', 'jingleRatio', 'jingleRotate', 'likes',
+    'handover', 'jinglePlacement', 'jingleRatio', 'jingleRotate', 'likes',
     'locale', 'loudness', 'maxTrackLengthMode', 'maxTrackSeconds', 'moodSchedule', 'moods',
     'pauseTalkMinSeconds', 'personas',
     'picker',

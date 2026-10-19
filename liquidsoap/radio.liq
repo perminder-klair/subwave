@@ -54,11 +54,15 @@ starve_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/starve")
 # shared dir tears when a heavy-duck segment and a talk-over link land together.
 voice_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/voice")
 intro_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/intro")
+jingle_overlay_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-overlay")
 
 # MUSIC STARVE GUARD (#1300 bug 7) — the latch only; its tick is registered far
 # below, after idle_mode exists. Declared here because the jingles gate reads it
 # from a thunk (same lazy-thunk pattern as bed_on_air).
 music_starved = ref(false)
+idle_mode = ref(false)
+stream_on = ref(false)
+overlay_music_timestamp = ref(0)
 
 # Live safety gates shared by on-demand jingles and the automatic rotate.
 # Declared before the queue sources; on_meta and voice_marker update them.
@@ -1373,6 +1377,23 @@ def voice_marker(channel, tmp_dir) =
             30.
           end
         voice_until := now + min(dur, VOICE_GATE_MAX_SEC) + 2.
+        if m["subwave_jingle_overlay"] == "true" then
+          try
+            file.write(
+              data=json.stringify(compact=true, {
+                filename = fname,
+                startedAt = now,
+                durationSec = dur,
+                placement = "over"
+              }),
+              atomic=true,
+              temp_dir=jingle_overlay_tmp_dir,
+              "#{state_dir}/jingle-playing.json"
+            )
+          catch err do
+            log(label="subwave", "overlay jingle marker failed (#{err})")
+          end
+        end
       end
     end
 end
@@ -1413,11 +1434,33 @@ def poll_voice() =
 end
 thread.run(every=0.5, poll_voice)
 
+# The offer and the poll share the final safety gate. A press or voice that
+# wins the race costs the optional ID, never its slot. Do not use is_ready on
+# voice queues: it latches true after their first push (see voice_until).
+def jingle_overlay_safe() =
+  stream_on() and not idle_mode() and not music_starved() and
+  source.is_ready(music_meta) and not bed_on_air() and not pause_talk_on_air() and
+  not jingle_now_on_air() and time() > voice_until() and
+  source.remaining(voice_queue) <= 0. and source.remaining(intro_queue) <= 0. and
+  list.length(voice_queue.queue()) == 0 and list.length(intro_queue.queue()) == 0 and
+  list.length(jingle_now_queue.queue()) == 0 and
+  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
+  not file.exists("#{state_dir}/jingle-now.txt")
+end
+
 def poll_intro() =
   if file.exists("#{state_dir}/intro.txt") then
     contents = string.trim(file.contents("#{state_dir}/intro.txt"))
     file.remove("#{state_dir}/intro.txt")
-    if contents != "" then
+    overlay = string.contains(substring='subwave_jingle_overlay="true"', contents)
+    song_stamp = list.assoc(default="", 1, string.extract(pattern="subwave_overlay_track_at=\\\"([0-9]+)\\\"", contents))
+    if contents != "" and (not overlay or (
+      jingle_ratio() == 0 and jingle_overlay_safe() and
+      song_stamp == "#{overlay_music_timestamp()}"
+    )) then
+      # Protect the lead-in until voice_marker installs the measured deadline.
+      # Same 2s poll/duck slack as the clip marker above.
+      if overlay then voice_until := max(voice_until(), time() + 2.) end
       log("DJ talk-over: #{contents}")
       if has_leadin then
         ignore(intro_queue.push(request.create(leadin_path)))
@@ -1616,7 +1659,6 @@ radio = smooth_add(
 # where it froze. A plain blank() is safe; the #660 CPU spin was specific to
 # blank.skip. Not persisted — a mixer restart comes back live and the controller
 # re-asserts idle if the room is still empty.
-idle_mode = ref(false)
 radio = switch(
   id="idle_gate",
   track_sensitive=false,
@@ -1794,6 +1836,7 @@ def on_meta(m) =
     jingle_now_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
+    overlay_music_timestamp := ts
     # json.stringify, not interpolation: titles with embedded quotes or
     # backslashes produce invalid JSON.
     payload = json.stringify(compact=true, {
@@ -2031,7 +2074,6 @@ def make_stream_outputs() =
 end
 
 stream_shutdown = ref(fun () -> ())
-stream_on = ref(false)
 
 def stream_up() =
   if not stream_on() then
@@ -2070,6 +2112,20 @@ server.register(
     shutdown()
     "OK"
   end
+)
+
+# An older/unrestarted mixer cannot prove safety: the controller requires both
+# this proof and a running ratio of zero before offering an overlay.
+server.register(
+  "jingle_overlay_status",
+  description="Safety and running rotate ratio for optional over-music IDs",
+  usage="jingle_overlay_status",
+  fun(_) -> json.stringify(compact=true, {
+    safe = jingle_overlay_safe(),
+    mixerRatio = jingle_ratio(),
+    remainingSeconds = source.remaining(music_meta),
+    crossfadeSeconds = crossfade_duration()
+  })
 )
 
 # Off air / back on air on demand — the mounts go away entirely. Contrast the

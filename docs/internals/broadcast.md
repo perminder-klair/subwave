@@ -10,6 +10,29 @@ skips, spoken-clock forecasting, air-time stamping, the listener buffer, the lis
 TTS engine routing, personas, guests, programmes and the policy switches
 (voice, clock, token budget).
 
+- **Optional jingle overlays** (`jinglePlacement`, default `between`): `over`
+  offers a pre-rendered ID on the intro channel after the opening crossfade;
+  `both` also keeps the controller's between-song talk-table row. Both opt-ins
+  force effective controller ownership and write mixer ratio `0`, preserving
+  the operator's stored `jingleRotate` preference for a return to `between`.
+  Each placement has its own N-track count using `jingleRatio`. One offer per
+  song is spent even when unsafe, never delayed into the middle of the song.
+  `broadcast/jingle-overlay.ts` owns frequency, head-window and fit decisions;
+  the existing watcher drives them. `onTrackStarted` reserves songs carrying
+  speech before any async work; `onQueued` remembers later speech for the whole
+  song. `airVoice`'s actual holder count (not its forecast) refuses busy-chain
+  overlays, with a final pre-write freshness check. `jingle_overlay_status`
+  proves the mixer's running ratio, live gates, remaining playable time and
+  crossfade bound; old/unreachable mixers fail silent. `poll_intro` rechecks
+  those gates and the target song's mixer timestamp for the annotated optional
+  ID, so a skip during a controller poll cannot move it to another song. Its marker is written at actual
+  intro playback with `placement: over`, so `jingleWindow` adds no cross offset
+  and `interposedSince` does not mistake it for a between-song seam. The current
+  song/ICY metadata stays intact; booth and voice events use `onSpoken` only
+  after the voice marker confirms air. The draw shares anti-repeat memory with
+  manual/controller jingles, and consults the latest marker when taking over
+  from mixer rotation. See [operator settings](../jingle-audio.md).
+
 - **Speech corrections (#1669)**: `tts.corrections` allows **500 rows** on
   save/load and in the web editor (was 100, which one station filled with year
   and decade respellings alone). `applyCorrections` in `audio/speech-text.ts`
