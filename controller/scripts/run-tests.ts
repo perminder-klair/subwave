@@ -21,10 +21,12 @@
 //
 // Concurrency defaults to 1, and parallel runs are opt-in. They are safe because
 // nothing is shared between files: each runs in its own process (env vars and
-// module state stay apart), and test-utils/state-dir.ts,
-// preloaded below, gives each process its OWN temp STATE_DIR on top of the
-// run's one. Without that preload every file would share the run's dir, and
-// parallel files would race on its settings.json, library.db and handoffs.
+// module state stay apart), and test-utils/state-dir.ts, preloaded below,
+// replaces the run's STATE_DIR with each process's OWN temp dir. Without that
+// preload every file would share the run's dir, and parallel files would race
+// on its settings.json, library.db and handoffs. The run's dir is then only the
+// fallback, so it is also exported as SUBWAVE_TEST_RUN_STATE_DIR for
+// test-state-isolation.test.ts, which checks each layer on its own.
 
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
@@ -91,7 +93,7 @@ const { status } = spawnSync(
     '--test-reporter=spec',
     ...files.map((f) => join(scriptsDir, f)),
   ],
-  { stdio: 'inherit', env: { ...process.env, STATE_DIR: stateDir } },
+  { stdio: 'inherit', env: { ...process.env, STATE_DIR: stateDir, SUBWAVE_TEST_RUN_STATE_DIR: stateDir } },
 );
 
 rmSync(stateDir, { recursive: true, force: true });
