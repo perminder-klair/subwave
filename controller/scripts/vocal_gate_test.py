@@ -83,4 +83,52 @@ finally:
 assert aw.vocal_ranges_from_rms(np.array([], dtype=np.float32), np.array([]), SR, HOP) == []
 assert aw.vocal_ranges_from_rms(np.zeros(frames(5), dtype=np.float32), const(5, 0.5), SR, HOP) == []
 
+# ── Case 5: DEMUCS_OVERLAP parses, falls back and clamps ─────────────────────
+saved_env = os.environ.get("DEMUCS_OVERLAP")
+try:
+    for raw, want in [("", 0.25), ("0.1", 0.1), ("junk", 0.25), ("nan", 0.25), ("-1", 0.0), ("1", 0.9)]:
+        os.environ["DEMUCS_OVERLAP"] = raw
+        assert aw.demucs_overlap() == want, f"DEMUCS_OVERLAP={raw!r}: {aw.demucs_overlap()} != {want}"
+finally:
+    if saved_env is None:
+        os.environ.pop("DEMUCS_OVERLAP", None)
+    else:
+        os.environ["DEMUCS_OVERLAP"] = saved_env
+
+# ── Case 6: separate() hands DEMUCS_OVERLAP to apply_model ───────────────────
+# Needs torch (heavy image); demucs itself is stubbed, so no model download.
+try:
+    import torch
+except ImportError:
+    torch = None
+if torch is None:
+    print("  (case 6 skipped: torch not installed)")
+else:
+    import types
+
+    seen = {}
+
+    def fake_apply_model(model, mix, device=None, overlap=None, **_kw):
+        seen["overlap"] = overlap
+        return torch.zeros(1, 4, *mix.shape[1:])
+
+    stub = types.ModuleType("demucs.apply")
+    stub.apply_model = fake_apply_model
+    saved_mods = {k: sys.modules.get(k) for k in ("demucs", "demucs.apply")}
+    sys.modules.setdefault("demucs", types.ModuleType("demucs"))
+    sys.modules["demucs.apply"] = stub
+    try:
+        det = aw.VocalActivityDetector()
+        det.model = object()
+        det.sources = ["drums", "bass", "other", "vocals"]
+        stems = det.separate(np.zeros((2, 64), dtype=np.float32))
+        assert seen["overlap"] == aw.DEMUCS_OVERLAP, f"apply_model got overlap={seen.get('overlap')}"
+        assert set(stems) == set(det.sources)
+    finally:
+        for k, v in saved_mods.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
 print("✓ vocal_gate_test.py passed")

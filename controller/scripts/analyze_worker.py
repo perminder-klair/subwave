@@ -40,6 +40,7 @@ import contextlib
 import ctypes
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -144,6 +145,20 @@ def _env_float(name, default):
             f"[analyze-worker] {name}={raw!r} is not a number; using default {default}\n"
         )
         return default
+
+
+def demucs_overlap():
+    """Share of each Demucs chunk that overlaps the next; 0.25 is demucs' own
+    default. Clamped to [0, 0.9]: 1.0 gives stride 0 and demucs raises. NaN
+    passes float() and the clamp, so it falls back like any non-number."""
+    v = _env_float("DEMUCS_OVERLAP", 0.25)
+    if math.isnan(v):
+        sys.stderr.write("[analyze-worker] DEMUCS_OVERLAP is NaN; using default 0.25\n")
+        return 0.25
+    return min(max(v, 0.0), 0.9)
+
+
+DEMUCS_OVERLAP = demucs_overlap()
 
 
 def _env_int(name, default, minimum=1):
@@ -1366,7 +1381,9 @@ class VocalActivityDetector:
         with torch.no_grad():
             # apply_model moves the model + chunks to the device itself (this
             # is how the demucs CLI's -d flag works), so no .to() here.
-            est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
+            est = apply_model(
+                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP
+            )[0]
         return {
             name: est[i].cpu().numpy()
             for i, name in enumerate(self.sources)

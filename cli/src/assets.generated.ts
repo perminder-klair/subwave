@@ -366,6 +366,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -710,6 +711,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -999,6 +1001,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -1384,6 +1387,9 @@ SITE_URL=
 #                         # is also the fastest on CPU we've measured — the
 #                         # mdx*/*_q alternatives are bags of 4 sub-models and
 #                         # run ~3x SLOWER despite the smaller download
+# DEMUCS_OVERLAP=0.25     # share of each Demucs chunk that overlaps the next
+#                         # (0-0.9). 0.1 measured ~14% faster on CPU with the
+#                         # near-identical vocal ranges
 # ANALYZE_SECONDS=40      # per-track analysis window (seconds), shared by
 #                         # bpm/key, CLAP and Demucs — the real speed lever
 #                         # (cost scales linearly). Raise it if you want vocal
