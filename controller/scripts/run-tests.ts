@@ -29,39 +29,22 @@
 // test-state-isolation.test.ts, which checks each layer on its own.
 
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { availableParallelism, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { parseRunArgs, type RunArgs } from './test-utils/run-args.js';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
-// --jobs N / -j N / --jobs=N, else TEST_CONCURRENCY, else 1. 'auto' means one
-// file per available CPU. The first remaining argument is the name filter.
-function parseJobs(raw: string | undefined, source: string): number {
-  if (raw === undefined || raw === '') return 1;
-  if (raw === 'auto') return Math.max(1, availableParallelism());
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) {
-    console.error(`${source} must be a positive integer or "auto", got "${raw}".`);
-    process.exit(1);
-  }
-  return n;
+let runArgs: RunArgs;
+try {
+  runArgs = parseRunArgs(process.argv.slice(2));
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
 }
-
-const args = process.argv.slice(2);
-let jobsArg: string | undefined;
-const rest: string[] = [];
-for (let i = 0; i < args.length; i++) {
-  const a = args[i];
-  if (a === '--jobs' || a === '-j') jobsArg = args[++i] ?? '';
-  else if (a.startsWith('--jobs=')) jobsArg = a.slice('--jobs='.length);
-  else rest.push(a);
-}
-const jobs = jobsArg !== undefined
-  ? parseJobs(jobsArg, '--jobs')
-  : parseJobs(process.env.TEST_CONCURRENCY, 'TEST_CONCURRENCY');
-const filter = rest[0]; // optional substring filter
+const { jobs, filter } = runArgs; // filter: optional substring
 
 const files = readdirSync(scriptsDir)
   .filter((f) => f.endsWith('.test.ts'))
