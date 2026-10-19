@@ -1,0 +1,131 @@
+// the playing FILE's own format (suffix, sample rate, bit depth, bit
+// rate) for the Dash, looked up from Navidrome once per track.
+//
+// Pins: the projection of a Subsonic song (unknown/zero fields are absent,
+// never zeroed), the per-track memo (one getSong per id however often the
+// Dash polls, concurrent polls share one call, a failure is retried only
+// after a short back-off), and the admin route's shape.
+//
+// Run: npm test -- now-playing-file
+
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { listen } from './test-utils/http.js';
+
+delete process.env.ADMIN_USER;
+delete process.env.ADMIN_PASS;
+
+const { fileFormatOf, createFileFormatLookup, FAILURE_RETRY_MS } = await import('../src/music/file-format.js');
+const { createNowPlayingFileRouter } = await import('../src/routes/now-playing-file.js');
+const express = (await import('express')).default;
+
+// The shapes production Navidrome 0.64.2 returned on 19 Oct.
+const FLAC = { id: 'a', suffix: 'flac', contentType: 'audio/flac', bitRate: 979, samplingRate: 44100, bitDepth: 16, channelCount: 2 };
+const MP3 = { id: 'b', suffix: 'MP3', contentType: 'audio/mpeg', bitRate: 192, samplingRate: 44100, bitDepth: 0, channelCount: 2 };
+const DSF = { id: 'c', suffix: 'dsf', contentType: 'audio/x-dsf', bitRate: 11290, samplingRate: 5644800, bitDepth: 1, channelCount: 2 };
+
+test('projection: every known field of a FLAC', () => {
+  assert.deepEqual(fileFormatOf(FLAC), {
+    suffix: 'flac', contentType: 'audio/flac', bitRate: 979, samplingRate: 44100, bitDepth: 16, channelCount: 2,
+  });
+});
+
+test('projection: a zero bit depth (lossy) is absent, not 0; the suffix is lowercased', () => {
+  const f = fileFormatOf(MP3);
+  assert.equal(f.suffix, 'mp3');
+  assert.equal('bitDepth' in f, false);
+  assert.equal(f.bitRate, 192);
+});
+
+test('projection: a 1-bit DSD file keeps its bit depth', () => {
+  assert.equal(fileFormatOf(DSF).bitDepth, 1);
+  assert.equal(fileFormatOf(DSF).samplingRate, 5644800);
+});
+
+test('projection: missing, non-numeric and negative fields are dropped', () => {
+  assert.deepEqual(fileFormatOf({ suffix: '', bitRate: 'x', samplingRate: -1, bitDepth: null }), {});
+  assert.deepEqual(fileFormatOf(null), {});
+});
+
+function fakeSongs(songs: Record<string, unknown>) {
+  const calls: string[] = [];
+  return {
+    calls,
+    getSong: async (id: string) => {
+      calls.push(id);
+      await new Promise(r => setTimeout(r, 5));
+      if (!(id in songs)) throw new Error('not found');
+      return songs[id];
+    },
+  };
+}
+
+test('lookup: one Navidrome call per track, however often it is asked', async () => {
+  const f = fakeSongs({ a: FLAC });
+  const lookup = createFileFormatLookup({ getSong: f.getSong });
+  for (let i = 0; i < 5; i++) assert.equal((await lookup('a'))?.suffix, 'flac');
+  assert.deepEqual(f.calls, ['a']);
+});
+
+test('lookup: concurrent polls for the same track share one call', async () => {
+  const f = fakeSongs({ a: FLAC });
+  const lookup = createFileFormatLookup({ getSong: f.getSong });
+  const all = await Promise.all([lookup('a'), lookup('a'), lookup('a')]);
+  assert.ok(all.every(x => x?.bitDepth === 16));
+  assert.deepEqual(f.calls, ['a']);
+});
+
+test('lookup: a failure answers null and is retried only after the back-off', async () => {
+  const f = fakeSongs({});
+  let now = 1_000_000;
+  const lookup = createFileFormatLookup({ getSong: f.getSong, now: () => now });
+  assert.equal(await lookup('x'), null);
+  assert.equal(await lookup('x'), null);
+  assert.deepEqual(f.calls, ['x'], 'a Dash polling every 3 s must not hammer a down Navidrome');
+  now += FAILURE_RETRY_MS + 1;
+  await lookup('x');
+  assert.deepEqual(f.calls, ['x', 'x']);
+});
+
+test('lookup: the memo stays bounded', async () => {
+  const songs: Record<string, unknown> = {};
+  for (let i = 0; i < 10; i++) songs[`t${i}`] = { ...FLAC, id: `t${i}` };
+  const f = fakeSongs(songs);
+  const lookup = createFileFormatLookup({ getSong: f.getSong, max: 3 });
+  for (let i = 0; i < 10; i++) await lookup(`t${i}`);
+  await lookup('t0'); // evicted long ago: fetched again
+  assert.equal(f.calls.filter(c => c === 't0').length, 2);
+  await lookup('t9'); // still held
+  assert.equal(f.calls.filter(c => c === 't9').length, 1);
+});
+
+async function serve(deps: Parameters<typeof createNowPlayingFileRouter>[0]) {
+  const app = express();
+  app.use(createNowPlayingFileRouter(deps));
+  const s = await listen(app);
+  s.server.unref();
+  return s;
+}
+
+test('route: the playing track\'s id and format', async () => {
+  const f = fakeSongs({ a: FLAC });
+  const s = await serve({ nowPlaying: async () => ({ subsonic_id: 'a', title: 'T' }), lookup: createFileFormatLookup({ getSong: f.getSong }) });
+  const body = await (await fetch(`${s.url}/now-playing/file`)).json();
+  assert.deepEqual(body, { id: 'a', format: fileFormatOf(FLAC) });
+  await s.close();
+});
+
+test('route: nothing from the library playing (a jingle, a bed) answers nulls', async () => {
+  const s = await serve({ nowPlaying: async () => ({ title: 'Jingle' }), lookup: async () => { throw new Error('must not be called'); } });
+  assert.deepEqual(await (await fetch(`${s.url}/now-playing/file`)).json(), { id: null, format: null });
+  await s.close();
+});
+
+test('route: an unreachable Navidrome is a null format, not an error', async () => {
+  const f = fakeSongs({});
+  const s = await serve({ nowPlaying: async () => ({ subsonic_id: 'gone' }), lookup: createFileFormatLookup({ getSong: f.getSong }) });
+  const res = await fetch(`${s.url}/now-playing/file`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { id: 'gone', format: null });
+  await s.close();
+});

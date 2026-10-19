@@ -7,6 +7,7 @@ import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
+import { formatFileFormat } from '../../lib/fileFormat';
 import { clientLabel, fmtConnected } from '../../lib/clientLabel';
 import type { QueueEntry } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
@@ -90,6 +91,7 @@ import {
   fetchConnections,
   fetchDashStatus,
   fetchHealthStats,
+  fetchNowPlayingFile,
   fetchRequests,
   fetchSuggestions,
   removeQueuedRow,
@@ -436,6 +438,17 @@ export default function DashPanel() {
   };
 
   const np = status?.nowPlaying;
+  // one lookup per track: keyed by the id, never re-polled (a file's
+  // format does not change), and an answer about a previous track is ignored.
+  const npId = np?.subsonic_id || '';
+  const fileQuery = useAdminQuery({
+    key: dashKeys.fileFormat(npId), adminFetch, enabled: ready && !!npId,
+    staleTime: Infinity, request: fetchNowPlayingFile, toastOnError: false,
+    // Navidrome did not answer: ask again a minute later (the controller backs
+    // off the same minute), instead of leaving the format blank for the track.
+    refetchInterval: (query) => (query.state.data && query.state.data.format === null ? 60_000 : false),
+  });
+  const fileFormat = fileQuery.data?.id === npId ? formatFileFormat(fileQuery.data.format) : null;
   const ctx = status?.context;
   // On-air timestamps render in the station zone so they match what the DJ
   // speaks, not the operator's browser timezone (#418).
@@ -505,6 +518,7 @@ export default function DashPanel() {
         pickerBusy={!!q.pickerBusy}
         busy={busy}
         onSkip={openSkip}
+        fileFormat={fileFormat}
       />
 
       {err && <ErrorState error={err} />}
