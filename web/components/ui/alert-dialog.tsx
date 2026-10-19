@@ -25,6 +25,11 @@ export interface V3AlertDialogProps {
   cancelLabel?: string;
   danger?: boolean;
   onConfirm?: () => void;
+  /** Optional second action between cancel and confirm, for a choice that is
+   *  not a cancel (e.g. "block, let it finish" beside "block + skip now").
+   *  Closes the dialog like confirm. Absent, the footer is unchanged. */
+  altLabel?: string;
+  onAlt?: () => void;
 }
 
 export function V3AlertDialog({
@@ -37,6 +42,8 @@ export function V3AlertDialog({
   cancelLabel = 'cancel',
   danger = false,
   onConfirm,
+  altLabel,
+  onAlt,
 }: V3AlertDialogProps) {
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
@@ -62,6 +69,14 @@ export function V3AlertDialog({
             <AlertDialog.Cancel className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink">
               {cancelLabel}
             </AlertDialog.Cancel>
+            {altLabel && (
+              <AlertDialog.Action
+                onClick={onAlt}
+                className="v3-eyebrow v3-focus cursor-pointer border border-ink bg-transparent px-3.5 py-1.5 text-[10px] text-ink"
+              >
+                {altLabel}
+              </AlertDialog.Action>
+            )}
             <AlertDialog.Action
               onClick={onConfirm}
               className={cn(

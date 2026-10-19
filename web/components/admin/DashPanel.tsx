@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
+import { adminResponse, useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
@@ -46,6 +46,8 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
+import { blockPlayingTrack, neverPlayToast, type SkipOutcome } from './dash/never-play';
+import { libraryKeys } from './library/queries';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
@@ -98,6 +100,7 @@ export default function DashPanel() {
   // Drives the PromptInputSubmit glyph: ready → submitted → error flash → ready.
   const [sayStatus, setSayStatus] = useState<ChatStatus>('ready');
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const [confirmNeverPlay, setConfirmNeverPlay] = useState(false);
 
   // Hardcoded set until the controller has a generated batch. The GET on mount
   // never calls a model; the refresh button's POST does.
@@ -224,6 +227,74 @@ export default function DashPanel() {
 
   // Runs only after the confirm dialog — a skip cuts the track for every listener.
   const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
+
+  // the library table's own block write, so the Library page's lists
+  // and the Blocked tab see it whether or not they are mounted.
+  const blockMutation = useAdminMutation({
+    adminFetch,
+    toastOnError: false,
+    request: (trackId: string, fetcher) => blockPlayingTrack(fetcher, trackId),
+    onDone: (_data, _vars, client) => {
+      void client.invalidateQueries({ queryKey: libraryKeys.blocked() });
+      void client.invalidateQueries({ queryKey: libraryKeys.rows });
+    },
+  });
+  const unblockMutation = useAdminMutation<void, string>({
+    adminFetch,
+    request: async (trackId, fetcher) => {
+      await adminResponse(fetcher, `/library/blocklist/track/${encodeURIComponent(trackId)}`, { method: 'DELETE' });
+    },
+    onDone: (_data, _vars, client) => {
+      void client.invalidateQueries({ queryKey: libraryKeys.blocked() });
+      void client.invalidateQueries({ queryKey: libraryKeys.rows });
+    },
+  });
+
+  // Runs only after the confirm dialog. The block lands FIRST: a failed block
+  // must not leave the operator with a skipped track that will still air
+  // again. The track is captured at open time, so a track change while the
+  // dialog is up blocks what the operator was looking at, not its successor.
+  const [neverPlayTarget, setNeverPlayTarget] = useState<{ id: string; title: string; artist?: string } | null>(null);
+  const openNeverPlay = () => {
+    const cur = status?.nowPlaying;
+    if (!cur?.subsonic_id || !cur.title) return;
+    setNeverPlayTarget({ id: cur.subsonic_id, title: cur.title, artist: cur.artist });
+    setConfirmNeverPlay(true);
+  };
+  const doNeverPlay = async (skipToo: boolean) => {
+    const target = neverPlayTarget;
+    if (!target) return;
+    setBusy('never-play');
+    try {
+      const r = await blockMutation.mutateAsync(target.id);
+      let skip: SkipOutcome = 'not-asked';
+      let skipError: string | undefined;
+      // Skip only if the blocked track is still the one on air.
+      if (skipToo && status?.nowPlaying?.subsonic_id === target.id) {
+        try {
+          await actionMutation.mutateAsync({ path: '/dj/skip', body: {} });
+          skip = 'done';
+        } catch (e) {
+          skip = 'failed';
+          skipError = errorMessage(e);
+        }
+      }
+      const t = neverPlayToast({ title: target.title, artist: target.artist, block: r.block, skip, purged: r.purged, skipError });
+      if (t.tone === 'err') notify.err(t.text);
+      else if (r.entry) {
+        notify.undo(t.text, () => {
+          unblockMutation.mutateAsync(target.id)
+            .then(() => notify.ok(`“${target.title}” can play again`))
+            .catch(() => { /* toasted by the mutation */ });
+        });
+      } else notify.ok(t.text);
+    } catch (e) {
+      notify.err(`never play: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+      void queryClient.invalidateQueries({ queryKey: dashKeys.status() });
+    }
+  };
 
   // No confirm: nothing on-air changes, worst case a 409 because the track went
   // on air first. The row drops optimistically; the poll confirms.
@@ -384,6 +455,8 @@ export default function DashPanel() {
       <StationHeader
         metrics={healthMetrics}
         np={np}
+        onNeverPlay={openNeverPlay}
+        canNeverPlay={!!np?.subsonic_id}
         djName={djName}
         showName={showName}
         weatherText={weatherText}
@@ -841,6 +914,20 @@ export default function DashPanel() {
         confirmLabel="skip track"
         danger
         onConfirm={doSkip}
+      />
+
+      <V3AlertDialog
+        open={confirmNeverPlay}
+        onOpenChange={setConfirmNeverPlay}
+        title="Never play this track"
+        description={neverPlayTarget
+          ? `Add “${neverPlayTarget.title}”${neverPlayTarget.artist ? ` — ${neverPlayTarget.artist}` : ''} to the never-play list? It will never air again, listener requests included. You can lift it from Library → Blocked.`
+          : ''}
+        altLabel="block, let it finish"
+        onAlt={() => void doNeverPlay(false)}
+        confirmLabel="block + skip now"
+        danger
+        onConfirm={() => void doNeverPlay(true)}
       />
     </div>
   );
