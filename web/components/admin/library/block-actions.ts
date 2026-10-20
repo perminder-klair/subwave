@@ -95,15 +95,19 @@ export function liftedText(e: { id: string; name?: string | null }): string {
   return `“${e.name || e.id}” can play again`;
 }
 
-/** The success toast for a new entry. Undo runs `lift`, then says so. */
+/**
+ * The toast for a new entry. Undo runs `lift`, then says so. `'err'` when
+ * something after the block failed (the Dash's skip): the entry is still new.
+ */
 export function notifyBlockedWithUndo(
   text: string,
   entry: BlockEntry,
   lift: (entry: BlockEntry) => Promise<unknown>,
+  tone: 'ok' | 'err' = 'ok',
 ): void {
   notify.undo(text, () => {
     lift(entry)
       .then(() => notify.ok(liftedText(entry)))
       .catch(err => notify.err(errorMessage(err)));
-  });
+  }, tone);
 }

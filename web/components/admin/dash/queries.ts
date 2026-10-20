@@ -50,6 +50,27 @@ export async function fetchDashStatus(fetcher: AdminFetch, signal: AbortSignal):
   return { ...nowPlaying, queue: state ?? {}, sessionMessages: session?.messages ?? [] };
 }
 
+/**
+ * Drop a queued row from the cached status ahead of its DELETE; the poll
+ * confirms. An in-flight status read is cancelled first so it cannot land over
+ * the patch with the row still in it. The write is stamped like a fresh read
+ * but carries everything else the cache held, now-playing included, so never
+ * judge what is on air from this cache after a refetch: never-play's skip
+ * reads the fetch's own answer instead (`refetchOnAirId`, #2018).
+ */
+export async function removeQueuedRow(client: QueryClient, id: string): Promise<void> {
+  await client.cancelQueries({ queryKey: dashKeys.status(), exact: true }, { silent: true });
+  client.setQueryData<DashStatus>(dashKeys.status(), current => current
+    ? {
+        ...current,
+        queue: {
+          ...(current.queue || {}),
+          upcoming: (current.queue?.upcoming || []).filter(item => item.subsonic_id !== id),
+        },
+      }
+    : current);
+}
+
 export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal): Promise<ConnectionsState> {
   const body = await adminJson<Partial<ConnectionsState>>(
     fetcher, '/listeners/connections', undefined, signal,
