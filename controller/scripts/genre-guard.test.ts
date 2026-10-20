@@ -1,69 +1,79 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { genreGuardCause, genreLabelKeys, runGenreKeys, runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
+import { runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
 import { genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
-import { aliasMapOf } from '../src/music/scene-vocab.js';
 
-const aliases = aliasMapOf(['Roots Reggae', 'Dub', 'Rocksteady'].map(from => ({ from: from.toLowerCase(), to: 'Reggae', at: '' })));
-const keys = (labels: readonly string[]) => genreLabelKeys(labels, aliases);
-const rawKeys = (labels: readonly string[]) => genreLabelKeys(labels, new Map());
+// Labels arrive already consolidated by the operator's scene aliases.
+const keys = (labels: readonly string[]) => genreKeysWithFamilies(labels, new Map());
 type Song = { id: string; title: string; artist: string; genres: string[] };
 const pick: Song = { id: 'repeat', title: 'Repeat', artist: 'New Artist', genres: ['Dub', 'Reggae', 'Roots Reggae'] };
 const other: Song = { id: 'other', title: 'Other', artist: 'Other Artist', genres: ['Soul'] };
 const prince: Song = { id: 'prince', title: 'Black Pum Pum', artist: 'Prince Buster', genres: ['Pop', 'International Pop', 'Reggae'] };
+const reggaeRun = () => Array.from({ length: 4 }, () => keys(['Reggae']));
 
 function fixture(patch: Partial<GenreGuardDeps<Song>> = {}) {
   const calls: Map<string, Song>[] = [];
+  const prompts: string[] = [];
   const events: Record<string, unknown>[] = [];
   const lines: string[] = [];
   const deps: GenreGuardDeps<Song> = {
     song: pick, seen: new Map([[pick.id, pick], [other.id, other], [prince.id, prince]]),
-    recentGenres: [['Reggae'], ['Roots Reggae'], ['Dub'], ['Rocksteady']].map(keys),
+    recentGenres: reggaeRun(),
     window: 4, genreKeysOf: s => keys(s.genres), recentRoots: new Set(),
-    repick: async alt => { calls.push(alt); return { id: other.id, reason: 'Smooth' }; },
+    repick: async (alt, reason) => { calls.push(alt); prompts.push(reason); return { id: other.id, reason: 'Smooth' }; },
     log: line => lines.push(line), logEvent: (_name, event) => events.push(event),
     ...patch,
   };
-  return { deps, calls, events, lines };
+  return { deps, calls, prompts, events, lines };
 }
 
-test('fires exactly when the next pick exceeds the configured aired run', () => {
-  const reggae = rawKeys(['Reggae']);
-  const history = Array.from({ length: 4 }, () => reggae);
-  assert.equal(genreGuardCause(reggae, history.slice(0, 3), 4), false);
-  assert.equal(genreGuardCause(reggae, history, 4), true);
-  assert.equal(genreGuardCause(rawKeys(['Soul']), history, 4), false);
-  assert.equal(genreGuardCause(reggae, [reggae, reggae, rawKeys(['Soul']), reggae], 4), false);
-  assert.equal(genreGuardCause(reggae, [reggae, new Set(), reggae, reggae], 4), false);
-  assert.equal(genreGuardCause(new Set(), history, 4), false);
-  assert.equal(genreGuardCause(reggae, history, 0), false);
-  assert.equal(genreGuardCause(reggae, [...history, rawKeys(['Soul'])], 4), true, 'older history is outside the window');
+// Whether the guard treats `song` as extending a run over `recent`.
+async function fires(song: Song, recent: Song['genres'][], window = 4) {
+  const { deps } = fixture({ song, recentGenres: recent.map(keys), window });
+  return (await runGenreGuard(deps)).kind !== 'none';
+}
+
+test('fires exactly when the next pick exceeds the configured run', async () => {
+  const reggae = { ...pick, genres: ['Reggae'] };
+  const soul = { ...other, id: 'soul-pick', genres: ['Soul'] };
+  const run = Array.from({ length: 4 }, () => ['Reggae']);
+  assert.equal(await fires(reggae, run.slice(0, 3)), false, 'three airings are not yet a run of four');
+  assert.equal(await fires(reggae, run), true);
+  assert.equal(await fires(soul, run), false);
+  assert.equal(await fires(reggae, [['Reggae'], ['Reggae'], ['Soul'], ['Reggae']]), false);
+  assert.equal(await fires(reggae, [['Reggae'], [], ['Reggae'], ['Reggae']]), false, 'an unlabelled track breaks the run');
+  assert.equal(await fires({ ...reggae, genres: [] }, run), false, 'an unlabelled pick extends nothing');
+  assert.equal(await fires(reggae, run, 0), false);
+  assert.equal(await fires(reggae, [...run, ['Soul']]), true, 'older tracks are outside the window');
+  assert.equal(await fires(reggae, [['Reggae']], 1), true, 'a window of one');
 });
 
-test('scene consolidations group subgenres; unconfigured labels remain distinct', async () => {
-  assert.deepEqual([...keys(['Roots Reggae', 'Dub', 'Rocksteady', '  REGGAE '])], ['reggae']);
-  assert.deepEqual([...rawKeys([' Roots   Reggae ', 'REGGAE', 'reggae', '', ' '])], ['roots reggae', 'reggae']);
-  assert.deepEqual([...genreLabelKeys([null, undefined, 42], aliases)], []);
-  assert.deepEqual([...rawKeys(['Hip Hop', 'Hip-Hop'])], ['hip hop', 'hip-hop'], 'punctuation stays distinct');
-  const { deps, calls, events } = fixture();
+test('a run is named as the newest track spells it; separators do not split a genre', async () => {
+  const { deps, calls, prompts, events } = fixture({
+    song: { ...pick, genres: ['Neo Soul'] },
+    seen: new Map([[pick.id, { ...pick, genres: ['Neo Soul'] }], ['funk', { ...other, id: 'funk', genres: ['Funk'] }], ['neo', { ...other, id: 'neo', genres: ['neo-soul'] }]]),
+    recentGenres: [['Neo-Soul'], ['Neo Soul'], ['NEO SOUL'], ['neo-soul']].map(keys),
+    repick: async (alt, reason) => { calls.push(alt); prompts.push(reason); return { id: 'funk' }; },
+  });
   assert.equal((await runGenreGuard(deps)).kind, 'repicked');
-  assert.deepEqual([...calls[0].keys()], [other.id]);
-  assert.deepEqual(events[0].genres, ['reggae']);
-  assert.equal(events[0].relaxed, false);
+  assert.deepEqual([...calls[0].keys()], ['funk'], 'a differently spelled Neo-Soul is no alternative');
+  assert.deepEqual(events[0].genres, ['neosoul']);
+  assert.match(prompts[0], /\["Neo-Soul"\]/);
 });
 
 test('run labels are the full-window intersection, never a union or pairwise overlap', async () => {
-  const history = [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae'], ['Rocksteady', 'Reggae']].map(rawKeys);
-  assert.deepEqual([...runGenreKeys(history, 4)], ['reggae']);
-  assert.deepEqual([...runGenreKeys([rawKeys(['Pop', 'Reggae']), rawKeys(['Reggae', 'Dub']), rawKeys(['Dub', 'Pop'])], 3)], []);
-  const { deps, calls } = fixture({ recentGenres: history, genreKeysOf: s => rawKeys(s.genres) });
+  const history = [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae'], ['Rocksteady', 'Reggae']];
+  const { deps, calls, events } = fixture({ recentGenres: history.map(keys) });
   assert.equal((await runGenreGuard(deps)).kind, 'repicked');
   assert.deepEqual([...calls[0].keys()], [other.id]);
+  assert.deepEqual(events[0].genres, ['reggae', 'family:reggae']);
+  const soul = { ...other, id: 'soul-pick', genres: ['Soul'] };
+  assert.equal(await fires(soul, [['Pop', 'Soul'], ['Soul', 'Funk'], ['Funk', 'Pop']], 3), false, 'pairwise overlap is not a run');
 });
 
 for (const song of [prince, { ...pick, artist: 'Jacob Miller' }]) {
-  test(`${song.artist}'s non-primary Reggae label extends a Reggae run without aliases`, async () => {
-    const { deps, calls } = fixture({ song, recentGenres: Array.from({ length: 4 }, () => rawKeys(['Reggae'])), genreKeysOf: s => rawKeys(s.genres) });
+  test(`${song.artist}'s non-primary Reggae label extends a Reggae run`, async () => {
+    const { deps, calls } = fixture({ song });
     assert.equal((await runGenreGuard(deps)).kind, 'repicked');
     assert.deepEqual([...calls[0].keys()], [other.id], 'neither multi-label reggae shape is a valid alternative');
   });
@@ -74,17 +84,20 @@ test('a pick sharing ANY run label fires; alternatives must carry NONE and a kno
   const reggae = { ...prince, genres: ['Pop', 'Reggae'] };
   const unknown = { ...other, id: 'unknown', genres: [] };
   const { deps, calls, events } = fixture({
-    song: dub, genreKeysOf: s => rawKeys(s.genres),
-    recentGenres: Array.from({ length: 4 }, () => rawKeys(['Reggae', 'Dub'])),
+    song: dub,
+    recentGenres: Array.from({ length: 4 }, () => keys(['Reggae', 'Dub'])),
     seen: new Map([dub, reggae, other, unknown].map(s => [s.id, s])),
   });
   assert.equal((await runGenreGuard(deps)).kind, 'repicked');
   assert.deepEqual([...calls[0].keys()], [other.id]);
-  assert.deepEqual(events[0].genres, ['reggae', 'dub']);
+  assert.deepEqual(events[0].genres, ['reggae', 'family:reggae', 'dub']);
 });
 
 test('no common full-window label stays quiet even with pairwise overlap', async () => {
-  const { deps, calls, events } = fixture({ recentGenres: [['Reggae', 'Soul'], ['Soul', 'Dub'], ['Dub', 'Reggae'], ['Reggae']].map(rawKeys) });
+  const { deps, calls, events } = fixture({
+    song: { ...pick, genres: ['Funk', 'Soul', 'Pop'] },
+    recentGenres: [['Funk', 'Soul'], ['Soul', 'Pop'], ['Pop', 'Funk'], ['Funk']].map(keys),
+  });
   assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });
   assert.deepEqual([calls, events], [[], []]);
 });
@@ -128,29 +141,26 @@ test('artist spacing may relax but a successful anchor exclusion survives', asyn
 });
 
 // Family rule: a shared label OR the same small built-in family.
-const famKeys = (labels: readonly string[]) => genreKeysWithFamilies(labels, new Map());
 const ska: Song = { id: 'ska', title: 'Ska', artist: 'Ska Artist', genres: ['Ska'] };
 const lovers: Song = { id: 'lovers', title: 'Lovers', artist: 'Lovers Artist', genres: ['Lovers Rock'] };
 const fam = (patch: Partial<GenreGuardDeps<Song>> = {}) => fixture({
   song: ska, seen: new Map([ska, lovers, other].map(s => [s.id, s])),
-  recentGenres: [['Reggae'], ['Roots Reggae'], ['Dub'], ['Rocksteady']].map(famKeys),
-  genreKeysOf: s => famKeys(s.genres), ...patch,
+  recentGenres: [['Reggae'], ['Roots Reggae'], ['Dub'], ['Rocksteady']].map(keys),
+  genreKeysOf: s => keys(s.genres), ...patch,
 });
 
 test('same family with no shared label still forms a run, and a pick in the family extends it', async () => {
   const { deps, calls, events } = fam();
-  assert.deepEqual([...runGenreKeys(deps.recentGenres, 4)], ['family:reggae']);
   assert.equal((await runGenreGuard(deps)).kind, 'repicked');
   assert.deepEqual([...calls[0].keys()], [other.id], 'only the outside-family candidate is offered');
   assert.deepEqual(events[0].genres, ['family:reggae']);
   assert.equal(events[0].steered, false);
 });
 
-test('a mixed-family window is not a run; a shared label alone still is', () => {
-  const history = [['Reggae'], ['Roots Reggae'], ['Soul'], ['Dub']].map(famKeys);
-  assert.deepEqual([...runGenreKeys(history, 4)], []);
-  const soulRun = Array.from({ length: 4 }, () => famKeys(['Soul']));
-  assert.deepEqual([...runGenreKeys(soulRun, 4)], ['soul'], 'unknown labels fall back to label overlap');
+test('a mixed-family window is not a run; a shared label alone still is', async () => {
+  assert.equal(await fires(ska, [['Reggae'], ['Roots Reggae'], ['Soul'], ['Dub']]), false);
+  const soul = { ...other, id: 'soul-pick', genres: ['Soul'] };
+  assert.equal(await fires(soul, Array.from({ length: 4 }, () => ['Soul'])), true, 'unknown labels fall back to label overlap');
 });
 
 test('unknown labels: a different unknown label is outside the run, an unlabelled track is not an alternative', async () => {
@@ -231,7 +241,7 @@ test('off makes no steer call and no reads', async () => {
 
 test('no run means no steer call', async () => {
   const { deps } = fam({
-    recentGenres: [['Reggae'], ['Soul'], ['Dub'], ['Ska']].map(famKeys),
+    recentGenres: [['Reggae'], ['Soul'], ['Dub'], ['Ska']].map(keys),
     steer: async () => { throw new Error('must not call'); },
   });
   assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });

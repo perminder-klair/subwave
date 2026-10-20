@@ -3,32 +3,25 @@
 // same constrained re-pick used by the artist/album guards, and (optionally)
 // one steer-away discovery call for the case where every candidate is in the
 // run's genre.
-import { aliasValue, sceneKey, type SceneAliasMap } from '../../music/scene-vocab.js';
 import type { CandidateLike } from '../../music/recency.js';
 import { alternativeCandidates } from './artist-guard.js';
-import { describeRunKey } from './genre-families.js';
+import type { GenreKeys } from './genre-families.js';
 
 export { genreKeysWithFamilies } from './genre-families.js';
 
-// Label keys reuse the operator's scene consolidations; otherwise each label
-// keeps its normalized identity. `genreKeysWithFamilies` adds the small
-// built-in family tokens on top.
-export function genreLabelKeys(labels: readonly unknown[], aliases: SceneAliasMap): Set<string> {
-  return new Set(labels.map(label => typeof label === 'string' ? sceneKey(aliasValue(label, aliases)) : '').filter(Boolean));
+// `recentGenres` is newest first: the slots the pick will follow. The run is
+// named as the newest track spells it. Unknown metadata breaks the evidence of
+// a run, rather than inventing one.
+export function runGenreKeys(recentGenres: readonly GenreKeys[], window: number): GenreKeys {
+  if (window <= 0 || recentGenres.length < window) return new Map();
+  return new Map([...recentGenres[0]].filter(([key]) => recentGenres.slice(1, window).every(keys => keys.has(key))));
 }
 
-// `recentGenres` is newest first, including the current confirmed airing.
-// Unknown metadata breaks the evidence of a run, rather than inventing one.
-export function runGenreKeys(recentGenres: readonly ReadonlySet<string>[], window: number): Set<string> {
-  if (window <= 0 || recentGenres.length < window) return new Set();
-  return new Set([...recentGenres[0]].filter(label => recentGenres.slice(1, window).every(labels => labels.has(label))));
+function labelsOverlap(keys: GenreKeys, runKeys: GenreKeys): boolean {
+  return [...keys.keys()].some(key => runKeys.has(key));
 }
 
-function labelsOverlap(labels: ReadonlySet<string>, runLabels: ReadonlySet<string>): boolean {
-  return [...labels].some(label => runLabels.has(label));
-}
-
-export function genreGuardCause(pickGenres: ReadonlySet<string>, recentGenres: readonly ReadonlySet<string>[], window: number): boolean {
+export function genreGuardCause(pickGenres: GenreKeys, recentGenres: readonly GenreKeys[], window: number): boolean {
   return labelsOverlap(pickGenres, runGenreKeys(recentGenres, window));
 }
 
@@ -40,9 +33,9 @@ export type GenreGuardOutcome<T> =
 export interface GenreGuardDeps<T> {
   song: T;
   seen: Iterable<[string, T]>;
-  recentGenres: readonly ReadonlySet<string>[];
+  recentGenres: readonly GenreKeys[];
   window: number;
-  genreKeysOf: (song: T) => ReadonlySet<string>;
+  genreKeysOf: (song: T) => GenreKeys;
   recentRoots: Set<string>;
   // Preserve the artist policy's always-on pick-anchor exclusion.
   avoidAnchorRoot?: string;
@@ -67,8 +60,9 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
   if (window <= 0) return { kind: 'none' };
   const runLabels = runGenreKeys(recentGenres, window);
   if (!runLabels.size || !labelsOverlap(genreKeysOf(song), runLabels)) return { kind: 'none' };
-  const genres = [...runLabels];
-  const label = genres.map(describeRunKey).join(', ');
+  const genres = [...runLabels.keys()];
+  const names = [...runLabels.values()];
+  const label = names.join(', ');
 
   const outsideRun = (candidates: Iterable<[string, T]>) => [...candidates].filter(([, s]) => {
     const keys = genreKeysOf(s);
@@ -100,7 +94,7 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
   }
   if (alt.size) {
     const repicked = await repick(alt,
-      `The last ${window} aired tracks all carry these genre labels: ${JSON.stringify(genres.map(describeRunKey))}. Your pick carries at least one of them and would extend that run. Choose a track carrying none of those labels from the candidates above, keeping the transition smooth.`);
+      `The last ${window} aired tracks all carry these genre labels: ${JSON.stringify(names)}. Your pick carries at least one of them and would extend that run. Choose a track carrying none of those labels from the candidates above, keeping the transition smooth.`);
     const altSong = repicked?.id ? alt.get(repicked.id) : null;
     if (altSong && repicked) {
       logEvent('pick.genreGuard', { relaxed: false, genres, window, from: song.title, to: altSong.title, candidates: alt.size, artistStarved, albumRelaxed, steered });
