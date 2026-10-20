@@ -9,10 +9,10 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import {
-  existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync,
+  existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 import {
@@ -110,21 +110,47 @@ test('a multi-station root copies the ACTIVE station\'s files', () => {
 
 // A Ctrl-C while a tool is still loading src/ ends as SIGKILL (tsx's parent
 // gives the busy child ~60 ms to answer), so no 'exit' runs and the next run
-// has to clear the dir. Only names the helper mints, and only for a dead owner.
-test('a dir whose owner has gone is swept; a live owner\'s, and any other name, is kept', async () => {
+// has to clear the dir. Only names the helper mints, only a directory, and only
+// for a dead owner.
+test('a dir whose owner has gone is swept; a live owner\'s, and any other name or entry, is kept', async () => {
   const parent = createTempDir(join(tmpdir(), 'subwave-isolated-sweep-'));
-  const names = {
-    abandoned: `subwave-x-${await deadPid()}-AbC123`,
-    live: `subwave-x-${process.pid}-AbC123`,
-    unminted: 'subwave-x-notes',
-    otherTool: `subwave-y-${await deadPid()}-AbC123`,
+  const at = (name: string) => join(parent, name);
+  const withKeys = (path: string) => {
+    mkdirSync(path);
+    writeFileSync(join(path, 'secrets.env'), 'OPENROUTER_API_KEY=sk-left-behind\n');
   };
-  for (const name of Object.values(names)) {
-    mkdirSync(join(parent, name));
-    writeFileSync(join(parent, name, 'secrets.env'), 'OPENROUTER_API_KEY=sk-left-behind\n');
+  const dead = await deadPid();
+  // In creation order: the symlink needs its target first.
+  const fixtures: Array<{ name: string; make: (path: string) => void; swept: boolean }> = [
+    { name: `subwave-x-${dead}-AbC123`, make: withKeys, swept: true },
+    { name: `subwave-x-${process.pid}-AbC123`, make: withKeys, swept: false },
+    // Pid 1 answers EPERM to a non-root runner and is alive to root: kept either way.
+    { name: 'subwave-x-1-AbC123', make: withKeys, swept: false },
+    { name: 'subwave-x-notes', make: withKeys, swept: false },
+    { name: `subwave-y-${dead}-AbC123`, make: withKeys, swept: false },
+    // The helper only ever mints directories.
+    { name: `subwave-x-${dead}-File01`, make: (p) => writeFileSync(p, 'not a dir'), swept: false },
+    { name: 'target', make: withKeys, swept: false },
+    { name: `subwave-x-${dead}-Link01`, make: (p) => symlinkSync(at('target'), p), swept: false },
+  ];
+  for (const { name, make } of fixtures) make(at(name));
+
+  assert.deepEqual(sweepAbandonedDirs(parent, 'subwave-x-'), fixtures.filter((f) => f.swept).map((f) => f.name));
+  for (const { name, swept } of fixtures) {
+    assert.equal(existsSync(at(name)), !swept, `${name} is ${swept ? 'swept' : 'kept'}`);
   }
-  assert.deepEqual(sweepAbandonedDirs(parent, 'subwave-x-'), [names.abandoned]);
-  assert.deepEqual(readdirSync(parent).sort(), [names.live, names.otherTool, names.unminted].sort());
+});
+
+// A dir another user owns cannot be made without root, so the sweep is told
+// this one belongs to someone else instead.
+test('an abandoned dir another user owns is never swept', { skip: process.getuid === undefined }, async () => {
+  const parent = createTempDir(join(tmpdir(), 'subwave-isolated-sweep-'));
+  const name = `subwave-x-${await deadPid()}-AbC123`;
+  mkdirSync(join(parent, name));
+
+  assert.deepEqual(sweepAbandonedDirs(parent, 'subwave-x-', process.getuid!() + 1), []);
+  assert.ok(existsSync(join(parent, name)), 'another user\'s dir is kept');
+  assert.deepEqual(sweepAbandonedDirs(parent, 'subwave-x-'), [name], 'the same dir is swept as its owner\'s');
 });
 
 // The usage error is reached only after every src/ import has run, so a tool
@@ -178,38 +204,62 @@ test('module-load writes and telemetry appends land in the isolated dir; keys st
   assert.deepEqual(snapshot(root), before);
 });
 
+const SIGNAL_PREFIX = 'subwave-isolated-signal-';
+
+// A process that has made its isolated dir and idles, as a tool waiting on a
+// model does. `setup` runs between the two.
+async function startIsolated(tmp: string, setup = '') {
+  const code = [
+    `const { isolateStationState } = await import(${JSON.stringify(helper)});`,
+    `const { dir } = isolateStationState(${JSON.stringify(SIGNAL_PREFIX)});`,
+    setup,
+    'console.log(`READY ${dir}`);',
+    'setInterval(() => {}, 1000);',
+  ].join('\n');
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
+    cwd: controller, env: { ...process.env, STATE_DIR: stationRoot(), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
+  const dir = await new Promise<string>((resolve, reject) => {
+    child.stdout.on('data', (data: Buffer) => {
+      output += data.toString();
+      const ready = /READY (\S+)/.exec(output);
+      if (ready) resolve(ready[1]);
+    });
+    child.on('exit', () => reject(new Error(output)));
+  });
+  assert.ok(existsSync(dir));
+  return { child, dir, output: () => output };
+}
+
 // A signal's default action skips 'exit' listeners, so the helper turns it
 // into process.exit() — or, when the tool has a handler of its own (llm-bench
 // flushes its report), lets that handler exit instead.
 for (const ownHandler of [false, true]) {
   test(`Ctrl-C removes the isolated dir${ownHandler ? ' after the tool\'s own handler' : ''}`, { timeout: 30_000 }, async () => {
     const tmp = createTempDir(join(tmpdir(), 'subwave-isolated-tmp-'));
-    const code = [
-      `const { isolateStationState } = await import(${JSON.stringify(helper)});`,
-      'const { dir } = isolateStationState("subwave-isolated-signal-");',
-      ownHandler ? 'process.on("SIGINT", () => { console.log("tool handler ran"); process.exit(130); });' : '',
-      'console.log(`READY ${dir}`);',
-      'setInterval(() => {}, 1000);',
-    ].join('\n');
-    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], {
-      cwd: controller, env: { ...process.env, STATE_DIR: stationRoot(), TMPDIR: tmp }, stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
-    const dir = await new Promise<string>((resolve, reject) => {
-      child.stdout.on('data', (data: Buffer) => {
-        output += data.toString();
-        const ready = /READY (\S+)/.exec(output);
-        if (ready) resolve(ready[1]);
-      });
-      child.on('exit', () => reject(new Error(output)));
-    });
-    assert.ok(existsSync(dir));
+    const { child, dir, output } = await startIsolated(tmp, ownHandler
+      ? 'process.on("SIGINT", () => { console.log("tool handler ran"); process.exit(130); });'
+      : '');
     const exited = once(child, 'exit');
     child.kill('SIGINT');
     const [exitCode] = await exited;
-    assert.equal(exitCode, 130, output);
-    assert.equal(/tool handler ran/.test(output), ownHandler, output);
+    assert.equal(exitCode, 130, output());
+    assert.equal(/tool handler ran/.test(output()), ownHandler, output());
     assert.equal(existsSync(dir), false, 'the isolated dir must not outlive a Ctrl-C');
   });
 }
+
+// SIGKILL runs nothing, so the dir outlives the run. The name the helper
+// minted must be one its own sweep recognises once that pid has gone.
+test('a SIGKILLed run\'s dir is left behind, then swept as abandoned', { timeout: 30_000 }, async () => {
+  const tmp = createTempDir(join(tmpdir(), 'subwave-isolated-tmp-'));
+  const { child, dir } = await startIsolated(tmp);
+  const exited = once(child, 'exit');
+  child.kill('SIGKILL');
+  await exited;
+  assert.ok(existsSync(dir), 'nothing ran to remove it');
+  assert.deepEqual(sweepAbandonedDirs(tmp, SIGNAL_PREFIX), [basename(dir)]);
+  assert.equal(existsSync(dir), false);
+});

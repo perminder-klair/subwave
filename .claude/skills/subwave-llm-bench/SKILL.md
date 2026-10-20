@@ -77,7 +77,8 @@ multi-station install it copies the active station's files. An exported
 as `Isolated STATE_DIR:` and deleted when the run exits, Ctrl-C included. A run
 killed before it can clean up (a Ctrl-C while it is still starting up, which
 tsx turns into SIGKILL, or a closed terminal) leaves its dir, and the next run
-deletes it.
+deletes it. A dir left by a `sudo` run belongs to root, and a run as yourself
+leaves it alone.
 `library.db` is not copied, because the fixtures fake the library.
 
 ```bash

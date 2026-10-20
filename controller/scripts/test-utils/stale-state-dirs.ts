@@ -11,11 +11,12 @@
 // mkdtemp's six-character suffix, and only one untouched for a day. That keeps
 // clear of a run still going in another checkout unless the run itself is a
 // day old: nothing writes to a run's own dir once it is made, so its age is
-// the run's age. It must also be owned by this user: the default tmpdir() is a
-// shared /tmp, where anyone can create a dir by that name and backdate it, and
-// one another user owns is never ours.
-import { lstatSync, readdirSync, rmSync } from 'node:fs';
+// the run's age. It must also be owned by this user (owned-dir.ts): the
+// default tmpdir() is a shared /tmp, where anyone can create a dir by that
+// name and backdate it, and one another user owns is never ours.
+import { readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { ownedDirStat } from './owned-dir.js';
 
 export const STATE_DIR_PREFIX = 'subwave-test-state-';
 const STATE_DIR_NAME = new RegExp(`^${STATE_DIR_PREFIX}[A-Za-z0-9]{6}$`);
@@ -35,8 +36,8 @@ export function sweepStaleStateDirs(root: string, now = Date.now(), uid = proces
     if (!STATE_DIR_NAME.test(name)) continue;
     const path = join(root, name);
     try {
-      const stat = lstatSync(path);
-      if (!stat.isDirectory() || (uid !== undefined && stat.uid !== uid) || now - stat.mtimeMs < STALE_MS) continue;
+      const stat = ownedDirStat(path, uid);
+      if (!stat || now - stat.mtimeMs < STALE_MS) continue;
       rmSync(path, { recursive: true, force: true });
       removed.push(path);
     } catch {

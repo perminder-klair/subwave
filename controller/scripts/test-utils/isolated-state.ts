@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveActiveStationDir } from '../../src/stations/resolve.js';
+import { ownedDirStat } from './owned-dir.js';
 
 // What makes a model call resolve exactly as it does on the station.
 // settings.json and schedule.json are the two files settings.load() reads, so
@@ -64,9 +65,11 @@ export function copyStationKeys(sourceRoot: string, dest: string): string[] {
 // ~60 ms, and a child still loading src/ runs no event-loop turn to do it. So
 // each dir is named after the pid that owns it, and the next run removes the
 // ones whose owner has gone. Only a name this helper mints
-// (<prefix><pid>-<6 chars>) is ever considered, and a pid that answers, or
-// belongs to another user, is kept. Returns the names removed.
-export function sweepAbandonedDirs(parent: string, prefix: string): string[] {
+// (<prefix><pid>-<6 chars>) is ever considered, and only as a directory this
+// user owns (owned-dir.ts); a pid that answers, or belongs to another user, is
+// kept. Returns the names removed. `uid` is a parameter so a test can stand
+// in for another user, whose dir only root could make.
+export function sweepAbandonedDirs(parent: string, prefix: string, uid = process.getuid?.()): string[] {
   let names: string[];
   try { names = readdirSync(parent); } catch { return []; }
   const removed: string[] = [];
@@ -79,8 +82,10 @@ export function sweepAbandonedDirs(parent: string, prefix: string): string[] {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue;
     }
+    const path = join(parent, name);
     try {
-      rmSync(join(parent, name), { recursive: true, force: true });
+      if (!ownedDirStat(path, uid)) continue;
+      rmSync(path, { recursive: true, force: true });
       removed.push(name);
     } catch {}
   }
