@@ -41,10 +41,6 @@ end
 
 np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
-# Second dir for the SAME marker file: jingle-playing.json has two writers (the
-# rotate's on_metadata and jingle_now_queue's hook) whose feeds can overlap
-# inside one crossfade, and a shared dir would tear the write.
-jingle_now_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-now")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
 pause_talk_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-talk")
 pause_voice_accept_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-voice-accept")
@@ -363,23 +359,11 @@ def jingle_duration(fname) =
   end
 end
 
-# Mark a manual jingle from its own source. It is deliberately outside
-# music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
-# station's now-playing row or ICY title.
-jingle_now_queue.on_metadata(synchronous=false, fun (m) -> begin
-  jingle_now_on_air := true
-  fname = m["filename"]
-  file.write(
-    data=json.stringify(compact=true, {
-      filename = fname,
-      durationSec = jingle_duration(fname),
-      startedAt = time()
-    }),
-    atomic=true,
-    temp_dir=jingle_now_tmp_dir,
-    "#{state_dir}/jingle-playing.json"
-  )
-end)
+# Arm the rotate's gate from a manual jingle's own source. The marker is written
+# where every jingle goes on air instead (JINGLE MARKER, below the jingle_now
+# fallback): like any request source, this queue starts the next queued press in
+# the frame that ends the current one, before the fallback has chosen it.
+jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := true)
 
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-appropriate
 # tracks and sends `auto.reload` after every write (scheduler.ts).
@@ -1336,22 +1320,6 @@ music =
       reload_mode="watch",
       "#{state_dir}/jingles.m3u"
     )
-    # Announce each jingle to the controller (#997): jingles are otherwise
-    # invisible to it and play outside its airVoice serialiser. Written at FEED
-    # time — the jingle turns audible ~crossfade_duration later — and the
-    # controller holds its voice chain until start + crossfade + clip length.
-    jingles.on_metadata(synchronous=false, fun (m) ->
-      file.write(
-        data=json.stringify(compact=true, {
-          filename = m["filename"],
-          durationSec = jingle_duration(m["filename"]),
-          startedAt = time()
-        }),
-        atomic=true,
-        temp_dir=jingle_tmp_dir,
-        "#{state_dir}/jingle-playing.json"
-      )
-    )
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
@@ -1383,6 +1351,41 @@ music = fallback(
 )
 # A jingle on air also means the playlist has moved past its last track.
 music.on_track(synchronous=true, fun (m) -> if m["subwave_jingle"] == "true" then auto_on_air := false end)
+
+# JINGLE MARKER — announce each jingle to the controller (#997): jingles are
+# otherwise invisible to it and play outside its airVoice serialiser. Written at
+# FEED time — the jingle turns audible ~crossfade_duration later — and the
+# controller holds its voice chain until start + crossfade + clip length.
+#
+# ONE writer for both kinds, on the source cross reads, because only here does a
+# jingle starting mean it is going on air. The jingles playlist and
+# jingle_now_queue are request sources, and a request source starts its next
+# ready request in the frame that ends the current one, firing that request's
+# hooks before anything downstream has chosen it. The rotate then takes music
+# for jingle_ratio tracks and the clip waits with its hooks already spent:
+# measured on 2.4.6, the playlist's own hook marked each rotate jingle at the
+# END of the one before, ~N tracks early, and its real airing wrote nothing.
+# Below music_meta, so an uploaded clip's retained ID3 tags never reach
+# now-playing.json or the ICY title.
+music.on_track(synchronous=false, fun (m) ->
+  if m["subwave_jingle"] == "true" then
+    fname = m["filename"]
+    try
+      file.write(
+        data=json.stringify(compact=true, {
+          filename = fname,
+          durationSec = jingle_duration(fname),
+          startedAt = time()
+        }),
+        atomic=true,
+        temp_dir=jingle_tmp_dir,
+        "#{state_dir}/jingle-playing.json"
+      )
+    catch err do
+      log(label="subwave", "jingle marker write failed for #{fname} (#{err})")
+    end
+  end
+)
 
 # Per-track loudness normalisation: the controller stamps `liq_amplify`
 # ("<n> dB") on any track with a measured LUFS. BEFORE the cross so each track

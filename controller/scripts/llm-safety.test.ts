@@ -16,15 +16,16 @@
 // scripts/llm-repeat-penalty.test.ts does.
 import assert from 'node:assert/strict';
 import { coldLoadSettings } from './test-utils/settings.js';
-import { mkdtempSync, readFileSync, rmSync, } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // STATE_DIR redirected BEFORE the first import of anything config-derived.
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-gemini-safety-'));
 process.env.STATE_DIR = stateRoot;
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');

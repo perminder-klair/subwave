@@ -2,10 +2,11 @@
 // Compact editorial context must reach initial/corrective choices, remain
 // bounded for small models, and never enter the separate link-writing input.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-shortlist-guidance-'));
 process.env.STATE_DIR = root;
@@ -71,11 +72,11 @@ before(async () => {
       usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
   };
 });
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   Math.random = realRandom;
   library.shutdown();
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 test('journeys and exploration have brief choice guidance, without competing during a run', () => {

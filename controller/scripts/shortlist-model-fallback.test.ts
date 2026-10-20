@@ -4,9 +4,10 @@
 // runTrackEvent -> pickViaSelectionRoute path; only HTTP is synthetic.
 import assert from 'node:assert/strict';
 import test, { after, before } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-shortlist-fallback-'));
 process.env.STATE_DIR = root;
@@ -58,10 +59,10 @@ before(async () => {
   };
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 function snapshot() {

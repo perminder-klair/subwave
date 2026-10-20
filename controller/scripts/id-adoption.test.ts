@@ -18,9 +18,10 @@
 
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // Golden pairs from Navidrome PR #5824's own tests (pinned in
 // scripts/id-canonical.test.ts).
@@ -279,7 +280,7 @@ await test('without a rotation it behaves exactly like pruneMissingTracks', asyn
   assert.ok(checkFacets().ok, 'facet table drifted after the prune');
 });
 
-after(() => {
+after(async () => {
   db.close();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
