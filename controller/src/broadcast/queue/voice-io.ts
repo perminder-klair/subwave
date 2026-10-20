@@ -207,8 +207,10 @@ export const BED_MARKER_FRESH_MS = 10_000;
 
 // The guard window as two numbers: when the clip clears, and how long the window
 // is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
-// as the test seam for the marker's durationSec precedence.
-export function jingleWindow(): { clearAtMs: number; windowMs: number } {
+// as the test seam for the marker's durationSec precedence. `crossSec` replaces
+// the station crossfade as the cross term, for a caller that has to cover the
+// longest tail the jingle can wait behind (the targeted skip, #2017).
+export function jingleWindow(crossSec?: number): { clearAtMs: number; windowMs: number } {
   const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
@@ -220,7 +222,7 @@ export function jingleWindow(): { clearAtMs: number; windowMs: number } {
     const clipMs = (Number.isFinite(measuredSec) && measuredSec > 0 ? measuredSec * 1000 : 0)
       || (typeof m?.filename === 'string' && wavDurationMs(m.filename))
       || JINGLE_FALLBACK_MS;
-    const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
+    const crossMs = (crossSec ?? (Number(settings.get()?.crossfadeDuration) || 10)) * 1000;
     const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
     return { clearAtMs: startedMs + windowMs, windowMs };
   } catch {
@@ -250,8 +252,14 @@ export function jingleAiredAtMs(filename: string): number {
 // song after `prevStartedMs` (itself a tick late), so the comparison has
 // minutes of margin. A marker from before the previous song — the files are
 // never deleted — is not after it and so never counts. Unreadable or absent
-// markers count as nothing interposed: this only labels a record.
-export function interposedSince(prevStartedMs: number, now = Date.now()): Interposed | null {
+// markers count as nothing interposed: this only labels a record. `kinds`
+// narrows the markers read; the targeted skip asks for beds and breaks only,
+// since a jingle's marker cannot be ordered against now-playing (#2017).
+export function interposedSince(
+  prevStartedMs: number,
+  now = Date.now(),
+  kinds: readonly Interposed[] = ['jingle', 'bed', 'break'],
+): Interposed | null {
   if (!Number.isFinite(prevStartedMs) || prevStartedMs <= 0) return null;
   const markers: Array<[Interposed, string]> = [
     ['jingle', config.liquidsoap.jinglePlayingFile],
@@ -261,6 +269,7 @@ export function interposedSince(prevStartedMs: number, now = Date.now()): Interp
   let found: Interposed | null = null;
   let latest = 0;
   for (const [kind, file] of markers) {
+    if (!kinds.includes(kind)) continue;
     try {
       const startedMs = Number(JSON.parse(readFileSync(file, 'utf8'))?.startedAt) * 1000;
       if (Number.isFinite(startedMs) && startedMs > prevStartedMs && startedMs <= now && startedMs > latest) {

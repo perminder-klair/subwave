@@ -506,7 +506,7 @@ export function registerSubwaveTools(
         "override, since every listener hears the same broadcast. ADMIN endpoint. Use " +
         "sparingly and deliberately; there is intentionally no listener-facing skip. " +
         "Pass `expectId` to skip only a specific track: if it has already ended, or a " +
-        "jingle, bed or pause-and-talk break is playing after it, nothing is skipped.",
+        "jingle, bed or pause-and-talk break is on air instead, nothing is skipped.",
       inputSchema: {
         expectId: skipBodyShape.expectId.describe(
           "Optional. The subsonic_id of the track you mean to skip, from subwave_now_playing. " +

@@ -41,7 +41,7 @@ delete process.env.ADMIN_PASS;
 
 const { config } = await import('../src/config.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { songFedAtMs, targetedSkipRefusal } = await import('../src/broadcast/skip-policy.js');
+const { skipJingleCrossSec, songFedAtMs, targetedSkipRefusal } = await import('../src/broadcast/skip-policy.js');
 const { skipBodySchema } = await import('../src/schemas/dj.js');
 const { default: express } = await import('express');
 const { router: djRouter } = await import('../src/routes/dj.js');
@@ -190,16 +190,79 @@ test('a jingle, bed or break that aired before the song does not block it', asyn
   assert.deepEqual(commands, ['skip']);
 });
 
-// now-playing's stamp is whole seconds; a short stinger fed just before the
-// song can carry a later fraction of the same second. Read as "after", it
-// would refuse every skip for the rest of the song.
-test('a marker inside the song\'s own truncated second is not after it', async () => {
+// now-playing's stamp is whole seconds; a short bed fed just before the song
+// can carry a later fraction of the same second. Read as "after", it would
+// refuse every skip for the rest of the song.
+test('a bed marker inside the song\'s own truncated second is not after it', async () => {
   const fed = Math.floor(nowSec()) - 60;
   writeFileSync(config.liquidsoap.nowPlayingFile, JSON.stringify({ title: 'A', artist: 'X', subsonic_id: 'A', timestamp: fed }));
-  writeFileSync(config.liquidsoap.jinglePlayingFile, JSON.stringify({ filename: 'j.wav', durationSec: 0.6, startedAt: fed + 0.4 }));
+  writeFileSync(config.liquidsoap.bedPlayingFile, JSON.stringify({ filename: 'b.mp3', startedAt: fed + 0.4 }));
   const r = await skip({ expectId: 'A' });
   assert.equal(r.status, 200);
   assert.deepEqual(commands, ['skip']);
+});
+
+// ── a jingle is placed by its own window, never ordered by stamp ─────────────
+// Measured on liquidsoap 2.4.6 with radio.liq's chain order and marker writers,
+// for the rotate and for jingle_now_queue alike: A → J → B writes B's
+// now-playing as A's closing seam is FED, and J's marker ~50ms after it, in
+// the same second. B is not audible until A's buffered tail (the outgoing
+// crossfade stamp) and J have played, 13s later for a 3s stinger, 24s for a
+// 14s one. So now-playing names B, and J's marker reads as BEFORE B, through
+// everything a skip would actually cut.
+function jingleAt(startedAt: number, durationSec: number) {
+  writeFileSync(config.liquidsoap.jinglePlayingFile, JSON.stringify({ filename: '/state/jingles/id.wav', durationSec, startedAt }));
+}
+function songFedAt(id: string, timestamp: number) {
+  writeFileSync(config.liquidsoap.nowPlayingFile, JSON.stringify({ title: `Song ${id}`, artist: 'X', subsonic_id: id, timestamp }));
+}
+
+test('A → J → B: while A\'s tail or the jingle airs, a skip aimed at B is refused', async () => {
+  const fed = Math.floor(nowSec()) - 5;
+  songFedAt('B', fed);
+  jingleAt(fed + 0.21, 3);
+  const r = await skip({ expectId: 'B' });
+  assert.equal(r.status, 409, 'the skip would cut the jingle (or A\'s tail), and B would play on');
+  assert.equal(r.body.reason, 'jingle-on-air');
+  assert.deepEqual(commands, []);
+});
+
+// The 50ms between the two writes can straddle a second boundary; read as a
+// jingle AFTER B, it refused every skip of B for B's whole length.
+test('A → J → B with the jingle\'s marker in the next second: B is skippable once J has aired', async () => {
+  const fed = Math.floor(nowSec()) - 60;
+  songFedAt('B', fed);
+  jingleAt(fed + 1.02, 3);
+  const r = await skip({ expectId: 'B' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(commands, ['skip']);
+});
+
+// A playlist starts its NEXT clip's metadata in the frame that ends the one
+// on air, so a jingle longer than the crossfade stamps the following jingle's
+// marker at its own end — while the song after it plays, and tracks before
+// that jingle airs. Ordered by stamp, that song could never be skipped.
+test('a long jingle stamps the next jingle early: the song after it is skippable once the window passes', async () => {
+  const fed = Math.floor(nowSec()) - 60;
+  songFedAt('C', fed);
+  jingleAt(fed + 19.9, 3);
+  const r = await skip({ expectId: 'C' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(commands, ['skip']);
+});
+
+// The jingle airs after the OUTGOING track's buffered tail, whose length is
+// that track's own crossfade stamp: up to CROSS_MAX_SECONDS (14s) on a station
+// crossfade of 10s. The station figure alone would let a skip through during
+// the jingle's last seconds.
+test('the jingle window allows for an outgoing tail longer than the station crossfade', async () => {
+  const fed = Math.floor(nowSec()) - 16;
+  songFedAt('B', fed);
+  jingleAt(fed + 0.05, 3);
+  const r = await skip({ expectId: 'B' });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.reason, 'jingle-on-air');
+  assert.deepEqual(commands, []);
 });
 
 // ── targeted: refused ────────────────────────────────────────────────────────
@@ -339,10 +402,17 @@ test('songFedAtMs counts the song from the end of its truncated second', () => {
 });
 
 test('targetedSkipRefusal: a changed id outranks an interposed item', () => {
-  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'A', interposed: null }), null);
-  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'B', interposed: 'jingle' }), 'track-changed');
-  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: null, interposed: null }), 'track-changed');
-  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'A', interposed: 'break' }), 'break-on-air');
+  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'A', jingleOnAir: false, interposed: null }), null);
+  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'B', jingleOnAir: true, interposed: null }), 'track-changed');
+  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: null, jingleOnAir: false, interposed: null }), 'track-changed');
+  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'A', jingleOnAir: false, interposed: 'break' }), 'break-on-air');
+  assert.equal(targetedSkipRefusal({ expectId: 'A', onAirId: 'A', jingleOnAir: true, interposed: null }), 'jingle-on-air');
+});
+
+test('skipJingleCrossSec: the longest outgoing tail a jingle can wait behind', () => {
+  assert.equal(skipJingleCrossSec(10), 14, 'a per-track stamp can reach CROSS_MAX_SECONDS');
+  assert.equal(skipJingleCrossSec(20), 20, 'an unstamped track carries the station crossfade');
+  assert.equal(skipJingleCrossSec(undefined), 14);
 });
 
 test('the body schema: no target unless expectId is a usable id', () => {

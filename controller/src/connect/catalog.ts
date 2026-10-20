@@ -668,7 +668,7 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_similar_tracks', title: 'Tracks that sound like this', description: 'CLAP sound-alike neighbours for a seed track.', endpoint: 'GET /similar-tracks', auth: 'station' },
   { name: 'subwave_queue_track', title: 'Queue an exact track', description: 'Push a specific track to the queue.', endpoint: 'POST /dj/queue-track', auth: 'admin', mutatesAir: true },
   { name: 'subwave_queue_block', title: 'Queue an album or artist block', description: 'Queue a whole album, or a run of tracks by one artist, in one action.', endpoint: 'POST /dj/queue-block', auth: 'admin', mutatesAir: true },
-  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track. Optional expectId skips only that track, refusing if it has ended or a jingle, bed or break followed it.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track. Optional expectId skips only that track, refusing if it has ended or a jingle, bed or break is on air instead.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_announce', title: 'DJ announce', description: 'Make the DJ speak text on air.', endpoint: 'POST /dj/say', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_segment', title: 'DJ segment', description: 'Fire a canned voice segment.', endpoint: 'POST /dj/segment', auth: 'admin', mutatesAir: true },
   { name: 'subwave_list_skills', title: 'List skills', description: 'The DJ\'s skill-segment catalogue.', endpoint: 'GET /dj/skills', auth: 'admin' },

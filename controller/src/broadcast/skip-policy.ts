@@ -1,5 +1,6 @@
 import type { SkipRefusalReason } from '../schemas/dj.js';
 import type { Interposed } from './queue/pure.js';
+import { CROSS_MAX_SECONDS } from '../music/mix.js';
 
 // Force-drain and await a resolved request before an operator skip. Proceed after the bounded
 // wait even if unconfirmed; ending the current track takes priority. #1300.
@@ -49,13 +50,26 @@ export function commitSatisfied(p: {
 // A skip carrying `expectId` lands only while that track is still what the
 // mixer is playing. A bare skip ends whatever is on air, and that stays the
 // behaviour without an id: the commit wait above can outlast the song, and a
-// jingle, bed or pause-talk break after it leaves now-playing.json naming it
-// (none of the three writes that file), so a caller that meant one song could
-// cut the next item instead.
+// jingle, bed or pause-talk break leaves now-playing.json naming a song that
+// is not what airs (none of the three writes that file), so a caller that
+// meant one song could cut another item instead.
+//
+// A jingle and a bed reach that timeline differently, so they are read
+// differently. Beds and breaks ride dj_queue through music_meta: the same
+// on_meta writes their marker and now-playing, in feed order, so a marker
+// stamped after the song was fed is after it. A jingle is not orderable that
+// way. Measured on liquidsoap 2.4.6 with radio.liq's chain, rotate and
+// jingle_now_queue alike, A → J → B writes B's now-playing as A's closing seam
+// is fed and J's marker ~50ms after it, while B is not audible until A's
+// buffered tail and J have played; and a playlist starts its next clip's
+// metadata in the frame that ends the one on air, so a jingle longer than the
+// crossfade stamps the FOLLOWING jingle's marker tracks early. A jingle is on
+// air for its own window instead (queue/voice-io.ts jingleWindow, the hold
+// airVoice already waits out).
 
 // When now-playing.json says its song was fed, as epoch ms, or null when the
 // file carries no usable stamp. Liquidsoap writes `timestamp` as time()
-// truncated to whole seconds, while the jingle, bed and break markers keep the
+// truncated to whole seconds, while the bed and break markers keep the
 // fraction, so a marker inside the song's own second cannot be ordered against
 // it. Count the song from the END of that second: only a song that ended
 // within a second of being fed could have something after it in there, while
@@ -66,6 +80,19 @@ export function songFedAtMs(np: { timestamp?: unknown } | null | undefined): num
   return Number.isFinite(sec) && sec > 0 ? (Math.floor(sec) + 1) * 1000 : null;
 }
 
+// The cross term of the jingle window, in seconds. A jingle airs after the
+// OUTGOING track's buffered tail, which is that track's own crossfade stamp:
+// up to CROSS_MAX_SECONDS for a controller-sized one, the station crossfade
+// for anything unstamped. The station figure alone (airVoice's) lets a skip
+// through during the jingle's last seconds behind a longer stamp; the cost of
+// the wider pad is a refusal for a few seconds into the song after it.
+export function skipJingleCrossSec(stationCrossfadeSec: unknown): number {
+  return Math.max(Number(stationCrossfadeSec) || 10, CROSS_MAX_SECONDS);
+}
+
+// The markers the targeted skip orders against now-playing (see above).
+export const SKIP_ORDERED_MARKERS = ['bed', 'break'] as const satisfies readonly Interposed[];
+
 const INTERPOSED_REFUSAL = {
   jingle: 'jingle-on-air',
   bed: 'bed-on-air',
@@ -73,24 +100,27 @@ const INTERPOSED_REFUSAL = {
 } as const satisfies Record<Interposed, SkipRefusalReason>;
 
 // Why a skip aimed at `expectId` must not land, or null when it may.
-// `onAirId` is now-playing.json's subsonic_id read fresh; `interposed` is the
-// newest jingle/bed/break marker stamped after that song was fed
-// (queue/voice-io.ts interposedSince), the same reading the seam record takes.
-// A different id wins over an interposed item: the song the caller meant is
-// gone either way, and naming the change is the more useful answer.
+// `onAirId` is now-playing.json's subsonic_id read fresh; `jingleOnAir` is
+// whether a jingle's window is still open; `interposed` is the newest bed or
+// break marker stamped after that song was fed (queue/voice-io.ts
+// interposedSince over SKIP_ORDERED_MARKERS, the reading the seam record
+// takes). A different id wins over an interposed item: the song the caller
+// meant is gone either way, and naming the change is the more useful answer.
 export function targetedSkipRefusal(p: {
   expectId: string;
   onAirId: string | null | undefined;
+  jingleOnAir: boolean;
   interposed: Interposed | null;
 }): SkipRefusalReason | null {
   if (!p.onAirId || p.onAirId !== p.expectId) return 'track-changed';
+  if (p.jingleOnAir) return 'jingle-on-air';
   return p.interposed ? INTERPOSED_REFUSAL[p.interposed] : null;
 }
 
 // The 409's `error` (and the booth line) for each refusal.
 export const SKIP_REFUSAL_MESSAGES: Record<SkipRefusalReason, string> = {
   'track-changed': 'that track is no longer on air — nothing skipped',
-  'jingle-on-air': 'a jingle is on air after that track — nothing skipped',
+  'jingle-on-air': 'a jingle is on air or crossfading in — nothing skipped',
   'bed-on-air': 'a bed is on air after that track — nothing skipped',
   'break-on-air': 'a pause-and-talk break is on air after that track — nothing skipped',
 };

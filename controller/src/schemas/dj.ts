@@ -104,10 +104,14 @@ export type QueueBlockBody = z.infer<typeof queueBlockSchema>;
  *
  *   * `track-changed` — now-playing no longer names the track the caller
  *     meant: it ended, during the commit wait or before the request arrived.
- *   * `jingle-on-air` / `bed-on-air` / `break-on-air` — now-playing still
- *     names it, but the mixer has since placed a jingle, a bed or a
- *     pause-and-talk break after it. None of those rewrites now-playing, so
- *     the name is stale and a skip would cut the item, not the song.
+ *   * `jingle-on-air` — a jingle is on air, or waiting in the crossfade
+ *     buffer behind the outgoing track's tail. Now-playing names the song
+ *     before it, or (from that song's closing seam) the song after it, and a
+ *     skip would cut the jingle or the tail, not the song.
+ *   * `bed-on-air` / `break-on-air` — now-playing still names it, but the
+ *     mixer has since placed a bed or a pause-and-talk break after it.
+ *     Neither rewrites now-playing, so the name is stale and a skip would cut
+ *     the item, not the song.
  */
 export const SKIP_REFUSAL_REASONS = ['track-changed', 'jingle-on-air', 'bed-on-air', 'break-on-air'] as const;
 export type SkipRefusalReason = (typeof SKIP_REFUSAL_REASONS)[number];
