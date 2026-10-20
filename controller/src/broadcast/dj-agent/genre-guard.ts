@@ -5,6 +5,7 @@
 // run's genre.
 import type { CandidateLike } from '../../music/recency.js';
 import { alternativeCandidates } from './artist-guard.js';
+import { onFreshAlbum, type AlbumKeyOf } from './album-guard.js';
 import type { GenreKeys } from './genre-families.js';
 
 // `recentGenres` is newest first: the slots the pick will follow. The run is
@@ -47,7 +48,7 @@ export interface GenreGuardDeps<T> {
   // album are set aside while any fresh-album one exists, so this guard cannot
   // undo the album guard. With none left, the cooldown relaxes (never starve).
   recentAlbums?: ReadonlySet<string>;
-  albumKeyOf?: (song: T) => string;
+  albumKeyOf?: AlbumKeyOf<T>;
   log: (line: string) => void;
   logEvent: (name: string, payload: Record<string, unknown>) => void;
 }
@@ -70,7 +71,7 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
   const narrow = (candidates: Iterable<[string, T]>) => {
     let pool = outsideRun(candidates);
     if (recentAlbums?.size && albumKeyOf) {
-      const fresh = pool.filter(([, s]) => { const key = albumKeyOf(s); return !key || !recentAlbums.has(key); });
+      const fresh = pool.filter(([, s]) => onFreshAlbum(s, recentAlbums, albumKeyOf));
       if (fresh.length) pool = fresh;
       else if (pool.length) albumRelaxed = true;
     }
