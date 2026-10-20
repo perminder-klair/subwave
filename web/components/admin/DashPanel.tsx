@@ -926,15 +926,13 @@ export default function DashPanel() {
         onConfirm={doSkip}
       />
 
+      {/* The target outlives the close on purpose: the close animation still
+          shows its text, and clearing it blanked the dialog as it faded.
+          openNeverPlay overwrites it before every open, and the two actions,
+          its only readers, exist only while the dialog is open. */}
       <V3AlertDialog
         open={confirmNeverPlay}
-        onOpenChange={open => {
-          setConfirmNeverPlay(open);
-          // The target is captured at open time; doNeverPlay reads it before
-          // its first await, so clearing on close is safe and keeps a stale
-          // target from outliving its dialog.
-          if (!open) setNeverPlayTarget(null);
-        }}
+        onOpenChange={setConfirmNeverPlay}
         title="Never play this track"
         description={neverPlayTarget
           ? `Add “${neverPlayTarget.title}”${neverPlayTarget.artist ? ` — ${neverPlayTarget.artist}` : ''} to the never-play list? It will never air again, listener requests included. You can lift it from Library → Blocked.`
