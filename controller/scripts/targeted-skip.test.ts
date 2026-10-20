@@ -206,8 +206,8 @@ test('a bed marker inside the song\'s own truncated second is not after it', asy
 
 // ── a jingle is placed by its own window, never ordered by stamp ─────────────
 // radio.liq writes the jingle marker where a jingle goes on air: one writer on
-// the jingle_now fallback's output, so a rotate jingle and a manual press are
-// marked alike, each at its own feed (liquidsoap/CLAUDE.md). Measured on
+// the music_with_jingle_now switch's output, so a rotate jingle and a manual
+// press are marked alike, each at its own feed (liquidsoap/CLAUDE.md). Measured on
 // liquidsoap 2.4.6 with that writer: A → J → B writes B's now-playing as A's
 // closing seam is FED, and J's marker ~50ms after it, in the same second. B is
 // not audible until A's buffered tail (the outgoing crossfade stamp) and J have

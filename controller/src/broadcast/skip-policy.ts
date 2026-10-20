@@ -58,11 +58,11 @@ export function commitSatisfied(p: {
 // differently. Beds and breaks ride dj_queue through music_meta: the same
 // on_meta writes their marker and now-playing, in feed order, so a marker
 // stamped after the song was fed is after it. A jingle is not orderable that
-// way. radio.liq marks it where it goes on air (one writer on the jingle_now
-// fallback's output, rotate and manual press alike), and measured on
-// liquidsoap 2.4.6 A → J → B writes B's now-playing as A's closing seam is fed
-// and J's marker ~50ms after it, while B is not audible until A's buffered
-// tail and J have played. A jingle is on air for its own window instead
+// way. radio.liq marks it where it goes on air (one writer on the
+// music_with_jingle_now switch's output, rotate and manual press alike), and
+// measured on liquidsoap 2.4.6 A → J → B writes B's now-playing as A's closing
+// seam is fed and J's marker ~50ms after it, while B is not audible until A's
+// buffered tail and J have played. A jingle is on air for its own window instead
 // (queue/voice-io.ts jingleWindow, the hold airVoice already waits out).
 
 // When now-playing.json says its song was fed, as epoch ms, or null when the

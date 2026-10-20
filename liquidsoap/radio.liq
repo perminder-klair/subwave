@@ -1312,6 +1312,11 @@ VOICE_GATE_MAX_SEC = 120.
 # this, so jingles never reach now-playing. An empty jingles.m3u is fine (rotate
 # skips an unavailable source); jingle_ratio 0 = jingles OFF (#997), the rotate
 # is not built at all.
+#
+# True while a rotate jingle is on air: set where it reaches the source cross
+# reads (below the jingle_now switch), released as the playlist starts its next
+# clip or any other track starts there. The rotate's gate holds open for it.
+rotate_jingle_on_air = ref(false)
 music =
   if jingle_ratio() > 0 then
     jingles = playlist(
@@ -1320,16 +1325,34 @@ music =
       reload_mode="watch",
       "#{state_dir}/jingles.m3u"
     )
+    # The playlist starts its next clip in the frame that ends the one on air,
+    # and this hook runs inside that frame, before the gate below sees its track
+    # mark. Re-checked at the mark, a closed gate dropped the rest of the frame,
+    # the next clip's head and metadata with it, so that clip later aired under
+    # the previous one's name and length.
+    jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
-    jingles = source.available(jingles, {
+    #
+    # The gate decides only whether a clip may START. Checked on every frame
+    # (the default), a voice clip or bed that began mid-stinger made the source
+    # unavailable, and the rotate left the clip there and played the rest at a
+    # later turn. track_sensitive holds an open gate while it is true, so it is
+    # true only for the clip on air: an open verdict must not outlive its clip,
+    # nor be re-checked at the clip's own end (the release above).
+    jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air()}, {
       not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
-    # Mark a stinger for dj_transition's JINGLE SEAMS rule. music_meta is
-    # captured above this rotate, so the key never reaches now-playing.
-    jingles = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingles)
+    # Mark a stinger for dj_transition's JINGLE SEAMS rule, and as the rotate's
+    # own for the gate's flag. music_meta is captured above this rotate, so the
+    # keys never reach now-playing.
+    jingles = metadata.map(
+      update=true,
+      fun (_) -> [("subwave_jingle", "true"), ("subwave_jingle_rotate", "true")],
+      jingles
+    )
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
@@ -1337,20 +1360,32 @@ music =
 
 # Manual presses wrap the automatic rotate so they win the next SAFE boundary,
 # even when dj_queue already holds tracks or the rotate is due. While speech or
-# a bed is live the source is unavailable but the request remains queued.
-jingle_now = source.available(jingle_now_queue, {
-  not bed_on_air() and not pause_talk_on_air() and time() > voice_until()
-})
+# a bed is live the press is not chosen but the request remains queued.
+#
+# The gate is the switch's own predicate, which track_sensitive=true asks only
+# when choosing at a track boundary, so a press that started plays to its end.
+# As a source.available gate it was asked on every frame: a bed pre-started at
+# the boundary the press won, or a DJ clip, closed it mid-clip and the fallback
+# left the clip, to play the rest at a later boundary. Measured on 2.4.6: a 14s
+# announcement aired 10s, two songs played, then its last 4s.
+#
 # The same mark as the rotate's jingles. Every jingle arrives here when the
 # controller owns the rotate (#1619), so this one covers both kinds.
-jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now)
-music = fallback(
+jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now_queue)
+music = switch(
   id="music_with_jingle_now",
   track_sensitive=true,
-  [jingle_now, music]
+  [
+    ({not bed_on_air() and not pause_talk_on_air() and time() > voice_until()}, jingle_now),
+    ({true}, music)
+  ]
 )
 # A jingle on air also means the playlist has moved past its last track.
 music.on_track(synchronous=true, fun (m) -> if m["subwave_jingle"] == "true" then auto_on_air := false end)
+# Holds the rotate's gate open for the clip on air (see the rotate). Set where a
+# clip is chosen, never on the playlist, which starts its next clip as this one
+# ends. Every other track releases it, a press included.
+music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_jingle_rotate"] == "true")
 
 # JINGLE MARKER — announce each jingle to the controller (#997): jingles are
 # otherwise invisible to it and play outside its airVoice serialiser. Written at
