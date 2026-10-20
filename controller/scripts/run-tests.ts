@@ -31,7 +31,7 @@
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { parseRunArgs, type RunArgs } from './test-utils/run-args.js';
 import { STATE_DIR_PREFIX, sweepStaleStateDirs } from './test-utils/stale-state-dirs.js';
@@ -73,7 +73,7 @@ const { status } = spawnSync(
     '--import',
     'tsx',
     '--import',
-    join(scriptsDir, 'test-utils', 'state-dir.ts'),
+    pathToFileURL(join(scriptsDir, 'test-utils', 'state-dir.ts')).href,
     '--test',
     `--test-concurrency=${jobs}`,
     '--test-reporter=spec',
