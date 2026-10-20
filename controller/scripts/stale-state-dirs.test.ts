@@ -17,32 +17,27 @@ const now = then.getTime() + 2 * DAY_MS;
 test('only a day-old top-level dir named like a test STATE_DIR is swept', () => {
   const root = createTempDir(join(tmpdir(), 'subwave-sweep-test-'));
   const at = (name: string) => join(root, name);
-
-  mkdirSync(at('subwave-test-state-AbC123'));
-  writeFileSync(at('subwave-test-state-AbC123/settings.json'), '{}');
-  mkdirSync(at('subwave-test-state-Fresh1'));
-  writeFileSync(at('subwave-test-state-File01'), 'not a dir');
-  mkdirSync(at('subwave-test-state-Seven77'));
-  mkdirSync(at('subwave-test-state-ab-cde'));
-  mkdirSync(at('my-subwave-test-state-Prefix'));
-  mkdirSync(at('nested/subwave-test-state-Nested'), { recursive: true });
-  mkdirSync(at('target'));
-  symlinkSync(at('target'), at('subwave-test-state-Link01'));
-
-  for (const name of ['subwave-test-state-AbC123', 'subwave-test-state-File01', 'subwave-test-state-Seven77',
-    'subwave-test-state-ab-cde', 'my-subwave-test-state-Prefix', 'nested/subwave-test-state-Nested', 'target']) {
-    utimesSync(at(name), then, then);
-  }
-  lutimesSync(at('subwave-test-state-Link01'), then, then);
   const anHourAgo = new Date(now - 60 * 60 * 1000);
-  utimesSync(at('subwave-test-state-Fresh1'), anHourAgo, anHourAgo);
+  // In creation order: the symlink needs its target first.
+  const fixtures: Array<{ name: string; make: (path: string) => void; mtime: Date; swept: boolean }> = [
+    { name: 'subwave-test-state-AbC123', make: (p) => { mkdirSync(p); writeFileSync(join(p, 'settings.json'), '{}'); }, mtime: then, swept: true },
+    { name: 'subwave-test-state-Fresh1', make: mkdirSync, mtime: anHourAgo, swept: false },
+    { name: 'subwave-test-state-File01', make: (p) => writeFileSync(p, 'not a dir'), mtime: then, swept: false },
+    { name: 'subwave-test-state-Seven77', make: mkdirSync, mtime: then, swept: false },
+    { name: 'subwave-test-state-ab-cde', make: mkdirSync, mtime: then, swept: false },
+    { name: 'my-subwave-test-state-Prefix', make: mkdirSync, mtime: then, swept: false },
+    { name: 'nested/subwave-test-state-Nested', make: (p) => mkdirSync(p, { recursive: true }), mtime: then, swept: false },
+    { name: 'target', make: mkdirSync, mtime: then, swept: false },
+    { name: 'subwave-test-state-Link01', make: (p) => symlinkSync(at('target'), p), mtime: then, swept: false },
+  ];
+  for (const { name, make, mtime } of fixtures) {
+    make(at(name));
+    lutimesSync(at(name), mtime, mtime); // the link itself, never its target
+  }
 
-  assert.deepEqual(sweepStaleStateDirs(root, now), [at('subwave-test-state-AbC123')]);
-  assert.equal(existsSync(at('subwave-test-state-AbC123')), false);
-  for (const kept of ['subwave-test-state-Fresh1', 'subwave-test-state-File01', 'subwave-test-state-Seven77',
-    'subwave-test-state-ab-cde', 'my-subwave-test-state-Prefix', 'nested/subwave-test-state-Nested',
-    'subwave-test-state-Link01', 'target']) {
-    assert.ok(existsSync(at(kept)), `${kept} is kept`);
+  assert.deepEqual(sweepStaleStateDirs(root, now), fixtures.filter((f) => f.swept).map((f) => at(f.name)));
+  for (const { name, swept } of fixtures) {
+    assert.equal(existsSync(at(name)), !swept, `${name} is ${swept ? 'swept' : 'kept'}`);
   }
 });
 
