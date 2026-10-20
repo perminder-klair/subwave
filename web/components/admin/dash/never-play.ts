@@ -38,7 +38,9 @@ export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'unconfirme
  * row removal), is cancelled by the Dash unmounting, or returns at once while
  * offline. Nothing is skipped without one. A refetch cancelled by a newer one
  * (another Dash action's invalidation) takes that fetch's answer, which was
- * sent later still.
+ * sent later still. The LAST success counts: a poll already answered when the
+ * refetch goes out cannot be cancelled and still writes inside the window,
+ * ahead of the refetch's own answer.
  */
 export async function refetchOnAirId(client: QueryClient): Promise<string | undefined> {
   const queryKey = dashKeys.status();

@@ -181,6 +181,24 @@ test('fresh read: a newer read that supersedes the refetch answers for it', asyn
   dash.done();
 });
 
+// A poll already answered when the refetch goes out is past cancelling, and
+// writes its answer a tick later, inside the window. The refetch's own answer
+// lands after it and must be the one that stands: the LAST success counts.
+test('fresh read: a poll answered as the refetch goes out is overruled by the refetch', async () => {
+  const s = station('a');
+  const dash = await mountedDash(s);
+  s.held = true;
+  void dash.client.invalidateQueries({ queryKey: dashKeys.status() });
+  await blockLands();
+  s.release();
+  s.onAir = 'b';
+  // The poll has resolved but not yet written its answer to the cache.
+  await Promise.resolve();
+  assert.equal(await refetchOnAirId(dash.client), 'b');
+  assert.equal(s.reads, 3);
+  dash.done();
+});
+
 // refetchQueries swallows a failed fetch and returns at once while offline,
 // leaving a poll taken before the block landed in the cache: the very read the
 // guard refuses, so it must not decide a skip.
