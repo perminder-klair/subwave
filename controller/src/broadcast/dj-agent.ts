@@ -21,7 +21,7 @@ import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-n
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
-import { genreGuardApplies, runGenreGuard } from './dj-agent/genre-guard.js';
+import { genreGuardApplies, runGenreGuard, withGenreRepick } from './dj-agent/genre-guard.js';
 import { ownsPickDirection } from '../music/discovery-policy.js';
 import { genreKeysFor } from '../music/genre-facts.js';
 import { albumKeyFor } from '../music/album-facts.js';
@@ -1046,7 +1046,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     if (genreGuarded.kind === 'repicked') {
       object = genreGuarded.object;
       song = genreGuarded.song;
-      agentPickResolution.guardOutcome = 'genre-repick';
+      agentPickResolution.guardOutcome = withGenreRepick(agentPickResolution.guardOutcome);
     }
   }
 

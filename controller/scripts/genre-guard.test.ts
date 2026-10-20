@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { genreGuardApplies, runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
+import { genreGuardApplies, runGenreGuard, withGenreRepick, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
 import { genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
 
 // Labels arrive already consolidated by the operator's scene aliases.
@@ -326,4 +326,12 @@ test('the guard is for whole-library programming: a genre list or an owned direc
   assert.equal(genreGuardApplies({ playlistLock: new Set(['a']) }, null), false, 'a strict playlist');
   assert.equal(genreGuardApplies({ audioWaypoint: [0.1, 0.2] }, null), false, 'a sonic journey');
   assert.equal(genreGuardApplies({ audioWaypoint: [] }, null), true, 'an empty waypoint is no journey');
+});
+
+test('a genre re-pick is named beside an earlier artist or album re-pick, never over it', () => {
+  assert.equal(withGenreRepick('none'), 'genre-repick');
+  assert.equal(withGenreRepick(undefined), 'genre-repick');
+  assert.equal(withGenreRepick('artist-repick'), 'artist-and-genre-repick');
+  assert.equal(withGenreRepick('album-repick'), 'album-and-genre-repick');
+  assert.equal(withGenreRepick('artist-and-album-repick'), 'artist-album-and-genre-repick');
 });

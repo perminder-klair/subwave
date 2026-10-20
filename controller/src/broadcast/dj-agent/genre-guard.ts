@@ -13,6 +13,7 @@ import type { CandidateLike } from '../../music/recency.js';
 import { alternativeCandidates } from './artist-guard.js';
 import { onFreshAlbum, type AlbumKeyOf } from './album-guard.js';
 import type { GenreKeys } from './genre-families.js';
+import type { GuardOutcome } from './leanings-review.js';
 
 // Whether the guard runs for this pick at all. It is for whole-library
 // programming: a show that sets its own genre list chose those genres, so a
@@ -40,6 +41,18 @@ function labelsOverlap(keys: GenreKeys, runKeys: GenreKeys): boolean {
 
 export function genreGuardCause(pickGenres: GenreKeys, recentGenres: readonly GenreKeys[], window: number): boolean {
   return labelsOverlap(pickGenres, runGenreKeys(recentGenres, window));
+}
+
+// The genre guard runs after the artist and album guards, so its re-pick is
+// named beside theirs, never in place of them.
+const WITH_GENRE: Partial<Record<GuardOutcome, GuardOutcome>> = {
+  'artist-repick': 'artist-and-genre-repick',
+  'album-repick': 'album-and-genre-repick',
+  'artist-and-album-repick': 'artist-album-and-genre-repick',
+};
+
+export function withGenreRepick(outcome: GuardOutcome | undefined): GuardOutcome {
+  return (outcome && WITH_GENRE[outcome]) || 'genre-repick';
 }
 
 export type GenreGuardOutcome<T> =
