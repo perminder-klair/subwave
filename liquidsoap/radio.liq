@@ -1321,6 +1321,7 @@ def intro_overlay_gain() =
     # poll using last metadata could skip a following ordinary DJ intro after
     # the cancelled request ended but before that intro emitted its metadata.
     intro_queue.skip()
+    intro_overlay_metadata := []
     0.
   end
 end
@@ -1576,7 +1577,7 @@ end
 # music bus. BEFORE mic_chain so the fixed-threshold compressor sees a levelled
 # input; the un-annotated lead-in plays at unity.
 voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
-intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(amplify(intro_overlay_gain, intro_queue))))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(amplify(override=null, intro_overlay_gain, intro_queue))))
 
 # SAFETY — the dead-air guard. `emergency` is an always-ready, non-silent
 # single, so the broadcast never has nothing to pull.

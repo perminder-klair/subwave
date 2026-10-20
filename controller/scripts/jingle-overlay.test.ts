@@ -19,6 +19,7 @@ const { validateSettingsPatch } = await import('../src/settings/patch-registry.j
 const { queue } = await import('../src/broadcast/queue.js');
 const { config } = await import('../src/config.js');
 const { airVoice, voiceBusy, jingleWindow, interposedSince } = await import('../src/broadcast/queue/voice-io.js');
+const { renderSettingsSnapshot } = await import('../src/doctor/review.js');
 
 const offer: OverlayOffer = {
   placement: 'over', ratio: 3, tracksSinceOverlay: 3,
@@ -89,6 +90,18 @@ test('cold-load round trips and restart receipts cover every placement without o
   writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, 'utf8')), jinglePlacement: 'typo' }));
   setCache(null);
   assert.equal((await settings.load()).jinglePlacement, 'between');
+});
+
+test('doctor reports the effective jingle owner for each placement', () => {
+  const previous = settings.get();
+  try {
+    for (const [placement, owner] of [['between', 'mixer'], ['over', 'controller'], ['both', 'controller']] as const) {
+      setCache({ ...previous, jingleRotate: 'mixer', jinglePlacement: placement });
+      assert.ok(renderSettingsSnapshot().includes(`jingle 1/${previous.jingleRatio} (${owner})`));
+    }
+  } finally {
+    setCache(previous);
+  }
 });
 
 test('entering overlay mode starts a clean N-track cycle even when the controller already owned between-song rotation', async () => {

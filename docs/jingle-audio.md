@@ -26,9 +26,10 @@ manual jingles, beds, pause-and-talk, idle/off-air and starvation all prevent
 an overlay. The mixer checks again when it consumes the offer and throughout
 playback. Entering idle or going off air cancels an accepted ID and its silent
 lead-in; resuming never restarts that ID alongside newly queued speech. A short song,
-an ID that cannot finish before the outgoing crossfade or measured vocal entry,
-or an unmeasurable audio import is skipped. A controller restart does not insert
-an ID into an already-running song.
+an ID that cannot finish before the outgoing crossfade or a measured vocal entry,
+or an unmeasurable audio import is skipped. Unanalysed songs have no measured
+vocal runway and pass the fit check, as DJ links do. A controller restart does
+not insert an ID into an already-running song.
 
 The mixer reads the ratio file only at startup. `over` and `both` write it as
 `0`, disabling its independent between-song rotation; `both` runs that rotation

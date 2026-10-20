@@ -91,6 +91,21 @@ test('a repeat press of an un-aired jingle is refused, not stacked', async () =>
   await markAired(other);
 });
 
+test('an overlay marker cannot retire a pending manual press of the same jingle', async () => {
+  assert.deepEqual(await queue.playJingle(other), { ok: true });
+  rmSync(join(STATE, 'jingle-now.txt'));
+  const pressedAt = queue._pendingJingles.get(other)!.at;
+  writeFileSync(config.liquidsoap.jinglePlayingFile, JSON.stringify({
+    filename: join(jingleDir, other),
+    placement: 'over',
+    startedAt: (pressedAt + 1000) / 1000,
+  }));
+
+  assert.deepEqual(await queue.playJingle(other), { ok: false, reason: 'already-queued' });
+  assert.ok(queue._pendingJingles.has(other), 'the manual press remains pending');
+  await markAired(other);
+});
+
 test('manual jingle rejects when its priority handoff cannot be written', async () => {
   const livePath = config.liquidsoap.jingleFile;
   config.liquidsoap.jingleFile = join(STATE, 'missing-parent', 'jingle-now.txt');

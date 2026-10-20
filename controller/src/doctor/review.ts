@@ -9,6 +9,7 @@ import * as settings from '../settings.js';
 import { primaryLeg, probeLegReachable, providerName, activeModelLabel } from '../llm/provider.js';
 import { djObject } from '../llm/sdk.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
+import { jingleRotateOwner } from '../broadcast/jingle-rotate.js';
 import * as analyzer from '../music/analyzer.js';
 import { DJ_DOC_KNOWLEDGE } from '../doctor-knowledge.js';
 import type { DoctorReport, DoctorReview, FixId, StationSettings } from './types.js';
@@ -121,7 +122,7 @@ export async function reviewReport(report: DoctorReport): Promise<DoctorReview> 
 // host being unreachable — the fingerprint of a model that can't reliably produce
 // structured output. Matched on message text so it works across providers.
 
-function renderSettingsSnapshot(): string {
+export function renderSettingsSnapshot(): string {
   let s: StationSettings | null = null;
   try { s = settings.get(); } catch { return ''; }
   const llm: NonNullable<StationSettings['llm']> = s?.llm || {};
@@ -153,7 +154,7 @@ function renderSettingsSnapshot(): string {
     `- LLM: ${providerName()} · ${activeModelLabel()} · Music selection ${llm.trackSelection === 'shortlist' ? 'Track Shortlist' : 'Agentic Tools'} · Request matching ${llm.requestMatching === 'direct' ? 'Direct' : 'Agentic'} · Segments & Skills ${llm.segmentRuntime === 'direct' ? 'Direct' : 'Agentic'} · Chain-of-thought ${llm.reasoning ? 'ON' : 'OFF'} · Agent deadline ${Math.round(Number(llm.agentTimeoutMs || 0) / 1000)}s · Context window ${llm.numCtx ?? 'n/a'} · Tool choice ${llm.toolChoice || 'required'} · Max response size ${llm.maxOutputTokens || 'default'}`,
     `- Budget: ${budget} · Always answer requests ${llm.exemptRequests === false ? 'OFF' : 'ON'} · Pause DJ when empty ${llm.pauseWhenEmpty ? 'ON' : 'OFF'}`,
     `- Picking: No-repeat window ${llm.noRepeatWindow ?? 'n/a'} · Resolve described requests via web ${llm.requestWebResolve ? 'ON' : 'OFF'}`,
-    `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} (${s?.jingleRotate === 'controller' ? 'controller' : 'mixer'}) · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
+    `- Broadcast: crossfade ${s?.crossfadeDuration ?? '?'}s · jingle 1/${s?.jingleRatio ?? '?'} (${jingleRotateOwner(s)}) · maxTrack ${s?.maxTrackSeconds ? s.maxTrackSeconds + 's' : 'unlimited'} · loudness ${s?.loudness?.targetLufs ?? '?'} LUFS · mounts ${mounts.join('+')} · archive ${s?.archive?.enabled ? 'ON' : 'OFF'}`,
     `- Voice: default TTS ${s?.tts?.defaultEngine || 'piper'}`,
     `- Analysis: Audio embeddings ${s?.audio?.embeddings ? 'ON' : 'OFF'} · Vocal activity ${s?.audio?.vocalActivity ? 'ON' : 'OFF'} · analyzer ${analyzerLabel}`,
     `- Search: ${s?.search?.provider || 'duckduckgo'}`,

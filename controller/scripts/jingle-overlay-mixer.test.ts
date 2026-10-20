@@ -58,8 +58,8 @@ test('both intro requests carry cancellation identity and cancelled audio is mut
   assert.match(liq, /intro_queue.on_metadata\(synchronous=true, fun\(m\) -> intro_overlay_metadata := m\)/);
   assert.match(body('intro_overlay_gain'), /jingle_overlay_valid/);
   assert.match(body('intro_overlay_gain'), /cancel_jingle_overlay\(\)/, 'an unsafe frame permanently cancels its whole offer');
-  assert.match(liq, /edge_fade\(amplify\(intro_overlay_gain, intro_queue\)\)/);
-  assert.match(body('intro_overlay_gain'), /intro_queue.skip\(\)/);
+  assert.match(liq, /edge_fade\(amplify\(override=null, intro_overlay_gain, intro_queue\)\)/);
+  assert.match(body('intro_overlay_gain'), /intro_queue.skip\(\)\s*intro_overlay_metadata := \[\]/);
   assert.match(body('voice_marker'), /jingle_overlay_valid\(m\["subwave_overlay_epoch"\], m\["subwave_overlay_track_at"\]\)/,
     'discarded ID never earns an actual-start marker');
 });

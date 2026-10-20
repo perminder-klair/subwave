@@ -243,6 +243,7 @@ export function jingleWindow(): { clearAtMs: number; windowMs: number } {
 export function jingleAiredAtMs(filename: string): number {
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    if (m?.placement === 'over') return 0;
     if (typeof m?.filename !== 'string') return 0;
     if (m.filename.split('/').pop() !== filename) return 0;
     const startedMs = Number(m?.startedAt) * 1000;
