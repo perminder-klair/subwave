@@ -1039,7 +1039,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       repick: guardRepick,
       recentAlbums: albumHours > 0 ? queue.recentAlbumKeys(albumHours) : undefined,
       albumKeyOf: albumKeyFor,
-      // Only called when no candidate lies outside the run's genre family.
+      // Only called when every candidate is in the run's genre.
       // Seeded from the pick anchor, the predecessor the re-pick is told about.
       steer: () => steerAwayCandidates(scope, pickAnchor, extras.seen),
       log: line => queue.log('picker', line),
