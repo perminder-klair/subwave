@@ -9,23 +9,21 @@ import { notify, errorMessage } from '../../../lib/notify';
 import type { PlaylistSummary } from './types';
 import type { Coverage, TaggerState } from '../LibraryTaggingPanel';
 import {
-  applyBlockMarks, applyEraYearEvent, applyLikeChange, applyTagEvent, libraryKeys, rowsOf,
+  applyEraYearEvent, applyLikeChange, applyTagEvent, libraryKeys,
 } from './queries';
 import {
-  AdminResponseError,
   adminJson,
-  adminResponse,
   useQueryErrorToast,
   type AdminFetch,
 } from '../../../lib/admin-query';
 import type {
-  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
+  BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
-
-// Per-call cap on POST /library/blocklist/check, matching the controller's.
-// A Search tab paged deep with Load more can hold more rows than that.
-const CHECK_CHUNK = 500;
+import {
+  deleteBlockEntry, liftedText, notifyBlockedWithUndo, postBlock, reconcileBlockCaches,
+  restampCachedBlockMarks,
+} from './block-actions';
 
 // Stable fallbacks for the two queries whose absent data has a meaning. A fresh
 // literal per render would change the context value's identity every time.
@@ -158,38 +156,11 @@ export function LibraryProvider({
     wasRunning.current = now;
   }, [tagger?.running, reloadCoverage]);
 
-  // Re-marks the rows already loaded: refetching every tab would lose pagination
-  // and re-hit Navidrome, and matching client-side would duplicate the
-  // normalised-name rules in music/blocklist.ts. Rows come from the query cache,
-  // so this reaches lists a tab switch unmounted but hasn't evicted.
-  const restampBlockMarks = useCallback(async () => {
-    const byId = new Map<string, Track>();
-    for (const [, data] of qc.getQueriesData({ queryKey: libraryKeys.rows })) {
-      for (const t of rowsOf(data)) if (t?.id && !byId.has(t.id)) byId.set(t.id, t);
-    }
-    if (byId.size === 0) return;
-    const rows = [...byId.values()].map(t => ({ id: t.id, artist: t.artist, album: t.album }));
-    try {
-      const marks: Record<string, BlockRef | null> = {};
-      // Chunked to stay under the endpoint's per-call cap.
-      for (let i = 0; i < rows.length; i += CHECK_CHUNK) {
-        const j = await adminJson<{ blocked?: Record<string, BlockRef | null> }>(
-          adminFetch,
-          '/library/blocklist/check',
-          {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tracks: rows.slice(i, i + CHECK_CHUNK) }),
-          },
-        );
-        Object.assign(marks, j.blocked || {});
-      }
-      applyBlockMarks(qc, marks);
-    } catch {
-      // Enrichment, not the operation: the block itself succeeded, so leave the
-      // last-known marks rather than toasting.
-    }
-  }, [adminFetch, qc]);
+  // Re-marks the loaded rows after a block write; block-actions has why.
+  const restampBlockMarks = useCallback(
+    () => restampCachedBlockMarks(qc, adminFetch),
+    [adminFetch, qc],
+  );
 
   const [liking, setLiking] = useState<string | null>(null);
 
@@ -550,52 +521,32 @@ export function LibraryProvider({
     e: { type: BlockType; id: string; name?: string | null },
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
-    try {
-      await adminResponse(
-        adminFetch,
-        `/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`,
-        { method: 'DELETE' },
-      );
-    } catch (error) {
-      if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
-    }
-    // The Blocked tab's list is a query like any other, so invalidating reaches
-    // it whether or not that tab is mounted.
-    void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
-    if (!quiet) notify.ok(`“${e.name || e.id}” can play again`);
-    await restampBlockMarks();
-  }, [adminFetch, qc, restampBlockMarks]);
+    await deleteBlockEntry(adminFetch, e);
+    if (!quiet) notify.ok(liftedText(e));
+    await reconcileBlockCaches(qc, adminFetch);
+  }, [adminFetch, qc]);
 
   const blockTrack = useCallback(async (track: Track, type: BlockType) => {
     setBlocking(track.id);
     try {
-      const j = await adminJson<{ entry?: BlockEntry; purged?: number }>(adminFetch, '/library/blocklist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, trackId: track.id }),
-      });
+      const j = await postBlock(adminFetch, type, track.id);
       const what = type === 'track' ? `“${track.title}”` : type === 'album' ? `album “${track.album}”` : track.artist;
       const entry = j.entry;
       // Undo rather than a confirm dialog: the row badge keeps a wrong scope
       // visible even after the toast goes.
       const msg = `${what} will never air${j.purged ? ` · ${j.purged} dropped from queue` : ''}`;
       if (entry) {
-        notify.undo(msg, () => {
-          removeBlockEntry(entry, { quiet: true })
-            .then(() => notify.ok(`“${entry.name || entry.id}” can play again`))
-            .catch(err => notify.err(errorMessage(err)));
-        });
+        notifyBlockedWithUndo(msg, entry, e => removeBlockEntry(e, { quiet: true }));
       } else {
         notify.ok(`${msg} — manage in the Blocked tab`);
       }
-      void qc.invalidateQueries({ queryKey: libraryKeys.blocked() });
-      await restampBlockMarks();
+      await reconcileBlockCaches(qc, adminFetch);
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setBlocking(null);
     }
-  }, [adminFetch, qc, removeBlockEntry, restampBlockMarks]);
+  }, [adminFetch, qc, removeBlockEntry]);
 
   // Lifts whichever entry matched this row, possibly an album or artist block
   // made from a different row. Rule refs never reach here, so the guard is a
