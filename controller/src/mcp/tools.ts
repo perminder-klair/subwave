@@ -513,7 +513,18 @@ export function registerSubwaveTools(
             "Omit it to end whatever is on air.",
         ),
       },
-      outputSchema: output({ ok: z.boolean(), reason: z.string().optional() }),
+      // Every field POST /dj/skip answers with. A client validates structured
+      // content against this with no additional properties allowed, so an
+      // undeclared `pending`/`committed` turned every skip — and every
+      // refusal — into a thrown -32602 after the skip had already run.
+      outputSchema: output({
+        ok: z.boolean(),
+        pending: z.boolean().optional(),
+        committed: z.boolean().optional(),
+        reason: z.string().optional(),
+        error: z.string().optional(),
+        onAirId: z.string().nullable().optional(),
+      }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     ({ expectId }) =>

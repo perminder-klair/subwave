@@ -390,6 +390,40 @@ test('MCP tool: expectId is optional and a refusal is reported, not an isError',
   assert.deepEqual(commands, []);
 });
 
+// Through a real McpServer + Client pair: the SDK client validates structured
+// content against the published output schema with no additional properties,
+// so a field the route answers with and the schema does not declare is a
+// thrown -32602 — after the skip (or the refusal) has already happened.
+test('MCP tool over the real SDK: the bare skip and a refusal both arrive as results', async () => {
+  const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js');
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const server = new McpServer({ name: 'targeted-skip', version: '0' });
+  registerSubwaveTools(server, new SubwaveClient({ baseUrl: http.url }));
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverSide);
+  const client = new Client({ name: 'targeted-skip', version: '0' });
+  await client.connect(clientSide);
+  try {
+    await client.listTools();
+    const bare: any = await client.callTool({ name: 'subwave_skip_track', arguments: {} });
+    assert.equal(bare.isError, undefined);
+    assert.deepEqual(bare.structuredContent, { ok: true, pending: false, committed: false });
+    assert.deepEqual(commands, ['skip']);
+
+    commands.length = 0;
+    marker('jingle', 5);
+    const refused: any = await client.callTool({ name: 'subwave_skip_track', arguments: { expectId: 'A' } });
+    assert.equal(refused.isError, undefined);
+    assert.equal(refused.structuredContent.ok, false);
+    assert.equal(refused.structuredContent.reason, 'jingle-on-air');
+    assert.equal(refused.structuredContent.onAirId, 'A');
+    assert.deepEqual(commands, []);
+  } finally {
+    await client.close();
+  }
+});
+
 // ── the pure halves ──────────────────────────────────────────────────────────
 
 test('songFedAtMs counts the song from the end of its truncated second', () => {
