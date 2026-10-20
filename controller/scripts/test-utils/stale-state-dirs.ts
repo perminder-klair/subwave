@@ -8,10 +8,12 @@
 //
 // Deliberately narrow: only the top level of the given dir, only a directory
 // (never followed through a symlink) whose WHOLE name is the prefix plus
-// mkdtemp's six-character suffix, and only one untouched for a day, so a run
-// still going in another checkout is never swept. It must also be owned by
-// this user: the default tmpdir() is a shared /tmp, where anyone can create a
-// dir by that name and backdate it, and one another user owns is never ours.
+// mkdtemp's six-character suffix, and only one untouched for a day. That keeps
+// clear of a run still going in another checkout unless the run itself is a
+// day old: nothing writes to a run's own dir once it is made, so its age is
+// the run's age. It must also be owned by this user: the default tmpdir() is a
+// shared /tmp, where anyone can create a dir by that name and backdate it, and
+// one another user owns is never ours.
 import { lstatSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
