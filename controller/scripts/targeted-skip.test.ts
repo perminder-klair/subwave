@@ -4,11 +4,13 @@
 // means the `skip` command never reached Liquidsoap — not that a function was
 // not called. The MCP client and tool run against the same server.
 //
-// The three ways a skip meant for one song cuts something else:
+// The ways a skip meant for one song cuts something else:
 //   * the song ended — before the request, or during commitBeforeSkip()'s
 //     wait for the queued pick (up to 20s);
-//   * a jingle, bed or pause-and-talk break followed it — none of them writes
+//   * a bed or pause-and-talk break followed it — neither writes
 //     now-playing.json, so the file still names the song;
+//   * a jingle stands between it and the air — the jingle's seam names the
+//     song after it while the outgoing tail and the jingle still play;
 //   * the controller's own view lags (the watcher's 1.5s tick) — the check
 //     reads the files, never queue.getNowPlaying().
 // And the bare skip — no body, a text body, `expectId: null` — is unchanged.
@@ -203,13 +205,15 @@ test('a bed marker inside the song\'s own truncated second is not after it', asy
 });
 
 // ── a jingle is placed by its own window, never ordered by stamp ─────────────
-// Measured on liquidsoap 2.4.6 with radio.liq's chain order and marker writers,
-// for the rotate and for jingle_now_queue alike: A → J → B writes B's
-// now-playing as A's closing seam is FED, and J's marker ~50ms after it, in
-// the same second. B is not audible until A's buffered tail (the outgoing
-// crossfade stamp) and J have played, 13s later for a 3s stinger, 24s for a
-// 14s one. So now-playing names B, and J's marker reads as BEFORE B, through
-// everything a skip would actually cut.
+// radio.liq writes the jingle marker where a jingle goes on air: one writer on
+// the jingle_now fallback's output, so a rotate jingle and a manual press are
+// marked alike, each at its own feed (liquidsoap/CLAUDE.md). Measured on
+// liquidsoap 2.4.6 with that writer: A → J → B writes B's now-playing as A's
+// closing seam is FED, and J's marker ~50ms after it, in the same second. B is
+// not audible until A's buffered tail (the outgoing crossfade stamp) and J have
+// played, 13s later for a 3s stinger, 24s for a 14s one. So now-playing names
+// B, and J's marker reads as BEFORE B, through everything a skip would
+// actually cut.
 function jingleAt(startedAt: number, durationSec: number) {
   writeFileSync(config.liquidsoap.jinglePlayingFile, JSON.stringify({ filename: '/state/jingles/id.wav', durationSec, startedAt }));
 }
@@ -238,17 +242,22 @@ test('A → J → B with the jingle\'s marker in the next second: B is skippable
   assert.deepEqual(commands, ['skip']);
 });
 
-// A playlist starts its NEXT clip's metadata in the frame that ends the one
-// on air, so a jingle longer than the crossfade stamps the following jingle's
-// marker at its own end — while the song after it plays, and tracks before
-// that jingle airs. Ordered by stamp, that song could never be skipped.
-test('a long jingle stamps the next jingle early: the song after it is skippable once the window passes', async () => {
-  const fed = Math.floor(nowSec()) - 60;
-  songFedAt('C', fed);
-  jingleAt(fed + 19.9, 3);
-  const r = await skip({ expectId: 'C' });
-  assert.equal(r.status, 200);
-  assert.deepEqual(commands, ['skip']);
+// The cost runs the other way: the window ends after the jingle, a few seconds
+// into B. Measured with the on-air writer, S2 → JB (14s) → S3 on a 10s
+// crossfade: S3's now-playing at +44.24, JB's marker at +44.29, S3 audible
+// ~23.6s after the marker, and the window (marker + 14s pad + 14s clip + 1s)
+// closes ~5.4s into S3 — 15 − D_A s, with D_A the outgoing tail. Inside it
+// the skip is refused; one second past it, it lands.
+test('the song after a jingle is refused only until the jingle\'s window closes', async () => {
+  for (const [secAfterMarker, status] of [[28, 409], [30, 200]] as const) {
+    commands.length = 0;
+    const markerAt = nowSec() - secAfterMarker;
+    songFedAt('S3', Math.floor(markerAt - 0.05));
+    jingleAt(markerAt, 14);
+    const r = await skip({ expectId: 'S3' });
+    assert.equal(r.status, status, `${secAfterMarker}s after the marker, ${(secAfterMarker - 23.6).toFixed(1)}s into S3`);
+    assert.deepEqual(commands, status === 200 ? ['skip'] : []);
+  }
 });
 
 // The jingle airs after the OUTGOING track's buffered tail, whose length is

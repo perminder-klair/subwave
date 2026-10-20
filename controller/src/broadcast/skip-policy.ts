@@ -58,14 +58,12 @@ export function commitSatisfied(p: {
 // differently. Beds and breaks ride dj_queue through music_meta: the same
 // on_meta writes their marker and now-playing, in feed order, so a marker
 // stamped after the song was fed is after it. A jingle is not orderable that
-// way. Measured on liquidsoap 2.4.6 with radio.liq's chain, rotate and
-// jingle_now_queue alike, A → J → B writes B's now-playing as A's closing seam
-// is fed and J's marker ~50ms after it, while B is not audible until A's
-// buffered tail and J have played; and a playlist starts its next clip's
-// metadata in the frame that ends the one on air, so a jingle longer than the
-// crossfade stamps the FOLLOWING jingle's marker tracks early. A jingle is on
-// air for its own window instead (queue/voice-io.ts jingleWindow, the hold
-// airVoice already waits out).
+// way. radio.liq marks it where it goes on air (one writer on the jingle_now
+// fallback's output, rotate and manual press alike), and measured on
+// liquidsoap 2.4.6 A → J → B writes B's now-playing as A's closing seam is fed
+// and J's marker ~50ms after it, while B is not audible until A's buffered
+// tail and J have played. A jingle is on air for its own window instead
+// (queue/voice-io.ts jingleWindow, the hold airVoice already waits out).
 
 // When now-playing.json says its song was fed, as epoch ms, or null when the
 // file carries no usable stamp. Liquidsoap writes `timestamp` as time()
@@ -84,8 +82,10 @@ export function songFedAtMs(np: { timestamp?: unknown } | null | undefined): num
 // OUTGOING track's buffered tail, which is that track's own crossfade stamp:
 // up to CROSS_MAX_SECONDS for a controller-sized one, the station crossfade
 // for anything unstamped. The station figure alone (airVoice's) lets a skip
-// through during the jingle's last seconds behind a longer stamp; the cost of
-// the wider pad is a refusal for a few seconds into the song after it.
+// through during the jingle's last seconds behind a longer stamp. The cost of
+// the wider pad is a refusal into the song after the jingle of this pad plus
+// the window's 1s tail minus that outgoing tail: on a 10s station, 15 − D_A s,
+// ~5s behind a 10s tail and ~12s behind a cold ending's 3–4s stamp.
 export function skipJingleCrossSec(stationCrossfadeSec: unknown): number {
   return Math.max(Number(stationCrossfadeSec) || 10, CROSS_MAX_SECONDS);
 }
@@ -120,7 +120,7 @@ export function targetedSkipRefusal(p: {
 // The 409's `error` (and the booth line) for each refusal.
 export const SKIP_REFUSAL_MESSAGES: Record<SkipRefusalReason, string> = {
   'track-changed': 'that track is no longer on air — nothing skipped',
-  'jingle-on-air': 'a jingle is on air or crossfading in — nothing skipped',
+  'jingle-on-air': 'a jingle is on air, about to air or just ended — nothing skipped',
   'bed-on-air': 'a bed is on air after that track — nothing skipped',
   'break-on-air': 'a pause-and-talk break is on air after that track — nothing skipped',
 };
