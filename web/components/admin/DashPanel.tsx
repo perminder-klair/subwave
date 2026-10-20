@@ -277,8 +277,9 @@ export default function DashPanel() {
         // now-playing on the song before it, a jingle's seam moves it on to
         // the song after it while the outgoing tail and the jingle still
         // play, and the song can end during the skip's commit wait. So the
-        // skip names its target and the controller refuses (409, moot)
-        // unless the blocked track is still the one on air.
+        // skip names its target and the controller refuses (409) unless the
+        // blocked track is what is on air: moot, or behind a jingle, which
+        // tells the operator to skip again once the song starts.
         const onAirId = await refetchOnAirId(queryClient);
         const decision = skipDecision({ targetId: target.id, onAirId });
         if (decision === 'skip') {

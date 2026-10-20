@@ -12,13 +12,14 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { AdminResponseError, type AdminFetch } from '../../../lib/admin-query';
 import { notify } from '../../../lib/notify';
+import type { SkipRefusalReason } from '../../../lib/schemas.generated';
 import { notifyBlockedWithUndo, postBlock } from '../library/block-actions';
 import type { BlockEntry } from '../library/types';
 import { dashKeys } from './queries';
 import type { DashStatus } from './types';
 
 export type BlockOutcome = 'added' | 'already';
-export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'unconfirmed';
+export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'behind-jingle' | 'unconfirmed';
 
 /**
  * Refetch the Dash status once the block has landed, and return the on-air id
@@ -75,16 +76,28 @@ export function skipDecision(o: {
 }
 
 /**
- * What a failed targeted skip means. The controller answers 409 when the
- * blocked track is not what the mixer is playing — it ended during the skip's
- * commit wait, a bed or pause-talk break followed it (neither moves
- * now-playing on, so `refetchOnAirId` still names it), or a jingle is still
- * airing ahead of it (the jingle's seam names the song after it early) — and
- * skipped nothing: the same answer as a `moot` decision, not a failure.
- * Anything else is.
+ * What a failed targeted skip means. A 409 skipped nothing, and its `reason`
+ * says why:
+ *
+ *   * `track-changed`, `bed-on-air`, `break-on-air` — the blocked track is not
+ *     what the mixer is playing. It ended during the skip's commit wait, or a
+ *     bed or pause-talk break followed it (neither moves now-playing on, so
+ *     `refetchOnAirId` still names it). The same answer as a `moot` decision.
+ *   * `jingle-on-air` — the blocked track is the one now-playing names, but a
+ *     jingle's seam names it before it airs: it is still queued behind the
+ *     outgoing tail and the jingle, or has only just started. It is about to
+ *     play, so the operator is told to skip again once it does, never that it
+ *     left the air.
+ *
+ * A 409 with an unknown or absent reason reads as `moot`, the answer every
+ * 409 got before the reasons were told apart. Anything other than a 409 is a
+ * failure.
  */
-export function skipFailureOutcome(error: unknown): 'moot' | 'failed' {
-  return error instanceof AdminResponseError && error.status === 409 ? 'moot' : 'failed';
+export function skipFailureOutcome(error: unknown): 'moot' | 'behind-jingle' | 'failed' {
+  if (!(error instanceof AdminResponseError) || error.status !== 409) return 'failed';
+  const body: unknown = error.body;
+  const reason = body && typeof body === 'object' ? (body as { reason?: unknown }).reason : undefined;
+  return reason === ('jingle-on-air' satisfies SkipRefusalReason) ? 'behind-jingle' : 'moot';
 }
 
 export interface NeverPlayResult {
@@ -119,6 +132,7 @@ export function neverPlayToast(o: {
   if (o.skip === 'done') parts.push('skipped');
   else if (o.skip === 'not-asked') parts.push('it finishes now');
   else if (o.skip === 'moot') parts.push('no longer on air, nothing skipped');
+  else if (o.skip === 'behind-jingle') parts.push('a jingle is on air, nothing skipped — skip again once the song starts');
   else if (o.skip === 'unconfirmed') parts.push('not confirmed on air, nothing skipped');
   else parts.push(`skip failed${o.skipError ? `: ${o.skipError}` : ''}`);
   if (o.purged) parts.push(`${o.purged} dropped from queue`);
