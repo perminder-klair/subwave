@@ -78,7 +78,7 @@ intent-shaped tools.
 | `subwave_search_library` | `GET /dj/search` | admin | no |
 | `subwave_similar_tracks` | `GET /similar-tracks` | station | no |
 | `subwave_queue_track` | `POST /dj/queue-track` | admin | queues a track |
-| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track |
+| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track (optional `expectId`: only that track, else refused) |
 | `subwave_dj_announce` | `POST /dj/say` | admin | speaks now |
 | `subwave_dj_segment` | `POST /dj/segment` | admin | speaks now |
 | `subwave_list_skills` | `GET /dj/skills` | admin | no |

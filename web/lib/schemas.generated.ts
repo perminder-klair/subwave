@@ -177,14 +177,15 @@ export const blockEntrySchema = z.object({
 
 // ─── from controller/src/schemas/dj.ts ───────────────────────────────────
 
-// Shared shapes for the studio's own queue actions (#1622 FR 4) — today just
-// the block queue, `POST /dj/queue-block`.
+// Shared shapes for the studio's own queue actions (#1622 FR 4) — the block
+// queue, `POST /dj/queue-block` — and the targeted skip, `POST /dj/skip`.
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle by `npm run gen:schemas`, so a project import or a node
 // builtin here breaks the mirror. Everything impure — resolving an album id
-// from a track, reading the blocklist, ordering the songs — lives in
-// broadcast/block-queue.ts and routes/dj.ts.
+// from a track, reading the blocklist, ordering the songs, reading what is on
+// air — lives in broadcast/block-queue.ts, broadcast/skip-policy.ts and
+// routes/dj.ts.
 
 /** What a block is a block OF. */
 export const QUEUE_BLOCK_KINDS = ['album', 'artist'] as const;
@@ -275,6 +276,39 @@ export const queueBlockSchema = z
   });
 
 export type QueueBlockBody = z.infer<typeof queueBlockSchema>;
+
+/**
+ * Why a targeted skip skipped nothing (#2017), the `reason` of its 409.
+ *
+ *   * `track-changed` — now-playing no longer names the track the caller
+ *     meant: it ended, during the commit wait or before the request arrived.
+ *   * `jingle-on-air` / `bed-on-air` / `break-on-air` — now-playing still
+ *     names it, but the mixer has since placed a jingle, a bed or a
+ *     pause-and-talk break after it. None of those rewrites now-playing, so
+ *     the name is stale and a skip would cut the item, not the song.
+ */
+export const SKIP_REFUSAL_REASONS = ['track-changed', 'jingle-on-air', 'bed-on-air', 'break-on-air'] as const;
+export type SkipRefusalReason = (typeof SKIP_REFUSAL_REASONS)[number];
+
+/**
+ * Body for `POST /dj/skip`.
+ *
+ * `expectId` is the on-air track's `subsonic_id` as the caller saw it on
+ * `/now-playing`. With it, the skip lands only if that track is still what is
+ * on air; without it (absent or null) the skip is the bare one it always was.
+ * The route took no body before this, so anything that is not a JSON object
+ * — no body, a text body, an array — still reads as no target, and other keys
+ * are dropped rather than refused. The shape is exported on its own for the
+ * MCP tool's input, which takes a raw shape rather than a schema.
+ */
+export const skipBodyShape = { expectId: idField.nullish() };
+
+export const skipBodySchema = z.preprocess(
+  (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {}),
+  z.object(skipBodyShape),
+);
+
+export type SkipBody = z.infer<typeof skipBodySchema>;
 
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 

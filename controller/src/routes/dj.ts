@@ -53,10 +53,14 @@ import { nextShowBoundaryMs } from '../broadcast/show-boundary.js';
 import { planBlock, blockLabel, blockPlayableSec, type BlockSong } from '../broadcast/block-queue.js';
 import {
   queueBlockSchema,
+  skipBodySchema,
   QUEUE_BLOCK_ARTIST_LIMIT_DEFAULT,
   QUEUE_BLOCK_MAX_TRACKS,
   type QueueBlockBody,
+  type SkipBody,
+  type SkipRefusalReason,
 } from '../schemas/dj.js';
+import { SKIP_REFUSAL_MESSAGES } from '../broadcast/skip-policy.js';
 
 export const router = express.Router();
 
@@ -809,9 +813,33 @@ router.post('/dj/auto-link', requireAdmin, (req, res) => {
 // Force-end the current track. Admin-only: there is no listener-facing skip.
 // Commits the queued pick first (#1300) so the skip airs what the admin queue
 // shows as next rather than an auto.m3u fill; the response says which happened.
-router.post('/dj/skip', requireAdmin, async (req, res) => {
+//
+// `expectId` (#2017) makes it a TARGETED skip: 409 with skip-policy's reason,
+// nothing skipped, unless that track is still on air. Checked twice: before the
+// commit, so a skip already moot forces no drain and waits out no 20s, and
+// again after it, immediately before the telnet skip, because the song can end
+// inside that wait. A refusal after the commit leaves the pick committed; it
+// airs next anyway, as the admin queue shows. No id: the bare skip, unchanged.
+router.post('/dj/skip', requireAdmin, validateBody(skipBodySchema), async (req, res) => {
+  const { expectId } = req.body as SkipBody;
+  const refuse = (
+    refusal: { reason: SkipRefusalReason; onAirId: string | null },
+    prep: { pending: boolean; committed: boolean } = { pending: false, committed: false },
+  ) => {
+    const error = SKIP_REFUSAL_MESSAGES[refusal.reason];
+    queue.log('scheduler', `operator skip refused — ${error}`, { reason: refusal.reason, expectId });
+    return res.status(409).json({ error, reason: refusal.reason, onAirId: refusal.onAirId, pending: prep.pending, committed: prep.committed });
+  };
   try {
+    if (expectId) {
+      const refusal = await queue.skipTargetRefusal(expectId);
+      if (refusal) return refuse(refusal);
+    }
     const prep = await queue.commitBeforeSkip();
+    if (expectId) {
+      const refusal = await queue.skipTargetRefusal(expectId);
+      if (refusal) return refuse(refusal, prep);
+    }
     await skipTrack();
     if (prep.pending && !prep.committed) {
       queue.log('scheduler', `track skipped by operator — queued pick not confirmed in dj_queue after ${Math.round(prep.waitedMs / 1000)}s; the auto playlist may fill the slot first`);

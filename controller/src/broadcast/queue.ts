@@ -89,9 +89,12 @@ import {
 import {
   commitSatisfied,
   skipPrepAction,
+  songFedAtMs,
+  targetedSkipRefusal,
   SKIP_COMMIT_WAIT_MS,
   SKIP_POLL_INTERVAL_MS,
 } from './skip-policy.js';
+import type { SkipRefusalReason } from '../schemas/dj.js';
 import * as stemBlend from './stem-blend.js';
 import type {
   DjLogEntry,
@@ -2334,6 +2337,25 @@ class Queue {
       await sleep(SKIP_POLL_INTERVAL_MS);
     }
     return { pending: true, committed: false, waitedMs: Date.now() - t0 };
+  }
+
+  // Why an operator skip aimed at `expectId` must not land, or null when it may
+  // (#2017). Reads now-playing.json from disk, not the watcher's copy (up to a
+  // 1.5s tick old), and the jingle/bed/break markers through interposedSince;
+  // skip-policy decides. A marker that cannot be read counts as nothing
+  // interposed, so a lost marker costs the old bare-skip behaviour, never a
+  // refusal; an unreadable now-playing refuses, because it cannot confirm the
+  // one thing the caller asked for.
+  async skipTargetRefusal(expectId: string): Promise<{ reason: SkipRefusalReason; onAirId: string | null } | null> {
+    const np = await this.readNowPlayingFromDisk();
+    const onAirId = typeof np?.subsonic_id === 'string' && np.subsonic_id ? np.subsonic_id : null;
+    const fedAt = songFedAtMs(np);
+    const reason = targetedSkipRefusal({
+      expectId,
+      onAirId,
+      interposed: fedAt == null ? null : interposedSince(fedAt),
+    });
+    return reason ? { reason, onAirId } : null;
   }
 
   // Speak something without queueing a track — hourly time checks, weather,
