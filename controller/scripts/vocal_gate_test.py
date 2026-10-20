@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 # Unit test for the vocal gate (analyze_worker.vocal_ranges_from_rms) — the
-# mix-anchored floor that fixes the #1125 mass false-positive. Pure numpy: no
-# torch, no demucs, no audio, so it runs anywhere. Feeds synthesized RMS
-# envelopes (the exact inputs the Demucs path produces) and asserts the floor
-# behaves. Run: `python3 scripts/vocal_gate_test.py` (exit 0 = pass).
+# mix-anchored floor that fixes the #1125 mass false-positive — plus the
+# DEMUCS_OVERLAP knob. Cases 1-5 are pure numpy: no torch, no demucs, no
+# audio, so they run anywhere. Feeds synthesized RMS envelopes (the exact
+# inputs the Demucs path produces) and asserts the floor behaves.
+# Run: `python3 scripts/vocal_gate_test.py` (exit 0 = pass).
+#
+# Case 6 is the exception: it checks separate() hands DEMUCS_OVERLAP to
+# apply_model, and that needs torch. It runs only where torch is installed,
+# i.e. inside the subwave-analyzer-heavy image, and skips everywhere else,
+# including `npm test` — so after touching separate(), run this file in that
+# image.
 
 import contextlib
 import io
