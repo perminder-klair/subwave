@@ -1,6 +1,6 @@
 // Pins the on-demand jingle path — POST /jingles/:filename/play →
-// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue and its own
-// marker hook (NOT on_meta, which never sees that source).
+// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue, and the
+// marker hook every jingle reaches (NOT on_meta, which never sees that source).
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -112,19 +112,49 @@ assert.ok(bedBranch > 0, 'on_meta still has its bed branch');
 assert.ok(titleGate > 0, 'on_meta still has its title/artist gate');
 assert.ok(bedBranch < titleGate, 'bed branch remains above the title gate');
 
-const markerHook = liq.indexOf('jingle_now_queue.on_metadata(synchronous=false');
-const markerHookEnd = liq.indexOf('\n  )', markerHook);
-assert.ok(markerHook > 0, 'the priority queue marks its own clips at feed time');
+// The marker is written where a jingle goes ON AIR, never on a jingle's own
+// source. Both are request sources, and a request source starts its next ready
+// request in the frame that ends the current one, firing that request's hooks
+// before the rotate or the fallback has chosen it. Measured on 2.4.6 with the
+// writer on the rotate's playlist: each automatic jingle was marked at the END
+// of the one before, N tracks early, and its real airing wrote nothing — so the
+// DJ was not held off a long stinger, was held over the song after it, and the
+// seam record moved "After jingle" one song late.
+const markerHook = liq.indexOf('music.on_track(synchronous=false, fun (m) ->');
+const markerHookEnd = liq.indexOf('\n)\n', markerHook);
 const branchBody = liq.slice(markerHook, markerHookEnd);
-assert.ok(
-  branchBody.includes('fun (m) -> begin'),
-  'a multi-expression Liquidsoap callback must use a begin/end block',
-);
-assert.ok(branchBody.includes('jingle-playing.json'), 'writes the collision-guard marker');
-assert.ok(branchBody.includes('jingle_now_tmp_dir'), 'own temp dir — one per writer, #1240');
-assert.ok(!branchBody.includes('temp_dir=jingle_tmp_dir'), 'never shares the rotate writer staging dir');
-assert.ok(!branchBody.includes('now-playing.json'), 'an announcement is not a song');
-assert.ok(!branchBody.includes('insert_metadata'), 'and never touches the ICY title');
+const jingleNowFallback = liq.indexOf('id="music_with_jingle_now"');
+
+test('jingle-playing.json is written from the source cross reads, for both kinds of jingle', () => {
+  assert.ok(markerHook > 0, 'the marker hook exists');
+  assert.ok(jingleNowFallback > 0 && markerHook > jingleNowFallback,
+    'below the jingle_now fallback, so it sees what that fallback CHOSE');
+  assert.ok(markerHook < liq.indexOf('music = cross('), 'and above cross: written at feed time');
+  assert.ok(!/^music = /m.test(liq.slice(jingleNowFallback, markerHook)),
+    'on the fallback\'s own output, with nothing re-bound in between');
+  assert.ok(liq.indexOf('music_meta = music') < markerHook,
+    'below music_meta: a clip\'s own ID3 tags never reach now-playing or the ICY title');
+  assert.ok(branchBody.includes('if m["subwave_jingle"] == "true" then'),
+    'only jingles — the rotate and jingle_now both stamp the mark');
+  assert.ok(branchBody.includes('"#{state_dir}/jingle-playing.json"'), 'writes the collision-guard marker');
+  assert.ok(branchBody.includes('temp_dir=jingle_tmp_dir'), 'through its own staging dir, #1240');
+  assert.ok(branchBody.includes('catch err do'), 'a failed write is logged, never raised in the hook');
+  assert.ok(!branchBody.includes('now-playing.json'), 'an announcement is not a song');
+  assert.ok(!branchBody.includes('insert_metadata'), 'and never touches the ICY title');
+});
+
+test('neither jingle source writes the marker from its own hook', () => {
+  const rotate = liq.slice(liq.indexOf('jingles = playlist('), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
+  assert.ok(rotate.length > 0, 'the rotate block is still where this test looks');
+  assert.ok(!rotate.includes('jingle-playing.json'),
+    'the playlist starts its next clip at the end of the current one, N tracks before it airs');
+  const nowHookAt = liq.indexOf('jingle_now_queue.on_metadata(');
+  const nowHook = liq.slice(nowHookAt, liq.indexOf('\n\n', nowHookAt));
+  assert.ok(nowHook.includes('jingle_now_on_air := true'), 'the priority queue still arms the rotate gate');
+  assert.ok(!nowHook.includes('jingle-playing.json'),
+    'a second queued press is started by the queue before the fallback chooses it');
+  assert.ok(!liq.includes('jingle_now_tmp_dir'), 'its staging dir went with its writer');
+});
 
 // A dedicated source is the only way to get ahead of an already-populated
 // FIFO dj_queue. Its availability gate preserves a manual press while deferring
