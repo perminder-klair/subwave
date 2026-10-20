@@ -132,7 +132,7 @@ export function neverPlayToast(o: {
   if (o.skip === 'done') parts.push('skipped');
   else if (o.skip === 'not-asked') parts.push('it finishes now');
   else if (o.skip === 'moot') parts.push('no longer on air, nothing skipped');
-  else if (o.skip === 'behind-jingle') parts.push('a jingle is on air, nothing skipped — skip again once the song starts');
+  else if (o.skip === 'behind-jingle') parts.push('a jingle is on air or just ended, nothing skipped — skip again in a few seconds');
   else if (o.skip === 'unconfirmed') parts.push('not confirmed on air, nothing skipped');
   else parts.push(`skip failed${o.skipError ? `: ${o.skipError}` : ''}`);
   if (o.purged) parts.push(`${o.purged} dropped from queue`);

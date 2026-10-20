@@ -279,7 +279,7 @@ export default function DashPanel() {
         // play, and the song can end during the skip's commit wait. So the
         // skip names its target and the controller refuses (409) unless the
         // blocked track is what is on air: moot, or behind a jingle, which
-        // tells the operator to skip again once the song starts.
+        // tells the operator to skip again in a few seconds.
         const onAirId = await refetchOnAirId(queryClient);
         const decision = skipDecision({ targetId: target.id, onAirId });
         if (decision === 'skip') {

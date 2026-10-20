@@ -378,7 +378,7 @@ const REFUSALS = [
   { reason: 'track-changed', error: 'that track is no longer on air — nothing skipped', outcome: 'moot', copy: 'no longer on air, nothing skipped' },
   { reason: 'bed-on-air', error: 'a bed is on air after that track — nothing skipped', outcome: 'moot', copy: 'no longer on air, nothing skipped' },
   { reason: 'break-on-air', error: 'a pause-and-talk break is on air after that track — nothing skipped', outcome: 'moot', copy: 'no longer on air, nothing skipped' },
-  { reason: 'jingle-on-air', error: 'a jingle is on air, about to air or just ended — nothing skipped', outcome: 'behind-jingle', copy: 'a jingle is on air, nothing skipped — skip again once the song starts' },
+  { reason: 'jingle-on-air', error: 'a jingle is on air, about to air or just ended — nothing skipped', outcome: 'behind-jingle', copy: 'a jingle is on air or just ended, nothing skipped — skip again in a few seconds' },
 ] as const;
 
 for (const r of REFUSALS) {
