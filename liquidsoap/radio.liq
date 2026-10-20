@@ -1402,15 +1402,49 @@ music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_j
 # END of the one before, ~N tracks early, and its real airing wrote nothing.
 # Below music_meta, so an uploaded clip's retained ID3 tags never reach
 # now-playing.json or the ICY title.
-music.on_track(synchronous=false, fun (m) ->
-  if m["subwave_jingle"] == "true" then
-    fname = m["filename"]
+#
+# BACK TO BACK: cross reads ahead of the air in bursts, taking a jingle shorter
+# than the crossfade whole and then the head of whatever follows, so a second
+# jingle can be fed milliseconds after the first while it airs only once the
+# first has ended. Stamped at its own feed, its window closed early by about the
+# first one's length (the DJ could talk over its tail), and the first one's
+# marker was overwritten before anything could read it. So each marker also
+# carries `queuedSec`, how long the clip waits behind the jingles fed before it
+# since the last other track, worked out here where the feed order is known:
+# each starts at the later of its own feed and the end of the one before. Only
+# a jingle shorter than the crossfade holds back the next one: a longer one is
+# read at the pace it airs, so whatever follows is fed as its last crossfade's
+# worth is buffered, the distance the controller's window already pads for.
+# 0. when it waits for nothing; an unmeasured length (jingle_duration 0.) adds
+# nothing, which is the window an older mixer gave.
+#
+# The bookkeeping runs on the streaming thread, so it is in feed order. The
+# write needs request.duration and file I/O, so it runs off that thread with
+# everything it needs captured, and stands down once a later jingle has been
+# fed: async tasks run on several threads, and the first of a burst landing
+# last would leave its own, shorter window on disk.
+jingle_burst = ref([])
+jingle_marker_seq = ref(0)
+
+def jingle_queued_sec(fed_at, ahead) =
+  def ends(clear, j) =
+    dur = jingle_duration(fst(j))
+    if dur < crossfade_duration() then max(clear, snd(j)) + dur else 0. end
+  end
+  max(0., list.fold(ends, 0., ahead) - fed_at)
+end
+
+def write_jingle_marker(seq, fname, fed_at, ahead) =
+  dur = jingle_duration(fname)
+  queued = jingle_queued_sec(fed_at, ahead)
+  if seq == jingle_marker_seq() then
     try
       file.write(
         data=json.stringify(compact=true, {
           filename = fname,
-          durationSec = jingle_duration(fname),
-          startedAt = time()
+          durationSec = dur,
+          startedAt = fed_at,
+          queuedSec = queued
         }),
         atomic=true,
         temp_dir=jingle_tmp_dir,
@@ -1419,6 +1453,22 @@ music.on_track(synchronous=false, fun (m) ->
     catch err do
       log(label="subwave", "jingle marker write failed for #{fname} (#{err})")
     end
+  end
+end
+
+music.on_track(synchronous=true, fun (m) ->
+  if m["subwave_jingle"] == "true" then
+    fname = m["filename"]
+    fed_at = time()
+    ahead = jingle_burst()
+    # Only an unbroken run of jingles grows it; eight is past any real burst.
+    kept = if list.length(ahead) < 8 then ahead else list.tl(ahead) end
+    jingle_burst := [...kept, (fname, fed_at)]
+    jingle_marker_seq := jingle_marker_seq() + 1
+    seq = jingle_marker_seq()
+    thread.run(fast=false, fun () -> write_jingle_marker(seq, fname, fed_at, ahead))
+  else
+    jingle_burst := []
   end
 )
 

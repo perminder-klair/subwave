@@ -224,7 +224,12 @@ export function jingleWindow(crossSec?: number): { clearAtMs: number; windowMs: 
       || JINGLE_FALLBACK_MS;
     const crossMs = (crossSec ?? (Number(settings.get()?.crossfadeDuration) || 10)) * 1000;
     const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
-    return { clearAtMs: startedMs + windowMs, windowMs };
+    // A jingle fed right behind another one in cross's read-ahead burst airs
+    // only once that one has ended; the mixer says how long it waits. Absent
+    // from an older broadcast image's marker, which keeps the old window.
+    const queuedSec = Number(m?.queuedSec);
+    const queuedMs = Number.isFinite(queuedSec) && queuedSec > 0 ? queuedSec * 1000 : 0;
+    return { clearAtMs: startedMs + queuedMs + windowMs, windowMs: queuedMs + windowMs };
   } catch {
     return none; // no marker (or unreadable) — nothing on air to avoid
   }

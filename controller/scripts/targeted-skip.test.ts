@@ -209,7 +209,8 @@ test('a bed marker inside the song\'s own truncated second is not after it', asy
 // the music_with_jingle_now switch's output, so a rotate jingle and a manual
 // press are marked alike, each at its own feed (liquidsoap/CLAUDE.md). Measured on
 // liquidsoap 2.4.6 with that writer: A → J → B writes B's now-playing as A's
-// closing seam is FED, and J's marker ~50ms after it, in the same second. B is
+// closing seam is FED, and J's marker lands ~50ms after it (stamped at J's own
+// feed), in the same second. B is
 // not audible until A's buffered tail (the outgoing crossfade stamp) and J have
 // played, 13s later for a 3s stinger, 24s for a 14s one. So now-playing names
 // B, and J's marker reads as BEFORE B, through everything a skip would
@@ -247,7 +248,9 @@ test('A → J → B with the jingle\'s marker in the next second: B is skippable
 // crossfade: S3's now-playing at +44.24, JB's marker at +44.29, S3 audible
 // ~23.6s after the marker, and the window (marker + 14s pad + 14s clip + 1s)
 // closes ~5.4s into S3 — 15 − D_A s, with D_A the outgoing tail. Inside it
-// the skip is refused; one second past it, it lands.
+// the skip is refused; one second past it, it lands. (That writer stamped when
+// its async hook ran; the marker is now stamped at the feed, a few hundredths
+// earlier, and carries queuedSec 0 for a single jingle, so neither bound moves.)
 test('the song after a jingle is refused only until the jingle\'s window closes', async () => {
   for (const [secAfterMarker, status] of [[28, 409], [30, 200]] as const) {
     commands.length = 0;

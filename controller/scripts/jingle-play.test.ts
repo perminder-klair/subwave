@@ -120,13 +120,20 @@ assert.ok(bedBranch < titleGate, 'bed branch remains above the title gate');
 // of the one before, N tracks early, and its real airing wrote nothing — so the
 // DJ was not held off a long stinger, was held over the song after it, and the
 // seam record moved "After jingle" one song late.
-const markerHook = liq.indexOf('music.on_track(synchronous=false, fun (m) ->');
-const markerHookEnd = liq.indexOf('\n)\n', markerHook);
-const branchBody = liq.slice(markerHook, markerHookEnd);
+//
+// The hook only books the jingle (on the streaming thread, so in feed order) and
+// hands the write to a task: request.duration and file I/O stay off that thread.
+const writerAt = liq.indexOf('def write_jingle_marker(');
+const writer = liq.slice(writerAt, liq.indexOf('\nend\n', writerAt));
+const spawnAt = liq.indexOf('thread.run(fast=false, fun () -> write_jingle_marker(');
+const markerHook = liq.lastIndexOf('music.on_track(synchronous=true, fun (m) ->', spawnAt);
+const branchBody = liq.slice(markerHook, liq.indexOf('\n)\n', markerHook));
 const jingleNowSwitch = liq.indexOf('id="music_with_jingle_now"');
 
 test('jingle-playing.json is written from the source cross reads, for both kinds of jingle', () => {
-  assert.ok(markerHook > 0, 'the marker hook exists');
+  assert.ok(writerAt > 0 && markerHook > 0 && spawnAt > markerHook, 'the marker hook exists and spawns the writer');
+  assert.ok(branchBody.includes('thread.run(fast=false, fun () -> write_jingle_marker('),
+    'the write runs off the streaming thread');
   assert.ok(jingleNowSwitch > 0 && markerHook > jingleNowSwitch,
     'below the jingle_now switch, so it sees what that switch CHOSE');
   assert.ok(markerHook < liq.indexOf('music = cross('), 'and above cross: written at feed time');
@@ -136,11 +143,44 @@ test('jingle-playing.json is written from the source cross reads, for both kinds
     'below music_meta: a clip\'s own ID3 tags never reach now-playing or the ICY title');
   assert.ok(branchBody.includes('if m["subwave_jingle"] == "true" then'),
     'only jingles — the rotate and jingle_now both stamp the mark');
-  assert.ok(branchBody.includes('"#{state_dir}/jingle-playing.json"'), 'writes the collision-guard marker');
-  assert.ok(branchBody.includes('temp_dir=jingle_tmp_dir'), 'through its own staging dir, #1240');
-  assert.ok(branchBody.includes('catch err do'), 'a failed write is logged, never raised in the hook');
-  assert.ok(!branchBody.includes('now-playing.json'), 'an announcement is not a song');
-  assert.ok(!branchBody.includes('insert_metadata'), 'and never touches the ICY title');
+  assert.ok(branchBody.includes('fed_at = time()'), 'stamped at feed, on the streaming thread');
+  assert.ok(writer.includes('"#{state_dir}/jingle-playing.json"'), 'writes the collision-guard marker');
+  assert.ok(writer.includes('temp_dir=jingle_tmp_dir'), 'through its own staging dir, #1240');
+  assert.ok(writer.includes('catch err do'), 'a failed write is logged, never raised in the task');
+  assert.ok(!writer.includes('now-playing.json') && !branchBody.includes('now-playing.json'),
+    'an announcement is not a song');
+  assert.ok(!writer.includes('insert_metadata'), 'and never touches the ICY title');
+  for (const field of ['filename = fname', 'durationSec = dur', 'startedAt = fed_at', 'queuedSec = queued']) {
+    assert.ok(writer.includes(field), `the payload carries ${field.split(' ')[0]}`);
+  }
+  assert.ok(!liq.includes('music.on_track(synchronous=false'), 'no second, unordered writer');
+});
+
+// Back to back: cross takes a jingle shorter than the crossfade whole and the
+// next track's head right behind it, so a second jingle is fed milliseconds
+// after the first but airs only once the first has ended. Measured on 2.4.6
+// (two 3s presses a bed had held): fed 0.06s apart, the second aired 12.96s
+// after its own feed, so a window opened at that feed left its last 1.96s
+// unheld. Only the mixer sees the feed order — the first marker is overwritten
+// before the controller can read it — so it stamps the wait itself
+// (scripts/jingle-burst-window.test.ts replays the controller's side).
+test('the marker says how long a jingle waits behind the jingles fed just before it', () => {
+  assert.ok(branchBody.includes('ahead = jingle_burst()'), 'the jingles already fed in this run');
+  assert.ok(branchBody.includes('jingle_burst := []'), 'and any other track ends the run');
+  const queued = liq.slice(liq.indexOf('def jingle_queued_sec('), writerAt);
+  assert.ok(queued.includes('max(clear, snd(j)) + dur'),
+    'each starts at the later of its feed and the end of the one before');
+  // A longer one is read at the pace it airs, so what follows it is fed as its
+  // end is buffered: measured, a 3s clip fed 4s into a 14s one aired at the
+  // usual distance from its own feed, and a chained wait over-held it by 10s.
+  assert.ok(queued.includes('if dur < crossfade_duration() then'),
+    'and only a jingle shorter than the crossfade holds the next one back');
+  assert.ok(queued.includes('max(0., list.fold(ends, 0., ahead) - fed_at)'),
+    'and a jingle that waits for nothing says 0');
+  // Tasks run on several threads, so the first of a burst can finish last.
+  assert.ok(branchBody.includes('jingle_marker_seq := jingle_marker_seq() + 1'), 'every jingle is numbered in feed order');
+  assert.ok(writer.includes('if seq == jingle_marker_seq() then'),
+    'and a write stands down once a later jingle has been fed');
 });
 
 test('neither jingle source writes the marker from its own hook', () => {
@@ -276,7 +316,7 @@ assert.ok(rotateGate.includes('not pause_talk_on_air()'),
 
 // Clip length rides in the marker: the controller can only parse RIFF, and an
 // import on a host without ffmpeg keeps its original container.
-assert.ok(branchBody.includes('durationSec = jingle_duration(fname)'),
+assert.ok(writer.includes('dur = jingle_duration(fname)') && writer.includes('durationSec = dur'),
   'the marker carries a measured duration, not just a filename');
 assert.ok(liq.includes('null.get(default=0., request.duration(fname))'),
   'jingle_duration measures via request.duration and degrades to 0 (unmeasured)');

@@ -61,8 +61,8 @@ export function commitSatisfied(p: {
 // way. radio.liq marks it where it goes on air (one writer on the
 // music_with_jingle_now switch's output, rotate and manual press alike), and
 // measured on liquidsoap 2.4.6 A → J → B writes B's now-playing as A's closing
-// seam is fed and J's marker ~50ms after it, while B is not audible until A's
-// buffered tail and J have played. A jingle is on air for its own window instead
+// seam is fed and J's marker lands ~50ms after it (stamped at J's own feed),
+// while B is not audible until A's buffered tail and J have played. A jingle is on air for its own window instead
 // (queue/voice-io.ts jingleWindow, the hold airVoice already waits out).
 
 // When now-playing.json says its song was fed, as epoch ms, or null when the
