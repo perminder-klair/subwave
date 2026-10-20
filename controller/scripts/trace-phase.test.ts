@@ -2,12 +2,13 @@
 // held the thread (`syncMs`) and how long it took overall (`ms`), inside the
 // current trace, without changing what the step returns or throws.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 
-const stateDir = mkdtempSync(join(tmpdir(), 'subwave-trace-phase-'));
+const stateDir = createTempDir(join(tmpdir(), 'subwave-trace-phase-'));
 process.env.STATE_DIR = stateDir;
 
 const { timePhase, withTrace } = await import('../src/observability/events.js');
