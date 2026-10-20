@@ -2,7 +2,7 @@
 // topAudioMoods (relative top-K selection over a {mood: cosine} map — the rule
 // that decides which labels land in tracks.audio_moods) and moodVocabHash
 // (the invalidation key that re-scores the library when vocabulary/prompts
-// change). Run: `tsx scripts/audio-moods.test.ts`.
+// change). Run: `npm test -- audio-moods`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 

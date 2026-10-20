@@ -21,7 +21,7 @@
 //      jingle takes, the jingle stands down for a scheduled segment, and a
 //      clip already rendered and waiting for a boundary holds it.
 //
-// Run: npx tsx scripts/jingle-rotate.test.ts (auto-discovered by npm test).
+// Run: `npm test -- jingle-rotate`.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';

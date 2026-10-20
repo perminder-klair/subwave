@@ -3,7 +3,7 @@
 // mood consumer reads through. These must answer from the SEED defaults before
 // settings.load() (get() returns DEFAULTS), which is what keeps the standalone
 // audio-moods + tagger paths working without a loaded settings.json.
-// Run: `tsx scripts/moods.test.ts`.
+// Run: `npm test -- moods.test.ts` (a substring match, so audio-moods.test.ts runs too).
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

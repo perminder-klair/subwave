@@ -132,17 +132,32 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
-// Re-read auto.m3u. radio.liq's file watch is only the backup for a write this
-// never followed, and its reload only empties the queue: off air, this command
-// makes radio.liq replace the playlist, dropping a track the old one had already
-// prepared, so OK means the old fallback is gone. Best-effort: errors are
-// swallowed so a refresh never fails here.
-export async function reloadAutoPlaylist(): Promise<boolean> {
+// `<id>.reload`, confirmed only by a complete OK. Best-effort: errors are
+// swallowed so a playlist write never fails on its reload.
+async function reloadPlaylist(id: 'auto' | 'jingles'): Promise<boolean> {
   try {
-    return await sendCommand('auto.reload', 2000, { requireComplete: true }) === 'OK';
+    return await sendCommand(`${id}.reload`, 2000, { requireComplete: true }) === 'OK';
   } catch {
     return false;
   }
+}
+
+// Re-read auto.m3u. radio.liq's file watch is only the backup for a write this
+// never followed, and its reload only empties the queue: off air, this command
+// makes radio.liq replace the playlist, dropping a track the old one had already
+// prepared, so OK means the old fallback is gone.
+export async function reloadAutoPlaylist(): Promise<boolean> {
+  return reloadPlaylist('auto');
+}
+
+// Re-read jingles.m3u, the mixer's own rotate (radio.liq `id="jingles"`). Its
+// reload_mode="watch" follows the file's inode on Liquidsoap 2.4.5, so it goes
+// deaf after the first atomic rewrite (#2008). 2.4.6 watches the directory, and
+// there the watch and this both reload, which only reshuffles the rotate. A
+// mixer without the rotate (jingleRatio 0, or the controller drawing jingles)
+// answers "unknown command": false, with nothing to reload.
+export async function reloadJinglesPlaylist(): Promise<boolean> {
+  return reloadPlaylist('jingles');
 }
 
 // Whether the fallback has a track ready to air: after auto.reload the mixer's

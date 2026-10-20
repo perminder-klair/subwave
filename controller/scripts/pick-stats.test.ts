@@ -15,7 +15,7 @@
 //   - idsByEnergy() returns exactly the ids songsByEnergy() would, in order,
 //     without mapping rows.
 //
-// Real better-sqlite3 DB in a temp STATE_DIR. Run: `tsx scripts/pick-stats.test.ts`.
+// Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- pick-stats`.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';

@@ -26,10 +26,10 @@
 // Budgets are deliberately loose (≈3–5× a warm dev-box run) — they exist to
 // catch an accidental O(n²) or a new per-row JSON.parse, not scheduler jitter.
 //
-// Row count is env-tunable:   OBS_SCALE_N=200000 tsx scripts/observatory-scale.test.ts
+// Row count is env-tunable:   OBS_SCALE_N=200000 npm test -- observatory-scale
 // (default 200000; OBS_SCALE_TMP overrides the temp dir — /tmp is tmpfs on
 // some distros and the seeded DB is ~0.5 GB at 200k).
-// Run: `tsx scripts/observatory-scale.test.ts` (folded into `npm run test`).
+// Run: `npm test -- observatory-scale`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
