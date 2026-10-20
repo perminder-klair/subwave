@@ -45,10 +45,10 @@ export interface GenreGuardDeps<T> {
   // Preserve the artist policy's always-on pick-anchor exclusion.
   avoidAnchorRoot?: string;
   repick: (alt: Map<string, T>, reason: string) => Promise<({ id?: string | null } & Record<string, unknown>) | null>;
-  // One extra discovery call, made only when no eligible candidate lies
-  // outside the run's genre. It returns candidates steered away from the
-  // run (for example sound-alikes of the current feel). The guard filters
-  // them the same way as `seen`. Absent or empty means keep the pick.
+  // One extra discovery call, made only when every candidate is in the run's
+  // genre. It returns candidates steered away from the run (for example
+  // sound-alikes of the current feel). The guard filters them the same way as
+  // `seen`. Absent or empty means keep the pick.
   steer?: () => Promise<Map<string, T> | null | undefined>;
   // Album cooldown, when it is on. An alternative on a recently aired album is
   // never offered.
@@ -99,13 +99,15 @@ export async function runGenreGuard<T extends CandidateLike>(deps: GenreGuardDep
     if (starved) return { alt: new Map(), heldBy: 'artist-spacing' };
     return { alt, heldBy: null };
   };
-  let { alt, heldBy } = narrow(seen);
+  const candidates = [...seen];
+  let { alt, heldBy } = narrow(candidates);
   // Every candidate is in the run's genre: make the one steer-away call, then
-  // judge its results by the same rules. Never called when an outside
-  // candidate already exists.
+  // judge its results by the same rules. Not when the run's leftovers are
+  // unlabelled, or outside it but refused by another guard: those are a
+  // different situation, and the pick stands.
   let steered = false;
   let steerReturned = 0;
-  if (!alt.size && steer) {
+  if (steer && candidates.every(([, s]) => labelsOverlap(genreKeysOf(s), runLabels))) {
     steered = true;
     let extra: Map<string, T> | null | undefined = null;
     try { extra = await steer(); } catch { extra = null; }

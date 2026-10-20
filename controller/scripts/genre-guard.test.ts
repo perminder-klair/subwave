@@ -298,3 +298,22 @@ test('an alternative inside both the spacing window and the cooldown keeps a pic
   assert.equal(repicks, 0);
   assert.equal(events[0].reason, 'album-cooldown');
 });
+
+test('the steer call runs only when every candidate is in the run', async () => {
+  const blank = { ...other, id: 'blank', genres: [] };
+  const byAnchor = { ...other, id: 'by-anchor', artist: 'Anchor Artist' };
+  for (const [leftover, patch, reason] of [
+    [blank, {}, 'no-other-genre'],
+    [byAnchor, { avoidAnchorRoot: 'anchor artist' }, 'anchor-artist'],
+  ] as const) {
+    let steerCalls = 0;
+    const { deps, events } = fam({
+      ...patch,
+      seen: new Map([[ska.id, ska], [leftover.id, leftover]]),
+      steer: async () => { steerCalls++; return new Map([[other.id, other]]); },
+    });
+    assert.deepEqual(await runGenreGuard(deps), { kind: 'kept' }, leftover.id);
+    assert.equal(steerCalls, 0, leftover.id);
+    assert.equal(events[0].reason, reason);
+  }
+});
