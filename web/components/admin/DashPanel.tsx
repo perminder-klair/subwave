@@ -46,7 +46,7 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
-import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision, type SkipOutcome } from './dash/never-play';
+import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision, skipFailureOutcome, type SkipOutcome } from './dash/never-play';
 import { deleteBlockEntry, notifyBlockedWithUndo, reconcileBlockCaches } from './library/block-actions';
 import type { BlockEntry } from './library/types';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
@@ -273,9 +273,9 @@ export default function DashPanel() {
         // (skipping its successor for every listener). A failed or offline
         // refetch is no read, and nothing is skipped without one. The read
         // cannot see a jingle, bed or pause-talk break (none updates
-        // now-playing) and /dj/skip takes no target, so either can still cut
-        // what follows the blocked song, as the plain Skip can; a targeted
-        // skip is a controller follow-up.
+        // now-playing), nor the song ending during the skip's commit wait, so
+        // the skip names its target and the controller refuses (409, moot)
+        // unless the blocked track is still the one on air.
         const since = Date.now();
         await queryClient.refetchQueries({ queryKey: dashKeys.status(), exact: true });
         const onAirId = freshOnAirId(queryClient.getQueryState<DashStatus>(dashKeys.status()), since);
@@ -283,11 +283,11 @@ export default function DashPanel() {
         if (decision === 'skip') {
           setBusy('skip');
           try {
-            await actionMutation.mutateAsync({ path: '/dj/skip', body: {} });
+            await actionMutation.mutateAsync({ path: '/dj/skip', body: { expectId: target.id } });
             skip = 'done';
           } catch (e) {
-            skip = 'failed';
-            skipError = errorMessage(e);
+            skip = skipFailureOutcome(e);
+            if (skip === 'failed') skipError = errorMessage(e);
           }
         } else {
           skip = decision;

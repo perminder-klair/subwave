@@ -1,13 +1,14 @@
 // "Never play" on the Dash's now-playing track: what the operator is told
 // after the confirm dialog. The block is the existing POST /library/blocklist
-// (absolute, requests included); the skip is the existing POST /dj/skip and is
-// the operator's choice in the dialog.
+// (absolute, requests included); the skip is the existing POST /dj/skip,
+// targeted at the blocked track, and is the operator's choice in the dialog.
 //
 // Run: npm test -- never-play
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision } from './never-play';
+import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision, skipFailureOutcome } from './never-play';
+import { runDashAction } from './queries';
 
 const T = { title: 'Blindspot', artist: 'Bomb the Bass' };
 
@@ -140,4 +141,45 @@ test('block: 409 already blocked is an outcome, not an error', async () => {
 test('block: any other failure throws, so nothing is skipped', async () => {
   const s = stubFetch(500, { error: 'boom' });
   await assert.rejects(() => blockPlayingTrack(s.fetcher, 'a'));
+});
+
+// The skip is TARGETED at the blocked track (#2017). The controller refuses
+// with 409 when that track is no longer on air — it ended during the commit
+// wait, or a jingle, bed or break followed it, which no status read can see —
+// and the toast says so, rather than "skip failed" over a skip that was
+// correctly withheld.
+async function targetedSkip(status: number, body: unknown) {
+  const s = stubFetch(status, body);
+  try {
+    await runDashAction(s.fetcher, '/dj/skip', { expectId: 'a' });
+    return { outcome: 'done' as const, calls: s.calls };
+  } catch (error) {
+    return { outcome: skipFailureOutcome(error), error, calls: s.calls };
+  }
+}
+
+test('targeted skip: the request names the blocked track', async () => {
+  const r = await targetedSkip(200, { ok: true });
+  assert.equal(r.outcome, 'done');
+  const [call] = r.calls;
+  assert.ok(call);
+  assert.equal(call.path, '/dj/skip');
+  assert.deepEqual(JSON.parse(String(call.init?.body)), { expectId: 'a' });
+});
+
+test('targeted skip: a 409 refusal is the moot toast, not a failure', async () => {
+  const r = await targetedSkip(409, { error: 'a jingle is on air after that track — nothing skipped', reason: 'jingle-on-air', onAirId: 'a' });
+  assert.equal(r.outcome, 'moot');
+  assert.deepEqual(neverPlayToast({ ...T, block: 'added', skip: r.outcome }), {
+    tone: 'ok',
+    text: '“Blindspot” — Bomb the Bass will never air again · no longer on air, nothing skipped',
+  });
+});
+
+test('targeted skip: any other error still reads as a failed skip, with its message', async () => {
+  const r = await targetedSkip(500, { error: 'liquidsoap telnet timeout' });
+  assert.equal(r.outcome, 'failed');
+  assert.ok(r.error instanceof Error);
+  assert.equal(r.error.message, 'liquidsoap telnet timeout', 'the message every dash toast showed before');
+  assert.equal(skipFailureOutcome(new Error('network down')), 'failed');
 });

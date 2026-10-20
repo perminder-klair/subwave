@@ -86,7 +86,9 @@ export async function runDashAction(
     body: JSON.stringify(body || {}),
   });
   const result = await response.json().catch(() => ({})) as ActResponse;
-  if (!response.ok) throw new Error(result.error || `failed (${response.status})`);
+  // Same message as ever; the status rides along so a caller can tell an
+  // answer (the targeted skip's 409) from a failure.
+  if (!response.ok) throw new AdminResponseError(result.error || `failed (${response.status})`, response.status, result);
   return result;
 }
 

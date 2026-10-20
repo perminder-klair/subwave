@@ -5,9 +5,9 @@
  * `POST /library/blocklist { type: 'track', trackId }` through
  * `library/block-actions` (the blocklist is absolute, so the track never airs
  * again, listener requests included), and the optional skip is the existing
- * `POST /dj/skip`. The block runs FIRST, so a
- * failed block never skips a track the operator meant to keep off the air
- * only together with the block.
+ * `POST /dj/skip`, TARGETED at the blocked track (`expectId`, #2017). The
+ * block runs FIRST, so a failed block never skips a track the operator meant
+ * to keep off the air only together with the block.
  */
 import { AdminResponseError, type AdminFetch } from '../../../lib/admin-query';
 import { postBlock } from '../library/block-actions';
@@ -44,6 +44,17 @@ export function skipDecision(o: {
 }): 'skip' | 'moot' | 'unconfirmed' {
   if (!o.onAirId) return 'unconfirmed';
   return o.onAirId === o.targetId ? 'skip' : 'moot';
+}
+
+/**
+ * What a failed targeted skip means. The controller answers 409 when the
+ * blocked track is no longer what is on air — it ended during the skip's
+ * commit wait, or a jingle, bed or pause-talk break followed it, none of which
+ * `freshOnAirId` can see — and skipped nothing: the same answer as a `moot`
+ * decision, not a failure. Anything else is.
+ */
+export function skipFailureOutcome(error: unknown): 'moot' | 'failed' {
+  return error instanceof AdminResponseError && error.status === 409 ? 'moot' : 'failed';
 }
 
 export interface NeverPlayResult {
