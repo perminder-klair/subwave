@@ -1034,15 +1034,17 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
     };
     const genreGuarded = await runGenreGuard<any>({
       song, seen: extras.seen, window: genreWindow,
-      recentGenres: [queue.current, ...queue.history].slice(0, genreWindow)
-        .map(item => item?.track ? genreKeysOf(item.track) : new Set<string>()),
+      // The slots this pick will follow, held queue first, as the artist and
+      // album windows walk them. Under pair drain `current` is one slot early.
+      recentGenres: queue.precedingTracks(genreWindow).map(genreKeysOf),
       genreKeysOf, recentRoots: neighbourRoots,
       avoidAnchorRoot: artistRootKey(pickAnchor || {}),
       repick: guardRepick,
       recentAlbums: albumHours > 0 ? queue.recentAlbumKeys(albumHours) : undefined,
       albumKeyOf: albumKeyFor,
       // Only called when no candidate lies outside the run's genre family.
-      steer: () => steerAwayCandidates(scope, queue.current?.track ?? null, extras.seen),
+      // Seeded from the pick anchor, the predecessor the re-pick is told about.
+      steer: () => steerAwayCandidates(scope, pickAnchor, extras.seen),
       log: line => queue.log('picker', line),
       logEvent,
     });

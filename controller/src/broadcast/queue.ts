@@ -4530,6 +4530,22 @@ class Queue {
     return out;
   }
 
+  // The n tracks a NEW pick will follow, nearest first: queued-and-unaired
+  // items from the tail (a new pick appends there), the track on air, then
+  // the aired history. The genre guard's run window, walked from the same end
+  // of the queue as the artist and album windows above. Under pair drain the
+  // pick follows the held head, not `current`, so a window that started at
+  // `current` judged the run one slot early (#2007).
+  precedingTracks(n = 0): Track[] {
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const out: Track[] = [];
+    for (const item of [...[...this.upcoming].reverse(), this.current, ...this.history]) {
+      if (out.length >= n) break;
+      if (item?.track) out.push(item.track);
+    }
+    return out;
+  }
+
   // A bed started feeding the music chain — air the link it was pushed for.
   //
   // Unlike waitForJingleClear (which computes a deadline and sleeps it out),

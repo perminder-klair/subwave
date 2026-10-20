@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
 
-const MODE = process.env.GENRE_STEER_TEST === 'text' ? 'text' : 'audio';
+// `anchor` is the audio index again, with only the held queue head indexed:
+// a search seeded from the track on air finds nothing at all.
+const MODE = process.env.GENRE_STEER_TEST === 'text' ? 'text' : process.env.GENRE_STEER_TEST === 'anchor' ? 'anchor' : 'audio';
 const stateRoot = mkdtempSync(join(tmpdir(), `subwave-genre-steer-${MODE}-`));
 process.env.STATE_DIR = stateRoot;
 const settings = await import('../../src/settings.js');
@@ -28,6 +30,8 @@ const prince = track('prince', ['Pop', 'International Pop', 'Reggae']);
 const jacob = track('jacob', ['Dub', 'Reggae', 'Roots Reggae']);
 // Shares no label with the run below, only its family.
 const rocksteady = track('rocksteady', ['Rocksteady']);
+// Pair drain's held head: the deadline pick follows it, not the track on air.
+const held = track('held', 'Reggae');
 
 before(async () => {
   const cfg = structuredClone(settings.getDefaults());
@@ -41,13 +45,20 @@ before(async () => {
   cfg.picker.albumHours = 1;
   store.setCache(cfg);
   await library.load();
-  for (const song of [anchor, repeat, alternative, prince, jacob, rocksteady]) library.set(song.id, song);
+  for (const song of [anchor, repeat, alternative, prince, jacob, rocksteady, held]) library.set(song.id, song);
   db.upsertTrackAnalysis(anchor.id, { bpm: 98, musicalKey: '8A' });
   // The on-air reggae track sits beside the soul track in vector space and far
   // from the other reggae candidates, so a real sound-alike or mood lookup can
   // only answer with `alternative` (the seed itself is dropped by the guard).
   const unit = (dim: number, hot: number, near = 0) => Array.from({ length: dim }, (_, i) => i === hot ? 1 : i === near ? 0.2 : 0);
-  if (MODE === 'audio') {
+  if (MODE === 'anchor') {
+    // `alternative` sits beside the held head. The track on air has no vector,
+    // so only a search seeded from the held head can reach it.
+    db.upsertTrackAnalysis(held.id, { bpm: 90, musicalKey: '3A' });
+    db.upsertTrackAudioVector(held.id, unit(512, 0));
+    db.upsertTrackAudioVector(alternative.id, unit(512, 0, 1));
+    for (const [i, s] of [repeat, prince, jacob, rocksteady].entries()) db.upsertTrackAudioVector(s.id, unit(512, 5 + i));
+  } else if (MODE === 'audio') {
     db.upsertTrackAudioVector(anchor.id, unit(512, 0));
     db.upsertTrackAudioVector(alternative.id, unit(512, 0, 1));
     for (const [i, s] of [repeat, prince, jacob, rocksteady].entries()) db.upsertTrackAudioVector(s.id, unit(512, 5 + i));
@@ -69,10 +80,10 @@ after(() => {
 
 
 let agentRuns = 0;
-type Scenario = 'steer-lands' | 'off' | 'queued-only' | 'shortlist';
+type Scenario = 'steer-lands' | 'off' | 'queued-only' | 'shortlist' | 'held-seed';
 const scenarios: Scenario[] = MODE === 'audio'
   ? ['steer-lands', 'off', 'queued-only', 'shortlist']
-  : ['steer-lands'];
+  : MODE === 'anchor' ? ['held-seed'] : ['steer-lands'];
 
 for (const scenario of scenarios) {
   test(`${MODE} index, ${scenario}: the extra discovery call feeds the re-pick with artist spacing and album cooldown both on`, async () => {
@@ -80,10 +91,12 @@ for (const scenario of scenarios) {
     settings.get().llm.trackSelection = scenario === 'shortlist' ? 'shortlist' : 'agentic';
     agentRuns = 0;
     queue.current = { track: anchor, source: 'ai' };
-    queue.history = Array.from({ length: scenario === 'queued-only' ? 2 : 3 }, (_, i) => ({
+    // `queued-only` and `held-seed` reach the run's fourth airing through `upcoming`.
+    queue.history = Array.from({ length: scenario === 'queued-only' || scenario === 'held-seed' ? 2 : 3 }, (_, i) => ({
       track: track(`history-${i}`, [['Dub'], ['Ska'], ['Lovers Rock']][i]), source: 'ai',
     }));
-    queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }] : [];
+    queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }]
+      : scenario === 'held-seed' ? [{ track: held, source: 'ai' }] : [];
     queue._recentPlays = [];
     queue.senderBusy = true;
     const logs: string[] = [];
@@ -108,6 +121,8 @@ for (const scenario of scenarios) {
       const prompt = body.messages.find((m: { role: string }) => m.role === 'user').content;
       const payload = JSON.parse(prompt.split('\n\n')[0]);
       assert.deepEqual(payload.candidates.map((s: { id: string }) => s.id), [alternative.id]);
+      // Seeded from the held head, the predecessor the re-pick is told about.
+      if (scenario === 'held-seed') assert.equal(payload.predecessor.title, held.title);
       return Response.json({
         id: 'completion', object: 'chat.completion', created: 0, model: 'genre-test',
         choices: [{ index: 0, finish_reason: 'tool_calls', message: {
@@ -119,15 +134,17 @@ for (const scenario of scenarios) {
       });
     };
     try {
-      await runTrackEvent(queue, ctx, { wantLink: false });
-      const fires = scenario === 'steer-lands';
+      await runTrackEvent(queue, ctx, scenario === 'held-seed' ? { wantLink: false, pickAnchor: held, anchorPrior: anchor } : { wantLink: false });
+      const fires = ['steer-lands', 'queued-only', 'held-seed'].includes(scenario);
       if (scenario !== 'shortlist') assert.equal(queue.upcoming.at(-1)?.track.id, fires ? alternative.id : repeat.id);
       if (scenario !== 'shortlist') assert.equal(calls, fires ? 1 : 0, 'one constrained re-pick, drawn from the extra call');
       assert.equal(logs.some(line => line.includes('steer-away')), fires, 'the log names the extra search');
       assert.equal(logs.some(line => line.includes('genre run')), fires);
       // The Shortlist route never reaches the Agentic genre guard: no agent run, no genre event, no extra search.
       if (scenario === 'shortlist') assert.equal(agentRuns, 0);
+      // A queued track counts toward the run, but the guard never re-picks it.
       if (scenario === 'queued-only') assert.equal(queue.upcoming[0].track.id, 'operator');
+      if (scenario === 'held-seed') assert.equal(queue.upcoming[0].track.id, held.id);
     } finally {
       queue.log = realLog;
       globalThis.fetch = realFetch;

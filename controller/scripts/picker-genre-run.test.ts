@@ -27,6 +27,13 @@ const prince = track('prince', ['Pop', 'International Pop', 'Reggae']);
 const jacob = track('jacob', ['Dub', 'Reggae', 'Roots Reggae']);
 // Shares no label with the run below, only its family.
 const rocksteady = track('rocksteady', ['Rocksteady']);
+// Pair drain: a deadline pick follows the HELD queue head, not the track on air.
+const heldReggae = track('held-reggae', 'Reggae');
+const heldSoul = track('held-soul', 'Soul');
+const HELD: Record<string, ReturnType<typeof track>> = { 'held-run': heldReggae, 'held-break': heldSoul };
+const ANALYSIS: Record<string, { bpm: number; key: string }> = {
+  [anchor.id]: { bpm: 98, key: '8A' }, [heldReggae.id]: { bpm: 90, key: '3A' }, [heldSoul.id]: { bpm: 101, key: '5B' },
+};
 
 before(async () => {
   const cfg = structuredClone(settings.getDefaults());
@@ -39,8 +46,8 @@ before(async () => {
   cfg.llm.fallback.enabled = false;
   store.setCache(cfg);
   await library.load();
-  for (const song of [anchor, repeat, alternative, prince, jacob, rocksteady]) library.set(song.id, song);
-  db.upsertTrackAnalysis(anchor.id, { bpm: 98, musicalKey: '8A' });
+  for (const song of [anchor, repeat, alternative, prince, jacob, rocksteady, heldReggae, heldSoul]) library.set(song.id, song);
+  for (const [id, { bpm, key }] of Object.entries(ANALYSIS)) db.upsertTrackAnalysis(id, { bpm, musicalKey: key });
 });
 
 after(() => {
@@ -52,14 +59,21 @@ after(() => {
   rmSync(stateRoot, { recursive: true, force: true });
 });
 
-for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'empty-alternatives', 'failed-repick', 'projection-only', 'family'] as const) {
-  test(`${scenario}: the real picker checks aired tracks and preserves transition facts`, async () => {
+// The window is the slots the pick will FOLLOW: queued items from the tail,
+// then the track on air, then history. `queued-only` and `held-run` reach the
+// fourth reggae airing only through `upcoming`; `held-break` would be a fifth
+// reggae airing by `current` and history, but the held Soul head ends the run.
+for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'held-run', 'held-break', 'empty-alternatives', 'failed-repick', 'projection-only', 'family'] as const) {
+  test(`${scenario}: the real picker checks the tracks the pick follows and preserves transition facts`, async () => {
     settings.get().llm.genreVarietyWindow = scenario === 'off' ? 0 : 4;
+    const held = HELD[scenario] ?? null;
+    const predecessor = held ?? anchor;
     queue.current = { track: anchor, source: 'ai' };
-    queue.history = Array.from({ length: scenario === 'below' || scenario === 'queued-only' ? 2 : 3 }, (_, i) => ({
+    queue.history = Array.from({ length: ['below', 'queued-only', 'held-run'].includes(scenario) ? 2 : 3 }, (_, i) => ({
       track: track(`history-${i}`, scenario === 'family' ? [['Dub'], ['Ska'], ['Lovers Rock']][i] : [['Pop', 'Reggae'], ['Dub', 'Reggae'], ['Roots Reggae', 'Reggae']][i]), source: 'ai',
     }));
-    queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }] : [];
+    queue.upcoming = scenario === 'queued-only' ? [{ track: track('operator', 'Reggae'), source: 'manual' }]
+      : held ? [{ track: held, source: 'ai' }] : [];
     queue._recentPlays = [];
     queue.senderBusy = true;
     const logs: string[] = [];
@@ -91,7 +105,7 @@ for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-o
       const prompt = body.messages.find((m: { role: string }) => m.role === 'user').content;
       const payload = JSON.parse(prompt.split('\n\n')[0]);
       assert.deepEqual(payload.candidates.map((s: { id: string }) => s.id), [alternative.id]);
-      assert.deepEqual(payload.predecessor, { title: anchor.title, artist: anchor.artist, bpm: 98, key: '8A' });
+      assert.deepEqual(payload.predecessor, { title: predecessor.title, artist: predecessor.artist, ...ANALYSIS[predecessor.id] });
       if (scenario === 'failed-repick') return Response.json({ error: { message: 'synthetic rejection' } }, { status: 400 });
       return Response.json({
         id: 'completion', object: 'chat.completion', created: 0, model: 'genre-test',
@@ -104,13 +118,15 @@ for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-o
       });
     };
     try {
-      await runTrackEvent(queue, ctx, { wantLink: false });
-      const fires = ['boundary', 'prince', 'jacob', 'projection-only', 'family'].includes(scenario);
+      await runTrackEvent(queue, ctx, held ? { wantLink: false, pickAnchor: held, anchorPrior: anchor } : { wantLink: false });
+      const fires = ['boundary', 'prince', 'jacob', 'projection-only', 'family', 'queued-only', 'held-run'].includes(scenario);
       assert.equal(queue.upcoming.at(-1)?.track.id, fires ? alternative.id : selected.id);
       // One constrained djObject call can make its existing recovery attempt.
       assert.equal(calls, scenario === 'failed-repick' ? 2 : fires ? 1 : 0);
       assert.equal(logs.some(line => line.includes('genre run')), fires || ['empty-alternatives', 'failed-repick'].includes(scenario));
+      // A queued track counts toward the run, but the guard never re-picks it.
       if (scenario === 'queued-only') assert.equal(queue.upcoming[0].track.id, 'operator');
+      if (held) assert.equal(queue.upcoming[0].track.id, held.id);
     } finally {
       queue.log = realLog;
       globalThis.fetch = realFetch;
