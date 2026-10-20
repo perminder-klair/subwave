@@ -14,22 +14,36 @@ import { postBlock } from '../library/block-actions';
 import type { BlockEntry } from '../library/types';
 
 export type BlockOutcome = 'added' | 'already';
-export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot';
+export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'unconfirmed';
 
 /**
- * Whether to skip after the block lands. `onAirId` must come from a FRESH
- * status read taken after the block request resolved: the track can change
- * while that request is in flight (a slow Navidrome getSong has no upper
- * bound), and a skip decided on the status the click saw would skip the
- * successor for every listener. An unknown on-air track is never skipped.
+ * The on-air id from a status read that landed after `since` (taken once the
+ * block resolved), or undefined when there is none. `refetchQueries` swallows
+ * a failed fetch, and returns at once while offline, leaving the last poll in
+ * the cache: that poll was taken before the block landed, the stale read the
+ * skip guard exists to refuse, so it counts as no read at all.
+ */
+export function freshOnAirId(
+  state: { dataUpdatedAt: number; data?: { nowPlaying?: { subsonic_id?: string } | null } } | undefined,
+  since: number,
+): string | undefined {
+  if (!state || state.dataUpdatedAt < since) return undefined;
+  return state.data?.nowPlaying?.subsonic_id || undefined;
+}
+
+/**
+ * Whether "block + skip now" skips, once the block has landed. `onAirId` must
+ * come from `freshOnAirId`: the track can change while the block request is in
+ * flight (a slow Navidrome getSong has no upper bound), and a skip decided on
+ * the status the click saw would skip the successor for every listener. No
+ * fresh read, or one naming no track, is never skipped.
  */
 export function skipDecision(o: {
-  skipToo: boolean;
   targetId: string;
-  onAirId: string | null | undefined;
-}): 'skip' | 'not-asked' | 'moot' {
-  if (!o.skipToo) return 'not-asked';
-  return o.onAirId && o.onAirId === o.targetId ? 'skip' : 'moot';
+  onAirId: string | undefined;
+}): 'skip' | 'moot' | 'unconfirmed' {
+  if (!o.onAirId) return 'unconfirmed';
+  return o.onAirId === o.targetId ? 'skip' : 'moot';
 }
 
 export interface NeverPlayResult {
@@ -64,6 +78,7 @@ export function neverPlayToast(o: {
   if (o.skip === 'done') parts.push('skipped');
   else if (o.skip === 'not-asked') parts.push('it finishes now');
   else if (o.skip === 'moot') parts.push('no longer on air, nothing skipped');
+  else if (o.skip === 'unconfirmed') parts.push('not confirmed on air, nothing skipped');
   else parts.push(`skip failed${o.skipError ? `: ${o.skipError}` : ''}`);
   if (o.purged) parts.push(`${o.purged} dropped from queue`);
   return { tone: o.skip === 'failed' ? 'err' : 'ok', text: parts.join(' · ') };

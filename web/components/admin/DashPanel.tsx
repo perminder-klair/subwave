@@ -46,7 +46,7 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
-import { blockPlayingTrack, neverPlayToast, skipDecision, type SkipOutcome } from './dash/never-play';
+import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision, type SkipOutcome } from './dash/never-play';
 import { deleteBlockEntry, notifyBlockedWithUndo, reconcileBlockCaches } from './library/block-actions';
 import type { BlockEntry } from './library/types';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
@@ -267,14 +267,19 @@ export default function DashPanel() {
       let skip: SkipOutcome = 'not-asked';
       let skipError: string | undefined;
       if (skipToo) {
-        // Decide on a FRESH read, never on `status` from this render: the
-        // track can change while the block request is in flight, and the
-        // closure would still show the blocked one (skipping its successor
-        // for every listener). A failed refetch leaves the last poll in the
-        // cache; an unknown track is never skipped.
+        // Decide on a read that landed AFTER the block, never on `status`
+        // from this render: the track can change while the block request is
+        // in flight, and the closure would still show the blocked one
+        // (skipping its successor for every listener). A failed or offline
+        // refetch is no read, and nothing is skipped without one. The read
+        // cannot see a jingle, bed or pause-talk break (none updates
+        // now-playing) and /dj/skip takes no target, so either can still cut
+        // what follows the blocked song, as the plain Skip can; a targeted
+        // skip is a controller follow-up.
+        const since = Date.now();
         await queryClient.refetchQueries({ queryKey: dashKeys.status(), exact: true });
-        const onAirId = queryClient.getQueryData<DashStatus>(dashKeys.status())?.nowPlaying?.subsonic_id;
-        const decision = skipDecision({ skipToo, targetId: target.id, onAirId });
+        const onAirId = freshOnAirId(queryClient.getQueryState<DashStatus>(dashKeys.status()), since);
+        const decision = skipDecision({ targetId: target.id, onAirId });
         if (decision === 'skip') {
           setBusy('skip');
           try {
