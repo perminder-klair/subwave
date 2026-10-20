@@ -15,7 +15,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { copyStationKeys, isolateStationState, STATION_KEY_FILES } from './test-utils/isolated-state.js';
+import {
+  copyStationKeys, isolateStationState, STATION_KEY_FILES, sweepAbandonedDirs,
+} from './test-utils/isolated-state.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 const controller = fileURLToPath(new URL('../', import.meta.url));
@@ -59,6 +61,14 @@ function stationRoot(): string {
   return root;
 }
 
+// The pid of a process that has exited, for a dir whose owner is gone.
+async function deadPid(): Promise<number> {
+  const child = spawn(process.execPath, ['-e', '']);
+  await once(child, 'exit');
+  assert.ok(child.pid);
+  return child.pid;
+}
+
 async function run(args: string[], env: Record<string, string>) {
   const child = spawn(process.execPath, ['--import', 'tsx', ...args], {
     cwd: controller, env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'],
@@ -98,6 +108,25 @@ test('a multi-station root copies the ACTIVE station\'s files', () => {
   assert.equal(readFileSync(join(dest, 'secrets.env'), 'utf8'), 'OPENAI_API_KEY=night\n');
 });
 
+// A Ctrl-C while a tool is still loading src/ ends as SIGKILL (tsx's parent
+// gives the busy child ~60 ms to answer), so no 'exit' runs and the next run
+// has to clear the dir. Only names the helper mints, and only for a dead owner.
+test('a dir whose owner has gone is swept; a live owner\'s, and any other name, is kept', async () => {
+  const parent = createTempDir(join(tmpdir(), 'subwave-isolated-sweep-'));
+  const names = {
+    abandoned: `subwave-x-${await deadPid()}-AbC123`,
+    live: `subwave-x-${process.pid}-AbC123`,
+    unminted: 'subwave-x-notes',
+    otherTool: `subwave-y-${await deadPid()}-AbC123`,
+  };
+  for (const name of Object.values(names)) {
+    mkdirSync(join(parent, name));
+    writeFileSync(join(parent, name, 'secrets.env'), 'OPENROUTER_API_KEY=sk-left-behind\n');
+  }
+  assert.deepEqual(sweepAbandonedDirs(parent, 'subwave-x-'), [names.abandoned]);
+  assert.deepEqual(readdirSync(parent).sort(), [names.live, names.otherTool, names.unminted].sort());
+});
+
 // The usage error is reached only after every src/ import has run, so a tool
 // that loads src/ against the station's root has already written to it.
 for (const [tool, args, prefix] of [
@@ -107,12 +136,13 @@ for (const [tool, args, prefix] of [
   test(`${tool} leaves the station's state root untouched and removes its own`, { timeout: 90_000 }, async () => {
     const root = stationRoot();
     const tmp = createTempDir(join(tmpdir(), 'subwave-isolated-tmp-'));
+    mkdirSync(join(tmp, `${prefix}${await deadPid()}-AbC123`));
     const before = snapshot(root);
     const { code, output } = await run([...args], { STATE_DIR: root, TMPDIR: tmp });
     assert.equal(code, 2, output);
     assert.match(output, /Usage: npm run/);
     assert.deepEqual(snapshot(root), before, 'no new dir, no rotated picks.log, no appended line');
-    assert.deepEqual(readdirSync(tmp).filter((name) => name.startsWith(prefix)), [], 'the isolated dir is removed on exit');
+    assert.deepEqual(readdirSync(tmp).filter((name) => name.startsWith(prefix)), [], 'its own dir is removed on exit, and a killed run\'s is swept');
   });
 }
 

@@ -16,7 +16,7 @@
 // body. This module imports nothing that reaches config.ts: stations/resolve.ts
 // is leaf-level by design.
 
-import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,13 +58,43 @@ export function copyStationKeys(sourceRoot: string, dest: string): string[] {
   return copied;
 }
 
+// A run that never reaches 'exit' leaves its dir, and the copied keys in it,
+// behind. That is not only SIGKILL or a closed terminal: under `npm run` the
+// tsx parent SIGKILLs a child that has not acknowledged a Ctrl-C within
+// ~60 ms, and a child still loading src/ runs no event-loop turn to do it. So
+// each dir is named after the pid that owns it, and the next run removes the
+// ones whose owner has gone. Only a name this helper mints
+// (<prefix><pid>-<6 chars>) is ever considered, and a pid that answers, or
+// belongs to another user, is kept. Returns the names removed.
+export function sweepAbandonedDirs(parent: string, prefix: string): string[] {
+  let names: string[];
+  try { names = readdirSync(parent); } catch { return []; }
+  const removed: string[] = [];
+  for (const name of names) {
+    const owner = name.startsWith(prefix) ? /^(\d+)-[A-Za-z0-9]{6}$/.exec(name.slice(prefix.length)) : null;
+    if (!owner) continue;
+    try {
+      process.kill(Number(owner[1]), 0);
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue;
+    }
+    try {
+      rmSync(join(parent, name), { recursive: true, force: true });
+      removed.push(name);
+    } catch {}
+  }
+  return removed;
+}
+
 // Make a temp state root seeded from the station's keys and point STATE_DIR at
 // it. An operator's STATE_DIR names the SOURCE root, as config.ts would read
 // it. The dir is removed when the process exits: on success, on a thrown error
-// and on Ctrl-C.
+// and on Ctrl-C; one a killed run left is swept by the next run.
 export function isolateStationState(prefix: string): { sourceRoot: string; dir: string } {
   const sourceRoot = process.env.STATE_DIR || REPO_STATE_ROOT;
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  sweepAbandonedDirs(tmpdir(), prefix);
+  const dir = mkdtempSync(join(tmpdir(), `${prefix}${process.pid}-`));
   process.once('exit', () => rmSync(dir, { recursive: true, force: true }));
   // A signal's default action ends the process without an 'exit' event, which
   // would leave the dir behind. This listener turns the signal into

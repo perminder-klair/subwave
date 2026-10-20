@@ -74,7 +74,10 @@ The run never writes to `state/`. It copies the station's `settings.json`,
 `schedule.json` and `secrets.env` into a temp `STATE_DIR` and works there. On a
 multi-station install it copies the active station's files. An exported
 `STATE_DIR` names a different station root to copy from. The temp dir is printed
-as `Isolated STATE_DIR:` and deleted when the run exits, Ctrl-C included.
+as `Isolated STATE_DIR:` and deleted when the run exits, Ctrl-C included. A run
+killed before it can clean up (a Ctrl-C while it is still starting up, which
+tsx turns into SIGKILL, or a closed terminal) leaves its dir, and the next run
+deletes it.
 `library.db` is not copied, because the fixtures fake the library.
 
 ```bash
