@@ -22,7 +22,7 @@ test('the runner hands the run a temp STATE_DIR, never the repo state/', () => {
   const runDir = process.env.SUBWAVE_TEST_RUN_STATE_DIR;
   assert.ok(runDir, 'the runner exports its dir as SUBWAVE_TEST_RUN_STATE_DIR');
   assertTempDir(runDir);
-  assert.equal(process.env.SUBWAVE_TEST_INHERITED_STATE_DIR, runDir,
+  assert.equal(process.env.SUBWAVE_TEST_STATE_DIR_BEFORE_PRELOAD, runDir,
     'the runner passes its dir to every file as STATE_DIR, whatever the shell exports');
 });
 

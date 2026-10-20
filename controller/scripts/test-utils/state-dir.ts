@@ -11,13 +11,14 @@
 // after this preload, before it imports anything that reads the variable. The
 // directory is removed on exit by createTempDir.
 //
-// The run's dir this replaces is kept as SUBWAVE_TEST_INHERITED_STATE_DIR, so
-// test-state-isolation.test.ts can still see that the runner's layer reached
-// this process; the assignment below hides it otherwise.
+// What STATE_DIR held before this preload replaced it is kept as
+// SUBWAVE_TEST_STATE_DIR_BEFORE_PRELOAD, so test-state-isolation.test.ts can
+// still see that the runner's layer reached this process; the assignment below
+// hides it otherwise.
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { STATE_DIR_PREFIX } from './stale-state-dirs.js';
 import { createTempDir } from './temp-dir.js';
 
-process.env.SUBWAVE_TEST_INHERITED_STATE_DIR = process.env.STATE_DIR ?? '';
+process.env.SUBWAVE_TEST_STATE_DIR_BEFORE_PRELOAD = process.env.STATE_DIR ?? '';
 process.env.STATE_DIR = createTempDir(join(tmpdir(), STATE_DIR_PREFIX));
