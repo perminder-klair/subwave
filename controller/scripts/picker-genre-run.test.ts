@@ -1,13 +1,12 @@
 // Real agent selection, guard wiring, constrained SDK re-pick and queue
 // insertion. HTTP and discovery are synthetic; nothing reaches a station.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 
-const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-genre-run-'));
-process.env.STATE_DIR = stateRoot;
+process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-genre-run-'));
 const settings = await import('../src/settings.js');
 const library = await import('../src/music/library.js');
 const db = await import('../src/music/library-db.js');
@@ -56,7 +55,6 @@ after(() => {
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
 });
 
 // The window is the slots the pick will FOLLOW: queued items from the tail,

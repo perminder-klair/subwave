@@ -328,17 +328,12 @@ export function clampNoRepeatWindow(raw: unknown, def: number): number {
   return Math.min(1000, Math.max(0, Math.floor(raw)));
 }
 
-// Artist spacing in SLOTS (#1406), floored into [0, 25]; 0 leaves only the
-// always-on back-to-back guard. The low ceiling is deliberate: this is consulted
-// at the POINT OF CHOICE against the run's own candidates, so a large window
-// mostly buys re-pick calls that end in a waived window.
-export function clampArtistVarietyWindow(raw: unknown, def: number): number {
-  if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
-  return Math.min(25, Math.max(0, Math.floor(raw)));
-}
-
-// Genre run length, floored into [0, 25], like artist spacing. Zero disables.
-export function clampGenreVarietyWindow(raw: unknown, def: number): number {
+// A variety window in SLOTS, floored into [0, 25]: artist spacing (#1406),
+// where 0 leaves only the always-on back-to-back guard, and the genre run
+// limit (#1897), where 0 is off. The low ceiling is deliberate: both are
+// consulted at the POINT OF CHOICE against the run's own candidates, so a
+// large window mostly buys re-pick calls that end in a waived window.
+export function clampVarietyWindow(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(25, Math.max(0, Math.floor(raw)));
 }

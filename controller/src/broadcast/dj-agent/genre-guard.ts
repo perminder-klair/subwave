@@ -30,17 +30,13 @@ export function genreGuardApplies(
 // `recentGenres` is newest first: the slots the pick will follow. The run is
 // named as the newest track spells it. Unknown metadata breaks the evidence of
 // a run, rather than inventing one.
-export function runGenreKeys(recentGenres: readonly GenreKeys[], window: number): GenreKeys {
+function runGenreKeys(recentGenres: readonly GenreKeys[], window: number): GenreKeys {
   if (window <= 0 || recentGenres.length < window) return new Map();
   return new Map([...recentGenres[0]].filter(([key]) => recentGenres.slice(1, window).every(keys => keys.has(key))));
 }
 
 function labelsOverlap(keys: GenreKeys, runKeys: GenreKeys): boolean {
   return [...keys.keys()].some(key => runKeys.has(key));
-}
-
-export function genreGuardCause(pickGenres: GenreKeys, recentGenres: readonly GenreKeys[], window: number): boolean {
-  return labelsOverlap(pickGenres, runGenreKeys(recentGenres, window));
 }
 
 // The genre guard runs after the artist and album guards, so its re-pick is

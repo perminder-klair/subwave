@@ -1,6 +1,6 @@
 // Genre-run setting: defaults, coercion and cold-load persistence.
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -15,15 +15,8 @@ const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const GENRE_VARIETY_WINDOW = 0;
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
-
 // Load a hand-written settings.json the way a controller restart would.
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm as Record<string, unknown>;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm })).llm as Record<string, unknown>; }
 
 test('a configured genre-run limit survives a controller restart', async () => {
   assert.equal((await coldLoad({ genreVarietyWindow: 12 })).genreVarietyWindow, 12);

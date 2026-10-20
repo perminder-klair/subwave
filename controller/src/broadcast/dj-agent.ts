@@ -14,7 +14,7 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
-import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
+import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
@@ -240,20 +240,22 @@ async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Ma
   return seen;
 }
 
-// The genre guard's one extra discovery call (#1897), seeded from the track on
-// air. Through the picker's own tools and scope, so recency, show locks, the
-// blocklist and the track-length floor all apply; the guard then drops the
-// run's genre from the results. No model call. A track-seeded sound-alike
-// lookup (the mood/lyric index when there is no audio index). New tracks join `seen` so later
-// note grounding can resolve them.
-async function steerAwayCandidates(
-  scope: PickerScope, onAir: { id?: string } | null, seen: Map<string, any>,
-): Promise<Map<string, any>> {
-  const found = new Map<string, any>();
-  const seedId = onAir?.id ?? null;
+// The genre guard's one extra discovery call (#1897): a sound-alike lookup
+// seeded from the pick anchor (the mood and lyric index when there is no audio
+// index), through the picker's own tools and scope, so recency, show locks,
+// the blocklist and the track-length floor all apply. No model call. The tool
+// keeps at most eight tracks (`collect()`'s cap) BEFORE the guard drops the
+// run's genre, so when most neighbours share the genre the re-pick sees only
+// a few. New tracks join `seen` so later note grounding can resolve them.
+async function steerAwayCandidates<T>(
+  scope: PickerScope, seed: CandidateLike | null, seen: Map<string, T>,
+): Promise<Map<string, T>> {
+  const found = new Map<string, T>();
+  const seedId = seed?.id ?? null;
   if (!seedId) return found;
   const { tools, seen: fresh } = buildPickerTools(scope);
-  const t = tools as Record<string, any>;
+  // Read as the Shortlist reads its sources: only `execute` is called here.
+  const t = tools as Record<string, { execute?: (args: { songId: string }, options: unknown) => Promise<unknown> } | undefined>;
   try {
     await (t.tracksThatSoundLikeThis ?? t.tracksLikeThis)?.execute?.({ songId: seedId }, {
       toolCallId: 'genre-guard-steer', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
@@ -1025,7 +1027,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   const genreWindow = settings.get().llm?.genreVarietyWindow ?? 0;
   if (genreWindow > 0 && !useShortlist && agentPickResolution
     && genreGuardApplies(scope, activeShow?.genres ?? scope.genreLock)) {
-    const genreGuarded = await runGenreGuard<any>({
+    const genreGuarded = await runGenreGuard<CandidateLike>({
       song, seen: extras.seen, window: genreWindow,
       // The slots this pick will follow, held queue first, as the artist and
       // album windows walk them. Under pair drain `current` is one slot early.

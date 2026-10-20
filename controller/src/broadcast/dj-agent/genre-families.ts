@@ -31,14 +31,14 @@ export const GENRE_FAMILIES: Readonly<Record<string, readonly string[]>> = {
 // as "and", so "Hip-Hop" and "hip hop", "Neo-Soul" and "Neo Soul", "R&B" and
 // "R & B", "Synth-Pop" and "Synthpop" each share one key. Only separators
 // fold, never spellings: "drum n bass" is not "drum and bass".
-export function genreKey(label: string): string {
+function genreKey(label: string): string {
   return sceneKey(label).replace(/&/g, 'and').replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 // Family tokens ride in the same map as label keys, so the run logic
 // (intersection, overlap) needs no second code path. A label key never holds
 // the prefix's colon, so the two cannot collide.
-export const FAMILY_PREFIX = 'family:';
+const FAMILY_PREFIX = 'family:';
 
 const FAMILY_OF: ReadonlyMap<string, string> = (() => {
   const map = new Map<string, string>();
@@ -47,11 +47,6 @@ const FAMILY_OF: ReadonlyMap<string, string> = (() => {
   }
   return map;
 })();
-
-/** The family a label belongs to, or null. */
-export function genreFamilyOf(label: string): string | null {
-  return FAMILY_OF.get(genreKey(label)) ?? null;
-}
 
 /**
  * A track's genre keys, each mapped to the name a prompt or log shows for it:

@@ -1,16 +1,15 @@
 // Real agent selection, guard wiring, constrained SDK re-pick and queue
 // insertion. HTTP and discovery are synthetic; nothing reaches a station.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { createTempDir } from './temp-dir.js';
 
 // `anchor` is the audio index again, with only the held queue head indexed:
 // a search seeded from the track on air finds nothing at all.
 const MODE = process.env.GENRE_STEER_TEST === 'text' ? 'text' : process.env.GENRE_STEER_TEST === 'anchor' ? 'anchor' : 'audio';
-const stateRoot = mkdtempSync(join(tmpdir(), `subwave-genre-steer-${MODE}-`));
-process.env.STATE_DIR = stateRoot;
+process.env.STATE_DIR = createTempDir(join(tmpdir(), `subwave-genre-steer-${MODE}-`));
 const settings = await import('../../src/settings.js');
 const library = await import('../../src/music/library.js');
 const db = await import('../../src/music/library-db.js');
@@ -75,7 +74,6 @@ after(() => {
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
 });
 
 
