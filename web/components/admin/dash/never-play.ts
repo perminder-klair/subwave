@@ -11,7 +11,23 @@
 import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
 
 export type BlockOutcome = 'added' | 'already';
-export type SkipOutcome = 'not-asked' | 'done' | 'failed';
+export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot';
+
+/**
+ * Whether to skip after the block lands. `onAirId` must come from a FRESH
+ * status read taken after the block request resolved: the track can change
+ * while that request is in flight (a slow Navidrome getSong has no upper
+ * bound), and a skip decided on the status the click saw would skip the
+ * successor for every listener. An unknown on-air track is never skipped.
+ */
+export function skipDecision(o: {
+  skipToo: boolean;
+  targetId: string;
+  onAirId: string | null | undefined;
+}): 'skip' | 'not-asked' | 'moot' {
+  if (!o.skipToo) return 'not-asked';
+  return o.onAirId && o.onAirId === o.targetId ? 'skip' : 'moot';
+}
 
 export interface NeverPlayResult {
   block: BlockOutcome;
@@ -48,6 +64,7 @@ export function neverPlayToast(o: {
   const parts = [o.block === 'added' ? `${what} will never air again` : `${what} was already on the never-play list`];
   if (o.skip === 'done') parts.push('skipped');
   else if (o.skip === 'not-asked') parts.push('it finishes now');
+  else if (o.skip === 'moot') parts.push('no longer on air, nothing skipped');
   else parts.push(`skip failed${o.skipError ? `: ${o.skipError}` : ''}`);
   if (o.purged) parts.push(`${o.purged} dropped from queue`);
   return { tone: o.skip === 'failed' ? 'err' : 'ok', text: parts.join(' · ') };

@@ -46,7 +46,7 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
-import { blockPlayingTrack, neverPlayToast, type SkipOutcome } from './dash/never-play';
+import { blockPlayingTrack, neverPlayToast, skipDecision, type SkipOutcome } from './dash/never-play';
 import { libraryKeys } from './library/queries';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
@@ -269,14 +269,26 @@ export default function DashPanel() {
       const r = await blockMutation.mutateAsync(target.id);
       let skip: SkipOutcome = 'not-asked';
       let skipError: string | undefined;
-      // Skip only if the blocked track is still the one on air.
-      if (skipToo && status?.nowPlaying?.subsonic_id === target.id) {
-        try {
-          await actionMutation.mutateAsync({ path: '/dj/skip', body: {} });
-          skip = 'done';
-        } catch (e) {
-          skip = 'failed';
-          skipError = errorMessage(e);
+      if (skipToo) {
+        // Decide on a FRESH read, never on `status` from this render: the
+        // track can change while the block request is in flight, and the
+        // closure would still show the blocked one (skipping its successor
+        // for every listener). A failed refetch leaves the last poll in the
+        // cache; an unknown track is never skipped.
+        await queryClient.refetchQueries({ queryKey: dashKeys.status(), exact: true });
+        const onAirId = queryClient.getQueryData<DashStatus>(dashKeys.status())?.nowPlaying?.subsonic_id;
+        const decision = skipDecision({ skipToo, targetId: target.id, onAirId });
+        if (decision === 'skip') {
+          setBusy('skip');
+          try {
+            await actionMutation.mutateAsync({ path: '/dj/skip', body: {} });
+            skip = 'done';
+          } catch (e) {
+            skip = 'failed';
+            skipError = errorMessage(e);
+          }
+        } else {
+          skip = decision;
         }
       }
       const t = neverPlayToast({ title: target.title, artist: target.artist, block: r.block, skip, purged: r.purged, skipError });
@@ -295,6 +307,7 @@ export default function DashPanel() {
       void queryClient.invalidateQueries({ queryKey: dashKeys.status() });
     }
   };
+
 
   // No confirm: nothing on-air changes, worst case a 409 because the track went
   // on air first. The row drops optimistically; the poll confirms.
@@ -918,7 +931,13 @@ export default function DashPanel() {
 
       <V3AlertDialog
         open={confirmNeverPlay}
-        onOpenChange={setConfirmNeverPlay}
+        onOpenChange={open => {
+          setConfirmNeverPlay(open);
+          // The target is captured at open time; doNeverPlay reads it before
+          // its first await, so clearing on close is safe and keeps a stale
+          // target from outliving its dialog.
+          if (!open) setNeverPlayTarget(null);
+        }}
         title="Never play this track"
         description={neverPlayTarget
           ? `Add “${neverPlayTarget.title}”${neverPlayTarget.artist ? ` — ${neverPlayTarget.artist}` : ''} to the never-play list? It will never air again, listener requests included. You can lift it from Library → Blocked.`
