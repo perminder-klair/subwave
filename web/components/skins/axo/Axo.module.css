@@ -41,8 +41,32 @@
 .fW { fill: var(--iso-w); }
 .fInk { fill: var(--ink); }
 .fAcc { fill: var(--accent); }
+/* The dust cover's smoked acrylic: the panel faintest, a wall seen edge-on
+   through more plastic darker, the wall turned toward the viewer darkest. */
 .fLid { fill: color-mix(in oklab, var(--ink) 5%, transparent); }
+.fLidWall { fill: color-mix(in oklab, var(--ink) 9%, transparent); }
+.fLidSide { fill: color-mix(in oklab, var(--ink) 14%, transparent); }
 .fNone { fill: none; }
+
+/* Paint servers: SVG stops take their colour from CSS, so the theme reaches
+   them. A side panel recedes, a top falls into the shelf's shadow, a unit
+   sits in its own contact shadow, and a lit lamp spills a little light. */
+.shade0 { stop-color: var(--ink); stop-opacity: 0; }
+.shade1 { stop-color: var(--ink); stop-opacity: 0.09; }
+.fall0 { stop-color: var(--ink); stop-opacity: 0.08; }
+.fall1 { stop-color: var(--ink); stop-opacity: 0; }
+.drop0 { stop-color: var(--ink); stop-opacity: 0.2; }
+.drop1 { stop-color: var(--ink); stop-opacity: 0; }
+.glow0 { stop-color: var(--accent); stop-opacity: 0.5; }
+.glow1 { stop-color: var(--accent); stop-opacity: 0; }
+
+/* A cast shadow: the tonearm's, on the record beneath it. */
+.shadow {
+  fill: var(--ink);
+  stroke: var(--ink);
+  stroke-dasharray: none;
+  opacity: 0.13;
+}
 
 .ns { stroke: none; }
 .solid { stroke-dasharray: none; }

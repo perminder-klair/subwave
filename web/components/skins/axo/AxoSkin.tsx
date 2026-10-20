@@ -97,6 +97,7 @@ export default function AxoSkin(_props: SkinProps) {
         ? 'now playing — muted'
         : 'now playing — side a';
   const statusText = tuningStatus(phase, muted);
+  // The display scrolls a line too long for its window, so this only caps it.
   const lcd = fit(
     offline
       ? 'OFF AIR · NO SIGNAL'
@@ -105,7 +106,7 @@ export default function AxoSkin(_props: SkinProps) {
         : phase === 'connecting'
           ? 'TUNING IN…'
           : [title, artist].filter(Boolean).join(' — ').toUpperCase(),
-    26,
+    64,
   );
 
   const adjustVolume = useVolumeNudge();
@@ -142,7 +143,7 @@ export default function AxoSkin(_props: SkinProps) {
     counter: live ? counterOf(elapsed) : '--:--',
     duration: nowPlaying?.duration ? fmtTime(nowPlaying.duration) : 'LIVE',
     lcd,
-    tapeLabel: fit((artist || stationName).toUpperCase(), 24),
+    tapeLabel: fit((artist || stationName).toUpperCase(), 22),
     djName,
     bpm: typeof nowPlaying?.bpm === 'number' ? nowPlaying.bpm : null,
     calm,

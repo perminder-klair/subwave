@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import { Pill } from '../ui';
 import { cn } from '../../../lib/cn';
-import { AXO, type DrawnBlock } from '../../skins/axo/geometry';
+import { AXO, type DrawnBlock, type RackLevel } from '../../skins/axo/geometry';
 import { ROWS as CIPHER_ROWS } from '../../skins/cipher/cipher';
 
 // Each card frames a pure-CSS miniature of that skin's real layout. The motion
@@ -217,6 +217,7 @@ const AXO_TOP = 'fill-bg';
 const AXO_LEFT = 'fill-[color-mix(in_oklab,var(--ink)_4%,var(--bg))]';
 const AXO_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_10%,var(--bg))]';
 const AXO_WELL = 'fill-[color-mix(in_oklab,var(--ink)_16%,var(--bg))]';
+const AXO_LID = 'fill-[color-mix(in_oklab,var(--ink)_7%,transparent)]';
 
 /** One box: top (w×d), front-left (w×h) and front-right (d×h) faces. */
 function AxoBox({ b }: { b: DrawnBlock }) {
@@ -229,9 +230,19 @@ function AxoBox({ b }: { b: DrawnBlock }) {
   );
 }
 
+/** A rack bay as the player draws it: the shelf, then the back post segments
+ *  standing on it. Its front segments go on after the unit it carries. */
+function AxoBay({ level }: { level: RackLevel }) {
+  return (
+    <>
+      <AxoBox b={level.shelf} />
+      {level.back.map((p, i) => <AxoBox key={i} b={p} />)}
+    </>
+  );
+}
+
 function AxoPreview() {
-  const posts = [AXO.pBL, AXO.pBR];
-  const front = [AXO.pFL, AXO.pFR];
+  const [bay0, bay1, bay2] = AXO.rack;
   return (
     <div className="flex h-full w-full items-stretch">
       <div className="grid w-[30%] content-start gap-1.5 border-r border-ink p-2.5 pt-5">
@@ -251,8 +262,7 @@ function AxoPreview() {
         >
           <AxoBox b={AXO.spL} />
           <path d={AXO.spL.sil} strokeWidth={1.2} />
-          {posts.map((p, i) => <AxoBox key={i} b={p} />)}
-          <AxoBox b={AXO.s0} />
+          <AxoBay level={bay0} />
           <AxoBox b={AXO.rcv} />
           <g transform={AXO.rcv.L}>
             <rect x="12" y="42" width="112" height="20" className="fill-ink" />
@@ -266,7 +276,8 @@ function AxoPreview() {
             />
           </g>
           <path d={AXO.rcv.sil} strokeWidth={1.2} />
-          <AxoBox b={AXO.s1} />
+          {bay0.front.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBay level={bay1} />
           <AxoBox b={AXO.tape} />
           <g transform={AXO.tape.L}>
             <rect x="12" y="8" width="110" height="46" className={AXO_WELL} />
@@ -275,8 +286,13 @@ function AxoPreview() {
             <rect x="134" y="8" width="44" height="14" className="fill-ink" />
           </g>
           <path d={AXO.tape.sil} strokeWidth={1.2} />
-          <AxoBox b={AXO.s2} />
-          <path d={AXO.lid} className="fill-[color-mix(in_oklab,var(--ink)_5%,transparent)]" />
+          {bay1.front.map((p, i) => <AxoBox key={i} b={p} />)}
+          <AxoBay level={bay2} />
+          <path d={AXO.lid.panel} className={AXO_LID} />
+          <path d={AXO.lid.left} className={AXO_LID} />
+          <path d={AXO.lid.right} className={AXO_LID} />
+          <path d={AXO.lid.front} className={AXO_LID} />
+          <path d={AXO.lid.sil} strokeWidth={1.2} />
           <AxoBox b={AXO.tt} />
           <g transform={AXO.tt.T}>
             <circle cx="96" cy="66" r="57" className={AXO_WELL} />
@@ -289,7 +305,6 @@ function AxoPreview() {
             <line x1="190" y1="24" x2="166" y2="98" strokeWidth={1.6} />
           </g>
           <path d={AXO.tt.sil} strokeWidth={1.2} />
-          {front.map((p, i) => <AxoBox key={i} b={p} />)}
           <AxoBox b={AXO.spR} />
           <g transform={AXO.spR.L}>
             <circle cx="40" cy="92" r="20" className={AXO_WELL} />

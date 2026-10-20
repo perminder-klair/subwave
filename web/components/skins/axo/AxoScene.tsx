@@ -8,13 +8,14 @@
 // still frame instead, since neither the CSS animation kill nor the media
 // query can reach a JS loop.
 
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 import { Heart } from 'lucide-react';
 import styles from './Axo.module.css';
 import { cn } from '@/lib/cn';
 import { useAnalyser } from '@/lib/hooks';
-import { AXO, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock } from './geometry';
+import { round2 } from '@/components/iso/geometry';
+import { AXO, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock, type RackLevel } from './geometry';
 import { foldBpm, isPowered, type ListenPhase } from '../shared';
 
 export interface AxoSceneProps {
@@ -30,6 +31,7 @@ export interface AxoSceneProps {
   counter: string;
   /** Dial end-stop legend: the track length, or "live". */
   duration: string;
+  /** The display line; one longer than the window scrolls through it. */
   lcd: string;
   tapeLabel: string;
   djName: string;
@@ -51,6 +53,15 @@ export interface AxoSceneProps {
 const SPIN_REEL = 140; // °/s
 const SPIN_PLATTER = 200; // °/s, about 33⅓ rpm
 
+// The receiver's display window: how much of a line fits, as width and as
+// characters. A longer line scrolls through the window the way an RDS
+// display does — held, run across at a reading pace, held at its end — and
+// a still frame ends it with an ellipsis instead.
+const LCD_ROOM = 101;
+const LCD_CHARS = 21;
+const MARQUEE_HOLD = 2.2; // s
+const MARQUEE_SPEED = 16; // units/s
+
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 /** Enter/Space activation for SVG nodes acting as buttons. */
@@ -69,6 +80,8 @@ function beatSeconds(bpm: number | null): number {
   return 60 / foldBpm(bpm, 70, 150);
 }
 
+const noSubscribe = () => () => {};
+
 export default function AxoScene(props: AxoSceneProps) {
   const {
     variant, phase, talk, muted, volume, ratio, counter, duration, lcd, tapeLabel,
@@ -78,7 +91,16 @@ export default function AxoScene(props: AxoSceneProps) {
   const mob = variant === 'mobile';
   const rootRef = useRef<HTMLDivElement | null>(null);
   // useId's punctuation varies across React versions; keep url(#…) plain.
-  const wobId = `axo-wob-${useId().replace(/[^\w-]/g, '')}`;
+  const uid = `axo-${useId().replace(/[^\w-]/g, '')}`;
+  const wobId = `${uid}-wob`;
+  const paint: PaintIds = {
+    shade: `${uid}-shade`, fall: `${uid}-fall`, dropX: `${uid}-dropx`, dropY: `${uid}-dropy`, glow: `${uid}-glow`,
+  };
+
+  // False through SSR and hydration. `calm` can differ between the two (the
+  // reduced-motion query only answers in the browser), so nothing printed
+  // may hang off it until hydration is done.
+  const hydrated = useSyncExternalStore(noSubscribe, () => true, () => false);
 
   const powered = isPowered(phase);
   const live = phase === 'live';
@@ -107,6 +129,7 @@ export default function AxoScene(props: AxoSceneProps) {
     const arms = all<SVGGElement>('[data-arm]');
     const needles = all<SVGLineElement>('[data-needle]');
     const lcds = all<SVGTextElement>('[data-lcd]');
+    const marquees = lcds.map(el => ({ el, text: '', len: 0, measured: -Infinity, t0: 0 }));
     const pulses = all<SVGCircleElement>('[data-pulse]');
     const boils = all<SVGFETurbulenceElement>('[data-boil]');
 
@@ -189,6 +212,21 @@ export default function AxoScene(props: AxoSceneProps) {
         for (const el of lcds) el.style.removeProperty('opacity');
       }
 
+      for (const m of marquees) {
+        // Re-measure on a new line, and now and then besides: the web font
+        // may land after the first measure, and a tree that was hidden
+        // measures zero.
+        const text = m.el.textContent ?? '';
+        if (text !== m.text) { m.text = text; m.t0 = t; m.measured = -Infinity; }
+        if (t - m.measured > 3) { m.len = m.el.getComputedTextLength(); m.measured = t; }
+        const over = m.len - LCD_ROOM;
+        if (over <= 0) { m.el.removeAttribute('transform'); continue; }
+        const run = over / MARQUEE_SPEED;
+        const u = (t - m.t0) % (MARQUEE_HOLD * 2 + run);
+        const x = u < MARQUEE_HOLD ? 0 : Math.min(over, (u - MARQUEE_HOLD) * MARQUEE_SPEED);
+        m.el.setAttribute('transform', `translate(${(-x).toFixed(1)} 0)`);
+      }
+
       for (const el of pulses) {
         if (p.phase === 'standby') {
           const ph = (t % 1.6) / 1.6;
@@ -217,7 +255,10 @@ export default function AxoScene(props: AxoSceneProps) {
       for (const s of spin) s.el.removeAttribute('transform');
       for (const c of cones) c.el.removeAttribute('transform');
       for (const a of arcs) a.el.style.removeProperty('opacity');
-      for (const el of lcds) el.style.removeProperty('opacity');
+      for (const el of lcds) {
+        el.style.removeProperty('opacity');
+        el.removeAttribute('transform');
+      }
       for (const el of pulses) el.style.removeProperty('opacity');
     };
   }, [calm]);
@@ -231,6 +272,8 @@ export default function AxoScene(props: AxoSceneProps) {
   const needleOwned = calm || !connecting;
   const r = ratio ?? 0.5;
   const sigLit = live ? 4 : connecting ? 1 : 0;
+  // The loop scrolls a long line; a still frame ends it with an ellipsis.
+  const lcdStill = lcd.length > LCD_CHARS ? `${lcd.slice(0, LCD_CHARS - 1)}…` : lcd;
 
   const drag = useRef<{ y: number; v: number } | null>(null);
   const setVol = (v: number) => onVolume(Math.round(clamp01(v) * 100) / 100);
@@ -269,51 +312,73 @@ export default function AxoScene(props: AxoSceneProps) {
             <feTurbulence data-boil="" type="fractalNoise" baseFrequency="0.03" numOctaves={2} seed={2} result="n" />
             <feDisplacementMap in="SourceGraphic" in2="n" scale={1.8} xChannelSelector="R" yChannelSelector="G" />
           </filter>
+          {/* Light: a side panel deepens toward the back, a top tucked under
+              the shelf above darkens toward it, each unit leaves a contact
+              shadow on its shelf, and a lit lamp glows. */}
+          <linearGradient id={paint.shade} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" className={styles.shade0} />
+            <stop offset="1" className={styles.shade1} />
+          </linearGradient>
+          <linearGradient id={paint.fall} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" className={styles.fall0} />
+            <stop offset="1" className={styles.fall1} />
+          </linearGradient>
+          <linearGradient id={paint.dropX} x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" className={styles.drop0} />
+            <stop offset="1" className={styles.drop1} />
+          </linearGradient>
+          <linearGradient id={paint.dropY} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" className={styles.drop0} />
+            <stop offset="1" className={styles.drop1} />
+          </linearGradient>
+          <radialGradient id={paint.glow}>
+            <stop offset="0" className={styles.glow0} />
+            <stop offset="1" className={styles.glow1} />
+          </radialGradient>
         </defs>
 
         <g className={cn(styles.draw, !powered && styles.drawOff)} aria-hidden="true">
           <path d={AXO.hatch} strokeWidth={0.5} opacity={0.5} />
 
-          <Speaker block={AXO.spL} />
+          <Speaker block={AXO.spL} shade={paint.shade} />
 
-          <Post block={AXO.pBL} />
-          <Post block={AXO.pBR} />
-
-          <Shelf block={AXO.s0} />
+          <Bay level={AXO.rack[0]} paint={paint} />
 
           {/* Receiver */}
-          <Face of={AXO.rcv} side="T" className={styles.fBg}>
+          <Face of={AXO.rcv} side="T" className={styles.fBg} shade={paint.fall}>
             <path d="M14 20H206M14 28H206M14 36H206" strokeWidth={0.4} opacity={0.5} />
           </Face>
-          <Face of={AXO.rcv} side="R" className={styles.fR} />
+          <Face of={AXO.rcv} side="R" className={styles.fR} shade={paint.shade} />
           <Face of={AXO.rcv} side="L" className={styles.fL}>
-            <rect x="12" y="10" width="112" height="26" className={styles.fBg} />
-            <path d={AXO.dialTicks} strokeWidth={0.6} className={styles.solid} />
-            <text x="15" y="32" fontSize={5.5} fontWeight={500} className={cn(styles.tx, styles.mono)}>0:00</text>
-            <text x="121" y="32" fontSize={5.5} fontWeight={500} textAnchor="end" className={cn(styles.tx, styles.mono)}>
-              {duration}
-            </text>
-            <line
-              data-needle=""
-              x1={needleOwned ? needleX : undefined}
-              x2={needleOwned ? needleX : undefined}
-              y1="11"
-              y2="35"
-              strokeWidth={1.6}
-              className={cn(styles.sAcc, styles.solid)}
-            />
-            <rect x="12" y="42" width="112" height="20" className={cn(styles.fInk, styles.ns)} />
-            <text
-              data-lcd=""
-              x="17"
-              y="55"
-              fontSize={6.5}
-              fontWeight={700}
-              letterSpacing="0.12em"
-              className={cn(styles.txBg, styles.mono)}
-            >
-              {lcd}
-            </text>
+            <Well id={`${uid}-dial`} x={12} y={10} w={112} h={26} t={2.5} className={styles.fBg}>
+              <path d={AXO.dialTicks} strokeWidth={0.6} className={styles.solid} />
+              <text x="15" y="34" fontSize={5.5} fontWeight={500} className={cn(styles.tx, styles.mono)}>0:00</text>
+              <text x="121" y="34" fontSize={5.5} fontWeight={500} textAnchor="end" className={cn(styles.tx, styles.mono)}>
+                {duration}
+              </text>
+              <line
+                data-needle=""
+                x1={needleOwned ? needleX : undefined}
+                x2={needleOwned ? needleX : undefined}
+                y1="10"
+                y2="38"
+                strokeWidth={1.6}
+                className={cn(styles.sAcc, styles.solid)}
+              />
+            </Well>
+            <Well id={`${uid}-lcd`} x={12} y={42} w={112} h={20} t={2} className={styles.fInk}>
+              <text
+                data-lcd=""
+                x="17"
+                y="56"
+                fontSize={6.5}
+                fontWeight={700}
+                letterSpacing="0.12em"
+                className={cn(styles.txBg, styles.mono)}
+              >
+                {hydrated && !calm ? lcd : lcdStill}
+              </text>
+            </Well>
             <text x="12" y="74" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>AXO-1</text>
             <text x="46" y="74" fontSize={4.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>SIG</text>
             {AXO.sigBars.map((b, i) => (
@@ -327,13 +392,7 @@ export default function AxoScene(props: AxoSceneProps) {
                 className={i < sigLit ? cn(styles.fInk, styles.ns) : cn(styles.fNone, styles.solid)}
               />
             ))}
-            <circle
-              cx="90"
-              cy="72.4"
-              r="2.2"
-              strokeWidth={0.5}
-              className={live ? cn(styles.fAcc, styles.ns) : cn(styles.fBg, styles.solid)}
-            />
+            <Lamp cx={90} cy={72.4} r={2.2} lit={live} glow={paint.glow} />
             <text x="95" y="74" fontSize={4.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>STEREO</text>
 
             <circle
@@ -345,90 +404,103 @@ export default function AxoScene(props: AxoSceneProps) {
               strokeWidth={1.3}
               className={cn(styles.fNone, styles.sAcc, styles.solid)}
             />
-            <circle cx="142" cy="24" r="9" className={styles.fW} />
-            <path
-              d="M138.82 20.82A4.5 4.5 0 1 0 145.18 20.82M142 18V23.5"
-              strokeWidth={1.6}
-              className={cn(powered ? styles.sAcc : styles.sInk, styles.solid)}
-            />
+            <Boss on="L" cx={142} cy={24} r={9} t={3} className={styles.fW}>
+              <path
+                d="M-3.18 -3.18A4.5 4.5 0 1 0 3.18 -3.18M0 -6V-0.5"
+                strokeWidth={1.6}
+                className={cn(powered ? styles.sAcc : styles.sInk, styles.solid)}
+              />
+            </Boss>
             <text x="142" y="41" fontSize={5} fontWeight={700} letterSpacing="0.14em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
               POWER
             </text>
 
-            <rect x="130" y="48" width="24" height="14" className={muted ? styles.fAcc : styles.fBg} />
-            <text
-              x="142"
-              y="57.2"
-              fontSize={5}
-              fontWeight={700}
-              letterSpacing="0.1em"
-              textAnchor="middle"
-              className={cn(muted ? styles.txOn : styles.tx, styles.mono)}
-            >
-              {muted ? 'MUTED' : 'MUTE'}
-            </text>
+            {/* A latching key: muted, it stays pressed in and lit. */}
+            <Key on="L" x={130} y={48} w={24} h={14} t={muted ? 1 : 3} className={muted ? styles.fAcc : styles.fBg}>
+              <text
+                x="142"
+                y="57.2"
+                fontSize={5}
+                fontWeight={700}
+                letterSpacing="0.1em"
+                textAnchor="middle"
+                className={cn(muted ? styles.txOn : styles.tx, styles.mono)}
+              >
+                {muted ? 'MUTED' : 'MUTE'}
+              </text>
+            </Key>
 
             <path d={AXO.volTicks} strokeWidth={0.8} className={styles.solid} />
-            <circle cx="186" cy="38" r="22" className={styles.fW} />
-            <circle cx="186" cy="38" r="13" className={styles.fBg} />
-            <g transform={`rotate(${knobAngle(volume).toFixed(1)} 186 38)`}>
-              <line x1="186" y1="19" x2="186" y2="25" strokeWidth={2.4} className={cn(styles.sAcc, styles.solid)} />
-            </g>
+            {/* The knob: a flange, then a cap standing proud of it with the pointer on its face. */}
+            <Boss on="L" cx={186} cy={38} r={22} t={2.5} className={styles.fW} />
+            <Boss on="L" cx={183.5} cy={40.5} r={15} t={5} className={styles.fBg}>
+              <g transform={`rotate(${knobAngle(volume).toFixed(1)})`}>
+                <line x1="0" y1="-13" x2="0" y2="-5" strokeWidth={2.4} className={cn(styles.sAcc, styles.solid)} />
+              </g>
+            </Boss>
             <text x="186" y="75" fontSize={5} fontWeight={700} letterSpacing="0.14em" textAnchor="middle" className={cn(styles.tx, styles.mono)}>
               VOLUME
             </text>
           </Face>
           <path d={AXO.rcv.sil} strokeWidth={1.5} className={styles.solid} />
 
-          <Shelf block={AXO.s1} />
+          <Posts of={AXO.rack[0]} />
+          <Bay level={AXO.rack[1]} paint={paint} />
 
           {/* Tape deck */}
-          <Face of={AXO.tape} side="T" className={styles.fBg} />
-          <Face of={AXO.tape} side="R" className={styles.fR} />
+          <Face of={AXO.tape} side="T" className={styles.fBg} shade={paint.fall} />
+          <Face of={AXO.tape} side="R" className={styles.fR} shade={paint.shade} />
           <Face of={AXO.tape} side="L" className={styles.fL}>
-            <rect x="12" y="8" width="110" height="46" className={styles.fW} />
-            <rect x="18" y="12" width="98" height="38" className={styles.fBg} />
-            {/* Tape packs: the left spool empties onto the right as the song plays. */}
-            <circle cx="44" cy="34" r={(9 + 7 * (1 - r)).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
-            <circle cx="90" cy="34" r={(9 + 7 * r).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
-            <rect x="56" y="28" width="22" height="12" strokeWidth={0.5} />
-            <rect x="24" y="14" width="86" height="9" strokeWidth={0.5} className={styles.fBg} />
-            <text x="27" y="20.6" fontSize={5} fontWeight={700} letterSpacing="0.14em" className={cn(styles.tx, styles.mono)}>
-              {tapeLabel}
-            </text>
-            <Reel cx={44} />
-            <Reel cx={90} />
-            <rect x="134" y="8" width="44" height="14" className={cn(styles.fInk, styles.ns)} />
-            <text x="156" y="18" fontSize={8} fontWeight={700} letterSpacing="0.06em" textAnchor="middle" className={cn(styles.txBg, styles.mono)}>
-              {counter}
-            </text>
+            <Well id={`${uid}-tape`} x={12} y={8} w={110} h={46} t={3} className={styles.fW}>
+              {/* The cassette sits in the well, its shell proud of the floor. */}
+              <Key on="L" x={18} y={12} w={98} h={38} t={2} className={styles.fBg}>
+                {/* Tape packs: the left spool empties onto the right as the song plays. */}
+                <circle cx="44" cy="34" r={(9 + 7 * (1 - r)).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
+                <circle cx="90" cy="34" r={(9 + 7 * r).toFixed(2)} strokeWidth={0.5} className={styles.fL} />
+                <rect x="56" y="28" width="22" height="12" strokeWidth={0.5} />
+                <rect x="24" y="14" width="86" height="9" strokeWidth={0.5} className={styles.fBg} />
+                <text x="27" y="20.6" fontSize={5} fontWeight={700} letterSpacing="0.14em" className={cn(styles.tx, styles.mono)}>
+                  {tapeLabel}
+                </text>
+                <Reel cx={44} />
+                <Reel cx={90} />
+              </Key>
+            </Well>
+            <Well id={`${uid}-count`} x={134} y={8} w={44} h={14} t={1.5} className={styles.fInk}>
+              <text x="156" y="18" fontSize={8} fontWeight={700} letterSpacing="0.06em" textAnchor="middle" className={cn(styles.txBg, styles.mono)}>
+                {counter}
+              </text>
+            </Well>
             <text x="186" y="18" fontSize={5} fontWeight={500} letterSpacing="0.16em" className={cn(styles.txMuted, styles.mono)}>TAPE</text>
-            <rect x="134" y="30" width="44" height="16" className={styles.fBg} />
-            <circle cx="143" cy="38" r="3" className={cn(styles.fAcc, styles.ns)} />
-            <text x="149" y="40.4" fontSize={6.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>REC</text>
+            <Key on="L" x={134} y={30} w={44} h={16} t={3} className={styles.fBg}>
+              <circle cx="143" cy="38" r="3" className={cn(styles.fAcc, styles.ns)} />
+              <text x="149" y="40.4" fontSize={6.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>REC</text>
+            </Key>
             <text x="156" y="55" fontSize={5} fontWeight={700} letterSpacing="0.16em" textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>
               REQUEST
             </text>
-            <rect x="184" y="30" width="28" height="16" className={like.liked ? styles.fAcc : styles.fBg} />
-            <Heart
-              x={likeX}
-              y={35}
-              width={6}
-              height={6}
-              strokeWidth={3.5}
-              className={cn(styles.icon, likeInk, like.liked && styles.icFill)}
-            />
-            {likeCount && (
-              <text
-                x={likeX + 7.5}
-                y="40.6"
-                fontSize={6.5}
-                fontWeight={700}
-                className={cn(like.liked ? styles.txOn : styles.tx, styles.mono)}
-              >
-                {likeCount}
-              </text>
-            )}
+            {/* Latching too: a kept track leaves KEEP pressed in and lit. */}
+            <Key on="L" x={184} y={30} w={28} h={16} t={like.liked ? 1 : 3} className={like.liked ? styles.fAcc : styles.fBg}>
+              <Heart
+                x={likeX}
+                y={35}
+                width={6}
+                height={6}
+                strokeWidth={3.5}
+                className={cn(styles.icon, likeInk, like.liked && styles.icFill)}
+              />
+              {likeCount && (
+                <text
+                  x={likeX + 7.5}
+                  y="40.6"
+                  fontSize={6.5}
+                  fontWeight={700}
+                  className={cn(like.liked ? styles.txOn : styles.tx, styles.mono)}
+                >
+                  {likeCount}
+                </text>
+              )}
+            </Key>
             <text
               x="198"
               y="55"
@@ -443,26 +515,29 @@ export default function AxoScene(props: AxoSceneProps) {
           </Face>
           <path d={AXO.tape.sil} strokeWidth={1.5} className={styles.solid} />
 
-          <Shelf block={AXO.s2} />
+          <Posts of={AXO.rack[1]} />
+          <Bay level={AXO.rack[2]} paint={paint} />
 
-          {/* Turntable */}
-          <path d={AXO.lid} strokeWidth={0.8} className={styles.fLid} />
-          <path d={AXO.lidInner} strokeWidth={0.4} opacity={0.6} />
-          <path d={AXO.lidGlint} strokeWidth={0.5} opacity={0.45} />
+          {/* Turntable. The cover leans back past upright, wholly behind the
+              plinth, so it goes down first and the plinth covers its foot. */}
+          <DustCover />
           <Face of={AXO.tt} side="L" className={styles.fL}>
             <text x="12" y="15" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>
               AXO-1 · DIRECT DRIVE · 33⅓
             </text>
           </Face>
-          <Face of={AXO.tt} side="R" className={styles.fR} />
+          <Face of={AXO.tt} side="R" className={styles.fR} shade={paint.shade} />
           <Face of={AXO.tt} side="T" className={styles.fBg}>
-            <rect x="40" y="0" width="14" height="4" className={styles.fW} />
-            <rect x="166" y="0" width="14" height="4" className={styles.fW} />
-            <circle cx="96" cy="66" r="59" className={styles.fW} />
-            <g transform="translate(96 66)">
+            {/* The platter stands proud of the plinth and the record lies on
+                it; each spins in its own group so the cylinder sides, which
+                face the viewer whatever the angle, stay put. */}
+            <Boss on="T" cx={96} cy={66} r={58} t={5} className={styles.fW}>
               <g data-spin={SPIN_PLATTER}>
-                <circle r="57" strokeWidth={1.6} strokeDasharray="0.8 2.6" strokeLinecap="butt" />
-                <circle r="54" className={styles.fL} />
+                <circle r="56.5" strokeWidth={1.6} strokeDasharray="0.8 2.6" strokeLinecap="butt" />
+              </g>
+            </Boss>
+            <Boss on="T" cx={91} cy={61} r={53} t={1.5} className={styles.fL}>
+              <g data-spin={SPIN_PLATTER}>
                 <circle r="49" strokeWidth={0.35} />
                 <circle r="45" strokeWidth={0.35} />
                 <circle r="38" strokeWidth={0.7} />
@@ -471,31 +546,43 @@ export default function AxoScene(props: AxoSceneProps) {
                 <circle r="23" strokeWidth={0.35} />
                 <circle r="18" className={cn(styles.fAcc, styles.ns)} />
                 <line x1="0" y1="-17" x2="0" y2="-7" strokeWidth={1.8} className={cn(styles.sBg, styles.solid)} />
-                <line x1="0" y1="-54" x2="0" y2="-45" strokeWidth={1.4} className={styles.solid} />
+                <line x1="0" y1="-53" x2="0" y2="-45" strokeWidth={1.4} className={styles.solid} />
               </g>
               <circle r="2" className={cn(styles.fInk, styles.ns)} />
+            </Boss>
+            <Key on="T" x={203} y={34} w={6} h={14} t={3} className={styles.fW} />
+            <Boss on="T" cx={182} cy={104} r={3.5} t={7} className={styles.fW} />
+            <Boss on="T" cx={190} cy={24} r={11} t={3} className={styles.fW} />
+            <Boss on="T" cx={187} cy={21} r={4.5} t={6} className={styles.fBg} />
+            {/* The arm floats above the record, so its shadow lands a little
+                below it; both swing on the same angle. */}
+            <g transform="translate(-3 -3)">
+              <g data-arm="" transform={calm ? staticArm : undefined} className={styles.shadow}>
+                <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
+                <rect x="185" y="100" width="10" height="12" />
+              </g>
             </g>
-            <circle cx="182" cy="104" r="3.5" className={styles.fW} />
-            <rect x="203" y="34" width="6" height="14" className={styles.fW} />
-            <circle cx="190" cy="24" r="10" className={styles.fW} />
-            <circle cx="190" cy="24" r="4" className={styles.fBg} />
-            <g data-arm="" transform={calm ? staticArm : undefined}>
-              <rect x="186" y="3" width="8" height="11" className={styles.fInk} />
-              <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
-              <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.2} className={cn(styles.sBg, styles.solid)} />
-              <rect x="185" y="100" width="10" height="12" className={styles.fInk} />
+            <g transform="translate(-9 -9)">
+              <g data-arm="" transform={calm ? staticArm : undefined}>
+                <rect x="186" y="3" width="8" height="11" className={styles.fInk} />
+                <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
+                <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.2} className={cn(styles.sBg, styles.solid)} />
+                <rect x="185" y="100" width="10" height="12" className={styles.fInk} />
+              </g>
             </g>
-            <rect x="12" y="108" width="16" height="12" className={styles.fInk} />
-            <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txBg, styles.mono)}>33</text>
-            <rect x="32" y="108" width="16" height="12" className={styles.fBg} />
-            <text x="40" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.tx, styles.mono)}>45</text>
+            <Key on="T" x={12} y={108} w={16} h={12} t={2} className={styles.fInk}>
+              <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txBg, styles.mono)}>33</text>
+            </Key>
+            <Key on="T" x={32} y={108} w={16} h={12} t={2} className={styles.fBg}>
+              <text x="40" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.tx, styles.mono)}>45</text>
+            </Key>
+            {/* The pilot lamp: lit while the platter turns. */}
+            <Lamp cx={57} cy={114} r={2.4} lit={live} glow={paint.glow} />
           </Face>
           <path d={AXO.tt.sil} strokeWidth={1.5} className={styles.solid} />
+          {AXO.hinges.map((h, i) => <Box key={i} block={h} />)}
 
-          <Post block={AXO.pFL} />
-          <Post block={AXO.pFR} />
-
-          <Speaker block={AXO.spR} />
+          <Speaker block={AXO.spR} shade={paint.shade} />
         </g>
 
         {/* The inked layer: sound lines, and notes only where they help. */}
@@ -640,13 +727,20 @@ export default function AxoScene(props: AxoSceneProps) {
   );
 }
 
+/** Ids of the scene's gradients, unique per mounted scene: desktop and
+ *  mobile both render, so a fixed id would collide. */
+interface PaintIds { shade: string; fall: string; dropX: string; dropY: string; glow: string }
+
 /** One face of a block: its plane, and a rect sized from the block filling it
  *  (top w × d, front-left w × h, front-right d × h), with whatever is drawn
- *  on it laid out in that plane. */
-function Face({ of: b, side, className, children }: {
+ *  on it laid out in that plane. `shade` lays a gradient over it — a side
+ *  panel receding, a top falling into the shadow of the shelf above. */
+function Face({ of: b, side, className, shade, children }: {
   of: DrawnBlock;
   side: 'T' | 'L' | 'R';
   className?: string;
+  /** Id of the gradient to lay over it. */
+  shade?: string;
   children?: ReactNode;
 }) {
   const width = side === 'R' ? b.d : b.w;
@@ -654,37 +748,191 @@ function Face({ of: b, side, className, children }: {
   return (
     <g transform={b[side]}>
       <rect width={width} height={height} className={className} />
+      {shade && <rect width={width} height={height} fill={`url(#${shade})`} className={styles.ns} />}
       {children}
     </g>
   );
 }
 
-function Speaker({ block }: { block: DrawnBlock }) {
+/** A whole small box: its three faces and silhouette. */
+function Box({ block }: { block: DrawnBlock }) {
+  return (
+    <>
+      <Face of={block} side="T" className={styles.fBg} />
+      <Face of={block} side="L" className={styles.fL} />
+      <Face of={block} side="R" className={styles.fR} />
+      <path d={block.sil} strokeWidth={0.9} className={styles.solid} />
+    </>
+  );
+}
+
+/** Where height off a face goes in that face's own coordinates, per unit of
+ *  world depth: out of a front panel toward (−1, 1), up off a top toward
+ *  (−1, −1). Everything raised or sunk below is drawn with it. */
+const OUT = { L: [-1, 1], T: [-1, -1] } as const;
+type Surface = keyof typeof OUT;
+
+/** A key standing `t` proud of its face. Of its four sides only the two
+ *  turned toward the viewer show (a front panel's key: its top and right; a
+ *  top's key: its front and right), and what's printed on it rides on its
+ *  cap. A smaller `t` is a key held pressed in. */
+function Key({ on, x, y, w, h, t, className, children }: {
+  on: Surface;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  t: number;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const dx = OUT[on][0] * t;
+  const dy = OUT[on][1] * t;
+  const edge = dy > 0 ? y : y + h;
+  return (
+    <>
+      <path d={`M${x} ${edge}H${x + w}l${dx} ${dy}H${x + dx}Z`} strokeWidth={0.5} className={on === 'L' ? styles.fBg : styles.fL} />
+      <path d={`M${x + w} ${y}V${y + h}l${dx} ${dy}V${y + dy}Z`} strokeWidth={0.5} className={styles.fR} />
+      <g transform={`translate(${dx} ${dy})`}>
+        <rect x={x} y={y} width={w} height={h} className={className} />
+        {children}
+      </g>
+    </>
+  );
+}
+
+/** A round boss — knob, button, platter, driver surround — standing `t`
+ *  proud of its face: the side band between the two tangents, the base
+ *  circle's near arc beneath it, and the cap on top. Children are laid out
+ *  about the cap's centre. */
+function Boss({ on, cx, cy, r, t, className, children }: {
+  on: Surface;
+  cx: number;
+  cy: number;
+  r: number;
+  t: number;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const [ox, oy] = OUT[on];
+  const tx = round2(cx + ox * t);
+  const ty = round2(cy + oy * t);
+  // The tangents run at right angles to the way the cap moved off the base.
+  const px = round2((-oy * r) / Math.SQRT2);
+  const py = round2((ox * r) / Math.SQRT2);
+  const a = `${round2(cx + px)} ${round2(cy + py)}`, b = `${round2(tx + px)} ${round2(ty + py)}`;
+  const c = `${round2(tx - px)} ${round2(ty - py)}`, d = `${round2(cx - px)} ${round2(cy - py)}`;
+  return (
+    <>
+      <circle cx={cx} cy={cy} r={r} className={styles.fR} />
+      <path d={`M${a}L${b}L${c}L${d}Z`} className={cn(styles.fR, styles.ns)} />
+      <path d={`M${a}L${b}M${c}L${d}`} />
+      <g transform={`translate(${tx} ${ty})`}>
+        <circle r={r} className={className} />
+        {children}
+      </g>
+    </>
+  );
+}
+
+/** A window sunk `t` into a front panel. Its floor shows shifted up and to
+ *  the right; of its walls only the left and the bottom face the viewer.
+ *  What sits in it lies on the floor, clipped to the opening. */
+function Well({ id, x, y, w, h, t, className, children }: {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  t: number;
+  className?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <>
+      <clipPath id={id}>
+        <rect x={x + t} y={y} width={w - t} height={h - t} />
+      </clipPath>
+      <rect x={x + t} y={y} width={w - t} height={h - t} className={cn(className, styles.ns)} />
+      <g clipPath={`url(#${id})`}>
+        <g transform={`translate(${t} ${-t})`}>{children}</g>
+      </g>
+      <path d={`M${x} ${y}H${x + t}V${y + h - t}L${x} ${y + h}Z`} strokeWidth={0.4} className={styles.fR} />
+      <path d={`M${x} ${y + h}L${x + t} ${y + h - t}H${x + w}V${y + h}Z`} strokeWidth={0.4} className={styles.fBg} />
+      <rect x={x} y={y} width={w} height={h} className={styles.fNone} />
+    </>
+  );
+}
+
+/** An indicator lamp; lit, it throws a little light on the panel round it. */
+function Lamp({ cx, cy, r, lit, glow }: { cx: number; cy: number; r: number; lit: boolean; glow: string }) {
+  return (
+    <>
+      {lit && <circle cx={cx} cy={cy} r={r * 3.2} fill={`url(#${glow})`} className={styles.ns} />}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        strokeWidth={0.5}
+        className={lit ? cn(styles.fAcc, styles.ns) : cn(styles.fBg, styles.solid)}
+      />
+    </>
+  );
+}
+
+/** The open dust cover, in smoked acrylic: every wall shows through the
+ *  others. The panel faces away and is seen from inside, so it takes the
+ *  faintest tint; the walls are seen edge-on through more of the plastic,
+ *  and the one turned toward the viewer reads darkest. */
+function DustCover() {
+  const { lid } = AXO;
+  return (
+    <>
+      <path d={lid.back} strokeWidth={0.4} className={styles.fLidWall} />
+      <path d={lid.panel} strokeWidth={0.5} className={styles.fLid} />
+      <path d={lid.glint} strokeWidth={0.6} opacity={0.4} />
+      <path d={lid.left} strokeWidth={0.5} className={styles.fLidWall} />
+      <path d={lid.front} strokeWidth={0.5} className={styles.fLidWall} />
+      <path d={lid.right} strokeWidth={0.6} className={styles.fLidSide} />
+      <path d={lid.rim} strokeWidth={0.9} />
+      <path d={lid.sil} strokeWidth={1.3} className={styles.solid} />
+    </>
+  );
+}
+
+function Speaker({ block, shade }: { block: DrawnBlock; shade: string }) {
   return (
     <>
       <Face of={block} side="T" className={styles.fBg}>
         <rect x="8" y="8" width="64" height="84" strokeWidth={0.4} opacity={0.6} />
       </Face>
-      <Face of={block} side="R" className={styles.fR} />
+      <Face of={block} side="R" className={styles.fR} shade={shade} />
       <Face of={block} side="L" className={styles.fL}>
         <rect x="6" y="6" width="68" height="238" strokeWidth={0.4} />
-        <circle cx="40" cy="36" r="10" className={styles.fBg} />
-        <circle cx="40" cy="36" r="4" className={styles.fW} />
-        <circle cx="40" cy="92" r="22" className={styles.fBg} />
-        <g transform="translate(40 92)">
-          <g data-cone="mid">
-            <circle r="18" className={styles.fW} />
-            <circle r="6" className={styles.fBg} />
+        {/* Each driver: a surround standing off the baffle, and the cone
+            sunk into it, its inner wall showing as a crescent. */}
+        <Boss on="L" cx={40} cy={36} r={10} t={2} className={styles.fBg}>
+          <Boss on="L" cx={0} cy={0} r={4} t={1.5} className={styles.fW} />
+        </Boss>
+        <Boss on="L" cx={40} cy={92} r={22} t={2.5} className={styles.fBg}>
+          <circle r="18" strokeWidth={0.5} className={styles.fR} />
+          <g transform="translate(1.4 -1.4)">
+            <g data-cone="mid">
+              <circle r="16.5" className={styles.fW} />
+              <circle r="5.5" className={styles.fBg} />
+            </g>
           </g>
-        </g>
-        <circle cx="40" cy="178" r="34" className={styles.fBg} />
-        <g transform="translate(40 178)">
-          <g data-cone="big">
-            <circle r="29" className={styles.fW} />
-            <circle r="19" strokeWidth={0.4} />
-            <circle r="10" className={styles.fBg} />
+        </Boss>
+        <Boss on="L" cx={40} cy={178} r={34} t={3} className={styles.fBg}>
+          <circle r="29" strokeWidth={0.5} className={styles.fR} />
+          <g transform="translate(1.8 -1.8)">
+            <g data-cone="big">
+              <circle r="27" className={styles.fW} />
+              <circle r="18" strokeWidth={0.4} />
+              <circle r="9.5" className={styles.fBg} />
+            </g>
           </g>
-        </g>
+        </Boss>
         <rect x="30" y="226" width="20" height="6" opacity={0.55} className={cn(styles.fInk, styles.ns)} />
       </Face>
       <path d={block.sil} strokeWidth={1.5} className={styles.solid} />
@@ -692,17 +940,22 @@ function Speaker({ block }: { block: DrawnBlock }) {
   );
 }
 
-function Shelf({ block }: { block: DrawnBlock }) {
+/** A shelf, with the contact shadow of the unit standing on it along the
+ *  strips of it that show: in front of the unit and to its right. */
+function Shelf({ block, paint }: { block: DrawnBlock; paint: PaintIds }) {
   return (
     <>
-      <Face of={block} side="T" className={styles.fBg} />
+      <Face of={block} side="T" className={styles.fBg}>
+        <rect x="10" y="142" width="220" height="6" fill={`url(#${paint.dropY})`} className={styles.ns} />
+        <rect x="230" y="10" width="6" height="138" fill={`url(#${paint.dropX})`} className={styles.ns} />
+      </Face>
       <Face of={block} side="L" className={styles.fL} />
       <Face of={block} side="R" className={styles.fR} />
     </>
   );
 }
 
-/** A rack post: only its sides show, the shelves cover its ends. */
+/** A rack post segment: only its sides show, the shelves cover its ends. */
 function Post({ block }: { block: DrawnBlock }) {
   return (
     <>
@@ -710,6 +963,22 @@ function Post({ block }: { block: DrawnBlock }) {
       <Face of={block} side="R" className={styles.fR} />
     </>
   );
+}
+
+/** A shelf, then the back post segments standing on it — before the unit it
+ *  carries, which hides most of them. */
+function Bay({ level, paint }: { level: RackLevel; paint: PaintIds }) {
+  return (
+    <>
+      <Shelf block={level.shelf} paint={paint} />
+      {level.back.map((p, i) => <Post key={i} block={p} />)}
+    </>
+  );
+}
+
+/** A bay's front post segments, which stand in front of its unit. */
+function Posts({ of: level }: { of: RackLevel }) {
+  return level.front.map((p, i) => <Post key={i} block={p} />);
 }
 
 function Reel({ cx }: { cx: number }) {
