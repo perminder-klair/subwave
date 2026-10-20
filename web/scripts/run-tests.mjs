@@ -91,8 +91,8 @@ const res = spawnSync(
   // than assumed: node's runner gives each test FILE its own process (verified —
   // two files, two PIDs), so neither `process.env` nor module state is shared
   // between them. No current web test needs this flag. The controller's runner
-  // defaults to it too but offers `--jobs`, because a preload there gives each
-  // of its files its own temp state dir and library DB.
+  // shares the default and offers `--jobs`; the header of
+  // controller/scripts/run-tests.ts says why that is safe there.
   //
   // It is passed anyway, for two honest reasons: the filesystem is still shared
   // (every file runs with cwd at the web root, so a future test writing a fixture

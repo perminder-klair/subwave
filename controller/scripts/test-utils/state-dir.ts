@@ -1,20 +1,5 @@
-// Preloaded into every test process by scripts/run-tests.ts (`--import`).
-//
-// Gives each test FILE its own empty STATE_DIR before any test code runs.
-// Without it, every file would share the one dir scripts/run-tests.ts hands the
-// run, and parallel files (`--jobs`) would race on its settings.json, library.db
-// and liquidsoap_*.txt handoffs. With neither, a file that never sets STATE_DIR
-// resolves config.ts's default: the repo's own state/ dir, which is also what
-// the dev compose mounts for a local station.
-//
-// A file that sets process.env.STATE_DIR itself still wins: its assignment runs
-// after this preload, before it imports anything that reads the variable. The
-// directory is removed on exit by createTempDir.
-//
-// What STATE_DIR held before this preload replaced it is kept as
-// SUBWAVE_TEST_STATE_DIR_BEFORE_PRELOAD, so test-state-isolation.test.ts can
-// still see that the runner's layer reached this process; the assignment below
-// hides it otherwise.
+// Preloaded into every test process by scripts/run-tests.ts (`--import`) to give
+// each test file its own empty STATE_DIR: layer 2 of the two that header explains.
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { STATE_DIR_PREFIX } from './stale-state-dirs.js';

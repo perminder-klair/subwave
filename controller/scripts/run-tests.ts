@@ -12,21 +12,36 @@
 // code, and the node:test shape reporting per assertion. Prefer node:test for
 // anything new.
 //
-// STATE_DIR is always a fresh temp dir, whatever the calling shell exports.
-// Most files set their own before importing the controller, but one that does
-// not falls through config.ts to the repo-local state/ — which on a host
-// running the station is the live state root, and the Navidrome migration
-// writes there on import. Overriding rather than defaulting means an exported
-// STATE_DIR pointing at a real station cannot leak in either.
+// STATE_DIR comes in two layers. This header is the one place they are
+// explained; CLAUDE.md, test-utils/state-dir.ts, test-state-isolation.test.ts
+// and web/scripts/run-tests.mjs point here.
 //
-// Concurrency defaults to 1, and parallel runs are opt-in. They are safe because
-// nothing is shared between files: each runs in its own process (env vars and
-// module state stay apart), and test-utils/state-dir.ts, preloaded below,
-// replaces the run's STATE_DIR with each process's OWN temp dir. Without that
-// preload every file would share the run's dir, and parallel files would race
-// on its settings.json, library.db and handoffs. The run's dir is then only the
-// fallback, so it is also exported as SUBWAVE_TEST_RUN_STATE_DIR for
-// test-state-isolation.test.ts, which checks each layer on its own.
+//   1. The run. This runner hands every file one fresh temp STATE_DIR,
+//      overriding whatever the calling shell exports, so an exported STATE_DIR
+//      pointing at a real station cannot leak in. Without it, a file that sets
+//      none falls through config.ts to the repo-local state/, which on a host
+//      running the station is the live state root, and the Navidrome migration
+//      writes there on import.
+//   2. The file. test-utils/state-dir.ts, preloaded into each test process,
+//      replaces the run's dir with that process's own empty one, so files run
+//      in parallel never race on one dir's settings.json, library.db or
+//      liquidsoap_*.txt handoffs. A file that sets STATE_DIR itself still wins:
+//      its assignment runs after the preload and before it imports config.
+//
+// Each layer hides the other's absence (without the preload every file shares
+// the run's dir; without the run's dir the shell's STATE_DIR reaches the
+// preload), so test-state-isolation.test.ts checks them apart. It needs two
+// variables to do it: SUBWAVE_TEST_RUN_STATE_DIR is what this runner handed
+// over, and SUBWAVE_TEST_STATE_DIR_BEFORE_PRELOAD is what the preload found in
+// STATE_DIR before replacing it. They match only when layer 1 reached the file.
+//
+// Concurrency defaults to 1, and parallel runs are opt-in. Files never share a
+// process (env vars and module state stay apart) or, given layer 2, a
+// STATE_DIR, but they do share the host. A test that reserves a port must keep
+// it bound (listen(0), never close it and bind the number again), and one that
+// writes outside its STATE_DIR must use createTempDir. A test with a tight
+// timing margin can still fail under `--jobs auto` on a busy host, so re-run a
+// parallel-only failure alone before treating it as real.
 
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -60,13 +75,15 @@ if (files.length === 0) {
 
 console.log(`Running ${files.length} test file(s)${filter ? ` matching "${filter}"` : ''}${jobs > 1 ? `, ${jobs} at a time` : ''}:\n`);
 
-// `--import tsx` loads .ts directly and is inherited by each subprocess, as is
-// the state-dir preload. The spec reporter is forced so a non-TTY doesn't fall
-// back to TAP. Dirs a killed run left behind are swept first.
+// A killed run skips every process's exit cleanup, so its dirs are swept here,
+// before this run makes its own (test-utils/stale-state-dirs.ts).
 const swept = sweepStaleStateDirs(tmpdir());
 if (swept.length > 0) console.log(`Removed ${swept.length} stale test STATE_DIR(s) left by a killed run.\n`);
 const stateDir = mkdtempSync(join(tmpdir(), STATE_DIR_PREFIX));
 
+// `--import tsx` loads .ts directly and is inherited by each subprocess, as is
+// the state-dir preload. The spec reporter is forced so a non-TTY doesn't fall
+// back to TAP.
 const { status } = spawnSync(
   process.execPath,
   [

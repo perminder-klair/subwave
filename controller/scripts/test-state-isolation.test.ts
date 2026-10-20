@@ -1,9 +1,5 @@
-// Two layers keep every test file off the repo-local state/ — the live station's
-// state root on a host running it. scripts/run-tests.ts hands the whole run one
-// temp STATE_DIR, overriding whatever the shell exports, and test-utils/state-dir.ts,
-// preloaded into each file, replaces it with that file's own, which is what keeps
-// parallel files (`--jobs`) apart. Either layer hides the other's absence, so each
-// is checked on its own here.
+// Checks the two STATE_DIR layers apart; the header of scripts/run-tests.ts
+// explains them and why each hides the other's absence.
 import assert from 'node:assert/strict';
 import { readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
