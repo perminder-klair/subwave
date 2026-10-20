@@ -4,7 +4,7 @@ import { runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/ge
 import { genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
 
 // Labels arrive already consolidated by the operator's scene aliases.
-const keys = (labels: readonly string[]) => genreKeysWithFamilies(labels, new Map());
+const keys = (labels: readonly string[]) => genreKeysWithFamilies(labels);
 type Song = { id: string; title: string; artist: string; genres: string[] };
 const pick: Song = { id: 'repeat', title: 'Repeat', artist: 'New Artist', genres: ['Dub', 'Reggae', 'Roots Reggae'] };
 const other: Song = { id: 'other', title: 'Other', artist: 'Other Artist', genres: ['Soul'] };

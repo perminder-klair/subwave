@@ -1,10 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GENRE_FAMILIES, genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
-import { aliasMapOf, sceneKey } from '../src/music/scene-vocab.js';
+import { sceneKey } from '../src/music/scene-vocab.js';
 
-const none = new Map<string, string>();
-const keysOf = (labels: readonly unknown[]) => [...genreKeysWithFamilies(labels, none).keys()].sort();
+const keysOf = (labels: readonly unknown[]) => [...genreKeysWithFamilies(labels).keys()].sort();
 const familyOf = (label: string) => keysOf([label]).find(key => key.startsWith('family:'))?.slice('family:'.length) ?? null;
 
 test('the family map is small, normalized, and puts each label in one family', () => {
@@ -42,13 +41,8 @@ test('keys keep the label and add one family token per labelled family', () => {
 });
 
 test('each key is named as the track first spells it, a family token as its family', () => {
-  const keys = genreKeysWithFamilies(['  Roots   Reggae ', 'roots-reggae', 'Neo-Soul'], none);
+  const keys = genreKeysWithFamilies(['  Roots   Reggae ', 'roots-reggae', 'Neo-Soul']);
   assert.deepEqual([...keys], [['rootsreggae', 'Roots Reggae'], ['family:reggae', 'reggae family'], ['neosoul', 'Neo-Soul']]);
-});
-
-test('scene aliases resolve first, then the family applies', () => {
-  const aliases = aliasMapOf([{ from: 'jamaican roots', to: 'Roots Reggae', at: '' }]);
-  assert.deepEqual([...genreKeysWithFamilies(['Jamaican Roots'], aliases)], [['rootsreggae', 'Roots Reggae'], ['family:reggae', 'reggae family']]);
 });
 
 test('separators and ampersands fold for every label, in a family or not', () => {

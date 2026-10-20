@@ -21,8 +21,8 @@ import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-n
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
-import { genreKeysWithFamilies, runGenreGuard } from './dj-agent/genre-guard.js';
-import * as sceneVocab from '../music/scene-vocab.js';
+import { runGenreGuard } from './dj-agent/genre-guard.js';
+import { genreKeysFor } from '../music/genre-facts.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import type { TransitionEffect } from '../settings/vocab.js';
@@ -1019,25 +1019,17 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
 
   // Last, so a softer album re-pick cannot restore the genre run. Only agent
   // selections pass here: requests/operator queueing and pool rescues stay
-  // exempt. Off performs no history walk, alias load or metadata lookup.
+  // exempt. Off performs no history walk or metadata lookup.
   const genreWindow = settings.get().llm?.genreVarietyWindow ?? 0;
   if (genreWindow > 0 && !useShortlist && agentPickResolution && !episodeSource) {
-    const aliases = sceneVocab.activeMap();
-    const genreKeysOf = (track: any) => {
-      const rec = track?.id ? library.get(track.id) : null;
-      // The discovery projection joins its labels with ', '. Prefer the
-      // mirror's original list; split only that compact fallback projection.
-      const labels = rec?.genres ?? (Array.isArray(track?.genres)
-        ? subsonic.songGenres(track)
-        : subsonic.songGenres(track).flatMap(label => label.split(', ')));
-      return genreKeysWithFamilies(labels, aliases);
-    };
     const genreGuarded = await runGenreGuard<any>({
       song, seen: extras.seen, window: genreWindow,
       // The slots this pick will follow, held queue first, as the artist and
       // album windows walk them. Under pair drain `current` is one slot early.
-      recentGenres: queue.precedingTracks(genreWindow).map(genreKeysOf),
-      genreKeysOf, recentRoots: neighbourRoots,
+      recentGenres: queue.precedingTracks(genreWindow).map(track => genreKeysFor(track)),
+      // Resolved against the library, like albumKeyOf below: the run's `seen`
+      // values are the model's projection.
+      genreKeysOf: genreKeysFor, recentRoots: neighbourRoots,
       avoidAnchorRoot: artistRootKey(pickAnchor || {}),
       repick: guardRepick,
       recentAlbums: albumHours > 0 ? queue.recentAlbumKeys(albumHours) : undefined,

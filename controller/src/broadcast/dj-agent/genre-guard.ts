@@ -7,8 +7,6 @@ import type { CandidateLike } from '../../music/recency.js';
 import { alternativeCandidates } from './artist-guard.js';
 import type { GenreKeys } from './genre-families.js';
 
-export { genreKeysWithFamilies } from './genre-families.js';
-
 // `recentGenres` is newest first: the slots the pick will follow. The run is
 // named as the newest track spells it. Unknown metadata breaks the evidence of
 // a run, rather than inventing one.

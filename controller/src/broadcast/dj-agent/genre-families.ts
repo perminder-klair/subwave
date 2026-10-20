@@ -1,6 +1,7 @@
 // A small built-in family map for the genre-run guard. Two genre labels count
-// as one genre when they match (after the operator's scene aliases) or when
-// both sit in the same family below. A label in no family only ever matches
+// as one genre when they match or when both sit in the same family below.
+// Labels arrive already consolidated by the operator's scene aliases (the
+// ingest normaliser, `subsonic.songGenres`, applied them). A label in no family only ever matches
 // itself.
 //
 // Keep this list SMALL and obviously correct. A family groups labels that a
@@ -9,7 +10,7 @@
 // post-punk, country rock), leave it out: an unlisted label simply falls back
 // to exact label overlap. Entries are matched through `genreKey`, so case,
 // spacing and separators do not matter.
-import { aliasValue, sceneKey, type SceneAliasMap } from '../../music/scene-vocab.js';
+import { sceneKey } from '../../music/scene-vocab.js';
 
 export const GENRE_FAMILIES: Readonly<Record<string, readonly string[]>> = {
   reggae: ['reggae', 'roots reggae', 'dub', 'ska', 'rocksteady', 'dancehall', 'lovers rock', 'ragga', 'reggae fusion'],
@@ -59,15 +60,15 @@ export function genreFamilyOf(label: string): string | null {
 export type GenreKeys = ReadonlyMap<string, string>;
 
 /**
- * Label keys (alias-resolved, separator-folded) plus one `family:<name>`
- * token for each label that sits in a family. Unknown labels contribute only
- * their key. The first spelling of a key names it.
+ * Label keys (separator-folded) plus one `family:<name>` token for each label
+ * that sits in a family. Unknown labels contribute only their key. The first
+ * spelling of a key names it.
  */
-export function genreKeysWithFamilies(labels: readonly unknown[], aliases: SceneAliasMap): GenreKeys {
+export function genreKeysWithFamilies(labels: readonly unknown[]): GenreKeys {
   const out = new Map<string, string>();
   for (const label of labels) {
     if (typeof label !== 'string') continue;
-    const name = aliasValue(label, aliases).trim().replace(/\s+/g, ' ');
+    const name = label.trim().replace(/\s+/g, ' ');
     const key = genreKey(name);
     if (!key) continue;
     if (!out.has(key)) out.set(key, name);
