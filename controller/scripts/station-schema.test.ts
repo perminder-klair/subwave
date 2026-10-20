@@ -4,7 +4,7 @@
 // middleware's fieldErrors payload, and manager.createStation /
 // manager.renameStation — the chokepoint reachable without a route.
 //
-// Run: npx tsx scripts/station-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- station-schema`.
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';

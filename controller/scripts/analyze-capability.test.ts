@@ -18,7 +18,7 @@
 //      had already done. That is what this module fixes, and why the messages
 //      are asserted rather than just the booleans: the string is the entire
 //      user-facing product of a broken analyzer.
-// Run: `tsx scripts/analyze-capability.test.ts` (folded into `npm run test`).
+// Run: `npm test -- analyze-capability`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

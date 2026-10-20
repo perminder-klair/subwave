@@ -9,31 +9,59 @@
  * block runs FIRST, so a failed block never skips a track the operator meant
  * to keep off the air only together with the block.
  */
+import type { QueryClient } from '@tanstack/react-query';
 import { AdminResponseError, type AdminFetch } from '../../../lib/admin-query';
-import { postBlock } from '../library/block-actions';
+import { notify } from '../../../lib/notify';
+import { notifyBlockedWithUndo, postBlock } from '../library/block-actions';
 import type { BlockEntry } from '../library/types';
+import { dashKeys } from './queries';
+import type { DashStatus } from './types';
 
 export type BlockOutcome = 'added' | 'already';
 export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot' | 'unconfirmed';
 
 /**
- * The on-air id from a status read that landed after `since` (taken once the
- * block resolved), or undefined when there is none. `refetchQueries` swallows
- * a failed fetch, and returns at once while offline, leaving the last poll in
- * the cache: that poll was taken before the block landed, the stale read the
- * skip guard exists to refuse, so it counts as no read at all.
+ * Refetch the Dash status once the block has landed, and return the on-air id
+ * from the SERVER's answer to that read, or undefined when there is none.
+ *
+ * The answer is the fetch's own success, caught as it lands. Never the cache
+ * afterwards: it also holds the Dash's optimistic writes, stamped as fresh as
+ * any read. Removing a queue row cancels this very refetch and writes the
+ * pre-block status back minus the row, so a cache read named the blocked track
+ * after the server had moved on, and the skip cut its successor (#2018). A
+ * `setQueryData` write is a `manual` success, so it never counts, whoever
+ * writes the cache now or later. Nor the fetch's return value: a fetch
+ * cancelled by an unmount resolves with the cached data, and one paused
+ * offline never resolves.
+ *
+ * No answer: a refetch that fails, is cancelled with nothing after it (that
+ * row removal), is cancelled by the Dash unmounting, or returns at once while
+ * offline. Nothing is skipped without one. A refetch cancelled by a newer one
+ * (another Dash action's invalidation) takes that fetch's answer, which was
+ * sent later still. The LAST success counts: a poll already answered when the
+ * refetch goes out cannot be cancelled and still writes inside the window,
+ * ahead of the refetch's own answer.
  */
-export function freshOnAirId(
-  state: { dataUpdatedAt: number; data?: { nowPlaying?: { subsonic_id?: string } | null } } | undefined,
-  since: number,
-): string | undefined {
-  if (!state || state.dataUpdatedAt < since) return undefined;
-  return state.data?.nowPlaying?.subsonic_id || undefined;
+export async function refetchOnAirId(client: QueryClient): Promise<string | undefined> {
+  const queryKey = dashKeys.status();
+  const query = client.getQueryCache().find<DashStatus>({ queryKey, exact: true });
+  if (!query) return undefined;
+  let read: DashStatus | undefined;
+  const unsubscribe = client.getQueryCache().subscribe(event => {
+    if (event.type !== 'updated' || event.query !== query) return;
+    if (event.action.type === 'success' && !event.action.manual) read = event.action.data as DashStatus | undefined;
+  });
+  try {
+    await client.refetchQueries({ queryKey, exact: true });
+  } finally {
+    unsubscribe();
+  }
+  return read?.nowPlaying?.subsonic_id || undefined;
 }
 
 /**
  * Whether "block + skip now" skips, once the block has landed. `onAirId` must
- * come from `freshOnAirId`: the track can change while the block request is in
+ * come from `refetchOnAirId`: the track can change while the block request is in
  * flight (a slow Navidrome getSong has no upper bound), and a skip decided on
  * the status the click saw would skip the successor for every listener. No
  * fresh read, or one naming no track, is never skipped.
@@ -48,10 +76,12 @@ export function skipDecision(o: {
 
 /**
  * What a failed targeted skip means. The controller answers 409 when the
- * blocked track is no longer what is on air — it ended during the skip's
- * commit wait, or a jingle, bed or pause-talk break followed it, none of which
- * `freshOnAirId` can see — and skipped nothing: the same answer as a `moot`
- * decision, not a failure. Anything else is.
+ * blocked track is not what the mixer is playing — it ended during the skip's
+ * commit wait, a bed or pause-talk break followed it (neither moves
+ * now-playing on, so `refetchOnAirId` still names it), or a jingle is still
+ * airing ahead of it (the jingle's seam names the song after it early) — and
+ * skipped nothing: the same answer as a `moot` decision, not a failure.
+ * Anything else is.
  */
 export function skipFailureOutcome(error: unknown): 'moot' | 'failed' {
   return error instanceof AdminResponseError && error.status === 409 ? 'moot' : 'failed';
@@ -93,4 +123,19 @@ export function neverPlayToast(o: {
   else parts.push(`skip failed${o.skipError ? `: ${o.skipError}` : ''}`);
   if (o.purged) parts.push(`${o.purged} dropped from queue`);
   return { tone: o.skip === 'failed' ? 'err' : 'ok', text: parts.join(' · ') };
+}
+
+/**
+ * Show the `neverPlayToast` message. A new entry always carries Undo, after a
+ * failed skip too: the block landed either way, so the error toast offers the
+ * same Undo the success one does.
+ */
+export function notifyNeverPlay(
+  t: { tone: 'ok' | 'err'; text: string },
+  entry: BlockEntry | undefined,
+  lift: (entry: BlockEntry) => Promise<unknown>,
+): void {
+  if (entry) notifyBlockedWithUndo(t.text, entry, lift, t.tone);
+  else if (t.tone === 'err') notify.err(t.text);
+  else notify.ok(t.text);
 }

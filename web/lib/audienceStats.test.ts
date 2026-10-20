@@ -1,6 +1,6 @@
 // Unit tests for the pure Audience-stats derivations. Same lightweight harness
 // as controller/scripts/*.test.ts (assert + ✓/✗ + non-zero exit on failure).
-// Run from the repo root:  npx tsx web/lib/audienceStats.test.ts
+// Run from web/: `npm test -- audienceStats`.
 //
 // bucketSamplesByHour uses local time (Date#getHours), so the hour-bucket tests
 // build timestamps from local Date components rather than hard-coded UTC ISO

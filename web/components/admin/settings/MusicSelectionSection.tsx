@@ -172,15 +172,44 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
             <Seg
               value={form.llm.requestMatching}
               options={[
-                { id: 'direct', label: 'Direct', title: 'Fast, tool-free matching for straightforward requests' },
+                { id: 'direct', label: 'Direct', title: 'Named songs and artists, tracks from albums, genres and simple moods' },
                 { id: 'agentic', label: 'Agent-assisted', title: 'Uses music-search tools for detailed or compound requests' },
               ]}
               onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestMatching: v as 'agentic' | 'direct' } }))}
             />
-            <div className="field-hint">
-              Direct matching covers most artist, title, genre and simple-mood requests in one call.
-              Agent-assisted matching can untangle detailed or compound requests, but needs a
-              tool-capable model and takes longer.
+            <div className="field-hint space-y-2">
+              <p>
+                Direct handles named music, genres and simple moods.
+                Agent-assisted explores more detailed requests with a tool-capable model.
+              </p>
+              <details className="group">
+                <summary className="w-fit cursor-pointer text-ink underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2">
+                  <span className="group-open:hidden">Read more</span>
+                  <span className="hidden group-open:inline">Read less</span>
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <p>
+                    <strong>Direct</strong> matches named songs and artists, tracks from named albums,
+                    genres and simple moods — for example, &ldquo;play something by Queen&rdquo; or
+                    &ldquo;something calm&rdquo;.
+                  </p>
+                  <p>
+                    It cannot reliably identify songs from remembered lyrics, films or current trends,
+                    refer back to earlier conversations, or follow exclusions and complex conditions
+                    such as &ldquo;anything except Queen&rdquo; or &ldquo;instrumental tracks from the
+                    1990s&rdquo;. Language requests depend on your library&apos;s tags or metadata.
+                    Recognised unsupported conditions are declined. Mood is a preference; an exact
+                    recording stays a match even when its mood cannot be verified. Explicit genre and language requirements are never
+                    relaxed to queue an alternative.
+                  </p>
+                  <p>
+                    <strong>Agent-assisted</strong> can explore more detailed requests, but needs a
+                    tool-capable model and may take longer. Identifying described songs via the web also
+                    needs &ldquo;Resolve described requests via web&rdquo; enabled and a configured
+                    web-search provider.
+                  </p>
+                </div>
+              </details>
             </div>
           </div>
           {form.llm.requestMatching === 'agentic' && (

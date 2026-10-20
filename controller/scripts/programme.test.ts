@@ -2,7 +2,7 @@
 // showSpan (position of an hour inside a show's consecutive schedule run —
 // drives which hour gets which feature and when the outro fires) and
 // planFeature (per-hour feature lookup with last-feature reuse).
-// Run: `tsx scripts/programme.test.ts`.
+// Run: `npm test -- programme.test.ts` (a substring match, so session-cap-keeps-programme.test.ts runs too).
 //
 // node:assert-via-tsx style, matching scripts/auto-pool.test.ts.
 

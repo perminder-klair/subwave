@@ -13,7 +13,7 @@
 //    drain-time policy may add others. Anything unsent must read null, which
 //    the dashboard renders as an em dash.
 //
-// Run: npx tsx scripts/queue-transition-label.test.ts (auto-discovered by npm test).
+// Run: `npm test -- queue-transition-label`.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

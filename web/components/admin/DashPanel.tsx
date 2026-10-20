@@ -46,8 +46,8 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
-import { blockPlayingTrack, freshOnAirId, neverPlayToast, skipDecision, skipFailureOutcome, type SkipOutcome } from './dash/never-play';
-import { deleteBlockEntry, notifyBlockedWithUndo, reconcileBlockCaches } from './library/block-actions';
+import { blockPlayingTrack, neverPlayToast, notifyNeverPlay, refetchOnAirId, skipDecision, skipFailureOutcome, type SkipOutcome } from './dash/never-play';
+import { deleteBlockEntry, reconcileBlockCaches } from './library/block-actions';
 import type { BlockEntry } from './library/types';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
@@ -80,6 +80,7 @@ import {
   fetchHealthStats,
   fetchRequests,
   fetchSuggestions,
+  removeQueuedRow,
   runDashAction,
 } from './dash/queries';
 
@@ -272,13 +273,13 @@ export default function DashPanel() {
         // in flight, and the closure would still show the blocked one
         // (skipping its successor for every listener). A failed or offline
         // refetch is no read, and nothing is skipped without one. The read
-        // cannot see a jingle, bed or pause-talk break (none updates
-        // now-playing), nor the song ending during the skip's commit wait, so
-        // the skip names its target and the controller refuses (409, moot)
+        // names a song, never what airs: a bed or pause-talk break leaves
+        // now-playing on the song before it, a jingle's seam moves it on to
+        // the song after it while the outgoing tail and the jingle still
+        // play, and the song can end during the skip's commit wait. So the
+        // skip names its target and the controller refuses (409, moot)
         // unless the blocked track is still the one on air.
-        const since = Date.now();
-        await queryClient.refetchQueries({ queryKey: dashKeys.status(), exact: true });
-        const onAirId = freshOnAirId(queryClient.getQueryState<DashStatus>(dashKeys.status()), since);
+        const onAirId = await refetchOnAirId(queryClient);
         const decision = skipDecision({ targetId: target.id, onAirId });
         if (decision === 'skip') {
           setBusy('skip');
@@ -294,9 +295,7 @@ export default function DashPanel() {
         }
       }
       const t = neverPlayToast({ title: target.title, artist: target.artist, block: r.block, skip, purged: r.purged, skipError });
-      if (t.tone === 'err') notify.err(t.text);
-      else if (r.entry) notifyBlockedWithUndo(t.text, r.entry, e => unblockMutation.mutateAsync(e));
-      else notify.ok(t.text);
+      notifyNeverPlay(t, r.entry, e => unblockMutation.mutateAsync(e));
     } catch (e) {
       notify.err(`never play: ${errorMessage(e)}`);
     } finally {
@@ -371,19 +370,7 @@ export default function DashPanel() {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
     setBusy(`cancel:${id}`);
-    await queryClient.cancelQueries(
-      { queryKey: dashKeys.status(), exact: true },
-      { silent: true },
-    );
-    queryClient.setQueryData<DashStatus>(dashKeys.status(), current => current
-      ? {
-          ...current,
-          queue: {
-            ...(current.queue || {}),
-            upcoming: (current.queue?.upcoming || []).filter(item => item.subsonic_id !== id),
-          },
-        }
-      : current);
+    await removeQueuedRow(queryClient, id);
     try {
       await cancelQueueItem.mutateAsync(id);
       notify.ok(`removed from queue: ${t.title || 'track'}`);

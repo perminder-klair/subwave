@@ -11,7 +11,7 @@
 // rather than as a refusal, and a malformed skills entry being DROPPED while a
 // malformed language is REFUSED.
 //
-// Run: npx tsx scripts/persona-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- persona-schema`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';

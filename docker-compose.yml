@@ -357,6 +357,7 @@ services:
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}

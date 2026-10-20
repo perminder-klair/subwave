@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
+import { isRefusedOutcome } from '@/lib/request-outcome';
 import { lastVoiceLine, voiceOnAirMs } from './shared';
 
 /** Whether a skin may run a JS-driven (motion) transition right now. Lite
@@ -101,7 +102,7 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
     const deadline = Date.now() + POLL_DEADLINE_MS;
     const tick = async () => {
       if (pollStopRef.current) return;
-      if (Date.now() > deadline) return; // give up quietly; accepted line stands
+      if (Date.now() > deadline) return;
       const data = await pollRequest(requestId);
       if (pollStopRef.current) return;
       if (data?.status === 'resolved') {
@@ -110,12 +111,10 @@ export function useRequestSlip(copy: RequestSlipCopy): RequestSlip {
           typeof data.queuePosition === 'number' && data.queuePosition > 0
             ? ` — #${data.queuePosition} in the queue`
             : '';
-        setAck(
-          data.ack ||
-            (t?.title
-              ? `Lining up “${t.title}”${t.artist ? ` by ${t.artist}` : ''}${pos}.`
-              : copy.sent),
-        );
+        const refused = isRefusedOutcome(data.outcome);
+        const identity = t?.title ? `“${t.title}”${t.artist ? ` by ${t.artist}` : ''}` : '';
+        setAck([data.ack || (identity ? `Lining up ${identity}${pos}.` : copy.sent), data.ack && identity ? identity : ''].filter(Boolean).join(' '));
+        setOutcome(refused ? 'refused' : 'sent');
         return;
       }
       if (data?.status === 'failed') {

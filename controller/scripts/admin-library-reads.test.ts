@@ -15,7 +15,7 @@
 //   - the browse page is paged by id and returns the same rows, in the same
 //     order, as the original `SELECT *` sort.
 //
-// Real better-sqlite3 DB in a temp STATE_DIR. Run: `tsx scripts/admin-library-reads.test.ts`.
+// Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- admin-library-reads`.
 
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
