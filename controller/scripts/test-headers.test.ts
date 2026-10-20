@@ -9,8 +9,8 @@
 //
 // Comments are found by a TypeScript parse, not a line regex, so a string
 // holding a command (this file's own cases) is never read as one. A bare run is
-// `tsx` or `node` (a path in front counts: node_modules/.bin/tsx), its flags,
-// then a script naming a test file that exists, or a template for one
+// `tsx` or `node` (a path in front counts: node_modules/.bin/tsx), its flags
+// and their values, then a script naming a test file that exists, or a template for one
 // (`<name>.test.ts`, `*.test.ts`, `$t.test.ts`). A made-up name like foo above
 // names no file, which is what lets a comment describe the hazard.
 //
@@ -49,9 +49,11 @@ const files = [scriptsDir, ...WEB_ROOTS.map((r) => join(repoRoot, 'web', r))].fl
 const testStem = (path: string) => basename(path).replace(/(\.test)\.[cm]?[jt]sx?$/, '$1');
 const known = new Set(files.map(testStem));
 
-// Every comment in a file, with the line it starts on.
-function comments(path: string): Array<{ line: number; text: string }> {
-  const text = readFileSync(path, 'utf8');
+// Every comment in a file, with the line it starts on. A comment is trivia
+// beside a token, so the walk visits every token, not only every node: one
+// that is last in a block or a literal sits before the closing `}` or `]`,
+// where no node starts or ends.
+function comments(path: string, text = readFileSync(path, 'utf8')): Array<{ line: number; text: string }> {
   const kind = path.endsWith('.tsx') ? ts.ScriptKind.TSX : path.endsWith('.mjs') ? ts.ScriptKind.JS : ts.ScriptKind.TS;
   const sf = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, false, kind);
   const found = new Map<number, string>();
@@ -59,17 +61,21 @@ function comments(path: string): Array<{ line: number; text: string }> {
     for (const r of ranges ?? []) found.set(r.pos, text.slice(r.pos, r.end));
   };
   const visit = (node: ts.Node) => {
-    collect(ts.getLeadingCommentRanges(text, node.pos));
-    collect(ts.getTrailingCommentRanges(text, node.end));
-    ts.forEachChild(node, visit);
+    // A JSDoc node lies inside its comment and JSX text is text, so neither
+    // borders on trivia. The JSDoc comment is still read, before its token.
+    if (ts.isJSDoc(node) || node.kind === ts.SyntaxKind.JsxText) return;
+    const children = node.getChildren(sf);
+    if (children.length === 0) {
+      collect(ts.getLeadingCommentRanges(text, node.pos));
+      collect(ts.getTrailingCommentRanges(text, node.end));
+    }
+    children.forEach(visit);
   };
   visit(sf);
   return [...found].map(([pos, body]) => ({ line: sf.getLineAndCharacterOfPosition(pos).line + 1, text: body }));
 }
 
 const COMMAND = /^(?:\S*\/)?(?:tsx|node)$/;
-// Flags whose value is the next word, so that word is not the script.
-const TAKES_VALUE = new Set(['--import', '--require', '-r', '--loader', '--experimental-loader', '--tsconfig', '--env-file']);
 const NAMES_A_TEST = /\.test(?:\.[cm]?[jt]sx?)?$/;
 const TEMPLATE = /[<>*${}]/;
 // Quotes, brackets and sentence punctuation around a word of prose.
@@ -80,8 +86,14 @@ function runsBare(line: string, knownTests: ReadonlySet<string>): boolean {
   const words = line.split(/\s+/).map(word);
   return words.some((w, i) => {
     if (!COMMAND.test(w)) return false;
-    let j = i + 1;
-    while (words[j]?.startsWith('-')) j += TAKES_VALUE.has(words[j]) ? 2 : 1;
+    let j = words[i + 1] === 'watch' ? i + 2 : i + 1;
+    // A flag can take the next word as its value (`--import tsx`,
+    // `--test-name-pattern drop`), so that word is passed over unless it is a
+    // flag or the script itself.
+    while (words[j]?.startsWith('-')) {
+      j += 1;
+      if (words[j] !== undefined && !words[j].startsWith('-') && !NAMES_A_TEST.test(words[j])) j += 1;
+    }
     const script = words[j] ?? '';
     return NAMES_A_TEST.test(script) && (TEMPLATE.test(script) || knownTests.has(testStem(script)));
   });
@@ -108,7 +120,19 @@ test('the scan reaches both packages and reads their headers', () => {
   assert.ok(own.some((c) => c.text === '// Run: `npm test -- test-headers`.'), 'the header run line is read');
 });
 
-test('the check reads a bare run in each form the headers used', () => {
+test('a comment is read wherever it sits, and a string never is', () => {
+  for (const [path, text] of [
+    ['x.ts', 'test("t", () => {\n  run();\n  // MARK\n});\n'],
+    ['x.ts', 'if (x) { /* MARK */ }\n'],
+    ['x.ts', 'const o = {\n  a: 1,\n  // MARK\n};\n'],
+    ['x.ts', '/** MARK */\nfunction f() {}\n'],
+    ['x.tsx', 'const e = <div>{/* MARK */}</div>;\n'],
+    ['x.mjs', 'run(); // MARK\n'],
+  ]) assert.ok(comments(path, text).some((c) => c.text.includes('MARK')), text);
+  assert.deepEqual(comments('x.ts', 'const s = "// MARK", r = /\\/\\/ MARK/, t = `/* MARK ${s} */`;\n'), []);
+});
+
+test('the check reads a bare run in each form, and passes the runner and prose', () => {
   const knownTests = new Set(['moods.test']);
   for (const line of [
     '// Run: `tsx scripts/moods.test.ts`.',
@@ -123,6 +147,9 @@ test('the check reads a bare run in each form the headers used', () => {
     '// Run any one with `tsx scripts/<name>.test.ts`.',
     '// node --test scripts/*.test.ts',
     '//   npx tsx "scripts/$t.test.ts"',
+    "// One case: `tsx --test --test-name-pattern 'drops' scripts/moods.test.ts`.",
+    '// node --test-reporter spec --test scripts/moods.test.ts',
+    '// tsx watch scripts/moods.test.ts',
   ]) assert.equal(runsBare(line, knownTests), true, line);
 
   for (const line of [
