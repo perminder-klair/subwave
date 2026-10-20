@@ -1,5 +1,5 @@
 // Regression test for the pick-anchor artist guard's re-pick (issue #1251).
-// Run: `tsx scripts/artist-guard.test.ts`.
+// Run: `npm test -- artist-guard.test.ts`.
 //
 // Two defects, one guard:
 //   1. The re-pick excluded ONLY the rejected anchor artist, so whichever artist ranked

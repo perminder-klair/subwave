@@ -1,6 +1,6 @@
 // Voice clips are trimmed toward one level at the handoff to the mixer.
 //
-// Run: npx tsx scripts/clip-level.test.ts (auto-discovered by npm test).
+// Run: `npm test -- clip-level`.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';

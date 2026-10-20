@@ -13,7 +13,7 @@
 // The second half runs adoptAndPrune against a real better-sqlite3 DB in a
 // temp STATE_DIR (set before library-db is imported, as in id-adoption.test.ts).
 // No Navidrome is configured, so getScanStatus() answers null (unknown).
-// Run: `tsx scripts/prune-policy.test.ts` (auto-discovered by npm test).
+// Run: `npm test -- prune-policy`.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

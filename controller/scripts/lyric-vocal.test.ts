@@ -1,6 +1,6 @@
 // Unit tests for the lyric→vocal derivation (music/lyric-vocal.ts): the
 // deterministic vocal-activity path built from Navidrome timed lyrics (#1125).
-// Run: `tsx scripts/lyric-vocal.test.ts`.
+// Run: `npm test -- lyric-vocal`.
 //
 // node:assert-via-tsx style, matching scripts/bed-policy.test.ts.
 

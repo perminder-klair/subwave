@@ -13,7 +13,7 @@
 // ONE take, an operator action that changes the answer invalidates immediately,
 // and a failed take is never cached or served stale.
 //
-// Run: `tsx scripts/ttl-cache.test.ts`.
+// Run: `npm test -- ttl-cache`.
 
 import assert from 'node:assert/strict';
 import { cachedAsync } from '../src/util/ttl-cache.js';

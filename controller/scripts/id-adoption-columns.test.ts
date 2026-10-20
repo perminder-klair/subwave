@@ -20,7 +20,7 @@
 // is checked against the schema `migrate()` actually builds, not a copy of it.
 // STATE_DIR is set before library-db is imported (dynamic import below),
 // matching scripts/stem-backfill.test.ts.
-// Run: `tsx scripts/id-adoption-columns.test.ts` (folded into `npm test`).
+// Run: `npm test -- id-adoption-columns`.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

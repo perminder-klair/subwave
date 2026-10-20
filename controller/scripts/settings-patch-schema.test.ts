@@ -2,7 +2,7 @@
 // What these guard is FIDELITY: the hand-rolled branches carry accidental
 // leniency (parseInt truncating a float, `!!`, `patch.beds || {}`) and no
 // conversion may turn a silent repair into a refusal or the reverse.
-// Run: npx tsx scripts/settings-patch-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- settings-patch-schema`.
 // What these tests are really guarding is FIDELITY. The branches being replaced
 import assert from 'node:assert/strict';
 import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
