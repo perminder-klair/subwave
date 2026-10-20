@@ -275,12 +275,16 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
                 className="max-w-[200px]"
               />
               <div className="field-hint">
-                After this many consecutive tracks in one genre family, the agent tries a candidate outside
-                that family. Two labels count as the same genre when they match, or when a small built-in
-                family list groups them (for example reggae, dub and ska). If every candidate is in the
-                family, the picker makes one extra search for a different sound. It keeps the original
-                pick if nothing eligible exists, and logs why. <strong>0 = off</strong> (the default), with
-                no extra reads or calls. Requests and operator-queued tracks are exempt. 0&ndash;25.
+                For whole-library programming on the Agentic route. Shows that set their own genre list,
+                prepared episodes, strict playlists and sonic journeys are left alone. After this many
+                tracks in a row in one genre family, the agent tries a candidate outside that family. Two
+                labels count as the same genre when they match, ignoring case and punctuation, or when a
+                small built-in family list groups them (for example reggae, dub and ska). If every
+                candidate is in the family, the picker makes one extra search for a different sound. It
+                never breaks artist spacing or the album cooldown to leave a genre: with nothing eligible,
+                it keeps the original pick and logs why. <strong>0 = off</strong> (the default), with no
+                extra reads or calls. Requests and operator-queued tracks count toward a run but are never
+                replaced. 0&ndash;25.
               </div>
             </div>
             <div className="field">

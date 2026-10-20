@@ -63,9 +63,13 @@ after(() => {
 // then the track on air, then history. `queued-only` and `held-run` reach the
 // fourth reggae airing only through `upcoming`; `held-break` would be a fifth
 // reggae airing by `current` and history, but the held Soul head ends the run.
-for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'held-run', 'held-break', 'empty-alternatives', 'failed-repick', 'projection-only', 'family'] as const) {
+// `genre-show`: the show on air sets its own genre list (soft, not strict),
+// so the run is that show doing its job and the guard stays out of it.
+for (const scenario of ['boundary', 'prince', 'jacob', 'below', 'off', 'queued-only', 'held-run', 'held-break', 'empty-alternatives', 'failed-repick', 'projection-only', 'family', 'genre-show'] as const) {
   test(`${scenario}: the real picker checks the tracks the pick follows and preserves transition facts`, async () => {
     settings.get().llm.genreVarietyWindow = scenario === 'off' ? 0 : 4;
+    settings.get().shows = scenario === 'genre-show' ? [{ id: 'reggae-hour', name: 'Reggae Hour', genres: ['Reggae'] } as never] : [];
+    settings.get().scheduleOverride = scenario === 'genre-show' ? { showId: 'reggae-hour', startedAt: 0, expiresAt: Date.now() + 3_600_000 } as never : null;
     const held = HELD[scenario] ?? null;
     const predecessor = held ?? anchor;
     queue.current = { track: anchor, source: 'ai' };

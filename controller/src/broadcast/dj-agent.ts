@@ -21,7 +21,8 @@ import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-n
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
-import { runGenreGuard } from './dj-agent/genre-guard.js';
+import { genreGuardApplies, runGenreGuard } from './dj-agent/genre-guard.js';
+import { ownsPickDirection } from '../music/discovery-policy.js';
 import { genreKeysFor } from '../music/genre-facts.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -470,8 +471,7 @@ export function shortlistSignals(
   // Same newest-first set summariseRecent reads: the track on air, then history.
   // An episode, journey or strict playlist owns the direction — the same
   // exemption the shortlist planner makes — so a run is not named there.
-  const ownsDirection = !!(scope.episodeSource || scope.playlistLock || scope.audioWaypoint?.length);
-  const run = hasHistory && !ownsDirection
+  const run = hasHistory && !ownsPickDirection(scope)
     ? genreRun([queue.current?.track, ...queue.history.map((entry: any) => entry?.track)], showGenres)
     : null;
   return {
@@ -1019,9 +1019,12 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
 
   // Last, so a softer album re-pick cannot restore the genre run. Only agent
   // selections pass here: requests/operator queueing and pool rescues stay
-  // exempt. Off performs no history walk or metadata lookup.
+  // exempt, and so does any show with its own genre list or an owned
+  // direction (genreGuardApplies). Off performs no history walk or metadata
+  // lookup.
   const genreWindow = settings.get().llm?.genreVarietyWindow ?? 0;
-  if (genreWindow > 0 && !useShortlist && agentPickResolution && !episodeSource) {
+  if (genreWindow > 0 && !useShortlist && agentPickResolution
+    && genreGuardApplies(scope, activeShow?.genres ?? scope.genreLock)) {
     const genreGuarded = await runGenreGuard<any>({
       song, seen: extras.seen, window: genreWindow,
       // The slots this pick will follow, held queue first, as the artist and

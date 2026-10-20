@@ -8,10 +8,23 @@
 // them, so it never waives either: an alternative they would refuse is never
 // offered, and with none left the pick stands. No slot is at stake, so their
 // never-starve relaxations have nothing to rescue here.
+import { ownsPickDirection } from '../../music/discovery-policy.js';
 import type { CandidateLike } from '../../music/recency.js';
 import { alternativeCandidates } from './artist-guard.js';
 import { onFreshAlbum, type AlbumKeyOf } from './album-guard.js';
 import type { GenreKeys } from './genre-families.js';
+
+// Whether the guard runs for this pick at all. It is for whole-library
+// programming: a show that sets its own genre list chose those genres, so a
+// run inside them is the show doing its job. A prepared episode, a strict
+// playlist or a sonic journey owns the pick's direction, the same exemption
+// #1907's named run makes.
+export function genreGuardApplies(
+  scope: Parameters<typeof ownsPickDirection>[0],
+  showGenres: readonly string[] | null | undefined,
+): boolean {
+  return !ownsPickDirection(scope) && !showGenres?.length;
+}
 
 // `recentGenres` is newest first: the slots the pick will follow. The run is
 // named as the newest track spells it. Unknown metadata breaks the evidence of

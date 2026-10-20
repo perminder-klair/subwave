@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
+import { genreGuardApplies, runGenreGuard, type GenreGuardDeps } from '../src/broadcast/dj-agent/genre-guard.js';
 import { genreKeysWithFamilies } from '../src/broadcast/dj-agent/genre-families.js';
 
 // Labels arrive already consolidated by the operator's scene aliases.
@@ -316,4 +316,14 @@ test('the steer call runs only when every candidate is in the run', async () => 
     assert.equal(steerCalls, 0, leftover.id);
     assert.equal(events[0].reason, reason);
   }
+});
+
+test('the guard is for whole-library programming: a genre list or an owned direction exempts the pick', () => {
+  assert.equal(genreGuardApplies({}, null), true, 'no show, or a show with no genre list');
+  assert.equal(genreGuardApplies({}, []), true);
+  assert.equal(genreGuardApplies({}, ['Reggae']), false, 'the show chose its genres, soft or strict');
+  assert.equal(genreGuardApplies({ episodeSource: { kind: 'artist' } }, null), false, 'a prepared episode');
+  assert.equal(genreGuardApplies({ playlistLock: new Set(['a']) }, null), false, 'a strict playlist');
+  assert.equal(genreGuardApplies({ audioWaypoint: [0.1, 0.2] }, null), false, 'a sonic journey');
+  assert.equal(genreGuardApplies({ audioWaypoint: [] }, null), true, 'an empty waypoint is no journey');
 });
