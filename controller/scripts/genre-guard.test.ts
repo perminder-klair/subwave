@@ -130,14 +130,22 @@ for (const id of [null, 'outside', pick.id, prince.id]) {
   });
 }
 
-test('artist spacing may relax but a successful anchor exclusion survives', async () => {
-  const { deps, calls, events } = fixture({ recentRoots: new Set(['other artist']) });
-  assert.equal((await runGenreGuard(deps)).kind, 'repicked');
-  assert.equal(events[0].artistStarved, true);
-  assert.equal(calls.length, 1);
-  const blocked = fixture({ avoidAnchorRoot: 'other artist' });
-  assert.equal((await runGenreGuard(blocked.deps)).kind, 'kept');
-  assert.equal(blocked.calls.length, 0);
+test('a genre re-pick never undoes artist spacing or the anchor exclusion', async () => {
+  // The only outside-run candidate is by a recently played artist: the pick stands.
+  const spaced = fixture({ recentRoots: new Set(['other artist']) });
+  assert.deepEqual(await runGenreGuard(spaced.deps), { kind: 'kept' });
+  assert.equal(spaced.calls.length, 0);
+  assert.equal(spaced.events[0].reason, 'artist-spacing');
+  assert.match(spaced.lines[0], /artist spacing holds/);
+  // With a fresh artist beside it, only the fresh artist is offered.
+  const fresh = { ...other, id: 'fresh', artist: 'Fresh Artist', genres: ['Funk'] };
+  const narrowed = fixture({ recentRoots: new Set(['other artist']), seen: new Map([pick, other, fresh].map(s => [s.id, s])), repick: async alt => { narrowed.calls.push(alt); return { id: fresh.id }; } });
+  assert.equal((await runGenreGuard(narrowed.deps)).kind, 'repicked');
+  assert.deepEqual([...narrowed.calls[0].keys()], [fresh.id]);
+  const anchored = fixture({ avoidAnchorRoot: 'other artist' });
+  assert.deepEqual(await runGenreGuard(anchored.deps), { kind: 'kept' });
+  assert.equal(anchored.calls.length, 0);
+  assert.equal(anchored.events[0].reason, 'anchor-artist');
 });
 
 // Family rule: a shared label OR the same small built-in family.
@@ -247,7 +255,7 @@ test('no run means no steer call', async () => {
   assert.deepEqual(await runGenreGuard(deps), { kind: 'none' });
 });
 
-test('album cooldown: a fresh-album alternative beats a recent-album one; with none left the cooldown relaxes', async () => {
+test('album cooldown: a fresh-album alternative is offered, a recent-album one never is', async () => {
   const recentAlbum = { ...other, id: 'recent-album', genres: ['Soul'], album: 'Old Record' };
   const freshAlbum = { ...other, id: 'fresh-album', genres: ['Funk'], album: 'New Record' };
   const albumOf = (s: Song & { album?: string }) => s.album ?? '';
@@ -259,12 +267,12 @@ test('album cooldown: a fresh-album alternative beats a recent-album one; with n
   const a = fam({ ...base, seen: new Map([ska, recentAlbum, freshAlbum].map(s => [s.id, s])) });
   assert.equal((await runGenreGuard(a.deps)).kind, 'repicked');
   assert.deepEqual(offered.pop(), ['fresh-album']);
-  assert.equal(a.events[0].albumRelaxed, false);
 
+  // Only a recent-album alternative: the pick, which passed the cooldown, stands.
   const b = fam({ ...base, seen: new Map([ska, recentAlbum].map(s => [s.id, s])) });
-  assert.equal((await runGenreGuard(b.deps)).kind, 'repicked');
-  assert.deepEqual(offered.pop(), ['recent-album'], 'never starve: the cooldown yields');
-  assert.equal(b.events[0].albumRelaxed, true);
+  assert.deepEqual(await runGenreGuard(b.deps), { kind: 'kept' });
+  assert.equal(offered.length, 0);
+  assert.equal(b.events[0].reason, 'album-cooldown');
 
   // Steered candidates are held to the same rule.
   const c = fam({ ...base, seen: new Map([[ska.id, ska]]), steer: async () => new Map([recentAlbum, freshAlbum].map(s => [s.id, s])) });
@@ -275,4 +283,18 @@ test('album cooldown: a fresh-album alternative beats a recent-album one; with n
   const d = fam({ albumKeyOf: albumOf, recentAlbums: new Set(), seen: new Map([ska, recentAlbum, freshAlbum].map(s => [s.id, s])), repick: base.repick });
   assert.equal((await runGenreGuard(d.deps)).kind, 'repicked');
   assert.deepEqual(offered.pop(), ['recent-album', 'fresh-album']);
+});
+
+test('an alternative inside both the spacing window and the cooldown keeps a pick that passed both', async () => {
+  const soul = { ...other, album: 'Recent Album' };
+  let repicks = 0;
+  const { deps, events } = fixture({
+    seen: new Map([[pick.id, pick], [soul.id, soul]]),
+    recentRoots: new Set(['other artist']),
+    recentAlbums: new Set(['Recent Album']), albumKeyOf: (s: Song & { album?: string }) => s.album ?? '',
+    repick: async () => { repicks++; return { id: soul.id }; },
+  });
+  assert.deepEqual(await runGenreGuard(deps), { kind: 'kept' });
+  assert.equal(repicks, 0);
+  assert.equal(events[0].reason, 'album-cooldown');
 });
