@@ -82,6 +82,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 | `say.txt` | 0.5s | WAV path → `voice_queue`, **heavy-ducked** (`smooth_add p`, `ducking.voice`, default 0.22). Idents, hourly time, weather, request intros |
 | `intro.txt` | 0.5s | between-track links → `intro_queue`, **light-ducked** (`ducking.intro`, default 0.30) so the song stays audible under the voice |
 | `auto.m3u` | telnet `auto.reload` | fallback playlist, rewritten every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) for the current mood; the reload sent after each write re-reads it, and radio.liq's file watch only re-reads contents no reload has read yet; only the reload replaces an off-air playlist, dropping a track it had already prepared |
+| `jingles.m3u` | telnet `jingles.reload` | the mixer's own jingle rotate, rebuilt by `broadcast/jingles.ts` on every jingle change and at boot; a reload follows each write (coalesced, never awaited), because a Liquidsoap 2.4.5 file watch misses atomic rewrites (#2008) |
 | `liquidsoap_*.txt` | startup | jingle_ratio, crossfade, per-codec enable/bitrate… written by `settings.update()`, **read once** — changes need a mixer restart (`/restart-mixer` → telnet) |
 
 **Liquidsoap → Controller / UI** — marker files, normally written from an `on_metadata` hook (the pause acceptance marker is the ordered exception):
@@ -126,7 +127,7 @@ Two sidecars: **`analyzer`** starts by default (acoustic analysis — lean by de
 
 ### Jingles
 
-`state/jingles.m3u` is empty by default. Run `scripts/generate-jingles.sh` once the stack is up — it `exec`s into the controller, pipes text through the configured TTS engine, writes WAVs into `${STATE_DIR}/jingles/` and rewrites the M3U. The playlist uses `reload_mode="watch"`, so new renders need no restart.
+`broadcast/jingles.ts` owns `state/jingles.m3u`. It rebuilds the file from the `jingles.json` sidecar on every create, upload, delete, persona-bundle import and backup restore, and at boot, which also installs the default ident. Each rebuild is an atomic rename followed by a telnet `jingles.reload`. The reload is never awaited and goes out once writes have paused for `RELOAD_SETTLE_MS`, so a batch upload costs one reload (#2008). The playlist's `reload_mode="watch"` is only a backstop: on Liquidsoap 2.4.5 it watches the file's inode, so it reports the first rename (as that inode goes) and is deaf after it. A mixer with no rotate (`jingleRatio` 0, or `jingleRotate: 'controller'`) answers "unknown command", which is ignored. `scripts/generate-jingles.sh` renders a fixed Piper set, writes the M3U itself and sends the same reload, but its list lasts only until the controller next rebuilds the file.
 
 ## Working on this codebase
 

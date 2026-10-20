@@ -163,7 +163,7 @@ First boot will spend a minute or two pulling images and compiling. Once `contro
 ./scripts/generate-jingles.sh
 ```
 
-This `docker compose exec`s into the controller and uses Piper to render the default set of station IDs into `${STATE_DIR}/jingles/`, then writes a fresh `jingles.m3u`. Liquidsoap's playlist uses `reload_mode="watch"`, so the new renders are picked up without a restart.
+This `docker compose exec`s into the controller and uses Piper to render the default set of station IDs into `${STATE_DIR}/jingles/`, then writes a fresh `jingles.m3u`. The script then sends the mixer `jingles.reload`, so the new renders are picked up without a restart.
 
 After F5, fall through to **Step 5 — Verify** below.
 
