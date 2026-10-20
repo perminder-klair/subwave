@@ -2,9 +2,10 @@
 // source must release its pass, cancel I/O and allow the next source to finish.
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 const root = mkdtempSync(join(tmpdir(), 'subwave-shortlist-deadline-'));
 process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = 'http://deadline-library.invalid';
@@ -14,7 +15,7 @@ const { clearPickerSourceCache } = await import('../src/llm/internal/tools/picke
 const { executeShortlistPlan } = await import('../src/music/shortlist.js');
 await library.load();
 const realFetch = globalThis.fetch;
-after(() => { globalThis.fetch = realFetch; library.shutdown(); rmSync(root, { recursive: true, force: true }); });
+after(async () => { globalThis.fetch = realFetch; library.shutdown(); await removeTempDir(root); });
 
 test('Shortlist supplies the registry deadline signal and continues after a timed-out source', async () => {
   let searchCalls = 0;

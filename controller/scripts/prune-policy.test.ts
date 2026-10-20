@@ -17,9 +17,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-prune-guard-'));
 process.env.STATE_DIR = stateDir;
@@ -103,7 +104,7 @@ test('a small removal needs no confirmation', async () => {
   assert.equal(gone.length, 300);
 });
 
-test.after(() => {
+test.after(async () => {
   db.close?.();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });

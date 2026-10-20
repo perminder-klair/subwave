@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-episode-source-'));
 let albumCalls = 0;
@@ -40,7 +41,7 @@ const { buildPickerTools } = await import('../src/llm/internal/tools/picker/inde
 const { showNoRepeatGuard } = await import('../src/music/show-recency.js');
 const { showSchema } = await import('../src/schemas/show.js');
 await settings.load(); await library.load(); await blocklist.load();
-after(async () => { db.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(root, { recursive: true, force: true }); });
+after(async () => { db.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); await removeTempDir(root); });
 for (const [id, title] of [['one', 'One'], ['two', 'Two'], ['duplicate', 'One'], ['short', 'Short']]) {
   db.upsertTrackMeta(id, { title, artist: 'Artist', artistId: 'artist', album: 'Album', albumId: 'album', duration: id === 'short' ? 10 : 180 });
 }

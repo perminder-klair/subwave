@@ -19,9 +19,10 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // Loud and quiet ends of the arousal axis, well clear of the decision
 // threshold in both directions.
@@ -48,9 +49,9 @@ const db = await import('../src/music/library-db.js');
 const { runPropagatedEnergyPass } = await import('../src/music/propagated-energy.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
-after(() => {
+after(async () => {
   db.close?.();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
 
 // A library big enough to calibrate against (MIN_BASELINE_TRACKS = 200),

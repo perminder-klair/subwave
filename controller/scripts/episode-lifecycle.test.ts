@@ -2,9 +2,10 @@ import type { SessionContext, ProgrammeState } from '../src/broadcast/session.js
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { after } from 'node:test';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-episode-lifecycle-'));
 process.env.STATE_DIR = root;
@@ -17,7 +18,7 @@ const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { prepareEpisodeContext, showPreparation } = await import('../src/broadcast/show-preparation.js');
 const { config } = await import('../src/config.js');
-after(() => rm(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 await settings.load();
 
 const plan = { angle: 'Episode angle', features: [], introNote: null, outroNote: null };

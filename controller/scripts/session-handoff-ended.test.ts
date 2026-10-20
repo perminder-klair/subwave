@@ -12,16 +12,17 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-handoff-ended-'));
 process.env.STATE_DIR = root;
 
 const session = await import('../src/broadcast/session.js');
 
-after(() => rmSync(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 
 function context(show: { id: string; name: string } | null, period = 'evening', mood = 'energetic') {
   return {

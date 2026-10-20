@@ -18,10 +18,11 @@
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `tsx scripts/pick-stats.test.ts`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-pick-stats-'));
 process.env.STATE_DIR = stateDir;
@@ -184,7 +185,7 @@ test('an energy on an untagged row counts nowhere, as in stats() (#1732)', async
   await library.load();
 });
 
-test.after(() => {
+test.after(async () => {
   db.close();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
