@@ -160,10 +160,10 @@ export interface StationHeaderProps {
   showName: string;
   weatherText: string;
   pickerBusy: boolean;
-  /** opens the never-play confirm for the track on air. Absent, no button. */
-  onNeverPlay?: () => void;
-  /** Disabled reason: only a library track (with a subsonic id) can be blocked. */
-  canNeverPlay?: boolean;
+  /** Opens the never-play confirm for the track on air. */
+  onNeverPlay: () => void;
+  /** Whether a library track (one with a subsonic id) is on air; only one can be blocked. */
+  canNeverPlay: boolean;
   busy: string | null;
   onSkip: () => void;
 }
@@ -289,16 +289,14 @@ export default function StationHeader({
           )}
         </div>
         <div className="flex gap-2">
-          {onNeverPlay && (
-            <Btn
-              lg
-              disabled={!!busy || !canNeverPlay}
-              onClick={onNeverPlay}
-              title={canNeverPlay ? 'Add this track to the never-play list' : 'Only a library track can be blocked'}
-            >
-              {busy === 'never-play' ? 'blocking…' : 'Never play'}
-            </Btn>
-          )}
+          <Btn
+            lg
+            disabled={!!busy || !canNeverPlay}
+            onClick={onNeverPlay}
+            title={canNeverPlay ? 'Add this track to the never-play list' : 'Only a library track can be blocked'}
+          >
+            {busy === 'never-play' ? 'blocking…' : 'Never play'}
+          </Btn>
           <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
             {busy === 'skip' ? 'skipping…' : 'Skip track'}
           </Btn>
