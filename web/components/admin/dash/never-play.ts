@@ -1,14 +1,17 @@
 /**
  * "Never play" on the Dash's now-playing track.
  *
- * No new rule path: the block is the library table's own
- * `POST /library/blocklist { type: 'track', trackId }` (the blocklist is
- * absolute, so the track never airs again, listener requests included) and the
- * optional skip is the existing `POST /dj/skip`. The block runs FIRST, so a
+ * No new rule path: the block is the Library page's own write,
+ * `POST /library/blocklist { type: 'track', trackId }` through
+ * `library/block-actions` (the blocklist is absolute, so the track never airs
+ * again, listener requests included), and the optional skip is the existing
+ * `POST /dj/skip`. The block runs FIRST, so a
  * failed block never skips a track the operator meant to keep off the air
  * only together with the block.
  */
-import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
+import { AdminResponseError, type AdminFetch } from '../../../lib/admin-query';
+import { postBlock } from '../library/block-actions';
+import type { BlockEntry } from '../library/types';
 
 export type BlockOutcome = 'added' | 'already';
 export type SkipOutcome = 'not-asked' | 'done' | 'failed' | 'moot';
@@ -34,17 +37,13 @@ export interface NeverPlayResult {
   /** Queued copies the server dropped (`queue.purgeBlocked()`). */
   purged?: number;
   /** The new entry, for Undo. Absent when it was already blocked. */
-  entry?: { type: 'track'; id: string; name?: string | null };
+  entry?: BlockEntry;
 }
 
 /** The block write. 409 "already blocked" is an outcome, not an error. */
 export async function blockPlayingTrack(fetcher: AdminFetch, trackId: string): Promise<NeverPlayResult> {
   try {
-    const j = await adminJson<{ entry?: NeverPlayResult['entry']; purged?: number }>(fetcher, '/library/blocklist', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'track', trackId }),
-    });
+    const j = await postBlock(fetcher, 'track', trackId);
     return { block: 'added', purged: j.purged, entry: j.entry };
   } catch (error) {
     if (error instanceof AdminResponseError && error.status === 409) return { block: 'already' };

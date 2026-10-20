@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { adminResponse, useAdminMutation, useAdminQuery } from '../../lib/admin-query';
+import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
@@ -47,7 +47,8 @@ import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
 import { blockPlayingTrack, neverPlayToast, skipDecision, type SkipOutcome } from './dash/never-play';
-import { libraryKeys } from './library/queries';
+import { deleteBlockEntry, notifyBlockedWithUndo, reconcileBlockCaches } from './library/block-actions';
+import type { BlockEntry } from './library/types';
 import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
@@ -228,26 +229,22 @@ export default function DashPanel() {
   // Runs only after the confirm dialog — a skip cuts the track for every listener.
   const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
 
-  // the library table's own block write, so the Library page's lists
-  // and the Blocked tab see it whether or not they are mounted.
+  // The same block write and cache reconciliation the Library page uses
+  // (library/block-actions), so its Blocked tab and loaded lists show the
+  // entry whether or not they are mounted.
   const blockMutation = useAdminMutation({
     adminFetch,
     toastOnError: false,
     request: (trackId: string, fetcher) => blockPlayingTrack(fetcher, trackId),
-    onDone: (_data, _vars, client) => {
-      void client.invalidateQueries({ queryKey: libraryKeys.blocked() });
-      void client.invalidateQueries({ queryKey: libraryKeys.rows });
-    },
+    // Not awaited: re-marking cached Library rows must not hold up the skip.
+    onDone: (_data, _vars, client) => { void reconcileBlockCaches(client, adminFetch); },
   });
-  const unblockMutation = useAdminMutation<void, string>({
+  const unblockMutation = useAdminMutation<void, BlockEntry>({
     adminFetch,
-    request: async (trackId, fetcher) => {
-      await adminResponse(fetcher, `/library/blocklist/track/${encodeURIComponent(trackId)}`, { method: 'DELETE' });
-    },
-    onDone: (_data, _vars, client) => {
-      void client.invalidateQueries({ queryKey: libraryKeys.blocked() });
-      void client.invalidateQueries({ queryKey: libraryKeys.rows });
-    },
+    // The Undo toast reports a failure itself.
+    toastOnError: false,
+    request: (entry, fetcher) => deleteBlockEntry(fetcher, entry),
+    onDone: (_data, _vars, client) => reconcileBlockCaches(client, adminFetch),
   });
 
   // Runs only after the confirm dialog. The block lands FIRST: a failed block
@@ -293,13 +290,8 @@ export default function DashPanel() {
       }
       const t = neverPlayToast({ title: target.title, artist: target.artist, block: r.block, skip, purged: r.purged, skipError });
       if (t.tone === 'err') notify.err(t.text);
-      else if (r.entry) {
-        notify.undo(t.text, () => {
-          unblockMutation.mutateAsync(target.id)
-            .then(() => notify.ok(`“${target.title}” can play again`))
-            .catch(() => { /* toasted by the mutation */ });
-        });
-      } else notify.ok(t.text);
+      else if (r.entry) notifyBlockedWithUndo(t.text, r.entry, e => unblockMutation.mutateAsync(e));
+      else notify.ok(t.text);
     } catch (e) {
       notify.err(`never play: ${errorMessage(e)}`);
     } finally {
