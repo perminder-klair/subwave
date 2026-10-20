@@ -133,29 +133,43 @@ DEMUCS_SR = 44100
 DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
 
 
-def _env_float(name, default):
+def _env_float(name, default, minimum=None, maximum=None):
+    """Decimal env var, warn-and-fall-back. With no bounds it reads exactly as it
+    always has (anything float() takes, nan and inf included). A bound makes it
+    the Python half of the controller's bounded `envFloat` (controller/src/util/
+    env.ts): NaN, inf or a value outside [minimum, maximum] warns and returns the
+    default. Never clamp instead — a clamp turned a percent-minded
+    DEMUCS_OVERLAP=25 into the slowest legal setting with nothing logged."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         # Runs at module load, before log() is defined — write stderr directly.
         sys.stderr.write(
             f"[analyze-worker] {name}={raw!r} is not a number; using default {default}\n"
         )
         return default
+    if minimum is None and maximum is None:
+        return value
+    if not math.isfinite(value):
+        problem = "is not a finite number"
+    elif minimum is not None and value < minimum:
+        problem = f"must be at least {minimum}"
+    elif maximum is not None and value > maximum:
+        problem = f"must be at most {maximum}"
+    else:
+        return value
+    sys.stderr.write(f"[analyze-worker] {name}={raw!r} {problem}; using default {default}\n")
+    return default
 
 
 def demucs_overlap():
-    """Share of each Demucs chunk that overlaps the next; 0.25 is demucs' own
-    default. Clamped to [0, 0.9]: 1.0 gives stride 0 and demucs raises. NaN
-    passes float() and the clamp, so it falls back like any non-number."""
-    v = _env_float("DEMUCS_OVERLAP", 0.25)
-    if math.isnan(v):
-        sys.stderr.write("[analyze-worker] DEMUCS_OVERLAP is NaN; using default 0.25\n")
-        return 0.25
-    return min(max(v, 0.0), 0.9)
+    """Share of each Demucs chunk that overlaps the next. The default is demucs'
+    own apply_model default, so an unset var changes nothing. 1.0 gives stride 0
+    and demucs raises, hence the 0.9 ceiling."""
+    return _env_float("DEMUCS_OVERLAP", 0.25, minimum=0.0, maximum=0.9)
 
 
 DEMUCS_OVERLAP = demucs_overlap()
