@@ -42,6 +42,7 @@ import {
   tuningStatus,
   turnClock,
 } from '../shared';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
 import {
   useDjOnAir,
   useRequestSlip,
@@ -275,11 +276,12 @@ export default function AxoSkin(_props: SkinProps) {
             <span className="font-display text-[22px] font-extrabold tracking-[0.02em]">{stationName.toUpperCase()}</span>
             <span className="font-mono text-[10px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">axo-1 · hi-fi stack</span>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <div className="flex items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase">
+          {/* One baseline for the run; the icons sit on its cap centre. */}
+          <div className="flex shrink-0 items-baseline gap-3 font-mono text-[11px]">
+            <div className="flex items-baseline gap-3 tracking-[0.16em] uppercase">
               {showName && (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <Play className="size-2.5 flex-none fill-current" />
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <Play className={cn('size-2.5 flex-none fill-current', CAP_CENTRE)} />
                   <span className="max-w-[18vw] truncate">{showName}</span>
                 </span>
               )}
@@ -296,6 +298,7 @@ export default function AxoSkin(_props: SkinProps) {
               title={focus ? 'Show the column (F)' : 'Focus — fold the column away (F)'}
               className={cn(
                 'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
+                CAP_CENTRE_16,
                 focus ? 'text-[var(--accent)]' : 'text-muted hover:text-ink',
               )}
             >
@@ -303,7 +306,7 @@ export default function AxoSkin(_props: SkinProps) {
                 ? <PanelLeftOpen className="size-4" aria-hidden="true" />
                 : <PanelLeftClose className="size-4" aria-hidden="true" />}
             </button>
-            <ThemeSwitcher />
+            <ThemeSwitcher className={CAP_CENTRE_16} />
           </div>
         </div>
 
@@ -442,7 +445,7 @@ export default function AxoSkin(_props: SkinProps) {
             {stationName.toUpperCase()}
           </span>
           <span className="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-            {showName && <><Play className="inline size-2 fill-current" /> {showName} · </>}
+            {showName && <><Play className="inline size-2 fill-current align-[calc(0.5cap-4px)]" /> {showName} · </>}
             <span className="text-[var(--accent)]">with {djName}</span>
           </span>
           <ThemeSwitcher />

@@ -54,6 +54,7 @@ import {
   trackMeta,
   tuningStatus,
 } from '../shared';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
 import { useDjOnAir, useRequestSlip, useSkinCalm, useTrackLike, type RequestOutcome } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
@@ -414,11 +415,12 @@ export default function CipherSkin({ contained }: SkinProps) {
               cipher-3 · type a request · rotor I sets volume
             </span>
           </div>
-          <div className="flex min-w-0 shrink items-center gap-3">
-            <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase">
+          {/* One baseline for the run; the icons sit on its cap centre. */}
+          <div className="flex min-w-0 shrink items-baseline gap-3 font-mono text-[11px]">
+            <div className="flex min-w-0 items-baseline gap-3 tracking-[0.16em] uppercase">
               {showName && (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <Play className="size-2.5 flex-none fill-current" />
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <Play className={cn('size-2.5 flex-none fill-current', CAP_CENTRE)} />
                   <span className="max-w-[18vw] truncate">{showName}</span>
                 </span>
               )}
@@ -427,7 +429,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                 <span className="max-w-[22vw] truncate border-l border-soft-border pl-3 text-muted">{contextLine(context)}</span>
               )}
             </div>
-            <ThemeSwitcher />
+            <ThemeSwitcher className={CAP_CENTRE_16} />
           </div>
         </div>
 
@@ -602,7 +604,7 @@ export default function CipherSkin({ contained }: SkinProps) {
             {stationName.toUpperCase()}
           </span>
           <span className="min-w-0 flex-1 truncate font-mono text-[10px] tracking-[0.16em] text-muted uppercase">
-            {showName && <><Play className="inline size-2 fill-current" /> {showName} · </>}
+            {showName && <><Play className="inline size-2 fill-current align-[calc(0.5cap-4px)]" /> {showName} · </>}
             <span className="text-vermilion">with {djName}</span>
           </span>
           <ThemeSwitcher />

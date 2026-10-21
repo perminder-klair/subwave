@@ -121,13 +121,15 @@ function SectionHead({ label, overridden, stationName, resetLabel, followingLabe
 export interface ThemeSwitcherProps {
   /** Trigger button text styling, so it picks up the right cluster's font. */
   variant?: 'player' | 'admin';
+  /** Extra classes for the trigger, e.g. a skin's alignment nudge. */
+  className?: string;
 }
 
 // Per-listener theme + skin switcher; picks persist in localStorage and beat the
 // station-wide defaults until reset. Modal rather than a dropdown so it reads the
 // same on every skin — an anchored popover collided with each skin's own chrome.
 // Renders nothing while the registry is loading or empty.
-export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps) {
+export default function ThemeSwitcher({ variant = 'player', className }: ThemeSwitcherProps) {
   const ctx = useThemeSwitcher();
   // Skin selection only exists inside a PlayerShell; the admin variant gets null
   // and hides the section, as does a build shipping a single skin.
@@ -203,6 +205,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
             variant === 'admin'
               ? 'caption min-h-9 min-w-9 text-muted sm:min-h-0 sm:min-w-0'
               : 'text-muted hover:text-ink',
+            className,
           )}
         >
           <Palette className="h-4 w-4" aria-hidden="true" />

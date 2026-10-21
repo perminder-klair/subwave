@@ -175,12 +175,14 @@ export default function TtySkin(_props: SkinProps) {
             {showName ? <> ▸ {showName.toUpperCase()}</> : null}
             <span className="text-[var(--accent)]"> — WITH {djName.toUpperCase()}</span>
           </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="hidden max-w-[40vw] truncate text-[12px] tracking-[0.1em] text-muted uppercase sm:inline">
+          {/* Baseline-aligned so the palette can sit on the run's cap centre
+              (CAP_CENTRE_16); the run is hidden below sm, so the nudge starts there. */}
+          <div className="flex shrink-0 items-baseline gap-3 text-[12px]">
+            <span className="hidden max-w-[40vw] truncate tracking-[0.1em] text-muted uppercase sm:inline">
               {[contextLine(context), clock ? turnClock(clock.getTime(), timezone, stationLocale) : '']
                 .filter(Boolean).join(' · ')}
             </span>
-            <ThemeSwitcher />
+            <ThemeSwitcher className="sm:-my-2 sm:translate-y-[calc(50%-0.5cap)]" />
           </div>
         </div>
 

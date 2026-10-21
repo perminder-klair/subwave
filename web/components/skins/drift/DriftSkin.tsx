@@ -30,6 +30,7 @@ import {
   stationIdentity,
   turnClock,
 } from '../shared';
+import { CAP_CENTRE } from '../capCentre';
 import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
@@ -162,8 +163,10 @@ export default function DriftSkin(_props: SkinProps) {
       <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[11px] tracking-[0.24em] text-ink uppercase sm:max-w-[45%]">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
-      <div className="absolute top-7 right-8 flex max-w-[45%] items-center gap-3">
-        <span className="hidden min-w-0 truncate font-mono text-[11px] tracking-[0.24em] text-muted uppercase sm:block">
+      {/* Baseline-aligned so the palette sits on the run's cap centre (see
+          CAP_CENTRE_16); the run is hidden below sm, so the nudge starts there. */}
+      <div className="absolute top-7 right-8 flex max-w-[45%] items-baseline gap-3 font-mono text-[11px]">
+        <span className="hidden min-w-0 truncate tracking-[0.24em] text-muted uppercase sm:block">
           {clock
             ? [
                 `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
@@ -171,16 +174,20 @@ export default function DriftSkin(_props: SkinProps) {
               ].filter(Boolean).join(' · ')
             : contextLine(context)}
         </span>
-        <ThemeSwitcher />
+        <ThemeSwitcher className="sm:-my-2 sm:translate-y-[calc(50%-0.5cap)]" />
       </div>
       <div className="absolute bottom-7 left-8 max-w-[38%] truncate font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
         {upNext?.title ? `up next · ${[upNext.title, upNext.artist].filter(Boolean).join(' — ')}` : ''}
       </div>
+      {/* One baseline for the corner, with the icons on its cap centre
+          (CAP_CENTRE). Every group inside is baseline-aligned too: a centred
+          group that leads with an icon takes the icon's bottom edge as its
+          baseline, which lifted the count and the heart above the volume. */}
       <div className="absolute right-8 bottom-7 flex items-baseline gap-2 font-mono text-[11px] tracking-[0.18em] text-muted uppercase">
-        <span className="hidden items-center gap-1.5 sm:inline-flex">
+        <span className="hidden items-baseline gap-1.5 sm:inline-flex">
           {listenerCount != null && (
-            <span className="inline-flex items-center gap-1" aria-label={`${listenerCount} listening`}>
-              <Headphones aria-hidden className="size-3" strokeWidth={1.5} />
+            <span className="inline-flex items-baseline gap-1" aria-label={`${listenerCount} listening`}>
+              <Headphones aria-hidden className={cn('size-3', CAP_CENTRE)} strokeWidth={1.5} />
               {listenerCount}
             </span>
           )}
@@ -197,12 +204,12 @@ export default function DriftSkin(_props: SkinProps) {
             aria-pressed={like.liked}
             aria-label={like.liked ? 'Liked' : 'Like this track'}
             className={cn(
-              'v3-focus inline-flex items-center gap-1 border-0 bg-transparent p-0',
+              'v3-focus inline-flex items-baseline gap-1 border-0 bg-transparent p-0',
               like.liked ? 'text-[var(--accent)]' : 'cursor-pointer text-muted hover:text-ink',
               like.pending && 'opacity-60',
             )}
           >
-            <Heart aria-hidden className={cn('size-3', like.liked && 'fill-current')} strokeWidth={1.5} />
+            <Heart aria-hidden className={cn('size-3', CAP_CENTRE, like.liked && 'fill-current')} strokeWidth={1.5} />
             {like.count > 0 && like.count}
           </button>
         )}

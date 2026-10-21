@@ -187,12 +187,14 @@ export default function SubampSkin(_props: SkinProps) {
       <div className="absolute top-7 left-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
         {stationName} — {showName ? `${showName} with ${djName}` : `with ${djName}`}
       </div>
-      <div className="absolute top-3 right-3 z-10 flex items-center gap-3 lg:top-7 lg:right-9">
-        <span className="hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:inline">
+      {/* Baseline-aligned so the palette sits on the run's cap centre (see
+          CAP_CENTRE_16); the run only shows from lg, so the nudge starts there. */}
+      <div className="absolute top-3 right-3 z-10 flex items-baseline gap-3 text-[10px] lg:top-7 lg:right-9">
+        <span className="hidden tracking-[0.24em] text-muted uppercase lg:inline">
           {[clock ? turnClock(clock.getTime(), timezone, stationLocale) : '', contextLine(context)]
             .filter(Boolean).join(' · ')}
         </span>
-        <ThemeSwitcher />
+        <ThemeSwitcher className="lg:-my-2 lg:translate-y-[calc(50%-0.5cap)]" />
       </div>
       <div className="relative mx-auto flex h-full w-full max-w-[580px] flex-col gap-2 px-3 pt-9 pb-3 lg:h-auto lg:min-h-full lg:justify-center lg:py-14">
         <Window title={<>SUBAMP ▪ LIVE BROADCAST DECK</>} className="flex-none">

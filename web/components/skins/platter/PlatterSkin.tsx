@@ -36,6 +36,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
 import { useDjOnAir, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
@@ -294,11 +295,14 @@ export default function PlatterSkin(_props: SkinProps) {
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex-none text-[15px] font-extrabold tracking-[0.14em]">{stationName.toUpperCase()}</span>
         </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <div className="hidden items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase md:flex">
+        {/* One baseline for the run; the icons sit on its cap centre. The run
+            is hidden below md, so the palette's nudge (CAP_CENTRE_16) starts there
+            too — alone, it centres as a box. */}
+        <div className="flex shrink-0 items-baseline gap-3 font-mono text-[11px]">
+          <div className="hidden items-baseline gap-3 tracking-[0.16em] uppercase md:flex">
             {showName && (
-              <span className="flex min-w-0 items-center gap-1.5">
-                <Play className="size-2.5 flex-none fill-current" />
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                <Play className={cn('size-2.5 flex-none fill-current', CAP_CENTRE)} />
                 <span className="max-w-[22vw] truncate">{showName}</span>
               </span>
             )}
@@ -315,6 +319,7 @@ export default function PlatterSkin(_props: SkinProps) {
             title={focusOn ? 'Show the column (F)' : 'Focus — fold the column away (F)'}
             className={cn(
               'v3-focus hidden shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none lg:inline-flex',
+              CAP_CENTRE_16,
               focusOn ? 'text-[var(--accent)]' : 'text-muted hover:text-ink',
             )}
           >
@@ -322,7 +327,7 @@ export default function PlatterSkin(_props: SkinProps) {
               ? <PanelRightOpen className="size-4" aria-hidden="true" />
               : <PanelRightClose className="size-4" aria-hidden="true" />}
           </button>
-          <ThemeSwitcher />
+          <ThemeSwitcher className="md:-my-2 md:translate-y-[calc(50%-0.5cap)]" />
         </div>
       </div>
 

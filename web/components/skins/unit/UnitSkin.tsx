@@ -34,6 +34,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
+import { CAP_CENTRE, CAP_CENTRE_16 } from '../capCentre';
 import { useAnalyser } from '@/lib/hooks';
 import { useLiteMode } from '@/hooks/useLiteMode';
 import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
@@ -511,10 +512,12 @@ export default function UnitSkin(_props: SkinProps) {
     </span>
   );
 
+  // Lamps sit on the type's cap centre (see CAP_CENTRE): centred on the line
+  // box instead, they hung a pixel or so below the capitals.
   const onAirLamp = (dot: string, textClass?: string) => (
-    <span className={cn('flex items-center gap-2', textClass)}>
+    <span className={cn('flex items-baseline gap-2', textClass)}>
       <span
-        className={cn(styles.lamp, offline ? styles.lampIdle : styles.lampLive, dot)}
+        className={cn(styles.lamp, offline ? styles.lampIdle : styles.lampLive, CAP_CENTRE, dot)}
         aria-hidden="true"
       />
       {offline ? 'off air' : 'on air'}
@@ -554,26 +557,27 @@ export default function UnitSkin(_props: SkinProps) {
           <div
             className={cn(
               styles.engravedSoft,
-              'flex flex-none items-center gap-[22px] font-mono text-[9px] font-bold tracking-[0.2em] uppercase',
+              'flex flex-none items-baseline gap-[22px] font-mono text-[9px] font-bold tracking-[0.2em] uppercase',
             )}
           >
             {onAirLamp('size-[9px]')}
-            <span className="flex items-center gap-2">
+            <span className="flex items-baseline gap-2">
               <span
                 className={cn(
                   styles.lamp,
                   tunedIn && signal.latencyMs != null ? styles.lampNet : styles.lampIdle,
+                  CAP_CENTRE,
                   'size-[9px]',
                 )}
                 aria-hidden="true"
               />
               {tunedIn && signal.latencyMs != null ? `net ${signal.latencyMs} ms` : 'net standby'}
             </span>
-            <span className="flex items-center gap-2">
-              <span className={cn(styles.lamp, styles.lampIdle, 'size-[9px]')} aria-hidden="true" />
+            <span className="flex items-baseline gap-2">
+              <span className={cn(styles.lamp, styles.lampIdle, CAP_CENTRE, 'size-[9px]')} aria-hidden="true" />
               {listenerCount ?? '—'} listening
             </span>
-            <ThemeSwitcher />
+            <ThemeSwitcher className={CAP_CENTRE_16} />
           </div>
         </div>
 
@@ -774,10 +778,10 @@ export default function UnitSkin(_props: SkinProps) {
           )}
         >
           <span className="tabular-nums">{clock}</span>
-          <span className="flex items-center gap-2.5">
+          <span className="flex items-baseline gap-2.5">
             {onAirLamp('size-[7px]')}
             <span>{listenerCount ?? '—'} listening</span>
-            <ThemeSwitcher />
+            <ThemeSwitcher className={CAP_CENTRE_16} />
           </span>
         </div>
 
