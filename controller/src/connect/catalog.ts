@@ -424,7 +424,7 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
           + 'It never returns station passwords or Alexa credentials.',
         auth: 'admin',
         responseExample: {
-          station: 'Chill Zone',
+          station: 'Example Station',
           streamUrl: 'https://radio.example.com/stream.mp3',
           streamMount: '/stream.mp3',
           streamOptions: [

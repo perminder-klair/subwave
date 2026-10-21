@@ -20,7 +20,7 @@ the invocation name or Skill ID.
 
 - The station must be reachable over public HTTPS.
 - `SITE_URL` must be set to the public station origin, for example
-  `https://subwave.citadels.studio`.
+  `https://radio.example.com`.
 - The selected stream mount must be publicly playable. SUB/WAVE exposes
   `/stream.mp3` always, plus optional `/stream.opus`, `/stream.flac`, and
   `/stream.aac` mounts.

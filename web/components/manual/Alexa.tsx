@@ -115,18 +115,17 @@ Alexa fetches the stream directly from the station
         <div className="bs-callout">
           <div className="bs-eyebrow">THE TUNEIN FAILURE WE SAW</div>
           <p>
-            Phrases such as <code className="bs-code-inline">open chill zone</code>,{' '}
-            <code className="bs-code-inline">play subwave radio</code>, or{' '}
-            <code className="bs-code-inline">open subwave signal</code> can be interpreted as
-            a name-free music request. Alexa may then answer with a station such as “ZBVI from
-            TuneIn” without invoking your skill. A distinctive invocation name plus the exact
+            Phrases such as <code className="bs-code-inline">open example station</code> or{' '}
+            <code className="bs-code-inline">play the radio</code> can be interpreted as a
+            name-free music request. Alexa may then answer with a catalogue station from
+            TuneIn without invoking your skill. A distinctive invocation name plus the exact
             phrase <code className="bs-code-inline">Alexa, open &lt;invocation name&gt;</code>{' '}
             forces the custom-skill route much more reliably.
           </p>
         </div>
         <p className="text-muted">
-          The station name can still be <strong>CHILL ZONE</strong>. Keep that name in Station
-          settings, but use a separate invocation such as{' '}
+          The station name can still be <strong>EXAMPLE STATION</strong>. Keep that name in
+          Station settings, but use a separate invocation such as{' '}
           <code className="bs-code-inline">subwave controller</code> to open the skill.
         </p>
         <p>
@@ -288,7 +287,7 @@ Alexa fetches the stream directly from the station
           </thead>
           <tbody>
             <tr>
-              <td>“ZBVI from TuneIn” or another catalogue station</td>
+              <td>A catalogue station from TuneIn or another service</td>
               <td>Alexa did not route the phrase to the custom skill. Use the exact distinctive invocation name with <code className="bs-code-inline">open</code>; do not say <code className="bs-code-inline">play &lt;station name&gt;</code> as the first command.</td>
             </tr>
             <tr>

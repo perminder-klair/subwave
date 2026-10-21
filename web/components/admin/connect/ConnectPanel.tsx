@@ -114,7 +114,7 @@ export default function ConnectPanel() {
             </div>
             <div className="mt-1 text-[11px] leading-[1.6] text-muted">
               Discover the HTTP API, try it live, wire up an MCP client, or point a speaker at the stream.
-              All URLs below are the real addresses for this station (<code className="break-all">{catalog.origin}</code>).
+              All URLs below are the real addresses for this station.
             </div>
           </div>
           <Btn sm onClick={downloadOpenApi} className="flex-none" title="Download an OpenAPI 3.1 spec for this station">

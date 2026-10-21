@@ -14,7 +14,7 @@ const { verifyAlexaStreamToken } = await import('../src/alexa/token.js');
 const { createAlexaSkill, router, testAlexaConnection } = await import('../src/routes/alexa.js');
 const settings = await import('../src/settings.js');
 
-const skillId = 'amzn1.ask.skill.4e261dd3-03ee-4139-8e6c-8d89d7f09355';
+const skillId = 'amzn1.ask.skill.11111111-1111-4111-8111-111111111111';
 
 function envelope(
   request: Record<string, unknown>,
@@ -63,7 +63,7 @@ const runtime = {
   getSettings: () => ({
     enabled: true,
     skillId,
-    station: 'CHILL ZONE',
+    station: 'EXAMPLE STATION',
     streamMount: '/stream.mp3',
     streamUrl: 'https://radio.example/stream.mp3',
   }),
@@ -96,7 +96,7 @@ test('Alexa launches the currently configured station and uses its public stream
   const response = await createAlexaSkill(runtime).invoke(launch());
   const body = response.response as any;
 
-  assert.equal(body.outputSpeech.ssml, '<speak>Starting CHILL ZONE.</speak>');
+  assert.equal(body.outputSpeech.ssml, '<speak>Starting EXAMPLE STATION.</speak>');
   assert.equal(body.shouldEndSession, true);
   assert.deepEqual(body.directives, [{
     type: 'AudioPlayer.Play',
@@ -155,7 +155,7 @@ test('pause and stop stop live playback, while resume starts at the live edge', 
   assert.deepEqual(pause.directives, [{ type: 'AudioPlayer.Stop' }]);
   assert.equal(stop.outputSpeech.ssml, '<speak>Radio stopped.</speak>');
   assert.deepEqual(stop.directives, [{ type: 'AudioPlayer.Stop' }]);
-  assert.equal(resume.outputSpeech.ssml, '<speak>Resuming CHILL ZONE.</speak>');
+  assert.equal(resume.outputSpeech.ssml, '<speak>Resuming EXAMPLE STATION.</speak>');
   assert.equal(resume.directives[0].audioItem.stream.offsetInMilliseconds, 0);
 });
 
