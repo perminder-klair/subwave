@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Palette } from 'lucide-react';
+import { Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { resolveFont, type Theme } from '@/lib/theme';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
+import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeProvider';
 import { useSkinSelection } from './skins/SkinContext';
 
@@ -125,8 +126,8 @@ export interface ThemeSwitcherProps {
   className?: string;
 }
 
-// Per-listener theme + skin switcher; picks persist in localStorage and beat the
-// station-wide defaults until reset. Modal rather than a dropdown so it reads the
+// Per-listener theme + skin switcher, plus this browser's lite-mode toggle; picks
+// persist in localStorage and beat the station-wide defaults until reset. Modal rather than a dropdown so it reads the
 // same on every skin — an anchored popover collided with each skin's own chrome.
 // Renders nothing while the registry is loading or empty.
 export default function ThemeSwitcher({ variant = 'player', className }: ThemeSwitcherProps) {
@@ -140,6 +141,7 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
   const [peekSkin, setPeekSkin] = useState<string | null>(null);
   const [, setPreviewLoaded] = useState(false);
   const activeChipRef = useRef<HTMLButtonElement>(null);
+  const { lite, setLite } = useLiteMode();
 
   // Opened before the warm-up below landed: the cards draw empty and fill in
   // when the chunk arrives, without suspending anything around them.
@@ -367,6 +369,43 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
                 {shownSkin && <Readout name={shownSkin.name} description={shownSkin.description} />}
               </section>
             )}
+
+            {/* Lite mode belongs to this browser, not the station, so its heading
+                carries no reset. The menu stays open so the listener sees the
+                blur and motion drop away behind it. */}
+            <section className="grid gap-1.5">
+              <div className="border-b border-soft-border px-1 pb-1">
+                <span className="v3-eyebrow text-[10px] tracking-[0.3em]">Performance</span>
+              </div>
+              <button
+                type="button"
+                aria-pressed={lite}
+                onClick={() => setLite(!lite)}
+                className={cn(
+                  'v3-focus mx-1 mt-1.5 flex cursor-pointer items-center gap-2.5 border px-3 py-2 text-left transition-colors duration-150',
+                  lite
+                    ? 'border-vermilion bg-[var(--accent-soft)]'
+                    : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                )}
+              >
+                <Zap className={cn('h-4 w-4 shrink-0', lite ? 'text-vermilion' : 'text-muted')} aria-hidden="true" />
+                <span className="grid min-w-0 flex-1 gap-0.5">
+                  <span className="truncate text-[10px] font-bold tracking-[0.14em] uppercase">Lite mode</span>
+                  <span className="truncate text-[10px] leading-[1.3] text-muted">
+                    Drops blur and animation, for low-power screens
+                  </span>
+                </span>
+                <span
+                  className={cn(
+                    'shrink-0 font-mono text-[9px] font-bold tracking-[0.2em] uppercase',
+                    lite ? 'text-vermilion' : 'text-muted',
+                  )}
+                  aria-hidden="true"
+                >
+                  {lite ? 'On' : 'Off'}
+                </span>
+              </button>
+            </section>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

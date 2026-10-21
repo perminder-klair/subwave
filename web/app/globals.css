@@ -883,8 +883,10 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     *,
     *::before,
     *::after {
+        /* Unprefixed only: Lightning CSS reads a later -webkit- line as an
+           override of this one and drops it, which left Chrome blurring.
+           The build adds the -webkit- copy Safari needs. */
         backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
     }
     /* With no blur, the booth glass panes go opaque. */
     :root {
@@ -941,8 +943,7 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
 html.lite *,
 html.lite *::before,
 html.lite *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important; /* unprefixed only, as above */
     animation: none !important;
 }
 html.lite {

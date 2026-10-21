@@ -142,8 +142,9 @@ export default function Themes() {
           station-wide pick until they clear it; a{' '}
           <em>Use station default</em> / <em>Use station skin</em> button on each
           section&rsquo;s heading drops them back to whatever the operator is
-          running. Lite mode is a URL switch rather than a menu row: open the
-          player once with <code>?lite=1</code> and that browser keeps it, until{' '}
+          running. The same menu carries the per-browser <em>Lite mode</em>{' '}
+          toggle; a kiosk can pin it from its start URL with{' '}
+          <code>?lite=1</code>, which that browser keeps until{' '}
           <code>?lite=0</code>.
         </p>
         <p className="text-muted">
