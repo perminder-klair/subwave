@@ -45,15 +45,19 @@ import {
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
+import type { AdminFetch } from '../../lib/admin-query';
 import AdminQueryProvider from './AdminQueryProvider';
 import { AdminLoading } from './AdminLoading';
 import { useStationFeed } from '../../hooks/useStationFeed';
+import { useTalking } from '../../hooks/useTalking';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
 import MusicStarvedBanner from './MusicStarvedBanner';
 import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
+import { stationBuddy } from './doctor-mood';
+import { useDoctorSummaryQuery } from './doctor-queries';
 import ThemeSwitcher from '../ThemeSwitcher';
 import {
   CommandDialog,
@@ -276,6 +280,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   const fullBleed = !!pathname && FULL_BLEED_ROUTES.some(r => pathname.startsWith(r));
   // Navidrome down raises the starve banner too; show only the specific one.
   const [navidromeOk, setNavidromeOk] = useState(true);
+  const [musicStarved, setMusicStarved] = useState(false);
 
   const handleSignIn = useCallback(
     async (user: string, pass: string): Promise<SignInResult> => {
@@ -321,9 +326,18 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
         <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
           <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
           <SidebarInset className="min-w-0 bg-transparent">
-            <TopBar pathname={pathname} />
+            <TopBar
+              pathname={pathname}
+              adminFetch={adminFetch}
+              navidromeOk={navidromeOk}
+              musicStarved={musicStarved}
+            />
             <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
-            <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
+            <MusicStarvedBanner
+              adminFetch={adminFetch}
+              suppressed={!navidromeOk}
+              onStatus={setMusicStarved}
+            />
             <div
               className={
                 fullBleed
@@ -676,9 +690,32 @@ function CollapsibleNavItem({
   );
 }
 
-function TopBar({ pathname }: { pathname: string | null }) {
+function TopBar({
+  pathname,
+  adminFetch,
+  navidromeOk,
+  musicStarved,
+}: {
+  pathname: string | null;
+  adminFetch: AdminFetch;
+  navidromeOk: boolean;
+  musicStarved: boolean;
+}) {
   const { section, page } = resolveCrumb(pathname);
-  const { nowPlaying, listeners, timezone, locale } = useStationFeed();
+  const { nowPlaying, listeners, timezone, locale, streamOnline, session } = useStationFeed();
+  // DJ Doc's badge reads the station live (an operator surface, so no listener
+  // buffer on the talking window) plus the last check's headline.
+  const talking = useTalking(session.messages, 0);
+  const summaryQuery = useDoctorSummaryQuery(adminFetch, true);
+  const buddy = stationBuddy({
+    musicStarved,
+    navidromeOk,
+    streamOnline,
+    talking,
+    summary: summaryQuery.data ?? null,
+  });
+  // On the doctor page the page's own buddy is DJ Doc; one is enough.
+  const onDoctorPage = !!pathname?.startsWith('/admin/doctor');
   const onAir = !!nowPlaying?.title;
   const listenersObj =
     listeners && typeof listeners === 'object'
@@ -754,9 +791,10 @@ function TopBar({ pathname }: { pathname: string | null }) {
         <Link
           href="/admin/doctor"
           className="inline-flex min-h-9 items-center gap-1.5 text-[var(--accent)] no-underline sm:min-h-0"
-          title="DJ Doc — run a station health check and get the producer's review"
+          title={`DJ Doc: ${buddy.note}. Run a station health check and get the producer's review`}
+          aria-label={`DJ Doc: ${buddy.note}`}
         >
-          <BoothBuddy mood="onair" size={16} />
+          {!onDoctorPage && <BoothBuddy mood={buddy.mood} size={18} />}
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
