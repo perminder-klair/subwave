@@ -168,6 +168,21 @@
     --sidebar-accent-foreground: var(--ink);
     --sidebar-border: var(--line);
     --sidebar-ring: var(--accent);
+    /* Booth glass: the admin rail and top bar are smoked studio glass
+       (`.admin-booth` in the ADMIN block). Smoke darkens like
+       --sidebar does: toward --ink here, toward black in the dark overrides.
+       The fills turn opaque wherever backdrop-filter is stripped (html.lite,
+       reduced motion), or text would show through an unblurred pane. */
+    --booth-smoke: var(--ink);
+    --booth-sheen: rgba(255, 255, 255, 0.55);
+    --booth-fill: color-mix(in oklab, var(--sidebar) 52%, transparent);
+    --booth-tile: color-mix(in oklab, var(--card-bg) 22%, transparent);
+    --booth-edge: color-mix(in oklab, var(--ink) 28%, transparent);
+    --booth-blur: blur(18px) saturate(1.5) brightness(0.97);
+    /* Text on an accent fill. --bg is the fallback; where relative colour is
+       supported it is near-white on a dark accent and near-black on a light
+       one, so Phosphor's amber and Blueprint's sky blue stay legible. */
+    --on-accent: var(--bg);
     /* Default display + mono faces. A theme overrides --display-font/--mono-font
      with a curated id, resolved to a family stack in lib/theme. */
     --display-font: var(--font-fraunces);
@@ -194,6 +209,8 @@
         --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
         /* Sidebar darker than the page — toward black, since --ink is light here. */
         --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
+        --booth-smoke: #000;
+        --booth-sheen: rgba(255, 255, 255, 0.1);
         color-scheme: dark;
     }
 }
@@ -216,7 +233,17 @@
     --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
     /* Sidebar darker than the page — toward black, since --ink is light here. */
     --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
+    --booth-smoke: #000;
+    --booth-sheen: rgba(255, 255, 255, 0.1);
     color-scheme: dark;
+}
+
+/* Lightness 0.66 is the flip point: every built-in accent below it takes white
+   text, every one above it black. */
+@supports (color: oklch(from red l c h)) {
+    :root {
+        --on-accent: oklch(from var(--accent) clamp(0.16, (0.66 - l) * 1000, 0.99) 0 0);
+    }
 }
 
 html,
@@ -859,6 +886,11 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
         backdrop-filter: none !important;
         -webkit-backdrop-filter: none !important;
     }
+    /* With no blur, the booth glass panes go opaque. */
+    :root {
+        --booth-fill: var(--sidebar);
+        --booth-tile: var(--card-bg);
+    }
     .v3-drawer-content,
     .v3-drawer-overlay,
     .v3-alert-overlay,
@@ -912,6 +944,10 @@ html.lite *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
     animation: none !important;
+}
+html.lite {
+    --booth-fill: var(--sidebar);
+    --booth-tile: var(--card-bg);
 }
 /* The animation kill above would leave the ripple a static ring stack for its
    3s burst — hide the rings, matching reduced-motion. */
@@ -3240,6 +3276,57 @@ html:has(.admin-root.paper) {
     background: var(--page-bg);
     scrollbar-width: thin;
     scrollbar-color: var(--scrollbar) transparent;
+}
+
+/* Booth glass: the signed-in shell's rail and top bar are smoked studio glass.
+   Glass needs something behind it, so the page carries a sparse field of ASCII
+   glyphs, speckled by their own noise so they read as printed, in the theme's
+   ink. It is a mask over an --ink fill, so every theme and mode colours it.
+   The layer is fixed, so nothing moves behind the rail and its blur stays
+   static; only the sticky top bar re-blurs as content scrolls under it. The
+   tokens live at :root (see --booth-fill) because the mobile drawer portals
+   outside .admin-root. */
+.admin-booth {
+    isolation: isolate;
+    --booth-ascii: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='160' font-family='monospace' font-size='11'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='1.3' numOctaves='1' seed='4'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  3.2 0 0 0 -0.9'/><feComposite in2='SourceGraphic' operator='in'/></filter><g filter='url(%23g)'><text x='15' y='34'>.</text><text x='15' y='94'>*</text><text x='15' y='134'>*</text><text x='15' y='154'>/</text><text x='27' y='34'>.</text><text x='27' y='54'>/</text><text x='27' y='134'>/</text><text x='27' y='154'>:</text><text x='39' y='14'>.</text><text x='39' y='154'>.</text><text x='51' y='134'>.</text><text x='75' y='134'>+</text><text x='87' y='114'>.</text><text x='123' y='54'>.</text><text x='135' y='114'>:</text><text x='147' y='114'>.</text><text x='159' y='74'>+</text><text x='159' y='94'>.</text><text x='159' y='154'>/</text><text x='195' y='34'>.</text><text x='207' y='34'>+</text><text x='219' y='114'>.</text></g></svg>");
+}
+.admin-booth::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-color: color-mix(in oklab, var(--ink) 22%, transparent);
+    -webkit-mask: var(--booth-ascii) 0 0 / 240px 160px repeat;
+    mask: var(--booth-ascii) 0 0 / 240px 160px repeat;
+}
+/* Inside the rail, cards and hairlines go translucent too. Overriding the
+   tokens rather than the properties leaves the Tailwind hover and active
+   states in ui/sidebar.tsx working. */
+.admin-booth-rail,
+html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"] {
+    --card-bg: var(--booth-tile);
+    --color-line: var(--booth-edge);
+    --color-sidebar-border: var(--booth-edge);
+}
+.admin-booth-rail > [data-sidebar="sidebar"],
+html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"] {
+    background:
+        linear-gradient(118deg, var(--booth-sheen) 0%, transparent 24%, transparent 58%, color-mix(in srgb, var(--booth-sheen) 60%, transparent) 66%, transparent 74%),
+        linear-gradient(180deg, color-mix(in oklab, var(--booth-smoke) 16%, transparent), color-mix(in oklab, var(--booth-smoke) 5%, transparent)),
+        var(--booth-fill);
+    box-shadow: inset -1px 0 0 var(--booth-sheen), inset 0 1px 0 var(--booth-sheen);
+    -webkit-backdrop-filter: var(--booth-blur);
+    backdrop-filter: var(--booth-blur);
+}
+.admin-booth-bar {
+    background:
+        linear-gradient(180deg, color-mix(in oklab, var(--booth-smoke) 12%, transparent), color-mix(in oklab, var(--booth-smoke) 4%, transparent)),
+        var(--booth-fill);
+    border-bottom: 1px solid var(--booth-edge);
+    box-shadow: inset 0 1px 0 var(--booth-sheen);
+    -webkit-backdrop-filter: var(--booth-blur);
+    backdrop-filter: var(--booth-blur);
 }
 
 /* Type */

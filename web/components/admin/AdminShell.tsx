@@ -322,7 +322,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
 
   return (
     <AdminQueryProvider key={auth}>
-      <div className="admin-root paper">
+      <div className="admin-root paper admin-booth">
         <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
           <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
           <SidebarInset className="min-w-0 bg-transparent">
@@ -439,7 +439,7 @@ function AdminSidebar({
     if (isMobile) setOpenMobile(false);
   };
   return (
-    <Sidebar collapsible="icon" className="border-sidebar-border">
+    <Sidebar collapsible="icon" className="admin-booth-rail border-sidebar-border">
       <SidebarHeader className="gap-1 px-2 py-3">
         <Link
           href="/admin/dash"
@@ -573,7 +573,7 @@ function NavActiveBg() {
   return (
     <m.span
       layoutId="admin-nav-active"
-      className="absolute inset-0 z-0 bg-ink"
+      className="absolute inset-0 z-0 bg-[var(--accent)]"
       initial={false}
       transition={{ type: 'spring', stiffness: 380, damping: 32 }}
       aria-hidden="true"
@@ -748,7 +748,7 @@ function TopBar({
   }, [onAir]);
 
   return (
-    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--line)] bg-[var(--sidebar)] px-4 py-2.5 sm:px-6">
+    <header className="admin-booth-bar sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 sm:px-6">
       <SidebarTrigger className="-ml-1 size-9 shrink-0 sm:size-7" />
       <Separator orientation="vertical" className="hidden h-5 sm:block" />
       <Breadcrumb className="hidden sm:block">
