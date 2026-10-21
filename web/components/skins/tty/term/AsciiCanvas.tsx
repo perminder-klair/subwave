@@ -20,7 +20,8 @@
 import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/cn';
 import { Grid, SPACE, WIDE_TAIL, cellWidth } from './grid';
-import { buildPalette, glows, isDarkTheme, type Rgb, type ThemeRgb } from './palette';
+import { createColorProbe, readThemeRgb, watchTheme } from '@/lib/theme-rgb';
+import { buildPalette, glows, isDarkTheme, type ThemeRgb } from './palette';
 import { drawGlyph, type GlyphMetrics } from './glyphs';
 import styles from './AsciiCanvas.module.css';
 
@@ -52,39 +53,6 @@ interface AsciiCanvasProps {
   lineHeight?: number;
   glow?: boolean;
   className?: string;
-}
-
-const FALLBACK: ThemeRgb = {
-  bg: [16, 14, 12],
-  ink: [236, 230, 220],
-  muted: [193, 192, 189],
-  accent: [217, 75, 42],
-  accent2: [217, 75, 42],
-};
-
-/** Any CSS colour (hex, oklch, color-mix…) to sRGB bytes, by painting it. */
-function resolveColor(probe: CanvasRenderingContext2D, css: string, fallback: Rgb): Rgb {
-  if (!css) return fallback;
-  const sentinel = `rgb(${fallback.join(',')})`;
-  probe.fillStyle = sentinel;
-  probe.fillStyle = css;
-  probe.clearRect(0, 0, 1, 1);
-  probe.fillRect(0, 0, 1, 1);
-  const d = probe.getImageData(0, 0, 1, 1).data;
-  return [d[0] ?? 0, d[1] ?? 0, d[2] ?? 0];
-}
-
-function readTheme(el: HTMLElement, probe: CanvasRenderingContext2D): ThemeRgb {
-  const cs = getComputedStyle(el);
-  const get = (k: string) => cs.getPropertyValue(k).trim();
-  const accent = resolveColor(probe, get('--accent'), FALLBACK.accent);
-  return {
-    bg: resolveColor(probe, get('--bg'), FALLBACK.bg),
-    ink: resolveColor(probe, get('--ink'), FALLBACK.ink),
-    muted: resolveColor(probe, get('--muted'), FALLBACK.muted),
-    accent,
-    accent2: resolveColor(probe, get('--accent-2'), accent),
-  };
 }
 
 /** Glyphs rendered once per (code point, colour), two cells wide per slot so
@@ -157,9 +125,8 @@ export default function AsciiCanvas({
     if (!host || !canvas || !ctx) return;
     const glowCanvas = glow ? glowRef.current : null;
     const gctx = glowCanvas?.getContext('2d') ?? null;
-    const probe = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    const probe = createColorProbe();
     if (!probe) return;
-    probe.canvas.width = probe.canvas.height = 1;
 
     const atlas = new GlyphAtlas();
     let grid = new Grid(0, 0);
@@ -167,7 +134,7 @@ export default function AsciiCanvas({
     let prevInk = new Uint16Array(0);
     let marks = new Uint8Array(0);
     let full = true;
-    let theme = readTheme(host, probe);
+    let theme = readThemeRgb(host, probe);
     let palette = buildPalette(theme);
     let m: GlyphMetrics | null = null;
     let env: PaintEnv | null = null;
@@ -290,7 +257,7 @@ export default function AsciiCanvas({
       else paintOnce();
     };
     const retheme = () => {
-      theme = readTheme(host, probe);
+      theme = readThemeRgb(host, probe);
       palette = buildPalette(theme);
       if (m) atlas.reset(m);
       full = true;
@@ -299,10 +266,7 @@ export default function AsciiCanvas({
 
     const ro = new ResizeObserver(relayout);
     ro.observe(host);
-    const mo = new MutationObserver(retheme);
-    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'data-theme'] });
-    const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    mq.addEventListener('change', retheme);
+    const unwatch = watchTheme(retheme);
     // The theme's face may still be loading: its metrics change when it lands.
     void document.fonts?.ready.then(() => { if (!disposed) { m = null; relayout(); } });
 
@@ -314,8 +278,7 @@ export default function AsciiCanvas({
       disposed = true;
       cancelAnimationFrame(raf);
       ro.disconnect();
-      mo.disconnect();
-      mq.removeEventListener('change', retheme);
+      unwatch();
       requestRef.current = () => {};
     };
   }, [fps, still, glow, lineHeight]);
