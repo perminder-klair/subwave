@@ -166,9 +166,9 @@ export default function Themes() {
           <li><strong>Vinyl</strong> &mdash; warm record sleeve: sepia paper, deep brown ink, mustard accent.</li>
           <li><strong>Cyberpunk</strong> &mdash; near-black neon: graphite base, cyan ink, hot pink accent.</li>
           <li><strong>Blueprint</strong> &mdash; drafting-table cobalt: chalk-white linework, a bright azure accent.</li>
-          <li><strong>Flare</strong> &mdash; hazard-orange flood: a full high-vis field, near-black ink, ultra-bold grotesque.</li>
+          <li><strong>Phosphor</strong> &mdash; a lab oscilloscope at night: green phosphor ink on black glass, amber for anything live, scanlines and a glow on every bright stroke.</li>
           <li><strong>Recon</strong> &mdash; field-ops poster: warm khaki stock, a hot-orange grid and accent.</li>
-          <li><strong>Signal</strong> &mdash; concrete monochrome: mid-gray press field, near-black ink. No colour, all signal.</li>
+          <li><strong>Riso</strong> &mdash; a two-drum duplicator print: blue and fluorescent pink on uncoated stock, a halftone screen, and the pink drum printing a couple of pixels off.</li>
         </ul>
         <p className="text-muted">
           The palette recolours both the player <em>and</em> the admin console,
@@ -221,7 +221,7 @@ export default function Themes() {
 
       <section className="bs-section">
         <p className="bs-eyebrow">THE TOKEN MAP</p>
-        <h2>Sixteen knobs, no surprises.</h2>
+        <h2>Eighteen knobs, no surprises.</h2>
         <p>
           A theme writes a fixed set of CSS variables onto <code className="bs-code-inline">&lt;html&gt;</code>.
           Any other key in your JSON is silently dropped, so a malformed theme can&rsquo;t
@@ -236,7 +236,7 @@ export default function Themes() {
           <li><strong>Accent</strong> &mdash; <code className="bs-code-inline">--accent</code> the station&rsquo;s accent (active states, on-air pill, focus rings), <code className="bs-code-inline">--accent-2</code> a genuinely different second ink (charts, secondary marks), <code className="bs-code-inline">--accent-soft</code> the accent tinted well into the paper.</li>
           <li><strong>Structure</strong> &mdash; <code className="bs-code-inline">--line</code> crisp hairline, <code className="bs-code-inline">--soft-border</code> the softer hairline between sections, <code className="bs-code-inline">--overlay</code> translucent wash for hover and modal scrims.</li>
           <li><strong>Type</strong> &mdash; <code className="bs-code-inline">--display-font</code> / <code className="bs-code-inline">--mono-font</code>, each a curated id (not a free font string).</li>
-          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1.</li>
+          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1. <code className="bs-code-inline">--texture</code> lays a pattern over the player (<code className="bs-code-inline">scanline</code> or <code className="bs-code-inline">halftone</code>), and <code className="bs-code-inline">--finish</code> runs a filter over everything the skin draws: <code className="bs-code-inline">bloom</code> glows light ink into a dark ground, <code className="bs-code-inline">misregister</code> prints an accent-coloured ghost under dark ink on light paper. Both are off when omitted, both touch the player only, never the admin console, and lite mode drops the finish.</li>
         </ul>
         <p>
           Any CSS colour value works: hex, <code className="bs-code-inline">rgb()</code>,{' '}

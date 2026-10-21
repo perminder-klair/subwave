@@ -8,7 +8,7 @@ export type PressRunSkinId =
 
 export type PressRunThemeId =
   | 'classic-light' | 'classic-dark' | 'blueprint' | 'cyberpunk'
-  | 'flare' | 'recon' | 'signal' | 'vinyl';
+  | 'phosphor' | 'recon' | 'riso' | 'vinyl';
 
 export interface PressRunPlate {
   /** `${skinId}-${themeId}` — also the image basename under public/. */
@@ -60,7 +60,7 @@ export const PRESS_RUN_PLATES: readonly PressRunPlate[] = [
     'cyberpunk', 'Cyberpunk'),
   plate(4, 'unit', 'Unit SW-9',
     'A tabletop receiver — milled aluminium, weighted knobs, one glowing dot-matrix window.',
-    'flare', 'Flare'),
+    'recon', 'Recon'),
   plate(5, 'drift', 'Drift',
     'Ninety percent weather, ten percent type — the cover art becomes the room.',
     'classic-dark', 'Classic Dark'),
@@ -69,10 +69,10 @@ export const PRESS_RUN_PLATES: readonly PressRunPlate[] = [
     'blueprint', 'Blueprint'),
   plate(7, 'cipher', 'Cipher-3',
     'A rotor cipher machine — the lampboard spells the song, and your request is typed on its keys.',
-    'signal', 'Signal'),
+    'phosphor', 'Phosphor'),
   plate(8, 'axo', 'AXO-1',
     'A hi-fi stack drawn at 30° — the switch, knob and keys in the drawing are the controls.',
-    'recon', 'Recon'),
+    'riso', 'Riso'),
 ];
 
 /** Row split for the two marquee bands: plates 1–4 drift left, 5–8 drift right. */

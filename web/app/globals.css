@@ -316,6 +316,48 @@ body::after {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.45  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 }
 
+/* Theme texture + finish (--texture / --finish) dress the player stage only;
+   the admin console keeps plain surfaces. lib/theme mirrors each token onto
+   <html> as data-texture / data-finish, and an unset token leaves these inert.
+   Isolated so the overlay's z-index and blend stay inside the stage, which in
+   a showcase embed is an absolute box on someone else's page. */
+.sw-theme-stage {
+    isolation: isolate;
+}
+.sw-theme-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 90;
+    pointer-events: none;
+    display: none;
+}
+/* Scanlines every 3px under a tube vignette. */
+html[data-texture="scanline"] .sw-theme-stage::after {
+    display: block;
+    background-image:
+        repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.34) 0 1px, transparent 1px 3px),
+        radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
+}
+/* An ink halftone screen over paper tooth, multiplied into the stock. */
+html[data-texture="halftone"] .sw-theme-stage::after {
+    display: block;
+    background-image:
+        radial-gradient(circle, color-mix(in oklab, var(--ink) 16%, transparent) 0.7px, transparent 1.25px),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .32  0 0 0 0 .26  0 0 0 0 .18  0 0 0 .6 0'/></filter><rect width='220' height='220' filter='url(%23n)'/></svg>");
+    background-size: 5px 5px, 220px 220px;
+    mix-blend-mode: multiply;
+    opacity: 0.9;
+}
+/* The finish re-filters every frame the skin paints, so lite mode drops it.
+   Filters live in components/ThemeFinishFilters.tsx. */
+html[data-finish="bloom"]:not(.lite) .sw-theme-stage {
+    filter: url(#sw-finish-bloom);
+}
+html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
+    filter: url(#sw-finish-misregister);
+}
+
 /* Ink-tinted scrollbars used inside drawers and any internal scroll areas. */
 .v3-scroll::-webkit-scrollbar {
     width: 6px;

@@ -2,7 +2,7 @@
 // /themes and the active id rides /state. On boot the cached token blob is
 // applied pre-paint via THEME_INIT_SCRIPT so there's no flash.
 
-import { THEME_TOKEN_KEYS, type DisplayFontId, type MonoFontId } from './theme-tokens.generated';
+import { THEME_TOKENS, THEME_TOKEN_KEYS, type DisplayFontId, type MonoFontId } from './theme-tokens.generated';
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
@@ -20,6 +20,8 @@ const FONT_STACKS: Record<DisplayFontId | MonoFontId, string> = {
   'anton': 'var(--font-anton), var(--font-space-grotesk), sans-serif',
   'chakra-petch': 'var(--font-chakra-petch), var(--font-sans), sans-serif',
   'saira-stencil-one': 'var(--font-saira-stencil-one), var(--font-space-grotesk), sans-serif',
+  'vt323': 'var(--font-vt323), var(--font-jetbrains), monospace',
+  'bricolage-grotesque': 'var(--font-bricolage-grotesque), var(--font-sans), sans-serif',
   // mono faces (--mono-font)
   'jetbrains': 'var(--font-jetbrains), ui-monospace, monospace',
   'ibm-plex-mono': 'var(--font-ibm-plex-mono), ui-monospace, monospace',
@@ -27,9 +29,25 @@ const FONT_STACKS: Record<DisplayFontId | MonoFontId, string> = {
   'fira-code': 'var(--font-fira-code), ui-monospace, monospace',
   'courier-prime': 'var(--font-courier-prime), "Courier New", monospace',
   'overpass-mono': 'var(--font-overpass-mono), ui-monospace, monospace',
+  'dm-mono': 'var(--font-dm-mono), ui-monospace, monospace',
 };
 
 const FONT_TOKEN_KEYS = new Set(['--display-font', '--mono-font']);
+
+// Keyword tokens (--texture, --finish) also go onto <html> as data attributes
+// (data-texture, data-finish): CSS cannot branch on a custom property's value,
+// so globals.css keys the overlay and the filter off the attribute instead.
+const KEYWORD_ATTRS: Record<string, string> = Object.fromEntries(
+  THEME_TOKENS.filter(t => t.type === 'keyword').map(t => [t.key, `data-${t.key.slice(2)}`]),
+);
+
+function applyKeywordAttrs(html: HTMLElement, tokens: Record<string, string>): void {
+  for (const [key, attr] of Object.entries(KEYWORD_ATTRS)) {
+    const v = tokens[key];
+    if (typeof v === 'string' && v) html.setAttribute(attr, v);
+    else html.removeAttribute(attr);
+  }
+}
 
 /** Curated font id → family stack; anything else passes through unchanged. */
 export function resolveFont(id: string): string {
@@ -60,6 +78,7 @@ export function applyTheme(theme: Theme): void {
     const value = FONT_TOKEN_KEYS.has(k) ? resolveFont(v) : v;
     html.style.setProperty(k, value);
   }
+  applyKeywordAttrs(html, theme.tokens);
   html.setAttribute('data-theme', theme.mode);
   syncDarkClass(theme.mode);
 }
@@ -79,6 +98,7 @@ function clearThemeTokens(): void {
   if (typeof document === 'undefined') return;
   const html = document.documentElement;
   for (const key of THEME_TOKEN_KEYS) html.style.removeProperty(key);
+  applyKeywordAttrs(html, {});
 }
 
 function systemMode(): ThemeMode {
@@ -173,12 +193,14 @@ export const THEME_INIT_SCRIPT = `
     if (usePalette) {
       var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
       var fonts = ${JSON.stringify(FONT_STACKS)};
+      var attrs = ${JSON.stringify(KEYWORD_ATTRS)};
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i];
         var v = t.tokens[k];
         if (typeof v === 'string') {
           if ((k === '--display-font' || k === '--mono-font') && fonts[v]) v = fonts[v];
           html.style.setProperty(k, v);
+          if (attrs[k] && v) html.setAttribute(attrs[k], v);
         }
       }
     }
