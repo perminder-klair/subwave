@@ -21,11 +21,13 @@ export default function ThemeFinishFilters() {
         <feGaussianBlur in="lum" stdDeviation="2.6" result="glow" />
         <feBlend in="glow" in2="SourceGraphic" mode="screen" />
       </filter>
-      {/* Misregistration: every dark line gets an accent-coloured ghost, offset
-          2 × 1.5px, multiplied under it like a second drum printing off true.
-          Darkness becomes alpha, so this reads on light paper only. The ramp
-          reaches zero at mid-grey (R+G+B ≈ 2.2), so the paper's own grain and
-          halftone, which sit inside this filter, never pick up the ghost. */}
+      {/* Misregistration: every bold dark form gets an accent-coloured ghost,
+          offset 1.5 × 1px, multiplied under it like a second drum printing off
+          true. Darkness becomes alpha, so this reads on light paper only. The
+          ramp reaches zero at mid-grey (R+G+B ≈ 2.2), so the paper's own grain
+          and halftone, which sit inside this filter, never pick up the ghost.
+          The erode drops the ghost from thin strokes: small type doubled by
+          its own ghost read as a blur, not as a print, on every skin. */}
       <filter id="sw-finish-misregister" x="0" y="0" width="100%" height="100%" colorInterpolationFilters="sRGB">
         <feColorMatrix
           in="SourceGraphic"
@@ -33,9 +35,10 @@ export default function ThemeFinishFilters() {
           values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  -0.64 -0.64 -0.64 0 1.41"
           result="inkA"
         />
-        <feFlood className="[flood-color:var(--accent)]" floodOpacity="0.85" result="drum" />
-        <feComposite in="drum" in2="inkA" operator="in" result="drumInk" />
-        <feOffset in="drumInk" dx="2" dy="1.5" result="ghost" />
+        <feMorphology in="inkA" operator="erode" radius="0.7" result="boldInk" />
+        <feFlood className="[flood-color:var(--accent)]" floodOpacity="0.7" result="drum" />
+        <feComposite in="drum" in2="boldInk" operator="in" result="drumInk" />
+        <feOffset in="drumInk" dx="1.5" dy="1" result="ghost" />
         <feBlend in="SourceGraphic" in2="ghost" mode="multiply" />
       </filter>
     </svg>

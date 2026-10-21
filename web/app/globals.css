@@ -339,7 +339,8 @@ html[data-texture="scanline"] .sw-theme-stage::after {
         repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.34) 0 1px, transparent 1px 3px),
         radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
 }
-/* An ink halftone screen over paper tooth, multiplied into the stock. */
+/* An ink halftone screen over paper tooth, multiplied into the stock. It lies
+   over the type too, so it stays light enough not to speckle small text. */
 html[data-texture="halftone"] .sw-theme-stage::after {
     display: block;
     background-image:
@@ -347,7 +348,7 @@ html[data-texture="halftone"] .sw-theme-stage::after {
         url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .32  0 0 0 0 .26  0 0 0 0 .18  0 0 0 .6 0'/></filter><rect width='220' height='220' filter='url(%23n)'/></svg>");
     background-size: 5px 5px, 220px 220px;
     mix-blend-mode: multiply;
-    opacity: 0.9;
+    opacity: 0.5;
 }
 /* The finish re-filters every frame the skin paints, so lite mode drops it.
    Filters live in components/ThemeFinishFilters.tsx. */
