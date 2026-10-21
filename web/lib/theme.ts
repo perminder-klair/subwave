@@ -8,6 +8,18 @@ const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
 const OVERRIDE_KEY = 'subwave-theme-override';
 
+// What the document is painted with, keyed by paintKey, so the 30 s registry
+// poll can skip a theme that hasn't changed. Rewriting identical tokens on
+// <html> still invalidates style for the whole document: WebKit then repaints
+// every layer (through a stage-wide --finish filter, where one is on) and
+// every canvas watching the theme re-rasterises, a hitch every 30 s on iPad.
+// applyTheme stamps it too, so the admin builder's direct writes stay counted.
+let painted: string | null = null;
+
+function paintKey(theme: Theme | null): string {
+  return theme ? JSON.stringify([theme.mode, theme.tokens]) : `base:${systemMode()}`;
+}
+
 // A theme stores --display-font / --mono-font as a curated id; these stacks
 // reference the next/font variables set in app/layout.tsx. Keyed by
 // DisplayFontId | MonoFontId so a new curated id fails the build without a stack.
@@ -81,6 +93,7 @@ export function applyTheme(theme: Theme): void {
   applyKeywordAttrs(html, theme.tokens);
   html.setAttribute('data-theme', theme.mode);
   syncDarkClass(theme.mode);
+  painted = paintKey(theme);
 }
 
 /** Mirror the resolved mode onto the shadcn-convention `.dark` class. The `dark:`
@@ -126,16 +139,22 @@ export function resolveAppearance(
   return { theme: byId(override) ?? byId(stationId) ?? registry[0] ?? null };
 }
 
-export function applyAppearance(resolved: ResolvedAppearance): void {
-  if (typeof document === 'undefined') return;
+/** Paint the resolved appearance. Returns false, writing nothing, when the
+ *  document already shows it, so a caller can skip its cache write too. */
+export function applyAppearance(resolved: ResolvedAppearance): boolean {
+  if (typeof document === 'undefined') return false;
+  const key = paintKey(resolved.theme);
+  if (key === painted) return false;
   if (resolved.theme) {
     applyTheme(resolved.theme);
-    return;
+    return true;
   }
   // No palette — hand the document back to `prefers-color-scheme`.
   clearThemeTokens();
   document.documentElement.removeAttribute('data-theme');
   syncDarkClass(systemMode());
+  painted = key;
+  return true;
 }
 
 /** Cache the theme so the next load applies it pre-paint via THEME_INIT_SCRIPT. */

@@ -378,11 +378,14 @@ html[data-texture="halftone"] .sw-theme-stage::after {
     opacity: 0.5;
 }
 /* The finish re-filters every frame the skin paints, so lite mode drops it.
+   WebKit (html.webkit, lib/platform) drops it too: it runs url() filters in
+   software over the whole stage on every repaint, which held desktop Safari to
+   13-19 fps on AXO and janked iPads on every skin. Safari keeps the texture.
    Filters live in components/ThemeFinishFilters.tsx. */
-html[data-finish="bloom"]:not(.lite) .sw-theme-stage {
+html[data-finish="bloom"]:not(.lite):not(.webkit) .sw-theme-stage {
     filter: url(#sw-finish-bloom);
 }
-html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
+html[data-finish="misregister"]:not(.lite):not(.webkit) .sw-theme-stage {
     filter: url(#sw-finish-misregister);
 }
 
@@ -528,17 +531,33 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     animation: v3-blink 1s steps(1) infinite;
 }
 
-/* Tune-in gate — expanding ink ring on the play disc. */
+/* Tune-in gate — expanding ink ring on the play disc. A disc behind the 92px
+   button scales out to 144px and fades, the same ring the 26px box-shadow
+   spread drew, but on transform + opacity: an animated box-shadow repainted
+   the full-viewport, backdrop-blurred overlay every frame until the tap, which
+   WebKit does on the CPU. */
 @keyframes v3-tunein-pulse {
     0% {
-        box-shadow: 0 0 0 0 color-mix(in oklab, var(--ink) 35%, transparent);
+        transform: scale(1);
+        opacity: 1;
     }
     70%,
     100% {
-        box-shadow: 0 0 0 26px color-mix(in oklab, var(--ink) 0%, transparent);
+        transform: scale(1.5652);
+        opacity: 0;
     }
 }
 .v3-tunein-pulse {
+    position: relative;
+}
+.v3-tunein-pulse::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: color-mix(in oklab, var(--ink) 35%, transparent);
     animation: v3-tunein-pulse 2s ease-out infinite;
 }
 
@@ -670,18 +689,15 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
         transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
         filter 0.3s ease;
 }
-.v3-cover-frame:hover,
 .v3-cover-frame:focus-visible {
     transform: translateY(-1px) scale(1.012);
-}
-.v3-cover-frame:focus-visible {
     outline: none;
 }
 /* Frame wakes from muted to ink on engage. */
 .v3-cover-frame .v3-cover-glitch {
     transition: border-color 0.25s ease;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch {
     border-color: var(--ink);
 }
 
@@ -712,11 +728,11 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     background-image: linear-gradient(#16d6cf, #16d6cf), var(--cover);
     background-blend-mode: multiply;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::before {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch::before {
     opacity: 0.55;
     animation: cover-glitch-r 0.55s steps(1) infinite;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::after {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch::after {
     opacity: 0.55;
     animation: cover-glitch-c 0.55s steps(1) infinite;
 }
@@ -737,7 +753,7 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     transition: opacity 0.18s ease;
     mix-blend-mode: overlay;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-scan {
     opacity: 0.6;
     animation: cover-scan-sweep 2.4s linear infinite;
 }
@@ -781,7 +797,7 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     border-bottom-width: 1px;
     border-right-width: 1px;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-tick {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-tick {
     opacity: 1;
     transform: scale(1);
 }
@@ -818,6 +834,35 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     border-radius: 50%;
     background: var(--accent);
     box-shadow: 0 0 0 1px var(--bg);
+}
+
+/* Hover engages only where there is real hover. A touch screen keeps :hover on
+   the cover after a tap (it opens the timeline) until the next tap elsewhere,
+   which left the ghosts and scan sweeping indefinitely: a repaint of blended
+   pixels every frame on an iPad. Same declarations as the engaged rules above. */
+@media (hover: hover) {
+    .v3-cover-frame:hover {
+        transform: translateY(-1px) scale(1.012);
+    }
+    .v3-cover-frame:hover .v3-cover-glitch {
+        border-color: var(--ink);
+    }
+    .v3-cover-frame:hover .v3-cover-glitch::before {
+        opacity: 0.55;
+        animation: cover-glitch-r 0.55s steps(1) infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-glitch::after {
+        opacity: 0.55;
+        animation: cover-glitch-c 0.55s steps(1) infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-scan {
+        opacity: 0.6;
+        animation: cover-scan-sweep 2.4s linear infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-tick {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 @keyframes cover-glitch-r {
@@ -896,7 +941,7 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     .v3-alert-overlay,
     .v3-alert-content,
     .v3-blink,
-    .v3-tunein-pulse,
+    .v3-tunein-pulse::after,
     .v3-connecting-pulse,
     /* The buddy (components/BoothBuddy.tsx) animates through its own module
        classes, so override with !important on the root + every descendant. */
