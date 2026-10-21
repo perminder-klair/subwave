@@ -201,7 +201,8 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
   }
   if (facets.includes('tail')) {
     warnings.push(
-      'tail: the analyzer still reads a byte-capped download, so a large file can come back unmeasurable again',
+      'tail: the window ends where the music stops when the edges facet is measured (run `--facets edges` first); ' +
+        'without edges it is the end of the file, and the tail stays due',
     );
   }
   if (facets.includes('stems')) {

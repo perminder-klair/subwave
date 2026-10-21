@@ -12,7 +12,7 @@
 // Facets (what each one writes on `tracks`):
 //   head      bpm, key, key ranges, intro, lead silence, sections, pace, grid
 //   loudness  loudness_lufs, peak_db (+ sample_peak_db, loudness_range_lu at v2)
-//   tail      outro_json, tail_silence_ms, tail_start_ms
+//   tail      outro_json, tail_silence_ms, tail_start_ms (+ tail_version at v2)
 //   clap      the CLAP audio vector (track_audio_vectors)
 //   vocal     vocal_ranges_json (+ the outro's tail vocal ranges)
 //   stems     stems_at (the stem-cache attempt stamp)
@@ -48,15 +48,34 @@ export type FacetStatus = 'ok' | 'unmeasurable' | 'failed';
 // measurement's own (`loudness_version`, NULL = 1), never assumed.
 // edges = silence at both ends against the absolute floor + the decoded length,
 // from the same whole-file decode.
+// tail v2 = a window ending where the music stops (placed from the stored
+// edges); v1 = the file's last ANALYZE_OUTRO_SECONDS. Read off the columns
+// (tailVersionOf), never assumed.
 export const FACET_VERSIONS: Readonly<Record<Facet, number>> = {
   head: 1,
   loudness: 2,
-  tail: 1,
+  tail: 2,
   clap: 1,
   vocal: 1,
   stems: 1,
   edges: 1,
 };
+
+// An end-of-file tail window counts as placed (v2) when the stored edges show
+// at most this much trailing silence: the window then held the same music,
+// give or take this, and re-measuring it would change nothing a transition
+// uses. Past it the silence starts to read as a fade (the operator's choice,
+// 21 Oct: re-measure only those).
+export const TAIL_PLACEMENT_TOLERANCE_MS = 3000;
+
+// Which window a stored tail was measured on: the analyzer's own stamp, else
+// v2 when the edges show the end-of-file window already ended at the music,
+// else v1.
+export function tailVersionOf(row: Pick<FacetSourceRow, 'tail_version' | 'has_edges' | 'edge_tail_ms'>): number {
+  if (row.tail_version != null && row.tail_version >= 2) return row.tail_version;
+  if (row.has_edges && row.edge_tail_ms != null && row.edge_tail_ms <= TAIL_PLACEMENT_TOLERANCE_MS) return 2;
+  return 1;
+}
 
 // The facets read off one whole-file decode rather than the analysis windows.
 export const WHOLE_FILE_FACETS: readonly Facet[] = ['loudness', 'edges'];
@@ -97,6 +116,8 @@ export interface FacetSourceRow {
   loudness_version: number;  // COALESCE(loudness_version, 1): which measurement loudness_lufs is
   has_loudness_curve?: number; // loudness_curve_json IS NOT NULL (the whole-file pass's curve, or its unavailable marker)
   has_edges: number;         // decoded_duration_ms IS NOT NULL
+  edge_tail_ms: number | null;
+  tail_version: number | null; // 2 = a tail window the analyzer placed from the edges
   analyze_fail_count: number | null;
   analyze_error: string | null;
 }
@@ -112,6 +133,7 @@ export const FACET_SOURCE_SELECT =
    COALESCE(loudness_version, 1)                      AS loudness_version,
    loudness_curve_json IS NOT NULL                    AS has_loudness_curve,
    decoded_duration_ms IS NOT NULL                    AS has_edges,
+   edge_tail_ms, tail_version,
    analyze_fail_count, analyze_error`;
 
 export interface DerivedFacet {
@@ -145,8 +167,12 @@ export function deriveFacetRows(
   const fails = row.analyze_fail_count ?? 0;
   const ok = (facet: Facet, reason: string | null = null, version = FACET_VERSIONS[facet]) =>
     out.push({ facet, status: 'ok', version, reason, attempts: fails });
+  // An unmeasurable tail with no edges to place it was the end-of-file
+  // window's answer: one version below, so it is retried once edges exist.
+  const unmeasurableVersion = (facet: Facet) =>
+    facet === 'tail' && !row.has_edges ? FACET_VERSIONS.tail - 1 : FACET_VERSIONS[facet];
   const unmeasurable = (facet: Facet, reason: string) =>
-    out.push({ facet, status: 'unmeasurable', version: FACET_VERSIONS[facet], reason, attempts: fails });
+    out.push({ facet, status: 'unmeasurable', version: unmeasurableVersion(facet), reason, attempts: fails });
 
   // The head pass is what stamps analysis_version; an older stamp means the
   // head features predate the current shape and are due again.
@@ -170,7 +196,10 @@ export function deriveFacetRows(
 
   // An outro proves the tail was decoded, even when its window held no
   // silence edge (tail_silence_ms is then NULL by design).
-  if (row.has_tail_silence || row.has_outro) ok('tail');
+  if (row.has_tail_silence || row.has_outro) {
+    ok('tail', null, tailVersionOf(row));
+    out[out.length - 1]!.measuredVersion = true;
+  }
   else if (analysed) unmeasurable('tail', opts.tailReason ?? 'tail-not-measured');
 
   if (hasClap) ok('clap');
@@ -323,8 +352,14 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     // An ok loudness row's reason (`no-curve`) describes the columns too.
     if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal' &&
       !(r.facet === 'loudness' && r.status === 'ok')) r.reason = prev.reason;
+    // Measuring edges re-decides which window a stored tail sits on (the
+    // tolerance in tailVersionOf), so that is taken as is too: otherwise every
+    // track whose edges arrive after this table was derived stays planned for
+    // a tail re-read it does not need.
+    const promoted = r.measuredVersion &&
+      (opts.rederive || (r.facet === 'tail' && fresh.has('edges')));
     const version =
-      isFresh || (opts.rederive && r.measuredVersion) || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
+      isFresh || promoted || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
         ? r.version : Math.min(prev.version, r.version);
     // 'seed' is reserved for rows the seed wrote; a live write that creates a
     // row without measuring it (a failure, a re-derive) records what it knows.
@@ -356,8 +391,9 @@ export function facetDerivationStamp(): string {
   // reasons from the columns. Re-derive earlier tables once, without promoting
   // their measurement versions. Revision 2 takes a version read from the
   // measurement's own column (loudness_version) as is, so a whole-file figure
-  // stored before its facet row knew about it is promoted once.
-  return JSON.stringify({ revision: 2, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
+  // stored before its facet row knew about it is promoted once. Revision 3
+  // reads the tail's version off its columns (tailVersionOf).
+  return JSON.stringify({ revision: 3, analysis: ANALYSIS_VERSION, facets: FACET_VERSIONS });
 }
 
 function readFacetStamp(d: Database.Database): string | null {
@@ -488,7 +524,7 @@ export function restampFacetRows(id: string, at: string): void {
 // whole-file facets survive it like their columns do: a loudness row measured
 // over the whole file (v2) and every edges row.
 export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean } = {}): void {
-  const facets: Facet[] = ['head', 'tail', 'clap'];
+  const facets: Facet[] = ['head', 'clap'];
   if (!opts.keepVocal) facets.push('vocal');
   if (opts.clearStems) facets.push('stems');
   const d = requireDb();
@@ -500,6 +536,11 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
     `DELETE FROM track_facet_status
       WHERE facet = 'loudness' AND track_id NOT IN
         (SELECT id FROM tracks WHERE ${SQL_WHOLE_FILE_LOUDNESS})`,
+  ).run();
+  // A placed tail is kept by clearAnalysis, like whole-file loudness.
+  d.prepare(
+    `DELETE FROM track_facet_status
+      WHERE facet = 'tail' AND track_id NOT IN (SELECT id FROM tracks WHERE tail_version >= 2)`,
   ).run();
   clearFacetFailures();
   // A kept vocal row was "head-only" because the outro lacked tail vocals; the

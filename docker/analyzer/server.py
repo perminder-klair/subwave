@@ -804,6 +804,10 @@ class AnalyzeRequest(BaseModel):
     # (loudness v2, edges) read when `path` is a capped copy. Never fetched
     # here; the worker's ffmpeg streams it.
     stream_url: str | None = None
+    # Facet requests only: where the music stops ({end_ms, duration_ms}, from
+    # the stored edges), so the tail window ends there instead of at the end
+    # of the file. Passed through as is; the worker validates it.
+    tail_window: dict[str, Any] | None = None
 
 
 @app.post("/analyze")
@@ -845,6 +849,8 @@ async def analyze(req: AnalyzeRequest):
             payload["tail_vocals"] = True
         if req.stream_url and "url" not in payload:
             payload["stream_url"] = req.stream_url
+        if req.tail_window is not None:
+            payload["tail_window"] = req.tail_window
     if facets and all(f in WHOLE_FILE_FACETS for f in facets):
         msg = await run_whole_file_once(payload)
     else:

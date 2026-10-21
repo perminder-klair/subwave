@@ -405,6 +405,22 @@ async def test_facet_contract():
         await server.analyze(server.AnalyzeRequest(path=audio.name, stream_url="http://navi/stream"))
     assert "stream_url" not in worker_calls[0], worker_calls
     assert not server.StdioWorker._wants_models({"facets": ["loudness", "edges"]})
+    # A tail placed from the stored edges: the placement travels with the
+    # facet request (and the stream URL the worker reads the window from).
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(
+            path=audio.name, complete=False, facets=["tail"], stream_url="http://navi/stream",
+            tail_window={"end_ms": 180000, "duration_ms": 200000},
+        ))
+    assert worker_calls == [{
+        "id": "1", "path": audio.name, "complete": False, "facets": ["tail"],
+        "stream_url": "http://navi/stream", "tail_window": {"end_ms": 180000, "duration_ms": 200000},
+    }], worker_calls
+    worker_calls.clear()
+    with tempfile.NamedTemporaryFile() as audio:
+        await server.analyze(server.AnalyzeRequest(path=audio.name, tail_window={"end_ms": 1, "duration_ms": 2}))
+    assert "tail_window" not in worker_calls[0], worker_calls
 
     # Model bookkeeping follows the facets named, not the env defaults.
     assert server.StdioWorker._wants_models({"facets": ["head", "tail"]}) is False

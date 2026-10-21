@@ -620,7 +620,11 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
       !(f === 'vocal' && lyricVocal) && !(f === 'stems' && !stems_dir));
     const res = requestedFacets.length ? await analyzer.analyzeFacets(
       id,
-      { facets: requestedFacets, tailVocals: tailVocals && !lyricVocal, stems_dir, complete: localComplete },
+      {
+        facets: requestedFacets, tailVocals: tailVocals && !lyricVocal, stems_dir, complete: localComplete,
+        // The tail window ends where the music stops, when the edges are known.
+        tailWindow: facets.includes('tail') ? analyzer.tailWindowFor(db.getTrack(id)) : null,
+      },
       localPath ?? undefined,
     ) : null;
     const source: db.FacetSource =
@@ -669,7 +673,8 @@ async function runAnalysisPassOnce(opts: AnalyzeOptions = {}): Promise<AnalyzeSt
         }
         w.edges = { leadMs: r.edgeLeadMs, tailMs: r.edgeTailMs, durationMs: r.decodedDurationMs };
       } else if (f === 'tail') {
-        w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs };
+        w.tail = { outro: r.outro, tailSilenceMs: r.tailSilenceMs, tailStartMs: r.tailStartMs,
+          version: r.tailPlaced ? 2 : null };
       } else if (f === 'clap' && r.audioEmbedding?.length === db.AUDIO_EMBEDDING_DIM) {
         w.clap = r.audioEmbedding;
         wroteClap = true;

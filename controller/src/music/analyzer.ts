@@ -95,6 +95,9 @@ export interface AnalysisResult {
   edgeLeadMs?: number | null;
   edgeTailMs?: number | null;
   decodedDurationMs?: number | null;
+  // Tail facet: true when the analyzer placed the tail window from the
+  // `tailWindow` it was sent (it then ends where the music stops: tail v2).
+  tailPlaced?: boolean;
 }
 
 // The outgoing track's measured ending. Timestamps are absolute ms.
@@ -263,6 +266,7 @@ interface WorkerMessage {
   edge_lead_ms?: unknown;
   edge_tail_ms?: unknown;
   decoded_duration_ms?: unknown;
+  tail_window?: unknown;
   // Facet-shape answer.
   facets?: Record<string, { status?: string; reason?: string; data?: WorkerMessage }>;
   source?: Record<string, unknown>;
@@ -463,6 +467,7 @@ function toAnalysisResult(msg: WorkerMessage): AnalysisResult {
           edgeLeadMs: parseSilenceMs(msg.edge_lead_ms),
           edgeTailMs: parseSilenceMs(msg.edge_tail_ms),
           decodedDurationMs: parseSilenceMs(msg.decoded_duration_ms),
+          tailPlaced: msg.tail_window === 'edges',
   };
 }
 
@@ -1137,6 +1142,9 @@ export type FacetName = 'head' | 'loudness' | 'tail' | 'clap' | 'vocal' | 'stems
 export const WHOLE_FILE_FACET_NAMES: readonly FacetName[] = ['loudness', 'edges'];
 const readsWholeFile = (body: Record<string, unknown>) =>
   Array.isArray(body.facets) && body.facets.some(f => (WHOLE_FILE_FACET_NAMES as readonly unknown[]).includes(f));
+// A placed tail window may be decoded from the stream URL (a capped copy cannot
+// reach it), so it needs the URL and the whole-file timeout too.
+const readsStream = (body: Record<string, unknown>) => readsWholeFile(body) || body.tail_window != null;
 export type FacetAnswerStatus = 'ok' | 'unmeasurable' | 'unavailable' | 'failed';
 
 export interface FacetAnswer {
@@ -1159,8 +1167,27 @@ export interface FacetAnalysis {
   source: FacetSourceInfo;
 }
 
+// Where the music stops, from the stored edges: the tail window ends there
+// instead of at the end of the file.
+export interface TailWindow {
+  endMs: number;
+  durationMs: number;
+}
+
+// The placement the stored edges give, or null when they are unmeasured or
+// leave nothing to place (a wholly silent file).
+export function tailWindowFor(t: { edgeTailMs?: number | null; decodedDurationMs?: number | null } | null | undefined): TailWindow | null {
+  const dur = t?.decodedDurationMs;
+  const tail = t?.edgeTailMs;
+  if (dur == null || tail == null || !Number.isFinite(dur) || !Number.isFinite(tail)) return null;
+  const endMs = Math.round(dur - tail);
+  return endMs > 0 && endMs <= dur ? { endMs, durationMs: Math.round(dur) } : null;
+}
+
 export interface FacetRequestOpts {
   facets: FacetName[];
+  // Tail facet: place the window from the stored edges.
+  tailWindow?: TailWindow | null;
   // Tail facet also carries the outro's vocal ranges (Demucs on the tail only).
   tailVocals?: boolean;
   stems_dir?: string;
@@ -1217,11 +1244,11 @@ async function facetRequest(
 ): Promise<FacetAnalysis> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  // A request that reads the whole file gets the whole-file deadline, which
+  // A request that reads the whole file (or the placed tail from it) gets the whole-file deadline, which
   // a caller's own deadline can only lengthen. Any other request keeps the
   // caller's deadline as given, shorter than the pass's included (a pick-time
   // separation's own budget, and the tests that shorten it), else the pass's.
-  const timeoutMs = readsWholeFile(body)
+  const timeoutMs = readsStream(body)
     ? Math.max(config.analyzer.requestTimeoutMs, config.analyzer.wholeFileTimeoutMs, deadlineMs ?? 0)
     : deadlineMs ?? config.analyzer.requestTimeoutMs;
   let msg: WorkerMessage;
@@ -1255,6 +1282,9 @@ export async function analyzeFacets(
 ): Promise<FacetAnalysis> {
   const body: Record<string, unknown> = { facets: opts.facets };
   if (opts.tailVocals) body.tail_vocals = true;
+  if (opts.tailWindow && opts.facets.includes('tail')) {
+    body.tail_window = { end_ms: opts.tailWindow.endMs, duration_ms: opts.tailWindow.durationMs };
+  }
   const stems = opts.stems_dir ? { stems_dir: opts.stems_dir, stems_require_marker: true } : {};
   const url = subsonic.getRawStreamUrl(songId);
   const timeoutMs = opts.timeoutMs; // undefined: facetRequest's default
@@ -1266,7 +1296,7 @@ export async function analyzeFacets(
       ...(opts.complete !== undefined ? { complete: opts.complete } : {}),
       // The whole-file facets read the stream URL unless the staged copy is
       // known to be complete; the worker decides, never the sidecar.
-      ...(readsWholeFile(body) ? { stream_url: url } : {}),
+      ...(readsStream(body) ? { stream_url: url } : {}),
       ...stems,
     }, timeoutMs);
   } catch (err) {

@@ -1264,6 +1264,99 @@ def analyze_outro(path, librosa, duration_s, complete=None):
     return facet_tail(y_src, sr, offset, duration_s, librosa)
 
 
+# ── tail placed from the stored edges (tail v2) ─────────────────────────────
+# The end-of-file window above is partly or wholly SILENT on a track that ends
+# in dead air: the ending reads as a fade (the silence is the decline), the
+# tail grid and tail vocals are measured on nothing, and an all-silent window
+# leaves the tail unmeasurable. The controller sends where the music stops
+# (`tail_window`: end_ms = decoded duration - trailing silence, both from the
+# whole-file `edges` facet) and the window ENDS there instead.
+
+def place_tail_window(end_ms):
+    """(offset_s, length_s) of the tail window that ends where the music
+    stops: the last OUTRO_SECONDS of music, or all of it on a shorter track."""
+    end_s = max(0.0, float(end_ms) / 1000.0)
+    offset = max(0.0, end_s - OUTRO_SECONDS)
+    return offset, end_s - offset
+
+
+def parse_tail_window(value):
+    """A request's `tail_window`, or None when it cannot be honoured (then the
+    tail falls back to the end-of-file window and is not marked placed)."""
+    if not isinstance(value, dict):
+        return None
+    end_ms, dur_ms = value.get("end_ms"), value.get("duration_ms")
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in (end_ms, dur_ms)):
+        return None
+    if end_ms <= 0 or dur_ms < end_ms:
+        return None
+    return {"end_ms": end_ms, "duration_ms": dur_ms}
+
+
+def tail_window_from_edges(edges):
+    """The placement an `edges` facet answer gives, or None."""
+    if not isinstance(edges, dict) or edges.get("status") != "ok":
+        return None
+    data = edges.get("data") or {}
+    dur, tail = data.get("decoded_duration_ms"), data.get("edge_tail_ms")
+    if not isinstance(dur, (int, float)) or not isinstance(tail, (int, float)):
+        return None
+    return parse_tail_window({"end_ms": int(round(dur - tail)), "duration_ms": int(round(dur))})
+
+
+def input_seek_is_exact(path):
+    """True when ffmpeg's INPUT seek lands on the exact sample for this file's
+    container: FLAC (frames carry sample numbers), Ogg (granule positions), WAV
+    and MP4/M4A (sample tables). MP3 and anything unrecognised are False:
+    ffmpeg's MP3 demuxer seeks through a 100-point Xing TOC or the average
+    bitrate, which is not guaranteed to land on the sample in a VBR file, and
+    every absolute timestamp the tail reports would move with it. The output
+    seek those get costs a decode from the start, on the few tracks that need
+    the stream at all."""
+    if not path:
+        return False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return False
+    return (head[:4] in (b"fLaC", b"OggS")
+            or (head[:4] == b"RIFF" and head[8:12] == b"WAVE")
+            or head[4:8] == b"ftyp")
+
+
+def window_ffmpeg_args(src, offset_s, length_s, dest, input_seek=False):
+    """ffmpeg command decoding [offset, offset+length) of `src` to a stereo WAV
+    at DEMUCS_SR (the rate Demucs needs; the tail features resample from it).
+    An input seek skips straight to the window; an output seek decodes from
+    the start and discards up to it, which is exact for every format."""
+    seek = ["-ss", f"{offset_s:.3f}"]
+    return (["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-threads", "1"]
+            + (seek if input_seek else []) + ["-i", src] + ([] if input_seek else seek)
+            + ["-t", f"{length_s:.3f}", "-vn", "-ac", "2", "-ar", str(DEMUCS_SR), "-f", "wav", "-y", dest])
+
+
+def extract_tail_window(src, offset_s, length_s, input_seek=False):
+    """Decode just the tail window of `src` (the stream URL) into a temp WAV;
+    returns its path. Raises on failure, with any URL reduced to its host."""
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    fd, dest = tempfile.mkstemp(prefix="subwave-tail-", suffix=".wav")
+    os.close(fd)
+    try:
+        p = subprocess.run(window_ffmpeg_args(src, offset_s, length_s, dest, input_seek),
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=WHOLE_FILE_TIMEOUT_S)
+        if p.returncode != 0:
+            raise RuntimeError(f"tail window decode failed: {ffmpeg_failure_reason(p.stderr.decode('utf-8', 'replace'))}")
+        return dest
+    except BaseException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+
+
 # Lazily loaded, at most once. None means "no embeddings this run" — either
 # disabled or a load failure (which we log once and then never retry, so one bad
 # model can't make every track fail).
@@ -2136,7 +2229,8 @@ def demucs_head(detector, load, librosa, stems_dir=None, stems_require_marker=Fa
     return vocal_ranges, stems_cached
 
 
-def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None):
+def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stems_require_marker=False, *, cache_errors=None,
+                window=None):
     """Demucs over the outro window: writes ABSOLUTE `outro["vocalRanges"]`
     ([] = analysed instrumental tail) and the tail stems + tail-meta when
     `stems_dir`. Only call with an outro computed from a proven tail.
@@ -2144,12 +2238,15 @@ def demucs_tail(detector, load, librosa, duration_s, outro, stems_dir=None, stem
     on a fading outro. Returns True when the tail vocals were measured.
     With `stems_require_marker` the marker is re-checked before the tail stems
     and again before the tail meta, as in demucs_head. cache_errors collects
-    publication failures separately from the successful vocal measurement."""
+    publication failures separately from the successful vocal measurement.
+    `window` = (offset_s, length_s) of a tail placed from the edges; absent,
+    the window is the file's last OUTRO_SECONDS. `duration_s` is the decoded
+    file length either way (the tail meta records it)."""
     import numpy as np
 
     try:
-        tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
-        y_tail, _srt = load(sr=DEMUCS_SR, mono=False, offset=tail_offset, duration=OUTRO_SECONDS)
+        tail_offset, tail_len = window if window else (max(0.0, duration_s - OUTRO_SECONDS), OUTRO_SECONDS)
+        y_tail, _srt = load(sr=DEMUCS_SR, mono=False, offset=tail_offset, duration=tail_len)
         if y_tail is None or np.size(y_tail) == 0:
             return False
         tail_stems = detector.separate(y_tail)
@@ -3166,7 +3263,7 @@ class FileSource:
     `complete` follows analyze()'s meaning: True = the file is whole, False =
     the cap truncated it, None = unknown (old caller)."""
 
-    def __init__(self, path, complete=None, owned=False, kind="path"):
+    def __init__(self, path, complete=None, owned=False, kind="path", stream_url=None):
         self.src_path = path
         self.path = path
         self.complete = complete
@@ -3174,14 +3271,19 @@ class FileSource:
         self.kind = kind
         self.decoded_tmp = None
         self.duration_s = 0.0
+        # The music server's stream URL, for a placed tail window this copy
+        # cannot prove it reaches (tail()); and the window decoded from it.
+        self.stream_url = stream_url
+        self.window_tmp = None
+        self.window_base_s = 0.0
 
     @classmethod
-    def from_request(cls, url=None, path=None, complete=None):
+    def from_request(cls, url=None, path=None, complete=None, stream_url=None):
         if path:
-            return cls(path, complete=complete, owned=False, kind="path")
+            return cls(path, complete=complete, owned=False, kind="path", stream_url=stream_url or url)
         if url:
             fetched, complete = fetch_audio(url)
-            return cls(fetched, complete=complete, owned=True, kind="capped-download")
+            return cls(fetched, complete=complete, owned=True, kind="capped-download", stream_url=stream_url or url)
         raise FacetRequestError("missing url or path")
 
     def open(self, librosa):
@@ -3198,9 +3300,17 @@ class FileSource:
     def load(self, librosa, sr, mono, offset=0.0, duration=None):
         return _path_loader(librosa, self.path)(sr=sr, mono=mono, offset=offset, duration=duration)
 
-    def tail(self, librosa):
+    def tail(self, librosa, placement=None):
         """(y_src, sr, offset) for a window PROVEN to reach the end of the
-        file, or a string reason why the end can't be proven."""
+        file, or a string reason why the end can't be proven.
+
+        With a `placement` (parse_tail_window) the window ends where the music
+        stops instead. The end is then proven by the edges that placed it, so
+        a copy known to be complete is read in place, and any other copy (the
+        byte-capped download, an unprovable pre-decode) has just the window
+        decoded from the stream URL; load_tail() reads the same window."""
+        if placement is not None:
+            return self._placed_tail(librosa, placement)
         if self.complete is False:
             return "capped-download"
         # A pre-decoded WAV's length IS the decodable length, so the short-
@@ -3210,6 +3320,30 @@ class FileSource:
             return "unknown-completeness"
         window = decode_tail(self.path, librosa, self.duration_s, self.complete)
         return window if window is not None else "tail-not-reached"
+
+    def _placed_tail(self, librosa, placement):
+        import numpy as np
+
+        offset, length = place_tail_window(placement["end_ms"])
+        in_place = self.complete is True
+        if not in_place:
+            if not self.stream_url:
+                return "capped-download"
+            self.window_tmp = extract_tail_window(self.stream_url, offset, length,
+                                                  input_seek=input_seek_is_exact(self.src_path))
+            self.window_base_s = offset
+        y_src, sr = self.load_tail(librosa, sr=ANALYZE_SR, mono=False, offset=offset, duration=length)
+        if y_src is None or np.shape(y_src)[-1] < ANALYZE_SR * length * 0.6:
+            return "tail-not-reached"
+        return y_src, sr, offset
+
+    def load_tail(self, librosa, sr, mono, offset=0.0, duration=None):
+        """load() for the tail window: the decoded window when one was
+        extracted (its time zero is the window's start), else the file."""
+        if self.window_tmp is None:
+            return self.load(librosa, sr=sr, mono=mono, offset=offset, duration=duration)
+        return _path_loader(librosa, self.window_tmp)(
+            sr=sr, mono=mono, offset=max(0.0, offset - self.window_base_s), duration=duration)
 
     def clap_windows(self, librosa):
         return (y48 for _offset, y48 in iter_clap_windows(self.path, librosa, self.duration_s))
@@ -3223,6 +3357,12 @@ class FileSource:
         }
 
     def close(self):
+        if self.window_tmp is not None:
+            try:
+                os.remove(self.window_tmp)
+            except OSError:
+                pass
+            self.window_tmp = None
         if self.decoded_tmp is not None:
             try:
                 os.remove(self.decoded_tmp)
@@ -3264,7 +3404,7 @@ def _failed(e):
 
 
 def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
-                   whole_input=None):
+                   whole_input=None, tail_window=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -3287,12 +3427,19 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
     what the whole-file facets read: `edges` always, and `loudness`, which is
     then measured over the whole file at its native rate (v2). Without it
     `loudness` keeps the analysis window's figures (an older controller sends
-    no stream URL) and `edges` is unmeasurable."""
+    no stream URL) and `edges` is unmeasurable.
+
+    `tail_window` (parse_tail_window: where the music stops, from the stored
+    edges) places the tail window, and the Demucs tail with it, so it ends at
+    the music instead of the file; edges measured in this same request place
+    it too. A placed tail answers `tail_window: "edges"` and takes its
+    trailing-silence fields from the edges."""
     out = {}
     wanted = set(facets)
     whole_wanted = [f for f in WHOLE_FILE_FACETS if f in wanted and (f != "loudness" or whole_input)]
     if whole_wanted:
         out.update(whole_file_facets(whole_input, whole_wanted))
+    placement = tail_window_from_edges(out.get("edges")) or parse_tail_window(tail_window)
 
     # Head window, decoded once with channels: head works off the mono
     # downmix, loudness off the real channels (issue #998).
@@ -3312,11 +3459,26 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
     # Tail: needed for the tail facet itself and to gate the Demucs tail pass.
     outro = None
     tail_reason = None
+    tail_span = None  # (offset_s, length_s) of a placed window
     if wanted & {"tail", "vocal", "stems"}:
         try:
-            window = source.tail(librosa)
+            window = source.tail(librosa, placement) if placement else source.tail(librosa)
             if isinstance(window, str):
                 tail_reason = window
+            elif placement:
+                t_src, t_sr, t_off = window
+                end_s = placement["end_ms"] / 1000.0
+                tail_span = (t_off, end_s - t_off)
+                # Measured as if the file ended where the music does; the
+                # trailing silence is the edges' own figure.
+                outro = facet_tail(t_src, t_sr, t_off, end_s, librosa)
+                if outro is None:
+                    tail_reason = "silent-tail-window"
+                else:
+                    outro.pop("tail_silence_ms", None)
+                    outro.pop("tail_start_ms", None)
+                    outro["tail_silence_ms"] = placement["duration_ms"] - placement["end_ms"]
+                    outro["tail_start_ms"] = placement["end_ms"]
             else:
                 t_src, t_sr, t_off = window
                 outro = facet_tail(t_src, t_sr, t_off, source.duration_s, librosa)
@@ -3340,6 +3502,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                     out[f] = _unavailable(why)
         else:
             load = lambda **kw: source.load(librosa, **kw)  # noqa: E731
+            tail_load = (lambda **kw: source.load_tail(librosa, **kw)) if tail_span else load  # noqa: E731
+            tail_dur = placement["duration_ms"] / 1000.0 if tail_span else source.duration_s
             stem_target = stems_dir if "stems" in wanted else None
             share_ok = stems_dir_to_write(stem_target, stems_require_marker) is not None
             if not share_ok:
@@ -3351,8 +3515,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             tail_vocals = False
             if outro is not None and "startMs" in outro:
                 tail_vocals = demucs_tail(
-                    detector, load, librosa, source.duration_s, outro, stem_target, stems_require_marker,
-                    cache_errors=cache_errors,
+                    detector, tail_load, librosa, tail_dur, outro, stem_target, stems_require_marker,
+                    cache_errors=cache_errors, window=tail_span,
                 )
             if stem_target and stems_dir_to_write(stem_target, stems_require_marker) is None:
                 share_ok = False
@@ -3382,8 +3546,12 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
             and not (wanted & {"vocal", "stems"}):
         detector = get_vocal_detector(force=True)
         if detector is not None:
-            demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
-                        source.duration_s, outro)
+            if tail_span:
+                demucs_tail(detector, lambda **kw: source.load_tail(librosa, **kw), librosa,
+                            placement["duration_ms"] / 1000.0, outro, window=tail_span)
+            else:
+                demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
+                            source.duration_s, outro)
 
     if "tail" in wanted and "tail" not in out:
         if outro is None:
@@ -3395,6 +3563,8 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                 lifted["tail_silence_ms"] = data.pop("tail_silence_ms")
                 if "tail_start_ms" in data:
                     lifted["tail_start_ms"] = data.pop("tail_start_ms")
+            if tail_span:
+                lifted["tail_window"] = "edges"
             out["tail"] = _ok({**lifted, **({"outro": data} if data else {})})
 
     if "head" in wanted and "head" not in out:
@@ -3448,7 +3618,8 @@ def analyze_facet_request(librosa, req):
             "source": {"kind": "whole-file", "duration_s": round(dur_ms / 1000.0, 3) if dur_ms else None,
                        "complete": True},
         }
-    source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"))
+    source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"),
+                                     stream_url=req.get("stream_url"))
     try:
         source.open(librosa)
         result = analyze_facets(
@@ -3456,6 +3627,7 @@ def analyze_facet_request(librosa, req):
             want_tail_vocals=req.get("tail_vocals") is True,
             stems_require_marker=req.get("stems_require_marker") is True,
             whole_input=whole_input,
+            tail_window=req.get("tail_window"),
         )
         return {"facets": result, "source": source.describe()}
     finally:

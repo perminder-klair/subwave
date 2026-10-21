@@ -673,6 +673,58 @@ the opt-in backfill), the curve cases in both (parsing the per-frame lines,
 the three series, the `no-curve` rule and its capability skip) and `scripts/silence-trim-library.test.ts` (edges outrank
 the window figures).
 
+**The tail facet is placed from the edges (tail v2).** The end-of-file tail
+window (the last `ANALYZE_OUTRO_SECONDS`) is partly or wholly silence on a
+track that ends in dead air, and the silence reads as the decline of a fade: on
+one production library, of the tracks with more than 3 s of trailing silence,
+13,901 were labelled `fade` and 48 `cold`. The tail grid and the Demucs tail
+vocals and stems are then measured on nothing too, and a window that is all
+silence leaves the tail unmeasurable. So a planned tail request carries
+`tail_window: {end_ms, duration_ms}` whenever the edges are stored
+(`analyzer.tailWindowFor`: decoded length minus trailing silence), and the
+worker ends the window there. Six rules:
+
+1. **Everything rides the placed window**: the ending, wind-down, tail grid and
+   tail loudness (`facet_tail`, measured as if the file ended at the music),
+   and the Demucs tail vocals, tail stems and `tail-meta.json`
+   (`demucs_tail(window=…)`). Timestamps stay absolute. `tail_silence_ms` and
+   `tail_start_ms` are the edges' own figures: the placed window holds no
+   trailing silence by construction.
+2. **The answer says it was placed** (`tail_window: "edges"` in the tail data).
+   Only that stamps `tail_version = 2`; an analyzer that predates the field
+   ignores it and its end-of-file answer stays v1. Edges measured in the same
+   request place the tail too.
+3. **The version is read off the columns** (`tailVersionOf`): `tail_version`,
+   else 2 when the stored edges show at most `TAIL_PLACEMENT_TOLERANCE_MS`
+   (3 s) of trailing silence (the end-of-file window then held the same music,
+   so re-measuring changes nothing), else 1. Measuring edges promotes an
+   existing tail the tolerance covers at once, not only on a whole-table
+   re-derive, or every track whose edges arrive later would stay planned for a
+   tail re-read. An unmeasurable tail with no edges is stored one version
+   below, so it is retried once edges can place it.
+4. **The window is read where it is proven.** A copy known to be complete is
+   read in place; any other (the byte-capped download) has just the window
+   decoded from `stream_url` (`extract_tail_window`), so a large file is no
+   longer `capped-download`. FLAC, Ogg, WAV and MP4 seek on ffmpeg's input
+   side; MP3 and anything unrecognised seek on the OUTPUT side, because the MP3
+   demuxer seeks through a Xing TOC or the average bitrate, which is not
+   guaranteed to land on the sample in a VBR file, and every absolute
+   timestamp would move with it. Such a request gets the whole-file timeout.
+5. **A placed tail is not overwritten by an end-of-file one**: a flat analysis
+   and a `--re-analyze` clear keep it, with its facet row (the loudness v2
+   rule). A facet answer from the end-of-file window does replace it and drops
+   the stamp. Tail vocal ranges are carried onto a new tail only when it sits
+   on the same window; a newly placed one leaves them to the vocal backfill.
+6. **Without edges the tail is today's end-of-file window, stamped v1**, so
+   `npm run analyze -- --facets edges` first and then `--facets tail` re-reads
+   exactly the tracks the tolerance does not cover. `tail_version` follows the
+   outro it describes through an id adoption.
+
+Pinned by `scripts/analyzer_tail_placement_test.py` (placement, the marker,
+Demucs on the placed window, the seek side, a real ffmpeg window landing on the
+sample) and `scripts/tail-placement.test.ts` (versions, the tolerance, live
+promotion, no overwrite, the request and the stamp end to end).
+
 ## Prepared artist episodes
 
 `broadcast/show-preparation.ts` owns `state/show-preparations.json`. Its key is a
