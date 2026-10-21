@@ -53,6 +53,45 @@ const lidQuad = (pts: Array<[number, number, number]>) => poly(pts.map(([x, dy, 
 const { x0: L0, x1: L1, d: LD, h: LH } = LID;
 const lidCorners: Pt[] = [0, LD].flatMap(dy => [0, LH].flatMap(dz => [lidAt(L0, dy, dz), lidAt(L1, dy, dz)]));
 
+// The cover's panel as a flat sheet, for anything laid out ON the glass (the
+// focus-mode screen): u runs along the hinge left to right, v down from the
+// cover's free edge, both in world units. The projection is affine, so one
+// matrix carries the whole sheet onto the screen; measured across the full
+// panel so the 2-decimal rounding in `project` washes out.
+const LW = L1 - L0;
+const sheetO = lidAt(L0, LD, LH);
+const sheetU: Pt = [(lidAt(L1, LD, LH)[0] - sheetO[0]) / LW, (lidAt(L1, LD, LH)[1] - sheetO[1]) / LW];
+const sheetV: Pt = [(lidAt(L0, 0, LH)[0] - sheetO[0]) / LD, (lidAt(L0, 0, LH)[1] - sheetO[1]) / LD];
+const sheetDet = sheetU[0] * sheetV[1] - sheetV[0] * sheetU[1];
+/** A screen point back onto the sheet. */
+const toSheet = ([x, y]: Pt): Pt => {
+  const px = x - sheetO[0], py = y - sheetO[1];
+  return [(px * sheetV[1] - py * sheetV[0]) / sheetDet, (py * sheetU[0] - px * sheetU[1]) / sheetDet];
+};
+// Each wall runs from a panel edge to the matching rim edge, so where the rim
+// lands on the sheet says how much of each edge a wall hides.
+const [rimU, rimV] = toSheet(lidAt(L0, LD, 0));
+const r4 = (v: number) => Math.round(v * 1e4) / 1e4;
+const sheetM = [...sheetU, ...sheetV, ...sheetO].map(r4) as [number, number, number, number, number, number];
+
+export const LID_SHEET = {
+  /** The sheet-to-screen map, as SVG matrix(a b c d e f) numbers. */
+  m: sheetM,
+  transform: `matrix(${sheetM.join(' ')})`,
+  w: LW,
+  h: LD,
+  /** Seen from inside through the open rim, the sheet must still read left to
+   *  right: a negative determinant would mirror everything printed on it. */
+  mirrored: sheetDet < 0,
+  /** The part of the sheet no wall stands in front of. */
+  clear: {
+    x0: round2(Math.max(0, rimU)),
+    y0: round2(Math.max(0, rimV)),
+    x1: round2(LW + Math.min(0, rimU)),
+    y1: round2(LD + Math.min(0, rimV)),
+  },
+} as const;
+
 const pw = project(152, 142, 64), mu = project(152, 142, 33);
 const lcdA = project(22, 142, 44), lcdB = project(124, 142, 30);
 

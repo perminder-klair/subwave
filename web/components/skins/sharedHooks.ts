@@ -4,7 +4,8 @@
 // here reads only the core contexts, per the skin contract (see types.ts);
 // wording and layout stay with each skin.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { useReducedMotion } from 'motion/react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
 import { useLiteMode } from '@/hooks/useLiteMode';
@@ -262,4 +263,32 @@ export function useVolumeNudge(): (delta: number) => void {
       setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100))),
     [setVolume],
   );
+}
+
+/** Squeeze any SVG `<text>` under `rootRef` that carries `data-fit="<room>"`
+ *  and runs past that room. A skin that sets legends inside a drawing lays
+ *  them out by character budget, which can't know the theme's face, so each
+ *  row is measured once drawn. Re-measures when `key` changes and again once
+ *  web fonts land; an empty key skips. Measuring isn't motion, so this runs in
+ *  lite and reduced motion too. A hidden tree measures zero and is left alone. */
+export function useSvgTextFit(rootRef: RefObject<Element | null>, key: string): void {
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || !key) return;
+    const fit = () => {
+      for (const el of root.querySelectorAll<SVGTextElement>('[data-fit]')) {
+        el.removeAttribute('textLength');
+        el.removeAttribute('lengthAdjust');
+        const room = Number(el.dataset.fit);
+        if (el.getComputedTextLength() > room) {
+          el.setAttribute('textLength', String(room));
+          el.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+        }
+      }
+    };
+    fit();
+    let alive = true;
+    void document.fonts?.ready.then(() => { if (alive) fit(); });
+    return () => { alive = false; };
+  }, [rootRef, key]);
 }

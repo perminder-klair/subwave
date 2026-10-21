@@ -2,14 +2,17 @@
 
 // AXO — the player drawn as a hi-fi stack at 30° isometric. The drawing is the
 // interface (see AxoScene); the column beside it carries the facts a drawing
-// can't, and the dashed construction lines before tune-in are the gate.
+// can't, and the dashed construction lines before tune-in are the gate. Focus
+// mode (desktop, F) folds the column away and hands the now-playing card to the
+// open dust cover, lit as a screen (screen.ts lays it out).
 // Desktop and mobile are two trees switched by CSS rather than a JS media
 // query, so SSR paints the right one first; the hidden scene's loop idles.
 
 import { useEffect, useRef, useState } from 'react';
-import { Play, X } from 'lucide-react';
+import { PanelLeftClose, PanelLeftOpen, Play, X } from 'lucide-react';
 import styles from './Axo.module.css';
 import AxoScene, { type AxoSceneProps } from './AxoScene';
+import type { LidScreenInfo } from './screen';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -50,6 +53,9 @@ import {
 import type { SkinProps } from '../types';
 
 const OFFLINE_COPY = 'Nothing is on the stream right now. Power is disabled until the station comes back.';
+
+/** Focus mode is a listener's own preference, remembered per browser. */
+const FOCUS_KEY = 'subwave:axo-focus';
 
 /** Clip a label to the width of the window it's printed in. */
 function fit(s: string, max: number): string {
@@ -120,6 +126,26 @@ export default function AxoSkin(_props: SkinProps) {
   });
   const closeReq = () => { setReqOpen(false); slip.reset(); };
 
+  // Focus mode (desktop): the column folds away and the dust cover becomes a
+  // screen carrying its facts. Hydrated in an effect to avoid an SSR mismatch;
+  // `focusMoved` holds the column's glide back until the listener toggles, so
+  // a remembered focus mode doesn't animate shut on every load.
+  const [focus, setFocus] = useState(false);
+  const [focusMoved, setFocusMoved] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(FOCUS_KEY) === '1') setFocus(true);
+    } catch {}
+  }, []);
+  const toggleFocus = () => {
+    setFocusMoved(true);
+    setFocus(v => {
+      const next = !v;
+      try { localStorage.setItem(FOCUS_KEY, next ? '1' : '0'); } catch {}
+      return next;
+    });
+  };
+
   useKeyboardShortcuts({
     space: handleTune,
     k: handleTune,
@@ -127,8 +153,10 @@ export default function AxoSkin(_props: SkinProps) {
     arrowdown: () => adjustVolume(-0.05),
     m: toggleMute,
     r: () => { if (!showTuneIn) setReqOpen(true); },
-    // Only while the card is up, so Escape still reaches menus otherwise.
-    escape: reqOpen ? closeReq : undefined,
+    f: toggleFocus,
+    // Only while the card is up or focus is on, so Escape still reaches
+    // menus otherwise. The card closes first.
+    escape: reqOpen ? closeReq : focus ? toggleFocus : undefined,
   });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -157,6 +185,28 @@ export default function AxoSkin(_props: SkinProps) {
     onRequest: () => setReqOpen(true),
     onLike: () => void like.like(),
   };
+
+  // The column's facts, worded for the cover's screen.
+  const next = upNext[0];
+  const screen: LidScreenInfo | null = focus
+    ? {
+        eyebrow: talk ? `on air — ${djName}` : offline ? 'off air · no signal' : eyebrow,
+        onAir: talk,
+        title,
+        artist,
+        detail: offline ? '' : [nowPlaying?.album, nowPlaying?.year].filter(Boolean).join(' · '),
+        elapsed: offline ? '--:--' : fmtTime(elapsed),
+        duration: nowPlaying?.duration && !offline ? fmtTime(nowPlaying.duration) : 'live',
+        ratio: offline ? null : ratio,
+        foot: offline
+          ? null
+          : talk && voice
+            ? { kind: 'quote', text: voice.text }
+            : next
+              ? { kind: 'next', text: [next.title ?? '—', next.artist].filter(Boolean).join(' — ') }
+              : null,
+      }
+    : null;
 
   const progress = (size: 'lg' | 'sm') => (
     <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
@@ -238,109 +288,133 @@ export default function AxoSkin(_props: SkinProps) {
                 <span className="max-w-[22vw] truncate border-l border-soft-border pl-3 text-muted">{contextLine(context)}</span>
               )}
             </div>
+            <button
+              type="button"
+              onClick={toggleFocus}
+              aria-pressed={focus}
+              aria-label="Focus mode"
+              title={focus ? 'Show the column (F)' : 'Focus — fold the column away (F)'}
+              className={cn(
+                'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
+                focus ? 'text-[var(--accent)]' : 'text-muted hover:text-ink',
+              )}
+            >
+              {focus
+                ? <PanelLeftOpen className="size-4" aria-hidden="true" />
+                : <PanelLeftClose className="size-4" aria-hidden="true" />}
+            </button>
             <ThemeSwitcher />
           </div>
         </div>
 
         <div className="flex min-h-0 flex-1">
-          <div className="flex w-[clamp(380px,32vw,460px)] flex-none flex-col gap-[22px] overflow-hidden border-r border-ink px-8 pt-8 pb-6">
-            <div className="flex flex-col gap-2.5">
-              {eyebrowEl}
-              <div className="line-clamp-3 font-display text-[clamp(40px,4.2vw,60px)] leading-[0.95] font-extrabold tracking-[-0.01em] text-balance italic">
-                {title}
+          <div
+            className={cn(
+              'flex-none overflow-hidden border-r border-ink',
+              styles.side,
+              focus && styles.sideFocus,
+              focusMoved && styles.sideMoves,
+            )}
+          >
+            <div className="flex h-full w-[clamp(380px,32vw,460px)] flex-col gap-[22px] overflow-hidden px-8 pt-8 pb-6">
+              <div className="flex flex-col gap-2.5">
+                {eyebrowEl}
+                <div className="line-clamp-3 font-display text-[clamp(40px,4.2vw,60px)] leading-[0.95] font-extrabold tracking-[-0.01em] text-balance italic">
+                  {title}
+                </div>
+                {offline ? (
+                  <span className="text-[15px] leading-relaxed text-pretty text-muted">{OFFLINE_COPY}</span>
+                ) : (
+                  <>
+                    {artist && <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>}
+                    {(nowPlaying?.album || nowPlaying?.year) && (
+                      <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
+                        {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
+                      </span>
+                    )}
+                    {(meta.facts.length > 0 || meta.moods.length > 0) && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {meta.facts.map(f => <Badge key={f} variant="ink" className="whitespace-nowrap">{f}</Badge>)}
+                        {meta.moods.map(m => <Badge key={m} variant="accent" className="whitespace-nowrap">{m}</Badge>)}
+                      </div>
+                    )}
+                    {progress('lg')}
+                  </>
+                )}
               </div>
-              {offline ? (
-                <span className="text-[15px] leading-relaxed text-pretty text-muted">{OFFLINE_COPY}</span>
-              ) : (
+
+              {!offline && (
                 <>
-                  {artist && <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>}
-                  {(nowPlaying?.album || nowPlaying?.year) && (
-                    <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
-                      {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
-                    </span>
-                  )}
-                  {(meta.facts.length > 0 || meta.moods.length > 0) && (
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {meta.facts.map(f => <Badge key={f} variant="ink" className="whitespace-nowrap">{f}</Badge>)}
-                      {meta.moods.map(m => <Badge key={m} variant="accent" className="whitespace-nowrap">{m}</Badge>)}
+                  <div className="h-px flex-none bg-soft-border" />
+                  {voice && (
+                    <div className="flex flex-col gap-2.5">
+                      {talk ? (
+                        <>
+                          {onAirTag}
+                          <span className="line-clamp-5 font-display text-[22px] leading-[1.35] font-medium text-pretty italic">
+                            “{voice.text}”
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
+                            last on air · {turnClock(voice.t, timezone, stationLocale)} — {djName}
+                          </span>
+                          <span className="line-clamp-4 font-display text-[17px] leading-[1.45] font-medium text-pretty italic">
+                            “{voice.text}”
+                          </span>
+                        </>
+                      )}
                     </div>
                   )}
-                  {progress('lg')}
-                </>
-              )}
-            </div>
-
-            {!offline && (
-              <>
-                <div className="h-px flex-none bg-soft-border" />
-                {voice && (
-                  <div className="flex flex-col gap-2.5">
-                    {talk ? (
-                      <>
-                        {onAirTag}
-                        <span className="line-clamp-5 font-display text-[22px] leading-[1.35] font-medium text-pretty italic">
-                          “{voice.text}”
-                        </span>
-                      </>
+                  <div className="flex flex-none flex-col border border-ink">
+                    <div className="border-b border-line px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
+                      next on the stack
+                    </div>
+                    {upNext.length > 0 ? (
+                      upNext.map((t, i) => (
+                        <div
+                          key={`${t.title ?? i}-${i}`}
+                          className={cn('flex items-center gap-3 px-3.5 py-2.5', i < upNext.length - 1 && 'border-b border-soft-border')}
+                        >
+                          <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-muted')}>
+                            {i === 0 ? 'CUED' : 'THEN'}
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-[14px] font-bold">{t.title ?? '—'}</div>
+                            {t.artist && <div className="truncate text-[11px] text-muted">{t.artist}</div>}
+                          </div>
+                        </div>
+                      ))
                     ) : (
-                      <>
-                        <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
-                          last on air · {turnClock(voice.t, timezone, stationLocale)} — {djName}
-                        </span>
-                        <span className="line-clamp-4 font-display text-[17px] leading-[1.45] font-medium text-pretty italic">
-                          “{voice.text}”
-                        </span>
-                      </>
+                      <div className="px-3.5 py-2.5 font-mono text-[11px] text-muted">
+                        nothing cued — {djName} picks at the run-out
+                      </div>
                     )}
                   </div>
-                )}
-                <div className="flex flex-none flex-col border border-ink">
-                  <div className="border-b border-line px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
-                    next on the stack
-                  </div>
-                  {upNext.length > 0 ? (
-                    upNext.map((t, i) => (
-                      <div
-                        key={`${t.title ?? i}-${i}`}
-                        className={cn('flex items-center gap-3 px-3.5 py-2.5', i < upNext.length - 1 && 'border-b border-soft-border')}
-                      >
-                        <span className={cn('font-mono text-[9px] tracking-[0.18em]', i === 0 ? 'text-[var(--accent)]' : 'text-muted')}>
-                          {i === 0 ? 'CUED' : 'THEN'}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-[14px] font-bold">{t.title ?? '—'}</div>
-                          {t.artist && <div className="truncate text-[11px] text-muted">{t.artist}</div>}
-                        </div>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="px-3.5 py-2.5 font-mono text-[11px] text-muted">
-                      nothing cued — {djName} picks at the run-out
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
+                </>
+              )}
 
-            {!talk && history.length > 0 && (
-              <div className="flex w-full flex-none flex-col gap-0.5">
-                <span className="pb-1.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">recently spun</span>
-                {history.map((h, i) => (
-                  <div
-                    key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
-                    className="flex gap-3 border-b border-soft-border py-[5px] text-[13px] last:border-b-0"
-                  >
-                    <span className="pt-0.5 font-mono text-[10px] text-muted tabular-nums">
-                      {turnClock(entryTime(h), timezone, stationLocale)}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate">
-                      <b>{h.title ?? '—'}</b>
-                      {h.artist && <> — {h.artist}</>}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+              {!talk && history.length > 0 && (
+                <div className="flex w-full flex-none flex-col gap-0.5">
+                  <span className="pb-1.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">recently spun</span>
+                  {history.map((h, i) => (
+                    <div
+                      key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
+                      className="flex gap-3 border-b border-soft-border py-[5px] text-[13px] last:border-b-0"
+                    >
+                      <span className="pt-0.5 font-mono text-[10px] text-muted tabular-nums">
+                        {turnClock(entryTime(h), timezone, stationLocale)}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate">
+                        <b>{h.title ?? '—'}</b>
+                        {h.artist && <> — {h.artist}</>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className={cn('relative min-w-0 flex-1', styles.gridDesk)}>
@@ -348,7 +422,7 @@ export default function AxoSkin(_props: SkinProps) {
               receiver · tape · turntable — drawn at 30°
             </span>
             <div className="absolute inset-x-4 top-9 bottom-3">
-              <AxoScene variant="desk" {...scene} />
+              <AxoScene variant="desk" {...scene} screen={screen} />
             </div>
             {reqOpen && (
               <div className="absolute right-6 bottom-6 flex w-[360px] flex-col border border-ink bg-bg shadow-drawer">

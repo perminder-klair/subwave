@@ -126,6 +126,31 @@
   background-position: 0 0, 8px 4.619px;
 }
 
+/* Focus mode's screen: the cover's panel lit as a sheet of display glass. A
+   faint accent tint and scanlines under the legends, an accent halo behind
+   them (the bloom filter's flood), dim segments where the song hasn't been. */
+.glass { fill: color-mix(in oklab, var(--accent) 7%, transparent); }
+.scanLine {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.07;
+  stroke-width: 0.5;
+}
+.bloomFlood { flood-color: var(--accent); flood-opacity: 0.35; }
+.seg { fill: color-mix(in oklab, var(--ink) 13%, transparent); }
+.sweep0 { stop-color: var(--accent); stop-opacity: 0; }
+.sweep1 { stop-color: var(--accent); stop-opacity: 0.22; }
+/* The band that runs down the glass as it lights. At rest it isn't there. */
+.sweep { opacity: 0; }
+
+/* The column beside the drawing folds shut in focus mode. Only the frame
+   narrows; the column inside keeps its width, so nothing reflows on the way,
+   and it stays in the accessibility tree, where the screen (drawn, and
+   aria-hidden with the rest of the drawing) can't stand in for it. */
+.side { width: clamp(380px, 32vw, 460px); }
+.side.sideFocus { width: 0; border-right-color: transparent; }
+.side.sideFocus > * { opacity: 0; }
+
 /* Progress: --pf (0..1) rides the skin root. */
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .progHead { left: calc(var(--pf, 0) * 100%); }
@@ -133,8 +158,36 @@
 .pulse { animation: axo-pulse 2.4s ease-in-out infinite; }
 @keyframes axo-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 
+/* Screen and column motion is layered on, never resting: the still frame above
+   is what reduced motion and lite get. The column only glides once the
+   listener has toggled it (sideMoves), so a remembered focus mode applied at
+   hydration doesn't animate shut on every load. */
+@media (prefers-reduced-motion: no-preference) {
+  .sweep { animation: axo-sweep 1.5s ease-out 0.1s both; }
+  .screenIn { animation: axo-screen-in 0.7s ease-out both; }
+  .sideMoves { transition: width 0.55s cubic-bezier(0.65, 0, 0.35, 1), border-color 0.55s ease; }
+  .sideMoves > * { transition: opacity 0.3s ease; }
+}
+@keyframes axo-sweep {
+  0% { opacity: 1; transform: translateY(0); }
+  75% { opacity: 0.8; }
+  100% { opacity: 0; transform: translateY(150px); }
+}
+/* A display striking up: a flicker, then on. */
+@keyframes axo-screen-in {
+  0% { opacity: 0; }
+  12% { opacity: 0.8; }
+  20% { opacity: 0.2; }
+  36% { opacity: 1; }
+  100% { opacity: 1; }
+}
+
 /* Lite and reduced motion: the pen still changes state, it just doesn't glide. */
 :global(html.lite) .draw { transition: none; }
+:global(html.lite) .sweep,
+:global(html.lite) .screenIn { animation: none; }
+:global(html.lite) .sideMoves,
+:global(html.lite) .sideMoves > * { transition: none; }
 @media (prefers-reduced-motion: reduce) {
   .draw { transition: none; }
   .pulse { animation: none; }

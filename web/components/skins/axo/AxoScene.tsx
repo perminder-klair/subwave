@@ -15,8 +15,10 @@ import styles from './Axo.module.css';
 import { cn } from '@/lib/cn';
 import { useAnalyser } from '@/lib/hooks';
 import { round2 } from '@/components/iso/geometry';
-import { AXO, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock, type RackLevel } from './geometry';
+import { AXO, LID_SHEET, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock, type RackLevel } from './geometry';
+import { ROW, SCREEN, SEGMENTS, screenLayout, type LidScreenInfo } from './screen';
 import { foldBpm, isPowered, type ListenPhase } from '../shared';
+import { useSvgTextFit } from '../sharedHooks';
 
 export interface AxoSceneProps {
   variant: 'desk' | 'mobile';
@@ -40,6 +42,8 @@ export interface AxoSceneProps {
   calm: boolean;
   audioRef: RefObject<HTMLAudioElement | null>;
   like: { available: boolean; liked: boolean; count: number; pending: boolean };
+  /** Focus mode: the dust cover is a screen carrying the now-playing card. */
+  screen?: LidScreenInfo | null;
   /** The tune-in overlay is up: the whole drawing takes the tap. */
   gateTap: boolean;
   onGateTap: () => void;
@@ -85,7 +89,7 @@ const noSubscribe = () => () => {};
 export default function AxoScene(props: AxoSceneProps) {
   const {
     variant, phase, talk, muted, volume, ratio, counter, duration, lcd, tapeLabel,
-    djName, calm, audioRef, like, gateTap, onGateTap, onPower, onMute, onVolume,
+    djName, calm, audioRef, like, screen = null, gateTap, onGateTap, onPower, onMute, onVolume,
     onRequest, onLike,
   } = props;
   const mob = variant === 'mobile';
@@ -96,6 +100,16 @@ export default function AxoScene(props: AxoSceneProps) {
   const paint: PaintIds = {
     shade: `${uid}-shade`, fall: `${uid}-fall`, dropX: `${uid}-dropx`, dropY: `${uid}-dropy`, glow: `${uid}-glow`,
   };
+  const screenIds: ScreenIds = {
+    clip: `${uid}-scrclip`, scan: `${uid}-scan`, bloom: `${uid}-bloom`, sweep: `${uid}-sweep`,
+  };
+
+  // The screen's rows are laid out by character budget; once drawn, any
+  // still overflowing its window is squeezed.
+  const screenText = screen
+    ? [screen.eyebrow, screen.title, screen.artist, screen.detail, screen.foot?.text ?? '', screen.elapsed].join('\n')
+    : '';
+  useSvgTextFit(rootRef, screenText);
 
   // False through SSR and hydration. `calm` can differ between the two (the
   // reduced-motion query only answers in the browser), so nothing printed
@@ -335,6 +349,7 @@ export default function AxoScene(props: AxoSceneProps) {
             <stop offset="0" className={styles.glow0} />
             <stop offset="1" className={styles.glow1} />
           </radialGradient>
+          {screen && <ScreenDefs ids={screenIds} />}
         </defs>
 
         <g className={cn(styles.draw, !powered && styles.drawOff)} aria-hidden="true">
@@ -520,7 +535,7 @@ export default function AxoScene(props: AxoSceneProps) {
 
           {/* Turntable. The cover leans back past upright, wholly behind the
               plinth, so it goes down first and the plinth covers its foot. */}
-          <DustCover />
+          <DustCover screen={screen} powered={powered} ids={screenIds} />
           <Face of={AXO.tt} side="L" className={styles.fL}>
             <text x="12" y="15" fontSize={5} fontWeight={500} letterSpacing="0.18em" className={cn(styles.txMuted, styles.mono)}>
               AXO-1 · DIRECT DRIVE · 33⅓
@@ -883,20 +898,208 @@ function Lamp({ cx, cy, r, lit, glow }: { cx: number; cy: number; r: number; lit
 /** The open dust cover, in smoked acrylic: every wall shows through the
  *  others. The panel faces away and is seen from inside, so it takes the
  *  faintest tint; the walls are seen edge-on through more of the plastic,
- *  and the one turned toward the viewer reads darkest. */
-function DustCover() {
+ *  and the one turned toward the viewer reads darkest. In focus mode the
+ *  panel is a screen: it goes on the panel itself, so the walls still stand
+ *  in front of its edges, and it takes the glint's place — those strokes run
+ *  straight through the card's rows, and the lit glass reads as glass without
+ *  them. */
+function DustCover({ screen, powered, ids }: { screen: LidScreenInfo | null; powered: boolean; ids: ScreenIds }) {
   const { lid } = AXO;
   return (
     <>
       <path d={lid.back} strokeWidth={0.4} className={styles.fLidWall} />
       <path d={lid.panel} strokeWidth={0.5} className={styles.fLid} />
-      <path d={lid.glint} strokeWidth={0.6} opacity={0.4} />
+      {screen
+        ? <LidScreen screen={screen} powered={powered} ids={ids} />
+        : <path d={lid.glint} strokeWidth={0.6} opacity={0.4} />}
       <path d={lid.left} strokeWidth={0.5} className={styles.fLidWall} />
       <path d={lid.front} strokeWidth={0.5} className={styles.fLidWall} />
       <path d={lid.right} strokeWidth={0.6} className={styles.fLidSide} />
       <path d={lid.rim} strokeWidth={0.9} />
       <path d={lid.sil} strokeWidth={1.3} className={styles.solid} />
     </>
+  );
+}
+
+/** Ids of the screen's clip, scanlines, bloom and sweep, unique per scene. */
+interface ScreenIds { clip: string; scan: string; bloom: string; sweep: string }
+
+/** The glass the screen lights: the sheet's clear part, a hair inside the
+ *  walls. The card itself keeps to SCREEN, within it. */
+const GLASS = (() => {
+  const { x0, y0, x1, y1 } = LID_SHEET.clear;
+  return { x: x0 + 2, y: y0 + 2, w: x1 - x0 - 4, h: y1 - y0 - 4 };
+})();
+
+/** HUD corner marks round the glass: inked when lit, construction lines in
+ *  standby, as everything unpowered is. */
+const GLASS_CORNERS = (() => {
+  const { x, y, w, h } = GLASS;
+  const a = 7, x1 = x + w, y1 = y + h;
+  return `M${x} ${y + a}V${y}H${x + a}M${x1 - a} ${y}H${x1}V${y + a}`
+    + `M${x1} ${y1 - a}V${y1}H${x1 - a}M${x + a} ${y1}H${x}V${y1 - a}`;
+})();
+
+function ScreenDefs({ ids }: { ids: ScreenIds }) {
+  return (
+    <>
+      <clipPath id={ids.clip}>
+        <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} />
+      </clipPath>
+      {/* Scanlines in the sheet's own units, so they lean back with it. */}
+      <pattern id={ids.scan} width="4" height="1.8" patternUnits="userSpaceOnUse">
+        <line x1="0" y1="0.9" x2="4" y2="0.9" className={styles.scanLine} />
+      </pattern>
+      <linearGradient id={ids.sweep} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" className={styles.sweep0} />
+        <stop offset="0.5" className={styles.sweep1} />
+        <stop offset="1" className={styles.sweep0} />
+      </linearGradient>
+      {/* The bloom is an accent halo behind each legend, not a blur of the
+          legend itself: a halo of the ink would read as a smudge on a pale
+          theme, where one of the accent reads as light. */}
+      <filter id={ids.bloom} x="-5%" y="-20%" width="110%" height="140%">
+        <feGaussianBlur in="SourceAlpha" stdDeviation="1.1" result="blur" />
+        <feFlood className={styles.bloomFlood} result="tint" />
+        <feComposite in="tint" in2="blur" operator="in" result="halo" />
+        <feMerge>
+          <feMergeNode in="halo" />
+          <feMergeNode in="SourceGraphic" />
+        </feMerge>
+      </filter>
+    </>
+  );
+}
+
+/** The now-playing card on the cover's panel, laid out flat by screen.ts and
+ *  set into the panel's plane by LID_SHEET, so it leans back with the glass.
+ *  Powered, the glass lights (tint, scanlines, a sweep as it comes on, the
+ *  bloom); in standby the card stays printed in the faded pen. Every row
+ *  that could run long carries data-fit, which the scene's measure reads. */
+function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: boolean; ids: ScreenIds }) {
+  const L = screenLayout(screen);
+  const { x, w } = SCREEN;
+  const right = x + w;
+  const pitch = L.bar.w / SEGMENTS;
+  const lit = screen.ratio == null ? 0 : Math.round(screen.ratio * SEGMENTS);
+  return (
+    <g transform={LID_SHEET.transform}>
+      <g clipPath={`url(#${ids.clip})`}>
+        {powered && (
+          <>
+            <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} className={cn(styles.glass, styles.ns)} />
+            <rect x={GLASS.x} y={GLASS.y} width={GLASS.w} height={GLASS.h} fill={`url(#${ids.scan})`} className={styles.ns} />
+            <g className={styles.sweep}>
+              <rect x={GLASS.x} y={GLASS.y - 26} width={GLASS.w} height={26} fill={`url(#${ids.sweep})`} className={styles.ns} />
+            </g>
+          </>
+        )}
+        {/* Keyed by the song, so a new one flickers on rather than swapping. */}
+        <g key={screen.title} filter={powered ? `url(#${ids.bloom})` : undefined} className={styles.screenIn}>
+          {screen.onAir && <circle cx={x + 2.2} cy={L.eyebrow.y - 2.3} r={2.2} className={cn(styles.fAcc, styles.ns)} />}
+          <text
+            data-fit={screen.onAir ? w - 7 : w}
+            x={screen.onAir ? x + 7 : x}
+            y={L.eyebrow.y}
+            fontSize={ROW.eyebrow.size}
+            fontWeight={700}
+            letterSpacing={`${ROW.eyebrow.tracking}em`}
+            className={cn(styles.txAcc, styles.mono)}
+          >
+            {L.eyebrow.text}
+          </text>
+          {L.title.rows.map(r => (
+            <text
+              key={r.y}
+              data-fit={w}
+              x={x}
+              y={r.y}
+              fontSize={L.title.size}
+              fontWeight={800}
+              className={cn(styles.tx, styles.display)}
+            >
+              {r.text}
+            </text>
+          ))}
+          {L.artist && (
+            <text
+              data-fit={w}
+              x={x}
+              y={L.artist.y}
+              fontSize={ROW.artist.size}
+              fontWeight={700}
+              letterSpacing={`${ROW.artist.tracking}em`}
+              className={cn(styles.tx, styles.mono)}
+            >
+              {L.artist.text}
+            </text>
+          )}
+          {L.detail && (
+            <text
+              data-fit={w}
+              x={x}
+              y={L.detail.y}
+              fontSize={ROW.detail.size}
+              fontWeight={500}
+              letterSpacing={`${ROW.detail.tracking}em`}
+              className={cn(styles.txMuted, styles.mono)}
+            >
+              {L.detail.text}
+            </text>
+          )}
+          {Array.from({ length: SEGMENTS }, (_, i) => (
+            <rect
+              key={i}
+              x={round2(L.bar.x + i * pitch)}
+              y={L.bar.y}
+              width={round2(pitch * 0.62)}
+              height={L.bar.h}
+              className={cn(i < lit ? styles.fAcc : styles.seg, styles.ns)}
+            />
+          ))}
+          <text
+            x={x}
+            y={L.timeY}
+            fontSize={ROW.time.size}
+            fontWeight={700}
+            letterSpacing={`${ROW.time.tracking}em`}
+            className={cn(styles.tx, styles.mono)}
+          >
+            {screen.elapsed}
+          </text>
+          <text
+            x={right}
+            y={L.timeY}
+            fontSize={ROW.time.size}
+            fontWeight={500}
+            letterSpacing={`${ROW.time.tracking}em`}
+            textAnchor="end"
+            className={cn(styles.txMuted, styles.mono)}
+          >
+            {screen.duration.toUpperCase()}
+          </text>
+          {L.foot?.kind === 'next' && (
+            <text
+              data-fit={w}
+              x={x}
+              y={L.foot.y}
+              fontSize={ROW.next.size}
+              letterSpacing={`${ROW.next.tracking}em`}
+              className={styles.mono}
+            >
+              <tspan fontWeight={700} className={styles.txAcc}>NEXT</tspan>
+              <tspan dx="4" fontWeight={500} className={styles.tx}>{L.foot.text}</tspan>
+            </text>
+          )}
+          {L.foot?.kind === 'quote' && (
+            <text data-fit={w} x={x} y={L.foot.y} fontSize={ROW.quote.size} fontWeight={500} className={cn(styles.tx, styles.display)}>
+              {L.foot.text}
+            </text>
+          )}
+        </g>
+      </g>
+      <path d={GLASS_CORNERS} strokeWidth={0.9} className={cn(powered && styles.sAcc, powered && styles.solid)} />
+    </g>
   );
 }
 
