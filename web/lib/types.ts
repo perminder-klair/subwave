@@ -22,9 +22,11 @@ export interface NowPlayingTrack {
 }
 
 export interface WeatherContext {
+  /** Simplified WMO: clear | cloudy | foggy | rainy | snowy | stormy | unknown. */
   condition?: string;
   temp?: number;
   location?: string;
+  isDay?: boolean;
 }
 
 export interface FestivalContext {
@@ -33,6 +35,10 @@ export interface FestivalContext {
 }
 
 export interface TimeContext {
+  /** The controller's day period (context.ts PERIOD_TABLE): early-morning,
+   *  morning, midday, afternoon, drive-time, evening, late-evening,
+   *  after-hours. */
+  period?: string;
   show?: string;
   vibe?: string;
 }

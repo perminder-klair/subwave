@@ -40,7 +40,7 @@ const SKINS = [
   },
   {
     name: 'TTY',
-    blurb: 'The station as a live process — panes and a status line, everything tailing like a terminal.',
+    blurb: 'The station as a live process — panes, an ASCII cover and a scope, everything tailing like a terminal. Press F and the window becomes an ANSI landscape for the hour and the weather, playing along with the music.',
   },
   {
     name: 'Platter',

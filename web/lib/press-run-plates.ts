@@ -56,7 +56,7 @@ export const PRESS_RUN_PLATES: readonly PressRunPlate[] = [
     'The flagship vinyl face — a reference turntable is the interface, needle and all.',
     'vinyl', 'Vinyl'),
   plate(3, 'tty', 'TTY',
-    'The station as a live process — panes and a status line, everything tails.',
+    'The station as a live process — panes and a key bar; focus draws an ANSI landscape.',
     'cyberpunk', 'Cyberpunk'),
   plate(4, 'unit', 'Unit SW-9',
     'A tabletop receiver — milled aluminium, weighted knobs, one glowing dot-matrix window.',

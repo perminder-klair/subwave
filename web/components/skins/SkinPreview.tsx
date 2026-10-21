@@ -146,36 +146,45 @@ function SubampPreview() {
   );
 }
 
+// TTY's panes: the status line, a now-playing pane with its scope's bars
+// along the bottom, the booth tail beside it, and the htop key bar.
+const TTY_BARS = ['h-2/3', 'h-full', 'h-3/4', 'h-full', 'h-1/2', 'h-2/3', 'h-1/3', 'h-1/2', 'h-1/4', 'h-1/3', 'h-1/4', 'h-1/6'];
+
 function TtyPreview() {
   return (
-    <div className="m-2.5 flex h-[calc(100%-1.25rem)] flex-col border border-ink bg-field">
-      <div className="flex items-center gap-1 border-b border-ink px-1.5 py-1">
+    <div className="m-2.5 flex h-[calc(100%-1.25rem)] flex-col gap-1 bg-field">
+      <div className="flex items-center gap-1 border border-ink px-1.5 py-1">
         <span className="size-1.5 rounded-full bg-vermilion" />
-        <span className="size-1.5 rounded-full border border-ink" />
+        <span className="h-[3px] w-6 bg-ink" />
         <span className="ml-auto h-px w-6 bg-muted" />
       </div>
-      <div className="flex flex-1 divide-x divide-ink">
-        <div className="grid flex-1 content-start gap-[3px] p-1.5">
-          <span className="flex items-center gap-1">
-            <span className="font-mono text-[7px] leading-none font-bold text-vermilion">›</span>
-            <span className="h-[3px] w-2/3 bg-ink" />
+      <div className="flex flex-1 gap-1">
+        <div className="flex flex-1 flex-col gap-[3px] border border-line p-1.5">
+          <span className="h-[4px] w-2/3 bg-ink" />
+          <span className="h-[3px] w-1/2 bg-muted" />
+          <span className="mt-auto flex h-3 items-end gap-px border border-line px-px pt-px">
+            {TTY_BARS.map((h, i) => (
+              <span key={i} className={cn('flex-1', h, i < 4 ? 'bg-vermilion' : 'bg-ink')} />
+            ))}
           </span>
-          <span className="ml-2 h-[3px] w-1/2 bg-muted" />
-          <span className="ml-2 h-[3px] w-3/5 bg-muted" />
+        </div>
+        <div className="grid w-1/3 content-start gap-[3px] border border-line p-1.5">
+          <span className="h-[3px] w-full bg-muted" />
+          <span className="h-[3px] w-2/3 bg-muted" />
           <span className="flex items-center gap-1">
-            <span className="h-[3px] w-1/3 bg-ink" />
+            <span className="h-[3px] w-1/2 bg-muted" />
             <span className={cn('h-2 w-[3px] bg-vermilion', BLINK)} />
           </span>
         </div>
-        <div className="grid w-1/3 content-start gap-[3px] p-1.5">
-          <span className="h-[3px] w-full bg-muted" />
-          <span className="h-[3px] w-2/3 bg-muted" />
-          <span className="h-[3px] w-4/5 bg-muted" />
-        </div>
       </div>
-      <div className="flex items-center gap-1 border-t border-ink bg-ink px-1.5 py-[3px]">
-        <span className="font-mono text-[7px] leading-none font-bold text-bg">ON AIR</span>
-        <span className="ml-auto h-px w-8 bg-bg/60" />
+      <div className="flex items-center gap-1">
+        {[0, 1, 2, 3].map(i => (
+          <span key={i} className="flex items-center gap-px">
+            <span className="h-[4px] w-[3px] bg-ink" />
+            <span className="h-[5px] w-2 bg-vermilion" />
+          </span>
+        ))}
+        <span className="ml-auto h-px w-6 bg-muted" />
       </div>
     </div>
   );
