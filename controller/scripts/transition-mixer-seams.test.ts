@@ -1,7 +1,7 @@
 // Three mixer-side seam rules in radio.liq's dj_transition, pinned as source
 // shapes because none of them is visible to a controller test and the renders
 // that prove them need Docker (`scripts/fx-render-test.sh loopgaps |
-// jingleseam`, plus the chop level tables in liquidsoap/CLAUDE.md).
+// jingleseam`, plus the chop level tables in radio.liq's chop comment).
 //
 //   1. JINGLE SEAMS. The rotate and jingle_now sit upstream of cross, so on
 //      A -> J -> B the J -> B seam reads B's entry flag, which was validated for
