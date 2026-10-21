@@ -24,6 +24,8 @@ import assert from 'node:assert/strict';
 
 const { listenerAuthDecision, stationAuthDecision, mountAuthToken } =
   await import('../src/util/listener-auth.js');
+const { createAlexaStreamToken, verifyAlexaStreamToken } =
+  await import('../src/alexa/token.js');
 
 const PW = 'hunter2-correct-horse';
 
@@ -73,6 +75,34 @@ assert.equal(
   listenerAuthDecision({ enabled: true, password: PW, mount: `/stream.mp3?auth=${PW}` }),
   true,
   '?auth= mount token admits (the browser <audio> path)',
+);
+const signedAlexaToken = createAlexaStreamToken(PW, '/stream.mp3', 3600, 1_700_000_000_000);
+const liveAlexaToken = createAlexaStreamToken(PW, '/stream.mp3', 3600);
+assert.match(signedAlexaToken, /^alexa1\.[^.]+\.[^.]+$/, 'Alexa token has a versioned signed shape');
+assert.equal(
+  verifyAlexaStreamToken(signedAlexaToken, PW, '/stream.mp3', 1_700_000_000_000),
+  true,
+  'fresh Alexa token verifies for its exact mount',
+);
+assert.equal(
+  listenerAuthDecision({ enabled: true, password: PW, mount: `/stream.mp3?auth=${encodeURIComponent(liveAlexaToken)}` }),
+  true,
+  'signed Alexa token admits through the Icecast callback',
+);
+assert.equal(
+  listenerAuthDecision({ enabled: true, password: PW, mount: `/stream.opus?auth=${encodeURIComponent(signedAlexaToken)}` }),
+  false,
+  'signed Alexa token cannot be replayed on another mount',
+);
+assert.equal(
+  verifyAlexaStreamToken(`${signedAlexaToken.slice(0, -1)}x`, PW, '/stream.mp3', 1_700_000_000_000),
+  false,
+  'tampering with the signature denies access',
+);
+assert.equal(
+  verifyAlexaStreamToken(signedAlexaToken, PW, '/stream.mp3', 1_700_003_600_000),
+  false,
+  'an expired Alexa token denies access',
 );
 assert.equal(
   listenerAuthDecision({ enabled: true, password: PW, pass: 'nope', mount: '/stream.mp3' }),

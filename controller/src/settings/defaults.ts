@@ -212,6 +212,11 @@ export const DEFAULTS = {
   // handing over every one at once is opt-in. GET /dj is deliberately unaffected:
   // it has always published the ON-AIR soul, one at a time.
   privacy: { privatePlayer: false, listenerAuth: false, password: '', publishPersonaSouls: false },
+  // Optional direct Alexa Custom Skill integration. Disabled until the operator
+  // supplies the one Skill ID created in the Alexa Developer Console. When
+  // listener auth is on, Alexa receives a short-lived signed URL whose lifetime
+  // is controlled by tokenTtlHours.
+  alexa: { enabled: false, skillId: '', streamMount: '/stream.mp3', tokenTtlHours: 24 },
   // Listener-request gates, all applied live. They bound the rate from several
   // angles at once: queue depth, requests/hour station-wide, per-track repeat
   // cooldown (0 = off), minimum gap between any two, and a single IP's share.

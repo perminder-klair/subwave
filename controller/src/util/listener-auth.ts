@@ -1,6 +1,7 @@
 // Icecast posts listener_add/listener_remove with pass and the mount query (#478).
 // Username is ignored; browser audio uses ?auth= because it cannot send Basic headers.
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { verifyAlexaStreamToken } from '../alexa/token.js';
 
 // Constant-time compare over fixed-size digests, so length leaks nothing.
 function safeEqual(a: string, b: string): boolean {
@@ -20,6 +21,11 @@ export function mountAuthToken(mount: string): string {
   }
 }
 
+function mountPath(mount: string): string {
+  const q = mount.indexOf('?');
+  return q === -1 ? mount : mount.slice(0, q);
+}
+
 export function listenerAuthDecision(opts: {
   enabled: boolean;
   password: string;
@@ -35,7 +41,14 @@ export function listenerAuthDecision(opts: {
   // Enabled with no password on file is a broken state: fail closed.
   if (!opts.password) return false;
   if (safeEqual(opts.pass || '', opts.password)) return true;
-  return safeEqual(mountAuthToken(opts.mount || ''), opts.password);
+  const mount = opts.mount || '';
+  if (safeEqual(mountAuthToken(mount), opts.password)) return true;
+  // Alexa receives a temporary bearer token when listener authentication is
+  // enabled. It is HMAC-signed with the station password, bound to this exact
+  // mount, and checked here at connection time. The password itself never
+  // leaves the controller.
+  if (verifyAlexaStreamToken(mountAuthToken(mount), opts.password, mountPath(mount))) return true;
+  return false;
 }
 
 // Icecast calls POST /listener-auth over the private network with no

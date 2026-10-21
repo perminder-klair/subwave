@@ -43,6 +43,7 @@ import {
   Webhook,
   Telescope,
 } from 'lucide-react';
+import AlexaIcon from './connect/AlexaIcon';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import type { AdminFetch } from '../../lib/admin-query';
@@ -216,6 +217,7 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/admin/connect?tab=endpoints', id: 'connect-endpoints', label: 'API', icon: Braces, tab: 'endpoints' },
           { href: '/admin/connect?tab=mcp', id: 'connect-mcp', label: 'MCP', icon: Boxes, tab: 'mcp' },
           { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
+          { href: '/admin/connect?tab=alexa', id: 'connect-alexa', label: 'Alexa', icon: AlexaIcon, tab: 'alexa' },
         ],
       },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },

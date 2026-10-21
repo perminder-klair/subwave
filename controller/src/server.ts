@@ -35,6 +35,7 @@ import { createStartupGate } from './middleware/startup.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
 import { router as authRoutes } from './routes/auth.js';
+import { router as alexaRoutes } from './routes/alexa.js';
 import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
@@ -118,6 +119,16 @@ configureHttp(app);
 // CORS preflight stays available while the controller initializes.
 const startup = createStartupGate();
 app.use(startup.middleware);
+
+// Amazon's official Express adapter must see the raw request body before any
+// JSON parser runs; it verifies Alexa's signature against those exact bytes.
+// Mount this route before the controller-wide parser, while still keeping it
+// behind the startup gate like every other state consumer.
+app.use(alexaRoutes);
+
+// Global cap for small JSON payloads; the persona-avatar route re-applies its own
+// larger cap. The 100 KB default was below the data URLs the avatar picker posts.
+app.use(express.json({ limit: '600kb' }));
 
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);

@@ -16,11 +16,13 @@ import EndpointsTab from './EndpointsTab';
 import McpTab from './McpTab';
 import IntegrationsTab from './IntegrationsTab';
 import WebhooksPanel from '../WebhooksPanel';
+import AlexaTab from './AlexaTab';
+import AlexaIcon from './AlexaIcon';
 import { useConnectCatalogQuery } from './queries';
 
-type TabId = 'endpoints' | 'mcp' | 'integrations' | 'webhooks';
+type TabId = 'endpoints' | 'mcp' | 'integrations' | 'webhooks' | 'alexa';
 
-const TAB_IDS = ['integrations', 'endpoints', 'mcp', 'webhooks'] as const;
+const TAB_IDS = ['integrations', 'endpoints', 'mcp', 'webhooks', 'alexa'] as const;
 
 // Stream URLs leads, and is the default. Three "where is the stream URL?"
 // reports arrived while this panel already answered it — on the third tab,
@@ -33,6 +35,7 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
   { id: 'endpoints', label: 'API', icon: Braces },
   { id: 'mcp', label: 'MCP', icon: Boxes },
   { id: 'webhooks', label: 'Webhooks', icon: Webhook },
+  { id: 'alexa', label: 'Alexa', icon: AlexaIcon },
 ];
 
 export default function ConnectPanel() {
@@ -125,6 +128,7 @@ export default function ConnectPanel() {
       {tab === 'mcp' && <McpTab catalog={catalog} />}
       {tab === 'integrations' && <IntegrationsTab catalog={catalog} />}
       {tab === 'webhooks' && <WebhooksPanel />}
+      {tab === 'alexa' && <AlexaTab adminFetch={adminFetch} />}
     </div>
   );
 }
