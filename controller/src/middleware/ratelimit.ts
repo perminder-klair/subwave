@@ -2,6 +2,7 @@
 // caps), the station-password box and listener-auth. All state is in-memory, so
 // a restart resets counters; durable enforcement belongs at the Caddy edge.
 import * as settings from '../settings.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 
 export const REQUESTS_DISABLED = process.env.REQUESTS_DISABLED === '1' || process.env.REQUESTS_DISABLED === 'true';
 
@@ -15,7 +16,19 @@ function limits() {
   };
 }
 
-const requestHistory = new Map(); // ip → { last: ts, hits: [ts,...] }
+const HOUR_MS = 3_600_000;
+// Per-key ceiling for every map below. Far above any honest station's distinct
+// clients per window; util/bounded-key-map.ts owns what happens past it.
+export const LIMITER_MAX_KEYS = 10_000;
+
+interface RequestRecord { last: number; hits: number[] }
+
+// A record is spent once neither its cooldown nor any hit still binds.
+const requestHistory = new BoundedKeyMap<RequestRecord>({
+  maxKeys: LIMITER_MAX_KEYS,
+  isLive: (rec, now) =>
+    now - rec.last < limits().cooldownMs || rec.hits.some(t => now - t < HOUR_MS),
+});
 
 // Opt-in: trust `CF-Connecting-IP` as the client identity. Off by default; the
 // default is the safe one (see clientIp).
@@ -54,7 +67,7 @@ export function clientIp(req) {
 // commit() spends them, once every later gate has passed.
 export function checkRateLimit(ip) {
   const now = Date.now();
-  const oneHourAgo = now - 3_600_000;
+  const oneHourAgo = now - HOUR_MS;
   const rec = requestHistory.get(ip) || { last: 0, hits: [] };
   rec.hits = rec.hits.filter(t => t > oneHourAgo);
   const { cooldownMs, perIpHourlyCap } = limits();
@@ -63,22 +76,16 @@ export function checkRateLimit(ip) {
   }
   if (rec.hits.length >= perIpHourlyCap) {
     const oldest = rec.hits[0];
-    return { ok: false, retryAfter: Math.ceil((oldest + 3_600_000 - now) / 1000) };
+    return { ok: false, retryAfter: Math.ceil((oldest + HOUR_MS - now) / 1000) };
   }
   rec.last = now;
-  requestHistory.set(ip, rec);
-  // Opportunistic cleanup so the map doesn't grow unbounded over weeks.
-  if (requestHistory.size > 2000) {
-    for (const [k, v] of requestHistory) {
-      if (!v.hits.length && now - v.last > 3_600_000) requestHistory.delete(k);
-    }
-  }
+  requestHistory.set(ip, rec, now);
   return { ok: true };
 }
 
 // Spend the per-IP hourly budget; call only once the request is being accepted.
 // Touches `hits` only — stamping `last` here would double-charge the cooldown.
-// A missing record (evicted by the janitor between check and commit) is seeded
+// A missing record (evicted under cap pressure between check and commit) is seeded
 // with a clear cooldown, so eviction fails open.
 export function commitRateLimit(ip) {
   const rec = requestHistory.get(ip) || { last: 0, hits: [] };
@@ -111,11 +118,17 @@ export function commitGlobalRateLimit() {
 // API integration cannot burn the attempts a human on the same address needs.
 const AUTH_WINDOW_MS = 15 * 60_000;
 const AUTH_WINDOW_CAP = 20;
-const authHistories = new Map(); // surface → Map(ip → [ts, ...])
+const authHistories = new Map<string, BoundedKeyMap<number[]>>(); // surface → ip → [ts, ...]
 
-function authHistoryFor(surface) {
+function authHistoryFor(surface: string): BoundedKeyMap<number[]> {
   let h = authHistories.get(surface);
-  if (!h) { h = new Map(); authHistories.set(surface, h); }
+  if (!h) {
+    h = new BoundedKeyMap<number[]>({
+      maxKeys: LIMITER_MAX_KEYS,
+      isLive: (hits, now) => hits.some(t => now - t < AUTH_WINDOW_MS),
+    });
+    authHistories.set(surface, h);
+  }
   return h;
 }
 
@@ -128,11 +141,19 @@ export function checkAuthRateLimit(ip, surface = 'station-auth') {
     return { ok: false, retryAfter: Math.ceil((hits[0] + AUTH_WINDOW_MS - now) / 1000) };
   }
   hits.push(now);
-  authHistory.set(ip, hits);
-  if (authHistory.size > 2000) {
-    for (const [k, v] of authHistory) {
-      if (!v.some(t => t > cutoff)) authHistory.delete(k);
-    }
+  authHistory.set(ip, hits, now);
+  return { ok: true };
+}
+
+// Peek only: the same verdict as checkAuthRateLimit without spending an
+// attempt. For a surface that counts failures alone and so must ask BEFORE
+// comparing the password — asking only after a mismatch leaves the comparison
+// itself unthrottled.
+export function peekAuthRateLimit(ip, surface = 'station-auth') {
+  const now = Date.now();
+  const hits = (authHistoryFor(surface).get(ip) || []).filter(t => t > now - AUTH_WINDOW_MS);
+  if (hits.length >= AUTH_WINDOW_CAP) {
+    return { ok: false, retryAfter: Math.ceil((hits[0] + AUTH_WINDOW_MS - now) / 1000) };
   }
   return { ok: true };
 }
@@ -160,4 +181,11 @@ export function listenerAuthFailureDelayMs(now = Date.now()) {
 export function resetListenerAuthFailures() {
   listenerFailWindowStart = 0;
   listenerFailCount = 0;
+}
+
+// Test seam: how many keys each per-client map holds.
+export function limiterKeyCounts(): { requests: number; auth: Record<string, number> } {
+  const auth: Record<string, number> = {};
+  for (const [surface, h] of authHistories) auth[surface] = h.size;
+  return { requests: requestHistory.size, auth };
 }

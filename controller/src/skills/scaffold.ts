@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { STATE_DIR, config } from '../config.js';
 import { queue } from '../broadcast/queue.js';
-import { SEEDED_KINDS, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
+import { SEEDED_KINDS, PENDING_TOOL_FILE, discoverSeededKinds, readTemplate, parseFrontmatter } from './loader.js';
 import { preservedFrontmatter } from './config-fields.js';
 
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
@@ -218,5 +218,7 @@ export async function resetBuiltinSkill(kind: string): Promise<void> {
       queue.log('scheduler', `[skills] reset removed the state-only "${kind}" tool.mjs — the shipped skill has none`);
     } catch { /* no tool.mjs to remove — the normal case */ }
   }
+  // Reset means the shipped shape, so code waiting for review goes too.
+  await rm(join(dir, PENDING_TOOL_FILE), { force: true });
   queue.log('scheduler', `[skills] reset built-in "${kind}" to shipped default`);
 }

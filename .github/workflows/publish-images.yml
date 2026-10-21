@@ -87,7 +87,7 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
-          # CUDA AIO — the heavy one-click container with CLAP + Demucs on cu124
+          # CUDA AIO — the heavy one-click container with CLAP + Demucs on cu128
           # torch wheels, for a box with an NVIDIA card (#1186). The AIO analog of
           # subwave-analyzer-cuda; the operator points the container at this tag
           # and adds GPU passthrough to its extra parameters (docs/unraid.md).
@@ -128,7 +128,7 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
-          # CUDA analyzer — the heavy stack on cu124 torch wheels for NVIDIA
+          # CUDA analyzer — the heavy stack on cu128 torch wheels for NVIDIA
           # hosts (#1099). amd64-only like heavy. Selected by the
           # docker-compose.analyzer-gpu.yml overlay (which also adds the GPU
           # device reservation), not by an .env var. onnxruntime stays the CPU
@@ -151,7 +151,7 @@ jobs:
       # Reclaim runner disk before the biggest builds. A GitHub-hosted
       # ubuntu-latest has ~14GB free on the root filesystem, which is where
       # /var/lib/docker lives — and subwave-aio-cuda is ~4GB compressed / ~11GB
-      # unpacked (the cu124 nvidia-*-cu12 wheels), enough to hit ENOSPC mid-build
+      # unpacked (the cu128 nvidia-*-cu12 wheels), enough to hit ENOSPC mid-build
       # once the buildx layer cache is added on top. These toolchains ship
       # preinstalled on the runner image and nothing in this workflow uses them;
       # dropping them frees ~20GB. Gated on the matrix flag so the small builds

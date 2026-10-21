@@ -26,7 +26,34 @@ function rpcError(res: express.Response, code: number, message: string) {
 // subwave_request_status.
 const HTTP_REQUEST_POLL_BUDGET_MS = 15_000;
 
+// A JSON-RPC batch fans out: every tools/call in it is its own loopback REST
+// request, so one POST at the edge became up to the SDK's 100 here. No client we
+// document batches — MCP 2025-06-18 dropped batching and the TypeScript SDK
+// client (Claude Code / Desktop) sends one message per POST — so cheap traffic
+// from an older client keeps a small batch, and the work-bearing method is
+// capped at one per POST, the same as an unbatched call.
+export const MCP_MAX_BATCH = 10;
+export const MCP_MAX_TOOL_CALLS_PER_POST = 1;
+
+export function mcpBatchRefusal(body: unknown): string | null {
+  if (!Array.isArray(body)) return null;
+  if (body.length > MCP_MAX_BATCH) {
+    return `Invalid Request: a batch must not exceed ${MCP_MAX_BATCH} messages`;
+  }
+  const calls = body.filter(m => m && typeof m === 'object' && (m as { method?: unknown }).method === 'tools/call').length;
+  if (calls > MCP_MAX_TOOL_CALLS_PER_POST) {
+    return `Invalid Request: a batch may carry at most ${MCP_MAX_TOOL_CALLS_PER_POST} tools/call`;
+  }
+  return null;
+}
+
 router.post('/mcp', async (req, res) => {
+  // Refused before any server, transport or loopback client exists.
+  const refusal = mcpBatchRefusal(req.body);
+  if (refusal) {
+    return res.status(400).json({ jsonrpc: '2.0', error: { code: -32600, message: refusal }, id: null });
+  }
+
   const client = new SubwaveClient({
     baseUrl: LOOPBACK_BASE,
     forwardAuth: typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined,

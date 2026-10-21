@@ -2,6 +2,7 @@
 // on the same origin (docker/Caddyfile).
 
 import { mountFor, type StreamFormat } from './streamFormat';
+import { stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
 import {
   normalizeStationBase,
   resolveStationConnection,
@@ -61,6 +62,9 @@ export interface StationApi {
   likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon; all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
+  /** Check a private-station password against `POST /station-auth` (#478),
+   *  which fails closed and is rate-limited. Never throws. */
+  checkStationAuth(password: string): Promise<StationAuthResult>;
   /** Absolute URL for an album cover. */
   cover(subsonicId: string): string;
   /** Absolute URL for a persona avatar. The controller emits
@@ -68,7 +72,9 @@ export interface StationApi {
   avatar(path: string): string;
   /** The Icecast mount for `format`, defaulting to the MP3 floor. Callers gate
    *  a non-MP3 format on platform + station support first. Carries no embedded
-   *  credentials; see streamHeaders(). */
+   *  login (see streamHeaders()), but does carry the private-station password
+   *  as `?auth=` when one is saved — read at call time, so unlocking a station
+   *  never has to rebuild this client. */
   streamUrl(format?: StreamFormat): string;
   /** `{ Authorization: 'Basic …' }` when the station has credentials, else
    *  undefined. iOS AVPlayer ignores URL userinfo, so the credential must
@@ -109,6 +115,7 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
 export function createApi(
   rawBase: string,
   credentials?: StationCredentials | null,
+  stationPassword: () => string | null = () => null,
 ): StationApi {
   const connection = resolveStationConnection(rawBase, credentials);
   // Persist credential-free bases. Reconstruct userinfo only for fetch/Image;
@@ -161,6 +168,18 @@ export function createApi(
         /* best-effort analytics */
       }
     },
+    checkStationAuth: async (password) => {
+      try {
+        const res = await fetchWithTimeout(api('/station-auth'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password }),
+        });
+        return stationAuthResult(res.status);
+      } catch {
+        return stationAuthResult(null);
+      }
+    },
     pollRequest: async (id) => {
       const res = await fetchWithTimeout(api(`/request/${encodeURIComponent(id)}`));
       if (res.status === 404) return { success: false, status: 'unknown' };
@@ -192,7 +211,7 @@ export function createApi(
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: (format = 'mp3') => `${cleanBase}${mountFor(format)}`,
+    streamUrl: (format = 'mp3') => withStreamAuth(`${cleanBase}${mountFor(format)}`, stationPassword()),
     streamHeaders: () => streamAuthHeaders,
   };
 }

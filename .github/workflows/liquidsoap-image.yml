@@ -10,6 +10,7 @@ on:
       - 'docker/icecast.xml.template'
       - 'liquidsoap/radio.liq'
       - 'scripts/liquidsoap-image-smoke*'
+      - 'scripts/liquidsoap-resume-fallback*'
       - '.github/workflows/liquidsoap-image.yml'
   workflow_dispatch:
 
@@ -30,17 +31,21 @@ jobs:
         run: python3 scripts/liquidsoap-image-smoke.test.py -v
       - name: Install capture decoder
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
-      - name: Build broadcast (includes unifier regression)
-        run: docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:unifier .
+      - name: Build broadcast
+        run: docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:smoke .
       - name: Build AIO Liquidsoap stage
-        run: docker build -f docker/Dockerfile.aio --target liquidsoap-patched -t subwave-test/aio-liquidsoap:unifier .
+        run: docker build -f docker/Dockerfile.aio --target liquidsoap -t subwave-test/aio-liquidsoap:smoke .
       - name: Compare AIO and broadcast executables
         run: |
-          docker run --rm --entrypoint sha256sum subwave-test/broadcast:unifier /usr/bin/liquidsoap > /tmp/broadcast.sha256
-          docker run --rm --entrypoint sha256sum subwave-test/aio-liquidsoap:unifier /usr/bin/liquidsoap > /tmp/aio.sha256
+          docker run --rm --entrypoint sha256sum subwave-test/broadcast:smoke /usr/bin/liquidsoap > /tmp/broadcast.sha256
+          docker run --rm --entrypoint sha256sum subwave-test/aio-liquidsoap:smoke /usr/bin/liquidsoap > /tmp/aio.sha256
           diff -u /tmp/broadcast.sha256 /tmp/aio.sha256
       - name: Exercise the baked radio script and all four codecs
-        run: python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier
+        run: python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:smoke
+      - name: Resume into another show airs the new show's fallback
+        run: |
+          python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke --crossfade 4
+          python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke --crossfade 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:

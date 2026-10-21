@@ -46,7 +46,7 @@ export interface SeasonWindow {
 // module); pinned by scripts/blocklist-name-fold.test.ts. Punctuation beyond
 // the apostrophe is deliberately not folded (`trip-hop` != `trip hop`).
 export const normText = (s: unknown) =>
-  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
+  String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
 // Number(x) + range test rather than z.number().int(): a numeric STRING from
 // <input type=number> has always been accepted.
@@ -155,8 +155,6 @@ export const blockRuleSchema = z.object({
   ),
 });
 
-export type BlockRulePatch = z.output<typeof blockRuleSchema>;
-
 // `POST /library/blocklist` — the id-entry create body. Two accepted forms, so
 // only `type` is required: `{type, trackId}` (server resolves the rest) or a
 // pre-resolved `{type, id, …}`. The route decides which arrived.
@@ -179,14 +177,15 @@ export const blockEntrySchema = z.object({
 
 // ─── from controller/src/schemas/dj.ts ───────────────────────────────────
 
-// Shared shapes for the studio's own queue actions (#1622 FR 4) — today just
-// the block queue, `POST /dj/queue-block`.
+// Shared shapes for the studio's own queue actions (#1622 FR 4) — the block
+// queue, `POST /dj/queue-block` — and the targeted skip, `POST /dj/skip`.
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle by `npm run gen:schemas`, so a project import or a node
 // builtin here breaks the mirror. Everything impure — resolving an album id
-// from a track, reading the blocklist, ordering the songs — lives in
-// broadcast/block-queue.ts and routes/dj.ts.
+// from a track, reading the blocklist, ordering the songs, reading what is on
+// air — lives in broadcast/block-queue.ts, broadcast/skip-policy.ts and
+// routes/dj.ts.
 
 /** What a block is a block OF. */
 export const QUEUE_BLOCK_KINDS = ['album', 'artist'] as const;
@@ -277,6 +276,46 @@ export const queueBlockSchema = z
   });
 
 export type QueueBlockBody = z.infer<typeof queueBlockSchema>;
+
+/**
+ * Why a targeted skip skipped nothing (#2017), the `reason` of its 409.
+ *
+ *   * `track-changed` — now-playing no longer names the track the caller
+ *     meant: it ended, during the commit wait or before the request arrived.
+ *   * `jingle-on-air` — a jingle is on air, or waiting in the crossfade
+ *     buffer behind the outgoing track's tail. Now-playing names the song
+ *     before it, or (from that song's closing seam) the song after it, and a
+ *     skip would cut the jingle or the tail, not the song. The window that
+ *     decides it also covers the first seconds of the song after the jingle,
+ *     so that song is about to play, or has just started: try again once it
+ *     is playing.
+ *   * `bed-on-air` / `break-on-air` — now-playing still names it, but the
+ *     mixer has since placed a bed or a pause-and-talk break after it.
+ *     Neither rewrites now-playing, so the name is stale and a skip would cut
+ *     the item, not the song.
+ */
+export const SKIP_REFUSAL_REASONS = ['track-changed', 'jingle-on-air', 'bed-on-air', 'break-on-air'] as const;
+export type SkipRefusalReason = (typeof SKIP_REFUSAL_REASONS)[number];
+
+/**
+ * Body for `POST /dj/skip`.
+ *
+ * `expectId` is the on-air track's `subsonic_id` as the caller saw it on
+ * `/now-playing`. With it, the skip lands only if that track is still what is
+ * on air; without it (absent or null) the skip is the bare one it always was.
+ * The route took no body before this, so anything that is not a JSON object
+ * — no body, a text body, an array — still reads as no target, and other keys
+ * are dropped rather than refused. The shape is exported on its own for the
+ * MCP tool's input, which takes a raw shape rather than a schema.
+ */
+export const skipBodyShape = { expectId: idField.nullish() };
+
+export const skipBodySchema = z.preprocess(
+  (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {}),
+  z.object(skipBodyShape),
+);
+
+export type SkipBody = z.infer<typeof skipBodySchema>;
 
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
@@ -1604,6 +1643,42 @@ export type PlaybackFailureInput = Pick<PlaybackFailure, 'attemptId' | 'source'>
   & Partial<Pick<PlaybackFailure, 'sourceTrackId' | 'title' | 'artist' | 'album'>>;
 export type PlaybackFailureHistory = z.output<typeof playbackFailureHistorySchema>;
 
+// ─── from controller/src/schemas/playlist-cursor.ts ──────────────────────
+
+// Play in order (show.playlistInOrder): where each show's walk through its
+// anchor playlist has got to. Persisted to state/playlist-cursors.json by
+// music/playlist-cursors.ts; the walk itself is music/playlist-order.ts.
+//
+// The cursor names the LAST PICKED anchor track, never the next one, so an edit
+// to the playlist between airings resolves against what actually went out: the
+// walk finds that track again and steps past it.
+export const playlistCursorSchema = z.object({
+  // The anchor this position belongs to (playlistIds, in order). A different
+  // anchor restarts the walk at the top.
+  sig: z.string().max(2000),
+  // Slot of the last pick in the merged anchor list.
+  index: z.number().int().min(0),
+  lastId: z.string().max(256),
+  // title|artist — what finds the last pick again after a Navidrome id
+  // rotation, which no remap hook reaches.
+  lastKey: z.string().max(1000),
+  // ISO time of the pick. Diagnostics only.
+  at: z.string().max(64),
+});
+
+// Keyed by show id. Bounded because a show deletion has no cleanup hook — the
+// store prunes unknown ids on write, and the cap is the backstop.
+export const PLAYLIST_CURSOR_STORE_MAX = 500;
+
+export const playlistCursorStoreSchema = z.object({
+  version: z.literal(1),
+  cursors: z.record(z.string().min(1).max(64), playlistCursorSchema)
+    .refine(c => Object.keys(c).length <= PLAYLIST_CURSOR_STORE_MAX, `at most ${PLAYLIST_CURSOR_STORE_MAX} cursors`),
+});
+
+export type PlaylistCursor = z.output<typeof playlistCursorSchema>;
+export type PlaylistCursorStore = z.output<typeof playlistCursorStoreSchema>;
+
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────
 
 // Shared playlist schemas — the request bodies of the /playlists routes and
@@ -1914,7 +1989,11 @@ export const listenerRequestSchema = z.object({
     .string({ error: 'Empty request' })
     .trim()
     .min(1, 'Empty request')
-    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`),
+    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`)
+    .refine(
+      text => text.normalize('NFKC').length <= REQUEST_TEXT_MAX,
+      `Keep it under ${REQUEST_TEXT_MAX} characters.`,
+    ),
   // Optional, but refused rather than sliced; no `.catch()` (it cannot tell a
   // wrong type from a too-long value). Reserved names are the guard's business.
   name: z.preprocess(
@@ -2207,7 +2286,6 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
  * window every reader already understands.
  */
 export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
-export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
 
 // One string for four constraints, naming both ends whichever one a value missed.
 const OVERRIDE_MINUTES_MESSAGE =
@@ -2771,6 +2849,29 @@ export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72
 // separate declarations of one number and must move together.
 export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
 
+// Track Shortlist discovery passes (#1687): how many controller-run source
+// calls build one shortlist. Unlike the agent's discoverySteps, 0 has no
+// meaning here, because one pass is the smallest real shortlist.
+export const SHORTLIST_PASSES_BOUNDS: SettingsNumericBound = { min: 1, max: 5 };
+export const SHORTLIST_PASSES_DEFAULT = 3;
+
+// Which of the three model routes run an agent tool loop (#1687): track
+// selection, listener-request matching and segment delivery each choose
+// independently. The agent deadline, the context-window floor and the
+// output-cap warning apply to whichever of them are agentic, so every reader
+// (DJ Doc, the Music selection form) asks here instead of re-deriving it.
+// Absent values read as the shipped default, which is agentic for all three.
+export function settingsAgentRoutes(llm: {
+  trackSelection?: unknown;
+  requestMatching?: unknown;
+  segmentRuntime?: unknown;
+} | null | undefined) {
+  const picks = llm?.trackSelection !== 'shortlist';
+  const requests = llm?.requestMatching !== 'direct';
+  const segments = llm?.segmentRuntime !== 'direct';
+  return { picks, requests, segments, any: picks || requests || segments };
+}
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -3129,6 +3230,16 @@ export const djSpeakClockSchema = z.boolean({
 export const djTalkOnlyBetweenTracksSchema = z.boolean({
   error: 'djTalkOnlyBetweenTracks must be a boolean',
 });
+
+export const ttsVoiceLevellingSchema = z.boolean({
+  error: 'tts.voiceLevelling must be a boolean',
+});
+
+// Only this new flag is stateless; the other TTS fields retain their merged-state validation.
+export const ttsPatchSchema = settingsBlockOf({
+  voiceLevelling: ttsVoiceLevellingSchema,
+});
+export type TtsPatch = z.infer<typeof ttsPatchSchema>;
 
 // The floor a rendered skill segment must clear before an opted-in show gives
 // it a real gap instead of a duck. settingsIntLike, like every other numeric
@@ -4324,6 +4435,13 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // The window is counted AFTER strict locks and excluded playlists, in
       // music/show-recency.ts.
       playlistExhaust: showBool(),
+      // Play in order: picks walk the anchor top to bottom (several playlists
+      // back to back, in playlistIds order), resume where the last airing left
+      // off and wrap at the end. A NO-OP without `playlistStrict`, for the same
+      // reason as playlistExhaust: a soft anchor mixes other tracks in, so a
+      // running order has nothing to be true of. Supersedes playlistExhaust
+      // when on. The walk and its position live in music/playlist-order.ts.
+      playlistInOrder: showBool(),
       excludedPlaylistIds: showStringList({
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
@@ -4558,7 +4676,6 @@ export const SKILL_CRON_RE = /^\S+(?:\s+\S+){4,5}$/;
 // When a custom skill may air. 'commute' restricts it to the commute hours;
 // 'any' is the default and is NOT written to frontmatter.
 export const SKILL_WINDOWS = ['any', 'commute'] as const;
-export type SkillWindow = (typeof SKILL_WINDOWS)[number];
 
 // The "right now" context vocabulary a segment may weave in (#471). Homed here
 // because it is validated on both sides: the controller checks a submitted
@@ -4789,7 +4906,6 @@ export const skillCreateSchema = customSkillFileSchema.extend({
   name: skillSlugSchema,
 });
 
-export type SkillFileInput = z.input<typeof customSkillFileSchema>;
 export type SkillFileParsed = z.output<typeof builtinSkillFileSchema> &
   Partial<z.output<typeof customSkillFileSchema>>;
 
@@ -4898,6 +5014,47 @@ export type StationCreate = z.output<typeof stationCreateSchema>;
 // Rename is display-name only — the slug and data folder stay put — so it
 // shares the name rule and nothing else.
 export const stationRenameSchema = z.object({ name: stationNameSchema });
+
+// ─── from controller/src/schemas/transitions.ts ──────────────────────────
+
+// Why a DJ transition effect did not make it onto a seam — the vocabulary of the
+// durable seam record (`plays.transition_drops`, the `track.play` event and the
+// Stats panel's Transitions card). One code per strip site in the drain, so a
+// count means one thing; the booth log keeps its own human sentence per site.
+//
+// Codes are STORED, so they are append-only: renaming one orphans every row
+// already written under it. Retire a code by leaving it here unused.
+export const MIX_DROP_REASONS = [
+  'dj-mode-off',     // the on-air persona left DJ mode between pick and drain
+  'switched-off',    // the operator switched this effect off (transitions.effects)
+  'no-predecessor',  // nothing on air to transition from (first track after boot)
+  'stem-seam',       // a pre-rendered stem blend owns the seam
+  'show-boundary',   // the seam is a show-change cut, which airs as a plain fade
+  'variety',         // the anti-streak rule: a third identical ask in a row
+  'yields-to-exit',  // the previous track already exits through a washout or loop
+  'pair-fit',        // the measured pair does not suit this effect
+  'no-tempo',        // the exit loop needs the track's measured tempo
+  'bed',             // an instrumental bed replaced the seam it was chosen for
+  'pause-talk',      // a pause-and-talk break replaced the seam it was chosen for
+  'jingle-seam',     // a jingle aired between the two tracks; the mixer stood down
+] as const;
+
+export type MixDropReason = (typeof MIX_DROP_REASONS)[number];
+
+export const MIX_DROP_REASON_LABELS: Record<MixDropReason, string> = {
+  'dj-mode-off': 'DJ mode off',
+  'switched-off': 'Switched off',
+  'no-predecessor': 'Nothing to follow',
+  'stem-seam': 'Stem blend seam',
+  'show-boundary': 'Show change cut',
+  'variety': 'Repeat rule',
+  'yields-to-exit': 'Previous exit effect',
+  'pair-fit': 'Pair did not suit it',
+  'no-tempo': 'No measured tempo',
+  'bed': 'Bed took the seam',
+  'pause-talk': 'Pause-and-talk break',
+  'jingle-seam': 'Jingle in between',
+};
 
 // ─── from controller/src/schemas/webhook.ts ──────────────────────────────
 

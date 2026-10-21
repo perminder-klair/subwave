@@ -5,6 +5,7 @@ import express from 'express';
 import { config } from './config.js';
 import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
+import { logCompatDetection } from './routes/settings/core.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
@@ -17,7 +18,10 @@ import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -191,6 +195,14 @@ app.listen(config.server.port, async (err?: Error) => {
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
+    // The one upgrade that changes behaviour without being asked (#1687), so it
+    // is said where the operator reads, every boot until a save records it.
+    // Detect what an `auto` openai-compatible connection is talking to before
+    // the first pick, and say what was found where the operator reads.
+    void logCompatDetection();
+    if (settings.migratedFromCandidatePool()) {
+      queue.log('picker', 'Candidate Pool is retired: this station now selects tracks with Track Shortlist, its replacement. Review Settings → Music selection; saving any setting records the choice and retires this note.');
+    }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
@@ -308,7 +320,16 @@ app.listen(config.server.port, async (err?: Error) => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  await startStreamIdleMonitor(flushPendingAutoPlaylist);
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: (stale, { skip }) => queue.dropProgrammeFromEarlierShow(stale, skip ? skipTrack : null),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));

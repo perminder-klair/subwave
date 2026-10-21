@@ -8,7 +8,7 @@ A separate **Expo SDK 57 / React Native** project (own `package.json`, `node_mod
 
 Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/docs/TESTING.md) before touching native config:
 
-- **New Architecture is mandatory** (RN 0.86 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files); without it Android crashes on the first playback event.
+- **New Architecture is mandatory** (RN 0.86 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix; without it Android crashes on the first playback event. The patch also fixes live media-session progress (#857). When changing the patch or upgrading RNTP/KotlinAudio, read the adapter and device-check rules in [`app/docs/TESTING.md`](docs/TESTING.md).
 - **The Live Activity is native, so OTA can't reach it.** The on-air card (Lock
   Screen, Dynamic Island, and — the point — the **Apple Watch Smart Stack**, which
   iOS 18+ mirrors it into for free) is a widget extension in `targets/live-activity/`
@@ -20,5 +20,7 @@ Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/doc
   mismatch silently stops the card rendering rather than failing the build. Full
   rules in [`app/docs/TESTING.md`](docs/TESTING.md).
 - **`ios/` and `android/` are gitignored** (Continuous Native Generation) — regenerated from `app.json` + `assets/` by `expo prebuild` / EAS. The source of truth for icons/splash is `assets/` (disc-mark branding) + `app.json`.
+- **A private station has its own password, apart from the Station login** (#478). `/state`'s `privacy` flags drive `useStationGate`: the private player hides the whole face until the password is in (`checking` counts as hidden), stream-only auth prompts over it. Every check is the fail-CLOSED `POST /station-auth`, never `/listener-auth`. The password lives in `lib/station-password.ts`'s own secure-storage key and rides the stream as `?auth=` (so Cast works), while a proxy login keeps its `Authorization` header — Icecast admits on either. `createApi` reads the password through a getter at stream-URL time, so unlocking never changes the client's identity: several hooks (the feed reset, the Live Activity lifecycle) key on it.
+- **No payment call-to-action in the app.** The back panel's About sheet links to the project site, the setup guide, the source and Discord (`src/lib/links.ts`). The Ko-fi link lives on the site footer instead. A donate or tip link to the developer inside the binary fails App Store 3.1.1 and Play's Payments policy outside the US, and the app is live on both stores.
 
 Distribution is **EAS cloud builds** → iOS TestFlight + Android internal-distribution link (project `@pinku1/subwave`, bundle `com.getsubwave.app`). The repeat-release workflow lives in the `subwave-app-ios-release` and `subwave-app-android-release` skills; getting it onto a physical Android phone over USB is `subwave-app-android`. See `app/README.md`.

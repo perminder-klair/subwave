@@ -72,6 +72,7 @@ after(async () => {
 });
 
 test('a sidecar path-unavailable response retries once by URL without shared-path options', async () => {
+  let toldUrl = 0;
   const result = await analyzer.analyzePathWithUrlFallback(
     'remote-track',
     '/remote/missing.audio',
@@ -82,9 +83,11 @@ test('a sidecar path-unavailable response retries once by URL without shared-pat
       stems_dir: '/var/sub-wave/stems/remote-track',
       embedding_only: true,
     },
+    () => { toldUrl += 1; },
   );
 
   assert.equal(result.bpm, 123);
+  assert.equal(toldUrl, 1, 'the caller is told the URL input was used (facet source provenance)');
   const requests = seen.filter((body) => body.path === '/remote/missing.audio' || body.url?.includes('id=remote-track'));
   assert.equal(requests.length, 2);
   assert.deepEqual(requests[0], {
@@ -116,8 +119,10 @@ test('an ordinary sidecar analysis failure is not retried by URL', async () => {
 
 test('a readable shared path keeps the one-request fast path', async () => {
   const beforeCount = seen.length;
-  const result = await analyzer.analyzePathWithUrlFallback('shared-track', '/shared/track.audio');
+  let toldUrl = 0;
+  const result = await analyzer.analyzePathWithUrlFallback('shared-track', '/shared/track.audio', {}, () => { toldUrl += 1; });
   assert.equal(result.musicalKey, '8A');
+  assert.equal(toldUrl, 0);
   assert.equal(seen.length - beforeCount, 1);
   assert.equal(seen.at(-1)?.path, '/shared/track.audio');
 });

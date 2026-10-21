@@ -3,6 +3,7 @@
 // half picks one. The rounding is pinned by clock-phrase.test.ts; here the
 // clause must never widen past exactly one time the band produced.
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,11 +103,9 @@ async function captureHourly(context: unknown, showWelcome = false) {
       const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
       assert.ok(url.startsWith('http://127.0.0.1:9/'), `unexpected external request: ${url}`);
       requests.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        id: 'chatcmpl-hourly', object: 'chat.completion', created: 1, model: 'fixture-model',
-        choices: [{ index: 0, message: { role: 'assistant', content: 'A fixture time check.' }, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return chatCompletionResponse({ id: 'chatcmpl-hourly',
+        message: { role: 'assistant', content: 'A fixture time check.' },
+        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
     }) as typeof fetch;
     await generateHourlyTime({
       context, showWelcome,

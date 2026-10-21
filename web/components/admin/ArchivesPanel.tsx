@@ -153,6 +153,7 @@ export default function ArchivesPanel() {
       {byDate.length === 0 && (
         <Card>
           <EmptyState
+            art="tapes"
             title="No recordings yet"
             description={
               <>

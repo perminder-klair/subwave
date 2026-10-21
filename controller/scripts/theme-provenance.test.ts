@@ -20,7 +20,7 @@
 //   3. `activeShow` is null, never absent, when the station default wins, so a
 //      client can destructure it without a presence check.
 //
-// Run: `tsx scripts/theme-provenance.test.ts` (or `npm test -- theme-prov`).
+// Run: `npm test -- theme-provenance`.
 
 import assert from 'node:assert/strict';
 import { resolveThemeProvenance } from '../src/util/theme-provenance.js';
@@ -94,7 +94,7 @@ const themeIds = ['classic-light', 'vinyl', 'blueprint'];
 // ── a stale pin must not paint nothing ───────────────────────────────────────
 
 // The theme file was deleted under our feet (or a built-in id was retired —
-// see show-theme-id.test.ts for the validator half of the same story).
+// see show-schema.test.ts for the validator half of the same story).
 {
   const p = resolveThemeProvenance({
     stationDefault: 'vinyl',

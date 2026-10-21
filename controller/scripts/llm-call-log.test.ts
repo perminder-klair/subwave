@@ -3,10 +3,11 @@
 // this line is the small metadata-only record operators can grep over time.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-llm-call-log-'));
 process.env.STATE_DIR = root;
@@ -71,6 +72,6 @@ test('failed calls do not duplicate the existing retry and failure logs', () => 
   assert.deepEqual(lines, []);
 });
 
-test.after(() => {
-  rmSync(root, { recursive: true, force: true });
+test.after(async () => {
+  await removeTempDir(root);
 });

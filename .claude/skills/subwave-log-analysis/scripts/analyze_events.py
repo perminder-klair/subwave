@@ -244,6 +244,7 @@ def report_picker(events, traces):
     if pick_traces:
         nav_counts, tool_counts, durations = [], [], []
         agent_ok = agent_fallback = agent_off = agent_rejected = 0
+        shortlist_ok = shortlist_failed = 0
         for tr in pick_traces.values():
             evs = tr["events"]
             nav_counts.append(sum(1 for e in evs if e.get("type") == "navidrome"))
@@ -258,8 +259,19 @@ def report_picker(events, traces):
             rejected = any(e.get("type") == "pick.rejected" for e in evs)
             llm_picks = [e for e in evs if e.get("type") == "llm"
                          and e.get("kind") == "djAgentPick"]
-            if not llm_picks:
-                agent_off += 1            # pickerAgent disabled — pool picker only
+            # Track Shortlist (llm.trackSelection: shortlist) makes one bounded
+            # djShortlistPick call instead of an agent run. A failed call still
+            # queues the top of its own list, so "failed" here is a model miss,
+            # not necessarily a pool fallback.
+            shortlist_picks = [e for e in evs if e.get("type") == "llm"
+                               and e.get("kind") == "djShortlistPick"]
+            if shortlist_picks:
+                if all(p.get("ok") for p in shortlist_picks) and not rejected:
+                    shortlist_ok += 1
+                else:
+                    shortlist_failed += 1
+            elif not llm_picks:
+                agent_off += 1            # no model pick — budget tier / breaker → pool picker
             elif rejected:
                 agent_rejected += 1       # LLM ok, but returned an unknown id → pool
             elif all(p.get("ok") for p in llm_picks):
@@ -275,12 +287,16 @@ def report_picker(events, traces):
         if durations:
             print(f"  decision latency               : avg {avg(durations):.0f} ms, "
                   f"p95 {pctl(durations,95):.0f} ms, max {max(durations):.0f} ms")
-        print(f"  agent succeeded   : {agent_ok}/{n}   {bar(agent_ok, n)}")
-        if agent_rejected:
-            print(f"  agent invalid id  : {agent_rejected}/{n}   {bar(agent_rejected, n)}  (returned an id not in its candidates → pool fallback)")
-        print(f"  agent -> fallback : {agent_fallback}/{n}   {bar(agent_fallback, n)}  (LLM call errored)")
+        if agent_ok or agent_rejected or agent_fallback:
+            print(f"  agent succeeded   : {agent_ok}/{n}   {bar(agent_ok, n)}")
+            if agent_rejected:
+                print(f"  agent invalid id  : {agent_rejected}/{n}   {bar(agent_rejected, n)}  (returned an id not in its candidates → pool fallback)")
+            print(f"  agent -> fallback : {agent_fallback}/{n}   {bar(agent_fallback, n)}  (LLM call errored)")
+        if shortlist_ok or shortlist_failed:
+            print(f"  shortlist ok      : {shortlist_ok}/{n}   {bar(shortlist_ok, n)}")
+            print(f"  shortlist failed  : {shortlist_failed}/{n}   {bar(shortlist_failed, n)}  (call errored or id rejected)")
         if agent_off:
-            print(f"  pool picker only  : {agent_off}/{n}  (pickerAgent disabled)")
+            print(f"  pool picker only  : {agent_off}/{n}  (no model pick — soft budget tier or open breaker)")
     else:
         print("No track-pick decisions in this window.")
 
@@ -322,6 +338,32 @@ def report_picker(events, traces):
             for a, c in top:
                 if c > 1:
                     print(f"    {c:>3}x  {a}")
+
+        # The seam record (#1829): how each track came in, the DJ's ask on the
+        # pick, and the armed effects a strip took back. Absent on events from
+        # a controller older than the record, so the block only prints when
+        # some play carries it.
+        seams = Counter(e["transition"] for e in plays if e.get("transition"))
+        asks = Counter(e["transitionAsk"] for e in plays if e.get("transitionAsk"))
+        drops = Counter(f'{d.get("effect")}: {d.get("reason")}'
+                        for e in plays for d in (e.get("transitionDrops") or []))
+        if seams or asks or drops:
+            print()
+            n_seams = sum(seams.values())
+            effect_seams = sum(c for k, c in seams.items()
+                               if k != "Normal" and not k.startswith("After "))
+            print(f"Transitions    : {n_seams} seams, {effect_seams} with an effect"
+                  + (f" ({100*effect_seams/n_seams:.0f}%)" if n_seams else ""))
+            if seams:
+                print("  seams armed    : " +
+                      "  ".join(f"{k}={v}" for k, v in seams.most_common()))
+            if asks:
+                print("  DJ asked for   : " +
+                      "  ".join(f"{k}={v}" for k, v in asks.most_common()))
+            if drops:
+                print(f"  dropped ({sum(drops.values())}):")
+                for k, c in drops.most_common(10):
+                    print(f"    {c:>3}x  {k}")
 
 
 def report_health(events, traces):

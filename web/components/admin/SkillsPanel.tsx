@@ -4,6 +4,7 @@
 import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { feedHost } from '../../lib/feed-host';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
@@ -224,8 +225,8 @@ export default function SkillsPanel() {
     } finally { setBusy(null); }
   };
 
-  // An imported bundle arrives disabled, and one carrying a tool.mjs runs code
-  // once enabled.
+  // An imported bundle arrives disabled, and a tool.mjs in it is held unloaded
+  // until the operator reads and trusts it from the skill's edit sheet.
   const importZip = async (file: File) => {
     try {
       const fd = new FormData();
@@ -233,7 +234,7 @@ export default function SkillsPanel() {
       const j = await importMutation.mutateAsync(fd);
       notify.ok(
         j.hasTool
-          ? `Imported “${j.slug}” — includes a data tool that runs code; review it before enabling`
+          ? `Imported “${j.slug}” — its tool.mjs is held unloaded; open Edit to read and trust it`
           : `Imported “${j.slug}” — disabled until you enable it`,
       );
     } catch (e) {
@@ -293,7 +294,7 @@ export default function SkillsPanel() {
     switch (status) {
       case 'enabled': return !!s.enabled;
       case 'disabled': return !s.enabled;
-      case 'needs-key': return s.ready === false;
+      case 'needs-key': return s.ready === false && !s.toolPending;
       case 'custom': return !!s.custom;
       case 'builtin': return !s.custom;
       default: return true;
@@ -569,7 +570,14 @@ export default function SkillsPanel() {
                     {s.cohosts && <MetaChip accent>co-hosted</MetaChip>}
                   </div>
 
-                  {s.ready === false && (
+                  {s.toolPending && (
+                    <V3Alert tone="error" title="Code awaiting review">
+                      This skill came with a <code>tool.mjs</code> that hasn&apos;t been loaded. Open
+                      it with <strong>Edit</strong> to read the code, then trust or discard it. Until
+                      then it can&apos;t air.
+                    </V3Alert>
+                  )}
+                  {s.ready === false && !s.toolPending && (
                     <V3Alert tone="error" title="API key not set">
                       This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
                       variable set in <code>.env</code>. Until then it stays inert and never
@@ -646,8 +654,9 @@ export default function SkillsPanel() {
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-3">
             <span className="min-w-0 flex-1 text-[11px] leading-[1.5] text-muted">
-              Got a skill someone shared as a <code>.zip</code>? Import it here — it may include a
-              data tool that runs code, so it arrives disabled for review.
+              Got a skill someone shared as a <code>.zip</code>? Import it here. It arrives
+              disabled, and any <code>tool.mjs</code> in it is held unloaded — nothing in it runs
+              until you read it and trust it from the skill&apos;s Edit sheet.
             </span>
             <input
               ref={fileInputRef}
@@ -673,7 +682,9 @@ export default function SkillsPanel() {
         }
       >
         <div className="text-[12px] leading-[1.65] text-muted">
-          These prompt-only skills ship with SUB/WAVE and update when you do.
+          Community skills come from the live catalog, so new ones appear without an
+          upgrade. They carry no code: a skill marked <strong>reads</strong> fetches that public
+          feed before it speaks, and the rest work from the brief alone.
           <strong> Install</strong> copies one into <code>state/skills/</code> as your own
           editable skill — it arrives <strong>disabled</strong>, so review the brief, then
           enable it. Made one worth sharing? Hit <strong>Edit → Share to community</strong> on
@@ -687,6 +698,7 @@ export default function SkillsPanel() {
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] font-extrabold">{c.label}</span>
                     {c.cooldown && <Pill className="text-[8px]">{c.cooldown} cooldown</Pill>}
+                    {feedHost(c.feed) && <Pill className="text-[8px]">reads {feedHost(c.feed)}</Pill>}
                   </div>
                   <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.brief}</div>
                   {(c.submittedBy || c.dateAdded) && (

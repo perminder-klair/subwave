@@ -2,6 +2,9 @@
 
 import Database from 'better-sqlite3';
 import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
+import { SEARCH_KEY_DDL, ensureSearchIndex, ensureSearchKeys, fillSearchKeys } from './search-keys.js';
+import { ensureFacetStatus } from './facets.js';
+import { ensureGenreInputs, touchGenreInputs } from './genre-inputs.js';
 
 // Returns the dim track_vectors is actually created at (stored dim when
 // `adoptStoredDim`, else `embeddingDim`) — the live schema dim.
@@ -90,7 +93,8 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
 
   if (userVersion < 6) {
     // Vocal-presence ranges (Demucs), JSON array of {startMs,endMs}. NULL = not
-    // computed; "[]" = analysed and instrumental, so needsVocalIds can skip it.
+    // computed; "[]" = measured with no vocal spans, so needsVocalIds can skip
+    // it. Track classification belongs to lyric-vocal.isInstrumental.
     runDdl(d, `ALTER TABLE tracks ADD COLUMN vocal_ranges_json TEXT;`);
     d.pragma('user_version = 6');
   }
@@ -438,6 +442,52 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     }).immediate();
   }
 
+  if (userVersion < 28) {
+    // The durable seam record (#1829): how each play came in (`transition`, a
+    // seam label), the DJ's ask on the pick (`transition_ask`) and the armed
+    // gestures a strip took back (`transition_drops`, JSON [{effect, reason}]).
+    // Nullable and additive: rows before this carry NULL, and an older
+    // controller's explicit-column INSERT never names them. Only the missing
+    // columns are added — a database whose user_version was wound back below
+    // this step (a downgrade, a hand repair) still has them, and ADD COLUMN on
+    // an existing column throws.
+    const have = new Set((d.prepare('PRAGMA table_info(plays)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = ['transition', 'transition_ask', 'transition_drops'].filter(c => !have.has(c));
+    if (add.length) runDdl(d, add.map(c => `ALTER TABLE plays ADD COLUMN ${c} TEXT;`).join('\n'));
+    d.pragma('user_version = 28');
+  }
+
+  if (userVersion < 29) {
+    // Library search keys (library-db/search-keys.ts): each track's folded name
+    // keys, genre runs and tag lists, so a query compares stored text with
+    // native LIKE/= instead of running JS per row. Plain nullable columns an
+    // older controller never names. Their stale trigger and index are ensured
+    // on every open below, and the keys filled after that.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = SEARCH_KEY_DDL.columns.filter(c => !have.has(c));
+    if (add.length) runDdl(d, add.map(c => `ALTER TABLE tracks ADD COLUMN ${c} ${c === 'search_fresh' ? 'INTEGER' : 'TEXT'};`).join('\n'));
+    d.pragma('user_version = 29');
+  }
+
+  // Before the vector reconcile below, which bumps it when it drops vectors.
+  // Never throws. Its update trigger names tracks.genres and tracks.moods, and
+  // SQLite refuses to DROP COLUMN either while it exists: a migration above
+  // that drops one must DROP TRIGGER genre_inputs_tracks_update first.
+  ensureGenreInputs(d);
+
+  // Never throws, like ensureGenreInputs: the search keys' stale trigger is pure
+  // SQL, so every connection's writes (an older controller's too) mark rows for
+  // the next refresh. It names seven tracks columns (title, artist, album,
+  // genres, moods, audio_moods, lastfm_tags), and SQLite refuses to DROP COLUMN
+  // any of them while it exists: a migration above that drops one must DROP
+  // TRIGGER tracks_search_stale first. Filled once on the upgrade to 29, so the
+  // first search after it does not pay for the whole library. The covering index
+  // a search scans comes after the fill, which would otherwise update it row by
+  // row; a station that ran migration 29 before the index existed builds it on
+  // its next open here. Never throws either.
+  if (ensureSearchKeys(d) && userVersion < 29) fillSearchKeys();
+  ensureSearchIndex(d);
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
@@ -465,6 +515,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           `recreating at ${embeddingDim}-d for the current embedding model`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      touchGenreInputs(d);
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     } else if (!reseed) {
       throw new Error(
@@ -482,6 +533,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
           `dropping vectors for re-embed`,
       );
       runDdl(d, 'DROP TABLE IF EXISTS track_vectors');
+      touchGenreInputs(d);
       d.prepare('DELETE FROM embedding_meta WHERE pk = 1').run();
     }
   }
@@ -507,6 +559,12 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
         `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
     );
   }
+
+  // Per-facet analysis status. Deliberately outside the user_version chain:
+  // created (and seeded from the columns above) on the first open that lacks
+  // it, so it never takes a number from upstream's migration sequence. Runs
+  // last because the seed reads track_audio_vectors.
+  ensureFacetStatus(d);
   return effectiveDim;
 }
 

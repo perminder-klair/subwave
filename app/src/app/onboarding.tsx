@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronUp, KeyRound } from 'lucide-react-native';
+import { ArrowLeftRight, ArrowUpRight, ChevronDown, ChevronRight, ChevronUp, KeyRound } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import LiveDot from '@/components/LiveDot';
@@ -21,6 +21,7 @@ import StationLiveStatus from '@/components/StationLiveStatus';
 import { createApi, normalizeBase, type HealthResult, type StationApi } from '@/lib/api';
 import { useStation } from '@/config/StationContext';
 import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
+import { PROJECT_LINKS, openExternal } from '@/lib/links';
 import type { StationRef } from '@/lib/station';
 import {
   splitStationAddress,
@@ -609,6 +610,24 @@ export default function Onboarding() {
                   </View>
                 </>
               ) : null}
+
+              <Pressable
+                onPress={() => openExternal(PROJECT_LINKS.setup)}
+                accessibilityRole="link"
+                accessibilityLabel="No station yet? Read the guide to run your own"
+                style={{ marginTop: 18, paddingVertical: 12, borderTopWidth: 1, borderTopColor: colors.softBorder }}
+              >
+                <View className="flex-row items-center" style={{ gap: 6 }}>
+                  <Text className="font-body-semibold text-ink" style={{ fontSize: 14 }}>
+                    No station yet? Run your own
+                  </Text>
+                  <ArrowUpRight size={15} color={colors.accent} />
+                </View>
+                <Text className="font-body text-muted" style={{ fontSize: 12.5, lineHeight: 18, marginTop: 3 }}>
+                  Your music library, a language model and a machine running Docker. The setup guide
+                  walks you through it.
+                </Text>
+              </Pressable>
 
               {addMode ? (
                 <Pressable onPress={() => router.back()} accessibilityRole="button" accessibilityLabel="Back to player" className="items-start" style={{ marginTop: 8, paddingVertical: 8 }}>

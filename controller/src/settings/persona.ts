@@ -40,11 +40,14 @@ export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
   return FREQUENCIES[Math.min(i + 1, FREQUENCIES.length - 1)];
 }
 
-// Single gate for the transition effects (filter sweep + echo washout): they're
-// on whenever the on-air persona is in DJ mode — no separate toggle. The picker
-// schema/prompt builders use this to decide whether to offer the DJ the
-// `transition` choice; when off, the guidance is never shown and nothing is
-// applied.
+// Gate for the six DJ transition effects (TRANSITION_EFFECTS): on whenever the
+// on-air persona is in DJ mode. The per-effect operator switches
+// (settings/transition-effects.ts, #1565) narrow it and compose with it at the
+// call sites, never in here. The picker schema/prompt builders use this to
+// decide whether to offer the DJ the `transition` choice; when off, the
+// guidance is never shown and nothing is applied. DJ mode also drives
+// pair-drain, stem blends and the transition stinger, which read djMode
+// directly.
 export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }
@@ -197,6 +200,14 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   return resolveShowShape(show, s);
 }
 
+// A stored show by id, in the same resolved shape the pick paths read — for
+// operator surfaces about a show that need not be on air (the in-order
+// position peek in routes/shows.ts). null when no such show exists.
+export function resolveShowById(id: string, s = get()) {
+  const show = s?.shows?.find(x => x.id === id);
+  return show ? resolveShowShape(show, s) : null;
+}
+
 // The takeover currently in force, or null (absent, expired, or a target that
 // names nothing real — a dangling or malformed show id). An explicit null
 // target is a valid Default programming takeover. Route/janitor helper.
@@ -260,6 +271,9 @@ function resolveShowShape(show, s) {
     // would make the switch a silent no-op on every pick path — the #779
     // blocklist failure, exactly.
     playlistExhaust: show.playlistExhaust === true,
+    // Play in order: read off the RESOLVED show by the in-order branch in
+    // broadcast/dj-agent.ts, so a missing line here is the #779 no-op again.
+    playlistInOrder: show.playlistInOrder === true,
     // Navidrome playlist blocklist: tracks in these playlists are hard-dropped
     // from the show's candidate pool (resolveExcludedPlaylistIds reads this off
     // the RESOLVED show, so omitting it here silently disabled the whole

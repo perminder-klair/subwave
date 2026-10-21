@@ -76,8 +76,10 @@ export function resolveEntry(rel: string): string | null {
   return abs;
 }
 
-export function openStream(abs: string) {
-  return createReadStream(abs);
+// `end` (inclusive byte offset) pins the read to a size already announced in
+// Content-Length: the current hour is still being appended to.
+export function openStream(abs: string, opts: { end?: number } = {}) {
+  return createReadStream(abs, opts);
 }
 
 // Retention sweep: delete whole day directories older than `days`. 0 means keep

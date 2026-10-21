@@ -4,20 +4,8 @@
 // and the extracted blocks are pinned verbatim so a reflow cannot reword them.
 
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import { instruction, sectionNames, instructionFiles } from '../src/llm/internal/prompts/instructions.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
-
-console.log('loader failure modes:');
 
 test('an unknown file throws, and names what exists', () => {
   assert.throws(() => instruction('nope', 'frame'), /no such file "nope\.md"/);
@@ -32,10 +20,14 @@ test('a placeholder with no value throws rather than shipping the braces', () =>
   assert.throws(() => instruction('pool-picker', 'frame', {}), /left \{station\} unsubstituted/);
 });
 
-test('substitution fills every occurrence', () => {
-  const out = instruction('picker', 'show-brief', { topic: 'late-night dub' });
-  assert.ok(out.includes('late-night dub'));
-  assert.ok(!out.includes('{'), 'no braces should survive');
+test('a VALUE containing {word} is content, not a missing placeholder', () => {
+  // Show topics and station names are free text; a "{word}" inside one used to
+  // read as unsubstituted and throw, disabling the pool picker's prompt.
+  const brief = instruction('picker', 'show-brief', { topic: 'Deep cuts from the {underground}' });
+  assert.ok(brief.includes('Deep cuts from the {underground}'));
+  const frame = instruction('pool-picker', 'frame', { station: 'Radio {x}' });
+  assert.ok(frame.includes('Radio {x}'));
+  assert.ok(instruction('pool-picker', 'show-brief', { topic: '$& {topic} $1' }).includes('$& {topic} $1'), 'inserted verbatim');
 });
 
 test('a numeric value substitutes', () => {
@@ -80,7 +72,7 @@ const PINNED: [string, string, Record<string, string | number>, string][] = [
   ['picker', 'finding-candidates', {},
     `Finding candidates: you get ONE discovery round before you commit — every tool call you make happens together in that round, and there is no second round to switch to. When you can make several tool calls in that round, do — two or three different tools beat betting on a single call; if only one call is possible, spend it on a tool that answers the whole moment rather than a narrow probe. Prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, deepCuts, randomSongs, and the audio/embedding similarity tools; similarSongs and topSongsByArtist use external data and often return little, so never lean on one of them alone. Then choose from whatever your round surfaced.`],
   ['request', 'frame', { ackFields: 'FIELDS' },
-    `The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in FIELDS — never pretend it's what they asked for.`],
+    `The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. When the listener names an artist or a song, look it up with searchLibrary in your discovery round — similarity tools cannot find a named ask. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in FIELDS — never pretend it's what they asked for. Whatever you write in FIELDS describes the track whose id you return: never name a different artist or title as the one playing.`],
   ['request', 'classification', {},
     `If the message isn't a music request at all, set kind: "chat" with id: null and let the ack answer them; anything that IS a music ask stays kind: "track" — when in doubt, "track".`],
   ['request', 'current-track-with-intro', {},
@@ -120,7 +112,6 @@ console.log('\nthe two discovery-budget variants stay in step:');
 test('both finding-candidates variants carry the same tool guidance', () => {
   // The variants differ only in how many rounds they promise.
   const steer = 'searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, deepCuts, randomSongs, and the audio/embedding similarity tools; similarSongs and topSongsByArtist use external data and often return little, so never lean on one of them alone.';
-  assert.ok(instruction('picker', 'finding-candidates').includes(steer));
   assert.ok(instruction('picker', 'finding-candidates-multi', { rounds: 3 }).includes(steer));
 });
 
@@ -131,9 +122,3 @@ test('the single-round variant never promises a second look', () => {
   assert.ok(one.includes('ONE discovery round'));
   assert.ok(!/\blater round\b|\bnext round\b/.test(one), 'single-round text must not imply a second round');
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall tests passed');

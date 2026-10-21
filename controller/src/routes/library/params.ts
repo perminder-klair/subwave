@@ -21,7 +21,8 @@ export function decodeCursor(s: string): { albumOffset: number; songIndex: numbe
     const albumOffset = parseInt(a, 10);
     const songIndex = parseInt(b, 10);
     if (!Number.isFinite(albumOffset) || !Number.isFinite(songIndex)) return { albumOffset: 0, songIndex: 0 };
-    return { albumOffset, songIndex };
+    // A negative index would read songs[-1] (undefined) and fail the request.
+    return { albumOffset: Math.max(0, albumOffset), songIndex: Math.max(0, songIndex) };
   } catch {
     return { albumOffset: 0, songIndex: 0 };
   }

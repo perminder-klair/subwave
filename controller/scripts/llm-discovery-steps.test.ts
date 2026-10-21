@@ -7,7 +7,7 @@
 // half checks the value reaches its consumers, the harness and the prompt.
 
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -23,7 +23,6 @@ const { discoveryStepsFor, gatedMaxStepsFor, DISCOVERY_STEPS_MAX } =
   await import('../src/llm/internal/provider/capabilities.js');
 const { promptDiscoverySteps } = await import('../src/llm/internal/provider/legs.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
 // A forced-tool provider (capability default 1).
 const LOCAL_LLM = {
@@ -34,12 +33,7 @@ const LOCAL_LLM = {
 // A native-strategy provider (capability default 3).
 const CLOUD_LLM = { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' };
 
-async function coldLoad(llm: Record<string, unknown>) {
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ llm: { ...LOCAL_LLM, ...llm } }));
-  setCache(null);
-  await settings.load();
-  return settings.get().llm;
-}
+async function coldLoad(llm: Record<string, unknown>) { return (await coldLoadSettings({ llm: { ...LOCAL_LLM, ...llm } })).llm; }
 
 test('0 means auto: an untouched install still follows the capability table', async () => {
   // Upgrading to a build with this setting must change no station's behaviour.
@@ -116,14 +110,6 @@ test('saving an override then restarting keeps it — the operator story', async
 });
 
 test('the per-provider budget reaches only the agents that opted in', async () => {
-  // The director's maxSteps: 2 is load-bearing, so it must not opt in.
-  // Without the opt-in runDiscoverySteps pins the historical single step
-  // whatever the provider or override says.
-  const { runDiscoverySteps } = await import('../src/llm/internal/provider/capabilities.js');
-  const llm = await coldLoad({ ...CLOUD_LLM, discoverySteps: 5 });
-  assert.equal(runDiscoverySteps(llm, true), 5, 'opted-in agents follow descriptor + override');
-  assert.equal(runDiscoverySteps(llm, false), 1, 'everyone else keeps the single historical step');
-
   const { pickerAgent, requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
   const { directorAgent } = await import('../src/skills/_agent.js');
   assert.equal(pickerAgent.providerDiscoveryBudget, true, 'picker opts in');

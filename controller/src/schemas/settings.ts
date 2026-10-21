@@ -494,6 +494,29 @@ export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72
 // separate declarations of one number and must move together.
 export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
 
+// Track Shortlist discovery passes (#1687): how many controller-run source
+// calls build one shortlist. Unlike the agent's discoverySteps, 0 has no
+// meaning here, because one pass is the smallest real shortlist.
+export const SHORTLIST_PASSES_BOUNDS: SettingsNumericBound = { min: 1, max: 5 };
+export const SHORTLIST_PASSES_DEFAULT = 3;
+
+// Which of the three model routes run an agent tool loop (#1687): track
+// selection, listener-request matching and segment delivery each choose
+// independently. The agent deadline, the context-window floor and the
+// output-cap warning apply to whichever of them are agentic, so every reader
+// (DJ Doc, the Music selection form) asks here instead of re-deriving it.
+// Absent values read as the shipped default, which is agentic for all three.
+export function settingsAgentRoutes(llm: {
+  trackSelection?: unknown;
+  requestMatching?: unknown;
+  segmentRuntime?: unknown;
+} | null | undefined) {
+  const picks = llm?.trackSelection !== 'shortlist';
+  const requests = llm?.requestMatching !== 'direct';
+  const segments = llm?.segmentRuntime !== 'direct';
+  return { picks, requests, segments, any: picks || requests || segments };
+}
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -852,6 +875,16 @@ export const djSpeakClockSchema = z.boolean({
 export const djTalkOnlyBetweenTracksSchema = z.boolean({
   error: 'djTalkOnlyBetweenTracks must be a boolean',
 });
+
+export const ttsVoiceLevellingSchema = z.boolean({
+  error: 'tts.voiceLevelling must be a boolean',
+});
+
+// Only this new flag is stateless; the other TTS fields retain their merged-state validation.
+export const ttsPatchSchema = settingsBlockOf({
+  voiceLevelling: ttsVoiceLevellingSchema,
+});
+export type TtsPatch = z.infer<typeof ttsPatchSchema>;
 
 // The floor a rendered skill segment must clear before an opted-in show gives
 // it a real gap instead of a duck. settingsIntLike, like every other numeric

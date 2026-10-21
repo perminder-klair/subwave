@@ -1,12 +1,17 @@
 # Agent setup
 
-This is a deepsec scanning workspace. Each registered project has its
-own setup prompt at `data/<id>/SETUP.md` — open the relevant one when
-asked to set a project up.
+This is a deepsec scanning workspace. `subwave` is already set up — its
+`data/subwave/INFO.md` is filled in and its `SETUP.md` was deleted. A
+newly registered project gets its own setup prompt at
+`data/<id>/SETUP.md`.
 
 ## Common tasks
 
-- **Set up a project for scanning**: read `data/<id>/SETUP.md` and
+- **Keep `subwave` current**: `data/subwave/INFO.md` is the threat model
+  every `process` batch is judged against. Update it when a new public
+  route, auth gate, import path or outbound fetch lands, and stay inside
+  its 50–100 line budget.
+- **Set up a new project for scanning**: read `data/<id>/SETUP.md` and
   follow it (read `node_modules/deepsec/SKILL.md`, then fill
   `data/<id>/INFO.md` from the target codebase).
 - **Add a new project**: run `deepsec init-project <root>` — it

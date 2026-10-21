@@ -64,6 +64,15 @@ let weatherCache: { data: any; fetchedAt: number; configKey: string } = {
   configKey: '',
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
+// After a failed fetch, wait this long before asking Open-Meteo again. The
+// public /now-playing poll reaches getWeather() through getFullContext() every
+// few seconds per listener, so an uncached failure turned a down or
+// rate-limiting upstream into one blocking fetch per poll — which also keeps a
+// rate-limited address rate-limited.
+const WEATHER_FAILURE_BACKOFF_MS = 5 * 60 * 1000;
+let weatherFailure: { at: number; configKey: string } | null = null;
+// One fetch at a time: concurrent callers on an expired cache share it.
+let weatherInFlight: { promise: Promise<any>; configKey: string } | null = null;
 
 // Weather is settings-layer state, so read the live settings cache directly.
 // The old config.weather mirror was refreshed by POST /settings and at boot,
@@ -88,6 +97,7 @@ function weatherConfigKey(weather: ReturnType<typeof weatherConfig>) {
 // their location in /settings.
 export function invalidateWeatherCache() {
   weatherCache = { data: null, fetchedAt: 0, configKey: '' };
+  weatherFailure = null;
 }
 
 // The place the weather readout is ATTRIBUTED to — the broad on-air location,
@@ -107,19 +117,39 @@ function attributedLocation(weather = weatherConfig()) {
 export async function getWeather() {
   const weather = weatherConfig();
   const configKey = weatherConfigKey(weather);
-  if (
-    weatherCache.data &&
-    weatherCache.configKey === configKey &&
-    Date.now() - weatherCache.fetchedAt < WEATHER_TTL_MS
-  ) {
-    return weatherCache.data;
+  const cached = weatherCache.data && weatherCache.configKey === configKey ? weatherCache.data : null;
+  if (cached && Date.now() - weatherCache.fetchedAt < WEATHER_TTL_MS) {
+    return cached;
   }
+  // Inside a failure backoff: the last good reading for this location if
+  // there is one, else the 'unknown' fallback — without a fetch.
+  if (weatherFailure && weatherFailure.configKey === configKey
+    && Date.now() - weatherFailure.at < WEATHER_FAILURE_BACKOFF_MS) {
+    return cached ?? unknownWeather(weather);
+  }
+  if (weatherInFlight && weatherInFlight.configKey === configKey) return weatherInFlight.promise;
+  const promise = fetchWeather(weather, configKey, cached);
+  weatherInFlight = { promise, configKey };
+  try {
+    return await promise;
+  } finally {
+    if (weatherInFlight?.promise === promise) weatherInFlight = null;
+  }
+}
+
+function unknownWeather(weather: ReturnType<typeof weatherConfig>) {
+  const tempUnit = weather.units === 'imperial' ? 'F' : 'C';
+  return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation(weather) };
+}
+
+async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey: string, stale: any) {
   const imperial = weather.units === 'imperial';
   const tempUnit = imperial ? 'F' : 'C';
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day${unitParam}`;
     const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
+    if (!res.ok) throw new Error(`weather upstream ${res.status}`);
     const data = await res.json() as any;
     const code = data.current.weather_code;
     const condition = mapWeatherCode(code);
@@ -132,9 +162,12 @@ export async function getWeather() {
       location: attributedLocation(weather),
     };
     weatherCache = { data: result, fetchedAt: Date.now(), configKey };
+    weatherFailure = null;
     return result;
   } catch {
-    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation(weather) };
+    weatherFailure = { at: Date.now(), configKey };
+    // A slightly old forecast beats 'unknown' flapping in and out.
+    return stale ?? unknownWeather(weather);
   }
 }
 
@@ -196,9 +229,8 @@ export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
     'https://geocoding-api.open-meteo.com/v1/search?name=' +
     encodeURIComponent(q) +
     '&count=6&language=en&format=json';
-  // Bounded because GET /geocode is public and unauthenticated: a stalled
-  // upstream would otherwise park a handler until undici's ~300s default, and
-  // unique queries all miss the 200-entry cache. Matches the deadline
+  // Bounded so a stalled upstream cannot park a handler until undici's ~300s
+  // default; unique queries all miss the 200-entry cache. Matches the deadline
   // /cover/:id already puts on its proxy fetch.
   const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
   if (!res.ok) throw new Error(`geocoding upstream ${res.status}`);

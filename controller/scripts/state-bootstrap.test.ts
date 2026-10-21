@@ -35,10 +35,10 @@
 // only ever printed a raw `chmod:` error) drifting away from the broadcast
 // one is how this class comes back.
 //
-// Run: `tsx scripts/state-bootstrap.test.ts`.
+// Run: `npm test -- state-bootstrap`.
 //
-// node:assert-via-tsx style, matching scripts/aio-analyzer-heavy.test.ts.
 
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, chmodSync, existsSync, statSync, writeFileSync } from 'node:fs';
@@ -92,17 +92,6 @@ const SUBDIRS = [
 ];
 
 const tmp = mkdtempSync(join(tmpdir(), 'subwave-state-bootstrap-'));
-let failures = 0;
-
-function check(label: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ok  ${label}`);
-  } catch (err) {
-    failures++;
-    console.error(`  FAIL ${label}\n       ${(err as Error).message.split('\n')[0]}`);
-  }
-}
 
 let caseNo = 0;
 function scratch(): { root: string; dir: string } {
@@ -112,11 +101,10 @@ function scratch(): { root: string; dir: string } {
 }
 
 for (const s of SUPERVISORS) {
-  console.log(`\n${s.name}`);
 
   // 1. Happy path: every dir prepared, world-writable, and not one line of
   //    output. This is what every boot on every install does.
-  check('happy path creates every state subdir, silently', () => {
+  await test('happy path creates every state subdir, silently', () => {
     const { root, dir } = scratch();
     const r = bootstrap(s.path, s.lib, root, dir);
     assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
@@ -126,7 +114,7 @@ for (const s of SUPERVISORS) {
       const mode = statSync(join(dir, d)).mode & 0o777;
       assert.equal(mode & 0o002, 0o002, `${d} is not world-writable (mode ${mode.toString(8)})`);
     }
-    // reload_mode="watch" needs these to exist before liquidsoap starts.
+    // Liquidsoap's file watches need these to exist before liquidsoap starts.
     assert.ok(existsSync(join(dir, 'auto.m3u')), 'auto.m3u not created');
     assert.ok(existsSync(join(dir, 'jingles.m3u')), 'jingles.m3u not created');
     assert.ok(existsSync(join(dir, 'archive', '.ndignore')), '.ndignore not created');
@@ -143,7 +131,7 @@ for (const s of SUPERVISORS) {
   //    pins the control flow this test exists for. The genuine read-only
   //    mount is covered at the image level: `docker run` with `-v ...:ro` at
   //    /var/sub-wave/archive, which exited 1 / unhealthy before this fix.
-  check('an unusable state path warns, names itself, and does not abort', () => {
+  await test('an unusable state path warns, names itself, and does not abort', () => {
     const { root, dir } = scratch();
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'stems'), 'not a directory');
@@ -161,7 +149,7 @@ for (const s of SUPERVISORS) {
 
   // 3. A read-only mount that is ALREADY world-writable is a working config —
   //    chmod refusing to re-apply 777 changes nothing and must not warn.
-  check('an unchangeable but already-writable dir stays silent', () => {
+  await test('an unchangeable but already-writable dir stays silent', () => {
     const { root, dir } = scratch();
     for (const d of SUBDIRS) mkdirSync(join(dir, d), { recursive: true, mode: 0o777 });
     for (const d of SUBDIRS) chmodSync(join(dir, d), 0o777);
@@ -173,7 +161,7 @@ for (const s of SUPERVISORS) {
   // 4. The analyzer writes stems as uid 10001. If the bootstrap ever stops
   //    covering that dir, relocating the stem cache to a bind mount silently
   //    goes back to being unwritable — the second half of bug 10.
-  check('stems and transitions are world-writable for the analyzer uid', () => {
+  await test('stems and transitions are world-writable for the analyzer uid', () => {
     const { root, dir } = scratch();
     const r = bootstrap(s.path, s.lib, root, dir);
     assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
@@ -189,7 +177,7 @@ for (const s of SUPERVISORS) {
   //    root-owned 755 Docker gives a freshly created source — the analyzer
   //    (uid 10001) then cannot write one stem, and the whole reason the
   //    operator moved the cache to a bigger disk is silently undone.
-  check('a relocated stem cache root is created and world-writable', () => {
+  await test('a relocated stem cache root is created and world-writable', () => {
     const { root, dir } = scratch();
     const stems = join(root, 'relocated-stems');
     const r = bootstrap(s.path, s.lib, root, dir, { SUBWAVE_STEMS_DIR: stems });
@@ -205,7 +193,7 @@ for (const s of SUPERVISORS) {
   // 6. Same never-fatal contract as every other path: the exFAT/NTFS/NFS disk
   //    people move the stem cache onto is exactly where chmod refuses, and
   //    that must cost a warning, not the broadcast.
-  check('an unusable relocated stems root warns and does not abort', () => {
+  await test('an unusable relocated stems root warns and does not abort', () => {
     const { root, dir } = scratch();
     const stems = join(root, 'relocated-stems');
     mkdirSync(root, { recursive: true });
@@ -216,12 +204,37 @@ for (const s of SUPERVISORS) {
     assert.match(r.out, /WARNING/i, `not surfaced as a warning: ${r.out}`);
     for (const d of SUBDIRS) assert.ok(existsSync(join(dir, d)), `${d} skipped`);
   });
+
+  // 7. The state ROOT is 1777, not 777. It holds root's icecast-secrets.env
+  //    and is shared with containers running as other uids; in a world-
+  //    writable dir WITHOUT the sticky bit any of them can rename or replace
+  //    that file. Sticky keeps every uid able to create files (the point of
+  //    the chmod) while only an owner can replace one. A single-station
+  //    install passes the root as both arguments, so the second, plain-777
+  //    prepare of the same path must not strip the bit again.
+  await test('a single-station root is sticky and still world-writable', () => {
+    const { root, dir } = scratch();
+    const r = bootstrap(s.path, s.lib, root, dir);
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    assert.equal(r.out.trim(), '', `expected silence, got: ${r.out}`);
+    assert.equal(statSync(root).mode & 0o7777, 0o1777, `root mode ${(statSync(root).mode & 0o7777).toString(8)}`);
+    // Subdirs keep plain 777: only the root holds install-level files, and
+    // the sidecars' own working dirs are not this change's to tighten.
+    for (const d of SUBDIRS) {
+      assert.equal(statSync(join(dir, d)).mode & 0o7777, 0o777, `${d} mode changed`);
+    }
+  });
+
+  // 8. Multi-station: the station dir is not the root, gets plain 777, and
+  //    the root keeps its sticky bit.
+  await test('a station dir gets 777 while the root stays sticky', () => {
+    const { root } = scratch();
+    const dir = join(root, 'stations', 'second');
+    const r = bootstrap(s.path, s.lib, root, dir);
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    assert.equal(statSync(root).mode & 0o7777, 0o1777, 'root lost its sticky bit');
+    assert.equal(statSync(dir).mode & 0o7777, 0o777, `station dir mode ${(statSync(dir).mode & 0o7777).toString(8)}`);
+  });
 }
 
-rmSync(tmp, { recursive: true, force: true });
-
-if (failures) {
-  console.error(`\n${failures} check(s) failed`);
-  process.exit(1);
-}
-console.log('\nstate-bootstrap: all checks passed');
+after(() => rmSync(tmp, { recursive: true, force: true }));

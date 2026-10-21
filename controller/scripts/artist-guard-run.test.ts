@@ -3,7 +3,7 @@
 // artist-guard.test.ts pins the pieces: which cause fires, and which candidates
 // a re-pick may choose from. This file pins how they are composed — which is
 // where the two causes actually diverge, and the half that was previously only
-// verifiable by reading, because it lived inline in pickViaAgent behind a model
+// verifiable by reading, because it lived inline in pickViaSelectionRoute behind a model
 // call.
 //
 // What it must hold:
@@ -43,10 +43,11 @@ function harness(opts: {
   const calls = { repick: 0, poolRescue: 0 };
   const reasons: string[] = [];
   const rescueArgs: string[] = [];
+  const rescueAnchors: string[] = [];
   const lines: string[] = [];
   const events: Record<string, unknown>[] = [];
   return {
-    calls, reasons, rescueArgs, lines, events,
+    calls, reasons, rescueArgs, rescueAnchors, lines, events,
     deps: {
       repick: async (alt: Map<string, Cand>, reason: string) => {
         calls.repick++;
@@ -54,9 +55,10 @@ function harness(opts: {
         const chosen = opts.repick ? opts.repick(alt, reason) : [...alt.values()][0] ?? null;
         return chosen ? { id: chosen.id } : null;
       },
-      poolRescue: async (avoidArtist: string) => {
+      poolRescue: async (avoidArtist: string, avoidAnchorArtist: string) => {
         calls.poolRescue++;
         rescueArgs.push(avoidArtist);
+        rescueAnchors.push(avoidAnchorArtist);
         return opts.poolRescue ?? 'empty';
       },
       log: (line: string) => { lines.push(line); },
@@ -160,6 +162,75 @@ test('a re-pick answering with an id it was not offered is refused', async () =>
   assert.equal(h.calls.poolRescue, 1, 'and is treated as a failed re-pick');
 });
 
+for (const window of [0, 5]) {
+  const pixies: Cand = { id: 'pixies', title: 'The Navajo Know', artist: 'Pixies' };
+  const rejected: Cand = { id: 'rejected', title: 'Mr. Grieves', artist: 'Pixies • Black Francis' };
+  const repeat: Cand = { id: 'repeat', title: 'Another track', artist: 'Pixies • Kim Deal' };
+  const recentRoots = window ? rootsOf('Pixies', clash.artist) : new Set<string>();
+
+  test(`overlapping credits cannot replace the anchor when the window is ${window}`, async () => {
+    const h = harness({ repick: (alt) => {
+      assert.deepEqual([...alt.keys()], [clash.id]);
+      return clash;
+    } });
+    const out = await run(h, {
+      song: rejected, pickAnchor: pixies, seen: seenOf(rejected, repeat, clash), recentRoots, window,
+    });
+    assert.equal(out.kind === 'repicked' && out.song.id, clash.id);
+    assert.deepEqual(h.calls, { repick: 1, poolRescue: 0 });
+    assert.equal(h.events.at(-1)?.recencyStarved, window > 0, 'only recency may relax');
+  });
+
+  test(`an anchor-only run reaches pool rescue with both credits when the window is ${window}`, async () => {
+    const h = harness({ poolRescue: 'queued' });
+    const out = await run(h, {
+      song: rejected, pickAnchor: pixies, seen: seenOf(rejected, repeat), recentRoots, window,
+    });
+    assert.equal(out.kind, 'rescued');
+    assert.deepEqual(h.calls, { repick: 0, poolRescue: 1 });
+    assert.deepEqual(h.rescueArgs, [rejected.artist]);
+    assert.deepEqual(h.rescueAnchors, [pixies.artist]);
+  });
+
+  test(`a constrained re-pick cannot answer with an excluded anchor credit at window ${window}`, async () => {
+    const h = harness({ repick: () => repeat, poolRescue: 'queued' });
+    const out = await run(h, {
+      song: rejected, pickAnchor: pixies, seen: seenOf(rejected, repeat, clash), recentRoots, window,
+    });
+    assert.equal(out.kind, 'rescued');
+    assert.deepEqual(h.calls, { repick: 1, poolRescue: 1 });
+    assert.deepEqual(h.rescueAnchors, [pixies.artist]);
+  });
+
+  test(`both the solo rejected act and combined anchor stay excluded at window ${window}`, async () => {
+    const blackFrancis: Cand = { id: 'black', title: 'Velvety', artist: 'Black Francis' };
+    const h = harness({ repick: (alt) => {
+      assert.deepEqual([...alt.keys()], [clash.id]);
+      return clash;
+    } });
+    const out = await run(h, {
+      song: pixies, pickAnchor: rejected, seen: seenOf(pixies, repeat, blackFrancis, clash),
+      recentRoots, window,
+    });
+    assert.equal(out.kind === 'repicked' && out.song.id, clash.id);
+  });
+}
+
+test('a credit changed during the constrained re-pick is checked against the anchor again', async () => {
+  const candidate = { ...clash };
+  const h = harness({ repick: () => {
+    candidate.artist = 'Pixies • Kim Deal';
+    return candidate;
+  }, poolRescue: 'queued' });
+  const out = await run(h, {
+    song: { id: 'r', title: 'Rejected', artist: 'Pixies • Black Francis' },
+    pickAnchor: { id: 'a', title: 'Anchor', artist: 'Pixies' },
+    seen: seenOf(candidate), window: 0,
+  });
+  assert.equal(out.kind, 'rescued');
+  assert.deepEqual(h.calls, { repick: 1, poolRescue: 1 });
+});
+
 // ── spacing: the #1406 cause, and the ways it must stay cheap ──────────────
 
 test('a pick inside the window is re-picked away from — the reported bug', async () => {
@@ -258,4 +329,35 @@ test('every firing names its cause and window, so the two are separable in the l
   assert.equal(h2.events[0].cause, 'recent');
   assert.equal(h2.events[0].basis, 'recent-window');
   assert.equal(h2.events[0].window, 9, 'the configured window rides the event');
+});
+
+// ── a listener request's stand-in (#1979) ──────────────────────────────────
+
+test('with no pick anchor only spacing can fire, and an exempt candidate is still offered', async () => {
+  // The request path's shape: a stand-in by a recently-heard artist, no
+  // anchor (so never the pool rescue — a pool pick is not the listener's
+  // request), and the listener's own ask exempt from the narrowing.
+  const offered: string[][] = [];
+  const h = harness({ repick: (alt) => { offered.push([...alt.keys()].sort()); return alt.get('c1') ?? null; } });
+  const out = await runArtistGuard<Cand>({
+    song: marvin, object: { id: marvin.id }, pickAnchor: null,
+    seen: seenOf(marvin, clash, sly),
+    recentRoots: rootsOf('Marvin Gaye', 'The Clash'),
+    window: 5,
+    exempt: (s) => s.id === 'c1',
+    ...h.deps,
+  });
+  assert.equal(out.kind, 'repicked');
+  assert.equal(out.kind === 'repicked' && out.song.id, 'c1');
+  assert.deepEqual(offered, [['c1', 's1']], 'the recent but exempt candidate is offered beside the fresh one');
+  assert.equal(h.calls.poolRescue, 0);
+  assert.equal(h.events.at(-1)?.cause, 'recent');
+
+  const idle = harness({ poolRescue: 'queued' });
+  const kept = await runArtistGuard<Cand>({
+    song: marvin, object: { id: marvin.id }, pickAnchor: null,
+    seen: seenOf(marvin, marvinTammi), recentRoots: rootsOf('Marvin Gaye'), window: 5, ...idle.deps,
+  });
+  assert.equal(kept.kind, 'kept', 'a single-artist run yields');
+  assert.deepEqual(idle.calls, { repick: 0, poolRescue: 0 });
 });

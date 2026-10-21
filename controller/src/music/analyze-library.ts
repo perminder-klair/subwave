@@ -12,6 +12,22 @@
 //   --vocal        backfill Demucs vocal ranges (implied by ANALYZE_VOCAL_ACTIVITY)
 //
 // The walk otherwise runs only on an empty catalogue (first-run bootstrap).
+//
+// Facet mode — scope read from track_facet_status instead of the legacy
+// queries (music/acoustics-plan.ts). Never walks; --re-analyze/--audio/--vocal
+// are ignored.
+//   --facets F[,F]       head, loudness, tail, clap, vocal, stems
+//   --where W            needs (default) | missing | unmeasurable[:reason] |
+//                        failed | outdated | all
+//   --ids a,b,c          restrict to these track ids
+//   --ids-file PATH      …or to the ids in a file (one per line, # comments)
+//   --limit N            cap the number of tracks planned
+//   --dry-run            print the plan and exit: no lock and no analysis. Opening
+//                        the DB may still create, seed or re-derive the facet
+//                        status table, as any open does.
+//
+//   e.g. npm run analyze -- --facets clap --where failed --dry-run
+//        npm run analyze -- --facets tail --where unmeasurable:capped --limit 200
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
@@ -23,6 +39,8 @@ import { runAnalysisPass } from './analyze.js';
 import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { readFileSync } from 'node:fs';
+import { formatPlan, parseFacets, parseWhere, planAcoustics, type AcousticsPlan } from './acoustics-plan.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 
 const logEvent = makeEventLogger('analyze');
@@ -54,17 +72,76 @@ async function applyWizardOverlay() {
   }
 }
 
+function stringFlag(args: string[], name: string): string | undefined {
+  const idx = args.indexOf(name);
+  if (idx < 0) return undefined;
+  const v = args[idx + 1];
+  if (v === undefined || v.startsWith('--')) throw new Error(`${name} needs a value`);
+  return v;
+}
+
+// --ids / --ids-file → explicit scope; neither → null (whole catalogue).
+function explicitIds(args: string[]): string[] | null {
+  const list = stringFlag(args, '--ids');
+  const file = stringFlag(args, '--ids-file');
+  if (!list && !file) return null;
+  const raw = [
+    ...(list ? list.split(',') : []),
+    ...(file ? readFileSync(file, 'utf8').split(/\r?\n/).map(l => l.replace(/#.*/, '')) : []),
+  ];
+  return [...new Set(raw.map(s => s.trim()).filter(Boolean))];
+}
+
+// Build the facet plan from the DB + whatever the analyzer says it can do.
+async function buildFacetPlan(args: string[], limit: number | undefined): Promise<AcousticsPlan> {
+  const facets = parseFacets(stringFlag(args, '--facets') ?? '');
+  const where = parseWhere(stringFlag(args, '--where'));
+  const known = db.allTrackIdsOrdered();
+  let ids = known;
+  const wanted = explicitIds(args);
+  if (wanted) {
+    const knownSet = new Set(known);
+    ids = wanted.filter(id => knownSet.has(id));
+    const unknown = wanted.length - ids.length;
+    if (unknown > 0) console.log(`[analyze] ${unknown} of the given ids are not in the library — ignored`);
+  }
+  // Probe so capabilities are real; an unreachable analyzer leaves them unknown.
+  const available = await analyzer.isAvailable().catch(() => false);
+  if (!available) console.log('[analyze] analyzer not reachable — capabilities unknown');
+  return planAcoustics({
+    ids,
+    facets,
+    where,
+    state: db.loadFacetState(facets),
+    capabilities: {
+      clap: available ? analyzer.audioEmbeddingAvailable() : null,
+      demucs: available ? analyzer.vocalActivityAvailable() : null,
+      tailVocal: available ? analyzer.tailVocalAvailable() : null,
+    },
+    limit,
+  });
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const facetMode = args.includes('--facets');
+  const dryRun = args.includes('--dry-run');
+  if (dryRun && !facetMode) {
+    console.error('[analyze] --dry-run needs --facets');
+    process.exit(1);
+  }
 
   // Single-flight: a controller-spawned run already holds the pidfile, so this
-  // is a no-op there; a manual run claims the lock or refuses.
+  // is a no-op there; a manual run claims the lock or refuses. A dry run reads
+  // only, so it never takes (or waits for) the lock.
   let ownsLock = false;
-  try {
-    ownsLock = acquireStandaloneLock('analyze', args);
-  } catch (err: any) {
-    console.error(`[analyze] ${err.message}`);
-    process.exit(1);
+  if (!dryRun) {
+    try {
+      ownsLock = acquireStandaloneLock('analyze', args);
+    } catch (err: any) {
+      console.error(`[analyze] ${err.message}`);
+      process.exit(1);
+    }
   }
   if (ownsLock) installPidfileCleanup();
 
@@ -83,6 +160,31 @@ async function main() {
   // adoptStoredDim so an embedding dim swap can't block analysis, which never
   // touches vectors (#319).
   await db.open({ embeddingDim, adoptStoredDim: true });
+
+  if (facetMode) {
+    let plan: AcousticsPlan;
+    try {
+      plan = await buildFacetPlan(args, limit);
+    } catch (err: any) {
+      console.error(`[analyze] ${err.message}`);
+      process.exit(1);
+    }
+    for (const line of formatPlan(plan)) console.log(line);
+    if (dryRun) {
+      analyzer.shutdown();
+      console.log('[analyze] dry run — nothing analysed');
+      process.exit(0);
+    }
+    if (plan.items.length === 0) {
+      analyzer.shutdown();
+      console.log('[analyze] nothing planned');
+      process.exit(0);
+    }
+    const stats = await runAnalysisPass({ plan });
+    analyzer.shutdown();
+    console.log('[analyze] stats:', JSON.stringify(stats));
+    process.exit(0);
+  }
 
   // Walk only when forced, or when the catalogue is empty (bootstrap).
   // --skip-walk hard-disables either way.

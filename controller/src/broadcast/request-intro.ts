@@ -5,6 +5,7 @@
 import * as dj from '../llm/dj.js';
 import { guardIntro } from '../util/request-guard.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { requestsAllowed } from './dj-budget.js';
 import * as session from './session.js';
 import type { Persona } from './queue/types.js';
 import type { HostSpeechStamp } from './session.js';
@@ -14,6 +15,7 @@ export interface QueuedRequestIntro {
   introPersona: Persona | null;
   introHostSpeech: HostSpeechStamp | null;
   guard: string | null;
+  failure?: string | null;
 }
 
 export async function generateQueuedRequestIntro(
@@ -22,16 +24,27 @@ export async function generateQueuedRequestIntro(
   generate: (args: Record<string, unknown>) => Promise<string> = dj.generateIntro,
 ): Promise<QueuedRequestIntro> {
   const owner = session.captureAutomaticHostSpeech(session.onAirPersona());
-  const script = autoVoiceAllowed()
-    ? await generate({ ...args, requestText, persona: owner.persona })
-    : null;
-  const guarded = await guardIntro(script, requestText, () =>
-    generate({ ...args, persona: owner.persona }));
-  const current = session.finalizeAutomaticHostSpeech(guarded.script, owner);
-  return {
-    introScript: current.text,
-    introPersona: current.persona,
-    introHostSpeech: current.hostSpeech,
-    guard: guarded.guard,
-  };
+  // Past the hard token cap with requests not exempt, the request still
+  // queues and acks; it just airs without a written intro.
+  try {
+    const script = autoVoiceAllowed() && requestsAllowed()
+      ? await generate({ ...args, requestText, persona: owner.persona })
+      : null;
+    // The retry must see no listener-derived text at all, or it can echo again:
+    // the request text is withheld, and so is the missed artist's NAME (the miss
+    // itself stays flagged, so the retry is still honest about the stand-in).
+    const { missedArtist: _missedArtist, ...withoutListenerText } = args;
+    const guarded = await guardIntro(script, requestText, () =>
+      generate({ ...withoutListenerText, persona: owner.persona }));
+    const current = session.finalizeAutomaticHostSpeech(guarded.script, owner);
+    return {
+      introScript: current.text,
+      introPersona: current.persona,
+      introHostSpeech: current.hostSpeech,
+      guard: guarded.guard,
+    };
+  } catch (err) {
+    console.error(`[request] optional intro failed: ${err instanceof Error ? err.message : String(err)}`);
+    return { introScript: null, introPersona: null, introHostSpeech: null, guard: null, failure: 'intro-failed' };
+  }
 }

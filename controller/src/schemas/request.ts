@@ -21,7 +21,11 @@ export const listenerRequestSchema = z.object({
     .string({ error: 'Empty request' })
     .trim()
     .min(1, 'Empty request')
-    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`),
+    .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`)
+    .refine(
+      text => text.normalize('NFKC').length <= REQUEST_TEXT_MAX,
+      `Keep it under ${REQUEST_TEXT_MAX} characters.`,
+    ),
   // Optional, but refused rather than sliced; no `.catch()` (it cannot tell a
   // wrong type from a too-long value). Reserved names are the guard's business.
   name: z.preprocess(

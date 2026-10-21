@@ -29,6 +29,15 @@ Two things it deliberately does **not** contain:
 - **Archives.** `state/archive/` (hourly stream recordings) is excluded because
   it's enormous. Back that up separately, or accept losing it.
 
+Restoring runs the archive through the same checks the dedicated imports
+use. `jingles.m3u` is never copied: it is rebuilt from the restored
+`jingles.json`, keeping only entries with an ordinary audio filename.
+`sfx.json` keeps only rows of the shape the effect library writes. A skill's
+`tool.mjs` that isn't already live on this station is held for review rather
+than loaded — see [custom skills](custom-skills.md#restoring-a-backup). The
+restore reports anything it left out. Still: restore backups you made, or that
+come from someone you trust.
+
 The tag database is the expensive thing in there. It represents every LLM
 enrichment pass over your library; rebuilding it costs hours and tokens, not
 just a rescan.

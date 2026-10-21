@@ -5,6 +5,7 @@
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { BoundedKeyMap } from '../util/bounded-key-map.js';
 
 const TAVILY_ENDPOINT = 'https://api.tavily.com/search';
 const DDG_ENDPOINT = 'https://api.duckduckgo.com/';
@@ -13,11 +14,21 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 type SearchResult = { title: string; content: string };
 type SearchResponse = { answer: string; results: SearchResult[] };
 
-// 30-min TTL cache keyed by `${provider}:${query}`. Same shape as music/picker.js
-// — Map + { val, at }, no LRU eviction (search queries are bounded by the
-// artists actually on rotation, so the Map stays small).
+// 30-min TTL cache keyed by `${provider}:${query}`. BOUNDED: the request path's
+// identifyRequestedTrack searches on a listener's free-text description, so the
+// key space is open-ended. Expired entries go first when the cap is reached, then
+// the least recently written.
 const CACHE_TTL_MS = 30 * 60 * 1000;
-const cache = new Map<string, { val: SearchResponse; at: number }>();
+const CACHE_MAX_KEYS = 256;
+const cache = new BoundedKeyMap<{ val: SearchResponse; at: number }>({
+  maxKeys: CACHE_MAX_KEYS,
+  isLive: (rec, now) => now - rec.at < CACHE_TTL_MS,
+});
+
+// Test seam.
+export function searchCacheSize(): number {
+  return cache.size;
+}
 
 async function memo(
   key: string,

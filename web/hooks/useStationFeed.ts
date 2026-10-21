@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { pollAsyncWhileVisible } from '@/lib/poll';
-import { splitAudibleTurns } from '@/lib/sessionFeed';
+import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type {
   ActiveShow,
@@ -40,9 +40,12 @@ export interface StationFeed {
    *  timestamps in this zone so they match what the DJ speaks (issue #418). */
   timezone: string | null;
   locale: StationLocale;
+  /** How far this listener sits behind the live edge, in ms: the station's
+   *  stream.bufferSeconds clamped to 0–60s, 0 before the first payload. */
+  leadMs: number;
 }
 
-const EMPTY_STATE: StationState = { upcoming: [], history: [], djLog: [] };
+const EMPTY_STATE: StationState = { upcoming: [], history: [] };
 const EMPTY_SESSION: SessionPayload = { session: null, messages: [] };
 const OFFLINE_CONFIRM_POLLS = 4;
 
@@ -75,10 +78,12 @@ export function useStationFeed(): StationFeed {
   const [locale, setLocale] = useState<StationLocale>('en-GB');
   const lastTrackKeyRef = useRef<string | null>(null);
   const offlinePollsRef = useRef(0);
-  // Listener buffer depth in ms. A ref, not state, so the polling effect never
-  // re-subscribes when it arrives. 0 until the first payload lands, degrading
-  // to live-edge behaviour rather than guessing an offset.
+  // Listener buffer depth in ms. The polling effect and hold timers read the
+  // ref, so they never re-subscribe when it arrives; the state mirror is for
+  // consumers. 0 until the first payload lands, degrading to live-edge
+  // behaviour rather than guessing an offset.
   const leadMsRef = useRef(0);
+  const [leadMs, setLeadMs] = useState(0);
   // Holds a track whose metadata has arrived but whose audio hasn't reached
   // this listener yet, until it's audible.
   const promoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -113,7 +118,8 @@ export function useStationFeed(): StationFeed {
         // winds it back past the track start.
         const bufSec = npRes.stream?.bufferSeconds;
         if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
-          leadMsRef.current = Math.min(Math.max(bufSec, 0), 60) * 1000;
+          leadMsRef.current = Math.min(Math.max(bufSec, 0), MAX_LEAD_SECONDS) * 1000;
+          setLeadMs(leadMsRef.current);
         }
         const trackKey = np ? `${np.title}\u0000${np.artist}` : null;
         // Prefer the queue's start time over "first seen by this client": a tab
@@ -206,5 +212,5 @@ export function useStationFeed(): StationFeed {
     };
   }, [client]);
 
-  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale };
+  return { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, opusEnabled, timezone, locale, leadMs };
 }

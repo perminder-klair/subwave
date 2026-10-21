@@ -38,6 +38,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.caddy
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     container_name: sub-wave-caddy
     restart: unless-stopped
     logging: *default-logging
@@ -66,6 +74,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      provenance: false
+      sbom: false
     container_name: sub-wave-broadcast
     restart: unless-stopped
     logging: *default-logging
@@ -115,6 +125,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
@@ -137,6 +149,8 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -192,6 +206,8 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
+      provenance: false
+      sbom: false
       args:
         # Source builds only — absolute URLs render off the RUNTIME env below.
         - SITE_URL=\${SITE_URL:-}
@@ -210,6 +226,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       - SUBWAVE_DJ_BRAIN_ENABLED=\${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       # RUNTIME source of truth for absolute URLs (canonicals, og:url,
       # robots.txt, sitemap.xml) — the generic image serves any domain.
@@ -236,6 +253,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only): point at a CUDA wheel index and layer
         # on docker-compose.tts-heavy-gpu.yml. See docs/gpu-tts.md.
@@ -310,6 +329,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -345,6 +366,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -379,7 +401,7 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 #
 # The web image is baked for same-origin /api + /stream.mp3, so point your proxy
 # at ONE hostname and replicate docker/Caddyfile's route table:
-#   /api/listener-auth → 404 / deny         (do this one FIRST — see below)
+#   /api/listener-auth*      → 404 / deny   (do this one FIRST — see below)
 #   /stream*                 → host:\${ICECAST_PORT}      (keep path; disable buffering)
 #   /listen.pls /listen.m3u  → host:\${CONTROLLER_PORT}   (keep path)
 #   /api/*                   → host:\${CONTROLLER_PORT}   (strip the /api prefix)
@@ -390,7 +412,9 @@ export const COMPOSE_BYO_YML = `# SUB/WAVE — production without the bundled re
 # Block /api/listener-auth at your proxy: it is Icecast's URL-auth callback and
 # answers 200/401 on the shared privacy.password, so routing it hands the
 # internet a password oracle (#478). Icecast reaches the controller directly
-# over the compose network and never needs it through the proxy.
+# over the compose network and never needs it through the proxy. Block it as a
+# case-insensitive PREFIX — the controller also answers a trailing slash and
+# any case, so an exact-path rule leaves variants routed.
 #
 # State persists in <repo>/state (override with STATE_DIR); bind mount, so
 # \`docker compose down -v\` won't touch it.
@@ -419,6 +443,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     container_name: sub-wave-broadcast
     restart: unless-stopped
     logging: *default-logging
@@ -462,6 +494,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         - SUBWAVE_BUILD_VERSION=\${SUBWAVE_BUILD_VERSION:-}
@@ -480,6 +514,8 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -535,6 +571,8 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
+      provenance: false
+      sbom: false
       args:
         - SITE_URL=\${SITE_URL:-}
         - NEXT_PUBLIC_GA_ID=\${NEXT_PUBLIC_GA_ID:-}
@@ -551,6 +589,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=\${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       - SUBWAVE_DJ_BRAIN_ENABLED=\${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       - SITE_URL=\${SITE_URL:-}
       # Set to 1 to keep the shared product pages (landing, docs, news,
@@ -576,6 +615,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only) — see docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
@@ -636,6 +677,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -668,6 +711,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -715,6 +759,14 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.broadcast
+      # No build attestations: BuildKit stamps each one fresh, and with the
+      # containerd image store that gives an unchanged, fully cached image a
+      # NEW id on every build. \`up -d --build controller\` rebuilds broadcast
+      # as a dependency, so the new id recreated the mixer and dropped every
+      # listener on a controller-only deploy. Published images keep theirs
+      # (publish-images.yml builds separately).
+      provenance: false
+      sbom: false
     # No \`platform:\` pin. On Apple Silicon, forcing linux/amd64 routes
     # liquidsoap through emulation where clock_nanosleep fails
     # (\`Unix.Unix_error(EUNKNOWNERR 0)\`) — the clock loop dies on every boot
@@ -768,6 +820,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.controller
+      provenance: false
+      sbom: false
       args:
         # Version reported by the controller; unset → controller/package.json.
         # The dev web UI resolves its own via \`git describe\` (next.config.js).
@@ -787,6 +841,8 @@ services:
       - TZ=\${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Maintainer-only, hidden Discovery Bench. Empty keeps its routes disabled.
+      - SUBWAVE_DISCOVERY_BENCH=\${SUBWAVE_DISCOVERY_BENCH:-}
       # Container path of the STEMS_DIR bind mount above — empty when the
       # operator did not relocate, which keeps the cache under the state dir
       # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
@@ -854,6 +910,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.tts-heavy
+      provenance: false
+      sbom: false
       args:
         # GPU opt-in (source build only) — see docs/gpu-tts.md.
         CHATTERBOX_TORCH_INDEX_URL: \${CHATTERBOX_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
@@ -911,6 +969,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.analyzer
+      provenance: false
+      sbom: false
       args:
         # Local build mirrors the pulled image: lean unless ANALYZER_HEAVY set.
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
@@ -941,6 +1001,7 @@ services:
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=\${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
@@ -1014,7 +1075,7 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 #   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 #   (BYO hosts: swap in docker-compose.byo.yml.)
 #
-# Requirements: NVIDIA driver + Container Toolkit only (cu124 wheels vendor the
+# Requirements: NVIDIA driver + Container Toolkit only (cu128 wheels vendor the
 # CUDA runtime). The worker picks the device itself (ANALYZE_DEVICE=auto: cuda
 # when torch sees a GPU, else cpu with a warning — a misconfigured host
 # degrades, not fails). ANALYZE_DEVICE=cpu in .env forces CPU without dropping
@@ -1291,9 +1352,11 @@ SITE_URL=
 #                         # search loads them once and they'd otherwise sit in
 #                         # RAM/swap forever; the longer window keeps the cold
 #                         # reload off interactive sound searches).
-# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds of no heavy use before the
-#                         # whole worker process is recycled (default 3600;
-#                         # 0 = never). The model release above hands back the
+# ANALYZE_RECYCLE_IDLE_S= # sidecar only: seconds without any request before
+#                         # the whole worker process is recycled (default 3600;
+#                         # 0 = never). A plain bpm/key pass counts too: it
+#                         # loads no models but leaves the same scratch
+#                         # resident. The model release above hands back the
 #                         # weights; the recycle also reclaims the ~1GB of
 #                         # librosa/numba/torch scratch — and on cuda the CUDA
 #                         # context — that survive it. Next request re-pays the
@@ -1324,6 +1387,16 @@ SITE_URL=
 #                         # is also the fastest on CPU we've measured — the
 #                         # mdx*/*_q alternatives are bags of 4 sub-models and
 #                         # run ~3x SLOWER despite the smaller download
+# DEMUCS_OVERLAP=0.25     # share of each Demucs chunk that overlaps the next
+#                         # (0-0.9; anything else warns and uses 0.25). 0.1
+#                         # measured ~14% faster on CPU with near-identical
+#                         # vocal ranges. It also changes the cached stems
+#                         # that stem-blend transitions play on air, not just
+#                         # analysis. Treat 0.1 as the floor: at the default
+#                         # window 0 is no faster and leaves a hard seam
+#                         # between chunks. The saving comes in whole chunks
+#                         # (7.8 s each for htdemucs), so how much you get
+#                         # depends on ANALYZE_SECONDS
 # ANALYZE_SECONDS=40      # per-track analysis window (seconds), shared by
 #                         # bpm/key, CLAP and Demucs — the real speed lever
 #                         # (cost scales linearly). Raise it if you want vocal
@@ -1402,4 +1475,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `1.19.0`; // x-release-please-version
+export const CLI_VERSION = `1.26.0`; // x-release-please-version

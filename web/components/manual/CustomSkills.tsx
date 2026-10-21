@@ -144,7 +144,9 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           </li>
           <li>
             A fetch that fails or times out <strong>stands the segment down</strong> rather
-            than letting the DJ invent one.
+            than letting the DJ invent one. So does a feed with nothing fresh left: a{' '}
+            <strong>Run now</strong> or <code className="bs-code-inline">cron:</code> on a
+            drained feed reports that it stood down.
           </li>
         </ul>
         <p className="text-muted">
@@ -177,7 +179,7 @@ rather than inventing a new name. Say nothing if it is empty.`}</CodeBlock>
           On a solo or off-show hour the skill stands down; Run now reports that it requires
           a co-hosted show before any model or TTS call. If it has a data tool, that data
           must come back usable — gathered by the skill&apos;s own tool loop, or fetched in
-          code when the picker agent is off — or the whole discussion stays silent instead
+          code when Segments &amp; Skills runs direct — or the whole discussion stays silent instead
           of inventing facts.
         </p>
       </section>
@@ -343,9 +345,11 @@ export const configFields = {
           <p>
             Unlike the reviewed catalog, an imported{' '}
             <code className="bs-code-inline">.zip</code> may include a{' '}
-            <code className="bs-code-inline">tool.mjs</code> — the same trust as dropping a
-            folder in by hand. When it does, the UI flags it on arrival; read the code before
-            you enable it.
+            <code className="bs-code-inline">tool.mjs</code>. It is held unloaded — none of
+            it runs — and the skill shows <strong>code to review</strong>. Open it with{' '}
+            <strong>Edit</strong>, read the source, then <strong>trust and load</strong> it
+            or <strong>discard</strong> it. A restored backup&rsquo;s skill code is held the
+            same way unless it is already live on this station.
           </p>
         </div>
       </section>
@@ -356,7 +360,9 @@ export const configFields = {
         <p>
           A freshly dropped skill appears on the admin <strong>Skills</strong> page toggled{' '}
           <strong>off</strong>. It can&rsquo;t air (by itself or via the DJ) until you
-          enable it there. Dropping a folder never puts unreviewed content (or code) on air.
+          enable it there. Dropping a folder never puts unreviewed content on air, but a{' '}
+          <code className="bs-code-inline">tool.mjs</code> you place by hand is loaded on
+          every scan, enabled or not — so only drop in code you&rsquo;ve read.
         </p>
         <p>
           Skills load at boot, and on demand via the <strong>Rescan state/skills</strong>{' '}

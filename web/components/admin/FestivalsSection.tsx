@@ -390,6 +390,7 @@ export default function FestivalsSection() {
         >
           {watchedFestivals.length === 0 ? (
             <EmptyState
+              art="calendar"
               title="Nothing on the calendar yet"
               description="Add your first date to get started."
             />

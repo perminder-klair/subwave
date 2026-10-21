@@ -1,0 +1,26 @@
+/* The loading console inks itself in and out while the admin starts. At rest
+   (lite mode, reduced motion) it is the construction drawing alone. */
+@media (prefers-reduced-motion: no-preference) {
+  .pen {
+    animation: admin-loading-ink 1.6s ease-in-out infinite alternate;
+  }
+  .cursor {
+    animation: admin-loading-blink 1s steps(1) infinite;
+  }
+}
+
+/* From the kit's construction pen to its ink (Iso.module.css .pen). */
+@keyframes admin-loading-ink {
+  0%, 15% {
+    stroke: var(--iso-off);
+    stroke-dasharray: var(--iso-off-dash);
+  }
+  85%, 100% {
+    stroke: var(--iso-ink);
+    stroke-dasharray: 6 0;
+  }
+}
+
+@keyframes admin-loading-blink {
+  50% { opacity: 0; }
+}

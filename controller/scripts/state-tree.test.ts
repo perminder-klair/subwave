@@ -140,3 +140,45 @@ test('listStateDir never recurses', async () => {
     'entries are one level only',
   );
 });
+
+// The state dir itself may sit behind a symlink (macOS's /var -> /private/var,
+// a symlinked checkout). Every comparison must then be resolved on both sides,
+// or a missing path reads as a traversal.
+const linkParent = mkdtempSync(join(tmpdir(), 'subwave-statelink-'));
+const linkedRoot = join(linkParent, 'state');
+symlinkSync(root, linkedRoot);
+symlinkSync(join(outside, 'gone'), join(root, 'dangling'));
+process.on('exit', () => {
+  rmSync(linkParent, { recursive: true, force: true });
+  rmSync(join(root, 'dangling'), { force: true });
+});
+
+test('a symlinked state root lists normally', async () => {
+  const out = await listStateDir(linkedRoot, 'voice');
+  assert.ok(out.entries.some((e) => e.name === 'line-1.wav'));
+});
+
+test('a missing path under a symlinked root is a plain error, not a path refusal', async () => {
+  for (const rel of ['no-such-dir', 'voice/no-such-dir', 'no/such/deep/dir', 'settings.json/x']) {
+    await assert.rejects(
+      () => listStateDir(linkedRoot, rel),
+      (err: Error) => !(err instanceof BadStatePathError),
+      `rel=${rel}`,
+    );
+  }
+});
+
+test('a symlinked root still refuses an escaping symlink, present or missing tail', async () => {
+  await assert.rejects(() => listStateDir(linkedRoot, 'escape'), BadStatePathError);
+  await assert.rejects(() => listStateDir(linkedRoot, 'escape/no-such-dir'), BadStatePathError);
+  await assert.rejects(() => listStateDir(linkedRoot, '../'), BadStatePathError);
+});
+
+test('a missing tail behind an escaping symlink is refused, not followed lexically', async () => {
+  await assert.rejects(() => listStateDir(root, 'escape/no-such-dir'), BadStatePathError);
+});
+
+test('a dangling symlink fails closed: its target is unknown', async () => {
+  await assert.rejects(() => listStateDir(root, 'dangling'), BadStatePathError);
+  await assert.rejects(() => listStateDir(linkedRoot, 'dangling/x'), BadStatePathError);
+});

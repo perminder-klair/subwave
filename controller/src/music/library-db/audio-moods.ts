@@ -5,6 +5,8 @@ import { AUDIO_EMBEDDING_DIM, requireDb } from './handle.js';
 // Every backfill scope must keep this exclusion, or an unanalysable file is
 // re-attempted forever (#1300).
 import { analysisFailureExclusion } from './tracks.js';
+import { deleteFacetRows } from './facets.js';
+import { touchGenreInputs } from './genre-inputs.js';
 
 // Phase one of a calibrated pass: raw cosines only, since the per-mood
 // baselines need the whole library on disk first. A crash between phases leaves
@@ -106,13 +108,6 @@ export function pageAudioMoodScores(
   return { items, lastId: rows.length ? rows[rows.length - 1].id : null };
 }
 
-// Decides whether the library is big enough to calibrate.
-export function audioMoodScoredCount(): number {
-  return (requireDb().prepare(
-    'SELECT COUNT(*) AS n FROM tracks WHERE audio_mood_scores_json IS NOT NULL',
-  ).get() as { n: number }).n;
-}
-
 // Labels only; a calibration-only change must not need the analyzer's text tower.
 export function setTrackAudioMoodLabelsBulk(
   rows: Array<{ id: string; moods: string[] }>,
@@ -183,9 +178,11 @@ export function setAudioMoodVocabHash(hash: string): void {
 }
 
 // Coverage meter, inverse of needsVocalIds (#646); a stored "[]" counts as done.
+// Spelled as idx_tracks_vocal_measured's expression so the count reads that
+// index, never the wide rows (#1937).
 export function vocalAnalyzedCount(): number {
   return (requireDb().prepare(
-    'SELECT COUNT(*) AS n FROM tracks WHERE vocal_ranges_json IS NOT NULL',
+    'SELECT COUNT(*) AS n FROM tracks WHERE (vocal_ranges_json IS NOT NULL) = 1',
   ).get() as { n: number }).n;
 }
 
@@ -263,14 +260,16 @@ export function pruneMissingTracks(liveIds: ReadonlySet<string>): number {
       delTrack.run(id);
       delVec.run(id);
       delAudioVec.run(id);
+      deleteFacetRows(id);
     }
+    touchGenreInputs(d);
   });
   runPrune(orphans);
   return orphans.length;
 }
 
 // "Analysed" means bpm IS NOT NULL; upsertTrackAnalysis writes bpm/key/intro
-// together.
+// together. Answered from idx_tracks_analysed alone (#1937).
 export function analysedCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM tracks WHERE bpm IS NOT NULL').get() as {
     n: number;

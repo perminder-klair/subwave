@@ -1,16 +1,18 @@
 // agentPlan resolves native output or forced done-tool output per leg. Ollama
 // skips native: it can return empty schema-valid JSON without discovery.
 // Recovery proceeds through done-only, terminal collapse (#1157), then text salvage.
-// All attempts share one deadline; throw so callers can use their stateless fallback.
+// All attempts share one deadline, and the native leg may use only part of it
+// (NATIVE_DEADLINE_SHARE); throw so callers can use their stateless fallback.
 
 import { Output, isStepCount, hasToolCall, ToolLoopAgent, ToolChoiceViolationError, tool } from 'ai';
 import type { ModelMessage, ToolSet, ToolLoopAgentSettings } from 'ai';
 import { z } from 'zod';
+import { PICKER_TOOL_TIMEOUT_MS as TOOL_TIMEOUT_MS } from '../tools/picker/defs.js';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError } from '../core/pure.js';
-import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage } from '../core/pure.js';
-import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, flattenToolCalls, failureDiagnostics, renderTerminalPrompt, isModelUnavailable, isGenerationControlError, createUsageMeter, endOnUserTurn } from '../core/pure.js';
+import type { StepLike, ToolCallLike, ToolCallSummary, TokenUsage, UsageMeter } from '../core/pure.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice, nativeFirstStepToolChoice, runDiscoverySteps, googleSafetyOptions } from '../provider/capabilities.js';
 import type { Leg } from '../provider/legs.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
@@ -27,42 +29,45 @@ interface AgentGenerateResult {
   totalUsage?: TokenUsage;
   steps?: StepLike[];
   staticToolCalls?: ToolCallLike[];
+  // Final step only — ai@7 builds each step's response.messages from that
+  // step's content alone. The whole run's trail is `responseMessages`.
   response?: { messages?: ModelMessage[] };
+  responseMessages?: ModelMessage[];
 }
 interface AgentLike {
   generate(options: { messages: ModelMessage[]; abortSignal?: AbortSignal }): Promise<AgentGenerateResult>;
 }
 
 // The SDK throws before completing a step when a model declines a required
-// tool. Preserve completed discovery, the declining text and all billed usage
-// so the existing done-only/terminal recovery gets the same evidence as before.
-function createAgentAttempt() {
+// tool. Preserve completed discovery and the declining text so the existing
+// done-only/terminal recovery gets the same evidence as before. Billed usage
+// goes to the leg's shared meter, which outlives the throw.
+function createAgentAttempt(meter: UsageMeter) {
   const steps: StepLike[] = [];
+  // Appended per step: each step's response.messages holds that step alone,
+  // and recovery needs every discovery call and result, not just the last.
   let responseMessages: ModelMessage[] = [];
-  const totalUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
   const callbacks = {
     onStepEnd: event => {
       steps.push(event);
-      responseMessages = event.response.messages;
+      responseMessages = [...responseMessages, ...event.response.messages];
     },
-    onLanguageModelCallEnd: event => {
-      const usage = usageOf({ usage: event.usage });
-      totalUsage.inputTokens += usage.input;
-      totalUsage.outputTokens += usage.output;
-      totalUsage.totalTokens += usage.total;
-    },
+    onLanguageModelCallEnd: meter.onLanguageModelCallEnd,
   } satisfies Pick<ToolLoopAgentSettings<never, ToolSet>, 'onStepEnd' | 'onLanguageModelCallEnd'>;
   return {
     callbacks,
+    // What finished steps produced so far, available even when the run threw.
+    trail: () => ({ steps: [...steps], messages: [...responseMessages] }),
     declined(err: ToolChoiceViolationError): AgentGenerateResult {
       const text = err.content.filter(part => part.type === 'text').map(part => part.text).join('\n');
+      const messages: ModelMessage[] = [...responseMessages, { role: 'assistant', content: text }];
       return {
         text,
         finishReason: err.finishReason,
-        totalUsage,
         steps: [...steps, { toolCalls: [] }],
         staticToolCalls: [],
-        response: { messages: [...responseMessages, { role: 'assistant', content: text }] },
+        response: { messages },
+        responseMessages: messages,
       };
     },
   };
@@ -85,6 +90,9 @@ interface DjAgentOptions {
   kind?: string;
   timeoutMs?: number;
   validate?: (object: unknown) => boolean;
+  // An answer that is complete WITHOUT a discovery call — see the native
+  // branch. Absent, every native answer must have explored.
+  settledWithoutTools?: (object: unknown) => boolean;
   telemetry?: Record<string, unknown>;
   // Follow the leg's per-provider discovery budget instead of the pinned single
   // historical step. Opt-in per agent, OFF by default: a caller's step cap can
@@ -102,7 +110,6 @@ const MAX_TOKENS_AGENT = 8000;
 // the model a tool-error result, so the loop keeps moving and no throw reaches
 // the transient/failover classifiers. Segment tools keep their own 8s internal
 // timeout; this is the backstop above it.
-const TOOL_TIMEOUT_MS = 10_000;
 
 // prepareStep pins activeTools so every step is a cornered single-purpose
 // request: below the commit point discovery only, at or past it `done` only.
@@ -188,6 +195,54 @@ function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label
     withTransientRetry(kind, () => fn(signal), signal));
 }
 
+// The tool-call turns of a run and the tool results answering them, without
+// the model's prose or final answer. Kept only when it holds a tool result.
+export function nativeToolExchange(trail: ModelMessage[]): ModelMessage[] {
+  const out = trail.filter((m) => m.role === 'tool'
+    || (m.role === 'assistant' && Array.isArray(m.content) && m.content.some((part: any) => part?.type === 'tool-call')));
+  return out.some((m) => m.role === 'tool') ? out : [];
+}
+
+// What a native miss looked like, for its log line. The SDK's own message
+// can't tell the failure modes apart: "could not parse the response" covers
+// both prose and an EMPTY reply (a hosted Claude thinking, then ending its turn
+// with no text, billed but blank), and "No output generated" is a run that hit
+// its step cap still calling tools. Each step reads as its tool names or as
+// `reply(<finish>, <chars>, <output tokens>)`; a non-empty unparsed text is
+// quoted short. Pure, so the wording is pinned without a model call.
+export interface NativeMissStep extends StepLike {
+  finishReason?: unknown;
+  text?: string;
+}
+export function describeNativeMiss(err: unknown, steps: readonly NativeMissStep[], cap: number): string {
+  const trail = steps.map((s) => {
+    const names = (s.toolCalls || []).map((c) => c.toolName || '?');
+    if (names.length) return names.join('+');
+    return `reply(${String(s.finishReason ?? '?')}, ${(s.text || '').length} chars, ${usageOf({ usage: s.usage }).output} out)`;
+  });
+  const last = steps.at(-1);
+  const hitCap = steps.length >= cap && (last?.toolCalls || []).length > 0;
+  const text = (err as { text?: unknown } | null)?.text;
+  const quoted = typeof text === 'string' && text.trim() ? ` · text "${text.trim().replace(/\s+/g, ' ').slice(0, 120)}"` : '';
+  return `steps ${trail.length ? trail.join(' → ') : 'none'}${hitCap ? ` · hit the ${cap}-step cap still calling tools` : ''}${quoted}`;
+}
+
+// The done-tool run's discovery budget after a native miss: the leg's budget
+// less the native steps that called a tool. Zero is safe only because the
+// caller passes steps solely when their tool results are carried forward, so
+// a run that commits at step 0 always has real candidates in view.
+export function remainingDiscoverySteps(budget: number, carriedSteps: StepLike[]): number {
+  const spent = carriedSteps.filter((s) => (s.toolCalls || []).length > 0).length;
+  return Math.max(0, budget - spent);
+}
+
+// Share of the shared deadline the native leg may use. A native call that hangs
+// would otherwise hold the whole budget (seen live: one pick waited the full
+// 90s and fell to the pool), leaving the done-tool path nothing; capped, the
+// rest of the cascade still gets its turn, with every step the native run
+// finished carried into it.
+export const NATIVE_DEADLINE_SHARE = 0.5;
+
 async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>): Promise<AgentGenerateResult> {
   try {
     return await runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
@@ -218,6 +273,7 @@ export async function djAgent({
   // Not applied to done-tool/recovery results: the caller repairs those itself
   // with the full `seen` context.
   validate,
+  settledWithoutTools,
 }: DjAgentOptions): Promise<{ object: unknown; steps: number; toolCalls: ToolCallSummary[] }> {
   return withFailover(
     kind,
@@ -234,43 +290,61 @@ export async function djAgent({
       let lastVia = 'ai-sdk:agent';
       // One shared wall-clock ceiling for every attempt below.
       const deadlineAt = timeoutMs ? Date.now() + timeoutMs : undefined;
+      const nativeDeadlineAt = timeoutMs ? Date.now() + Math.floor(timeoutMs * NATIVE_DEADLINE_SHARE) : undefined;
+      // Tokens billed across EVERY leg below, counted as each provider call
+      // ends — including legs that throw, decline or hit their step cap, which
+      // leave no result to read usage from. This sum is what telemetry/log.ts
+      // records, on success and (attached to the error) on failure, and what
+      // the daily token cap counts against.
+      const billingMeter = createUsageMeter();
+      // Context capacity is the peak individual request, while billing counts
+      // every call. Observe the same callbacks so declines and retries retain
+      // both measurements without counting any tokens twice.
+      let contextPeakInput = 0;
+      const meter: UsageMeter = {
+        ...billingMeter,
+        onLanguageModelCallEnd: event => {
+          contextPeakInput = Math.max(contextPeakInput, usageOf({ usage: event.usage }).input);
+          billingMeter.onLanguageModelCallEnd(event);
+        },
+      };
       try {
         // No discovery tools + a model that ignores JSON mode: no loop to run,
         // and ToolLoopAgent + Output.object would throw NoObjectGeneratedError.
         if (plan === 'object-via-tool') {
           lastVia = 'ai-sdk:tool';
-          const { object, usage, perf, warnings } = await runDeadlinedCall(deadlineAt, kind, 'agent object',
-            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal }));
+          const { object, perf, warnings } = await runDeadlinedCall(deadlineAt, kind, 'agent object',
+            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal, meter }));
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
             sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-            usage,
+            usage: meter.usage(),
+            contextPeakInput,
             perf,
             warnings,
             extra: { system, messages, toolCalls: [], steps: 0, response: JSON.stringify(object, null, 2), ...telemetry },
           };
         }
 
-        // Tokens spent across EVERY leg below. Each is a separate billable call
-        // and `result` is reassigned between them, so a single usageOf(result)
-        // at the end would count only the last one. This sum is what
-        // telemetry/log.ts records and what the daily token cap counts against.
-        let spentUsage = { input: 0, output: 0, total: 0 };
-        const addUsage = (u: { input: number; output: number; total: number }) => {
-          spentUsage = {
-            input: spentUsage.input + u.input,
-            output: spentUsage.output + u.output,
-            total: spentUsage.total + u.total,
-          };
-        };
+        // The native run's finished steps, read after a miss. Its tool calls fill
+        // the caller's `seen` map, and the same tools dedupe against it, so a
+        // done-tool run started from the bare messages re-searches, finds every
+        // match "already shown this pick", and never sees what the native run
+        // found: a listener asking for a track the library holds was told it
+        // was not there. Carrying the trail keeps those results in view.
+        let nativeTrailOf: (() => { steps: StepLike[]; messages: ModelMessage[] }) | null = null;
 
         // Native-first structured output. A miss falls through to the done-tool
-        // path below; lastVia stays ':native' so the record attributes there.
+        // path below, which takes the attribution over from here.
         if (plan === 'native-then-done') {
           try {
             lastVia = 'ai-sdk:agent:native';
+            const nativeAttempt = createAgentAttempt(meter);
+            nativeTrailOf = nativeAttempt.trail;
+            const nativeCap = Math.max(maxSteps, gatedMaxSteps);
             const nativeAgent = new ToolLoopAgent({
+              ...nativeAttempt.callbacks,
               // forceNoThink below, so use the no-think model.
               model: leg.noThinkModel ?? leg.model,
               instructions: system,
@@ -278,7 +352,7 @@ export async function djAgent({
               // No `done` tool to force here, so the cap is every discovery step
               // plus one to emit. Max with the caller's value so a deliberately
               // taller loop isn't shrunk by a narrow descriptor.
-              stopWhen: [isStepCount(Math.max(maxSteps, gatedMaxSteps))],
+              stopWhen: [isStepCount(nativeCap)],
               temperature,
               maxOutputTokens,
               ...googleSafetyOptions(leg.cfg),
@@ -287,8 +361,17 @@ export async function djAgent({
               // free text still reasons.
               reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema: schema! }),
+              // The schema rides every step, so an open step 0 lets the model
+              // answer before it has explored; that run is discarded below and
+              // the pick repeats in done-tool mode. Force discovery first, then
+              // leave later steps open to emit the object.
+              prepareStep: async ({ stepNumber }: { stepNumber: number }) =>
+                (stepNumber === 0 ? { toolChoice: nativeFirstStepToolChoice(leg.cfg) } : {}),
+              // A run that ends on its step cap mid-exploration makes `output`
+              // throw after every step was billed; nativeAttempt's callbacks
+              // count each call as it ends and keep its trail.
             } as any);
-            const nr = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
+            const nr = await runDeadlined(nativeDeadlineAt, kind, 'native run', nativeAgent, messages);
             const nObj = nr.output;
             const nSteps = nr.steps?.length ?? 0;
             // Require a real discovery call: the cross-provider failure
@@ -296,30 +379,50 @@ export async function djAgent({
             // only tool calls populate the `seen` map the caller resolves ids
             // against.
             const explored = (nr.steps || []).some((s) => (s.toolCalls || []).length > 0);
+            // Some answers need no discovery at all, and the caller says which:
+            // the segment director's "stay silent" reads no data. Without this,
+            // hosted mode (first step tool_choice auto) discarded every silent
+            // tick and re-asked it twice more — ~11s and 13k tokens, every five
+            // minutes, to decide to say nothing. Picks never opt in: their id
+            // must come from a tool result.
+            let settled = false;
+            if (nObj && !explored && typeof settledWithoutTools === 'function') {
+              try { settled = !!settledWithoutTools(nObj); } catch { settled = false; }
+            }
             // A throwing validator counts as a miss, never as an agent failure.
             let accepted = true;
-            if (nObj && explored && typeof validate === 'function') {
+            if (nObj && (explored || settled) && typeof validate === 'function') {
               try { accepted = !!validate(nObj); } catch { accepted = false; }
             }
-            if (nObj && explored && accepted) {
+            if (nObj && (explored || settled) && accepted) {
               const toolCalls = flattenToolCalls(nr);
               return {
                 value: { object: nObj, steps: nSteps, toolCalls },
                 via: lastVia,
                 sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-                usage: usageOf(nr),
+                usage: meter.usage(),
+                contextPeakInput,
                 perf: perfOf(nr),
                 warnings: warningsOf(nr),
                 extra: { system, messages, toolCalls, steps: nSteps, response: JSON.stringify(nObj, null, 2), ...telemetry },
               };
             }
-            console.log(`[${kind}] native output produced no usable pick (explored=${explored}, accepted=${accepted}) — falling back to done-tool`);
-            addUsage(usageOf(nr));
+            console.log(`[${kind}] native output produced no usable answer (explored=${explored}, accepted=${accepted}; ${describeNativeMiss(null, nativeAttempt.trail().steps, nativeCap)}) — falling back to done-tool`);
           } catch (e) {
-            if (isGenerationControlError(e) || isModelUnavailable(e)) throw e;
-            console.log(`[${kind}] native output failed (${e?.message}) — falling back to done-tool`);
+            // The native leg's own cap is not the pick's deadline: while shared
+            // time remains, the done-tool path runs with what native finished.
+            const nativeCapHit = (e as Error)?.name === 'AgentDeadlineError'
+              && deadlineAt != null && nativeDeadlineAt != null && nativeDeadlineAt < deadlineAt
+              && Date.now() < deadlineAt;
+            if (!nativeCapHit && (isGenerationControlError(e) || isModelUnavailable(e))) throw e;
+            console.log(`[${kind}] native output failed (${e?.message}; ${describeNativeMiss(e, nativeTrailOf ? nativeTrailOf().steps : [], Math.max(maxSteps, gatedMaxSteps))}) — falling back to done-tool`);
           }
         }
+
+        // Past here the native pass is over, so the record names the path that
+        // answers (or fails). Left at ':native', a pick the done-tool run rescued
+        // read as a first-pass answer, and the stats hid how often native missed.
+        lastVia = 'ai-sdk:agent';
 
         // Unified main agent: done-tool (Ollama-with-tools, or a native miss),
         // native-no-tools (agent-level Output.object), or free text (no schema).
@@ -331,14 +434,26 @@ export async function djAgent({
 
         const discoveryToolNames = tools ? Object.keys(tools) : [];
         const useGatedDiscovery = useDoneTool && discoveryToolNames.length > 0;
-        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice, discoverySteps) : undefined;
-        // On a gated run the cap is DERIVED, not the caller's: exactly
-        // discoverySteps + 1. Lower ends the loop before the forced `done` step
-        // runs; higher hands the model extra `done` steps to decline in.
-        // Ungated runs keep the caller's value.
-        const effectiveMaxSteps = useGatedDiscovery ? gatedMaxSteps : maxSteps;
-
-        const mainAttempt = createAgentAttempt();
+        const nativeTrail = nativeTrailOf ? nativeTrailOf() : { steps: [], messages: [] };
+        // Only the discovery exchange: tool-call turns and their results. The
+        // native run's own unusable answer stays out, as before.
+        const nativeToolMessages = nativeToolExchange(nativeTrail.messages);
+        const baseMessages = nativeToolMessages.length ? endOnUserTurn([...messages, ...nativeToolMessages]) : messages;
+        // The carried rounds are discovery already spent, so they come off this
+        // run's budget. Gating a model that has its candidates back into fresh
+        // discovery-only steps is how a hosted Claude on tool_choice 'auto'
+        // answered in text there and stopped without `done`, every time, so
+        // each native miss paid for a wasted run before done-only recovery.
+        // Spent in full, the run commits at step 0 with the carried results in
+        // view, which is the shape recovery already succeeds with.
+        const runDiscoveryBudget = remainingDiscoverySteps(discoverySteps, nativeToolMessages.length ? nativeTrail.steps : []);
+        const prepareStep = useGatedDiscovery ? gatedDiscoveryPrepareStep(discoveryToolNames, forcedChoice, runDiscoveryBudget) : undefined;
+        // On a gated run the cap is DERIVED, not the caller's: exactly the
+        // run's discovery budget + 1. Lower ends the loop before the forced
+        // `done` step runs; higher hands the model extra `done` steps to
+        // decline in. Ungated runs keep the caller's value.
+        const effectiveMaxSteps = useGatedDiscovery ? runDiscoveryBudget + 1 : maxSteps;
+        const mainAttempt = createAgentAttempt(meter);
         const agent = new ToolLoopAgent({
           ...mainAttempt.callbacks,
           // useDoneTool legs force tool calls → no-think model; the schema-only
@@ -358,16 +473,15 @@ export async function djAgent({
           // On the done-tool path the schema lives on `done`, so no agent output.
           ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
         } as any);
-        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, messages, mainAttempt);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, baseMessages, mainAttempt);
         let steps = result.steps?.length ?? 0;
-        addUsage(usageOf(result));
 
         // The trail belongs to the MAIN run: `result` is reassigned by the
         // done-only recovery below, so reading it off the final result loses it
         // entirely. Capture here and top up from later attempts. The terminal
         // collapse renders this into its prompt, which is what stops a cornered
         // model from inventing an id.
-        let discoveryTrail = flattenToolCalls(result);
+        let discoveryTrail = [...flattenToolCalls(nativeTrail), ...flattenToolCalls(result)];
         const captureTrail = (r: AgentGenerateResult) => {
           const more = flattenToolCalls(r);
           if (more.length) discoveryTrail = [...discoveryTrail, ...more];
@@ -399,13 +513,16 @@ export async function djAgent({
           console.log(`[${kind}] agent stopped without calling done — retrying with done-only`);
           recordAgentRetry();
           lastVia = 'ai-sdk:agent:recovery';
-          const priorMessages = result.response?.messages || [];
-          const recoveryMessages = priorMessages.length ? [...messages, ...priorMessages] : messages;
-          const recoveryAttempt = createAgentAttempt();
+          // The whole run's trail, never `response.messages` (final step only).
+          const priorMessages = result.responseMessages || result.response?.messages || [];
+          // Never end on the model's own turn: a run that stopped with plain
+          // text leaves an assistant message last, and current Claude models
+          // reject that as prefill (see endOnUserTurn).
+          const recoveryMessages = endOnUserTurn(priorMessages.length ? [...baseMessages, ...priorMessages] : baseMessages);
+          const recoveryAttempt = createAgentAttempt(meter);
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
             buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
           steps = result.steps?.length ?? 0;
-          addUsage(usageOf(result));
           captureTrail(result);
           noteIfDeclined('recovery', result);
 
@@ -423,10 +540,9 @@ export async function djAgent({
               const prompt = renderTerminalPrompt(messages, discoveryTrail);
               const t = await runDeadlinedCall(deadlineAt, kind, 'agent terminal collapse',
                 (signal) => objectViaToolCall(leg, {
-                  system, prompt, schema, temperature, maxOutputTokens, signal,
+                  system, prompt, schema, temperature, maxOutputTokens, signal, meter,
                 }));
               terminalObject = t.object;
-              addUsage(t.usage);
               terminalPrompt = prompt;
               // A real model call the record should count.
               steps += 1;
@@ -463,9 +579,7 @@ export async function djAgent({
               const err = new Error('agent did not call the done tool before stopping') as AgentFailureError;
               err.text = declinedAttempts.length ? declinedAttempts.join('\n\n') : (result.text || '');
               err.finishReason = result.finishReason;
-              // Spend across every leg, in the raw TokenUsage shape
-              // failureDiagnostics feeds to usageOf.
-              err.usage = { inputTokens: spentUsage.input, outputTokens: spentUsage.output, totalTokens: spentUsage.total };
+              // Spend across every leg is attached by the catch below.
               err.steps = result.steps;
               throw err;
             }
@@ -482,7 +596,8 @@ export async function djAgent({
           value: { object, steps, toolCalls },
           via: lastVia,
           sampling: samplingWithLocalKnobs(leg.cfg, { temperature }),
-          usage: spentUsage,
+          usage: meter.usage(),
+          contextPeakInput,
           perf: perfOf(result),
           warnings: warningsOf(result),
           // Full and untruncated. When the collapse answered, the flattened
@@ -496,8 +611,11 @@ export async function djAgent({
         };
       } catch (err) {
         // Attribute to the path actually attempted; withFailover writes the
-        // record and decides whether this failure tries the backup.
+        // record and decides whether this failure tries the backup. The spend
+        // rides on the error whatever threw — a deadline, a provider error in
+        // a later leg, or the salvage miss — so the record still counts it.
         (err as { __via?: string }).__via = lastVia;
+        meter.attachTo(err);
         throw err;
       }
     },

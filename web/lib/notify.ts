@@ -5,9 +5,12 @@ export const notify = {
   ok: (message: string) => toast.success(message),
   err: (message: string) => toast.error(message, { duration: 6000 }),
   info: (message: string) => toast(message),
-  // 10s: long enough to read the message and reach the button.
-  undo: (message: string, onUndo: () => void) =>
-    toast.success(message, { duration: 10_000, action: { label: 'Undo', onClick: onUndo } }),
+  // 10s: long enough to read the message and reach the button. 'err' is a
+  // partial failure whose landed half can still be undone.
+  undo: (message: string, onUndo: () => void, tone: 'ok' | 'err' = 'ok') => {
+    const options = { duration: 10_000, action: { label: 'Undo', onClick: onUndo } };
+    return tone === 'err' ? toast.error(message, options) : toast.success(message, options);
+  },
   busy: (message: string): string | number =>
     toast.loading(message, { duration: Infinity }),
   dismiss: (id: string | number) => toast.dismiss(id),

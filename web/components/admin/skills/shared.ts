@@ -18,6 +18,9 @@ export interface Skill {
   custom?: boolean;
   tags?: string[];
   cohosts?: boolean;
+  // Imported/restored tool.mjs held for review; the skill can't air until it
+  // is trusted or discarded.
+  toolPending?: boolean;
 }
 
 export type StatusFilter = 'all' | 'enabled' | 'disabled' | 'needs-key' | 'custom' | 'builtin';

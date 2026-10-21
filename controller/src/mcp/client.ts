@@ -14,7 +14,8 @@
  *   - station-password gated:   GET /similar-tracks — open on a public station,
  *                               closed on a private one (a DIFFERENT secret
  *                               from the admin one; see stationHeader)
- *   - admin, Basic-auth gated:  the /dj/* command surface and /sfx
+ *   - admin, Basic-auth gated:  the /dj/* command surface, /sfx and
+ *                               /debug/dj-log (the booth log)
  *
  * Every failure is turned into a SubwaveError carrying a message written for
  * the agent — it says what went wrong AND what to do about it, so the model
@@ -132,6 +133,18 @@ export interface QueueBlockResult {
   skipped: { title: string | null; artist: string | null; reason: string; blockedBy: unknown | null }[];
   /** A warning only; nothing is cut at the boundary. */
   runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
+}
+
+/** POST /dj/skip. `reason`/`error` are set only when a targeted skip was refused (HTTP 409). */
+export interface SkipResult {
+  ok: boolean;
+  /** The queued pick had to be committed first, and whether it confirmed in time. */
+  pending?: boolean;
+  committed?: boolean;
+  reason?: string;
+  error?: string;
+  /** What now-playing names, on a refusal. */
+  onAirId?: string | null;
 }
 
 export interface SfxPlayResult {
@@ -286,9 +299,24 @@ export class SubwaveClient {
     return this.call<Record<string, unknown>>("/now-playing");
   }
 
-  /** GET /state — upcoming queue, recent history, and the DJ booth log. */
+  /** GET /state — upcoming queue and recent history (public; no booth log). */
   async state(): Promise<Record<string, unknown>> {
     return this.call<Record<string, unknown>>("/state");
+  }
+
+  /**
+   * GET /debug/dj-log — the newest booth-log lines, admin-gated. Null without
+   * admin credentials, when they are refused or locked out, or against a
+   * controller that predates the route, so the state tool degrades to the
+   * public view instead of failing.
+   */
+  async boothLog(): Promise<unknown[] | null> {
+    if (!this.hasAdminCreds) return null;
+    const body = await this.call<{ djLog?: unknown }>("/debug/dj-log", {
+      admin: true,
+      allowStatuses: [401, 403, 404, 429],
+    });
+    return Array.isArray(body?.djLog) ? body.djLog : null;
   }
 
   /** GET /schedule — shows, personas, and the weekly schedule grid. */
@@ -400,9 +428,21 @@ export class SubwaveClient {
     });
   }
 
-  /** POST /dj/skip — force-end the current track (operator override). */
-  async skipTrack(): Promise<{ ok: boolean }> {
-    return this.call<{ ok: boolean }>("/dj/skip", { method: "POST", admin: true });
+  /**
+   * POST /dj/skip — force-end the current track (operator override). With
+   * `expectId` the skip is targeted: the controller answers 409 rather than
+   * skip when that track is no longer what is on air, returned as `ok: false`
+   * with its reason. Without it, the bare skip sent exactly as before.
+   */
+  async skipTrack(expectId?: string | null): Promise<SkipResult> {
+    if (!expectId) return this.call<SkipResult>("/dj/skip", { method: "POST", admin: true });
+    const body = await this.call<SkipResult>("/dj/skip", {
+      method: "POST",
+      admin: true,
+      body: { expectId },
+      allowStatuses: [409],
+    });
+    return body.reason ? { ...body, ok: false } : body;
   }
 
   /** POST /dj/refresh-playlist — rebuild the fallback auto-playlist now. */

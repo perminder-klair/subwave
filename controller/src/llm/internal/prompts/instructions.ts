@@ -52,12 +52,19 @@ export function instruction(file: string, section: string, vars: Record<string, 
   if (!sections) throw new Error(`instructions: no such file "${file}.md" (have: ${[...FILES.keys()].join(', ')})`);
   const body = sections.get(section);
   if (body == null) throw new Error(`instructions: ${file}.md has no section "${section}" (have: ${[...sections.keys()].join(', ')})`);
+  // Missing placeholders are judged against the TEMPLATE, never the filled
+  // output: a value is free text (a show topic, a station name) and may itself
+  // contain "{word}", which is content, not an authoring slip.
+  const missing: string[] = [];
   const filled = body.replace(PLACEHOLDER, (whole, key: string) => {
     const v = vars[key];
-    return v == null ? whole : String(v);
+    if (v == null) {
+      missing.push(whole);
+      return whole;
+    }
+    return String(v);
   });
-  const leftover = filled.match(PLACEHOLDER);
-  if (leftover) throw new Error(`instructions: ${file}.md section "${section}" left ${leftover.join(', ')} unsubstituted`);
+  if (missing.length) throw new Error(`instructions: ${file}.md section "${section}" left ${missing.join(', ')} unsubstituted`);
   return filled;
 }
 

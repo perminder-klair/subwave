@@ -1,6 +1,6 @@
 // Pins the on-demand jingle path — POST /jingles/:filename/play →
-// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue and its own
-// marker hook (NOT on_meta, which never sees that source).
+// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue, and the
+// marker hook every jingle reaches (NOT on_meta, which never sees that source).
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -73,10 +73,10 @@ test('manual jingle uses a priority handoff without touching the FIFO track hand
   await markAired(filename);
 });
 
-// The priority queue is a FIFO with no remove path, and the fallback keeps
-// selecting it while it is non-empty — so a retried tool call or a
-// double-clicked button would air the same announcement twice with no way back
-// short of /restart-mixer.
+// The priority queue is a FIFO with no remove path, and the switch keeps
+// choosing it at each safe boundary while it is non-empty — so a retried tool
+// call or a double-clicked button would air the same announcement twice with no
+// way back short of /restart-mixer.
 test('a repeat press of an un-aired jingle is refused, not stacked', async () => {
   assert.deepEqual(await queue.playJingle(other), { ok: true });
   assert.ok(existsSync(join(STATE, 'jingle-now.txt')), 'the first press was handed over');
@@ -112,42 +112,156 @@ assert.ok(bedBranch > 0, 'on_meta still has its bed branch');
 assert.ok(titleGate > 0, 'on_meta still has its title/artist gate');
 assert.ok(bedBranch < titleGate, 'bed branch remains above the title gate');
 
-const markerHook = liq.indexOf('jingle_now_queue.on_metadata(synchronous=false');
-const markerHookEnd = liq.indexOf('\n  )', markerHook);
-assert.ok(markerHook > 0, 'the priority queue marks its own clips at feed time');
-const branchBody = liq.slice(markerHook, markerHookEnd);
-assert.ok(
-  branchBody.includes('fun (m) -> begin'),
-  'a multi-expression Liquidsoap callback must use a begin/end block',
-);
-assert.ok(branchBody.includes('jingle-playing.json'), 'writes the collision-guard marker');
-assert.ok(branchBody.includes('jingle_now_tmp_dir'), 'own temp dir — one per writer, #1240');
-assert.ok(!branchBody.includes('temp_dir=jingle_tmp_dir'), 'never shares the rotate writer staging dir');
-assert.ok(!branchBody.includes('now-playing.json'), 'an announcement is not a song');
-assert.ok(!branchBody.includes('insert_metadata'), 'and never touches the ICY title');
+// The marker is written where a jingle goes ON AIR, never on a jingle's own
+// source. Both are request sources, and a request source starts its next ready
+// request in the frame that ends the current one, firing that request's hooks
+// before the rotate or the fallback has chosen it. Measured on 2.4.6 with the
+// writer on the rotate's playlist: each automatic jingle was marked at the END
+// of the one before, N tracks early, and its real airing wrote nothing — so the
+// DJ was not held off a long stinger, was held over the song after it, and the
+// seam record moved "After jingle" one song late.
+//
+// The hook only books the jingle (on the streaming thread, so in feed order) and
+// hands the write to a task: request.duration and file I/O stay off that thread.
+const writerAt = liq.indexOf('def write_jingle_marker(');
+const writer = liq.slice(writerAt, liq.indexOf('\nend\n', writerAt));
+const spawnAt = liq.indexOf('thread.run(fast=false, fun () -> write_jingle_marker(');
+const markerHook = liq.lastIndexOf('music.on_track(synchronous=true, fun (m) ->', spawnAt);
+const branchBody = liq.slice(markerHook, liq.indexOf('\n)\n', markerHook));
+const jingleNowSwitch = liq.indexOf('id="music_with_jingle_now"');
+
+test('jingle-playing.json is written from the source cross reads, for both kinds of jingle', () => {
+  assert.ok(writerAt > 0 && markerHook > 0 && spawnAt > markerHook, 'the marker hook exists and spawns the writer');
+  assert.ok(branchBody.includes('thread.run(fast=false, fun () -> write_jingle_marker('),
+    'the write runs off the streaming thread');
+  assert.ok(jingleNowSwitch > 0 && markerHook > jingleNowSwitch,
+    'below the jingle_now switch, so it sees what that switch CHOSE');
+  assert.ok(markerHook < liq.indexOf('music = cross('), 'and above cross: written at feed time');
+  assert.ok(!/^music = /m.test(liq.slice(jingleNowSwitch, markerHook)),
+    'on the switch\'s own output, with nothing re-bound in between');
+  assert.ok(liq.indexOf('music_meta = music') < markerHook,
+    'below music_meta: a clip\'s own ID3 tags never reach now-playing or the ICY title');
+  assert.ok(branchBody.includes('if m["subwave_jingle"] == "true" then'),
+    'only jingles — the rotate and jingle_now both stamp the mark');
+  assert.ok(branchBody.includes('fed_at = time()'), 'stamped at feed, on the streaming thread');
+  assert.ok(writer.includes('"#{state_dir}/jingle-playing.json"'), 'writes the collision-guard marker');
+  assert.ok(writer.includes('temp_dir=jingle_tmp_dir'), 'through its own staging dir, #1240');
+  assert.ok(writer.includes('catch err do'), 'a failed write is logged, never raised in the task');
+  assert.ok(!writer.includes('now-playing.json') && !branchBody.includes('now-playing.json'),
+    'an announcement is not a song');
+  assert.ok(!writer.includes('insert_metadata'), 'and never touches the ICY title');
+  for (const field of ['filename = fname', 'durationSec = dur', 'startedAt = fed_at', 'queuedSec = queued']) {
+    assert.ok(writer.includes(field), `the payload carries ${field.split(' ')[0]}`);
+  }
+  assert.ok(!liq.includes('music.on_track(synchronous=false'), 'no second, unordered writer');
+});
+
+// Back to back: cross takes a jingle shorter than the crossfade whole and the
+// next track's head right behind it, so a second jingle is fed milliseconds
+// after the first but airs only once the first has ended. Measured on 2.4.6
+// (two 3s presses a bed had held): fed 0.06s apart, the second aired 12.96s
+// after its own feed, so a window opened at that feed left its last 1.96s
+// unheld. Only the mixer sees the feed order — the first marker is overwritten
+// before the controller can read it — so it stamps the wait itself
+// (scripts/jingle-burst-window.test.ts replays the controller's side).
+test('the marker says how long a jingle waits behind the jingles fed just before it', () => {
+  assert.ok(branchBody.includes('ahead = jingle_burst()'), 'the jingles already fed in this run');
+  assert.ok(branchBody.includes('jingle_burst := []'), 'and any other track ends the run');
+  const queued = liq.slice(liq.indexOf('def jingle_queued_sec('), writerAt);
+  assert.ok(queued.includes('max(clear, snd(j)) + dur'),
+    'each starts at the later of its feed and the end of the one before');
+  // A longer one is read at the pace it airs, so what follows it is fed as its
+  // end is buffered: measured, a 3s clip fed 4s into a 14s one aired at the
+  // usual distance from its own feed, and a chained wait over-held it by 10s.
+  assert.ok(queued.includes('if dur < crossfade_duration() then'),
+    'and only a jingle shorter than the crossfade holds the next one back');
+  assert.ok(queued.includes('max(0., list.fold(ends, 0., ahead) - fed_at)'),
+    'and a jingle that waits for nothing says 0');
+  // Tasks run on several threads, so the first of a burst can finish last.
+  assert.ok(branchBody.includes('jingle_marker_seq := jingle_marker_seq() + 1'), 'every jingle is numbered in feed order');
+  assert.ok(writer.includes('if seq == jingle_marker_seq() then'),
+    'and a write stands down once a later jingle has been fed');
+});
+
+test('neither jingle source writes the marker from its own hook', () => {
+  const rotate = liq.slice(liq.indexOf('jingles = playlist('), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
+  assert.ok(rotate.length > 0, 'the rotate block is still where this test looks');
+  assert.ok(!rotate.includes('jingle-playing.json'),
+    'the playlist starts its next clip at the end of the current one, N tracks before it airs');
+  const nowHookAt = liq.indexOf('jingle_now_queue.on_metadata(');
+  const nowHook = liq.slice(nowHookAt, liq.indexOf('\n\n', nowHookAt));
+  assert.ok(nowHook.includes('jingle_now_on_air := true'), 'the priority queue still arms the rotate gate');
+  assert.ok(!nowHook.includes('jingle-playing.json'),
+    'a second queued press is started by the queue before the switch chooses it');
+  assert.ok(!liq.includes('jingle_now_tmp_dir'), 'its staging dir went with its writer');
+});
 
 // A dedicated source is the only way to get ahead of an already-populated
-// FIFO dj_queue. Its availability gate preserves a manual press while deferring
+// FIFO dj_queue. The switch's predicate preserves a manual press while deferring
 // it past active speech or a bed/track pair.
 const priorityQueue = liq.indexOf('jingle_now_queue = request.queue(id="jingle_now_queue")');
-const priorityGate = liq.indexOf('jingle_now = source.available(jingle_now_queue');
-const priorityFallback = liq.indexOf('[jingle_now, music]');
+const prioritySwitch = liq.lastIndexOf('music = switch(', jingleNowSwitch);
+const priorityGate = liq.indexOf('({not bed_on_air()', prioritySwitch);
+const priorityChoices = liq.indexOf('({true}, music)', prioritySwitch);
 assert.ok(priorityQueue > 0, 'on-demand jingles have a dedicated request queue');
-assert.ok(priorityGate > priorityQueue, 'the dedicated queue is wrapped in an availability gate');
-assert.ok(priorityFallback > priorityGate, 'the dedicated queue wins the next safe boundary');
-// Anchored at the gate itself, NOT at the queue declaration ~770 lines above:
-// the automatic rotate's gate carries both of these strings, so a window that
-// started any earlier passed even with this gate deleted outright.
-const gateWindow = liq.slice(priorityGate, priorityFallback);
+assert.ok(prioritySwitch > priorityQueue && jingleNowSwitch - prioritySwitch < 40,
+  'the dedicated queue is the first choice of the music_with_jingle_now switch');
+assert.ok(priorityGate > prioritySwitch && priorityChoices > priorityGate,
+  'gated by its own predicate, ahead of the music it wraps');
+// Anchored at the predicate itself, NOT at the queue declaration ~770 lines
+// above: the automatic rotate's gate carries both of these strings, so a window
+// that started any earlier passed even with this gate deleted outright.
+const gateWindow = liq.slice(priorityGate, liq.indexOf('jingle_now)', priorityGate));
 assert.ok(gateWindow.includes('not bed_on_air()'), 'a jingle cannot split a bed from its track');
 assert.ok(gateWindow.includes('time() > voice_until()'), 'a jingle cannot start over active speech');
-assert.ok(priorityFallback > liq.indexOf('rotate(weights=[1, jingle_ratio()]'),
+assert.ok(gateWindow.includes('not pause_talk_on_air()'), 'nor over a pause-and-talk break');
+assert.ok(prioritySwitch > liq.indexOf('rotate(weights=[1, jingle_ratio()]'),
   'manual priority wraps the automatic rotate so an automatic jingle cannot win first');
+
+// A gate decides whether a jingle may START. Asked on every frame (a
+// source.available gate, as both once were), a bed pre-started at the boundary
+// a press won, or a DJ clip, closed it mid-clip: measured on 2.4.6, a 14s
+// announcement aired 10s, two songs played, then its last 4s.
+test('a jingle that has started plays to its end', () => {
+  assert.ok(liq.slice(prioritySwitch, priorityGate).includes('track_sensitive=true'),
+    'the press gate is asked only when the switch chooses, at a track boundary');
+  assert.ok(!liq.includes('source.available(jingle_now_queue'), 'never as a per-frame gate on the press');
+  // The rotate's gate stays an availability gate (the rotate is the stdlib's),
+  // held open only while its own clip is on air: an open verdict must not
+  // outlive the clip it was given for.
+  assert.ok(liq.includes('jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air() and '),
+    'the rotate gate is latched for the clip on air, and only for it, never a constant true');
+  const flagHook = liq.indexOf(
+    'music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_jingle_rotate"] == "true")');
+  assert.ok(flagHook > jingleNowSwitch && flagHook < liq.indexOf('music = cross('),
+    'set where a clip is chosen, on the source cross reads');
+  assert.ok(!/^music = /m.test(liq.slice(jingleNowSwitch, flagHook)), 'with nothing re-bound in between');
+  const rotateMark = liq.slice(liq.indexOf('jingles = metadata.map('), liq.indexOf('rotate(weights=[1, jingle_ratio()]'));
+  assert.ok(rotateMark.includes('("subwave_jingle_rotate", "true")'), 'which tells the rotate\'s clips from a press');
+  // Released on the playlist itself, inside the frame where it starts its next
+  // clip and before the gate sees that frame's track mark. Re-checked at the
+  // mark, a closed gate dropped the rest of the frame: the next clip's head and
+  // metadata, so it aired later under the previous clip's name and length.
+  const release = liq.indexOf('jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)');
+  assert.ok(release > liq.indexOf('jingles = playlist(') && release < liq.indexOf('jingles = source.available(jingles,'),
+    'the latch is released on the raw playlist, below the gate');
+});
+
+// Back to back, the rotate chooses the next clip in the same cycle the last one
+// ends, on the verdict the latch held. With the music chain starved there is
+// nothing else to turn to, so a held gate was never asked `not
+// music_starved()` again: measured on the baked image (empty auto.m3u, ratio
+// 1), the starve latched at 31.6s and stingers kept airing to the end of a 120s
+// run with no emergency switch (#1300 bug 7).
+test('the latch never holds the rotate open over a latched starve', () => {
+  assert.ok(liq.includes('track_sensitive={rotate_jingle_on_air() and not music_starved()}'),
+    'once the starve guard latches, the rotate gate is asked every cycle again');
+});
 
 // The rotate must also stand down while a manual jingle is on air, or it stacks
 // a stinger on top of the announcement.
 const rotateGate = liq.slice(
-  liq.indexOf('jingles = source.available(jingles, {'),
+  liq.indexOf('jingles = source.available(jingles,'),
   liq.indexOf('rotate(weights=[1, jingle_ratio()]'),
 );
 assert.ok(rotateGate.includes('not jingle_now_on_air()'),
@@ -213,7 +327,7 @@ assert.ok(rotateGate.includes('not pause_talk_on_air()'),
 
 // Clip length rides in the marker: the controller can only parse RIFF, and an
 // import on a host without ffmpeg keeps its original container.
-assert.ok(branchBody.includes('durationSec = jingle_duration(fname)'),
+assert.ok(writer.includes('dur = jingle_duration(fname)') && writer.includes('durationSec = dur'),
   'the marker carries a measured duration, not just a filename');
 assert.ok(liq.includes('null.get(default=0., request.duration(fname))'),
   'jingle_duration measures via request.duration and degrades to 0 (unmeasured)');

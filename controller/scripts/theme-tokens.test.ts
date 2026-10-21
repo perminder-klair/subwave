@@ -7,6 +7,7 @@
 // token only accepts curated ids, grain stays in [0,1], and the swatch keys are
 // a subset of the token keys.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   THEME_TOKENS,
@@ -17,18 +18,6 @@ import {
   tokenType,
   isValidTokenValue,
 } from '../src/theme-tokens.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}`);
-    console.error(`    ${(err as Error).message}`);
-  }
-}
 
 test('every descriptor has a valid type + non-empty label/key', () => {
   for (const t of THEME_TOKENS) {
@@ -95,9 +84,3 @@ test('grain token accepts [0,1] numbers only', () => {
 test('unknown keys never validate', () => {
   assert.ok(!isValidTokenValue('--danger', 'anything'));
 });
-
-if (failures > 0) {
-  console.error(`\n${failures} theme-token test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall theme-token tests passed');

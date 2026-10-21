@@ -138,17 +138,16 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       {
         method: 'GET',
         path: '/state',
-        summary: 'Queue, history & DJ log',
+        summary: 'Queue & history',
         description:
-          'The upcoming queue, recent play history, and the DJ booth log (last 50 ' +
-          'entries), plus the active theme id and station timezone. Polled by the ' +
-          'web player every 5s alongside /now-playing.',
+          'The upcoming queue and recent play history, plus the active theme id and ' +
+          'station timezone. Polled by the web player every 5s alongside /now-playing. ' +
+          'The DJ booth log is operator diagnostics and is not part of this read.',
         auth: 'none',
         responseExample: {
           current: { title: 'Midnight City', artist: 'M83', source: 'auto', startedAt: 1720000000000 },
           upcoming: [{ title: 'Open Eye Signal', artist: 'Jon Hopkins', requestedBy: 'auto' }],
           history: [{ title: 'Nightcall', artist: 'Kavinsky' }],
-          djLog: [{ t: 1720000000000, kind: 'pick', text: 'picked Open Eye Signal' }],
           autoPick: true,
           autoLink: true,
           theme: { active: 'midnight' },
@@ -409,9 +408,15 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: 'POST',
         path: '/dj/skip',
         summary: 'Skip the current track',
+        // No bodyExample on purpose: the playground pre-fills it, and a sample
+        // id would turn its default press into a refused targeted skip.
         description:
           'Force-end the current track (operator override). There is no ' +
-          'listener-facing skip by design — this is admin-only.',
+          'listener-facing skip by design — this is admin-only. Optional body ' +
+          '`{ "expectId": "<subsonic_id>" }` (the id from /now-playing) makes it a ' +
+          'targeted skip: 409 with a `reason` (track-changed, jingle-on-air, ' +
+          'bed-on-air, break-on-air) and nothing skipped unless that track is ' +
+          'still the one on air. No body: ends whatever is on air.',
         auth: 'admin',
         mutatesAir: true,
         responseExample: { ok: true },
@@ -663,7 +668,7 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_similar_tracks', title: 'Tracks that sound like this', description: 'CLAP sound-alike neighbours for a seed track.', endpoint: 'GET /similar-tracks', auth: 'station' },
   { name: 'subwave_queue_track', title: 'Queue an exact track', description: 'Push a specific track to the queue.', endpoint: 'POST /dj/queue-track', auth: 'admin', mutatesAir: true },
   { name: 'subwave_queue_block', title: 'Queue an album or artist block', description: 'Queue a whole album, or a run of tracks by one artist, in one action.', endpoint: 'POST /dj/queue-block', auth: 'admin', mutatesAir: true },
-  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track. Optional expectId skips only that track, refusing if it has ended or a jingle, bed or break is on air instead.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_announce', title: 'DJ announce', description: 'Make the DJ speak text on air.', endpoint: 'POST /dj/say', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_segment', title: 'DJ segment', description: 'Fire a canned voice segment.', endpoint: 'POST /dj/segment', auth: 'admin', mutatesAir: true },
   { name: 'subwave_list_skills', title: 'List skills', description: 'The DJ\'s skill-segment catalogue.', endpoint: 'GET /dj/skills', auth: 'admin' },
@@ -696,7 +701,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'Ogg Opus',
     codec: 'opus',
     description:
-      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Danger zone. ' +
+      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Broadcast & mixer. ' +
       'Chromium-based browsers upgrade to it automatically; iOS/Firefox stay on MP3.',
     settingFlag: 'opusEnabled',
     alwaysOn: false,
@@ -707,7 +712,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     codec: 'flac',
     description:
       'Lossless capture of the processed bus at 44.1kHz. Enable in Settings → ' +
-      'Danger zone. For external players — the web/native players do not auto-select it.',
+      'Broadcast & mixer. For external players — the web/native players do not auto-select it.',
     settingFlag: 'flacEnabled',
     alwaysOn: false,
   },
@@ -716,7 +721,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'AAC (ADTS)',
     codec: 'aac',
     description:
-      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Danger zone. For ' +
+      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Broadcast & mixer. For ' +
       'external players that prefer AAC.',
     settingFlag: 'aacEnabled',
     alwaysOn: false,

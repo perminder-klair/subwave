@@ -4,11 +4,14 @@
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
+import { isUtf8 } from 'node:buffer';
 import { config } from '../../config.js';
 import { writeFileAtomicSync } from '../../util/atomic-file.js';
 import * as settings from '../../settings.js';
-import { sleep } from './pure.js';
+import { sleep, type Interposed } from './pure.js';
 import { awaitVoiceAir } from './voice-marker.js';
+import { mpegLayer3Frame, mp3FrameOffset } from '../../audio/mp3-frames.js';
+import { levelledGainDb, voiceLevellingEnabled } from '../../audio/clip-level.js';
 
 const _handoffChains: Map<string, Promise<void>> = new Map();
 
@@ -143,7 +146,9 @@ export async function airVoice(
   const clipMs = clipDurationMs(wavPath, text);
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
   const voiceId = stableVoiceId || mintVoiceId();
-  const uri = voiceUri(wavPath, gainDb, voiceId, pauseDeliveryId);
+  // Add this take's trim only while the operator has levelling enabled.
+  const gain = voiceLevellingEnabled() ? levelledGainDb(wavPath, gainDb) : gainDb;
+  const uri = voiceUri(wavPath, gain, voiceId, pauseDeliveryId);
   const now = Date.now();
   const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
@@ -202,8 +207,10 @@ export const BED_MARKER_FRESH_MS = 10_000;
 
 // The guard window as two numbers: when the clip clears, and how long the window
 // is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
-// as the test seam for the marker's durationSec precedence.
-export function jingleWindow(): { clearAtMs: number; windowMs: number } {
+// as the test seam for the marker's durationSec precedence. `crossSec` replaces
+// the station crossfade as the cross term, for a caller that has to cover the
+// longest tail the jingle can wait behind (the targeted skip, #2017).
+export function jingleWindow(crossSec?: number): { clearAtMs: number; windowMs: number } {
   const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
@@ -215,9 +222,14 @@ export function jingleWindow(): { clearAtMs: number; windowMs: number } {
     const clipMs = (Number.isFinite(measuredSec) && measuredSec > 0 ? measuredSec * 1000 : 0)
       || (typeof m?.filename === 'string' && wavDurationMs(m.filename))
       || JINGLE_FALLBACK_MS;
-    const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
+    const crossMs = (crossSec ?? (Number(settings.get()?.crossfadeDuration) || 10)) * 1000;
     const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
-    return { clearAtMs: startedMs + windowMs, windowMs };
+    // A jingle fed right behind another one in cross's read-ahead burst airs
+    // only once that one has ended; the mixer says how long it waits. Absent
+    // from an older broadcast image's marker, which keeps the old window.
+    const queuedSec = Number(m?.queuedSec);
+    const queuedMs = Number.isFinite(queuedSec) && queuedSec > 0 ? queuedSec * 1000 : 0;
+    return { clearAtMs: startedMs + queuedMs + windowMs, windowMs: queuedMs + windowMs };
   } catch {
     return none; // no marker (or unreadable) — nothing on air to avoid
   }
@@ -237,6 +249,43 @@ export function jingleAiredAtMs(filename: string): number {
   } catch {
     return 0;
   }
+}
+
+// What the mixer placed between the previous song and the one starting now, if
+// anything: the latest jingle, bed or pause-and-talk marker stamped after the
+// previous song started. All three are written at cross-FEED time, a whole
+// song after `prevStartedMs` (itself a tick late), so the comparison has
+// minutes of margin. A marker from before the previous song — the files are
+// never deleted — is not after it and so never counts. Unreadable or absent
+// markers count as nothing interposed: this only labels a record. `kinds`
+// narrows the markers read; the targeted skip asks for beds and breaks only,
+// since a jingle's marker cannot be ordered against now-playing (#2017).
+export function interposedSince(
+  prevStartedMs: number,
+  now = Date.now(),
+  kinds: readonly Interposed[] = ['jingle', 'bed', 'break'],
+): Interposed | null {
+  if (!Number.isFinite(prevStartedMs) || prevStartedMs <= 0) return null;
+  const markers: Array<[Interposed, string]> = [
+    ['jingle', config.liquidsoap.jinglePlayingFile],
+    ['bed', config.liquidsoap.bedPlayingFile],
+    ['break', config.liquidsoap.pauseTalkPlayingFile],
+  ];
+  let found: Interposed | null = null;
+  let latest = 0;
+  for (const [kind, file] of markers) {
+    if (!kinds.includes(kind)) continue;
+    try {
+      const startedMs = Number(JSON.parse(readFileSync(file, 'utf8'))?.startedAt) * 1000;
+      if (Number.isFinite(startedMs) && startedMs > prevStartedMs && startedMs <= now && startedMs > latest) {
+        found = kind;
+        latest = startedMs;
+      }
+    } catch {
+      // no marker — nothing of this kind has aired
+    }
+  }
+  return found;
 }
 
 // Bound a jingle hold by remaining time, its own window, and the absolute ceiling. Forecasts
@@ -267,11 +316,12 @@ export function voiceUri(
 }
 
 // Best-effort playback duration of the clip ITSELF. Reads the exact length from
-// a WAV header (the local engines), and estimates from word count for anything
-// else (cloud mp3). This is the figure published to consumers as `durationMs` —
-// the padding below belongs to the serialiser's hold, not to the speech.
+// a WAV header (the local engines) or measures an mp3 (the cloud engines), and
+// only estimates from word count when the file is neither. This is the figure
+// published to consumers as `durationMs` — the padding below belongs to the
+// serialiser's hold, not to the speech.
 export function clipDurationMs(wavPath: string, text: string): number {
-  return wavDurationMs(wavPath) ?? estimateSpeechMs(text);
+  return wavDurationMs(wavPath) ?? mp3DurationMs(wavPath) ?? estimateSpeechMs(text);
 }
 
 // The clip plus the lead-in and duck-tail padding: what the voice chain holds
@@ -288,9 +338,88 @@ function estimateSpeechMs(text: string): number {
   return Math.ceil((words / 2.3) * 1000);
 }
 
+// Keep trailer parsing bounded, but size alone is never evidence of metadata.
+const MP3_TRAILER_MAX_BYTES = 4096;
+
+function hasValidMp3Trailer(buf: Buffer, off: number): boolean {
+  let end = buf.length;
+  if (end - off > MP3_TRAILER_MAX_BYTES) return false;
+  // ID3v1/1.1 has no length field: its signature and fixed 128-byte extent
+  // must occupy the end of the file, with no junk between it and the audio.
+  if (end - off >= 128 && buf.toString('latin1', end - 128, end - 125) === 'TAG') end -= 128;
+  if (end === off) return true;
+  if (end - off < 32) return false;
+
+  const footer = end - 32;
+  if (buf.toString('latin1', footer, footer + 8) !== 'APETAGEX') return false;
+  const version = buf.readUInt32LE(footer + 8);
+  const size = buf.readUInt32LE(footer + 12);
+  const count = buf.readUInt32LE(footer + 16);
+  const flags = buf.readUInt32LE(footer + 20);
+  if ((version !== 1000 && version !== 2000) || size < 32 || size > end - off
+      || (flags !== 0 && flags !== 0x80000000)
+      || (version === 1000 && flags !== 0)
+      || buf.subarray(footer + 24, end).some(byte => byte !== 0)) return false;
+
+  // APE's size includes the footer and items, but excludes its optional
+  // header. Both records must agree, and every item must fit before the footer.
+  let item = end - size;
+  if (flags === 0x80000000) {
+    if (item - 32 !== off
+        || !buf.subarray(off, off + 20).equals(buf.subarray(footer, footer + 20))
+        || buf.readUInt32LE(off + 20) !== 0xa0000000
+        || buf.subarray(off + 24, off + 32).some(byte => byte !== 0)) return false;
+  } else if (item !== off) return false;
+  const keys = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    if (item + 8 > footer) return false;
+    const valueSize = buf.readUInt32LE(item);
+    const itemFlags = buf.readUInt32LE(item + 4);
+    if ((itemFlags & ~7) !== 0 || (itemFlags & 6) === 6) return false;
+    item += 8;
+    const keyEnd = buf.indexOf(0, item);
+    if (keyEnd < item || keyEnd >= footer) return false;
+    const key = buf.toString('latin1', item, keyEnd);
+    if (!/^[\x20-\x7e]{2,255}$/.test(key) || ['OggS', 'TAG', 'ID3', 'MP+'].includes(key)) return false;
+    const folded = key.toLowerCase();
+    if (keys.has(folded)) return false;
+    keys.add(folded);
+    const valueStart = keyEnd + 1;
+    item = valueStart + valueSize;
+    if (item > footer || ((itemFlags & 6) !== 2 && !isUtf8(buf.subarray(valueStart, item)))) return false;
+  }
+  return item === footer;
+}
+
+// Duration of an mp3 clip (ElevenLabs, Fish, openai-compatible) without
+// decoding it: walk the frame headers and add up what each frame holds. That
+// stays exact on variable bitrate, where file size over bitrate can come out
+// seconds short, and short is the direction that lets the next line talk over
+// this one. Returns null, so the caller falls back to the estimate, for
+// anything that is not Layer III or that the walk cannot follow to the end.
+function mp3DurationMs(path: string): number | null {
+  try {
+    const buf = readFileSync(path);
+    let off = mp3FrameOffset(buf);
+    if (off == null) return null;
+    let seconds = 0;
+    let frames = 0;
+    for (let frame = mpegLayer3Frame(buf, off); frame && off + frame.length <= buf.length; frame = mpegLayer3Frame(buf, off)) {
+      seconds += frame.seconds;
+      frames += 1;
+      off += frame.length;
+    }
+    if (frames < 2 || !hasValidMp3Trailer(buf, off)) return null;
+    return Math.ceil(seconds * 1000);
+  } catch {
+    return null;
+  }
+}
+
 // Duration from a WAV header (byteRate from `fmt `, byte count from `data`).
-// Returns null for non-WAV or anything it can't parse, so the caller falls back
-// to the word-count estimate. Reads only the first 4KB — headers are tiny.
+// Returns null for non-WAV or anything it can't parse, so the caller tries the
+// mp3 reader and then the word-count estimate. Reads only the first 4KB —
+// headers are tiny.
 function wavDurationMs(path: string): number | null {
   let fd: number | null = null;
   try {

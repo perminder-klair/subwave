@@ -13,10 +13,12 @@ import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import { aboveKnownTrackCeiling } from '../music/track-duration.js';
 import * as silenceTrim from '../music/silence-trim.js';
+import { capCueOutSec } from '../music/track-floor.js';
 import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
+import { artistRootKey, creditedActKeys, creditedActNames, trackKey, type CandidateLike } from '../music/recency.js';
+import type { AirTimeOf } from '../music/show-recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import {
@@ -38,10 +40,13 @@ import * as bedPolicy from './bed-policy.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { HostSpeechStamp, TurnMeta } from './session.js';
-import type { PromptMemoryEntry } from './prompt-memory.js';
+import { promptRecapEntries, VERBATIM_META } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
-import { TRANSITION_EFFECTS } from '../settings/vocab.js';
+import { showKeyAt } from './show-boundary.js';
+import { programmeShowKey } from './resume-show.js';
+import { TRANSITION_EFFECTS, type TransitionEffect } from '../settings/vocab.js';
+import type { MixDropReason } from '../schemas/transitions.js';
 import { logEvent } from '../observability/events.js';
 import { recordPlaybackFailure } from '../observability/playback-failures.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
@@ -83,10 +88,15 @@ import {
 } from './drain-policy.js';
 import {
   commitSatisfied,
+  skipJingleCrossSec,
   skipPrepAction,
+  songFedAtMs,
+  targetedSkipRefusal,
   SKIP_COMMIT_WAIT_MS,
+  SKIP_ORDERED_MARKERS,
   SKIP_POLL_INTERVAL_MS,
 } from './skip-policy.js';
+import type { SkipRefusalReason } from '../schemas/dj.js';
 import * as stemBlend from './stem-blend.js';
 import type {
   DjLogEntry,
@@ -115,6 +125,10 @@ import {
   shouldDropObsoleteHostSpeech,
   shouldDropStaleLink,
   sleep,
+  TRANSITION_LEDGER_SIZE,
+  transitionAskOf,
+  ENTRY_EFFECTS,
+  seamRecordAtPlay,
   voiceChannelFor,
 } from './queue/pure.js';
 import {
@@ -124,7 +138,6 @@ import {
   repickAfterFailure,
 } from './resolve-probe.js';
 import {
-  DEDUPE_KINDS,
   KIND_LABEL,
   TRACK_TIED_KINDS,
   VOICE_KINDS,
@@ -139,11 +152,16 @@ import {
   speechDurationMs,
   writeHandoff,
   jingleAiredAtMs,
+  jingleWaitMs,
+  jingleWindow,
+  interposedSince,
   type QueuedVoice,
   type VoiceHandoff,
 } from './queue/voice-io.js';
 import { awaitIntroRender, IntroRenderTracker } from './queue/intro-render.js';
 import { notifyQueued, notifySpoken } from './voice-events.js';
+import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './coast-handover.js';
+import { picksAllowed } from './dj-budget.js';
 
 // Everything the outside world is told about ONE spoken segment, held in a
 // single value because it is now read twice — once when the clip is committed
@@ -387,12 +405,14 @@ class Queue {
   _lastBed: string | null = null;      // last bed aired — anti-repeat for bed-policy.pickBed
   _lastBedStartedAt = 0;               // bed-playing.json's last-seen startedAt — the edge onBedStarted fires on
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
+  _mixApplied = new WeakSet<QueueItem>(); // items applyMixTransition has reached — their ask is the ledger's, not a pending one
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: RecentPlay[] = [];
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
+  _coastHandover = createHandoverEdge(); // armed by a queued track starting, fired by the first moment picking stops (#1975, #1992)
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _handoffBoundaryTimer: NodeJS.Timeout | null = null;
   _handoffGenerationTimer: NodeJS.Timeout | null = null;
@@ -808,25 +828,13 @@ class Queue {
     maxChars = settings.get().djBehaviour.recapChars,
     prior = false,
   }: { limit?: number; withinMinutes?: number; maxChars?: number; prior?: boolean } = {}) {
-    const cutoff = Date.now() - withinMinutes * 60_000;
-    const seenDedupe = new Set<string>();
-    const picked: PromptMemoryEntry[] = [];
-    for (const entry of prior ? session.priorPromptMemory() : session.promptMemory()) {
-      if (!VOICE_KINDS.has(entry.kind)) continue;
-      if (new Date(entry.t).getTime() < cutoff) break;
-      if (DEDUPE_KINDS.has(entry.kind)) {
-        if (seenDedupe.has(entry.kind)) continue;
-        seenDedupe.add(entry.kind);
-      }
-      picked.push(entry);
-      if (picked.length >= limit) break;
-    }
+    const now = Date.now();
+    const picked = promptRecapEntries(prior ? session.priorPromptMemory() : session.promptMemory(),
+      { limit, withinMinutes, maxChars }, now);
     if (picked.length === 0) return null;
-    return picked.map((e) => {
-      const ago = formatAgo(Date.now() - new Date(e.t).getTime());
-      const msg = (e.message || '').replace(/\s+/g, ' ').trim();
-      const truncated = msg.length > maxChars ? msg.slice(0, maxChars - 1) + '…' : msg;
-      return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${truncated}"`;
+    return picked.map(e => {
+      const ago = formatAgo(now - Date.parse(e.t));
+      return `- ${ago} ago [${KIND_LABEL[e.kind] || e.kind}]: "${e.message}"`;
     }).join('\n');
   }
 
@@ -991,6 +999,7 @@ class Queue {
         : null,
       aiPicked,
       selectionShowAt: Number.isFinite(selectionAt) ? selectionAt : null,
+      showKey: showKeyAt(typeof selectionAt === 'number' && Number.isFinite(selectionAt) ? selectionAt : Date.now()),
       block: block ?? undefined,
       // Only stamp a back-announce target when there's actually an intro/link to
       // air against it; a bare track carries no claim about what preceded it.
@@ -1153,13 +1162,36 @@ class Queue {
   // pick event turn so the model can SEE its own habit and break it (it has
   // no other way to know what it recently chose; session-history imitation is
   // how both the all-normal and all-blend monocultures formed).
+  //
+  // The ledger fills at DRAIN, but under pair-drain the held head only drains
+  // once its successor is picked — so the pick being built right now would
+  // never see the ask just before it. Model picks the drain has not reached
+  // yet are appended in queue order; requests, studio pushes and blocks carry
+  // no ask and are skipped. Read-only: the ledger, and so the anti-streak
+  // strip, keeps its drain-time timing.
   recentTransitionChoices(): string[] {
-    return [...this._recentEffects];
+    const pending = this.upcoming
+      .filter(i => !i.sent && i.aiPicked && i.track && !this._mixApplied.has(i))
+      .map(i => transitionAskOf(i.track))
+      .filter((k): k is NonNullable<typeof k> => k != null);
+    return [...this._recentEffects, ...pending].slice(-TRANSITION_LEDGER_SIZE);
+  }
+
+  // Record one armed gesture that a strip is about to take back, onto the track
+  // it rode — the seam record written to the play row when the track airs. Call
+  // it BEFORE the delete, while the flag (and washoutAuto) still say what it
+  // was. Idempotent per effect+reason, since a drain retry re-runs the strips.
+  noteDrop(track: Track, effect: TransitionEffect, reason: MixDropReason) {
+    if (track[effect] !== true) return;
+    const drops = (track.mixDrops ??= []);
+    if (drops.some(d => d.effect === effect && d.reason === reason)) return;
+    drops.push(effect === 'washout' && track.washoutAuto ? { effect, reason, auto: true } : { effect, reason });
   }
 
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
-  stripEffect(track: Track, reason: string) {
+  stripEffect(track: Track, reason: string, code: MixDropReason) {
+    for (const k of TRANSITION_EFFECTS) this.noteDrop(track, k, code);
     const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : track.chop ? 'chop' : track.loop ? 'loop' : 'washout';
     delete track.sweep;
     delete track.washout;
@@ -1308,6 +1340,7 @@ class Queue {
       // stamps (washout/loop/crossSec) govern this track's OWN ending and stay.
       if (item.track && (item.track.sweep || item.track.blend || item.track.dissolve || item.track.chop)) {
         const kind = item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.dissolve ? 'dissolve' : 'chop';
+        for (const k of ENTRY_EFFECTS) this.noteDrop(item.track, k, 'bed');
         delete item.track.sweep;
         delete item.track.blend;
         delete item.track.dissolve;
@@ -1336,10 +1369,21 @@ class Queue {
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
+    this._mixApplied.add(item);
+    // The seam record's ASK: what the DJ chose on this pick, before any strip
+    // below. Recorded only where the choice was offered — a DJ-mode pick, or
+    // one that carries a flag from before DJ mode flipped off — so a plain
+    // station does not fill the record with 'normal' it never chose. Once: a
+    // drain retry sees the flags this pass already stripped.
+    if (item.aiPicked && item.track.transitionAsk === undefined
+      && (persona?.djMode || TRANSITION_EFFECTS.some(k => item.track[k]))) {
+      const ask = transitionAskOf(item.track);
+      if (ask) item.track.transitionAsk = ask;
+    }
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
     if (!persona?.djMode) {
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'dj mode off');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'dj mode off', 'dj-mode-off');
       return;
     }
 
@@ -1354,6 +1398,7 @@ class Queue {
     // both and switching off the sweep must not take the washout with it.
     for (const kind of TRANSITION_EFFECTS) {
       if (item.track[kind] && !settings.effectEnabled(kind)) {
+        this.noteDrop(item.track, kind, 'switched-off');
         delete item.track[kind];
         this.log('mix', `${kind} dropped (switched off in settings)`);
       }
@@ -1373,7 +1418,7 @@ class Queue {
     if (!prevTrack) {
       // Nothing on-air to validate against (first track after boot) — an
       // effect on a cold start would garnish silence; drop it.
-      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor');
+      if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor', 'no-predecessor');
       return;
     }
 
@@ -1389,12 +1434,13 @@ class Queue {
     // plus effect gating — still capped by the operator crossfade ceiling.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
 
-    // DJ transition effects (sweep/washout) — the agent proposes, the data
+    // DJ transition effects (all six) — the agent proposes, the data
     // disposes; a rejected flag is stripped so getAnnotatedUri never stamps it.
-    // A washout also gets canvas + tempo stamps on the flagged track ITSELF,
-    // since its liq_cross_duration governs its own end, exactly where the wash
-    // fires. The sweep needs no stamps: the transition into it is already sized
-    // and its envelope scales to whatever d it gets.
+    // The exit gestures (washout, loop) get canvas + tempo stamps on the
+    // flagged track ITSELF, since its liq_cross_duration governs its own end,
+    // exactly where they fire. The entry gestures need no canvas: the
+    // transition into them is already sized and their envelopes scale to
+    // whatever d they get (chop still takes a gate period, below).
     //
     // Auto-arm a washout when the cap will CUT this pick (duration >
     // effectiveMaxTrackSec → drain stamps liq_cue_out): the ending is a forced
@@ -1413,10 +1459,16 @@ class Queue {
     // rather than a DJ choice, but it is the same gesture at the same cost —
     // an operator who switched the washout off did not ask for it back on the
     // capped exits. The cut still happens; it is just a plain crossfade.
-    if (cappedExit && !item.track.washout && !item.track.loop && settings.effectEnabled('washout')) {
-      item.track.washout = true;
-      item.track.washoutAuto = true;
-    }
+    // Re-run wherever a later strip takes away what kept it off (a variety-
+    // stripped washout or loop, a loop with no tempo): the cap's echo-out is
+    // not a choice those strips ration.
+    const armCapWashout = () => {
+      if (cappedExit && !item.track.washout && !item.track.loop && settings.effectEnabled('washout')) {
+        item.track.washout = true;
+        item.track.washoutAuto = true;
+      }
+    };
+    armCapWashout();
 
     // Ending-aware exit canvas (feature: outro analysis). The pair-sized
     // feature-1 value above can't be applied (#749), but a track's measured
@@ -1466,8 +1518,27 @@ class Queue {
     if (item.stemSeam) {
       for (const k of ['sweep', 'blend', 'dissolve', 'chop'] as const) {
         if (item.track[k]) {
+          this.noteDrop(item.track, k, 'stem-seam');
           delete item.track[k];
           this.log('mix', `${k} dropped (the seam into this pick is a rendered stem blend)`);
+        }
+      }
+    }
+    // Show-boundary cut (#1574): the predecessor is CUT at a show change, and
+    // radio.liq stands every gesture down on that seam (it reads liq_show_fade
+    // off the outgoing track), so these would never air. Stripping them keeps
+    // the label, the booth log and the ledger describing the plain fade that
+    // does — and keeps a mixer older than the flag from running a held-hot
+    // entry gesture over a mid-record cut. Before the ledger, like the stem
+    // seam: that seam was never the model's to shape, so the ledger records
+    // what is left. The FIFO drain guarantees the predecessor already passed
+    // applyBoundaryStamps, with or without pair-drain.
+    if (prevTrack.showFade) {
+      for (const k of ['sweep', 'blend', 'dissolve', 'chop'] as const) {
+        if (item.track[k]) {
+          this.noteDrop(item.track, k, 'show-boundary');
+          delete item.track[k];
+          this.log('mix', `${k} dropped (the previous track is cut at a show change — that seam is a plain fade)`);
         }
       }
     }
@@ -1485,20 +1556,21 @@ class Queue {
     // monoculture and a stuck model stays stripped until it genuinely varies.
     // Auto (length-cap) washouts are deterministic, not choices, and are
     // invisible to the ledger in both directions.
-    const choice: string | null =
-      item.track.sweep ? 'sweep' : item.track.blend ? 'blend'
-        : item.track.dissolve ? 'dissolve'
-        : item.track.chop ? 'chop'
-        : item.track.loop ? 'loop'
-        : (item.track.washout && !item.track.washoutAuto) ? 'washout'
-        : item.track.washoutAuto ? null : 'normal';
+    //
+    // Targeted, like the switch strip: only the counted ask goes. The blanket
+    // stripEffect() also took the cap's auto-washout off a capped pick whose
+    // ask was the third sweep, and the forced cut aired bare.
+    const choice = transitionAskOf(item.track);
     const last2 = this._recentEffects.slice(-2);
     if (choice && choice !== 'normal' && last2.length >= 2 && last2.every(k => k === choice)) {
-      this.stripEffect(item.track, `variety — third ${choice} in a row`);
+      this.noteDrop(item.track, choice, 'variety');
+      delete item.track[choice];
+      this.log('mix', `${choice} dropped (variety — third ${choice} in a row)`);
+      armCapWashout();
     }
     if (choice) {
       this._recentEffects.push(choice);
-      if (this._recentEffects.length > 4) this._recentEffects.shift();
+      if (this._recentEffects.length > TRANSITION_LEDGER_SIZE) this._recentEffects.shift();
     }
     // Entry-side effects (sweep/dissolve/chop) garnish the PREVIOUS track's
     // ending — a loop exit already armed on that track IS the transition, so
@@ -1506,10 +1578,12 @@ class Queue {
     // here keeps the pick log honest). Loops are FIFO-armed on their own
     // applyMixTransition pass, so prevTrack.loop is already validated.
     if (item.track.sweep && prevTrack.loop) {
+      this.noteDrop(item.track, 'sweep', 'yields-to-exit');
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (previous track already exits through a loop)');
     }
     if (item.track.sweep && !mix.effectAllowedFor('sweep', cur, next)) {
+      this.noteDrop(item.track, 'sweep', 'pair-fit');
       delete item.track.sweep;
       this.log('mix', 'sweep dropped (tracks too compatible — beat-blend beats a sweep)');
     }
@@ -1518,10 +1592,12 @@ class Queue {
     // it only makes sense between COMPATIBLE tracks — the handover exposes a
     // clash rather than hiding it.
     if (item.track.blend && prevTrack.loop) {
+      this.noteDrop(item.track, 'blend', 'yields-to-exit');
       delete item.track.blend;
       this.log('mix', 'blend dropped (previous track already exits through a loop)');
     }
     if (item.track.blend && !mix.effectAllowedFor('blend', cur, next)) {
+      this.noteDrop(item.track, 'blend', 'pair-fit');
       delete item.track.blend;
       this.log('mix', 'blend dropped (tracks clash — a handover needs a compatible pair)');
     }
@@ -1533,10 +1609,12 @@ class Queue {
     // length-cap auto-arm. radio.liq enforces the same precedence as a
     // belt-and-braces guard; stripping here keeps the pick log honest.
     if (item.track.dissolve && (prevTrack.washout || prevTrack.loop)) {
+      this.noteDrop(item.track, 'dissolve', 'yields-to-exit');
       delete item.track.dissolve;
       this.log('mix', `dissolve dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
     }
     if (item.track.dissolve && !mix.effectAllowedFor('dissolve', cur, next)) {
+      this.noteDrop(item.track, 'dissolve', 'pair-fit');
       delete item.track.dissolve;
       this.log('mix', 'dissolve dropped (tracks too compatible — a blend keeps the groove a wash would kill)');
     }
@@ -1550,10 +1628,12 @@ class Queue {
     // washout riding the previous track's exit, same reasoning as the
     // dissolve: both gestures shape the same outgoing ending.
     if (item.track.chop && (prevTrack.washout || prevTrack.loop)) {
+      this.noteDrop(item.track, 'chop', 'yields-to-exit');
       delete item.track.chop;
       this.log('mix', `chop dropped (previous track already exits through a ${prevTrack.washout ? 'washout' : 'loop'})`);
     }
     if (item.track.chop && !mix.effectAllowedFor('chop', cur, next)) {
+      this.noteDrop(item.track, 'chop', 'pair-fit');
       delete item.track.chop;
       this.log('mix', 'chop dropped (tracks too compatible — a beat-blend beats a cut)');
     }
@@ -1571,8 +1651,10 @@ class Queue {
     // unmeasured track is noise, not craft (editorial otherwise, like the
     // washout — the variety ledger rations it).
     if (item.track.loop && !(next.bpm && next.bpm > 0)) {
+      this.noteDrop(item.track, 'loop', 'no-tempo');
       delete item.track.loop;
       this.log('mix', 'loop dropped (no measured tempo — a loop needs a bar length)');
+      armCapWashout();
     }
     if (item.track.loop) {
       item.track.crossSec = mix.loopCrossSecondsFor(next, maxSec);
@@ -1589,8 +1671,8 @@ class Queue {
 
     // Feature 2 — transition FX, spaced by the chattiness ladder and gated on
     // settings.sfx.enabled; never two transitions in a row, and never a riser
-    // over a sweep/washout transition. Only ARMED here: this runs at drain
-    // time, right after the PREVIOUS track started — the crossfade this
+    // over a seam that carries an armed effect. Only ARMED here: this runs at
+    // drain time, right after the PREVIOUS track started — the crossfade this
     // stinger is sized for (prevTrack → item) is a full track away. Playing it
     // now (the original behaviour) landed a drum-roll a few seconds into a
     // song, apropos of nothing. onTrackStarted fires it when item airs, i.e.
@@ -1731,6 +1813,8 @@ class Queue {
       return null;
     }
     item.track.showFade = true;
+    this.noteDrop(item.track, 'washout', 'show-boundary');
+    this.noteDrop(item.track, 'loop', 'show-boundary');
     delete item.track.washout;
     delete item.track.washoutAuto;
     delete item.track.washoutDelay;
@@ -2064,6 +2148,8 @@ class Queue {
                 // (their canvases would fight the clip) and cut tight into
                 // the clip. Entry-side flags on ITEM are untouched — they
                 // garnish the seam INTO it, which already aired its stamps.
+                this.noteDrop(item.track, 'washout', 'stem-seam');
+                this.noteDrop(item.track, 'loop', 'stem-seam');
                 delete item.track.washout;
                 delete item.track.washoutAuto;
                 delete item.track.washoutDelay;
@@ -2134,10 +2220,13 @@ class Queue {
           const liveCueIns = positiveCues([item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]);
           item.cueInSec = liveCueIns.length ? Math.max(...liveCueIns) : undefined;
           return subsonic.getAnnotatedUri(item.track, {
-            maxDurationSec: liveMax,
+            // The cap's cue only when this track actually runs past it — a stamp
+            // past a short track's end defeats the crossfade (track-floor.ts).
+            maxDurationSec: capCueOutSec(itemDurSec, liveMax),
             cueOutSec: earlyEnds.length ? Math.min(...earlyEnds) : null,
             cueInSec: item.cueInSec ?? null,
             resolveProbeId: item.resolveProbeId,
+            clipLeadSec: item.stemBlend ? stemBlend.CLIP_SEAM_CROSS_SEC : null,
           });
         };
         if (trim.cueInSec != null || trim.cueOutSec != null) {
@@ -2252,6 +2341,29 @@ class Queue {
       await sleep(SKIP_POLL_INTERVAL_MS);
     }
     return { pending: true, committed: false, waitedMs: Date.now() - t0 };
+  }
+
+  // Why an operator skip aimed at `expectId` must not land, or null when it may
+  // (#2017). Reads now-playing.json from disk, not the watcher's copy (up to a
+  // 1.5s tick old); a jingle through its own window (jingleWindow, widened to
+  // the longest outgoing tail), a bed or break through interposedSince.
+  // skip-policy decides, and says why the two are read differently. A marker
+  // that cannot be read counts as nothing on air, so a lost marker costs the
+  // old bare-skip behaviour, never a refusal; an unreadable now-playing
+  // refuses, because it cannot confirm the one thing the caller asked for.
+  async skipTargetRefusal(expectId: string): Promise<{ reason: SkipRefusalReason; onAirId: string | null } | null> {
+    const np = await this.readNowPlayingFromDisk();
+    const onAirId = typeof np?.subsonic_id === 'string' && np.subsonic_id ? np.subsonic_id : null;
+    const fedAt = songFedAtMs(np);
+    const now = Date.now();
+    const jingle = jingleWindow(skipJingleCrossSec(settings.get()?.crossfadeDuration));
+    const reason = targetedSkipRefusal({
+      expectId,
+      onAirId,
+      jingleOnAir: jingleWaitMs(now, jingle.clearAtMs, jingle.windowMs) > 0,
+      interposed: fedAt == null ? null : interposedSince(fedAt, now, SKIP_ORDERED_MARKERS),
+    });
+    return reason ? { reason, onAirId } : null;
   }
 
   // Speak something without queueing a track — hourly time checks, weather,
@@ -2399,15 +2511,23 @@ class Queue {
       // confirms that it reached listeners. A multi-line handoff settles on
       // its final line only.
       if (kind === 'handoff' && settlesHandoff) session.markHandoffAired();
+      // The clip's length rides along so a player can tell when the words end
+      // (the app's lock-screen "on the mic" window, #1848) — the same figure
+      // notifySpoken publishes below.
+      const durationMs = Number.isFinite(handoff.clipMs) && handoff.clipMs > 0
+        ? Math.round(handoff.clipMs)
+        : null;
       session.appendTurn({
         role: 'segment',
         kind,
         text: safeText,
         // Live-edge, so a LISTENER-facing consumer adds stream.bufferSeconds
         // (#1114). Absent when unmeasured, never zeroed.
-        meta: airedAt != null
-          ? { ...meta, airedAt: new Date(airedAt).toISOString() }
-          : meta,
+        meta: {
+          ...meta,
+          ...(airedAt != null ? { airedAt: new Date(airedAt).toISOString() } : {}),
+          ...(durationMs != null ? { durationMs } : {}),
+        },
       });
       notifySpoken({
         voiceId: handoff.voiceId,
@@ -2676,6 +2796,7 @@ class Queue {
       // silence (or, worse, to the voice break) instead of its intended song.
       if (item.track.sweep || item.track.blend || item.track.dissolve || item.track.chop) {
         const kind = item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.dissolve ? 'dissolve' : 'chop';
+        for (const k of ENTRY_EFFECTS) this.noteDrop(item.track, k, 'pause-talk');
         delete item.track.sweep;
         delete item.track.blend;
         delete item.track.dissolve;
@@ -3187,12 +3308,13 @@ class Queue {
     await writeHandoff(config.liquidsoap.jingleFile, jingles.jingleUri(path), { maxWaitMs: 5000 });
     this._pendingJingles.set(filename, { at: Date.now(), rotate });
     // The sidecar's own script, not the hashed filename: every other segment
-    // turn in the booth log and the DJ's chat history carries prose, and
+    // turn in the booth log and the listener booth carries prose, and
     // `jingle_a1b2c3d4.wav` reads as noise next to them (playSfx logs its
-    // effect NAME for the same reason).
+    // effect NAME for the same reason). Verbatim: the operator wrote that
+    // script, often as an announcement, so no prompt reads it back (#1908).
     const label = (await jingles.list()).find(j => j.filename === filename)?.text || filename;
     this.log('jingle', `"${label}" queued — airs at the next safe boundary`);
-    session.appendTurn({ role: 'segment', kind: 'jingle', text: label });
+    session.appendTurn({ role: 'segment', kind: 'jingle', text: label, meta: { ...VERBATIM_META } });
     return { ok: true as const };
   }
 
@@ -3367,6 +3489,9 @@ class Queue {
       const introPublication = this._introPublications.get(item);
       if (introPublication) this.trackIntroPublication(this.current, introPublication);
       this.log('playing', `${np.title} — ${np.artist}`, { requestedBy: item.requestedBy, source });
+      // Something the queue put on air: a coast that predates it can hold it,
+      // so the next moment picking stops checks the file (#1992).
+      this._coastHandover.aired();
       // A tracked item matched → controller and Liquidsoap are in sync; clear any
       // dj_queue-empty desync streak accumulated from prior untracked plays.
       this._emptyDjQueueStreak = 0;
@@ -3421,6 +3546,17 @@ class Queue {
     // correlating session archives after the fact.
     const onAirShow = session.getSession()?.show || null;
 
+    // The seam record: how this track came in, the DJ's ask on it, and every
+    // armed gesture a strip took back (#1829). Labels what the controller
+    // ARMED — see seamRecordAtPlay for what a jingle, bed or break between the
+    // two songs does to it. An entry gesture stranded by a jingle is noted as
+    // a drop here, the one strip that happens in the mixer rather than the drain.
+    const prevStartedMs = outgoingPrev?.startedAt ? Date.parse(outgoingPrev.startedAt) : NaN;
+    const seam = seamRecordAtPlay(outgoingPrev, this.current, interposedSince(prevStartedMs));
+    for (const k of seam.stranded) this.noteDrop(this.current.track, k, 'jingle-seam');
+    const transitionAsk = this.current.track.transitionAsk ?? null;
+    const transitionDrops = this.current.track.mixDrops?.length ? this.current.track.mixDrops : null;
+
     // Milestone on the unified timeline — the anchor each pick trace hangs off.
     logEvent('track.play', {
       title: this.current.track.title,
@@ -3432,6 +3568,9 @@ class Queue {
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
       show: onAirShow?.name || null,
+      transition: seam.label,
+      transitionAsk,
+      transitionDrops,
     });
 
     // Durable play history (library.db `plays`) — backs the admin Library
@@ -3447,6 +3586,9 @@ class Queue {
       requestedBy: this.current.requestedBy || null,
       showId: onAirShow?.id || null,
       showName: onAirShow?.name || null,
+      transition: seam.label,
+      transitionAsk,
+      transitionDrops,
     });
 
     // `sourceTrackId` is the id from the music backend (Subsonic/Navidrome, or
@@ -3513,9 +3655,38 @@ class Queue {
     // watcher still gets onTrackStarted events for those auto tracks, so the
     // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
-      this.runPickCycle({ isAutonomous });
+    if (this.upcoming.length === 0 && !this.pickerBusy) {
+      const closed = this.pickGateClosed();
+      if (!closed) this.runPickCycle({ isAutonomous });
+      // Closed: the coast takes over when this track ends, so the scheduler can
+      // check the fallback is not holding what the queue just aired (#1975).
+      else this.handOverToCoast(closed);
     }
+  }
+
+  // Why the auto-DJ will not pick into an empty slot now, or null when it will:
+  // the one gate every empty-slot path asks (#1992). The daily token cap's hard
+  // tier is not here: the cycle still runs under it (session roll, programme,
+  // handoff) and only its pick stands down, so runPickCycle reports that one.
+  pickGateClosed(): HandoverReason | null {
+    if (!this.autoPick) return 'auto-pick-off';
+    return djCallsAllowed() ? null : 'listeners';
+  }
+
+  // Picking has stopped with nothing queued, so the coast takes over when the
+  // track on air ends. Reports it once per stretch: the edge fires only if a
+  // queued track started since the last report (#1975, #1992).
+  handOverToCoast(reason: HandoverReason) {
+    if (this._coastHandover.held()) notifyCoastHandover(reason);
+  }
+
+  // The operator's auto-pick switch (POST /auto-pick). Turned off with nothing
+  // queued and no pick in flight, the track on air is already the last thing
+  // the queue will play, and no boundary comes before the coast (#1992). A pick
+  // in flight reports it from its own tail if it ends without one.
+  setAutoPick(on: boolean) {
+    this.autoPick = on;
+    if (!on && this.upcoming.length === 0 && !this.pickerBusy) this.handOverToCoast('auto-pick-off');
   }
 
   async runArmedBoundaryHandoff({
@@ -3603,6 +3774,7 @@ class Queue {
     }
     this.pickerBusy = true;
     (async () => {
+      let outcome: 'capped' | undefined;
       try {
         // The pick made now airs when the track it FOLLOWS ends, so near a show
         // boundary the rules to pick by are the NEXT show's. PICK_SHOW_LOOKAHEAD
@@ -3699,7 +3871,7 @@ class Queue {
         } catch (err) {
           this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
         }
-        await djAgent.runTrackEvent(this, pickCtx, {
+        outcome = await djAgent.runTrackEvent(this, pickCtx, {
           // The mic-pass owns this seam; an outgoing link cannot follow it.
           wantLink: wantLink && !finalTrackHandoff,
           showAt,
@@ -3710,6 +3882,15 @@ class Queue {
         this.log('error', `DJ track event failed: ${(err as Error).message}`);
       } finally {
         this.pickerBusy = false;
+        // Ended with nothing queued after picking stopped: the hard cap stood
+        // this pick down, or the gate closed while it was in flight and it
+        // ended without one, thrown or not. No boundary comes before the coast,
+        // so this is the moment. A held anchor airs first and re-arms the edge
+        // itself; a pick that failed with the gate open reports nothing (#1992).
+        if (this.upcoming.length === 0) {
+          const stopped = outcome === 'capped' ? 'token-cap' : this.pickGateClosed();
+          if (stopped) this.handOverToCoast(stopped);
+        }
       }
     })();
   }
@@ -3726,7 +3907,7 @@ class Queue {
   // away. Past the hard deadline the window closes and drainToLiquidsoap's
   // intrinsic path owns the endgame.
   maybeDeadlinePick() {
-    if (!this.autoPick || this.pickerBusy || !djCallsAllowed()) return;
+    if (this.pickerBusy || this.pickGateClosed()) return;
     if (!this.pairDrainActive()) return;
     const rem = this.remainingSecOnAir();
     if (!shouldDeadlinePick(rem)) return;
@@ -3823,18 +4004,30 @@ class Queue {
     // A whole origin being down fails every re-pick the same way, and each one
     // costs an LLM call to queue a track that cannot air. Past the budget the
     // auto playlist keeps the station on air until the next natural pick.
-    if (!repickAfterFailure(this._resolveFailStreak)) {
+    const repick = repickAfterFailure(this._resolveFailStreak);
+    if (!repick) {
       this.log('scheduler',
         `${this._resolveFailStreak} unresolvable picks in a row — holding off on re-picks; the auto playlist covers the slot until the next track boundary`);
-      return;
     }
 
     // Same gate as onTrackStarted's auto-DJ block: only re-pick when the slot is
-    // genuinely empty, no pick is already running, and DJ calls are allowed.
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
+    // genuinely empty, no pick is already running, and the gate is open; the
+    // re-pick budget is a test inside the open arm. Closed, the dropped item was
+    // the last one queued, so the coast takes over when the track on air ends,
+    // budget or not: the handover onTrackStarted reports at a boundary (#1975).
+    // A pick in flight reports it from its own tail instead.
+    if (this.upcoming.length > 0 || this.pickerBusy) return;
+    const closed = this.pickGateClosed();
+    if (closed) {
+      this.handOverToCoast(closed);
+    } else if (repick) {
       this._deadlinePickAt = Date.now();  // this IS a pick attempt — stamp the backstop's cooldown
       const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
       this.runPickCycle({ isAutonomous });
+    } else if (!picksAllowed()) {
+      // Past the budget at the hard cap: no capped cycle runs to report the
+      // cap, so the drop is the handover moment too (#1992).
+      this.handOverToCoast('token-cap');
     }
   }
 
@@ -3918,6 +4111,72 @@ class Queue {
     const item = this.upcoming.find(i => i.track?.id === trackId);
     if (!item) return { ok: false, reason: 'not-queued' };
     return this.removeUpcomingItem(item);
+  }
+
+  // What is on air, and the picks chosen for another show than `onAirShow`,
+  // minus requests. Taken the moment the programme resumes, so that what the
+  // new show picks afterwards is never mistaken for the earlier show's. A pick
+  // chosen for the show on air stays, whenever it was queued: a pick aimed
+  // across the boundary, or one queued while the programme was paused.
+  snapshotProgramme(onAirShow: string): { current: QueueItem | null; upcoming: QueueItem[] } {
+    const isEarlierShow = (item: QueueItem | null) => {
+      if (!item || item.requestedBy) return false;
+      const key = programmeShowKey(item);
+      return key !== null && key !== onAirShow;
+    };
+    // The mixer can start a new track before idle_off is acknowledged.
+    return {
+      current: isEarlierShow(this.current) ? this.current : null,
+      upcoming: this.upcoming.filter(isEarlierShow),
+    };
+  }
+
+  // The programme paused in one show and resumed in another (stream-idle.ts).
+  // The frozen track and the picks queued behind it were chosen for the earlier
+  // show: an afternoon floor-filler would otherwise play on into the night
+  // programme. Remove those picks and skip that track (`skip: null` leaves it
+  // on air). Only what `stale` holds is touched, and requests are kept and
+  // never skipped: someone asked for those, whatever the hour. The caller rebuilds and reloads the fallback
+  // first, or the skip lands on a track Liquidsoap prefetched from the old one.
+  async dropProgrammeFromEarlierShow(
+    stale: { current: QueueItem | null; upcoming: QueueItem[] },
+    skip: (() => Promise<unknown>) | null = liquidsoapControl.skipTrack,
+  ): Promise<{ dropped: number; kept: number; skipped: boolean }> {
+    let dropped = 0;
+    let kept = 0;
+    for (const item of stale.upcoming) {
+      if (!this.upcoming.includes(item)) continue;   // aired or cancelled meanwhile
+      const removed = await this.removeUpcomingItem(item, 'show changed while paused').catch(() => ({ ok: false }));
+      if (removed.ok) dropped += 1;
+      else kept += 1;
+    }
+    // onTrackStarted replaces `current` on every start, so identity tells the
+    // frozen track, or an earlier-show pick that started while the fallback was
+    // rebuilding, from anything else on air. A pick the mixer would not give
+    // back airs next anyway, so cutting the track short would only bring that
+    // one forward.
+    const leftover = (item: QueueItem | null) =>
+      !!item && !item.requestedBy && (item === stale.current || stale.upcoming.includes(item));
+    let skipped = false;
+    if (skip && leftover(this.current) && kept === 0) {
+      try {
+        // A kept request must be committed in dj_queue or the skip airs the fallback instead.
+        await this.commitBeforeSkip();
+        // Playback can advance while the commit waits for a resolved request:
+        // skip whatever is on air then, if it is still one of the earlier show's.
+        if (leftover(this.current)) {
+          await skip();
+          skipped = true;
+        }
+      } catch (err) {
+        this.log('error', `could not skip the track left over from the earlier show: ${(err as Error).message}`);
+      }
+    }
+    this.log('scheduler',
+      `show changed while the programme was paused — dropped ${dropped} queued pick(s)`
+      + (kept ? `, ${kept} already with the mixer and will still air` : '')
+      + (skipped ? ', skipped the leftover track' : ''));
+    return { dropped, kept, skipped };
   }
 
   // The cancel itself, addressed by ITEM rather than by track id.
@@ -4154,6 +4413,60 @@ class Queue {
     return { ids, keys };
   }
 
+  // When each track last went to air, for a full playlist rotation (#1919) —
+  // music/show-recency.ts measures the rotation's window over its OWN tracks'
+  // airings with this, and orders its coast by it.
+  //
+  // The durable plays index (library.lastAiredInfo: every airing on record,
+  // memoised five minutes) under this process's fresher memory: the sidecar's
+  // end stamps, and Infinity for the track on air and everything queued behind
+  // it — committed to air, so the rotation counts them as spent. The sidecar
+  // alone holds 96h at most, which a weekly show's rotation outlives. Newest
+  // wins, by id or by title|artist, so a duplicate rip shares its twin's history.
+  rotationAirTimes(): AirTimeOf {
+    const durable = library.lastAiredInfo();
+    const ids = new Map<string, number>();
+    const keys = new Map<string, number>();
+    const newest = (map: Map<string, number>, key: string, at: number) => {
+      const prev = map.get(key);
+      if (prev == null || at > prev) map.set(key, at);
+    };
+    const stamp = (track: CandidateLike | null | undefined, at: number) => {
+      if (Number.isNaN(at)) return;
+      if (track?.id) newest(ids, track.id, at);
+      if (track?.title) newest(keys, trackKey(track), at);
+    };
+    for (const p of this._recentPlays) stamp(p, Date.parse(p.endedAt));
+    stamp(this.current?.track, Infinity);
+    for (const item of this.upcoming) stamp(item?.track, Infinity);
+    return (track) => {
+      const key = track?.title ? trackKey(track) : null;
+      const times = [
+        track?.id ? durable.byId.get(track.id) : undefined,
+        track?.id ? ids.get(track.id) : undefined,
+        key ? durable.byKey.get(key) : undefined,
+        key ? keys.get(key) : undefined,
+      ].filter((at): at is number => at != null);
+      return times.length ? Math.max(...times) : null;
+    };
+  }
+
+  // What the queue, not the coast, put on air at or after `sinceMs`: the
+  // on-air track and every play behind it, newest first. Coast plays are left
+  // out on purpose — the coast plays its own file as a shuffle pass and does not
+  // repeat inside one — so the scheduler's handover check (#1975) asks only
+  // about the DJ's picks, requests and studio pushes. Bounded by the 50-play
+  // history, which outlasts the hourly rebuild by about two hours of music.
+  airedFromQueueSince(sinceMs: number): CandidateLike[] {
+    const aired: CandidateLike[] = [];
+    if (this.current?.track && this.current.source !== 'auto') aired.push(this.current.track);
+    for (const item of this.history) {
+      if (Date.parse(item.endedAt ?? '') < sinceMs) break;
+      if (item.track && item.source !== 'auto') aired.push(item.track);
+    }
+    return aired;
+  }
+
   queuedIds(): Set<string> {
     const ids = new Set<string>();
     if (this.current?.track?.id) ids.add(this.current.track.id);
@@ -4216,14 +4529,23 @@ class Queue {
   // Both pickers use lead-artist keys from the queue tail, current track, and last
   // n distinct plays. New picks append at the tail, including behind unaired requests.
   neighbourArtistRoots(n = 0): Set<string> {
-    const out = new Set<string>();
-    if (!Number.isFinite(n) || n <= 0) return out;
-    const add = (artist: string | null | undefined) => {
-      const key = artistRootKey({ artist });
-      if (key) out.add(key);
-    };
-    for (const item of this.upcoming.slice(-n)) add(item?.track?.artist);
-    add(this.current?.track?.artist);
+    return new Set(this.neighbourArtistCredits(n).flatMap(artist => creditedActKeys({ artist })));
+  }
+
+  // The window's slots, walked ONCE for every reader below: up to n
+  // queued-and-unaired tracks in queue order, the track on air, then the last n
+  // distinct plays newest first. `slot` is how many slots before the NEW pick
+  // each was heard — 1 is the queue tail the pick will follow — so a reader
+  // that only needs the credits ignores it. One walk, so the guard's set, the
+  // named list and the distances cannot disagree about which plays are in it.
+  private neighbourArtistSlots(n: number): { artist: string | null | undefined; slot: number }[] {
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const queued = this.upcoming.slice(-n);
+    const out: { artist: string | null | undefined; slot: number }[] = queued.map(
+      (item, i) => ({ artist: item?.track?.artist, slot: queued.length - i }),
+    );
+    let slot = queued.length;
+    out.push({ artist: this.current?.track?.artist, slot: ++slot });
     // Distinct TRACKS, not rows — the sidecar can hold two entries for one play
     // (see recentlyPlayedByCount), and a duplicate row must not burn a slot.
     const seenIds = new Set<string>();
@@ -4236,9 +4558,52 @@ class Queue {
       distinct++;
       if (p.id) seenIds.add(p.id);
       if (k) seenKeys.add(k);
-      add(p.artist);
+      out.push({ artist: p.artist, slot: ++slot });
     }
     return out;
+  }
+
+  // The same window as display credits, one per lead-artist key (first seen
+  // wins), so the Agentic pick event can name exactly the artists the guard
+  // will refuse. One walk serves both, so the named list and the guard's set
+  // cannot drift apart.
+  neighbourArtistCredits(n = 0): string[] {
+    const out = new Map<string, string>();
+    for (const { artist } of this.neighbourArtistSlots(n)) {
+      const key = artistRootKey({ artist });
+      if (key && !out.has(key)) out.set(key, String(artist).trim());
+    }
+    return [...out.values()];
+  }
+
+  // The same window as how many slots before the NEW pick each act was heard,
+  // the nearest occurrence winning. The artist guard reads it to relax onto
+  // the artist heard LONGEST ago when every candidate is inside the window
+  // (L3). Every slot's credit counts, so its keys are a SUPERSET of
+  // neighbourArtistRoots, which keys only the first credit per lead act: a
+  // later "Daljit Chahal & Karan Aujla" behind "Daljit Chahal & Amantej Hundal"
+  // adds Karan Aujla here and not there. The swap only runs when every
+  // candidate is already in the roots, so the extra keys can only make a
+  // distance nearer, never invent one.
+  neighbourArtistDistances(n = 0): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const { artist, slot } of this.neighbourArtistSlots(n)) {
+      for (const key of creditedActKeys({ artist })) out.set(key, Math.min(slot, out.get(key) ?? Infinity));
+    }
+    return out;
+  }
+
+  // The window as act names for the Agentic pick event: every act the guard
+  // will refuse, deduped across credits (recency.creditedActNames).
+  neighbourArtistActs(n = 0): string[] {
+    const out = new Map<string, string>();
+    for (const credit of this.neighbourArtistCredits(n)) {
+      for (const name of creditedActNames(credit)) {
+        const key = artistRootKey(name);
+        if (key && !out.has(key)) out.set(key, name);
+      }
+    }
+    return [...out.values()];
   }
 
   // Both pickers share this album window, including every unaired queue item.
@@ -4260,6 +4625,22 @@ class Queue {
     for (const p of this._recentPlays) {
       if (new Date(p.endedAt).getTime() < cutoff) break;
       add(p);
+    }
+    return out;
+  }
+
+  // The n tracks a NEW pick will follow, nearest first: queued-and-unaired
+  // items from the tail (a new pick appends there), the track on air, then
+  // the aired history. The genre guard's run window, walked from the same end
+  // of the queue as the artist and album windows above. Under pair drain the
+  // pick follows the held head, not `current`, so a window that started at
+  // `current` judged the run one slot early (#2007).
+  precedingTracks(n = 0): Track[] {
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const out: Track[] = [];
+    for (const item of [...[...this.upcoming].reverse(), this.current, ...this.history]) {
+      if (out.length >= n) break;
+      if (item?.track) out.push(item.track);
     }
     return out;
   }

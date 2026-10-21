@@ -3,6 +3,7 @@
 
 import { useCallback, useRef } from 'react';
 import { AnimatePresence, m } from 'motion/react';
+import { ArrowUpRight, Heart, Play, Square } from 'lucide-react';
 import styles from './Platter.module.css';
 import {
   usePlayerActions,
@@ -223,7 +224,12 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
         <div className="flex shrink-0 items-center gap-3">
           <div className="hidden items-center gap-3 font-mono text-[11px] tracking-[0.16em] uppercase md:flex">
-            {showName && <span className="max-w-[22vw] truncate">▸ {showName}</span>}
+            {showName && (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Play className="size-2.5 flex-none fill-current" />
+                <span className="max-w-[22vw] truncate">{showName}</span>
+              </span>
+            )}
             <span className="text-[var(--accent)]">with {djName}</span>
             <span className="max-w-[24vw] truncate border-l border-soft-border pl-3 text-muted">
               {contextLine(context) || (offline ? 'off air' : 'on air')}
@@ -254,7 +260,9 @@ export default function PlatterSkin(_props: SkinProps) {
                   tunedIn ? 'bg-[var(--accent)] text-bg' : 'bg-bg text-ink hover:bg-[var(--field)]',
                 )}
               >
-                <span className="text-[30px] leading-none">{tunedIn ? '■' : '▶'}</span>
+                {tunedIn
+                  ? <Square className="size-6 fill-current" strokeWidth={0} />
+                  : <Play className="ml-1 size-7 fill-current" strokeWidth={0} />}
                 <span className="font-mono text-[8px] font-bold tracking-[0.22em]">{tunedIn ? 'STOP' : 'START'}</span>
               </button>
               <button
@@ -282,7 +290,7 @@ export default function PlatterSkin(_props: SkinProps) {
                     like.pending && 'opacity-60',
                   )}
                 >
-                  <span className="text-[16px] leading-none">{like.liked ? '♥' : '♡'}</span>
+                  <Heart className={cn('size-4', like.liked && 'fill-current')} />
                   {like.count > 0 && <span className="tabular-nums">{like.count}</span>}
                 </button>
               )}
@@ -486,7 +494,7 @@ export default function PlatterSkin(_props: SkinProps) {
                         : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
                     )}
                   >
-                    {slip.sending ? 'sending…' : 'send ↗'}
+                    {slip.sending ? 'sending…' : <span className="flex items-center gap-1">send <ArrowUpRight className="size-3" /></span>}
                   </button>
                 </div>
                 <div className="flex items-baseline gap-3">
@@ -537,8 +545,9 @@ export default function PlatterSkin(_props: SkinProps) {
           <span className="grid justify-items-center gap-6">
             <Deck playing={false} stationName={stationName} title={nowPlaying?.title ?? 'one live stream'} artist={artist} />
             <span className="grid justify-items-center gap-1.5 text-center">
-              <span className="font-mono text-[11px] font-bold tracking-[0.24em] text-[var(--accent)] uppercase">
-                ▶ drop the needle
+              <span className="flex items-center gap-2 font-mono text-[11px] font-bold tracking-[0.24em] text-[var(--accent)] uppercase">
+                <Play className="size-2.5 fill-current" strokeWidth={0} />
+                drop the needle
               </span>
               <span className="font-mono text-[11px] tracking-[0.2em] text-muted uppercase">tap to tune in</span>
             </span>

@@ -10,6 +10,7 @@ interface ErrorLike {
   message?: unknown;
   statusCode?: unknown;
   status?: unknown;
+  status_code?: unknown;
   code?: unknown;
   name?: unknown;
   cause?: ErrorLike;
@@ -52,6 +53,8 @@ interface ToolResultLike {
 export interface StepLike {
   toolCalls?: ToolCallLike[];
   toolResults?: ToolResultLike[];
+  usage?: TokenUsage;
+  totalUsage?: TokenUsage;
 }
 
 // The flattened discovery-tool entry surfaced to /debug.
@@ -59,6 +62,8 @@ export interface ToolCallSummary {
   name: string | undefined;
   args: unknown;
   result: unknown;
+  // One-based discovery round, retained for faithful native-shortlist replay.
+  round: number;
 }
 
 // Reasoning is suppressed at the provider layer when `llm.reasoning` is off;
@@ -149,6 +154,43 @@ export function usageOf(
   return { input, output, total };
 }
 
+// Every billed provider call inside one per-leg attempt, summed as it ENDS
+// rather than read off a result afterwards. A result only exists for a call
+// that returned: a declined forced tool, an unparseable object, a step cap
+// hit mid-exploration, a later leg's throw or a transient retry all leave
+// billed calls with no result to read, and the daily token cap
+// (telemetry/log.ts record()) only counts what reaches the record. Each
+// generateText/ToolLoopAgent in the attempt registers `onLanguageModelCallEnd`;
+// `usage()` is the success figure and `attachTo(err)` puts the same sum on a
+// throw, where failureDiagnostics reads it. One meter per leg attempt, so a
+// failover's backup leg records its own spend and nothing is counted twice.
+export interface UsageMeter {
+  readonly onLanguageModelCallEnd: (event: { usage?: TokenUsage }) => void;
+  usage(): { input: number; output: number; total: number };
+  attachTo(err: unknown): void;
+}
+
+export function createUsageMeter(): UsageMeter {
+  const sum = { input: 0, output: 0, total: 0 };
+  return {
+    onLanguageModelCallEnd: (event) => {
+      const u = usageOf({ usage: event?.usage });
+      sum.input += u.input;
+      sum.output += u.output;
+      sum.total += u.total;
+    },
+    usage: () => ({ ...sum }),
+    attachTo(err) {
+      // A metered zero says nothing, so it never overwrites usage an error
+      // already carried; otherwise the meter saw every call the error did.
+      if (!err || typeof err !== 'object' || sum.total <= 0) return;
+      try {
+        (err as ErrorLike).usage = { inputTokens: sum.input, outputTokens: sum.output, totalTokens: sum.total };
+      } catch { /* A frozen error keeps whatever it carried. */ }
+    },
+  };
+}
+
 // Per-step performance stats aggregated for /debug, in ms. undefined when the
 // result carries none, so the record omits the field.
 export function perfOf(result: any): { modelMs: number; stepMs: number; toolMs?: Record<string, number>; tokensPerSec?: number } | undefined {
@@ -219,6 +261,11 @@ export function budgetMode(
 //                          same-leg retry gets first crack and only a persistent
 //                          overload reaches failover.
 //   isModelUnavailable   → fail over; permanent even with a transient status.
+//   isServerExhausted    → fail over; a 5xx that survived same-leg retries means
+//                          this leg cannot serve the call (bare-500 servers have
+//                          no wording for the message classifiers to match).
+//   isConnectionRefused  → NOT transient in practice: withTransientRetry skips
+//                          same-leg retries for it so failover decides at once.
 
 // AI_RetryError is a wrapper with no statusCode/cause/responseHeaders of its
 // own; the real APICallError lives in err.lastError / err.errors[]. Every
@@ -244,6 +291,22 @@ export function isGenerationControlError(err: ErrorLike | null | undefined): boo
   return isProviderRequestTimeout(err) || err?.code === 'GENERATION_CANCELLED' || err?.name === 'AgentDeadlineError';
 }
 
+// A local parse failure — JSON.parse's SyntaxError, a schema's ZodError — is
+// built from the MODEL'S OWN output, and V8 quotes that output in the message
+// ('Unexpected token \'F\', "Forbidden..." is not valid JSON'). So every
+// message-reading branch below sees an empty message for one: a reply that
+// happens to say "Forbidden", "quota" or "503" is not a provider verdict.
+// Status and code checks are unaffected (these errors carry neither).
+function isLocalParseError(err: ErrorLike | null | undefined): boolean {
+  return err?.name === 'SyntaxError' || err?.name === 'ZodError';
+}
+function providerMessage(err: ErrorLike): string {
+  if (isLocalParseError(err)) return '';
+  const own = String(err.message || '');
+  if (own) return own;
+  return isLocalParseError(err.cause) ? '' : String(err.cause?.message || '');
+}
+
 const TRANSIENT_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 const TRANSIENT_CODE = new Set([
   'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN',
@@ -263,7 +326,7 @@ export function isTransient(err: ErrorLike | null | undefined): boolean {
   if (typeof code === 'string' && TRANSIENT_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
   if (name === 'AbortError' || name === 'TimeoutError') return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (/\b(408|425|429|500|502|503|504)\b/.test(msg)) return true;
   if (/socket hang up|fetch failed|network.*(error|timeout)/i.test(msg)) return true;
   return false;
@@ -284,9 +347,55 @@ export function isUnreachable(err: ErrorLike | null | undefined): boolean {
   if (typeof code === 'string' && UNREACHABLE_CODE.has(code)) return true;
   const name = err.name ?? err.cause?.name;
   if (name === 'AbortError' || name === 'TimeoutError') return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (/fetch failed|socket hang up|getaddrinfo|connect ECONNREFUSED|connect ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(msg)) {
     return true;
+  }
+  return false;
+}
+
+// A 5xx that SURVIVED same-leg retries: the leg answered but cannot serve this
+// call. The canonical case is a server with no model loaded — it answers a bare
+// 500 with no wording, so every message classifier (isModelUnavailable and
+// friends) sees nothing to match, and the call dies with the configured backup
+// sitting idle. Status-based by design: only the 5xx subset that isTransient
+// retries ({500, 502, 503, 504}) can reach failover having burned its same-leg
+// budget. The status code, when the error carries one, is the whole answer: a
+// 400 whose MESSAGE happens to contain "500" ("max_tokens must be at most
+// 500") is a bad request, not a server that cannot serve, and reading it as one
+// would park a healthy primary for the whole sticky window. The message is
+// consulted only for an error with no status at all (a transport that folds the
+// status into its text), mirroring isTransient's wording band for that case.
+const EXHAUSTED_STATUS = new Set([500, 502, 503, 504]);
+
+export function isServerExhausted(err: ErrorLike | null | undefined): boolean {
+  if (!err) return false;
+  err = unwrapSdkError(err);
+  if (isGenerationControlError(err)) return false;
+  const status = err.statusCode ?? err.status ?? err.status_code
+    ?? err.cause?.statusCode ?? err.cause?.status ?? err.cause?.status_code;
+  if (typeof status === 'number') return EXHAUSTED_STATUS.has(status);
+  const msg = providerMessage(err);
+  return /\b(500|502|503|504)\b/.test(msg);
+}
+
+// A host that refuses the connection or cannot be resolved is not coming back
+// within a retry backoff (0.5s + 1.5s): same-leg retries against it only add
+// latency before failover gets to decide, and a service mid-restart is better
+// served by the backup than by waiting out the port. EAI_AGAIN (temporary DNS
+// failure) stays retryable — it can clear in a second.
+const CONNECTION_REFUSED_CODE = new Set(['ECONNREFUSED', 'ENOTFOUND']);
+
+export function isConnectionRefused(err: ErrorLike | null | undefined): boolean {
+  const seen = new Set<ErrorLike>();
+  while (err && typeof err === 'object' && !seen.has(err)) {
+    seen.add(err);
+    if (isGenerationControlError(err) || isLocalParseError(err)) return false;
+    const inner = unwrapSdkError(err);
+    if (inner !== err) { err = inner; continue; }
+    if (typeof err.code === 'string' && CONNECTION_REFUSED_CODE.has(err.code)) return true;
+    if (/connect ECONNREFUSED|ENOTFOUND/i.test(providerMessage(err))) return true;
+    err = err.cause;
   }
   return false;
 }
@@ -328,13 +437,24 @@ const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:\s+[`
 // Ollama's incident wording omits "model". Bound it to a single model-ID token
 // containing a digit, dot or colon, followed by the dated retirement sentence.
 const MODEL_ID_RETIRED_RE = /^\s*(?=[\w.:/-]*[\d.:])[\w.:/-]{1,60} was retired at \d{4}-\d{2}-\d{2}\b/i;
+// Anthropic answers a retired or unknown model id with a 404 whose error type is
+// `not_found_error` and whose whole message is `model: <id>`. A proxy relays it
+// as a tail inside its own error (CLIProxyAPI: "…; last upstream error:
+// not_found_error: model: claude-3-5-haiku-20241022)"), often under a 429 with
+// a day-long Retry-After, which is how it read as a rate limit and burned three
+// SDK attempts per call. The type name anchors the relayed form; the bare form
+// counts only on a 404, where the message IS the whole answer.
+const ANTHROPIC_MODEL_NOT_FOUND_RE = /\bnot_found_error:?\s+model:\s*[`'"]?[\w.:/-]{1,60}[`'"]?(?=$|[\s;),])/i;
+const BARE_MODEL_ID_RE = /^\s*model:\s*[`'"]?[\w.:/-]{1,60}[`'"]?\s*$/i;
 
 export function isModelUnavailable(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   if (MODEL_GONE_CODES.has(upstreamErrorCode(err))) return true;
-  const msg = String(err.message || err.cause?.message || '');
-  return MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg);
+  const msg = providerMessage(err);
+  if (MODEL_GONE_RE.test(msg) || MODEL_ID_RETIRED_RE.test(msg) || ANTHROPIC_MODEL_NOT_FOUND_RE.test(msg)) return true;
+  const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
+  return status === 404 && BARE_MODEL_ID_RE.test(msg);
 }
 
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
@@ -347,7 +467,7 @@ export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
   // A bare 429 is deliberately NOT enough — only one whose message names a
   // quota, via QUOTA_RE below.
   if (status === 402) return true;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   if (AUTH_RE.test(msg)) return true;
   if (QUOTA_RE.test(msg)) return true;
   // Monthly cap: by code first, message second.
@@ -365,7 +485,7 @@ export function isUpstreamOverloaded(err: ErrorLike | null | undefined): boolean
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
   if (status === 529) return true; // Anthropic "Overloaded" — outside TRANSIENT_STATUS
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   return UPSTREAM_OVERLOAD_RE.test(msg);
 }
 
@@ -379,7 +499,7 @@ export function isRateLimited(err: ErrorLike | null | undefined): boolean {
   if (!err) return false;
   err = unwrapSdkError(err);
   const status = err.statusCode ?? err.status ?? err.cause?.statusCode ?? err.cause?.status;
-  const msg = String(err.message || err.cause?.message || '');
+  const msg = providerMessage(err);
   const is429 = status === 429 || (status == null && /\b429\b/.test(msg));
   if (!is429) return false;
   const headers = err.responseHeaders ?? err.cause?.responseHeaders;
@@ -403,7 +523,7 @@ export function errReason(err: ErrorLike | null | undefined): string {
 // Flatten a tool-loop result's discovery trail for /debug. Excludes the
 // synthetic `done` tool — that is the schema-emit signal, not a discovery action.
 export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefined): ToolCallSummary[] {
-  return (result?.steps || []).flatMap((s) => {
+  return (result?.steps || []).flatMap((s, stepIndex) => {
     const results = s.toolResults || [];
     return (s.toolCalls || [])
       .filter((c) => c.toolName !== 'done')
@@ -411,6 +531,7 @@ export function flattenToolCalls(result: { steps?: StepLike[] } | null | undefin
         name: c.toolName,
         args: c.input ?? c.args ?? null,
         result: results[i]?.output ?? results[i]?.result ?? null,
+        round: stepIndex + 1,
       }));
   });
 }
@@ -608,11 +729,20 @@ export function nearestId(id: string, candidateIds: Iterable<string>): string | 
   return secondDist - bestDist >= NEAREST_ID_MARGIN ? best : null;
 }
 
-// ElevenLabs eleven_v3* family: bracketed audio tags render as expressive cues,
-// and `stability` is discrete (snapV3Stability). Lives here so djSystem's tag
-// hint and cloud-speech's snap share one rule without an import cycle.
+// ElevenLabs eleven_v3* family: `stability` is discrete (snapV3Stability).
+// Lives here so cloud-speech's snap and the cue gate below share one place
+// without an import cycle.
 export function isElevenLabsV3(model: string): boolean {
   return /^eleven[_-]?v3/i.test(model || '');
+}
+
+// ElevenLabs families that render bracketed audio tags as expressive cues:
+// eleven_v3* and eleven_v4* (v4 takes a continuous stability, so it is not a
+// v3 for the snap). The family id below predates v4 and covers both. Named
+// families only: a model that cannot render tags reads them aloud, so an
+// unknown future id stays out until it is checked.
+export function isElevenLabsAudioTagModel(model: string): boolean {
+  return /^eleven[_-]?v[34](?:[._-]|$)/i.test(model || '');
 }
 
 // Fish's natural-language bracket cues are an S2.1 capability. Custom model
@@ -621,9 +751,20 @@ export function isFishS21Model(model: string): boolean {
   return /^s2[._-]?1(?:[._-]|$)/i.test(model || '');
 }
 
+// Speech model ids from ElevenLabs' GET /v1/models, which also lists
+// voice-changer and other non-speech models. Provider order is kept: it leads
+// with the current generation.
+export function elevenLabsTtsModelIds(data: unknown): string[] {
+  if (!Array.isArray(data)) return [];
+  return (data as { model_id?: unknown; can_do_text_to_speech?: unknown }[])
+    .filter((m) => m?.can_do_text_to_speech === true)
+    .map((m) => m.model_id)
+    .filter((id): id is string => typeof id === 'string' && !!id);
+}
+
 export function cloudExpressionCueFamily(provider: string, model: string): 'fish-s21' | 'elevenlabs-v3' | null {
   if (provider === 'fish-audio' && isFishS21Model(model)) return 'fish-s21';
-  if (provider === 'elevenlabs' && isElevenLabsV3(model)) return 'elevenlabs-v3';
+  if (provider === 'elevenlabs' && isElevenLabsAudioTagModel(model)) return 'elevenlabs-v3';
   return null;
 }
 
@@ -761,3 +902,22 @@ export function soulBrief(soul: unknown, max: number = SOUL_BRIEF_MAX): string {
   if (s.length <= max) return s;
   return `${String(clipText(s, max)).replace(/[,;:.]+$/, '')}…`;
 }
+
+// The user turn a replayed conversation gets when it would otherwise END on the
+// model's own turn. Wording mirrors the recovery agent's instruction.
+export const RECOVERY_USER_TURN = 'Call the `done` tool now with your final answer.';
+
+// A conversation handed back to a model must not end on an assistant turn.
+// The done-only recovery replays the first run's trail, and when that run
+// stopped with plain text instead of a tool call, the trail's last message is
+// the model's own reply. Sending that is "assistant prefill", which current
+// Claude generations refuse outright ("This model does not support assistant
+// message prefill"), so the recovery threw and the segment was lost. Appending
+// a user turn only in that case keeps strict role alternation (#555) intact:
+// a conversation already ending on a user or tool message is returned as is.
+export function endOnUserTurn<M extends { role?: string }>(messages: M[], text: string = RECOVERY_USER_TURN): M[] {
+  const last = messages[messages.length - 1];
+  if (last?.role !== 'assistant') return messages;
+  return [...messages, { role: 'user', content: text } as unknown as M];
+}
+

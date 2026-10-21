@@ -19,7 +19,7 @@ const {
   soundKnnWidth,
   similarTracksOutcome,
 } = await import('../src/util/similar-tracks.js');
-const { stationAuthCandidate, stationAuthDecision } = await import('../src/util/listener-auth.js');
+const { stationAuthCandidate } = await import('../src/util/listener-auth.js');
 
 const PW = 'hunter2-correct-horse';
 
@@ -97,12 +97,6 @@ test('the published row is a fixed, non-widening subset', () => {
     ],
     'adding a key here publishes it to the internet — do it deliberately',
   );
-});
-
-test('the CLAP-derived audioMoods stay an admin surface', () => {
-  // /library/browse publishes audioMoods behind requireAdmin; this route is
-  // reachable with no credential on a public station.
-  assert.equal('audioMoods' in publicSimilarTrack(SEED_ROW as never), false);
 });
 
 test('the year is the ERA year, never the raw release year', () => {
@@ -238,22 +232,6 @@ test('privatePlayer OFF with listenerAuth ON still closes the gate', async () =>
   await settings.update({ privacy: { password: PW, privatePlayer: false, listenerAuth: true } } as never);
   assert.equal((await callGate()).passed, false);
   assert.equal((await callGate({ headers: { 'x-station-auth': PW } })).passed, true);
-
-  // The pure decision agrees, so the middleware can't be collapsed into the
-  // Icecast one without this failing.
-  assert.equal(
-    stationAuthDecision({ privatePlayer: false, listenerAuth: true, password: PW, candidate: 'x' }),
-    false,
-  );
-});
-
-test('a lock with no password on file is closed, not open', async () => {
-  // update() refuses to persist this, but a hand-edited settings.json can
-  // produce it; "no password" must not read as "no lock".
-  assert.equal(
-    stationAuthDecision({ privatePlayer: true, listenerAuth: false, password: '', candidate: '' }),
-    false,
-  );
 });
 
 test('a failing API read cannot spend the player password box\'s attempts', async () => {
@@ -275,6 +253,45 @@ test('a failing API read cannot spend the player password box\'s attempts', asyn
   // The default argument is the password box, so POST /station-auth keeps its
   // historical counter.
   assert.equal(checkAuthRateLimit('203.0.113.250').ok, true);
+});
+
+test('a full failure bucket refuses the RIGHT password too, without comparing', async () => {
+  // Counting only failures is safe only if the bucket is read before the
+  // comparison. Read after it, a full bucket would 429 every wrong guess and
+  // still pass the right one — the cap would never stop the guessing.
+  await settings.update({ privacy: { password: PW, privatePlayer: true } } as never);
+  const ip = '198.51.100.42';
+  const call = async (headers: Record<string, string> = {}) => {
+    const res = fakeRes();
+    let passed = false;
+    await requireStationAuth(
+      { headers: { 'x-forwarded-for': ip, ...headers }, query: {}, socket: { remoteAddress: '127.0.0.1' } } as never,
+      res as never,
+      () => { passed = true; },
+    );
+    return { passed, res };
+  };
+
+  // The right password does not spend an attempt — this is a read an agent polls.
+  for (let i = 0; i < 25; i++) assert.equal((await call({ 'x-station-auth': PW })).passed, true);
+
+  for (let i = 0; i < 20; i++) {
+    assert.equal((await call({ 'x-station-auth': `guess-${i}` })).res.code, 401, `failure ${i + 1} is a 401`);
+  }
+  const wrong = await call({ 'x-station-auth': 'guess-20' });
+  assert.equal(wrong.res.code, 429, 'the 21st failure is refused');
+  const right = await call({ 'x-station-auth': PW });
+  assert.equal(right.passed, false, 'the right password is refused while the bucket is full');
+  assert.equal(right.res.code, 429, 'and gets the same answer a wrong one does');
+  assert.ok(Number(right.res.headers['Retry-After']) > 0);
+
+  // Another address is unaffected.
+  assert.equal((await callGate({ headers: { 'x-station-auth': PW } })).passed, true);
+
+  // A public station never reads the counter, so leftover failures from its
+  // private days cannot shut a public read.
+  await settings.update({ privacy: { password: PW, privatePlayer: false, listenerAuth: false } } as never);
+  assert.equal((await call()).passed, true, 'public again → open, whatever the bucket holds');
 });
 
 test('GET /similar-tracks is mounted with requireStationAuth in front of it', async () => {

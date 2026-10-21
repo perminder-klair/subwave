@@ -1,5 +1,6 @@
  
 import type { TaggerState, LibraryStatsLite, BudgetMode } from '../LibraryTaggingPanel';
+import type { TransitionDrop } from '../../../lib/transitionStats';
 
 export interface Track {
   id: string;
@@ -48,9 +49,22 @@ export type LikeIndex = Record<string, { count: number; operator: boolean }>;
 
 export interface LikedResponse { rows: Track[]; total: number }
 
+// Why search text ran as plain text. `syntax`: no query at all ("AC/DC"), so
+// the box offers to search it as written; `incomplete`: it stops mid-query,
+// most often while still being typed; `meaning`: a query we do not run.
+export interface QueryError { message: string; offset: number; kind: 'syntax' | 'incomplete' | 'meaning' }
+
 export interface BrowseResponse {
   rows: Track[];
   total: number;
+  // The search text was not a valid query and ran as plain text.
+  queryError?: QueryError | null;
+  readsAs?: string;
+  // The search text the feedback above belongs to.
+  searched?: string;
+  // The search's stored keys are still being rebuilt after a bulk change, so
+  // its answer may be missing tracks.
+  reindexing?: boolean;
   moodVocab: string[];
   stats: {
     total: number;
@@ -153,6 +167,15 @@ export interface PlayEntry {
   requestedBy: string | null;
   showId: string | null;
   showName: string | null;
+  // The seam record. `transition` is the label of the seam INTO this track as
+  // the controller armed it ('Normal', 'Washout + Sweep', 'Stem blend', …);
+  // `transitionAsk` is the DJ's own ask on the pick; `transitionDrops` are the
+  // effects it asked for that did not air, each with a MixDropReason code. All
+  // three are null on rows written before the record existed. Optional so an
+  // older controller that omits them reads the same as null.
+  transition?: string | null;
+  transitionAsk?: string | null;
+  transitionDrops?: TransitionDrop[] | null;
 }
 
 export interface SettingsResponse {

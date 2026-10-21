@@ -1,5 +1,5 @@
 import { normalizeStationLocale } from '../../../lib/format';
-import { normalizeGeminiSafety, TRANSITION_EFFECTS, type TransitionEffect } from '../../../lib/schemas.generated';
+import { normalizeGeminiSafety, SHORTLIST_PASSES_DEFAULT, TRANSITION_EFFECTS, ttsVoiceLevellingSchema, type TransitionEffect } from '../../../lib/schemas.generated';
 import type { FormState, SettingsData, LlmHeaderRow } from './shared';
 
 // The single client-side copy, read by both form hydration and the dirty-check.
@@ -24,6 +24,12 @@ export const FISH_TTS_DEFAULTS = {
 function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
   if (!raw || typeof raw !== 'object') return [];
   return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
+}
+
+// The stored connection mode, as the form holds it. Anything unrecognised is
+// 'local', which is how the controller loads it too.
+function compatibleModeOf(v: unknown): 'local' | 'hosted' | 'auto' {
+  return v === 'hosted' || v === 'auto' ? v : 'local';
 }
 
 export function settingsForm(v: NonNullable<SettingsData['values']>): FormState {
@@ -123,6 +129,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
       // Absent (a settings.json predating the key) reads as ON, matching the
       // controller's own coercion in settings.load().
       enabled: v.tts?.enabled !== false,
+      voiceLevelling: ttsVoiceLevellingSchema.catch(false).parse(v.tts?.voiceLevelling),
       defaultEngine: v.tts?.defaultEngine ?? 'piper',
       // Absent block = off, matching the controller's normalizeTtsFallback().
       fallback: {
@@ -208,16 +215,23 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
         return legacy ? { [prov]: legacy } : {};
       })(),
       headers: headerRows(v.llm?.headers),
-      compatibleMode: v.llm?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+      compatibleMode: compatibleModeOf(v.llm?.compatibleMode),
       reasoning: !!v.llm?.reasoning,
       toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
       pickerAgent: !!v.llm?.pickerAgent,
+      trackSelection: v.llm?.trackSelection === 'shortlist' ? 'shortlist' : 'agentic',
+      shortlistPasses: typeof v.llm?.shortlistPasses === 'number' ? v.llm.shortlistPasses : SHORTLIST_PASSES_DEFAULT,
+      shortlistSearchPreparation: v.llm?.shortlistSearchPreparation === true,
+      guestMusicalLeanings: v.llm?.guestMusicalLeanings === true,
+      requestMatching: v.llm?.requestMatching === 'direct' ? 'direct' : 'agentic',
+      segmentRuntime: v.llm?.segmentRuntime === 'direct' ? 'direct' : 'agentic',
       // Fallback must track the controller's default (config.ts, 250): a
       // settings.json written before the field existed omits the key, and
       // seeding the OLD default here means opening Settings and saving any
       // LLM field silently persists it over the new one.
       noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 250),
       artistVarietyWindow: String(typeof v.llm?.artistVarietyWindow === 'number' ? v.llm.artistVarietyWindow : 5),
+      genreVarietyWindow: String(typeof v.llm?.genreVarietyWindow === 'number' ? v.llm.genreVarietyWindow : 0),
       requestWebResolve: !!v.llm?.requestWebResolve,
       agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
       pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
@@ -245,8 +259,9 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
           return legacy ? { [prov]: legacy } : {};
         })(),
         headers: headerRows(v.llm?.fallback?.headers),
-        compatibleMode: v.llm?.fallback?.compatibleMode === 'hosted' ? 'hosted' : 'local',
+        compatibleMode: compatibleModeOf(v.llm?.fallback?.compatibleMode),
         reasoning: !!v.llm?.fallback?.reasoning,
+        toolChoice: v.llm?.fallback?.toolChoice === 'auto' ? 'auto' : 'required',
       },
     },
     search: {

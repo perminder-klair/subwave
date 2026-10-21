@@ -432,6 +432,7 @@ export default function WebhooksPanel() {
       {fields.length === 0 && (
         <Card title="No webhooks yet">
           <EmptyState
+            art="jack"
             title="No webhooks yet"
             description="Add one to push now-playing and station events out to other services."
             action={<Btn sm onClick={() => append(blank(events))}>Add webhook</Btn>}

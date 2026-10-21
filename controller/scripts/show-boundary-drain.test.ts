@@ -16,6 +16,7 @@ const settings = await import('../src/settings.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const { getAnnotatedUri } = await import('../src/music/subsonic.js');
 const { BOUNDARY_TOLERANCE_SEC } = await import('../src/broadcast/show-boundary.js');
+const { nextTransitionLabel } = await import('../src/broadcast/queue/pure.js');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RADIO_LIQ = join(here, '..', '..', 'liquidsoap', 'radio.liq');
@@ -207,6 +208,52 @@ test('a boundary cut is a plain crossfade — every gesture stands down', () => 
   assert.match(uri, /liq_show_fade="true"/, 'the mixer is told why the track stops');
   assert.match(uri, /liq_cue_out="300"/, 'alongside the cut it explains');
   assert.doesNotMatch(uri, /liq_washout|liq_loop/, 'and no gesture the drain stripped');
+});
+
+// The SUCCESSOR of a cut track. radio.liq disarms its entry gestures too, so
+// the controller must stop advertising them — the label, the booth log and the
+// variety ledger all read these flags. Driven in the drain's own per-item order
+// (the cut track's mix pass and boundary stamps, then the successor's mix pass)
+// for both places the cut track can be when its successor drains: still queued
+// ahead of it (pair-drain hands the pair over together) and already on air (an
+// eager drain, or a successor that was held past the cut track's start).
+test('the pick after a cut track drops its entry gestures in both drain orders', async () => {
+  for (const order of ['queued ahead', 'on air'] as const) {
+    await seed({ station: true });
+    const personas = settings.get().personas.map((p, i) => (i === 0 ? { ...p, djMode: true } : p));
+    await settings.update({ personas });
+    const cutTrack = stage() as any;
+    const next = {
+      track: { id: 'next', title: 'Next', artist: 'C', duration: 240, sweep: true, chop: true },
+      aiPicked: true,
+    } as any;
+    queue.upcoming.push(next);
+    queue.djLog = [];
+    (queue as any)._recentEffects = [];
+
+    queue.applyMixTransition(cutTrack);
+    queue.applyBoundaryStamps(cutTrack, cutFor(cutTrack));
+    assert.equal(cutTrack.track.showFade, true, `${order}: the cut is armed first`);
+    cutTrack.sent = true;
+    if (order === 'on air') {
+      queue.current = { ...cutTrack, startedAt: new Date().toISOString() };
+      queue.upcoming = [next];
+    }
+    queue.applyMixTransition(next);
+
+    assert.equal(next.track.sweep, undefined, `${order}: the sweep is stripped`);
+    assert.equal(next.track.chop, undefined, `${order}: and the chop`);
+    const lines = queue.djLog.filter(e => e.kind === 'mix').map(e => e.message);
+    assert.ok(lines.includes('sweep dropped (the previous track is cut at a show change — that seam is a plain fade)'),
+      `${order}: the booth log says why`);
+    assert.ok(!lines.some(l => /sweep armed|chop armed/.test(l)), `${order}: and never claims it armed`);
+    assert.deepEqual((queue as any)._recentEffects, ['normal', 'normal'],
+      `${order}: the ledger records what is left, as for a stem seam`);
+    next.sent = true;
+    assert.equal(nextTransitionLabel(cutTrack, next), 'Normal', `${order}: the label is the plain fade`);
+  }
+  const personas = settings.get().personas.map(p => ({ ...p, djMode: false }));
+  await settings.update({ personas });
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));

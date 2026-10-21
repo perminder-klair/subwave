@@ -257,3 +257,49 @@ export async function ensureDefaults() {
     console.log('[sfx] no default sound effects available (no bundled files, no ElevenLabs key)');
   }
 }
+
+// What a stored effect's `file` may be: `<slug>.<audio ext>`, the only shape
+// create/importAudio/installDefault ever write. getPath and remove join it onto
+// the sfx folder, so this is the check that keeps a sidecar row inside it.
+function isStoredFileName(file: unknown): file is string {
+  if (typeof file !== 'string') return false;
+  const dot = file.lastIndexOf('.');
+  if (dot <= 0) return false;
+  const stem = file.slice(0, dot);
+  return slugify(stem) === stem && isAcceptedAudio(file) && /^[a-z0-9]+$/i.test(file.slice(dot + 1));
+}
+
+/**
+ * Replace the sidecar with the one a station backup carried. Backs the restore
+ * in routes/backup.ts, which used to write sfx.json verbatim. Each row answers
+ * to the rules the writers above apply — the key is a slug, `file` is
+ * `<slug>.<audio ext>` — and a row that fails is dropped and named.
+ */
+export async function restoreMeta(raw: unknown): Promise<{ kept: number; dropped: string[] }> {
+  const items = (raw as any)?.items;
+  if (!items || typeof items !== 'object' || Array.isArray(items)) {
+    throw new Error('sfx.json is not a sound-effect sidecar');
+  }
+  const next: Record<string, any> = {};
+  const dropped: string[] = [];
+  for (const [name, info] of Object.entries(items as Record<string, any>)) {
+    if (!name || slugify(name) !== name || !info || typeof info !== 'object' || !isStoredFileName(info.file)) {
+      dropped.push(name);
+      continue;
+    }
+    const duration = Number(info.durationSec);
+    next[name] = {
+      name,
+      description: typeof info.description === 'string' ? info.description : '',
+      prompt: typeof info.prompt === 'string' ? info.prompt : '',
+      durationSec: Number.isFinite(duration) && duration > 0 ? duration : null,
+      file: info.file,
+      builtin: info.builtin === true,
+      ...(typeof info.source === 'string' ? { source: info.source } : {}),
+      ...(typeof info.createdAt === 'string' ? { createdAt: info.createdAt } : {}),
+    };
+  }
+  await mkdir(DIR, { recursive: true });
+  await saveMeta({ items: next });
+  return { kept: Object.keys(next).length, dropped };
+}

@@ -41,7 +41,7 @@ const GUIDE = [
   {
     href: '/manual/themes',
     label: 'Skins & Themes',
-    blurb: 'Swap the player face between six built-in skins, pick the station-wide palette, or fork the reference player entirely.',
+    blurb: 'Swap the player face between eight built-in skins, pick the station-wide palette, or fork the reference player entirely.',
   },
   {
     href: '/manual/cli',

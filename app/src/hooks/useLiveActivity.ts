@@ -24,6 +24,8 @@ export interface UseLiveActivityParams {
   nowPlaying: NowPlayingTrack | null;
   activeShow?: ActiveShow | null;
   boothFeed?: SessionTurn[];
+  /** Listener buffer behind the live edge (useStationFeed.leadMs). */
+  leadMs: number;
   /** Epoch ms when the track became audible to this listener; the
    *  stream.bufferSeconds offset is already applied by useStationFeed. */
   trackStartedAt: number | null;
@@ -41,6 +43,7 @@ export function useLiveActivity({
   nowPlaying,
   activeShow,
   boothFeed,
+  leadMs,
   trackStartedAt,
   station,
   accent,
@@ -48,7 +51,7 @@ export function useLiveActivity({
 }: UseLiveActivityParams): void {
   const supported = useMemo(() => isLiveActivitySupported(), []);
 
-  const talking = useTalking(boothFeed);
+  const talking = useTalking(boothFeed, leadMs);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
   // Native artwork fetch ignores URL userinfo; pass the Basic header.

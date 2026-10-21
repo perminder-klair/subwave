@@ -123,7 +123,7 @@ try {
   // carries the mix into the ack, and nothing else.
   const reqMix = requestMatcherSystem(mixPersona);
   assert.match(reqMix, /Write the "ack" field in English with Japanese woven in/);
-  assert.match(reqMix, /Every OTHER field \(search_terms, artist, genre, mood, sort, intent, language\) stays in English/);
+  assert.match(reqMix, /Artist, title, album and search_terms keep canonical names in their original script/);
   assert.equal(requestMatcherSystem({ ...noLangPersona, alsoSpeaks: '' }), requestMatcherSystem(noLangPersona), 'an empty mix is byte-identical');
   // Cast exchanges stay one-language: each line airs in its own speaker's voice.
   assert.match(

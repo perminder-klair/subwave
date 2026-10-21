@@ -1,6 +1,6 @@
 {
   "name": "subwave-app",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "main": "index.ts",
   "dependencies": {
     "@bacons/apple-targets": "^5.0.0",

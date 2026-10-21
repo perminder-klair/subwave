@@ -70,7 +70,7 @@ intent-shaped tools.
 |---|---|---|---|
 | `subwave_health` | `GET /health` | none | no |
 | `subwave_now_playing` | `GET /now-playing` | none | no |
-| `subwave_station_state` | `GET /state` | none | no |
+| `subwave_station_state` | `GET /state` (+ `GET /debug/dj-log` with admin creds) | none (booth log: admin) | no |
 | `subwave_schedule` | `GET /schedule` | none | no |
 | `subwave_session` | `GET /session` | none | no |
 | `subwave_request_song` | `POST /request` + `GET /request/:id` | none | queues a track |
@@ -78,7 +78,7 @@ intent-shaped tools.
 | `subwave_search_library` | `GET /dj/search` | admin | no |
 | `subwave_similar_tracks` | `GET /similar-tracks` | station | no |
 | `subwave_queue_track` | `POST /dj/queue-track` | admin | queues a track |
-| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track |
+| `subwave_skip_track` | `POST /dj/skip` | admin | ends the current track (optional `expectId`: only that track, else refused) |
 | `subwave_dj_announce` | `POST /dj/say` | admin | speaks now |
 | `subwave_dj_segment` | `POST /dj/segment` | admin | speaks now |
 | `subwave_list_skills` | `GET /dj/skills` | admin | no |
@@ -93,7 +93,9 @@ intent-shaped tools.
 
 All read-only passthroughs. `now-playing` returns the current track, station
 context (time, weather, dominant mood), and live listener counts; `state`
-returns the upcoming queue, recent history, and the DJ booth log; `schedule`
+returns the upcoming queue and recent history, plus the DJ booth log when the
+connection carries admin credentials (the log is operator diagnostics, so the
+public `GET /state` no longer serves it); `schedule`
 the personas, shows, and weekly grid (in the station's timezone); `session`
 the DJ's live session identity and recent transcript turns (for up to 30
 minutes after a show change these lead with the previous show's last few
@@ -168,7 +170,9 @@ Puts a spoken update on-air via `POST /dj/say`. Three axes:
 - **`mode`** — `styled` (default) hands the text to the LLM as an *instruction*
   and the DJ rewrites it in persona before speaking; `raw` speaks the text
   verbatim. Give a topic → `styled`. Give finished words → `raw` (also the
-  right choice for emergency wording that must not be paraphrased).
+  right choice for emergency wording that must not be paraphrased). A `raw`
+  line is booth-logged and shown in the session feed but never fed back into
+  the DJ's later prompts, so it cannot resurface as banter (#1908).
 - **`placement`** — `solo` (default) is a heavy-ducked solo DJ moment (maps to
   the controller's `dj-speak` kind → `say.txt`); `over-track` is lightly ducked
   so the DJ talks over the playing song (maps to `link` → `intro.txt`).
@@ -256,14 +260,17 @@ prompt.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod behind Caddy: `http://localhost:7700/api`. |
+| `SUBWAVE_API_URL` | auto-detected | Controller base URL. Unset: the first of `http://localhost:7701` (dev) and `http://localhost:7700/api` (prod behind Caddy) whose `/health` answers, else `:7701`. |
 | `SUBWAVE_ADMIN_USER` | — | Matches the controller's `ADMIN_USER`. |
 | `SUBWAVE_ADMIN_PASS` | — | Matches the controller's `ADMIN_PASS`. |
 | `SUBWAVE_STATION_PASSWORD` | — | Matches `settings.privacy.password`. Only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 In dev the controller is exposed directly on `:7701`. In prod only Caddy binds
 a host port, so the server must target `:7700/api` — the `handle_path` rule
-strips the `/api` prefix before the controller sees the route.
+strips the `/api` prefix before the controller sees the route. With the variable
+unset the stdio server probes both once at launch, so the repo's `.mcp.json`
+works against either stack; a stack that is down at launch leaves it on `:7701`
+until the MCP server is restarted. Set the variable for any other host.
 
 ---
 

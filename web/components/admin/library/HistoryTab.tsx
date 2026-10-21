@@ -11,6 +11,7 @@ import { PAGE_SIZE } from './types';
 import type { BlockType, LikeIndex, PlayEntry, Track } from './types';
 import { Thumb } from './bits';
 import { BlockMenu, HeartButton, likeStateFor } from './row-actions';
+import { historySeamLine } from '../../../lib/transitionStats';
 
 function playDayLabel(iso: string): string {
   const d = new Date(iso);
@@ -96,6 +97,7 @@ export function HistoryTab({
               const prevDay = prev ? playDayLabel(prev.playedAt) : null;
               const time = new Date(p.playedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
               const track = historyTrack(p);
+              const seam = historySeamLine(p);
               return (
                 <Fragment key={p.id}>
                   {day !== prevDay && (
@@ -109,6 +111,11 @@ export function HistoryTab({
                     <div className="min-w-0 flex-1">
                       <div className="lib-title">{p.title || 'unknown'}</div>
                       <div className="lib-artist">{p.artist || ''}{p.album ? ` · ${p.album}` : ''}</div>
+                      {seam && (
+                        <div className="truncate text-[11px] text-muted" title={seam.title}>
+                          ↳ {seam.text}
+                        </div>
+                      )}
                     </div>
                     {p.showName && (
                       <span className="lib-mtag hidden shrink-0 md:inline-block" title="show on air">{p.showName}</span>

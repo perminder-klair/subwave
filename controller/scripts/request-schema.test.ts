@@ -12,6 +12,7 @@ import {
 } from '../src/schemas/request.js';
 import { cleanRequesterName } from '../src/util/request-guard.js';
 import { firstMessage } from '../src/util/zod-error.js';
+import { listenerRequestSchema as playerRequestSchema } from '../../web/lib/schemas.generated.js';
 
 test('accepts a bare text and defaults name to empty', () => {
   const r = listenerRequestSchema.parse({ text: 'play something for late-night driving' });
@@ -52,6 +53,26 @@ test('refuses over-cap text (the old path silently sliced to 280)', () => {
   const r = listenerRequestSchema.safeParse({ text: 'x'.repeat(REQUEST_TEXT_MAX + 1) });
   assert.equal(r.success, false);
   assert.match(r.error!.issues[0].message, /280/);
+});
+
+test('server and player refuse requests that expand past the cap under NFKC', () => {
+  for (const schema of [listenerRequestSchema, playerRequestSchema]) {
+    for (const text of ['\uFDFA'.repeat(REQUEST_TEXT_MAX), '\uFB01'.repeat(141)]) {
+      assert.ok(text.length <= REQUEST_TEXT_MAX, 'the raw input fits');
+      assert.ok(text.normalize('NFKC').length > REQUEST_TEXT_MAX, 'normalization expands it past the cap');
+      const result = schema.safeParse({ text });
+      assert.equal(result.success, false);
+      assert.equal(result.error?.issues[0].message, `Keep it under ${REQUEST_TEXT_MAX} characters.`);
+    }
+  }
+});
+
+test('text at the normalized cap is accepted without changing the submitted text', () => {
+  const text = '\uFB01'.repeat(140);
+  assert.equal(text.normalize('NFKC').length, REQUEST_TEXT_MAX);
+  for (const schema of [listenerRequestSchema, playerRequestSchema]) {
+    assert.equal(schema.parse({ text }).text, text);
+  }
 });
 
 test('refuses an over-cap or non-string name (the old path sliced / coerced)', () => {
@@ -124,6 +145,16 @@ test('route: over-cap text 400s with fieldErrors keyed "text"', () => {
   const { res, nexted } = runValidate({ text: 'x'.repeat(REQUEST_TEXT_MAX + 1) });
   assert.equal(nexted, false);
   assert.equal(res.code, 400);
+  assert.deepEqual(Object.keys(res.body.fieldErrors ?? {}), ['text']);
+});
+
+test('route: normalization expansion is refused before the request handler runs', () => {
+  const { res, nexted } = runValidate({ text: '\uFDFA'.repeat(REQUEST_TEXT_MAX) });
+  assert.equal(nexted, false);
+  assert.equal(res.code, 400);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.error, `Keep it under ${REQUEST_TEXT_MAX} characters.`);
+  assert.equal(res.body.message, res.body.error);
   assert.deepEqual(Object.keys(res.body.fieldErrors ?? {}), ['text']);
 });
 

@@ -164,6 +164,14 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             Reddit
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://ko-fi.com/pklair"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Buy me a coffee
           </AnimatedLink>
         </span>
       </div>

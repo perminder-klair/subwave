@@ -7,8 +7,10 @@ import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
 import { basename as pathBasename } from 'node:path';
 import { speak } from '../audio/tts.js';
+import type { TtsVoiceSlot } from '../schemas/persona.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
+import { reloadJinglesPlaylist } from './liquidsoap-control.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
@@ -17,6 +19,8 @@ import { JINGLE_FILENAME_RE, JINGLE_NAME_MAX, uniqueFilename } from '../personas
 const DIR = `${STATE_DIR}/jingles`;
 const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
 const META = `${STATE_DIR}/jingles.json`;
+// radio.liq mixes at 44.1 kHz; its MP3/FLAC/AAC outputs use that rate too.
+const JINGLE_SAMPLE_RATE = 44_100;
 
 const DEFAULT_IDENT = {
   filename: 'station_ident_default.wav',
@@ -40,11 +44,30 @@ async function saveMeta(meta: any) {
   await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
-// Atomic: Liquidsoap watches jingles.m3u (reload_mode="watch"), so an in-place
-// rewrite can reload a truncated playlist mid-write.
+// How long jingles.m3u must sit unchanged before the mixer is told to re-read
+// it. A batch upload is one importAudio, and so one rewrite, per file, sent one
+// after another; each new write restarts the wait, so the batch costs one
+// reload, not one per file.
+export const RELOAD_SETTLE_MS = 2000;
+let reloadTimer: NodeJS.Timeout | null = null;
+
+// Atomic, so the mixer never reads a half-written playlist. That rename is what
+// a Liquidsoap 2.4.5 file watch stops seeing (#2008), so every write is followed
+// by a telnet reload. Never awaited: no write waits on the mixer, and a mixer
+// that is down or has no rotate changes nothing here.
 async function rewritePlaylist(filenames: string[]) {
   const lines = filenames.map((f: string) => `${DIR}/${f}`);
   await writeFileAtomic(PLAYLIST, lines.join('\n') + (lines.length ? '\n' : ''));
+  scheduleReload();
+}
+
+function scheduleReload() {
+  if (reloadTimer) clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null;
+    void reloadJinglesPlaylist();
+  }, RELOAD_SETTLE_MS);
+  reloadTimer.unref?.();
 }
 
 async function statOrNull(p: string) {
@@ -91,7 +114,7 @@ export function jingleUri(path: string): string {
   return `annotate:subwave_kind="jingle":${path}`;
 }
 
-export async function create(text: string, { builtin = false }: { builtin?: boolean } = {}) {
+export async function create(text: string, { builtin = false, tts }: { builtin?: boolean; tts?: TtsVoiceSlot } = {}) {
   if (!text || !text.trim()) throw new Error('Empty jingle text');
   await mkdir(DIR, { recursive: true });
 
@@ -99,7 +122,21 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   const filename = builtin ? DEFAULT_IDENT.filename : `jingle_${id}.wav`;
   const outPath = `${DIR}/${filename}`;
 
-  await speak(text, { kind: 'jingle', outPath });
+  await speak(text, { kind: 'jingle', outPath, persona: tts ? { tts } : undefined });
+
+  // Levelled like an uploaded jingle. A TTS stinger renders well under the
+  // normalised tracks it plays between (9 dB on one cloud voice), and this is
+  // the one step both rotates share. A failed pass keeps the file as rendered.
+  if (await hasFfmpeg()) {
+    try {
+      await transcodeAudio(await readFile(outPath), {
+        outPath, format: 'wav', loudnorm: true,
+        sampleRate: JINGLE_SAMPLE_RATE, channels: 2,
+      });
+    } catch (err: any) {
+      console.warn(`[jingles] could not level ${filename}: ${err?.message || err}`);
+    }
+  }
 
   const meta = await loadMeta();
   meta.items[filename] = {
@@ -112,7 +149,7 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   return { filename, text: text.trim(), outPath };
 }
 
-// Import an operator-supplied audio file. Transcoded to WAV + loudness-levelled
+// Import an operator-supplied audio file. Transcoded to 44.1 kHz stereo WAV + loudness-levelled
 // when ffmpeg is available, otherwise stored as-is with its original extension.
 export async function importAudio(
   buffer: Buffer,
@@ -128,7 +165,10 @@ export async function importAudio(
   let filename: string;
   if (await hasFfmpeg()) {
     filename = `jingle_${id}.wav`;
-    await transcodeAudio(buffer, { outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true });
+    await transcodeAudio(buffer, {
+      outPath: `${DIR}/${filename}`, format: 'wav', loudnorm: true,
+      sampleRate: JINGLE_SAMPLE_RATE, channels: 2,
+    });
   } else {
     filename = `jingle_${id}.${extOf(originalName) || 'mp3'}`;
     await writeFile(`${DIR}/${filename}`, buffer);
@@ -201,9 +241,10 @@ export async function ensureDefaultIdent() {
  * it has written anything (personas/bundle.ts asks for every member up front).
  *
  * The character-class half is the one that matters. A filename here becomes a
- * LINE of jingles.m3u, which Liquidsoap reloads on watch, so a newline in a
- * name adds a rotation entry nobody chose — see JINGLE_FILENAME_RE. An
- * extension test alone leaves the rest of the name unchecked.
+ * LINE of jingles.m3u, which the mixer re-reads after every write, so a
+ * newline in a name adds a rotation entry nobody chose — see
+ * JINGLE_FILENAME_RE. An extension test alone leaves the rest of the name
+ * unchecked.
  */
 export function isAdoptableName(filename: unknown): boolean {
   const raw = String(filename ?? '');
@@ -290,4 +331,42 @@ export async function adopt(
   await saveMeta(meta);
   await rewritePlaylist(Object.keys(meta.items));
   return { filename: name, text: meta.items[name].text };
+}
+
+/**
+ * Replace the sidecar with the one a station backup carried, and regenerate
+ * jingles.m3u from it. Backs the restore in routes/backup.ts, which used to
+ * write both files verbatim.
+ *
+ * The playlist is never taken from the archive: every line of it is a request
+ * the mixer re-reads after every write, and the only lines this module ever
+ * writes are `<jingle dir>/<sidecar key>`. So the sidecar is the thing
+ * restored, each key answers to the same isAdoptableName a bundled jingle
+ * does, and the playlist is rebuilt from what survived — which also re-roots
+ * the absolute paths at THIS station's state dir rather than the one the
+ * backup was taken on.
+ * A key that fails is dropped and named, never repaired.
+ */
+export async function restoreMeta(raw: unknown): Promise<{ kept: number; dropped: string[] }> {
+  const items = (raw as any)?.items;
+  if (!items || typeof items !== 'object' || Array.isArray(items)) {
+    throw new Error('jingles.json is not a jingle sidecar');
+  }
+  const next: Record<string, any> = {};
+  const dropped: string[] = [];
+  for (const [name, info] of Object.entries(items as Record<string, any>)) {
+    if (!isAdoptableName(name) || !info || typeof info !== 'object' || Array.isArray(info)) {
+      dropped.push(name);
+      continue;
+    }
+    next[name] = {
+      text: typeof info.text === 'string' ? info.text : '',
+      ...(typeof info.createdAt === 'string' ? { createdAt: info.createdAt } : {}),
+      builtin: info.builtin === true,
+      ...(typeof info.source === 'string' ? { source: info.source } : {}),
+    };
+  }
+  await saveMeta({ items: next });
+  await rewritePlaylist(Object.keys(next));
+  return { kept: Object.keys(next).length, dropped };
 }

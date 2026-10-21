@@ -37,6 +37,7 @@ import {
 // here silently diverged the moment SHOW_NAME_MAX became the one rule the
 // validator, the loader and the admin form all run.
 import { SHOW_NAME_MAX, SHOW_SEGMENT_SKILL_MAX, repairEraWindow } from '../schemas/show.js';
+import { FEED_MAX_ITEMS_KEY, FEED_MAX_ITEMS_LIMIT, FEED_URL_KEY, resolveFeedConfig } from '../skills/feed.js';
 
 // Slug rule shared by every community artifact — lowercase, starts alphanumeric,
 // then alphanumeric/hyphen, ≤49 chars. Anchored, so a slug can't carry a path
@@ -60,9 +61,27 @@ export interface CommunitySkill {
   cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
+  // A catalog skill can't ship a tool.mjs, but it can declare a feed: on install
+  // it lands as the skill's own `feed:` knob, and the loader generates the same
+  // fetch tool a hand-set feed gets (skills/feed.ts, #1616).
+  feed?: string;
+  feedMaxItems?: number;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;
+}
+
+// The knob values a catalog skill installs with, in writeSkillFile's
+// `config`/`configKeys` shape. Empty for a prompt-only entry, so its install
+// writes exactly the SKILL.md it always did.
+export function communitySkillConfig(cs: CommunitySkill): {
+  config: Record<string, string | number>;
+  configKeys: string[];
+} {
+  if (!cs.feed) return { config: {}, configKeys: [] };
+  const config: Record<string, string | number> = { [FEED_URL_KEY]: cs.feed };
+  if (cs.feedMaxItems) config[FEED_MAX_ITEMS_KEY] = cs.feedMaxItems;
+  return { config, configKeys: [FEED_URL_KEY, FEED_MAX_ITEMS_KEY] };
 }
 
 export interface CommunityPersona {
@@ -180,6 +199,21 @@ function normalizeSkill(raw: any): CommunitySkill | null {
   if (!SLUG_RE.test(slug)) return null;
   const brief = str(raw?.brief);
   if (!brief) return null;
+  // The feed URL goes through the loader's own rule. A declared feed that rule
+  // refuses drops the ENTRY rather than just the feed: a brief written to speak
+  // from fetched items, installed with nothing to fetch, is a skill told to
+  // report news it was never given.
+  let feed: string | undefined;
+  if (raw?.feed != null && str(raw.feed)) {
+    feed = resolveFeedConfig({ [FEED_URL_KEY]: str(raw.feed) }).feed?.url;
+    if (!feed) return null;
+  }
+  // Lenient, like the loader's own count: a bad number has an obvious answer
+  // (the station default), so it is dropped rather than costing the entry.
+  const maxItems = raw?.feedMaxItems;
+  const feedMaxItems = feed && Number.isInteger(maxItems) && maxItems >= 1 && maxItems <= FEED_MAX_ITEMS_LIMIT
+    ? maxItems as number
+    : undefined;
   return {
     slug,
     label: str(raw?.label) || slug,
@@ -190,6 +224,8 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     cohosts: raw?.cohosts === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
+    feed,
+    feedMaxItems,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),
     dateModified: optStr(raw?.dateModified, 10),

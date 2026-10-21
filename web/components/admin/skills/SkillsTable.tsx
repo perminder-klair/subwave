@@ -54,7 +54,9 @@ export function SkillsTable({
           <span className="truncate font-extrabold text-ink">{s.label || s.name}</span>
           {s.custom && <Pill className="text-[8px]">custom</Pill>}
           {s.cohosts && <MetaChip accent>co-hosted</MetaChip>}
-          {s.ready === false && (
+          {s.toolPending ? (
+            <MetaChip className="border-[var(--danger)] text-[var(--danger)]">code to review</MetaChip>
+          ) : s.ready === false && (
             <MetaChip className="border-[var(--danger)] text-[var(--danger)]">needs key</MetaChip>
           )}
           {isPinned(s) && <MetaChip accent>pinned</MetaChip>}

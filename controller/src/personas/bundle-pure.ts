@@ -59,6 +59,18 @@ export const JINGLE_NAME_MAX = 120;
 export const JINGLE_FILENAME_RE = /^[A-Za-z0-9_.-]{1,116}$/;
 
 /**
+ * Cap on the uncompressed size of `manifest.json` and `persona.json`.
+ *
+ * Both are inflated into memory and parsed. The audio members are checked
+ * against their DECLARED size before getData() for the same reason this exists:
+ * a zip may pair a tiny compressed member with a declared size of gigabytes,
+ * and inflation runs synchronously on the event loop. A persona plus a manifest
+ * listing 24 jingle texts is a few kilobytes; this is two orders of magnitude
+ * of headroom.
+ */
+export const MAX_BUNDLE_JSON_BYTES = 1024 * 1024;
+
+/**
  * How many jingles one bundle may carry.
  *
  * Each member becomes a file, a sidecar row AND a line in the watched playlist,

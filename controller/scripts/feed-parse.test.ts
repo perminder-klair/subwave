@@ -78,6 +78,25 @@ test('a single item is not dropped for being unwrapped', () => {
   assert.equal(items[0].description, '');
 });
 
+// WordPress writes typographic punctuation as numeric character references, and
+// the parser decodes only the five named XML entities. Undecoded, the model was
+// handed `Man&#8217;s` and `Loads of &#8220;Friends&#8221;` as the headline.
+test('numeric character references are decoded, decimal and hex, single or double encoded', () => {
+  const xml = `<?xml version="1.0"?><rss version="2.0"><channel>
+    <item><title>Man&#8217;s house &#038; the &#x201C;tarp&#x201D;</title><description>It&amp;#8217;s back</description></item>
+  </channel></rss>`;
+  const [item] = parseFeed(xml, 10);
+  assert.equal(item.title, 'Man\u2019s house & the \u201Ctarp\u201D');
+  assert.equal(item.description, 'It\u2019s back');
+});
+
+test('an out-of-range character reference is left as text rather than throwing', () => {
+  const xml = `<?xml version="1.0"?><rss version="2.0"><channel>
+    <item><title>Bad &#99999999; ref</title></item>
+  </channel></rss>`;
+  assert.equal(parseFeed(xml, 10)[0].title, 'Bad &#99999999; ref');
+});
+
 test('a numeric-looking headline stays a string', () => {
   const feed = `<rss><channel><item><title>2026</title><description>1.2.3</description></item></channel></rss>`;
   const [item] = parseFeed(feed, 10);

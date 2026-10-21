@@ -1,10 +1,50 @@
 // Display helpers for GET /session turns. Source of truth is
 // web/lib/sessionFeed.ts; keep in sync. Classes: voice (spoken on air),
 // dj (pick/request reasoning), track (aired), system.
+// MAX_HOLD_MS is exported here (the web keeps it private) because the talking
+// window in lib/voice-turn uses the same bound on an implausibly future stamp.
 
 import type { SessionTurn } from './types';
 
 export type TurnDisplayClass = 'voice' | 'dj' | 'track' | 'system';
+
+// Delay stamped speech by leadMs to match listener audio (#1382, #1114). Show
+// unstamped turns immediately.
+export const MAX_HOLD_MS = 120_000;
+
+/** Ceiling on the listener's buffer behind the live edge, in seconds:
+ *  useStationFeed clamps the station's `stream.bufferSeconds` to it. */
+export const MAX_LEAD_SECONDS = 60;
+
+export function airedAtMs(turn: SessionTurn | null | undefined): number | null {
+  const raw = turn?.meta?.airedAt;
+  if (typeof raw !== 'string') return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : null;
+}
+
+// Return audible turns and the next pending display time. Use the same rule for
+// polls and timers.
+export function splitAudibleTurns(
+  messages: SessionTurn[] | null | undefined,
+  leadMs: number,
+  nowMs: number,
+): { visible: SessionTurn[]; nextChangeMs: number | null } {
+  const visible: SessionTurn[] = [];
+  let nextChangeMs: number | null = null;
+  for (const turn of messages || []) {
+    const at = airedAtMs(turn);
+    const audibleAt = at == null ? null : at + Math.max(0, leadMs);
+    // An implausibly future stamp (skewed clock, absurd buffer) counts as
+    // unknown: this hold fails towards "shown early", never "never shown".
+    if (audibleAt == null || audibleAt <= nowMs || audibleAt - nowMs > MAX_HOLD_MS) {
+      visible.push(turn);
+      continue;
+    }
+    if (nextChangeMs == null || audibleAt < nextChangeMs) nextChangeMs = audibleAt;
+  }
+  return { visible, nextChangeMs };
+}
 
 export function turnClass(turn: SessionTurn | null | undefined): TurnDisplayClass {
   switch (turn?.role) {

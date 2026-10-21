@@ -24,7 +24,7 @@ import Foundation
 struct LikeTrackIntent: AppIntent, LiveActivityIntent {
   static var title: LocalizedStringResource = "Like the track on air"
   static var description = IntentDescription(
-    "Hearts whatever SUB/WAVE is playing right now, from the Lock Screen, the Dynamic Island or the Apple Watch Smart Stack."
+    "Hearts whatever SUB/WAVE is playing right now, from the Lock Screen or the Dynamic Island."
   )
 
   /// Never foreground the app — the point of the button is that the listener

@@ -13,6 +13,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import * as likes from './likes.js';
 import { onCacheChange } from '../settings/store.js';
 import { applyKnownTrackCeiling } from '../music/track-duration.js';
 import * as settings from '../settings.js';
@@ -21,12 +22,16 @@ import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, prefe
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
+import { allowsMoodPlaylistDiscovery } from '../music/discovery-policy.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
-import { applyTrackFloor } from '../music/track-floor.js';
+import { applyTrackFloor, capCueOutSec, trackLengthSeconds } from '../music/track-floor.js';
+import { airableAnchorTracks, coastFloor, COAST_MIN_SEC, rotationCoast, rotationOrder, showNoRepeatGuard } from '../music/show-recency.js';
+import { knownDurationSec } from './queue/pure.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { createAutoPlaylistRefresh, type RefreshResult } from './auto-playlist-refresh.js';
+import { coastContents, coastRepeats, HANDOVER_REASON_TEXT, onCoastHandover, type CoastContents, type HandoverReason } from './coast-handover.js';
 import { isIdle } from './stream-idle.js';
 import { autoPlaylistRefreshCron, createAutoPlaylistRefreshRunner } from './auto-playlist-maintenance.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
@@ -107,6 +112,36 @@ export const flushPendingAutoPlaylist = playlistRefresh.flushPending;
 // Which show the file on disk holds (#1111); rules in auto-playlist-show.ts.
 const autoPlaylistBuild = createShowBuildTracker();
 
+// Which tracks the file on disk holds, stamped by the build that wrote it.
+// null until one lands in this process: the file is then a previous run's, so
+// the handover check below cannot vouch for it and rebuilds.
+let coastOnDisk: CoastContents | null = null;
+
+// The auto-DJ stopped picking — nobody listening, the daily token cap's hard
+// tier, or auto-pick switched off — so the station coasts on auto.m3u once the
+// track on air ends (#1975, #1992). Rebuild the file when it holds anything the
+// queue aired since it was built. A full rotation's always does; a sampled
+// coast rarely does, and skipping it then keeps a departure from costing a
+// Navidrome fan-out for nothing. A build still in flight is about to replace
+// the file the stamp describes, and it read the air history before this
+// boundary, when the queue's last pick was only queued, so the stamp cannot
+// vouch for it: rebuild behind it. Returns whether it rebuilt.
+export async function refreshCoastOnHandover(reason: HandoverReason): Promise<boolean> {
+  const inFlight = playlistRefresh.isBusy();
+  const repeats = coastOnDisk && !inFlight ? coastRepeats(coastOnDisk, queue.airedFromQueueSince(coastOnDisk.builtAt)) : null;
+  if (repeats === 0) return false;
+  const paused = `Auto-playlist: DJ picks paused (${HANDOVER_REASON_TEXT[reason]})`;
+  queue.log('scheduler', inFlight
+    ? `${paused} — a fallback build in flight started before picking stopped, requesting a refresh behind it`
+    : repeats === null
+      ? `${paused} — fallback on disk predates this run, requesting a refresh`
+      : `${paused} — fallback holds ${repeats} track(s) aired since it was built, requesting a refresh`);
+  return (await refreshAutoPlaylist({ automatic: true })) === 'refreshed';
+}
+onCoastHandover(reason => {
+  void refreshCoastOnHandover(reason).catch(err => queue.log('error', `Fallback refresh at DJ pause failed: ${err.message}`));
+});
+
 // Rebuild the fallback only when the resolved active show is not the one
 // auto.m3u holds. Called from rollSessionNow, the shared boundary sequence
 // every show transition runs through — never a second cron. Returns whether it
@@ -159,6 +194,9 @@ onCacheChange(() => {
 });
 
 async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<RefreshResult> {
+  // Before any air history is read, so a play that ends mid-build counts as
+  // after it for the handover check.
+  const builtAt = Date.now();
   const epoch = autoPlaylistPolicyEpoch;
   const policyKey = autoPlaylistPolicyKey();
   const ctx = await prepareEpisodeContext(await getFullContext());
@@ -167,7 +205,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // lowercased `title|artist` — an id-only filter lets duplicate copies of a
   // just-played song back in (#874).
   await library.load();
-  const libStats = library.stats();
+  const libStats = library.pickStats(); // only the recency-window inputs (#1723)
   // mirrorTotal, not `total` (tagged only), so an untagged 50k catalogue does
   // not read as empty.
   const windows = recencyWindowsForLibrary(libStats.distinctArtists, libStats.mirrorTotal || libStats.total);
@@ -238,12 +276,33 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // the cap: applied to the assembled pool below, never-starve.
   const minDurationSec = settings.effectiveMinTrackSec(show);
 
+  // Full rotation (#1612), decided by the same guard the pick paths read, so
+  // the coast continues the rotation they are walking instead of sampling round
+  // it (#1919). Only `rotation` is read here; the window sizes are the pickers'.
+  const rotation = strictPlaylist
+    ? showNoRepeatGuard(0, 0, {
+        show,
+        playlistTracks: playlistPool!.tracks,
+        episodeTracks: episodeSource?.tracks,
+        excludedIds,
+        resolvedGenres: genreNames,
+        minTrackSec: minDurationSec,
+        maxTrackSec: selectionMaxSec,
+      }).rotation ?? null
+    : null;
+  // Air history for every strict playlist: the rotation's order, and the
+  // longest-waiting fill under the coast floor below.
+  const airTimeOf = strictPlaylist ? queue.rotationAirTimes() : null;
+  // Shuffled first so never-aired ties break at random.
+  const rotationPool = rotation ? rotationCoast(shuffle(rotation), airTimeOf!, { cap: SHOW_PLAYLIST_STRICT_WEIGHT }) : null;
+
   // Balanced pool builder — recency/dedup/artist-cap guards on every candidate,
   // keyed on both id and `title|artist` (#874). Pure; scripts/auto-pool.test.ts.
   const builder = createPoolBuilder({
     recentIds,
     recentKeys,
-    targetPool: TARGET_POOL,
+    // A rotation's floor may need more than the usual pool to fill the hour.
+    targetPool: Math.max(TARGET_POOL, rotationPool?.length ?? 0),
     maxPerArtist: AUTO_MAX_PER_ARTIST,
     selectionMaxSec,
   });
@@ -261,6 +320,9 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   };
 
   if (episodeSource) take('episode-artist', shuffle(episodeSource.tracks), TARGET_POOL, { neverStarve: true, maxPerArtist: Infinity });
+  // A full rotation IS the coast: the tracks next due, carrying their own
+  // recency. The other sources could only add in-playlist tracks out of turn.
+  else if (rotationPool) take('show-rotation', rotationPool, rotationPool.length, { ignoreRecency: true, maxPerArtist: Infinity });
   else {
   // 0. Dedicated show-genre/era source, the dominant contributor when a show
   // pins a genre or year window. Both Navidrome queries filter server-side, so
@@ -336,7 +398,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // 2. Navidrome playlists whose name matches the mood. Skipped when the show
   // pins its own playlists (0b) — mood-substring matching would leak other
   // shows' same-mood playlists into the pool (#642).
-  if (poolMoods.length && !hasPlaylist) {
+  if (poolMoods.length && allowsMoodPlaylistDiscovery({ hasPlaylistAnchor: !!show?.playlistIds?.length, playlistTracks: playlistPool?.tracks })) {
     try {
       const playlists = await subsonic.getPlaylists();
       const matched = playlists.filter((p: any) =>
@@ -388,10 +450,18 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     queue.log('error', `Frequent-albums fetch failed: ${err.message}`);
   }
 
-  // 5. Starred — hand-curated.
+  // 5. Starred — hand-curated. Only the operator's curation earns this weight
+  // (likes.operatorStarred, gated on likes.influenceDj); a star a listener like
+  // left behind is held back as the last filler below, because this coast is
+  // the dead-air guard and the filter must never be what empties it.
+  let listenerStarred: any[] = [];
   try {
     const starred = shuffle(await subsonic.getStarred());
-    take('starred', enforce(starred), nz(STARRED_WEIGHT));
+    await likes.load();
+    const curated = likes.operatorStarred(starred, settings.get()?.likes);
+    const curatedIds = new Set(curated.map((s: any) => s?.id));
+    listenerStarred = starred.filter((s: any) => !curatedIds.has(s?.id));
+    take('starred', enforce(curated), nz(STARRED_WEIGHT));
   } catch (err) {
     queue.log('error', `Starred fetch failed: ${err.message}`);
   }
@@ -431,6 +501,10 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     }
   }
 
+  // Listener-only stars as the last filler, only when every source above came
+  // back empty (see 5).
+  if (!pool.length && listenerStarred.length) take('starred', enforce(listenerStarred), TARGET_POOL);
+
   }
 
   // Strict playlist: drop every off-playlist track, but never-starve to the
@@ -466,6 +540,27 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
     if (allowed.length) replacePool(allowed);
   }
 
+  // Never-collapse floor (#1919), every strict playlist: the recency-filtered
+  // take above never-starves only on ZERO, so a playlist mostly heard inside
+  // trackHours came out as 2-5 tracks that looped for an hour and more. Top up
+  // to an hour of audio from the playlist's longest-waiting tracks, through the
+  // same "can this anchor track air" rule the pickers count. A prepared episode
+  // steers the airing, so its coast is left to its own source.
+  if (strictPlaylist && !episodeSource) {
+    const airable = rotation ?? airableAnchorTracks(playlistPool!.tracks, {
+      show, excludedIds, resolvedGenres: genreNames, minTrackSec: minDurationSec, maxTrackSec: selectionMaxSec,
+    });
+    const before = pool.length;
+    // Copied as take() copies: the top-up rows are the memoised playlist's own
+    // objects, and the loudness stamp below writes onto whatever it is handed.
+    replacePool(coastFloor(pool, rotationOrder(shuffle(airable), airTimeOf!), airTimeOf!)
+      .map((t: any, i) => (i < before ? t : { ...t, _source: 'floor' })));
+    if (pool.length > before) {
+      fromSource.floor = pool.length - before;
+      queue.log('scheduler', `Auto-playlist: strict playlist fallback ran under an hour — topped up with ${pool.length - before} longest-waiting playlist track(s)`);
+    }
+  }
+
   // This fallback bypasses the drain, so it has to stamp what the drain would:
   // loudness gain (same resolver, so both paths level identically), the
   // max-track cue_out cap (#447) and the silence trim (music/silence-trim.ts).
@@ -477,14 +572,14 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   const lines = ['#EXTM3U', ...pool.map((t: any) => {
     const trim = silenceTrim.resolveSilenceTrim(t);
     return subsonic.getAnnotatedUri(t, {
-      maxDurationSec,
+      // Same rule as the drain: stamp the cap only past this track's length.
+      maxDurationSec: capCueOutSec(knownDurationSec(t), maxDurationSec),
       cueInSec: trim.cueInSec,
       cueOutSec: trim.cueOutSec,
     });
   })];
-  // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
-  // in-place write can trigger a reload of a truncated playlist.
-  // A pause can land during catalogue work. Do not trigger either watcher or
+  // Atomic replace, so a reload never reads a half-written playlist.
+  // A pause can land during catalogue work. Do not publish or send the
   // telnet reload in that case; already-started work cannot be cancelled.
   const currentContext = { ...ctx, at: new Date().toISOString() };
   const currentShow = settings.resolveActiveShow();
@@ -496,11 +591,13 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Small IPC file: synchronous atomic commit leaves no policy-change gap
   // between the freshness check and rename. Catalogue work stays asynchronous.
   writeFileAtomicSync(config.liquidsoap.autoPlaylist, lines.join('\n'));
-  // The atomic rename swaps the inode, so the inotify watch can orphan itself
-  // and loop a stale snapshot forever (#874). Force a telnet reload;
-  // best-effort, so an unreachable mixer never fails the refresh.
+  coastOnDisk = coastContents(pool, builtAt);
+  // Reload over telnet; radio.liq's file watch only re-reads a write this
+  // reload never reached. Off air, radio.liq replaces the playlist, dropping a
+  // track the old one had already prepared; best-effort, so an unreachable
+  // mixer never fails the refresh.
   const reloaded = await reloadAutoPlaylist();
-  if (!reloaded) queue.log('scheduler', 'Auto-playlist written but telnet reload failed — relying on inotify watch');
+  if (!reloaded) queue.log('scheduler', 'Auto-playlist written but the mixer did not confirm the reload — the file watch re-reads it; an off-air playlist is replaced on the next refresh');
 
   // Surface a silently-degraded strict genre and a too-thin strict pool (#629).
   if (strict && showGenres.length && !genreNames.length) {
@@ -508,7 +605,8 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   } else if (strict && genreNames.length && pool.length < TARGET_POOL) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreNames.join(', ')} — looping a short genre-pure fallback`);
   }
-  if (strictPlaylist && pool.length < TARGET_POOL) {
+  if (strictPlaylist && pool.length < TARGET_POOL
+    && pool.reduce((sec, t) => sec + (trackLengthSeconds(t) ?? 0), 0) < COAST_MIN_SEC) {
     queue.log('scheduler', `Auto-playlist: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
   }
 
@@ -533,7 +631,7 @@ async function refreshAutoPlaylistInner(canPublish: () => boolean): Promise<Refr
   // Every writer stamps, or the next boundary rebuilds a file already built for
   // this show (#1111).
   autoPlaylistBuild.built(show);
-  return 'refreshed';
+  return reloaded ? 'refreshed' : 'unreloaded';
 }
 
 // ---------------------------------------------------------------------------

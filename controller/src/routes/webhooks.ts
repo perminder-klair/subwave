@@ -50,13 +50,16 @@ router.post('/webhooks', requireAdmin, validateBody(webhooksPatchSchema), async 
 });
 
 // Uses live, non-redacted settings so the saved authHeader actually goes out.
+// A failed delivery is a 502 carrying the status or error code only, never the
+// endpoint's response body or the hook URL.
 router.post('/webhooks/:id/test', requireAdmin, async (req, res) => {
   try {
     await settings.load();
     const hook = (settings.get().webhooks || []).find((h: any) => h.id === req.params.id);
     if (!hook) return res.status(404).json({ error: 'webhook not found' });
-    await fireTest(hook);
-    res.json({ ok: true });
+    const result = await fireTest(hook);
+    if (result.ok) return res.json({ ok: true, status: result.status });
+    res.status(502).json({ ok: false, status: result.status ?? null, error: `delivery failed: ${result.error}` });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

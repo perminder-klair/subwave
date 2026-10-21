@@ -92,6 +92,9 @@ const STALE_SOCKET_BACKOFF_MS = 250;
 
 type CallOptions = {
   retryFastTransport?: boolean;
+  // The caller's own deadline (a picker tool's abortSignal), on top of the
+  // per-request timeout. An abort ends the call; it is never retried.
+  signal?: AbortSignal;
 };
 
 // Reads and operations that are explicitly idempotent opt in at their call
@@ -117,14 +120,17 @@ function describeTransportError(endpoint: string, err: any): Error {
 async function boundedFetch(
   endpoint: string,
   url: string,
-  { retryFastTransport = false }: CallOptions = {},
+  { retryFastTransport = false, signal }: CallOptions = {},
 ) {
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     try {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
       subLog.recordHttpAttempt(endpoint, 'api');
-      return await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+      const timeout = AbortSignal.timeout(config.navidrome.timeoutMs);
+      return await fetch(url, { signal: signal ? AbortSignal.any([timeout, signal]) : timeout });
     } catch (err: any) {
+      if (signal?.aborted) throw new Error(`Subsonic ${endpoint} cancelled`);
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error(
           `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
@@ -289,13 +295,25 @@ const rejectArchive = (arr: any[]) =>
 // operator can review a blocked track; queue.push still refuses it. Every
 // airing path takes the default and never sees blocked songs.
 export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
+  return (await searchPage(query, { songCount, songOffset, includeBlocked })).songs;
+}
+
+// search() plus `rawCount`: how many songs the server returned for the page
+// BEFORE the archive and blocklist filters. A caller asking "was that a full
+// page?" must ask this — a 25-row page with one blocked track is still a full
+// page, not the end of a narrow result set.
+export async function searchPage(
+  query,
+  { songCount = 20, songOffset = 0, includeBlocked = false, signal }: { songCount?: number; songOffset?: number; includeBlocked?: boolean; signal?: AbortSignal } = {},
+): Promise<{ songs: any[]; rawCount: number }> {
   const r = await call(
     'search3',
     { query, songCount, songOffset, artistCount: 5, albumCount: 5 },
-    RETRY_FAST_TRANSPORT,
+    { ...RETRY_FAST_TRANSPORT, signal },
   );
-  const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
-  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
+  const raw = r.searchResult3?.song || [];
+  const songs = raw.filter((s) => !isStationArchive(s));
+  return { songs: includeBlocked ? songs : blocklist.rejectBlocked(songs), rawCount: raw.length };
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
@@ -414,23 +432,32 @@ function similarity(a: string, b: string): number {
 // not. Paired with the shared-token guard on multi-word names below.
 const ARTIST_MATCH_THRESHOLD = 0.82;
 
-export async function resolveArtist(name, { artistCount = 10 } = {}) {
+// Per-token searches in resolveArtist's relax step. One search3 per word is
+// sized for a NAME; a long query (free text, a whole sentence) would otherwise
+// fan out into one Navidrome round trip per word. A name longer than this
+// still gets its first words searched, and the fuzzy rank below compares
+// against the whole query either way.
+const RESOLVE_ARTIST_MAX_TOKEN_SEARCHES = 6;
+
+export async function resolveArtist(name, { artistCount = 10, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
   const query = normArtist(name);
   if (!query) return null;
 
   // 1. Exact index search.
-  const exact = await searchArtists(name, { artistCount });
+  const exact = await searchArtists(name, { artistCount, signal });
   const direct = exact.find((a: any) => normArtist(a.name) === query);
   if (direct) return direct;
 
   // 2. Relax — search per token ("Kahlon" finds "Sikander Kahlon"), unioned
-  //    with the exact hits.
+  //    with the exact hits. Distinct tokens only, capped, and stopped as soon as
+  //    the caller's deadline has passed.
   const tokens = query.split(' ').filter(t => t.length >= 2);
   const candidates = new Map<string, any>();
   for (const a of exact) candidates.set(a.id, a);
-  for (const token of tokens) {
+  for (const token of [...new Set(tokens)].slice(0, RESOLVE_ARTIST_MAX_TOKEN_SEARCHES)) {
+    if (signal?.aborted) break;
     try {
-      for (const a of await searchArtists(token, { artistCount })) {
+      for (const a of await searchArtists(token, { artistCount, signal })) {
         candidates.set(a.id, a);
       }
     } catch {}
@@ -543,27 +570,27 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
-export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size }, RETRY_FAST_TRANSPORT);
+export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
 // moves, so an offset-less read pins the same albums forever.
-export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, RETRY_FAST_TRANSPORT);
+export async function getFrequentAlbums({ size = 20, offset = 0, signal }: { size?: number; offset?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
-export async function getArtistInfo(id, { count = 10 } = {}) {
-  const r = await call('getArtistInfo2', { id, count }, RETRY_FAST_TRANSPORT);
+export async function getArtistInfo(id, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getArtistInfo2', { id, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artistInfo2 || null;
 }
 
 // Last.fm "top songs" for an artist, intersected with the library. Keyed by
 // artist NAME, not id.
-export async function getTopSongs(artistName, { count = 10 } = {}) {
-  const r = await call('getTopSongs', { artist: artistName, count }, RETRY_FAST_TRANSPORT);
+export async function getTopSongs(artistName, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getTopSongs', { artist: artistName, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.topSongs?.song || []);
 }
 
@@ -605,8 +632,8 @@ export async function getRecentSongsByArtist(
   return songs.slice(0, count);
 }
 
-export async function getAlbum(id) {
-  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
 }
 
@@ -622,11 +649,11 @@ export async function getArtist(id) {
   return r.artist || null;
 }
 
-export async function searchArtists(query, { artistCount = 5 } = {}) {
+export async function searchArtists(query, { artistCount = 5, signal }: { artistCount?: number; signal?: AbortSignal } = {}) {
   const r = await call(
     'search3',
     { query, artistCount, albumCount: 0, songCount: 0 },
-    RETRY_FAST_TRANSPORT,
+    { ...RETRY_FAST_TRANSPORT, signal },
   );
   return r.searchResult3?.artist || [];
 }
@@ -763,14 +790,19 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
   }
 }
 
-export async function getPlaylists() {
-  const r = await call('getPlaylists', {}, RETRY_FAST_TRANSPORT);
+export async function getPlaylists({ signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getPlaylists', {}, { ...RETRY_FAST_TRANSPORT, signal });
   return r.playlists?.playlist || [];
 }
 
-export async function getPlaylist(id) {
-  const r = await call('getPlaylist', { id }, RETRY_FAST_TRANSPORT);
-  return rejectArchive(r.playlist?.entry || []);
+// `includeBlocked` is for the blocklist's OWN playlist-rule resolver: it builds
+// the member set that `rejectBlocked` consults, so reading through the filter
+// returned the playlist minus its own members on every refresh after the first
+// (0 tracks, rule inert, flipping back each TTL). Airing paths take the default.
+export async function getPlaylist(id, { signal, includeBlocked = false }: { signal?: AbortSignal; includeBlocked?: boolean } = {}) {
+  const r = await call('getPlaylist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
+  const songs = (r.playlist?.entry || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 // Playlist mutations: song-id lists ride the query string, so they are chunked
@@ -884,7 +916,7 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -904,6 +936,10 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // configured crossfade) or a washout's 12s canvas outlives its transition.
   const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
   if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
+  // The outgoing side of a stem-blend clip seam: how far its cue-out sits past
+  // the clip's start (broadcast/stem-seam.ts). radio.liq buffers past it and
+  // aligns the clip on it; an older mixer ignores the key.
+  if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
   // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify
   // override parses. Applied before the ducking layers. Absent = unity.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
@@ -929,7 +965,9 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` and
   // radio.liq's `cue_cut` stops the track there. Only the capped paths set it
   // (autonomous picks + auto.m3u); listener requests pass null and play in
-  // full. A cue_out past the track's end is a no-op. An explicit cueOutSec (a
+  // full. Callers pass the cap only for a track that runs past it
+  // (track-floor.capCueOutSec): a cue_out past the end is NOT a no-op when the
+  // decoder cannot measure the stream, it defeats the crossfade. An explicit cueOutSec (a
   // stem blend's start in the OUTGOING track) competes with the cap and the
   // earlier cut wins, so a blend can't resurrect audio past the cap. cueInSec
   // skips the INCOMING track past the head its rendered clip already played.
@@ -957,6 +995,9 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
     `subsonic_id="${escAnnotate(song.id)}"`,
     'subwave_clip="1"',
     `liq_cross_duration="${escAnnotate(crossSec)}"`,
+    // The cue lead both clip seams were cut with (broadcast/stem-seam.ts):
+    // radio.liq aligns the clip on it rather than on what `cross` buffered.
+    `liq_clip_lead="${escAnnotate(crossSec)}"`,
   ];
   // No liq_amplify: the render already gain-matched both sources, so a stamp
   // here would double-apply.

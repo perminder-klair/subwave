@@ -17,6 +17,7 @@ import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
+import { effectiveCompatMode } from './compat-mode';
 import {
   SectionHeader, SaveBar, KeyStatus,
   headerMap,
@@ -126,6 +127,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
+  // The chat connection's mode as in force, `auto` resolved to its detection.
+  const llmCompatMode = effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary);
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
@@ -485,7 +488,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                {effectiveProvider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                {effectiveProvider === 'openai-compatible' && llmCompatMode === 'hosted'
                   ? <>Leave blank to use the chat service&apos;s embedding endpoint. For Azure, enter a different resource URL ending in <code>/openai/v1</code> only when embeddings live on another resource. Enter the embedding deployment name above. </>
                   : <>Embeddings need a <strong>dedicated</strong> server when a local chat server cannot embed. </>}
                 {effectiveProvider === 'locca' ? (
@@ -495,7 +498,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
-                ) : form.llm.compatibleMode === 'hosted' ? null : (
+                ) : llmCompatMode === 'hosted' ? null : (
                   <>
                     Leave blank only if this server itself does embeddings;
                     otherwise run a separate embedding server (
@@ -540,7 +543,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 onChange={rows => setForm(f => ({ ...f, embedding: { ...f.embedding, headers: rows } }))} />
               <div className="field-hint">
                 Leave empty to use the chat connection&apos;s headers when embeddings
-                use the same provider. For a separate Azure embedding resource,
+                use the same provider and server. For a separate Azure embedding resource,
                 add its <code>api-key</code> here. Values are hidden after saving.
               </div>
             </div>

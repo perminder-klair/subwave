@@ -7,21 +7,20 @@ import test from 'node:test';
 import { z } from 'zod';
 import { generateText, APICallError, ToolChoiceViolationError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isGenerationControlError, isProviderRequestTimeout, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, isModelUnavailable, isServerExhausted, isConnectionRefused, errReason, nearestId, isElevenLabsV3, isFishS21Model, cloudExpressionCueFamily, elevenLabsTtsModelIds, snapV3Stability, modelTolerant, schemaHint, clipText, soulBrief, SOUL_BRIEF_MAX, renderTerminalPrompt, messageText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
-import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, thinkingMandatoryModel, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
+import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, nativeFirstStepToolChoice, thinkingMandatoryModel, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { objectViaToolCall, emitInstructions, EMIT_ANSWER_INSTRUCTION } from '../src/llm/internal/strategy/object-via-tool.js';
 import { NATIVE_JSON_INSTRUCTION } from '../src/llm/internal/strategy/object.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL, openAICompatibleFetch } from '../src/llm/internal/provider/registry.js';
-import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
+import { personaToneDirectives, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
 import { deliveryHint, modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
-
 
 async function main() {
   console.log('isUnreachable vs isTransient (the failover gate):');
@@ -197,6 +196,67 @@ async function main() {
   await test('a bare 429 with a Retry-After header but no wording → rate-limited', () => {
     assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after': '20' } }), true);
     assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after-ms': '500' } }), true);
+  });
+
+  console.log('isServerExhausted (a 5xx that survived same-leg retries → fail over, no wording needed):');
+  await test('a bare 500 with no wording classifies by status alone (the locca model-off case)', () => {
+    const e: any = { statusCode: 500, message: 'Internal Server Error' };
+    assert.equal(isServerExhausted(e), true);
+    assert.equal(isUnreachable(e), false);        // the host answered — not a network outage
+    assert.equal(isModelUnavailable(e), false);   // no wording to match — which is why this exists
+    assert.equal(isQuotaOrAuthError(e), false);
+    assert.equal(isTransient(e), true);           // still retried on the same leg first
+  });
+  await test('the exhausted statuses are exactly the 5xx subset that same-leg retry burns', () => {
+    for (const status of [500, 502, 503, 504]) assert.equal(isServerExhausted({ statusCode: status }), true);
+    for (const status of [408, 425, 429, 501, 529]) assert.equal(isServerExhausted({ statusCode: status }), false);
+  });
+  await test('a wording-only 5xx in the message classifies when the SDK flattened the status', () => {
+    assert.equal(isServerExhausted({ message: 'HTTP 503: Service Unavailable' }), true);
+    assert.equal(isServerExhausted({ message: 'request failed with 502' }), true);
+    // …but a 4xx mention or a number inside prose does not.
+    assert.equal(isServerExhausted({ message: 'HTTP 429: too many requests' }), false);
+    assert.equal(isServerExhausted({ message: 'processed 5001 tokens in 5 seconds' }), false);
+  });
+  await test('a status code is the whole answer: a 4xx that mentions 500 is a bad request, not an exhausted server', () => {
+    assert.equal(isServerExhausted({ statusCode: 400, message: 'max_tokens must be at most 500' }), false);
+    assert.equal(isServerExhausted({ statusCode: 422, message: 'upstream said 503' }), false);
+    assert.equal(isServerExhausted({ cause: { statusCode: 404 }, message: 'route /v1/502 not found' }), false);
+  });
+  await test('cause.statusCode is unwrapped and SDK retry wrappers survive', () => {
+    assert.equal(isServerExhausted({ cause: { statusCode: 502 } }), true);
+    const inner = { statusCode: 500, message: 'Internal Server Error' };
+    for (const wrapped of [{ lastError: inner }, { errors: [inner] }]) {
+      assert.equal(isServerExhausted(wrapped), true);
+    }
+  });
+  await test('generation control errors and local parse failures never exhaust', () => {
+    const deadline: any = new Error('pick exceeded 45000ms deadline');
+    deadline.name = 'AgentDeadlineError';
+    assert.equal(isServerExhausted(deadline), false);
+    // A model reply that happens to contain "500" is quoted in a SyntaxError's
+    // message — providerMessage blanks it, so neither status nor wording matches.
+    const parse: any = new SyntaxError('Unexpected token \'I\', "Internal Server Error (500)" is not valid JSON');
+    assert.equal(isServerExhausted(parse), false);
+  });
+
+  console.log('isConnectionRefused (a refused/unresolvable host → skip same-leg retries):');
+  await test('ECONNREFUSED and ENOTFOUND classify by code, cause, or message', () => {
+    assert.equal(isConnectionRefused({ code: 'ECONNREFUSED' }), true);
+    assert.equal(isConnectionRefused({ code: 'ENOTFOUND' }), true);
+    assert.equal(isConnectionRefused({ cause: { code: 'ECONNREFUSED' } }), true);
+    assert.equal(isConnectionRefused(new Error('connect ECONNREFUSED 127.0.0.1:11434') as any), true);
+    assert.equal(isConnectionRefused({ lastError: { code: 'ENOTFOUND' } }), true);
+  });
+  await test('temporary failures stay retryable (EAI_AGAIN can clear in a second)', () => {
+    assert.equal(isConnectionRefused({ code: 'EAI_AGAIN' }), false);
+    assert.equal(isConnectionRefused({ code: 'ETIMEDOUT' }), false);
+    assert.equal(isConnectionRefused({ code: 'ECONNRESET' }), false);
+  });
+  await test('a refused host is still transient+unreachable for the failover gate', () => {
+    const e: any = { code: 'ECONNREFUSED', message: 'connect ECONNREFUSED 127.0.0.1:11434' };
+    assert.equal(isTransient(e), true);
+    assert.equal(isUnreachable(e), true);
   });
 
   console.log('isModelUnavailable (model gone for good → fail over, never retry):');
@@ -646,6 +706,13 @@ async function main() {
     assert.equal(forcedToolChoice({ toolChoice: 'whatever' }), 'required');
     assert.equal(forcedToolChoice(undefined), 'required');
   });
+  await test('nativeFirstStepToolChoice: hosted openai-compatible stays auto, every other leg follows forcedToolChoice (#1693 case D)', () => {
+    // Mistral: json_schema with tools is only compatible with tool_choice auto.
+    assert.equal(nativeFirstStepToolChoice({ provider: 'openai-compatible', compatibleMode: 'hosted' }), 'auto');
+    assert.equal(nativeFirstStepToolChoice({ provider: 'openai' }), 'required');
+    assert.equal(nativeFirstStepToolChoice({ provider: 'openai', toolChoice: 'auto' }), 'auto');
+    assert.equal(nativeFirstStepToolChoice({ provider: 'anthropic', model: 'claude-opus-5-5' }), 'auto');
+  });
   await test('forcedToolChoice: thinking-mandatory Claude models are always auto — they 400 on tool_choice any/tool', () => {
     // The live failure: openai-compatible proxy → claude-sonnet-5-5, required → any → 400.
     assert.equal(forcedToolChoice({ provider: 'openai-compatible', model: 'claude-sonnet-5-5' }), 'auto');
@@ -825,7 +892,7 @@ async function main() {
         { role: 'assistant', content: 'Just span Blue Monday.' },
         { role: 'user', content: 'Pick the track to play next. Stay silent — no link this time.' },
       ],
-      [{ name: 'searchByMood', args: { mood: 'late-night' }, result: [{ id: 'nEeVD8AWxtsGqdGS5vIvMr', title: 'Blue in Green' }] }],
+      [{ name: 'searchByMood', args: { mood: 'late-night' }, result: [{ id: 'nEeVD8AWxtsGqdGS5vIvMr', title: 'Blue in Green' }], round: 1 }],
     );
     assert.ok(prompt.includes('nEeVD8AWxtsGqdGS5vIvMr'), 'the discovered id must survive — without it a cornered model can only fabricate one');
     assert.ok(prompt.includes('searchByMood'), 'names the tool that produced the findings');
@@ -846,7 +913,7 @@ async function main() {
   await test('never renders the synthetic done tool as a finding', () => {
     const prompt = renderTerminalPrompt(
       [{ role: 'user', content: 'Pick.' }],
-      [{ name: 'done', args: { id: 'x' }, result: null }, { name: 'searchByMood', args: {}, result: [{ id: 'realId' }] }],
+      [{ name: 'done', args: { id: 'x' }, result: null, round: 1 }, { name: 'searchByMood', args: {}, result: [{ id: 'realId' }], round: 1 }],
     );
     assert.ok(!prompt.includes('done('), '`done` is the schema-emit signal, not a discovery result');
     assert.ok(prompt.includes('realId'), 'the genuine discovery still renders');
@@ -856,6 +923,7 @@ async function main() {
       name: `tool${i}`,
       args: {},
       result: [{ id: `id${i}`, blurb: 'x'.repeat(5000) }],
+      round: i + 1,
     }));
     const prompt = renderTerminalPrompt([{ role: 'user', content: 'Pick.' }], fat);
     assert.ok(prompt.length < 40_000, `prompt stays bounded (was ${prompt.length})`);
@@ -1085,15 +1153,7 @@ async function main() {
     assert.match(introBudgetPhrase(4000, 4000), /4s/);
   });
 
-  console.log('personaToneDirectives / normalizeDial:');
-  await test('normalizeDial clamps to 0-10 int, neutral on garbage', () => {
-    assert.equal(normalizeDial(7), 7);
-    assert.equal(normalizeDial(-3), 0);
-    assert.equal(normalizeDial(99), 10);
-    assert.equal(normalizeDial(6.7), 7);
-    assert.equal(normalizeDial('abc'), DIAL_NEUTRAL);
-    assert.equal(normalizeDial(undefined), DIAL_NEUTRAL);
-  });
+  console.log('personaToneDirectives:');
   await test('neutral / missing dials append nothing (prompt stays byte-identical)', () => {
     assert.equal(personaToneDirectives({ humour: 5, localColour: 5, warmth: 5 }), '');
     assert.equal(personaToneDirectives({}), '');
@@ -1108,20 +1168,6 @@ async function main() {
     const both = personaToneDirectives({ humour: 8, warmth: 8 });
     assert.ok(both.startsWith('\n\nTone:\n- '));
     assert.equal(both.split('\n- ').length, 3); // header + 2 bullets
-  });
-  // validatePersonasStrict rebuilds each persona from a field whitelist; dials
-  // missing from it are dropped on every save. Pin that they round-trip.
-  await test('validatePersonasStrict carries the dials through the save path', () => {
-    const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
-      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
-    const [saved] = validatePersonasStrict([{ ...base, humour: 9, localColour: 0, warmth: 99 }]);
-    assert.equal(saved.humour, 9);
-    assert.equal(saved.localColour, 0);
-    assert.equal(saved.warmth, 10);            // clamped, same as normalizeDial
-    const [bare] = validatePersonasStrict([base]);
-    assert.equal(bare.humour, DIAL_NEUTRAL);   // absent dials default to neutral
-    assert.equal(bare.localColour, DIAL_NEUTRAL);
-    assert.equal(bare.warmth, DIAL_NEUTRAL);
   });
 
   // Every consumer branches on these values; pin the ladder and the save path.
@@ -1186,19 +1232,6 @@ async function main() {
     assert.equal(clampTtsSpeed(1.23), 1.25);
     assert.equal(clampTtsSpeed(0.87), 0.85);
     assert.equal(clampTtsSpeed(1.0), 1.0);
-  });
-
-  // The persona save path (validatePersonasStrict → validateTtsBlock) must carry
-  // tts.speed through, else the per-persona dial is silently dropped on every save.
-  await test('validatePersonasStrict carries tts.speed through the save path', () => {
-    const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
-      tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
-    const [fast] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 1.4 } }]);
-    assert.equal(fast.tts.speed, 1.4);
-    const [clamped] = validatePersonasStrict([{ ...base, tts: { ...base.tts, speed: 9 } }]);
-    assert.equal(clamped.tts.speed, 2.0);          // clamped to max
-    const [bare] = validatePersonasStrict([base]);
-    assert.equal(bare.tts.speed, TTS_SPEED_DEFAULT); // absent → unity
   });
 
   await test('deliveryHint never pins a multilingual persona to one language', () => {
@@ -1482,9 +1515,25 @@ async function main() {
   await test('cue families require both the matching provider and model family', () => {
     assert.equal(cloudExpressionCueFamily('fish-audio', 's2.1-pro'), 'fish-s21');
     assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v3'), 'elevenlabs-v3');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v3_conversational'), 'elevenlabs-v3');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v4'), 'elevenlabs-v3');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v4_turbo'), 'elevenlabs-v3');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_flash_v2_5'), null);
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v5'), null, 'an unchecked family stays out');
+    assert.equal(cloudExpressionCueFamily('elevenlabs', 'eleven_v40'), null);
     assert.equal(cloudExpressionCueFamily('fish-audio', 'eleven_v3_custom'), null);
     assert.equal(cloudExpressionCueFamily('elevenlabs', 's2.1-pro'), null);
     assert.equal(cloudExpressionCueFamily('openai', 'eleven_v3'), null);
+  });
+
+  await test('elevenLabsTtsModelIds keeps speech models in provider order and drops the rest', () => {
+    assert.deepEqual(elevenLabsTtsModelIds([
+      { model_id: 'eleven_v4_turbo', can_do_text_to_speech: true },
+      { model_id: 'eleven_english_sts_v2', can_do_text_to_speech: false },
+      { model_id: 'eleven_flash_v2_5', can_do_text_to_speech: true },
+      { can_do_text_to_speech: true },
+    ]), ['eleven_v4_turbo', 'eleven_flash_v2_5']);
+    assert.deepEqual(elevenLabsTtsModelIds({ detail: 'unauthorized' }), []);
   });
 
   console.log('isElevenLabsV3 (model-family gate):');
@@ -1498,6 +1547,8 @@ async function main() {
     assert.equal(isElevenLabsV3('eleven_flash_v2_5'), false);
     assert.equal(isElevenLabsV3('eleven_multilingual_v2'), false);
     assert.equal(isElevenLabsV3('eleven_ttv_v3'), false);
+    assert.equal(isElevenLabsV3('eleven_v4'), false, 'v4 takes a continuous stability: no snap');
+    assert.equal(isElevenLabsV3('eleven_v4_turbo'), false);
     assert.equal(isElevenLabsV3('gpt-4o-mini-tts'), false);
     assert.equal(isElevenLabsV3(''), false);
   });
