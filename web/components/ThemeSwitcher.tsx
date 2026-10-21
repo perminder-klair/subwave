@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import dynamic from 'next/dynamic';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Palette } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -12,9 +11,39 @@ import { useSkinSelection } from './skins/SkinContext';
 
 // The skin miniatures only matter once the menu is open, so they load with it
 // rather than riding every skin's first paint; hovering or focusing the trigger
-// starts the fetch early.
-const SkinPreview = dynamic(() => import('./skins/SkinPreview'));
-const prefetchSkinPreview = () => { void import('./skins/SkinPreview'); };
+// starts the fetch early. Loaded by hand, not through next/dynamic: its lazy
+// component suspends on the first render that meets it however warm the chunk
+// is, and with `ssr` on and no `loading` it brings no Suspense boundary of its
+// own — so the first open suspended the whole player. The face blanked, sat
+// hidden through React's reveal throttle (~300ms) and remounted its effects.
+type SkinPreviewComponent = typeof import('./skins/SkinPreview').default;
+let skinPreview: SkinPreviewComponent | null = null;
+let skinPreviewLoad: Promise<SkinPreviewComponent> | null = null;
+function loadSkinPreview(): Promise<SkinPreviewComponent> {
+  skinPreviewLoad ??= import('./skins/SkinPreview').then(
+    m => (skinPreview = m.default),
+    err => {
+      skinPreviewLoad = null;
+      throw err;
+    },
+  );
+  return skinPreviewLoad;
+}
+const prefetchSkinPreview = () => { loadSkinPreview().catch(() => {}); };
+
+// Each specimen tile sets its theme's display face, and next/font fetches a face
+// only once something uses it — so the first open after a load fetched five or
+// six at once, blanked their text for the block period and reflowed when they
+// landed. Every later open was smooth. A stack names its faces through the
+// next/font variables, which `document.fonts.load` can't read, so they resolve
+// against <html> first.
+function warmDisplayFonts(fontIds: string[]) {
+  const root = getComputedStyle(document.documentElement);
+  for (const id of new Set(fontIds)) {
+    const stack = resolveFont(id).replace(/var\((--[\w-]+)\)/g, (_, name: string) => root.getPropertyValue(name).trim() || 'serif');
+    void document.fonts.load(`22px ${stack}`).catch(() => {});
+  }
+}
 
 // A theme as a type specimen: its own paper, ink and display face, with the
 // accent as a stripe along the foot. The colours are scoped to this one tile, so
@@ -107,12 +136,41 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const [open, setOpen] = useState(false);
   const [peekTheme, setPeekTheme] = useState<string | null>(null);
   const [peekSkin, setPeekSkin] = useState<string | null>(null);
+  const [, setPreviewLoaded] = useState(false);
   const activeChipRef = useRef<HTMLButtonElement>(null);
+
+  // Opened before the warm-up below landed: the cards draw empty and fill in
+  // when the chunk arrives, without suspending anything around them.
+  useEffect(() => {
+    if (!open || !showSkins || skinPreview) return;
+    let live = true;
+    loadSkinPreview().then(() => { if (live) setPreviewLoaded(true); }, () => {});
+    return () => { live = false; };
+  }, [open, showSkins]);
 
   // A custom theme can push the pick past the strip's visible end.
   useEffect(() => {
     if (open) activeChipRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [open]);
+
+  // Warm what the first open would otherwise fetch mid-animation — the
+  // miniatures' chunk and the specimens' faces — once the page is idle, so the
+  // first open runs like every later one. Keyed by the face list rather than the
+  // registry array, which the theme poll replaces.
+  const specimenFonts = ctx?.themes.map(t => t.tokens['--display-font'] ?? 'fraunces').join(',') ?? '';
+  useEffect(() => {
+    if (!specimenFonts) return;
+    const warm = () => {
+      if (showSkins) prefetchSkinPreview();
+      warmDisplayFonts(specimenFonts.split(','));
+    };
+    if (typeof requestIdleCallback === 'function') {
+      const handle = requestIdleCallback(warm, { timeout: 4000 });
+      return () => cancelIdleCallback(handle);
+    }
+    const handle = setTimeout(warm, 2000);
+    return () => clearTimeout(handle);
+  }, [specimenFonts, showSkins]);
 
   if (!ctx || ctx.themes.length === 0) return null;
 
@@ -120,6 +178,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const shownTheme = themes.find(t => t.id === peekTheme) ?? themes.find(t => t.id === effectiveId);
   const shownSkin = skinCtx?.skins.find(s => s.id === peekSkin)
     ?? skinCtx?.skins.find(s => s.id === skinCtx.effectiveId);
+  const SkinPreview = skinPreview;
 
   return (
     <Dialog.Root
@@ -280,7 +339,7 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
                             isActive ? 'border-vermilion bg-[var(--accent-soft)]' : 'border-ink bg-field',
                           )}
                         >
-                          <SkinPreview id={s.id} />
+                          {SkinPreview && <SkinPreview id={s.id} />}
                         </span>
                         <span className="flex min-w-0 items-center gap-1.5 px-2 py-1.5">
                           {isActive && (
