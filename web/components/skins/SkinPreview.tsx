@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/cn';
 import { AXO, type DrawnBlock, type RackLevel } from './axo/geometry';
 import { ROWS as CIPHER_ROWS } from './cipher/cipher';
+import { ARM, DECK, PLATTER, RECORD, RECORD_LIFT, VIEWBOX as PLATTER_VIEWBOX, armAngle, ringTicks, stylusAt } from './platter/iso';
 
 // A pure-CSS miniature of each skin's real layout, shared by the admin's station
 // skin gallery and the listener's Appearance menu. The host card must be a
@@ -180,24 +181,66 @@ function TtyPreview() {
   );
 }
 
+// Platter's deck at 30° isometric — the turntable as its focus mode draws it,
+// from the skin's own geometry (platter/iso.ts) so the card can't drift from
+// the player — with the record's sleeve propped behind it, beside a slab card
+// for the column of facts. The record turns under the shared play-state gate.
+const PL_TOP = 'fill-bg';
+const PL_LEFT = 'fill-[color-mix(in_oklab,var(--ink)_6%,var(--bg))]';
+const PL_RIGHT = 'fill-[color-mix(in_oklab,var(--ink)_13%,var(--bg))]';
+const PL_MAT = 'fill-[color-mix(in_oklab,var(--ink)_72%,var(--bg))]';
+const PL_RING = ringTicks(0.62).lit;
+const PL_STYLUS = stylusAt(armAngle('play', 0.4));
+
 function PlatterPreview() {
+  const { plinth, plinthBox: p, sleeve, sleeveBox: s } = DECK;
+  const rx = PLATTER.cx - RECORD_LIFT, ry = PLATTER.cy - RECORD_LIFT;
   return (
-    <div className="flex h-full w-full items-center gap-2 bg-field p-2.5">
-      <div className="relative grid aspect-square h-full place-items-center border border-ink bg-bg">
-        <span className={cn('relative grid aspect-square h-[74%] place-items-center rounded-full border border-ink bg-ink', REEL)}>
-          <span className="grid aspect-square h-[42%] place-items-center rounded-full border border-bg/70 bg-field">
-            <span className="size-[3px] rounded-full bg-vermilion" />
-          </span>
-        </span>
-        <span className="absolute top-1 right-1 h-[2px] w-[58%] origin-right -rotate-[28deg] bg-ink" />
-        <span className="absolute top-1 right-1 size-[5px] translate-x-1/2 -translate-y-1/2 rounded-full border border-ink bg-field" />
+    <div className="flex h-full w-full items-stretch bg-field">
+      <div className="relative flex-1 bg-[radial-gradient(circle,var(--soft-border)_1px,transparent_1.5px)] bg-size-[9px_5.2px]">
+        <svg
+          viewBox={String(PLATTER_VIEWBOX)}
+          className="absolute inset-0 size-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+          strokeWidth={0.7}
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <g transform={sleeve.L}>
+            <rect width={s.w} height={s.h} className="fill-surface" />
+            <rect x="18" y="18" width={s.w - 36} height={s.h - 70} className="fill-vermilion stroke-none" />
+            <rect x="18" y={s.h - 40} width={s.w * 0.55} height="9" className="fill-ink stroke-none" />
+          </g>
+          <path d={sleeve.sil} strokeWidth={1.2} />
+          <rect transform={plinth.L} width={p.w} height={p.h} className={PL_LEFT} />
+          <rect transform={plinth.R} width={p.d} height={p.h} className={PL_RIGHT} />
+          <rect transform={plinth.T} width={p.w} height={p.d} className={PL_TOP} />
+          <g transform={plinth.T}>
+            <path d={PL_RING} strokeWidth={1.4} className="stroke-vermilion" />
+            <circle cx={PLATTER.cx} cy={PLATTER.cy} r={PLATTER.r} className={PL_MAT} />
+            <g className={cn('origin-center [transform-box:fill-box]', REEL)}>
+              <circle cx={rx} cy={ry} r={RECORD.r} className="fill-[#0c0a09]" />
+              <circle cx={rx} cy={ry} r="34" className="fill-vermilion stroke-none" />
+              <line x1={rx} y1={ry - RECORD.r + 6} x2={rx} y2={ry - RECORD.r + 20} className="stroke-bg" strokeWidth={1} />
+            </g>
+            <line
+              x1={ARM.px - ARM.lift}
+              y1={ARM.py - ARM.lift}
+              x2={PL_STYLUS[0] - ARM.lift}
+              y2={PL_STYLUS[1] - ARM.lift}
+              strokeWidth={1.6}
+            />
+            <circle cx={ARM.px - ARM.lift} cy={ARM.py - ARM.lift} r="9" className="fill-bg" />
+          </g>
+          <path d={plinth.sil} strokeWidth={1.2} />
+        </svg>
       </div>
-      <div className="grid flex-1 content-start gap-1.5 border border-ink bg-surface p-1.5">
-        <span className="h-[3px] w-1/3 bg-vermilion" />
-        <span className="h-[4px] w-4/5 bg-ink" />
-        <span className="h-[3px] w-1/2 bg-muted" />
+      {/* The column, as a slab: its side and foot in the card's own shade. */}
+      <div className="my-2.5 mr-3 grid w-[34%] content-start gap-1.5 border border-ink bg-surface p-1.5 shadow-[2.6px_1.5px_0_color-mix(in_oklab,var(--surface)_60%,#000)]">
+        <span className="h-[3px] w-1/2 bg-vermilion" />
+        <span className="h-[4px] w-full bg-ink" />
+        <span className="h-[3px] w-2/3 bg-muted" />
         <span className="mt-1 h-[3px] w-full bg-soft-border" />
-        <EqRow className="mt-1 h-4 justify-start" />
+        <span className="h-[3px] w-4/5 bg-soft-border" />
       </div>
     </div>
   );
@@ -312,13 +355,35 @@ function AxoPreview() {
   );
 }
 
-// The rotor machine's top deck in miniature, laid out on the desk machine's own
-// grid (1360×800): power key, rotor windows, tape, the lampboard with two
-// bulbs taking turns, and the keyboard in its well.
-const CIPHER_PANEL = 'fill-bg';
-const CIPHER_PLATE = 'fill-[color-mix(in_oklab,var(--ink)_5%,var(--bg))]';
-const CIPHER_WELL = 'fill-[color-mix(in_oklab,var(--ink)_13%,var(--bg))]';
-const CIPHER_SKIRT = 'fill-[color-mix(in_oklab,var(--ink)_12%,var(--bg))]';
+// The rotor machine in miniature, laid out on the desk machine's own grid
+// (1360×800) and finished as the skin is, in Unit SW-9's hardware: a brushed
+// plate whose side and lip show down the 30° axis, wells sunk into it, the
+// tape and the lampboard as black display glass with two bulbs taking turns,
+// dark keys on darker bodies swept down that same axis, and the power knob.
+// Every key shade is mixed from the key's own face (--mk), as the skin's are,
+// so the bodies stay darker than the faces on a dark theme too.
+const C_PLATE = 'fill-[color-mix(in_oklab,var(--bg)_95%,#000)]';
+const C_SIDE = 'fill-[color-mix(in_oklab,var(--bg)_72%,#000)]';
+const C_LIP = 'fill-[color-mix(in_oklab,var(--bg)_80%,#000)]';
+const C_WELL = 'fill-[color-mix(in_oklab,var(--bg)_89%,#000)]';
+const C_DEEP = 'fill-[color-mix(in_oklab,var(--bg)_78%,#000)]';
+const C_GLASS = 'fill-[#0e0d0b] stroke-[#0a0908]';
+const C_KEY = 'fill-[var(--mk)]';
+const C_BODY = 'fill-[color-mix(in_oklab,var(--mk)_56%,#000)] stroke-none';
+// The 30° sweep of a key's body: cos 30°, sin 30° of its depth.
+const C_DX = 7;
+const C_DY = 4;
+
+/** A block key: its body swept down the 30° axis, then its face. */
+function CipherBlock({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const body = `M${x} ${y}H${x + w}L${x + w + C_DX} ${y + C_DY}V${y + h + C_DY}H${x + C_DX}L${x} ${y + h}Z`;
+  return (
+    <>
+      <path d={body} className={C_BODY} />
+      <rect x={x} y={y} width={w} height={h} rx="3" className={C_KEY} />
+    </>
+  );
+}
 
 function CipherPreview() {
   const lamps = CIPHER_ROWS.flatMap(({ length: n }, row) =>
@@ -330,51 +395,58 @@ function CipherPreview() {
   return (
     <div className="flex h-full w-full items-center justify-center p-2.5 pt-5">
       <svg
-        viewBox="0 0 1360 800"
-        className="h-full w-full fill-none stroke-ink [&_*]:[vector-effect:non-scaling-stroke]"
+        viewBox="0 0 1380 806"
+        className="h-full w-full fill-none stroke-ink [--mk:color-mix(in_oklab,var(--ink)_92%,var(--bg))] [&_*]:[vector-effect:non-scaling-stroke]"
         strokeWidth={0.8}
         aria-hidden="true"
       >
-        <rect width="1360" height="788" className={CIPHER_PLATE} strokeWidth={1.2} />
+        <path d="M1360 0L1374 8V796L1360 788Z" className={C_SIDE} />
+        <path d="M0 788H1360L1374 796H14Z" className={C_LIP} />
+        <rect width="1360" height="788" className={C_PLATE} strokeWidth={1.2} />
         {([
-          [20, 20, 164, 200], [198, 20, 440, 200], [652, 20, 688, 200],
-          [20, 234, 164, 214], [198, 234, 964, 214], [1176, 234, 164, 214],
+          [20, 20, 164, 200], [198, 20, 440, 200],
+          [20, 234, 164, 214], [1176, 234, 164, 214],
           [20, 462, 164, 306], [1176, 462, 164, 306],
-        ] as const).map(([x, y, w, h]) => <rect key={`${x}-${y}`} x={x} y={y} width={w} height={h} className={CIPHER_PANEL} />)}
-        <rect x="198" y="462" width="964" height="306" className={CIPHER_WELL} />
+        ] as const).map(([x, y, w, h]) => <rect key={`${x}-${y}`} x={x} y={y} width={w} height={h} rx="4" className={C_WELL} />)}
+        <rect x="198" y="462" width="964" height="306" rx="4" className={C_DEEP} />
+        <rect x="652" y="20" width="688" height="200" rx="4" className={C_GLASS} />
+        <rect x="198" y="234" width="964" height="214" rx="4" className={C_GLASS} />
 
         <g transform="translate(102 112)">
-          <circle r="40" className={CIPHER_WELL} />
-          <circle r="28" className={CIPHER_PANEL} />
+          <circle cx="6" cy="3.5" r="40" className={C_BODY} />
+          <circle r="40" className={C_KEY} />
+          <circle r="27" className="fill-[color-mix(in_oklab,var(--mk)_88%,#fff)]" />
           <g transform="rotate(45)">
-            <rect x="-8" y="-36" width="16" height="72" className={CIPHER_PANEL} />
-            <line y1="-14" y2="14" className="stroke-vermilion" strokeWidth={2} />
+            <line y1="-24" y2="-9" className="stroke-vermilion" strokeWidth={3} strokeLinecap="round" />
           </g>
         </g>
         {[278, 418, 558].map(c => (
           <g key={c}>
-            <rect x={c - 48} y="66" width="70" height="88" className={CIPHER_PANEL} />
-            <rect x={c - 30} y="98" width="34" height="24" className="fill-ink stroke-none" />
-            <rect x={c + 28} y="66" width="20" height="88" className={CIPHER_WELL} />
+            <CipherBlock x={c - 42} y={34} w={84} h={24} />
+            <rect x={c - 48} y="66" width="70" height="88" rx="3" className={C_GLASS} />
+            <rect x={c - 30} y="98" width="34" height="24" className="fill-[#f4f0e6] stroke-none" />
+            <rect x={c + 28} y="66" width="20" height="88" rx="3" className={C_KEY} />
+            <CipherBlock x={c - 42} y={162} w={84} h={24} />
           </g>
         ))}
         <rect x="678" y="48" width="130" height="7" className="fill-vermilion stroke-none" />
-        <rect x="678" y="80" width="320" height="38" className="fill-ink stroke-none" />
-        <rect x="678" y="138" width="210" height="10" className="fill-muted stroke-none" />
-        <line x1="678" y1="192" x2="1314" y2="192" strokeDasharray="6 5" />
+        <rect x="678" y="80" width="320" height="38" className="fill-[#f4f0e6] stroke-none" />
+        <rect x="678" y="138" width="210" height="10" className="fill-[#f4f0e6]/50 stroke-none" />
+        <line x1="678" y1="192" x2="1314" y2="192" className="stroke-[#f4f0e6]/40" strokeDasharray="6 5" />
         <line x1="678" y1="192" x2="930" y2="192" className="stroke-vermilion" strokeWidth={2} />
 
-        {([[46, 299, 84], [1202, 299, 84], [46, 540, 56], [46, 616, 56], [1198, 551, 128]] as const).map(([x, y, h], i) => (
-          <g key={`${x}-${y}`}>
-            <rect x={x} y={y + 8} width={i === 4 ? 120 : 112} height={h} className={CIPHER_SKIRT} />
-            <rect x={x} y={y} width={i === 4 ? 120 : 112} height={h} className={CIPHER_PANEL} />
-          </g>
-        ))}
-        {lamps.map(l => <circle key={`${l.x}-${l.y}`} cx={l.x} cy={l.y} r="25" className={CIPHER_PANEL} />)}
+        {([[46, 299, 112, 84], [1202, 299, 112, 84], [46, 540, 112, 56], [46, 616, 112, 56], [1198, 551, 120, 128], [472, 699, 416, 36]] as const).map(
+          ([x, y, w, h]) => <CipherBlock key={`${x}-${y}`} x={x} y={y} w={w} h={h} />,
+        )}
+        {lamps.map(l => <circle key={`${l.x}-${l.y}`} cx={l.x} cy={l.y} r="25" className="fill-[#2a2724] stroke-[#000]" />)}
         <circle cx="888" cy="393" r="25" className={cn('fill-vermilion stroke-none', BLINK)} />
         <circle cx="1096" cy="285" r="25" className={cn('fill-vermilion stroke-none [animation-delay:525ms]', BLINK)} />
-        {keys.map(k => <circle key={`${k.x}-${k.y}`} cx={k.x} cy={k.y} r="29" className={CIPHER_PANEL} />)}
-        <rect x="472" y="699" width="416" height="36" className={CIPHER_PANEL} />
+        {keys.map(k => (
+          <g key={`${k.x}-${k.y}`}>
+            <circle cx={k.x + C_DX} cy={k.y + C_DY} r="29" className={C_BODY} />
+            <circle cx={k.x} cy={k.y} r="29" className={C_KEY} />
+          </g>
+        ))}
       </svg>
     </div>
   );
