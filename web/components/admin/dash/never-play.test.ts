@@ -1,16 +1,28 @@
-// "Never play" on the Dash's now-playing track: what the operator is told
-// after the confirm dialog, and the read the optional skip is decided on. The
-// block is the existing POST /library/blocklist (absolute, requests included);
-// the skip is the existing POST /dj/skip, targeted at the blocked track, and
-// is the operator's choice in the dialog.
+// The Dash's Skip dialog on the now-playing track: the choices it offers,
+// what the operator is told after it, and the read a block's optional skip is
+// decided on. The block is the existing POST /library/blocklist (absolute,
+// requests included); its skip is the existing POST /dj/skip, targeted at the
+// blocked track, and is the operator's choice in the dialog. A plain skip is
+// the bare POST /dj/skip, and its toast offers the block afterwards.
 //
 // Run: npm test -- never-play
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { onlineManager, QueryClient, QueryObserver } from '@tanstack/react-query';
+import type { ReactElement } from 'react';
 import { toast } from 'sonner';
-import { blockPlayingTrack, neverPlayToast, notifyNeverPlay, refetchOnAirId, skipDecision, skipFailureOutcome } from './never-play';
+import {
+  blockPlayingTrack,
+  neverPlayToast,
+  notifyNeverPlay,
+  notifySkipped,
+  refetchOnAirId,
+  skipChoices,
+  skipDecision,
+  skipFailureOutcome,
+  skipFollowUps,
+} from './never-play';
 import { dashKeys, removeQueuedRow, runDashAction } from './queries';
 import type { DashStatus } from './types';
 import type { BlockEntry } from '../library/types';
@@ -58,6 +70,77 @@ test('no artist: the title alone', () => {
   assert.equal(
     neverPlayToast({ title: 'Untitled', block: 'added', skip: 'not-asked' }).text,
     '“Untitled” will never air again · it finishes now',
+  );
+});
+
+const LIB = { id: 'a', title: 'Depth Narcosis', artist: 'Kognitif', album: 'Monometric' };
+
+// One dialog for a skip and the three never-play tiers. The plain skip comes
+// first, as the choice every open resets to.
+test('choices: a plain skip first, then the track, its album and its artist', () => {
+  const choices = skipChoices(LIB);
+  assert.deepEqual(choices.map(c => c.id), ['skip', 'track', 'album', 'artist']);
+  assert.ok(choices.every(c => !c.disabled));
+  assert.equal(choices[2]?.detail, 'Nothing from “Monometric” airs again.');
+  assert.equal(choices[3]?.detail, 'Nothing by Kognitif airs again.');
+});
+
+test('choices: a track outside the library can only be skipped', () => {
+  const choices = skipChoices({ title: 'Live Feed' });
+  assert.equal(choices.find(c => c.id === 'skip')?.disabled, undefined);
+  for (const c of choices.filter(c => c.id !== 'skip')) {
+    assert.equal(c.disabled, 'Only a library track can be blocked.', c.id);
+  }
+});
+
+// The operator confirms a block by what it covers, so a tier the Dash can't
+// name is not offered, even though the server could resolve it.
+test('choices: an album or artist the Dash cannot name is not offered', () => {
+  const choices = skipChoices({ id: 'a', title: 'Depth Narcosis' });
+  assert.equal(choices.find(c => c.id === 'track')?.disabled, undefined);
+  assert.equal(choices.find(c => c.id === 'album')?.disabled, 'The album on air is not known.');
+  assert.equal(choices.find(c => c.id === 'artist')?.disabled, 'The artist on air is not known.');
+});
+
+test('album block: says what it covers', () => {
+  assert.equal(
+    neverPlayToast({ ...LIB, scope: 'album', block: 'added', skip: 'done', purged: 1 }).text,
+    'nothing from “Monometric” — Kognitif will air again · skipped · 1 dropped from queue',
+  );
+  assert.equal(
+    neverPlayToast({ ...LIB, scope: 'album', block: 'already', skip: 'not-asked' }).text,
+    '“Monometric” — Kognitif was already on the never-play list · it finishes now',
+  );
+});
+
+test('artist block: says what it covers', () => {
+  assert.equal(
+    neverPlayToast({ ...LIB, scope: 'artist', block: 'added', skip: 'done' }).text,
+    'nothing by Kognitif will air again · skipped',
+  );
+  assert.equal(
+    neverPlayToast({ ...LIB, scope: 'artist', block: 'already', skip: 'done' }).text,
+    'Kognitif was already on the never-play list · skipped',
+  );
+});
+
+test('an album or artist block with no name still says the block landed', () => {
+  assert.equal(
+    neverPlayToast({ title: 'Depth Narcosis', scope: 'album', block: 'added', skip: 'done' }).text,
+    '“Depth Narcosis” will never air again · skipped',
+  );
+});
+
+// A plain skip's follow-up block comes with no skip of its own, so its toast
+// says nothing about one: "it finishes now" would be wrong after a skip.
+test('a block with no skip of its own has no skip clause', () => {
+  assert.deepEqual(neverPlayToast({ ...LIB, block: 'added' }), {
+    tone: 'ok',
+    text: '“Depth Narcosis” — Kognitif will never air again',
+  });
+  assert.equal(
+    neverPlayToast({ ...LIB, scope: 'artist', block: 'added', purged: 3 }).text,
+    'nothing by Kognitif will air again · 3 dropped from queue',
   );
 });
 
@@ -291,6 +374,17 @@ test('block: 201 carries the entry and the purge count, posted as a track block'
   assert.deepEqual(JSON.parse(String(call.init?.body)), { type: 'track', trackId: 'a' });
 });
 
+// The server resolves the album or artist from the track, so the Dash posts
+// the track id at every tier.
+test('block: an album or artist block posts its tier with the track id', async () => {
+  for (const scope of ['album', 'artist'] as const) {
+    const entry = { type: scope, id: `${scope}-1`, name: 'x' };
+    const s = stubFetch(201, { entry, purged: 0 });
+    assert.deepEqual(await blockPlayingTrack(s.fetcher, 'a', scope), { block: 'added', purged: 0, entry });
+    assert.deepEqual(JSON.parse(String(s.calls[0]?.init?.body)), { type: scope, trackId: 'a' });
+  }
+});
+
 test('block: 409 already blocked is an outcome, not an error', async () => {
   const s = stubFetch(409, { error: 'already blocked' });
   assert.deepEqual(await blockPlayingTrack(s.fetcher, 'a'), { block: 'already' });
@@ -425,4 +519,43 @@ test('targeted skip: Undo after a refused skip lifts the new entry', async () =>
   shown.action?.onClick({});
   await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(lifted, [ENTRY]);
+});
+
+// A plain skip's toast offers the block afterwards, for the operator who
+// decides once the track is gone: never the track, or never its artist.
+test('skipped: a library track offers never play and never this artist', () => {
+  assert.deepEqual(skipFollowUps(LIB), [
+    { scope: 'track', label: 'never play' },
+    { scope: 'artist', label: 'never this artist' },
+  ]);
+  assert.deepEqual(skipFollowUps({ id: 'a', title: 'Depth Narcosis' }).map(o => o.scope), ['track']);
+  assert.deepEqual(skipFollowUps({ title: 'Live Feed' }), []);
+});
+
+test('skipped: a track outside the library gets the plain toast, with nothing to offer', () => {
+  notifySkipped({ title: 'Live Feed' }, () => assert.fail('nothing to block'));
+  const shown = lastToast();
+  assert.equal(shown.type, 'success');
+  assert.equal(shown.title, 'skip track done');
+  assert.equal(shown.action, undefined);
+});
+
+type ChoiceButton = ReactElement<{ children: string; onClick: () => void }>;
+
+test('skipped: picking a follow-up blocks at its tier and closes the toast', () => {
+  // Sonner closes a toast on the next animation frame, which Node lacks.
+  globalThis.requestAnimationFrame ??= (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number;
+  const blocked: string[] = [];
+  notifySkipped(LIB, scope => blocked.push(scope));
+  const shown = lastToast() as ReturnType<typeof lastToast> & { id: string | number; description?: unknown };
+  assert.equal(shown.type, 'success');
+  assert.equal(shown.title, 'skip track done');
+  assert.equal(shown.description, 'Keep “Depth Narcosis” — Kognitif off the air?');
+  assert.equal(shown.duration, 10_000);
+  const buttons = (shown.action as unknown as ReactElement<{ children: ChoiceButton[] }>).props.children;
+  assert.deepEqual(buttons.map(b => b.props.children), ['never play', 'never this artist']);
+  assert.ok(toast.getToasts().some(t => t.id === shown.id));
+  buttons[1]?.props.onClick();
+  assert.deepEqual(blocked, ['artist']);
+  assert.ok(!toast.getToasts().some(t => t.id === shown.id), 'the pick closed the toast');
 });
