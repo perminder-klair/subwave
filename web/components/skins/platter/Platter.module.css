@@ -81,8 +81,10 @@
 }
 
 /* A card as a slab seen from above and left at 30°: its right side and its
-   underside show, each a parallelogram, the underside in deeper shade. Both
-   start at the card's outer edge, so its own border is their shared edge.
+   underside show, each a parallelogram, the underside in deeper shade — the
+   card's own surface toward black, so a side is darker than its face on a
+   dark theme too (toward the ink, it came out paler). Both start at the
+   card's outer edge, so its own border is their shared edge.
    The card brings its own positioning (relative or absolute): set here, it
    would beat the utility class, which loads first, and pull an absolutely
    placed card back into the flow. */
@@ -103,7 +105,7 @@
   width: calc(var(--slab) * 0.866);
   height: calc(100% + 2px);
   border-left: 0;
-  background: color-mix(in oklab, var(--ink) 12%, var(--bg));
+  background: color-mix(in oklab, var(--surface) 86%, #000);
   transform: skewY(30deg);
 }
 .slab::after {
@@ -112,23 +114,30 @@
   width: calc(100% + 2px);
   height: calc(var(--slab) * 0.5);
   border-top: 0;
-  background: color-mix(in oklab, var(--ink) 22%, var(--bg));
+  background: color-mix(in oklab, var(--surface) 74%, #000);
   transform: skewX(60deg);
 }
 
-/* Transport keys stand proud at the same 30°, their edge a stack of the ink;
-   pressing sinks one to the deck, and a latched key (playing, muted, liked)
+/* Transport keys stand proud at the same 30°: their side is a stack of the
+   key's resting face (the paper) in shade, and a second stack, one pixel
+   wider in the ink, traces the whole extruded silhouette — so the side reads
+   against a pale deck and a dark one alike. Drawn in the ink alone, a dark
+   theme turned the side into a bright crescent that read as a highlight.
+   Pressing sinks a key to the deck, and a latched key (playing, muted, liked)
    stays down. A press is an interaction, so lite keeps the short glide. */
 .isoKey {
+  --side: color-mix(in oklab, var(--bg) 52%, #000);
   box-shadow:
-    0.87px 0.5px 0 var(--ink), 1.73px 1px 0 var(--ink), 2.6px 1.5px 0 var(--ink),
-    3.46px 2px 0 var(--ink), 4.33px 2.5px 0 var(--ink);
+    0.87px 0.5px 0 var(--side), 1.73px 1px 0 var(--side), 2.6px 1.5px 0 var(--side),
+    3.46px 2px 0 var(--side), 4.33px 2.5px 0 var(--side),
+    0.87px 0.5px 0 1px var(--ink), 1.73px 1px 0 1px var(--ink), 2.6px 1.5px 0 1px var(--ink),
+    3.46px 2px 0 1px var(--ink), 4.33px 2.5px 0 1px var(--ink);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
 }
 .isoKey:active:not(:disabled),
 .isoKeyDown {
   transform: translate(3.46px, 2px);
-  box-shadow: 0.87px 0.5px 0 var(--ink);
+  box-shadow: 0.87px 0.5px 0 var(--side), 0.87px 0.5px 0 1px var(--ink);
 }
 
 /* ── Focus mode: the deck at 30° isometric (IsoDeck) ───────────────────── */

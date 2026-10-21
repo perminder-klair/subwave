@@ -17,11 +17,18 @@
   --plate-txt: var(--ink);
   --txt: var(--ink);
   /* Keys: the theme's ink as a dark cap (a pale one on a dark theme), its
-     legend in the paper. --edge is a key's side, seen down the 30° axis. */
-  --key-hi: color-mix(in oklab, var(--ink) 88%, var(--bg));
-  --key-lo: color-mix(in oklab, var(--ink) 97%, #000);
-  --edge: color-mix(in oklab, var(--ink) 92%, #000);
-  --edge-lo: color-mix(in oklab, var(--ink) 97%, #000);
+     legend in the paper. Every shade of a key — the lit top, the shaded foot,
+     the side seen down the 30° axis — is mixed from the KEY'S OWN FACE toward
+     white or black, never toward the theme's ink: on a dark theme the ink is
+     the pale end, which lit the keys from below and drew each side as pale as
+     its face, so a key lost its depth and its swept body read as a notched
+     rectangle. The knob is the same, from its own face. */
+  --key: color-mix(in oklab, var(--ink) 92%, var(--bg));
+  --key-hi: color-mix(in oklab, var(--key) 92%, #fff);
+  --key-lo: color-mix(in oklab, var(--key) 90%, #000);
+  --edge: color-mix(in oklab, var(--key) 58%, #000);
+  --edge-lo: color-mix(in oklab, var(--key) 44%, #000);
+  --knob: color-mix(in oklab, var(--ink) 88%, var(--bg));
   --keytext: color-mix(in oklab, var(--bg) 87%, var(--ink));
   --keytext-dim: color-mix(in srgb, var(--keytext) 55%, transparent);
   /* Display glass is self-lit hardware: deliberately off-token, as Unit's. */
@@ -164,15 +171,17 @@
 
 /* ── Panels: wells sunk into the plate, a nameplate on each ─────────── */
 /* A well's floor sits down the 30° axis, so of its walls only the top and the
-   left face the reader: an inset band along those two edges. */
+   left face the reader: an inset band along those two edges. Its floor is the
+   plate in shade, mixed toward black: toward the ink, a dark theme's wells
+   came out paler than the plate and read as raised. */
 .panel {
   position: relative;
   border: 1px solid var(--line);
   border-radius: 3px;
   background: linear-gradient(
     180deg,
-    color-mix(in oklab, var(--bg) 93%, var(--ink)),
-    color-mix(in oklab, var(--bg) 87%, var(--ink))
+    color-mix(in oklab, var(--bg) 93%, #000),
+    color-mix(in oklab, var(--bg) 87%, #000)
   );
   box-shadow:
     inset 3.5px 2px 0 rgba(0, 0, 0, 0.07),
@@ -202,8 +211,8 @@
 .panel.wellBay {
   background: linear-gradient(
     180deg,
-    color-mix(in oklab, var(--bg) 81%, var(--ink)),
-    color-mix(in oklab, var(--bg) 73%, var(--ink))
+    color-mix(in oklab, var(--bg) 82%, #000),
+    color-mix(in oklab, var(--bg) 74%, #000)
   );
   box-shadow:
     inset 6px 3.5px 0 rgba(0, 0, 0, 0.1),
@@ -237,17 +246,20 @@
 /* ── Power key: a weighted knob ─────────────────────────────────────── */
 .svgTxt { fill: var(--plate-txt); stroke: none; }
 .svgTick { stroke: var(--plate-txt); fill: none; }
-.pkO0 { stop-color: color-mix(in oklab, var(--ink) 78%, var(--bg)); }
-.pkO1 { stop-color: color-mix(in oklab, var(--ink) 94%, #000); }
-.pkI0 { stop-color: color-mix(in oklab, var(--ink) 84%, var(--bg)); }
-.pkI1 { stop-color: color-mix(in oklab, var(--ink) 91%, #000); }
+.pkO0 { stop-color: color-mix(in oklab, var(--knob) 88%, #fff); }
+.pkO1 { stop-color: color-mix(in oklab, var(--knob) 82%, #000); }
+.pkI0 { stop-color: color-mix(in oklab, var(--knob) 92%, #fff); }
+.pkI1 { stop-color: color-mix(in oklab, var(--knob) 88%, #000); }
 /* The knob's side: a round-capped stroke as wide as the knob, run down the
    30° axis, is exactly a cylinder's silhouette. */
 .pkSide { stroke: var(--edge-lo); fill: none; }
 .pkShadow { fill: rgba(0, 0, 0, 0.18); stroke: none; }
-.pkRim { stroke: var(--ink); fill: none; }
+/* The face and the cap take their gradient from the fill ATTRIBUTE, so these
+   two set only the stroke: a CSS fill here beats the attribute, and the
+   knob's face went transparent over its side. */
+.pkRim { stroke: var(--ink); }
 .pkKnurl { stroke: rgba(255, 255, 255, 0.08); fill: none; }
-.pkCapEdge { stroke: rgba(0, 0, 0, 0.5); fill: none; }
+.pkCapEdge { stroke: rgba(0, 0, 0, 0.5); }
 .pkMark { stroke: var(--accent); fill: none; }
 .pkMarkGlow { stroke: var(--accent); fill: none; opacity: 0.35; }
 .keyTurn {
@@ -522,8 +534,8 @@
   border-radius: 50%;
   background: radial-gradient(
     circle at 50% 22%,
-    color-mix(in oklab, var(--ink) 78%, var(--bg)),
-    color-mix(in oklab, var(--ink) 93%, #000) 72%
+    color-mix(in oklab, var(--key) 88%, #fff),
+    color-mix(in oklab, var(--key) 84%, #000) 72%
   );
   /* The hairline is where the cap's top turns down into its side: without it
      the two dark tones run together. */
@@ -587,7 +599,7 @@
   justify-content: center;
   border-radius: 3px;
   background: linear-gradient(180deg, var(--key-hi), var(--key-lo));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 1px color-mix(in oklab, var(--key) 50%, #000);
   color: var(--keytext);
   transform: translate(calc(var(--dx) * var(--t)), calc(var(--dy) * var(--t)));
   transition: transform 70ms;
