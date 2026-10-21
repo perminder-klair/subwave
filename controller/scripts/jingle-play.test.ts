@@ -229,7 +229,7 @@ test('a jingle that has started plays to its end', () => {
   // The rotate's gate stays an availability gate (the rotate is the stdlib's),
   // held open only while its own clip is on air: an open verdict must not
   // outlive the clip it was given for.
-  assert.ok(liq.includes('jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air()}, {'),
+  assert.ok(liq.includes('jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air() and '),
     'the rotate gate is latched for the clip on air, and only for it, never a constant true');
   const flagHook = liq.indexOf(
     'music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_jingle_rotate"] == "true")');
@@ -245,6 +245,17 @@ test('a jingle that has started plays to its end', () => {
   const release = liq.indexOf('jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)');
   assert.ok(release > liq.indexOf('jingles = playlist(') && release < liq.indexOf('jingles = source.available(jingles,'),
     'the latch is released on the raw playlist, below the gate');
+});
+
+// Back to back, the rotate chooses the next clip in the same cycle the last one
+// ends, on the verdict the latch held. With the music chain starved there is
+// nothing else to turn to, so a held gate was never asked `not
+// music_starved()` again: measured on the baked image (empty auto.m3u, ratio
+// 1), the starve latched at 31.6s and stingers kept airing to the end of a 120s
+// run with no emergency switch (#1300 bug 7).
+test('the latch never holds the rotate open over a latched starve', () => {
+  assert.ok(liq.includes('track_sensitive={rotate_jingle_on_air() and not music_starved()}'),
+    'once the starve guard latches, the rotate gate is asked every cycle again');
 });
 
 // The rotate must also stand down while a manual jingle is on air, or it stacks

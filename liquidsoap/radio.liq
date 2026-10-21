@@ -1341,7 +1341,14 @@ music =
     # later turn. track_sensitive holds an open gate while it is true, so it is
     # true only for the clip on air: an open verdict must not outlive its clip,
     # nor be re-checked at the clip's own end (the release above).
-    jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air()}, {
+    #
+    # Except for the starve guard. Served back to back, the next clip is chosen
+    # in the same cycle the last one ends, on that cycle's verdict, which the
+    # flag had held; so with no music to turn to, a held gate was never asked
+    # again and the rotate served stingers forever over a latched starve (#1300
+    # bug 7, measured on the baked image). Once it latches the gate is asked
+    # every cycle again, as before, and cuts the clip on air.
+    jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air() and not music_starved()}, {
       not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
