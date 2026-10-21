@@ -454,6 +454,32 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
   target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
 }
 
+// Per-task model overrides ({ [kind]: model }). Primary-only (not on fallback,
+// so kept out of applyLlmLegPatch — which LLM_LEG_FIELDS pins to per-leg keys).
+// Whole-map REPLACE (not a merge) so clearing a task in the editor actually
+// clears it. Keys are task kinds the callers pass to primaryLeg(); values are
+// trimmed model ids, each 0-100 chars like `model`; an empty value drops the
+// entry (blank = "use the primary model").
+export function applyModelOverridesPatch(
+  target: Record<string, unknown>,
+  l: Record<string, unknown>,
+  label = 'llm',
+): void {
+  if (l.modelOverrides !== undefined) {
+    if (!l.modelOverrides || typeof l.modelOverrides !== 'object' || Array.isArray(l.modelOverrides)) {
+      throw new Error(`${label}.modelOverrides must be an object map of task → model`);
+    }
+    const next: Record<string, string> = {};
+    for (const [k, v] of Object.entries(l.modelOverrides as Record<string, unknown>)) {
+      if (typeof k !== 'string' || !k) continue;
+      const model = String(v ?? '').trim();
+      if (model.length > 100) throw new Error(`${label}.modelOverrides.${k} must be 0-100 chars`);
+      if (model) next[k] = model;
+    }
+    target.modelOverrides = next;
+  }
+}
+
 // Route an inline API key into `llmHost.keys[provider]` (#657) using the leg's
 // already-resolved provider. '' clears that entry; 'set' (the getRedacted()
 // sentinel) and undefined leave it untouched.

@@ -36,7 +36,7 @@ export interface SectionSpec {
 }
 
 export const LLM_PROVIDER_FORM_KEYS = [
-  'llm.provider', 'llm.model', 'llm.ollamaUrl', 'llm.numCtx', 'llm.repeatPenalty',
+  'llm.provider', 'llm.model', 'llm.modelOverrides', 'llm.ollamaUrl', 'llm.numCtx', 'llm.repeatPenalty',
   'llm.providerBaseUrls', 'llm.headers', 'llm.compatibleMode', 'llm.reasoning',
   'llm.toolChoice', 'llm.pauseWhenEmpty', 'llm.dailyTokenCap', 'llm.budgetSoftPct',
   'llm.exemptRequests', 'llm.maxOutputTokens', 'llm.geminiSafety', 'llm.fallback',

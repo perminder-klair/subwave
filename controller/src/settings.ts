@@ -56,6 +56,7 @@ import {
   applyInlineKey,
   applyCustomHeadersPatch,
   applyLlmLegPatch,
+  applyModelOverridesPatch,
   canonicalKokoroLang,
   clamp01,
   clampAgentTimeout,
@@ -988,6 +989,19 @@ export async function load() {
         ? stored.llm.provider
         : DEFAULTS.llm.provider,
       model: typeof stored.llm?.model === 'string' ? stored.llm.model.trim() : DEFAULTS.llm.model,
+      modelOverrides: (() => {
+        // String values only, trimmed, empties dropped (blank = "use primary").
+        // Anything else reads as no overrides rather than wedging boot.
+        const raw = stored.llm?.modelOverrides;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ...DEFAULTS.llm.modelOverrides };
+        const out: Record<string, string> = {};
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          if (typeof k !== 'string' || !k || typeof v !== 'string') continue;
+          const model = v.trim();
+          if (model) out[k] = model;
+        }
+        return out;
+      })(),
       // Legacy single slot is migrated into `keys` below, then cleared — there
       // is exactly one source of truth for inline keys (issue #657).
       apiKey: '',
@@ -2101,6 +2115,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   if ('llm' in patch) {
     const l = patch.llm || {};
     applyLlmLegPatch(next.llm, l, 'llm');
+    applyModelOverridesPatch(next.llm, l, 'llm');
     // Route the primary inline key into keys[provider] AFTER the provider is
     // resolved, so it's stored under the identity it belongs to (issue #657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
