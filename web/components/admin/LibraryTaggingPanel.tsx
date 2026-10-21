@@ -1,7 +1,7 @@
 'use client';
 
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon, RefreshCw } from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon, RefreshCw, Maximize2, Minimize2, Download } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { relTime } from '../../lib/format';
 import { Btn, Eyebrow } from './ui';
@@ -9,6 +9,8 @@ import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
 import LibraryTaggingModal from './LibraryTaggingModal';
 import SceneVocabSection from './library/SceneVocabSection';
+import { useTaggerRunLog } from './library/useTaggerRunLog';
+import { notify } from '../../lib/notify';
 
 export interface Coverage {
   tagged: number;
@@ -125,6 +127,8 @@ export interface TaggerState {
   mode?: 'tag' | 'analyze' | 'reconcile' | null;
   progress?: TaggerProgress | null;
   lastRun?: TaggerLastRun | null;
+  // The current (or last) run's full log id; null before this controller's first run.
+  runLogId?: string | null;
 }
 
 // Rides along on /settings, so it needs no extra request on any tab.
@@ -301,6 +305,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // Keyed on the run's finishedAt so a NEW failure re-shows the banner.
   const [dismissedFailAt, setDismissedFailAt] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+  // Follow the newest line only while the operator is at the bottom: scrolling
+  // up to read something must not be yanked away by the next poll.
+  const logStick = useRef(true);
+  const [logTall, setLogTall] = useState(false);
+  const [pickedLog, setPickedLog] = useState('');
+  const runLog = useTaggerRunLog(p.logOpen, p.tagger);
+  // Every line fetched for this run; before the first read (or with no run
+  // since the controller started) the snapshot's short tail stands in.
+  const logLines = runLog.log && runLog.log.runId === p.tagger?.runLogId
+    ? runLog.log.entries.map(e => e.line)
+    : (p.tagger?.lastLog ?? []);
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
@@ -526,8 +541,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   useDynamicStyle(runFillRef, { width: runPct != null ? `${runPct}%` : null });
 
   useEffect(() => {
-    if (p.logOpen && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [p.logOpen, p.tagger?.lastLog?.length]);
+    if (p.logOpen && logRef.current && logStick.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [p.logOpen, logLines.length, logTall]);
+  const downloadLog = (id: string) => {
+    runLog.download(id).catch((e: unknown) => notify.err(e instanceof Error ? e.message : String(e)));
+  };
 
   const openModal = (intent: 'reembed' | null = null) => {
     setModalIntent(intent);
@@ -1209,16 +1227,58 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         >
           <Terminal size={13} /> {p.logOpen ? 'Hide log' : 'View log'}
         </button>
+        {p.logOpen && (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-muted hover:text-ink"
+            onClick={() => setLogTall(t => !t)}
+          >
+            {logTall ? <Minimize2 size={13} /> : <Maximize2 size={13} />} {logTall ? 'Shrink log' : 'Expand log'}
+          </button>
+        )}
+        {p.logOpen && runLog.files.length > 0 && (
+          <span className="inline-flex items-center gap-2 text-[11px] text-muted">
+            <select
+              aria-label="Run log to download"
+              className="rounded border border-separator-strong bg-transparent px-1 py-0.5 text-[11px]"
+              value={pickedLog || runLog.files[0]?.id}
+              onChange={e => setPickedLog(e.target.value)}
+            >
+              {runLog.files.map(f => (
+                <option key={f.id} value={f.id}>
+                  {new Date(f.startedAt).toLocaleString()} · {f.mode} · {Math.max(1, Math.round(f.bytes / 1024))} KB
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 font-bold text-muted hover:text-ink"
+              onClick={() => downloadLog(pickedLog || runLog.files[0]!.id)}
+            >
+              <Download size={13} /> Download log
+            </button>
+          </span>
+        )}
       </div>
 
       {p.logOpen && (
         <pre
           ref={logRef}
           aria-live="polite"
-          className="term term-crt m-0 max-h-56 overflow-y-auto !border-t !border-l-0 border-separator-strong"
+          className={cn(
+            'term term-crt m-0 overflow-y-auto !border-t !border-l-0 border-separator-strong',
+            logTall ? 'max-h-[80vh]' : 'max-h-96',
+          )}
+          onScroll={e => {
+            const el = e.currentTarget;
+            logStick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
         >
-          {(p.tagger?.lastLog ?? []).length
-            ? (p.tagger?.lastLog ?? []).map((line, i) => {
+          {runLog.log?.gap && runLog.log.runId === p.tagger?.runLogId && (
+            <div className="text-muted">… earlier lines are no longer held here; download the log for the whole run.</div>
+          )}
+          {logLines.length
+            ? logLines.map((line, i) => {
                 // Structured events render by kind; raw strings fall back.
                 if (typeof line === 'object' && line !== null) {
                   const st = EVENT_STYLE[line.kind] ?? EVENT_STYLE.info;

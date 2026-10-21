@@ -14,6 +14,12 @@ import { createIdRotationRecovery, type RotationRecoveryResult, type RotatedIdEv
 import { refreshTaggerFallback, runTaggerFollowups, type MaintenanceMode } from './tagger-followups.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, ROTATION_PREFIX, CATALOGUE_PREFIX, type TaggerProgress, type TaggerEvent, type TaggerRotation } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
+import path from 'node:path';
+import { STATE_DIR } from '../config.js';
+import {
+  RunLog, runLogId, openRunLogSink, pruneRunLogs, listRunLogs, runLogPath,
+  RUN_LOG_DIR_NAME, RUN_LOG_KEEP, type RunLogPage, type RunLogFileInfo,
+} from './tagger-run-log.js';
 
 type TaggerMode = MaintenanceMode;
 
@@ -41,11 +47,38 @@ type TaggerState = {
   // Latest [progress] sentinel; left in place after exit, UI gates display on `running`.
   progress: TaggerProgress | null;
   lastRun: TaggerLastRun | null;
+  // Id of the current (or last) run's full log: the cursor feed below and its
+  // file under state/tagger-logs/. null before the first run of this process.
+  runLogId: string | null;
 };
 
 export const tagger: TaggerState = {
   running: false, startedAt: null, pid: null, lastLog: [], mode: null, progress: null, lastRun: null,
+  runLogId: null,
 };
+
+// The full run log. `lastLog` above stays the short tail every snapshot carries;
+// this one is read by sequence number, so a page polling every few seconds gets
+// every line however fast the child prints, and each run is also kept on disk.
+const RUN_LOG_DIR = path.join(STATE_DIR, RUN_LOG_DIR_NAME);
+let runLog: RunLog | null = null;
+
+// Lines after `after` for the run `runId`. A cursor from another run (the page
+// was open across a new start) reads from the beginning. null = no run yet.
+export function taggerLogSince(after: number, runId?: string | null): RunLogPage | null {
+  if (!runLog) return null;
+  return runLog.since(runId && runId !== runLog.runId ? 0 : after);
+}
+
+export function taggerLogFiles(): RunLogFileInfo[] {
+  return listRunLogs(RUN_LOG_DIR);
+}
+
+// Absolute, because Express's sendFile refuses a relative path.
+export function taggerLogFile(id: unknown): string | null {
+  const p = runLogPath(RUN_LOG_DIR, id);
+  return p ? path.resolve(p) : null;
+}
 
 const idRotationRecovery = createIdRotationRecovery({
   maintenanceRunning: () => tagger.running,
@@ -240,6 +273,14 @@ function spawnChild(
   tagger.lastLog = [];
   tagger.mode = mode;
   tagger.progress = null;
+  // One file per run, the newest RUN_LOG_KEEP kept. A disk that refuses the file
+  // costs the download, never the run: the log then lives in memory only.
+  runLog?.close();
+  const logId = runLogId(new Date(startedAt), mode);
+  try { pruneRunLogs(RUN_LOG_DIR, RUN_LOG_KEEP - 1); } catch { /* retention is best effort */ }
+  runLog = new RunLog({ runId: logId, sink: openRunLogSink(RUN_LOG_DIR, logId) });
+  tagger.runLogId = logId;
+  const thisRunLog = runLog;
 
   let catalogueReady = false;
   let earlyRefresh: Promise<boolean> | null = null;
@@ -315,10 +356,12 @@ function spawnChild(
             const last = tagger.lastLog[tagger.lastLog.length - 1];
             if (typeof last === 'string' && stripLogPrefix(last) === ev.text) tagger.lastLog.pop();
             tagger.lastLog.push({ kind: ev.kind, text: ev.text, at: ev.at });
+            thisRunLog.event(ev, (raw) => stripLogPrefix(raw) === ev.text);
           } catch { /* malformed sentinel — drop */ }
           continue;
         }
         tagger.lastLog.push(line);
+        thisRunLog.raw(line);
       }
       if (tagger.lastLog.length > 100) tagger.lastLog = tagger.lastLog.slice(-100);
     };
@@ -335,6 +378,8 @@ function spawnChild(
     activeChild = null;
     clearPidfile();
     tagger.lastLog.push(`[error] ${err.message}`);
+    thisRunLog.raw(`[error] ${err.message}`);
+    thisRunLog.close();
     tagger.lastRun = {
       mode,
       outcome: 'failed',
@@ -345,6 +390,12 @@ function spawnChild(
       finishedAt: new Date().toISOString(),
     };
     queue.log('error', `${label} could not start: ${err.message}`);
+  });
+  // The run log closes on 'close', not 'exit': 'exit' can fire while the
+  // child's last output is still in the pipes, and the file must hold it.
+  child.on('close', (code, signal) => {
+    thisRunLog.raw(`[exit ${signal || code}]`);
+    thisRunLog.close();
   });
   child.on('exit', (code, signal) => {
     tagger.running = false;

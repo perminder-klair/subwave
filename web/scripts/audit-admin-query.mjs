@@ -165,6 +165,14 @@ const allowed = new Map([
   ['connect/Playground.tsx', new Map([
     ['operator-api-command', { callee: 'adminResponse', method: 'endpoint.method', path: /^relPath$/ }],
   ])],
+  ['library/useTaggerRunLog.ts', new Map([
+    // One run's log file as a download, byte for byte; nothing cached reads it.
+    ['tagger-log-download', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/library\/tagger\/logs\/\$\{\}$/,
+    }],
+  ])],
   ['personas/helpers.ts', new Map([
     ['random-avatar-download', {
       callee: 'nativeFetch',
