@@ -1,11 +1,13 @@
 'use client';
 
-// The machine's parts. Each one is drawn once and sized by the variables its
-// machine sets (.desk or .mob in Cipher.module.css), so the desk and the phone
-// share every component. Colour comes from the pen variables on the skin root:
-// solid ink when powered, construction lines in standby or off air.
+// The machine's parts, in Unit SW-9's hardware. Each one is drawn once and
+// sized by the variables its machine sets (.desk or .mob in Cipher.module.css),
+// so the desk and the phone share every component. Every depth — a key's
+// travel, a lamp's socket, the knob's side — runs down the one 30° axis; the
+// finish comes from the hardware variables on the skin root, and standby
+// darkens the glass and the lamps rather than the metal.
 
-import { memo, useRef } from 'react';
+import { memo, useId, useRef } from 'react';
 import type { ButtonHTMLAttributes, PointerEvent, ReactNode, WheelEvent } from 'react';
 import styles from './Cipher.module.css';
 import { cn } from '@/lib/cn';
@@ -43,8 +45,9 @@ export function Screws() {
   );
 }
 
-/** The power key: a turn switch that reads OFF at -45° and ON at +45°, with
- *  a ring rippling out of it while the tune-in gate waits. */
+/** The power key: a weighted knob that reads OFF at -45° and ON at +45°, its
+ *  side showing down the 30° axis, with a ring rippling out of it while the
+ *  tune-in gate waits. */
 export function PowerKey({
   on,
   gate,
@@ -61,7 +64,11 @@ export function PowerKey({
   label: string;
   onPress: () => void;
 }) {
+  // useId's punctuation varies across React versions; keep url(#…) plain.
+  const uid = `pk-${useId().replace(/[^\w-]/g, '')}`;
   const w = compact ? 2 : 1;
+  // The knob stands 7 proud of the plate; its side runs down the 30° axis.
+  const side = { x: 6.06, y: 3.5 };
   return (
     <button
       type="button"
@@ -76,6 +83,16 @@ export function PowerKey({
         className={cn('block overflow-visible', compact ? 'size-[62px]' : 'size-[128px]')}
         aria-hidden="true"
       >
+        <defs>
+          <radialGradient id={`${uid}-o`} cx="50%" cy="22%" r="80%">
+            <stop offset="0" className={styles.pkO0} />
+            <stop offset="0.72" className={styles.pkO1} />
+          </radialGradient>
+          <radialGradient id={`${uid}-i`} cx="50%" cy="20%" r="85%">
+            <stop offset="0" className={styles.pkI0} />
+            <stop offset="0.78" className={styles.pkI1} />
+          </radialGradient>
+        </defs>
         <circle r="46" strokeWidth={1.5 * w} className={cn(styles.ring, gate && styles.ringOn)} />
         {compact ? (
           <>
@@ -84,32 +101,27 @@ export function PowerKey({
           </>
         ) : (
           <>
-            <path d="M-31.1 -31.1L-36.8 -36.8M31.1 -31.1L36.8 -36.8" strokeWidth={1.5} className={styles.pen} />
+            <path d="M-31.1 -31.1L-36.8 -36.8M31.1 -31.1L36.8 -36.8" strokeWidth={1.5} className={styles.svgTick} />
             <text x="-45" y="-43" fontSize={9} fontWeight={700} letterSpacing="0.1em" textAnchor="middle" className={cn(styles.svgTxt, 'font-mono')}>OFF</text>
             <text x="45" y="-43" fontSize={9} fontWeight={700} letterSpacing="0.1em" textAnchor="middle" className={cn(styles.svgTxt, 'font-mono')}>ON</text>
           </>
         )}
-        <circle r="40" strokeWidth={1.5 * w} className={cn(styles.pen, styles.penFill)} />
-        <circle r="28" strokeWidth={w} className={cn(styles.pen, styles.penBg)} />
+        <circle cx={side.x + 5} cy={side.y + 5} r="41" className={styles.pkShadow} />
+        <line x2={side.x} y2={side.y} strokeWidth={80} strokeLinecap="round" className={styles.pkSide} />
+        <circle r="40" fill={`url(#${uid}-o)`} strokeWidth={w} className={styles.pkRim} />
+        <circle r="34" strokeWidth={1} className={styles.pkKnurl} />
         <g className={cn(styles.keyTurn, on && styles.keyOn)}>
-          <rect
-            x={compact ? -9 : -8}
-            y="-36"
-            width={compact ? 18 : 16}
-            height="72"
-            strokeWidth={1.5 * w}
-            className={cn(styles.pen, styles.penBg)}
-          />
-          {!compact && <circle cy="-27" r="3.5" strokeWidth={1} className={styles.pen} />}
-          <line y1={compact ? -16 : -14} y2={compact ? 16 : 14} strokeWidth={compact ? 5 : 2.5} className={styles.svgAcc} />
+          <circle r="27" fill={`url(#${uid}-i)`} strokeWidth={w} className={styles.pkCapEdge} />
+          <line y1="-24" y2="-9" strokeWidth={compact ? 9 : 7} strokeLinecap="round" className={styles.pkMarkGlow} />
+          <line y1="-24" y2="-9" strokeWidth={compact ? 5 : 3.5} strokeLinecap="round" className={styles.pkMark} />
         </g>
       </svg>
     </button>
   );
 }
 
-/** One rotor: arrows to step it, its window showing the neighbours, and a
- *  milled edge that drags. It is a slider to assistive tech and the keyboard.
+/** One rotor: keys to step it, its glass window showing the neighbours, and
+ *  a knurled thumbwheel that drags. It is a slider to assistive tech and the keyboard.
  *  `max` makes it end-stopped (rotor I, the volume); without it, it wraps. */
 export function Rotor({
   name,
@@ -202,7 +214,7 @@ export function Rotor({
   );
 }
 
-/** The lampboard: one bulb per letter, `lit` glowing. Decorative — the tape
+/** The lampboard: one smoked bulb per letter behind the glass, `lit` glowing. Decorative — the tape
  *  says in words what the bulbs spell. */
 export const Lampboard = memo(function Lampboard({ lit }: { lit: string | null }) {
   return (
@@ -236,9 +248,9 @@ export interface KeyHandlers {
   release: () => void;
 }
 
-/** The three rows of letter keys. They sit outside the tab order (the
- *  physical keyboard types the same letters) but stay buttons for assistive
- *  tech, which clicks them with detail 0. */
+/** The three rows of letter keys, round dark caps. They sit outside the tab
+ *  order (the physical keyboard types the same letters) but stay buttons for
+ *  assistive tech, which clicks them with detail 0. */
 export const KeyRows = memo(function KeyRows({ down, keys }: { down: string | null; keys: KeyHandlers }) {
   return (
     <>
@@ -275,14 +287,13 @@ export const KeyRows = memo(function KeyRows({ down, keys }: { down: string | nu
   );
 });
 
-/** A rectangular key on a skirt. `drop` (a Tailwind `[--drop:…]` class in
- *  className) is how far it travels. Latched keys sit down in the well;
- *  `lit` fills the face with the accent. */
+/** A rectangular key on its body. `drop` (a Tailwind `[--drop:…]` class in
+ *  className) is how deep it stands and how far it travels, down the 30°
+ *  axis. Latched keys sit down for good; `lit` glows the face in the accent. */
 export function BlockKey({
   latched,
   lit,
   dead,
-  caps,
   down,
   className,
   children,
@@ -292,8 +303,6 @@ export function BlockKey({
   lit?: boolean;
   /** Printed in the muted ink: nothing to act on yet. */
   dead?: boolean;
-  /** The keyboard's darker skirt rather than a panel key's. */
-  caps?: boolean;
   /** Held from the keyboard (the space bar). */
   down?: boolean;
 }) {
@@ -307,7 +316,6 @@ export function BlockKey({
         latched && styles.latched,
         lit && styles.lit,
         dead && styles.dead,
-        caps && styles.capsSkirt,
         'v3-focus cursor-pointer disabled:cursor-default',
         className,
       )}

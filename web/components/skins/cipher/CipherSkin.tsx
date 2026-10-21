@@ -5,9 +5,11 @@
 // per beat (or the DJ's words as they air). Typing on the machine's keys, or
 // the real keyboard, writes a request: each letter steps the rotors and lights
 // its enciphered bulb, and SEND hands the plain text to the booth.
-// Desktop and phone are two trees switched by CSS rather than a JS media
-// query, so SSR paints the right one first. Each machine is drawn at a fixed
-// size and scaled to its box.
+// It is built in Unit SW-9's hardware — a brushed plate, dark top-lit keys, a
+// weighted knob, display glass — with every depth on it receding down one 30°
+// axis (Cipher.module.css says how). Desktop and phone are two trees switched
+// by CSS rather than a JS media query, so SSR paints the right one first. Each
+// machine is drawn at a fixed size and scaled to its box.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { RefObject } from 'react';
@@ -74,8 +76,10 @@ const SENT_HOLD_MS = 9000;
 // gives up its lampboard instead.
 const COMPACT_BELOW = 0.7;
 
-const DESK = { w: 1360, h: 800, max: 1.1 };
-const MOB = { w: 366, h: 516, compactH: 390, max: 1.6 };
+// Each box is the plate plus the chassis's depth, which shows down the 30°
+// axis to its right and below it.
+const DESK = { w: 1376, h: 800, max: 1.1 };
+const MOB = { w: 375, h: 522, compactH: 396, max: 1.6 };
 
 /** Scale a fixed-size drawing to fit its parent, centred. The element stays
  *  hidden (CSS) until the first fit lands. */
@@ -432,8 +436,7 @@ export default function CipherSkin({ contained }: SkinProps) {
             <div ref={deskFit} className={cn(styles.fit, styles.desk, 'w-[1360px]')}>
               <div
                 className={cn(
-                  styles.ln,
-                  styles.isoL,
+                  styles.chassis,
                   'relative grid h-[788px] w-[1360px] grid-cols-[164px_minmax(0,1fr)_164px] grid-rows-[200px_214px_minmax(0,1fr)] gap-3.5 p-5',
                 )}
               >
@@ -463,7 +466,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                     {rotorII}
                     {rotorIII}
                   </Panel>
-                  <Panel label="Tape" className="min-w-0 flex-1 px-[26px] pt-[22px] pb-[18px]">
+                  <Panel label="Tape" className={cn(styles.glassBay, 'min-w-0 flex-1 px-[26px] pt-[22px] pb-[18px]')}>
                     <span className={cn(styles.sprockets, 'absolute inset-x-3.5 top-2 h-1')} aria-hidden="true" />
                     <span className={cn(styles.sprockets, 'absolute inset-x-3.5 bottom-1.5 h-1')} aria-hidden="true" />
                     <Tape {...tape} variant="desk" />
@@ -488,7 +491,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                   </BlockKey>
                 </Panel>
 
-                <Panel label="Lampboard" className="flex flex-col items-center justify-center">
+                <Panel label="Lampboard" className={cn(styles.glassBay, 'flex flex-col items-center justify-center')}>
                   <Lampboard lit={machine.lit} />
                 </Panel>
 
@@ -577,7 +580,6 @@ export default function CipherSkin({ contained }: SkinProps) {
                   </span>
                 </Panel>
               </div>
-              <div className={cn(styles.plinth, 'h-3 w-[1360px]')} />
             </div>
           </div>
           {gateButton}
@@ -645,7 +647,7 @@ export default function CipherSkin({ contained }: SkinProps) {
           <div className={cn('relative min-h-0 flex-1', styles.gridMob)}>
             <div className="absolute inset-x-3 inset-y-2.5 landscape:inset-y-1.5">
               <div ref={mobFit} className={cn(styles.fit, styles.mob, 'w-[366px]')}>
-                <div className={cn(styles.ln, styles.isoL, styles.mobBody, 'flex w-[366px] flex-col gap-3.5 px-2.5 pt-3.5 pb-2.5')}>
+                <div className={cn(styles.chassis, styles.mobBody, 'flex w-[366px] flex-col gap-3.5 px-2.5 pt-3.5 pb-2.5')}>
                   <div className="flex h-[150px] flex-none gap-1.5">
                     <Panel label="Power" className="flex w-[70px] flex-none flex-col items-center justify-center gap-2">
                       <PowerKey
@@ -672,7 +674,7 @@ export default function CipherSkin({ contained }: SkinProps) {
                     </Panel>
                   </div>
 
-                  <Panel label="Lamps" className={cn(styles.lampBay, 'flex h-[112px] flex-none flex-col items-center justify-center')}>
+                  <Panel label="Lamps" className={cn(styles.lampBay, styles.glassBay, 'flex h-[112px] flex-none flex-col items-center justify-center')}>
                     <Lampboard lit={machine.lit} />
                   </Panel>
 
@@ -683,7 +685,6 @@ export default function CipherSkin({ contained }: SkinProps) {
                     <div className="mt-1.5 flex w-[333px] gap-1.5">
                       <BlockKey
                         aria-label="Delete last letter"
-                        caps
                         dead={!composing}
                         disabled={!composing}
                         onClick={machine.del}
@@ -693,7 +694,6 @@ export default function CipherSkin({ contained }: SkinProps) {
                       </BlockKey>
                       <BlockKey
                         aria-label="Clear message"
-                        caps
                         dead={!composing}
                         disabled={!composing}
                         onClick={machine.clear}
@@ -709,7 +709,6 @@ export default function CipherSkin({ contained }: SkinProps) {
                       />
                       <BlockKey
                         aria-label={`Send request to ${djName}`}
-                        caps
                         lit={hasMsg}
                         dead={!hasMsg}
                         disabled={!hasMsg}
@@ -759,7 +758,6 @@ function SpaceBar({
       aria-label="Space"
       tabIndex={-1}
       data-cipher-key=""
-      caps
       down={down}
       onPointerDown={e => {
         if (e.button > 0) return;
@@ -861,7 +859,7 @@ function Tape({ variant, mode, eyebrow, eyebrowR, keyText, song, spelling, talk,
 
       {mode === 'music' && (
         <>
-          <div className={cn(styles.txt, 'font-display leading-[1.05] font-bold tracking-[-0.01em]', titleFit(Array.from(song.title).length, variant))}>
+          <div className={cn(styles.txt, styles.tapeTitle, 'font-display leading-[1.05] font-bold tracking-[-0.01em]', titleFit(Array.from(song.title).length, variant))}>
             <span className="sr-only">{song.title}</span>
             <span aria-hidden="true">
               <TapeChars text={song.title} base={0} spelling={spelling} />
