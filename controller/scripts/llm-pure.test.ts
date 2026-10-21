@@ -20,7 +20,7 @@ import { personaToneDirectives, validatePersonasStrict, clampTtsSpeed, TTS_SPEED
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
-import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
+import { deliveryHint, modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
 
 async function main() {
   console.log('isUnreachable vs isTransient (the failover gate):');
@@ -1232,6 +1232,12 @@ async function main() {
     assert.equal(clampTtsSpeed(1.23), 1.25);
     assert.equal(clampTtsSpeed(0.87), 0.85);
     assert.equal(clampTtsSpeed(1.0), 1.0);
+  });
+
+  await test('deliveryHint never pins a multilingual persona to one language', () => {
+    assert.deepEqual(deliveryHint({ language: 'English' }, 'elevenlabs', 'eleven_v3'), { language: 'en' });
+    assert.deepEqual(deliveryHint({ language: 'English', alsoSpeaks: ['Japanese'] }, 'elevenlabs', 'eleven_v3'), {});
+    assert.match(deliveryHint({ alsoSpeaks: ['Japanese'] }, 'openai', 'gpt-4o-mini-tts').instructions || '', /mixes English, Japanese/);
   });
 
   // At most one of body/atempo is non-null: send `speed` upstream or stretch locally.
