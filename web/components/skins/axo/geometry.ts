@@ -2,7 +2,7 @@
 // (components/iso/geometry.ts): every box is its three faces in a shear
 // matrix, silhouettes traced separately at a heavier pen. Pure data, no React.
 
-import { arrow, drawBlock, hatchStrip, loop, poly, project, round2, type DrawnBlock, type Pt } from '@/components/iso/geometry';
+import { drawBlock, poly, project, round2, type DrawnBlock, type Pt } from '@/components/iso/geometry';
 
 export type { DrawnBlock };
 
@@ -92,9 +92,6 @@ export const LID_SHEET = {
   },
 } as const;
 
-const pw = project(152, 142, 64), mu = project(152, 142, 33);
-const lcdA = project(22, 142, 44), lcdB = project(124, 142, 30);
-
 // The rack: three shelves on four corner posts. Each post is drawn as the
 // segments BETWEEN shelves, so a shelf passes in front of the post it rests
 // on rather than the post slicing down through every shelf front, and each
@@ -137,7 +134,13 @@ export const AXO = {
   tt: unit(232, 24),
   /** Hinge knuckles straddling the plinth's back edge, over the cover's foot. */
   hinges: [drawBlock({ x: 40, y: 7, z: 256, w: 14, d: 7, h: 4 }), drawBlock({ x: 166, y: 7, z: 256, w: 14, d: 7, h: 4 })],
-  hatch: hatchStrip(-50, -24, 26, 120, 7) + hatchStrip(240, 270, 8, 150, 7) + hatchStrip(370, 396, 26, 120, 7),
+  /** The shadow each floor-standing piece casts on the floor beside it, away
+   *  from the light: flat strips at z = 0, faded outward along world x. */
+  floor: [
+    drawBlock({ x: -50, y: 26, z: 0, w: 26, d: 94, h: 0 }),
+    drawBlock({ x: 240, y: 8, z: 0, w: 30, d: 142, h: 0 }),
+    drawBlock({ x: 370, y: 26, z: 0, w: 26, d: 94, h: 0 }),
+  ],
   lid: {
     /** The top panel, seen from inside through the open rim. */
     panel: lidQuad([[L0, 0, LH], [L1, 0, LH], [L1, LD, LH], [L0, LD, LH]]),
@@ -159,16 +162,11 @@ export const AXO = {
   arcs: [[0, 0], [0, 1], [1, 0], [1, 1]] as Array<[number, number]>,
   /** Screen position of each woofer's centre, which the sound lines radiate from. */
   woofers: [project(-90, 120, 72), project(330, 120, 72)] as [Pt, Pt],
-  loopPower: loop(pw[0], pw[1], 18, 13),
-  loopMute: loop(mu[0], mu[1], 20, 12),
-  arrowPress: arrow(-62, 198, -20, 190, -2, 102),
-  arrowMute: arrow(-96, 184, -50, 176, -14, 132),
-  crossLcd: `M${lcdA.join(' ')}L${lcdB.join(' ')}M${project(22, 142, 30).join(' ')}L${project(124, 142, 44).join(' ')}`,
 } as const;
 
-/** Both frame the whole stack. Desktop leaves room for the inked notes beside
- *  it; mobile, which draws no notes, hugs the speakers, the open lid and the
- *  sound lines, so the drawing fills as much of a phone as it can. */
+/** Both frame the whole stack. Desktop leaves room for the ON AIR sign above
+ *  it; mobile hugs the speakers, the open lid and the sound lines, so the
+ *  drawing fills as much of a phone as it can. */
 export const VIEWBOX = {
   desk: '-250 -410 590 680',
   mobile: '-254 -404 570 672',

@@ -1,8 +1,9 @@
 'use client';
 
-// AXO — the player drawn as a hi-fi stack at 30° isometric. The drawing is the
-// interface (see AxoScene); the column beside it carries the facts a drawing
-// can't, and the dashed construction lines before tune-in are the gate. Focus
+// AXO — the player as a hi-fi stack at 30° isometric, built in Unit SW-9's
+// hardware. The drawing is the interface (see AxoScene); the column beside it
+// is a brushed plate carrying the facts a drawing can't, the now-playing card
+// on display glass, and the dimmed glass before tune-in is the gate. Focus
 // mode (desktop, F) folds the column away and hands the now-playing card to the
 // open dust cover, lit as a screen (screen.ts lays it out).
 // Desktop and mobile are two trees switched by CSS rather than a JS media
@@ -209,14 +210,15 @@ export default function AxoSkin(_props: SkinProps) {
       }
     : null;
 
+  // On the glass: a lit fill, and a cream mark where the song has got to.
   const progress = (size: 'lg' | 'sm') => (
     <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
       <span className={cn('font-mono font-bold tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
         {fmtTime(elapsed)}
       </span>
-      <div className="relative h-[6px] flex-1 bg-[color-mix(in_oklab,var(--ink)_14%,var(--bg))]">
-        <div className={cn('absolute inset-y-0 left-0 bg-[var(--accent)]', ratio == null ? 'w-full opacity-40' : styles.progFill)} />
-        {ratio != null && <div className={cn('absolute -top-[3.5px] h-[13px] w-[3px] bg-ink', styles.progHead)} />}
+      <div className={cn('relative h-[5px] flex-1', styles.progTrack)}>
+        <div className={cn('absolute inset-y-0 left-0', styles.progFill, ratio == null && 'w-full opacity-40')} />
+        {ratio != null && <div className={cn('absolute -top-[4px] h-[13px] w-[3px]', styles.progMark, styles.progHead)} />}
       </div>
       <span className={cn('font-mono text-muted tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
         {nowPlaying?.duration ? fmtTime(nowPlaying.duration) : 'live'}
@@ -233,7 +235,7 @@ export default function AxoSkin(_props: SkinProps) {
 
   const onAirTag = (
     <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
-      <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse)} />
+      <span className={cn('size-[7px] rounded-full', styles.ledOn, styles.pulse)} />
       on air — {djName}
     </span>
   );
@@ -241,12 +243,7 @@ export default function AxoSkin(_props: SkinProps) {
   const statusBar = (pad: string) => (
     <div className={cn('flex flex-none items-center gap-4 border-t border-ink bg-field font-mono text-[10px] tracking-[0.16em] uppercase', pad)}>
       <span className={cn('flex items-center gap-2 font-bold whitespace-nowrap', powered ? 'text-[var(--accent)]' : 'text-muted')}>
-        <span
-          className={cn(
-            'size-2 rounded-full',
-            powered ? 'bg-[var(--accent)]' : 'border border-[var(--muted)]',
-          )}
-        />
+        <span className={cn('size-2 rounded-full', powered ? styles.ledOn : styles.ledOff)} />
         {statusText}
       </span>
       {listenerCount != null && (
@@ -314,15 +311,17 @@ export default function AxoSkin(_props: SkinProps) {
           <div
             className={cn(
               'flex-none overflow-hidden border-r border-ink',
+              styles.plate,
               styles.side,
               focus && styles.sideFocus,
               focusMoved && styles.sideMoves,
             )}
           >
-            <div className="flex h-full w-[clamp(380px,32vw,460px)] flex-col gap-[22px] overflow-hidden px-8 pt-8 pb-6">
-              <div className="flex flex-col gap-2.5">
+            <div className="flex h-full w-[clamp(380px,32vw,460px)] flex-col gap-[26px] overflow-hidden px-6 pt-8 pb-6">
+              <div className={cn(styles.bay, styles.glassBay, !powered && styles.dimGlass, 'flex flex-none flex-col gap-2.5 px-5 pt-6 pb-5')}>
+                <span className={styles.legend}>Display</span>
                 {eyebrowEl}
-                <div className="line-clamp-3 font-display text-[clamp(40px,4.2vw,60px)] leading-[0.95] font-extrabold tracking-[-0.01em] text-balance italic">
+                <div className={cn(styles.dotTitle, 'line-clamp-3 text-[clamp(30px,2.9vw,42px)] leading-[1.08] text-balance')}>
                   {title}
                 </div>
                 {offline ? (
@@ -348,9 +347,9 @@ export default function AxoSkin(_props: SkinProps) {
 
               {!offline && (
                 <>
-                  <div className="h-px flex-none bg-soft-border" />
                   {voice && (
-                    <div className="flex flex-col gap-2.5">
+                    <div className={cn(styles.bay, 'flex flex-none flex-col gap-2.5 px-4 pt-5 pb-4')}>
+                      <span className={styles.legend}>Booth</span>
                       {talk ? (
                         <>
                           {onAirTag}
@@ -370,10 +369,8 @@ export default function AxoSkin(_props: SkinProps) {
                       )}
                     </div>
                   )}
-                  <div className="flex flex-none flex-col border border-ink">
-                    <div className="border-b border-line px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
-                      next on the stack
-                    </div>
+                  <div className={cn(styles.bay, 'flex flex-none flex-col pt-2.5')}>
+                    <span className={styles.legend}>Next on the stack</span>
                     {upNext.length > 0 ? (
                       upNext.map((t, i) => (
                         <div
@@ -399,8 +396,8 @@ export default function AxoSkin(_props: SkinProps) {
               )}
 
               {!talk && history.length > 0 && (
-                <div className="flex w-full flex-none flex-col gap-0.5">
-                  <span className="pb-1.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">recently spun</span>
+                <div className={cn(styles.bay, 'flex w-full flex-none flex-col gap-0.5 px-3.5 pt-4 pb-1.5')}>
+                  <span className={styles.legend}>Recently spun</span>
                   {history.map((h, i) => (
                     <div
                       key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
@@ -422,7 +419,7 @@ export default function AxoSkin(_props: SkinProps) {
 
           <div className={cn('relative min-w-0 flex-1', styles.gridDesk)}>
             <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] whitespace-nowrap text-muted uppercase">
-              receiver · tape · turntable — drawn at 30°
+              receiver · tape deck · turntable — 30° iso
             </span>
             <div className="absolute inset-x-4 top-9 bottom-3">
               <AxoScene variant="desk" {...scene} screen={screen} />
@@ -473,26 +470,28 @@ export default function AxoSkin(_props: SkinProps) {
 
           {/* Rows never shrink: squeezed, a clamped title collapses to
               nothing. The column clips at the bottom instead. */}
-          <div className="flex flex-none flex-col gap-1.5 overflow-hidden px-4 py-2.5 *:shrink-0 sm:portrait:px-6 sm:portrait:pb-4 landscape:min-w-0 landscape:flex-1 landscape:justify-center">
-            {eyebrowEl}
-            <div className="line-clamp-1 font-display text-[24px] leading-[1.1] font-extrabold tracking-[-0.01em] italic landscape:line-clamp-2">
-              {title}
+          <div className={cn(styles.plate, 'flex flex-none flex-col gap-2 overflow-hidden px-3 py-2.5 *:shrink-0 sm:portrait:px-6 sm:portrait:pb-4 landscape:min-w-0 landscape:flex-1 landscape:justify-center')}>
+            <div className={cn(styles.bay, styles.glassBay, !powered && styles.dimGlass, 'flex flex-col gap-1.5 px-3.5 py-2.5')}>
+              {eyebrowEl}
+              <div className={cn(styles.dotTitle, 'line-clamp-1 text-[22px] leading-[1.15] landscape:line-clamp-2')}>
+                {title}
+              </div>
+              {offline ? (
+                <span className="line-clamp-2 text-[13px] leading-snug text-muted">{OFFLINE_COPY}</span>
+              ) : (
+                <>
+                  {artist && (
+                    <span className="truncate font-mono text-[11px] tracking-[0.14em] uppercase">
+                      {artist}
+                      {nowPlaying?.year && <span className="text-muted"> · {nowPlaying.year}</span>}
+                    </span>
+                  )}
+                  {progress('sm')}
+                </>
+              )}
             </div>
-            {offline ? (
-              <span className="line-clamp-2 text-[13px] leading-snug text-muted">{OFFLINE_COPY}</span>
-            ) : (
-              <>
-                {artist && (
-                  <span className="truncate font-mono text-[11px] tracking-[0.14em] uppercase">
-                    {artist}
-                    {nowPlaying?.year && <span className="text-muted"> · {nowPlaying.year}</span>}
-                  </span>
-                )}
-                {progress('sm')}
-              </>
-            )}
             {talk && voice && (
-              <div className="flex flex-col gap-1 border-t border-soft-border pt-1.5">
+              <div className="flex flex-col gap-1 px-1">
                 {onAirTag}
                 <span className="line-clamp-2 font-display text-[14px] leading-[1.35] font-medium italic">
                   “{voice.text}”
@@ -500,7 +499,7 @@ export default function AxoSkin(_props: SkinProps) {
               </div>
             )}
             {!talk && !offline && upNext[0] && (
-              <div className="flex items-center gap-3 border-t border-soft-border pt-1.5">
+              <div className="flex items-center gap-3 px-1">
                 <span className="font-mono text-[9px] tracking-[0.18em] text-[var(--accent)]">CUED</span>
                 <div className="min-w-0 flex-1 truncate text-[13px]">
                   <b>{upNext[0].title ?? '—'}</b>
