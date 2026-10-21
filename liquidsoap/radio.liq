@@ -1616,7 +1616,7 @@ voice_queue.on_metadata(synchronous=false, voice_marker("say", voice_tmp_dir))
 intro_queue.on_metadata(synchronous=false, voice_marker("intro", intro_tmp_dir))
 
 # Sound-effects channel — short pre-rendered stingers the DJ agent plays UNDER
-# its voice, path written into sfx.txt (broadcast/sfx.js + queue.playSfx). Not
+# its voice, path written into sfx.txt (broadcast/sfx.ts + queue.playSfx). Not
 # mic-chained: the audio is already produced.
 sfx_queue = request.queue(id="sfx_queue")
 
@@ -2093,8 +2093,9 @@ archive_path = {time.string("#{state_dir}/archive/%Y-%m-%d/%H-00.mp3")}
 def make_stream_outputs() =
   # Every encoder below picks its bitrate from a fixed set of branches because
   # %mp3/%opus/%fdkaac(bitrate=…) each need a parse-time literal int — a ref
-  # won't do. Keep the branches in sync with MP3_BITRATES / OPUS_BITRATES /
-  # AAC_BITRATES in settings.ts.
+  # won't do. Keep the branches in sync with SETTINGS_MP3_BITRATES /
+  # SETTINGS_OPUS_BITRATES / SETTINGS_AAC_BITRATES in
+  # controller/src/schemas/settings.ts.
   br = stream_bitrate()
   mp3_enc =
     if br <= 64 then

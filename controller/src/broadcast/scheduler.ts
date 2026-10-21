@@ -813,9 +813,10 @@ function banterEligible(now: Date): boolean {
   return true;
 }
 
-// Segment director: the talk table's one FILL row (#1500) — offered every fifth
-// minute, no wall-clock placement, stands down on any minute a scheduled row
-// wants. Its per-kind cooldowns and frequency floor stay in skills/_agent.ts.
+// Segment director: a FILL row of the talk table (#1500), beside the jingle
+// rotate — offered every fifth minute, no wall-clock placement, stands down on
+// any minute a scheduled row wants. Its per-kind cooldowns and frequency floor
+// stay in skills/_agent.ts.
 function segmentEligible(): boolean {
   if (!autoVoiceAllowed()) return false;  // station voice is off — music only (manual /dj/skill still runs)
   if (programme.onAir()) return false;  // a programme episode owns its talk moments — the director stands down

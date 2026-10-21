@@ -681,7 +681,7 @@ export const DEFAULTS = {
     stemBlends: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
-    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // and lose all six. Resolved through settings/transition-effects.ts, which
     // reads an absent or malformed block as "all on" — so this default and a
     // station that has never written the block are the same station.
     effects: {

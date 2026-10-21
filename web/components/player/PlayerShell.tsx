@@ -30,8 +30,8 @@ export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
   skin?: SkinComponent;
   /** Rendered inside a showcase frame (landing page) rather than full-page:
-   *  absolute instead of fixed positioning, dialogs portal into the frame,
-   *  no toaster. */
+   *  absolute instead of fixed positioning, and dialogs portal into the
+   *  frame. */
   contained?: boolean;
 }
 

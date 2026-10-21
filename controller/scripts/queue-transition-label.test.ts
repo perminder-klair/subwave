@@ -3,7 +3,7 @@
 //
 // Two properties are load-bearing:
 //
-//  - The label mirrors radio.liq's dj_transition precedence (:287-291, :381),
+//  - The label mirrors radio.liq's dj_transition precedence (its arming lines),
 //    which lives on BOTH sides of the pair: washout/loop ride the OUTGOING
 //    track, sweep/blend/dissolve/chop ride the INCOMING one. A label derived
 //    from one side alone is wrong roughly half the time.
@@ -66,8 +66,8 @@ test('a washout coexists with sweep and blend', () => {
 });
 
 test('a washout suppresses dissolve and chop', () => {
-  // radio.liq:289-291 — enforced there too, so the label must describe what
-  // actually airs rather than what the queue happens to hold.
+  // radio.liq's dissolve/chop arming lines carry `not washing` too, so the
+  // label must describe what actually airs rather than what the queue holds.
   assert.equal(
     nextTransitionLabel(item({ washout: true }), item({ dissolve: true, chop: true })),
     'Washout',
@@ -75,8 +75,8 @@ test('a washout suppresses dissolve and chop', () => {
 });
 
 test('a loop suppresses every entry gesture', () => {
-  // radio.liq:288 + :381 — the loop IS the transition; garnishing it chokes
-  // the gesture.
+  // radio.liq puts `not looping` on every entry gesture: the loop IS the
+  // transition, and garnishing it chokes the gesture.
   assert.equal(
     nextTransitionLabel(item({ loop: true }), item({ sweep: true, blend: true })),
     'Loop',
