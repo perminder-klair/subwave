@@ -6,7 +6,11 @@
 // shrink below legibility.
 //
 // Browser-only (it needs a canvas), and cached per text and size — a title
-// is rasterised once, not once a frame.
+// is rasterised once, not once a frame. Choosing the size only measures: a
+// line's ink is measured once at 100px and every candidate size scales from
+// it, so of the dozens of sizes fitBanner may try, only the one that fits is
+// drawn and read back. Drawing each to learn its width stalled the paint
+// after a track change.
 
 import type { Grid } from './grid';
 
@@ -18,32 +22,75 @@ export interface BannerMask {
   cells: Uint8Array;
 }
 
+/** A line's ink box at the 100px probe size, letter spacing aside. */
+export interface BannerInk {
+  left: number;
+  right: number;
+  ascent: number;
+  descent: number;
+  /** Characters, for the letter spacing. */
+  chars: number;
+}
+
 const cache = new Map<string, BannerMask | null>();
+const inks = new Map<string, BannerInk | null>();
 let scratch: CanvasRenderingContext2D | null = null;
 
 /** Canvas pixels per sub-pixel row. */
 const SCALE = 12;
 
-/** One line of text at `rows` cell rows, however wide it comes out;
- *  `squeeze` < 1 condenses the face horizontally. */
-function rasterize(text: string, family: string, rows: number, aspect: number, squeeze: number): BannerMask | null {
-  scratch ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-  const ctx = scratch;
-  if (!ctx) return null;
+/** How a line lays out at `rows` cell rows: its scale from the probe, the
+ *  letter spacing, and its width in sub-pixels and in cells. `squeeze` < 1
+ *  condenses the face horizontally. */
+export function bannerLayout(ink: BannerInk, rows: number, aspect: number, squeeze: number) {
   // A sub-pixel is half a cell each way, so it keeps the cell's proportions.
   const subW = SCALE * aspect;
-  const height = rows * 2 * SCALE;
-  ctx.font = `800 100px ${family}`;
-  const probe = ctx.measureText(text);
-  const inkH = probe.actualBoundingBoxAscent + probe.actualBoundingBoxDescent;
-  if (!(inkH > 0)) return null;
-  const k = height / inkH;
+  const k = (rows * 2 * SCALE) / (ink.ascent + ink.descent);
   const spacing = subW * 1.1;
-  const inkW = ((probe.actualBoundingBoxLeft + probe.actualBoundingBoxRight) * k
-    + spacing * Math.max(0, [...text].length - 1)) * squeeze;
+  const inkW = ((ink.left + ink.right) * k + spacing * Math.max(0, ink.chars - 1)) * squeeze;
   const subCols = Math.ceil(inkW / subW);
-  const cols = Math.ceil(subCols / 2);
+  return { k, subW, spacing, subCols, cols: Math.ceil(subCols / 2) };
+}
+
+function scratchContext(): CanvasRenderingContext2D | null {
+  scratch ??= document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  return scratch;
+}
+
+/** A line's ink in the banner face, or null when it draws nothing. */
+function measureInk(text: string, family: string): BannerInk | null {
+  const key = `${text}\u0000${family}`;
+  let ink = inks.get(key);
+  if (ink === undefined) {
+    ink = null;
+    const ctx = scratchContext();
+    if (ctx) {
+      ctx.font = `800 100px ${family}`;
+      const probe = ctx.measureText(text);
+      if (probe.actualBoundingBoxAscent + probe.actualBoundingBoxDescent > 0) {
+        ink = {
+          left: probe.actualBoundingBoxLeft,
+          right: probe.actualBoundingBoxRight,
+          ascent: probe.actualBoundingBoxAscent,
+          descent: probe.actualBoundingBoxDescent,
+          chars: [...text].length,
+        };
+      }
+    }
+    if (inks.size > 256) inks.clear();
+    inks.set(key, ink);
+  }
+  return ink;
+}
+
+/** One line of text at `rows` cell rows, however wide it comes out. */
+function rasterize(text: string, family: string, rows: number, aspect: number, squeeze: number): BannerMask | null {
+  const ctx = scratchContext();
+  const ink = measureInk(text, family);
+  if (!ctx || !ink) return null;
+  const { k, subW, spacing, subCols, cols } = bannerLayout(ink, rows, aspect, squeeze);
   if (cols < 1) return null;
+  const height = rows * 2 * SCALE;
 
   const cw = Math.ceil(subCols * subW);
   ctx.canvas.width = cw;
@@ -54,7 +101,7 @@ function rasterize(text: string, family: string, rows: number, aspect: number, s
   ctx.fillStyle = '#000';
   ctx.textBaseline = 'alphabetic';
   ctx.setTransform(squeeze, 0, 0, 1, 0, 0);
-  ctx.fillText(text, probe.actualBoundingBoxLeft * k, probe.actualBoundingBoxAscent * k);
+  ctx.fillText(text, ink.left * k, ink.ascent * k);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.letterSpacing = '0px';
   const data = ctx.getImageData(0, 0, cw, height).data;
@@ -129,14 +176,23 @@ function stack(parts: BannerMask[]): BannerMask {
 /** Condensed faces, tried after the natural one. */
 const SQUEEZES = [1, 0.74];
 
+export interface BannerPlan {
+  lines: string[];
+  rows: number;
+  squeeze: number;
+}
+
 /** The biggest banner of `text` that fits `maxCols` and stands no taller
  *  than two full-size lines: letters `maxRows` tall and shrinking, and at
  *  each size trying more lines and then a condensed face before going
  *  smaller — down to `minRows`, below which a banner stops reading as
- *  letters. Null when nothing fits. */
-export function fitBanner(
-  text: string, family: string, aspect: number, maxCols: number, maxRows: number, minRows = 3,
-): BannerMask | null {
+ *  letters. Chosen from `measure` alone (a line's ink, or null when it has
+ *  none), so a candidate too wide is turned away before anything is drawn.
+ *  Null when nothing fits. */
+export function planBanner(
+  text: string, measure: (line: string) => BannerInk | null,
+  aspect: number, maxCols: number, maxRows: number, minRows = 3,
+): BannerPlan | null {
   const maxHeight = maxRows * 2 + 1;
   for (let rows = maxRows; rows >= minRows; rows--) {
     for (const squeeze of SQUEEZES) {
@@ -144,12 +200,28 @@ export function fitBanner(
         if (n * rows + n - 1 > maxHeight) break;
         const lines = splitLines(text, n);
         if (!lines) break;
-        const parts = lines.map(l => line(l, family, rows, aspect, squeeze));
-        if (parts.every(p => p && p.cols <= maxCols)) return parts.length === 1 ? parts[0]! : stack(parts as BannerMask[]);
+        const fits = lines.every(l => {
+          const ink = measure(l);
+          if (!ink) return false;
+          const { cols } = bannerLayout(ink, rows, aspect, squeeze);
+          return cols >= 1 && cols <= maxCols;
+        });
+        if (fits) return { lines, rows, squeeze };
       }
     }
   }
   return null;
+}
+
+/** planBanner's choice, drawn. */
+export function fitBanner(
+  text: string, family: string, aspect: number, maxCols: number, maxRows: number, minRows = 3,
+): BannerMask | null {
+  const plan = planBanner(text, l => measureInk(l, family), aspect, maxCols, maxRows, minRows);
+  if (!plan) return null;
+  const parts = plan.lines.map(l => line(l, family, plan.rows, aspect, plan.squeeze));
+  if (!parts.every((p): p is BannerMask => p !== null)) return null;
+  return parts.length === 1 ? parts[0]! : stack(parts);
 }
 
 /* Quadrant bits → glyph. */
