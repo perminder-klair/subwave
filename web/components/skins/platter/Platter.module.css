@@ -4,20 +4,13 @@
 @keyframes platter-rim { to { transform: rotate(360deg); } }
 @keyframes platter-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.28; } }
 
-.record,
-.sheen,
-.rim,
-.pulse {
-  animation-play-state: paused;
-}
-.playing {
-  animation-play-state: running;
-}
-
+/* Each turns only while .playing. The pause rides in the shorthand itself: a
+   separate animation-play-state rule ahead of these was reset by them, so the
+   record went on spinning after STOP. */
 /* Keep .rim and .record durations equal so the mat and record rotate together. */
-.record { animation: platter-spin 5.9s linear infinite; }
+.record { animation: platter-spin 5.9s linear infinite paused; }
 .sheen {
-  animation: platter-sheen 11.8s linear infinite;
+  animation: platter-sheen 11.8s linear infinite paused;
   mix-blend-mode: screen;
   background: conic-gradient(
     from 210deg,
@@ -29,8 +22,9 @@
     rgba(255, 255, 255, 0) 344deg
   );
 }
-.rim { animation: platter-rim 5.9s linear infinite; }
-.pulse { animation: platter-pulse 2.4s ease-in-out infinite; }
+.rim { animation: platter-rim 5.9s linear infinite paused; }
+.pulse { animation: platter-pulse 2.4s ease-in-out infinite paused; }
+.playing { animation-play-state: running; }
 
 @media (prefers-reduced-motion: reduce) {
   .record,
