@@ -387,6 +387,12 @@ public-domain recordings.
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
 
+## Credits
+
+SUB/WAVE is built on Liquidsoap, Icecast, Navidrome, and many other open-source
+projects, models, and services. [CREDITS.md](CREDITS.md) lists them all, with
+their licences.
+
 ## License
 
 [MIT](LICENSE).
