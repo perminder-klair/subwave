@@ -192,7 +192,7 @@ test('neither jingle source writes the marker from its own hook', () => {
   const nowHook = liq.slice(nowHookAt, liq.indexOf('\n\n', nowHookAt));
   assert.ok(nowHook.includes('jingle_now_on_air := true'), 'the priority queue still arms the rotate gate');
   assert.ok(!nowHook.includes('jingle-playing.json'),
-    'a second queued press is started by the queue before the fallback chooses it');
+    'a second queued press is started by the queue before the switch chooses it');
   assert.ok(!liq.includes('jingle_now_tmp_dir'), 'its staging dir went with its writer');
 });
 

@@ -360,9 +360,10 @@ def jingle_duration(fname) =
 end
 
 # Arm the rotate's gate from a manual jingle's own source. The marker is written
-# where every jingle goes on air instead (JINGLE MARKER, below the jingle_now
-# fallback): like any request source, this queue starts the next queued press in
-# the frame that ends the current one, before the fallback has chosen it.
+# where every jingle goes on air instead (JINGLE MARKER, below the
+# music_with_jingle_now switch): like any request source, this queue starts the
+# next queued press in the frame that ends the current one, before the switch
+# has chosen it.
 jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := true)
 
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-appropriate
