@@ -1,18 +1,12 @@
 // Lite (low-power) mode: adds a `lite` class to <html> that drops every
 // backdrop-filter and disables animations (globals.css), for weak GPUs.
 //
-// Precedence: `?lite=1`/`?lite=0` in the URL (written through to localStorage so
-// a later param-less visit sticks), then the theme-menu toggle, then off.
-// Applied pre-paint via LITE_INIT_SCRIPT so a kiosk never flashes the heavy build.
+// Set with `?lite=1` / cleared with `?lite=0` in the URL — written through to
+// localStorage so a later param-less visit sticks — else off. Applied pre-paint
+// via LITE_INIT_SCRIPT so a kiosk never flashes the heavy build.
 
 const STORAGE_KEY = 'subwave-lite';
 const LITE_CLASS = 'lite';
-
-/** No-op on the server. */
-export function applyLite(on: boolean): void {
-  if (typeof document === 'undefined') return;
-  document.documentElement.classList.toggle(LITE_CLASS, on);
-}
 
 /** Null when nothing is stored, so callers can tell "never chosen" from
  *  "explicitly off". */
@@ -26,14 +20,6 @@ export function loadLitePref(): boolean | null {
   } catch {
     return null;
   }
-}
-
-/** Storage failures are swallowed; the DOM class still applies for the session. */
-export function saveLitePref(on: boolean): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, on ? '1' : '0');
-  } catch { /* private mode / quota — non-fatal */ }
 }
 
 // Pre-hydration <script> body: resolves lite mode from ?lite= then localStorage

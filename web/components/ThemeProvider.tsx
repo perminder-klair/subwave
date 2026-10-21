@@ -35,8 +35,8 @@ interface ThemeContextValue {
   activeShow: { id: string; name: string; themeId: string } | null;
   /** Per-browser override id, or null when none is set. */
   overrideId: string | null;
-  /** Override if set and still in the registry, else the station's — what the
-   *  picker highlights. */
+  /** The theme on screen: the override if still in the registry, else the
+   *  station's, else the registry's first — what the picker highlights. */
   effectiveId: string | null;
   /** Save or clear the override and re-apply immediately. null clears it. */
   setOverride: (id: string | null) => void;
@@ -130,10 +130,11 @@ export default function ThemeProvider({ children }: { children?: ReactNode }) {
     [applyEffective, stationActiveId],
   );
 
-  // Mirrors resolveAppearance's palette precedence so consumers don't
-  // re-implement it.
-  const effectiveId =
-    (overrideId && themes.some(t => t.id === overrideId) ? overrideId : stationActiveId) ?? null;
+  // The theme actually painted, read through resolveAppearance itself so
+  // consumers don't re-implement its precedence. That includes its last resort:
+  // a station id the registry no longer has (a deleted theme) paints the first
+  // theme, and the picker must mark that one rather than nothing.
+  const effectiveId = resolveAppearance(themes, stationActiveId, overrideId).theme?.id ?? null;
 
   return (
     <ThemeContext.Provider

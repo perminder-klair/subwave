@@ -140,9 +140,11 @@ export default function Themes() {
           lets a listener choose a different theme <em>and</em> a different skin
           for their own browser. The choice is saved locally and beats the
           station-wide pick until they clear it; a{' '}
-          <em>Use station default</em> / <em>Use station skin</em> row drops them
-          back to whatever the operator is running. The same menu carries the
-          per-browser lite-mode toggle.
+          <em>Use station default</em> / <em>Use station skin</em> button on each
+          section&rsquo;s heading drops them back to whatever the operator is
+          running. Lite mode is a URL switch rather than a menu row: open the
+          player once with <code>?lite=1</code> and that browser keeps it, until{' '}
+          <code>?lite=0</code>.
         </p>
         <p className="text-muted">
           The skin picker only appears when the build ships more than one skin
