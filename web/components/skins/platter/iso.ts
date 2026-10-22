@@ -101,12 +101,30 @@ export function armAngleAt(r: number): number {
   return round2((ARM_HEADING - Math.acos(cos)) / DEG);
 }
 
+export type ArmPose = 'rest' | 'cue' | 'play';
+
 /** Where the tonearm sits: parked, cueing over the lead-in, or tracking the
  *  grooves inward as the song plays. */
-export function armAngle(phase: 'rest' | 'cue' | 'play', ratio: number | null): number {
+export function armAngle(phase: ArmPose, ratio: number | null): number {
   if (phase === 'rest') return ARM_REST;
   if (phase === 'cue') return armAngleAt(GROOVE_OUT + 3);
   return armAngleAt(GROOVE_OUT - (ratio ?? 0) * (GROOVE_OUT - GROOVE_IN));
+}
+
+/** The most the arm steps in one move without swinging. A whole song tracks
+ *  under 20°, so a song of ten seconds or more creeps less than this each
+ *  second, and a jump back to the lead-in is far more. */
+export const ARM_STEP_MAX = 2;
+
+/** Whether the arm eases to a new angle or steps to it. It swings for a
+ *  change of pose and for a jump, such as a new song's lead-in; the creep
+ *  across a playing record steps, since an ease restarted every second never
+ *  comes to rest. */
+export function armSwings(
+  from: { pose: ArmPose; angle: number },
+  to: { pose: ArmPose; angle: number },
+): boolean {
+  return from.pose !== to.pose || Math.abs(to.angle - from.angle) > ARM_STEP_MAX;
 }
 
 /** The stylus's position for an arm angle, on the face's plane. */

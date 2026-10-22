@@ -7,9 +7,12 @@
 // mode (desktop, F) folds the column away and hands the now-playing card to the
 // open dust cover, lit as a screen (screen.ts lays it out).
 // Desktop and mobile are two trees switched by CSS rather than a JS media
-// query, so SSR paints the right one first; the hidden scene's loop idles.
+// query, so SSR paints the right one first. Each tree has a drawing of its own
+// (a portrait tablet's mobile tree draws the desk scene), but once hydrated
+// only the one on screen stays mounted: each is some 450 SVG nodes and a
+// loop, and the skin re-renders every second.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { PanelLeftClose, PanelLeftOpen, Play, X } from 'lucide-react';
 import styles from './Axo.module.css';
 import AxoScene, { type AxoSceneProps } from './AxoScene';
@@ -67,6 +70,30 @@ function fit(s: string, max: number): string {
 function counterOf(sec: number): string {
   const s = Math.max(0, Math.floor(sec));
   return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Which drawing the viewport shows, by the breakpoints the trees below are
+ *  switched on: the desktop tree from lg, a portrait tablet's desk scene from
+ *  sm, the phone's scene otherwise. */
+type Layout = 'desk' | 'tablet' | 'mobile';
+const DESK_QUERY = '(min-width: 64rem)';
+const TABLET_QUERY = '(min-width: 40rem) and (orientation: portrait)';
+
+function subscribeLayout(onChange: () => void): () => void {
+  const lists = [DESK_QUERY, TABLET_QUERY].map(q => window.matchMedia(q));
+  for (const l of lists) l.addEventListener('change', onChange);
+  return () => { for (const l of lists) l.removeEventListener('change', onChange); };
+}
+
+function layoutNow(): Layout {
+  if (window.matchMedia(DESK_QUERY).matches) return 'desk';
+  return window.matchMedia(TABLET_QUERY).matches ? 'tablet' : 'mobile';
+}
+
+/** Null through SSR and hydration, so all three drawings hydrate as the
+ *  server printed them; the one on screen after that. */
+function useLayout(): Layout | null {
+  return useSyncExternalStore(subscribeLayout, layoutNow, () => null);
 }
 
 export default function AxoSkin(_props: SkinProps) {
@@ -161,8 +188,23 @@ export default function AxoSkin(_props: SkinProps) {
     escape: reqOpen ? closeReq : focus ? toggleFocus : undefined,
   });
 
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(rootRef, { '--pf': ratio ?? 0 });
+  const layout = useLayout();
+  const shows = (l: Layout) => layout == null || layout === l;
+
+  // The scene is memoised, so all it's handed must hold still between ticks.
+  // The tune-in gate's handlers are new every render, so it gets fixed ones
+  // that call the latest.
+  const gate = useRef({ tuneInFromOverlay, handleTune });
+  gate.current = { tuneInFromOverlay, handleTune };
+  const onGateTap = useCallback(() => gate.current.tuneInFromOverlay(), []);
+  const onPower = useCallback(() => gate.current.handleTune(), []);
+  const onRequest = useCallback(() => setReqOpen(true), []);
+  const likeTrack = like.like;
+  const onLike = useCallback(() => void likeTrack(), [likeTrack]);
+  const likeState = useMemo(
+    () => ({ available: like.available, liked: like.liked, count: like.count, pending: like.pending }),
+    [like.available, like.liked, like.count, like.pending],
+  );
 
   const scene: Omit<AxoSceneProps, 'variant'> = {
     phase,
@@ -178,14 +220,14 @@ export default function AxoSkin(_props: SkinProps) {
     bpm: typeof nowPlaying?.bpm === 'number' ? nowPlaying.bpm : null,
     calm,
     audioRef,
-    like: { available: like.available, liked: like.liked, count: like.count, pending: like.pending },
+    like: likeState,
     gateTap: showOverlay && !offline,
-    onGateTap: tuneInFromOverlay,
-    onPower: handleTune,
+    onGateTap,
+    onPower,
     onMute: toggleMute,
-    onVolume: v => setVolume(v),
-    onRequest: () => setReqOpen(true),
-    onLike: () => void like.like(),
+    onVolume: setVolume,
+    onRequest,
+    onLike,
   };
 
   // The column's facts, worded for the cover's screen.
@@ -210,20 +252,8 @@ export default function AxoSkin(_props: SkinProps) {
       }
     : null;
 
-  // On the glass: a lit fill, and a cream mark where the song has got to.
   const progress = (size: 'lg' | 'sm') => (
-    <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
-      <span className={cn('font-mono font-bold tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
-        {fmtTime(elapsed)}
-      </span>
-      <div className={cn('relative h-[5px] flex-1', styles.progTrack)}>
-        <div className={cn('absolute inset-y-0 left-0', styles.progFill, ratio == null && 'w-full opacity-40')} />
-        {ratio != null && <div className={cn('absolute -top-[4px] h-[13px] w-[3px]', styles.progMark, styles.progHead)} />}
-      </div>
-      <span className={cn('font-mono text-muted tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
-        {nowPlaying?.duration ? fmtTime(nowPlaying.duration) : 'live'}
-      </span>
-    </div>
+    <Progress size={size} elapsed={elapsed} ratio={ratio} duration={nowPlaying?.duration} />
   );
 
   const eyebrowEl = offline ? (
@@ -265,7 +295,7 @@ export default function AxoSkin(_props: SkinProps) {
   );
 
   return (
-    <div ref={rootRef} className="absolute inset-0 overflow-hidden bg-bg font-sans text-ink">
+    <div className="absolute inset-0 overflow-hidden bg-bg font-sans text-ink">
       {/* ── Desktop ─────────────────────────────────────────────── */}
       <div className="absolute inset-0 hidden flex-col lg:flex">
         <div className="flex flex-none items-center justify-between gap-6 border-b border-ink px-8 py-1.5">
@@ -422,7 +452,7 @@ export default function AxoSkin(_props: SkinProps) {
               receiver · tape deck · turntable — 30° iso
             </span>
             <div className="absolute inset-x-4 top-9 bottom-3">
-              <AxoScene variant="desk" {...scene} screen={screen} />
+              {shows('desk') && <AxoScene variant="desk" {...scene} screen={screen} />}
             </div>
             {reqOpen && (
               <div className="absolute right-6 bottom-6 flex w-[360px] flex-col border border-ink bg-bg shadow-drawer">
@@ -461,10 +491,10 @@ export default function AxoSkin(_props: SkinProps) {
             )}
           >
             <div className="absolute inset-x-0 inset-y-1.5 sm:portrait:hidden">
-              <AxoScene variant="mobile" {...scene} />
+              {shows('mobile') && <AxoScene variant="mobile" {...scene} />}
             </div>
             <div className="absolute inset-x-4 inset-y-3 hidden sm:portrait:block">
-              <AxoScene variant="desk" {...scene} />
+              {shows('tablet') && <AxoScene variant="desk" {...scene} />}
             </div>
           </div>
 
@@ -518,6 +548,33 @@ export default function AxoSkin(_props: SkinProps) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** On the glass: a lit fill, and a cream mark where the song has got to. The
+ *  track carries --pf itself: on the skin's root, its change every second
+ *  restyled every node of the drawing too. */
+function Progress({ size, elapsed, ratio, duration }: {
+  size: 'lg' | 'sm';
+  elapsed: number;
+  ratio: number | null;
+  duration: number | undefined;
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(trackRef, { '--pf': ratio ?? 0 });
+  return (
+    <div className={cn('flex items-center', size === 'lg' ? 'gap-3 pt-1.5' : 'gap-2.5')}>
+      <span className={cn('font-mono font-bold tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
+        {fmtTime(elapsed)}
+      </span>
+      <div ref={trackRef} className={cn('relative h-[5px] flex-1', styles.progTrack)}>
+        <div className={cn('absolute inset-y-0 left-0', styles.progFill, ratio == null && 'w-full opacity-40')} />
+        {ratio != null && <div className={cn('absolute -top-[4px] h-[13px] w-[3px]', styles.progMark, styles.progHead)} />}
+      </div>
+      <span className={cn('font-mono text-muted tabular-nums', size === 'lg' ? 'text-[13px]' : 'text-[12px]')}>
+        {duration ? fmtTime(duration) : 'live'}
+      </span>
     </div>
   );
 }

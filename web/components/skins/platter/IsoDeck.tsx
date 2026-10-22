@@ -8,7 +8,7 @@
 // inward. Geometry is iso.ts; colour is theme tokens in Platter.module.css,
 // except the record and its label, which are the same in every theme.
 
-import { useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import styles from './Platter.module.css';
 import { cn } from '@/lib/cn';
@@ -16,14 +16,18 @@ import { round2 } from '@/components/iso/geometry';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useSvgTextFit } from '../sharedHooks';
 import {
-  ARM, DECK, PLATTER, RECORD, RECORD_LIFT, REST_POST, VIEWBOX, armAngle, clip, ringTicks,
+  ARM, DECK, PLATTER, RECORD, RECORD_LIFT, REST_POST, VIEWBOX, armAngle, armSwings, clip, ringTicks, type ArmPose,
 } from './iso';
+
+/** How long the arm keeps its ease after a swing starts: the 1.1 s swing in
+ *  Platter.module.css, and a little to spare. */
+const SWING_MS = 1300;
 
 export interface IsoDeckProps {
   /** The record turns and the stylus is down. */
   playing: boolean;
   /** Where the arm is: parked, cueing while the stream locks, or playing. */
-  arm: 'rest' | 'cue' | 'play';
+  arm: ArmPose;
   /** 0..1 through the track, null when the length is unknown. */
   ratio: number | null;
   stationName: string;
@@ -47,10 +51,19 @@ export default function IsoDeck(props: IsoDeckProps) {
   const ids = { sheen: `${uid}-sheen`, sleeve: `${uid}-sleeve`, next: `${uid}-next` };
 
   // The arm's angle rides a custom property, so the CSS transition can swing
-  // it (an SVG transform attribute snaps).
+  // it (an SVG transform attribute snaps), set on the arm alone: on the
+  // deck's root, its change every second restyled the whole drawing. The ease
+  // is on only while the arm swings; restarted by every second's creep, it
+  // never came to rest, and WebKit repainted the arm on every frame.
+  const armRef = useRef<SVGGElement | null>(null);
+  const angle = armAngle(arm, ratio);
+  const swinging = useArmSwing(arm, angle);
+  useDynamicStyle(armRef, { '--arm': `${angle}deg` });
+
+  // The clock's row is fitted too, but in a mono face it can only outgrow
+  // its room when it gains a digit, so that is all the key follows of it.
   const rootRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(rootRef, { '--arm': `${armAngle(arm, ratio)}deg` });
-  useSvgTextFit(rootRef, [title, detail, elapsed, facts.join(' '), next?.title ?? '', next?.artist ?? ''].join('\n'));
+  useSvgTextFit(rootRef, [title, detail, elapsed.length, duration, facts.join(' '), next?.title ?? '', next?.artist ?? ''].join('\n'));
 
   const ring = ringTicks(ratio);
   const rec = { x: PLATTER.cx - RECORD_LIFT, y: PLATTER.cy - RECORD_LIFT };
@@ -197,8 +210,13 @@ export default function IsoDeck(props: IsoDeckProps) {
             <Cylinder cx={PLATTER.cx} cy={PLATTER.cy} r={PLATTER.r} t={PLATTER.t} className={styles.fMat} />
             <Cylinder cx={PLATTER.cx - PLATTER.t} cy={PLATTER.cy - PLATTER.t} r={RECORD.r} t={RECORD.t} className={styles.vinylFill} side={styles.vinylFill} />
             <g transform={`translate(${rec.x} ${rec.y})`}>
+              {/* Only the label's printing turns: the grooves and the
+                  label's paper look the same at any angle, and WebKit
+                  restyles and repaints every node of a turning SVG group on
+                  the CPU, every frame. */}
+              <Record />
               <g className={cn(styles.isoSpin, playing && styles.playing)}>
-                <Record stationName={stationName} title={title} artist={artist} />
+                <Label stationName={stationName} title={title} artist={artist} />
               </g>
               {/* A reflection stays put while the record turns under it. */}
               <path d={sector(RECORD.r - 4, 40, 200, 248)} fill={`url(#${ids.sheen})`} className={styles.ns} />
@@ -211,14 +229,16 @@ export default function IsoDeck(props: IsoDeckProps) {
             <Cylinder cx={REST_POST.x} cy={REST_POST.y} r={4} t={10} className={styles.fW} />
             <Cylinder cx={ARM.px} cy={ARM.py} r={13} t={3} className={styles.fW} />
             <Cylinder cx={ARM.px - 3} cy={ARM.py - 3} r={6} t={ARM.lift - 3} className={styles.fBg} />
-            <g transform={`translate(${ARM.px - RECORD_LIFT} ${ARM.py - RECORD_LIFT})`}>
-              <g className={cn(styles.isoArm, styles.armShadow)}>
-                <ArmShape shadow />
+            <g ref={armRef} className={cn(swinging && styles.armSwing)}>
+              <g transform={`translate(${ARM.px - RECORD_LIFT} ${ARM.py - RECORD_LIFT})`}>
+                <g className={cn(styles.isoArm, styles.armShadow)}>
+                  <ArmShape shadow />
+                </g>
               </g>
-            </g>
-            <g transform={`translate(${ARM.px - ARM.lift} ${ARM.py - ARM.lift})`}>
-              <g className={styles.isoArm}>
-                <ArmShape />
+              <g transform={`translate(${ARM.px - ARM.lift} ${ARM.py - ARM.lift})`}>
+                <g className={styles.isoArm}>
+                  <ArmShape />
+                </g>
               </g>
             </g>
           </g>
@@ -228,6 +248,28 @@ export default function IsoDeck(props: IsoDeckProps) {
       </svg>
     </div>
   );
+}
+
+/** Whether the arm eases to its angle, from the move that swings it
+ *  (armSwings) for as long as the swing takes; otherwise it steps. Decided
+ *  during the render that moves it, so the ease lands in the same commit as
+ *  the new angle and the transition catches it. */
+function useArmSwing(pose: ArmPose, angle: number): boolean {
+  const [prev, setPrev] = useState({ pose, angle });
+  // Swings started and finished, counted, so one starting mid-swing restarts
+  // the clock.
+  const [started, setStarted] = useState(0);
+  const [finished, setFinished] = useState(0);
+  if (prev.pose !== pose || prev.angle !== angle) {
+    setPrev({ pose, angle });
+    if (armSwings(prev, { pose, angle })) setStarted(started + 1);
+  }
+  useEffect(() => {
+    if (started === 0) return;
+    const id = window.setTimeout(() => setFinished(started), SWING_MS);
+    return () => window.clearTimeout(id);
+  }, [started]);
+  return started > finished;
 }
 
 /** A sleeve standing on the floor: its cover on the face toward the viewer,
@@ -321,8 +363,8 @@ function Cylinder({ cx, cy, r, t, className, side }: {
 }
 
 /** The record's face about its centre: grooves, the gaps between tracks, and
- *  the label with the song on it. All of it turns. */
-function Record({ stationName, title, artist }: { stationName: string; title: string; artist: string }) {
+ *  the label's paper, all of which look the same turned. */
+function Record() {
   const grooves: number[] = [];
   for (let r = 40; r <= RECORD.r - 3; r += 3) grooves.push(r);
   return (
@@ -331,6 +373,14 @@ function Record({ stationName, title, artist }: { stationName: string; title: st
       {[56, 71, 83].map(r => <circle key={r} r={r} className={styles.grooveGap} />)}
       <circle r="36.5" strokeWidth={1.4} className={cn(styles.fNone, styles.sAcc)} />
       <circle r="34" strokeWidth={0.6} className={styles.labelPaper} />
+    </>
+  );
+}
+
+/** What's printed on the label, which turns with the record. */
+function Label({ stationName, title, artist }: { stationName: string; title: string; artist: string }) {
+  return (
+    <>
       <text y="-19" fontSize={4} fontWeight={700} letterSpacing="0.26em" textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>
         {clip(stationName.toUpperCase(), 16)}
       </text>

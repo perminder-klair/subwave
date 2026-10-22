@@ -4,7 +4,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { project } from '@/components/iso/geometry';
-import { ARM, DECK, PLATTER, RECORD, VIEWBOX, armAngle, armAngleAt, ringTicks, stylusAt } from './iso';
+import {
+  ARM, ARM_STEP_MAX, DECK, PLATTER, RECORD, VIEWBOX, armAngle, armAngleAt, armSwings, ringTicks, stylusAt, type ArmPose,
+} from './iso';
 
 const fromCentre = (angle: number) => {
   const [x, y] = stylusAt(angle);
@@ -55,4 +57,18 @@ test('the ring lights as many ticks as the song has played', () => {
   assert.equal(count(ringTicks(0.5).lit), 30);
   assert.equal(count(ringTicks(1).lit) + count(ringTicks(1).unlit), 60);
   assert.equal(count(ringTicks(2).unlit), 0, 'an over-long elapsed lights the ring, no more');
+});
+
+test('the arm steps through a playing song and swings for anything else', () => {
+  const at = (pose: ArmPose, ratio: number | null) => ({ pose, angle: armAngle(pose, ratio) });
+  // A second of a ten-second song is the biggest creep the arm steps
+  // through; eased, a step that comes every second never finishes.
+  assert.equal(armSwings(at('play', 0.5), at('play', 0.6)), false);
+  assert.equal(armSwings(at('play', 0), at('play', null)), false);
+  // A new song's lead-in, and every change of pose, swing.
+  assert.equal(armSwings(at('play', 0.9), at('play', 0)), true);
+  assert.equal(armSwings(at('cue', null), at('play', 0)), true);
+  assert.equal(armSwings(at('play', 0.4), at('rest', null)), true);
+  // A whole song tracks well past the step, so a jump back always swings.
+  assert.ok(armAngle('play', 1) - armAngle('play', 0) > ARM_STEP_MAX * 4);
 });
