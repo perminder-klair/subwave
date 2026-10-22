@@ -12,6 +12,7 @@
 import {
   FACETS,
   FACET_VERSIONS,
+  WHOLE_FILE_FACETS,
   type Facet,
   type FacetCell,
 } from './library-db/facets.js';
@@ -46,6 +47,9 @@ export interface PlanCapabilities {
   demucs: boolean | null;
   // Tail-only vocal backfill requires positive support, unlike missing heads.
   tailVocal: boolean | null;
+  // The whole-file facets (loudness v2, edges): an analyzer with ffmpeg that
+  // knows them. Absent/null = unknown (planned, flagged).
+  wholeFile?: boolean | null;
 }
 
 export interface PlanInput {
@@ -71,7 +75,7 @@ export interface WorkItem {
   request: WorkRequest;
 }
 
-export type SkipReason = 'no-clap' | 'no-demucs' | 'no-tail-vocal' | 'limit';
+export type SkipReason = 'no-clap' | 'no-demucs' | 'no-tail-vocal' | 'no-whole-file' | 'limit';
 
 export interface FacetPlanCount {
   facet: Facet;
@@ -148,6 +152,9 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
     if ((f === 'vocal' || f === 'stems') && input.capabilities.demucs === false) return 'no-demucs';
     if (f === 'vocal' && cell?.reason === 'head-only' &&
       !tailVocalBackfillAvailable(input.capabilities.tailVocal)) return 'no-tail-vocal';
+    // An analyzer without them would answer `loudness` with a window figure
+    // (still due) and `edges` not at all: a guaranteed no-op.
+    if (WHOLE_FILE_FACETS.includes(f) && input.capabilities.wholeFile === false) return 'no-whole-file';
     return null;
   };
 
@@ -194,6 +201,13 @@ export function planAcoustics(input: PlanInput): AcousticsPlan {
   }
   if (facets.includes('stems')) {
     warnings.push('stems: the stem-cache byte budget is enforced at run time, so fewer than planned may be written');
+  }
+  const whole = WHOLE_FILE_FACETS.filter((f) => facets.includes(f));
+  if (whole.length) {
+    warnings.push(
+      `${whole.join(', ')}: read${whole.length === 1 ? 's' : ''} the whole file (one decode per track, streamed from the music server)` +
+        (input.capabilities.wholeFile == null ? ' — whole-file capability unknown (analyzer not probed or predates it)' : ''),
+    );
   }
 
   return {

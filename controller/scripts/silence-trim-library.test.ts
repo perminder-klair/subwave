@@ -39,7 +39,7 @@ await settings.load();
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { resolveSilenceTrim, shiftOnsetMs } = await import('../src/music/silence-trim.js');
+const { resolveSilenceTrim, shiftOnsetMs, playableSpanSec } = await import('../src/music/silence-trim.js');
 
 await library.load();
 
@@ -95,4 +95,53 @@ test('a track object with its own fresh analysis outranks the stored row', () =>
   });
   assert.equal(t.cueInSec, 1.75);
   assert.equal(t.cueOutSec, null);
+});
+
+// The whole-file `edges` facet: the same absolute floor, but measured over
+// the whole decoded file rather than a 40 s head and a 20 s tail window, and
+// ended on the decoded length rather than the container tag.
+db.upsertTrackMeta('edged', { title: 'Edged', artist: 'A', album: 'Al', duration: 200 } as never);
+db.upsertTrackAnalysis('edged', {
+  bpm: 120, musicalKey: 'C', introMs: 8_000, confidence: 1,
+  leadSilenceMs: 6_000, tailSilenceMs: 9_000, tailStartMs: 191_000,
+});
+db.writeFacetResults('edged', { source: 'url', edges: { leadMs: 3_000, tailMs: 12_000, durationMs: 201_000 } });
+
+test('library.get exposes the edges facet', () => {
+  const rec = library.get('edged');
+  assert.equal(rec.edgeLeadMs, 3_000);
+  assert.equal(rec.edgeTailMs, 12_000);
+  assert.equal(rec.decodedDurationMs, 201_000);
+});
+
+test('stored edges outrank the window figures, ending on the decoded length', () => {
+  const t = resolveSilenceTrim({ id: 'edged', duration: 200 });
+  assert.equal(t.cueInSec, 2.75);
+  // 201 s decoded − 12 s of trailing silence, + the 250 ms margin.
+  assert.equal(t.cueOutSec, 189.25);
+  assert.equal(playableSpanSec({ id: 'edged', duration: 200 }), 186.5);
+});
+
+test('window figures on the track object do not beat stored edges', () => {
+  // A pick carrying the head/tail windows' answer is still the narrower
+  // measurement; only edges on the object itself outrank the stored ones.
+  const t = resolveSilenceTrim({
+    id: 'edged', duration: 200, leadSilenceMs: 2_000, tailSilenceMs: 0, tailStartMs: 200_000,
+  });
+  assert.equal(t.cueInSec, 2.75);
+  assert.equal(t.cueOutSec, 189.25);
+  const own = resolveSilenceTrim({
+    id: 'edged', duration: 200, edgeLeadMs: 2_000, edgeTailMs: 0, decodedDurationMs: 199_000,
+  });
+  assert.equal(own.cueInSec, 1.75);
+  assert.equal(own.cueOutSec, null);
+});
+
+test('with the trim off, the playable span still ends on the decoded length', async () => {
+  await settings.update({ silenceTrim: { enabled: false } } as never);
+  try {
+    assert.equal(playableSpanSec({ id: 'edged', duration: 200 }), 201);
+  } finally {
+    await settings.update({ silenceTrim: { enabled: true, minGapMs: 1_500 } } as never);
+  }
 });

@@ -281,7 +281,7 @@ test('an open replaces a stale trigger definition, at any user_version', async (
   d.exec(`DROP TRIGGER tracks_search_stale;
     CREATE TRIGGER tracks_search_stale AFTER UPDATE OF title ON tracks
     BEGIN UPDATE tracks SET search_fresh = NULL WHERE id = NEW.id; END;`);
-  assert.equal(d.pragma('user_version', { simple: true }), 29, 'already upgraded, so no migration runs');
+  assert.equal(d.pragma('user_version', { simple: true }), 30, 'already upgraded, so no migration runs');
   db.close();
   await db.open({ embeddingDim: 4 });
   const sql = db.getDb()!.prepare(`SELECT sql FROM sqlite_master WHERE name = 'tracks_search_stale'`).pluck().get();

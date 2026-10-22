@@ -1,5 +1,6 @@
 // Use absolute-floor silence measurements for cues, never relative intro/outro estimates that
-// can mistake quiet music for silence. Bound trims with the minimum gap, edge margins, and
+// can mistake quiet music for silence. The whole-file `edges` facet (both ends of the WHOLE
+// decoded file, and its decoded length) outranks the head/tail window figures when measured. Bound trims with the minimum gap, edge margins, and
 // per-edge ceilings (MAX_LEAD_TRIM_SEC, MAX_TAIL_TRIM_SEC); unknown measurements preserve the
 // whole track.
 
@@ -33,6 +34,11 @@ export interface SilenceTrimTrack {
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
   tailStartMs?: number | null;
+  // Whole-file facet `edges`. When measured (decodedDurationMs set) they
+  // replace the three window figures above as one set.
+  edgeLeadMs?: number | null;
+  edgeTailMs?: number | null;
+  decodedDurationMs?: number | null;
 }
 
 export interface SilenceTrimResult {
@@ -63,7 +69,28 @@ interface Measured {
   durSec: number;
 }
 
+const msOrNull = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+
+// The edges facet as one set, or null: lead, tail and the decoded length are
+// one measurement, never mixed with a window figure.
+function edgesOf(t: SilenceTrimTrack | null | undefined): { lead: number; tail: number; dur: number } | null {
+  const dur = msOrNull(t?.decodedDurationMs);
+  const lead = msOrNull(t?.edgeLeadMs);
+  const tail = msOrNull(t?.edgeTailMs);
+  return dur != null && dur > 0 && lead != null && tail != null ? { lead, tail, dur } : null;
+}
+
 function measure(track: SilenceTrimTrack): Measured {
+  // Edges on the track itself, else the stored ones: they outrank any window
+  // figure, which only ever saw the first ANALYZE_SECONDS and the last
+  // ANALYZE_OUTRO_SECONDS against a tagged duration.
+  const edges = edgesOf(track) ?? (track.id ? edgesOf(library.get(track.id)) : null);
+  if (edges) {
+    let durSec = Number(track.duration ?? track.durationSec) || 0;
+    if (durSec <= 0 && track.id) durSec = library.get(track.id)?.durationSec ?? 0;
+    return { leadMs: edges.lead, tailMs: edges.tail, tailStartMs: edges.dur - edges.tail, durSec };
+  }
   let leadMs = track.leadSilenceMs;
   let tailMs = track.tailSilenceMs;
   let tailStartMs = track.tailStartMs;

@@ -121,6 +121,11 @@ export function get(songId: string): any {
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
+    // The whole-file edges facet, which the resolver prefers over the three
+    // window figures above. Same rule: a missing field disables it silently.
+    edgeLeadMs: t.edgeLeadMs,
+    edgeTailMs: t.edgeTailMs,
+    decodedDurationMs: t.decodedDurationMs,
   };
 }
 

@@ -102,6 +102,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Ducking is `smooth_add`, never an RMS follower; `p` is the fraction of the music left up.
 - Every transition effect runs on Liquidsoap's single streaming thread, so its cost is its shape: the dissolve sums its combs and subtracts the dry once, never per tap.
 - Both sides of a rendered seam are gained by `music/loudness.ts` `resolveGainDb`, never from the analyzer's LUFS.
+- Loudness and peak are one whole-file measurement (`loudness` v2, stamped `loudness_version`); nothing that measures less may overwrite it. The `edges` facet outranks the window figures in silence trim.
 
 **Library, picker, LLM, TTS** (`music.md`, `broadcast.md`)
 - Write `genres`, never `genre` (a generated column); `subsonic.songGenres()` is the one ingest normaliser. Genre matching is one-directional.

@@ -469,6 +469,25 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 29');
   }
 
+  if (userVersion < 30) {
+    // Whole-file facets. `loudness_version` says WHICH measurement
+    // loudness_lufs/peak_db hold: NULL = the analysis window's (first
+    // ANALYZE_SECONDS at ANALYZE_SR, sample peak), 2 = integrated loudness and
+    // TRUE peak over the whole file at its native rate, written with the
+    // whole-file LRA and sample peak. `edge_*` are the silence edges against
+    // the absolute floor and `decoded_duration_ms` the decoded length, all
+    // three from the same whole-file decode (facet `edges`). Only the missing
+    // columns are added: a database whose user_version was wound back below
+    // this step still has them, and ADD COLUMN on an existing column throws.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = [
+      ['loudness_version', 'INTEGER'], ['loudness_range_lu', 'REAL'], ['sample_peak_db', 'REAL'],
+      ['edge_lead_ms', 'INTEGER'], ['edge_tail_ms', 'INTEGER'], ['decoded_duration_ms', 'INTEGER'],
+    ].filter(([c]) => !have.has(c));
+    if (add.length) runDdl(d, add.map(([c, t]) => `ALTER TABLE tracks ADD COLUMN ${c} ${t};`).join('\n'));
+    d.pragma('user_version = 30');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above

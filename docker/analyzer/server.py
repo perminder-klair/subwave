@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable, Callable
@@ -57,6 +58,18 @@ def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int
 
 
 ANALYZE_CONCURRENCY = _bounded_int_env("ANALYZE_CONCURRENCY", 1, 1, 8)
+
+# Whole-file facet requests (loudness v2, edges) in flight. Each is a one-shot
+# worker process running one ffmpeg decode on ONE CPU thread with no model, so
+# it runs outside the analyze pool (whose workers hold CLAP/Demucs) and can go
+# much wider: a library's first whole-file pass reads every file once. The
+# controller sends up to its own ANALYZE_WHOLE_FILE_CONCURRENCY; this caps
+# what this host accepts.
+WHOLE_FILE_CONCURRENCY = _bounded_int_env("ANALYZE_WHOLE_FILE_CONCURRENCY", 4, 1, 32)
+# Wall-clock bound for one file, matching the worker's own default. A long DJ
+# mix streamed from the music server is the slow case.
+WHOLE_FILE_TIMEOUT_S = float(_bounded_int_env("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900, 30, 7200))
+WHOLE_FILE_FACETS = ("loudness", "edges")
 
 # Idle worker recycle (#1204 follow-up). The worker's own idle release drops
 # the CLAP/Demucs singletons, but ~1GB of librosa/numba/torch scratch stays
@@ -613,6 +626,47 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(title="subwave-analyzer", lifespan=lifespan)
 
 
+# Created lazily inside the running loop (an asyncio primitive must not be
+# bound to an import-time loop).
+_whole_file_sem: asyncio.Semaphore | None = None
+
+
+def _whole_file_semaphore() -> asyncio.Semaphore:
+    global _whole_file_sem
+    if _whole_file_sem is None:
+        _whole_file_sem = asyncio.Semaphore(WHOLE_FILE_CONCURRENCY)
+    return _whole_file_sem
+
+
+async def run_whole_file_once(payload: dict[str, Any]) -> dict[str, Any]:
+    """One whole-file facet request in a one-shot worker process
+    (`analyze_worker.py --whole-file`), bounded by its own semaphore so a bulk
+    pass never queues behind CLAP/Demucs jobs. Answers like the pool does."""
+    async with _whole_file_semaphore():
+        proc = await asyncio.create_subprocess_exec(
+            ANALYZE_PYTHON, ANALYZE_WORKER, "--whole-file",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={**os.environ, "ANALYZE_WHOLE_FILE_TIMEOUT_S": str(WHOLE_FILE_TIMEOUT_S)},
+        )
+        try:
+            out, err = await asyncio.wait_for(
+                proc.communicate((json.dumps(payload) + "\n").encode()), timeout=WHOLE_FILE_TIMEOUT_S + 30
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"ok": False, "error": f"whole-file pass timed out after {WHOLE_FILE_TIMEOUT_S:.0f}s"}
+    try:
+        return json.loads((out or b"").decode("utf-8", "replace").strip().splitlines()[-1])
+    except Exception:  # noqa: BLE001 — a worker that printed nothing usable
+        # A stream URL carries the music server's credentials, so it never
+        # reaches a response or a log.
+        tail = re.sub(r"(https?://[^/\s?#]+)[^\s]*", r"\1/…", (err or b"").decode("utf-8", "replace")).strip()[-300:]
+        return {"ok": False, "error": f"whole-file worker gave no result: {tail or 'no output'}"}
+
+
 @app.get("/health")
 async def health():
     # `engines` lists engines *currently ready*, not the static set — the
@@ -663,6 +717,12 @@ async def health():
         # older workers never emit the key, so this stays None and the
         # controller keeps sending flat requests to them.
         "analyze_facets_capable": analyzer_pool.capability("facets_capable", "facets"),
+        # Whole-file facets (loudness v2 over the whole file, silence edges and
+        # the decoded length): needs ffmpeg in the worker image. None on older
+        # workers, which never emit the key.
+        "analyze_whole_file_capable": analyzer_pool.capability("whole_file_capable", "whole_file"),
+        # How many whole-file requests this host runs at once (its own lane).
+        "analyze_whole_file_concurrency": WHOLE_FILE_CONCURRENCY,
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
@@ -711,13 +771,17 @@ class AnalyzeRequest(BaseModel):
     # Skips every non-embedding feature in the worker.
     embedding_only: bool = False
     # Per-facet request: compute ONLY these facets (head, loudness, tail,
-    # clap, vocal, stems) and answer {"facets": {...}, "source": {...}}.
+    # clap, vocal, stems, edges) and answer {"facets": {...}, "source": {...}}.
     # Absent = the flat response above, unchanged. embed / vocal /
     # embedding_only are ignored when this is set: the facets say it all.
     facets: list[str] | None = None
     # Facet requests only: a tail measured without the vocal/stems facets also
     # carries the outro's vocal ranges (Demucs on the tail window only).
     tail_vocals: bool = False
+    # Facet requests only: the music server's stream URL the whole-file facets
+    # (loudness v2, edges) read when `path` is a capped copy. Never fetched
+    # here; the worker's ffmpeg streams it.
+    stream_url: str | None = None
 
 
 @app.post("/analyze")
@@ -757,7 +821,12 @@ async def analyze(req: AnalyzeRequest):
         payload["facets"] = facets
         if req.tail_vocals:
             payload["tail_vocals"] = True
-    msg = await analyzer_pool.request(payload)
+        if req.stream_url and "url" not in payload:
+            payload["stream_url"] = req.stream_url
+    if facets and all(f in WHOLE_FILE_FACETS for f in facets):
+        msg = await run_whole_file_once(payload)
+    else:
+        msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
     if facets is not None:

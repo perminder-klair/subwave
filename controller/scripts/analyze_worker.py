@@ -2171,6 +2171,276 @@ def facet_loudness(y_src, sr):
     return out
 
 
+# --- Whole-file facets: `loudness` v2 and `edges` ----------------------------
+# facet_loudness above measures the decoded analysis WINDOW: the first
+# ANALYZE_SECONDS, resampled to ANALYZE_SR. That is the right input for bpm and
+# key and the wrong one for a playback gain: a quiet opening reads the whole
+# track as quiet, and the peak that caps the boost never sees the louder
+# passages after it, nor the inter-sample peaks the resample filters away. The
+# silence edges have the same blind spot: the head window cannot see past
+# ANALYZE_SECONDS and the tail window past ANALYZE_OUTRO_SECONDS, and the only
+# duration the controller has is the container tag.
+#
+# Both facets therefore read the WHOLE file at its native rate, in ONE ffmpeg
+# run with constant memory: the ebur128 filter prints integrated loudness, LRA,
+# sample and true peak (4x oversampled) on stderr, and the same decoded audio
+# leaves on stdout as float PCM, which EdgeScanner reads for the edges and the
+# exact decoded length. A request for both pays one decode. CPU only, about
+# 2-3 s for a typical track on one thread, linear in duration; the real cost
+# is reading the whole file (a FLAC is often 20-40 MB).
+
+# Version stamp the controller stores with whole-file loudness figures; a
+# window measurement carries none. Kept in step with the controller's
+# FACET_VERSIONS.loudness.
+WHOLE_FILE_LOUDNESS_VERSION = 2
+WHOLE_FILE_FACETS = ("loudness", "edges")
+# Below the BS.1770 absolute gate nothing counts: ffmpeg prints -70 LUFS for
+# digital silence. Treated as "no loudness", like measure_loudness's -inf.
+_WHOLE_LOUDNESS_FLOOR_LUFS = -69.9
+WHOLE_FILE_TIMEOUT_S = _env_float("ANALYZE_WHOLE_FILE_TIMEOUT_S", 900.0)
+# PCM read size off ffmpeg's stdout (bytes): ~1.5 s of 44.1 kHz stereo float.
+_WHOLE_FILE_CHUNK = 1 << 19
+
+
+def parse_ebur128_summary(text):
+    """Integrated loudness, LRA, sample peak and true peak out of ffmpeg's
+    ebur128 summary (the block printed at the end of the run). A field is None
+    when absent or -inf. Pure, so it is tested without ffmpeg."""
+    # Only the final block counts: per-frame lines are kept out of the log
+    # (framelog=verbose), but one must never be read as the result.
+    summary = text[text.rfind("Summary:"):] if "Summary:" in text else text
+
+    def grab(pattern):
+        m = re.search(pattern, summary)
+        if not m or m.group(1) in ("-inf", "inf", "nan"):
+            return None
+        try:
+            return float(m.group(1))
+        except ValueError:
+            return None
+
+    num = r"(-?inf|nan|-?[\d.]+)"
+    lufs = grab(r"Integrated loudness:\s*\n\s*I:\s*" + num + r"\s*LUFS")
+    lra = grab(r"Loudness range:\s*\n\s*LRA:\s*" + num + r"\s*LU")
+    sample_peak = grab(r"Sample peak:\s*\n\s*Peak:\s*" + num + r"\s*dBFS")
+    true_peak = grab(r"True peak:\s*\n\s*Peak:\s*" + num + r"\s*dBFS")
+    if lufs is not None and lufs <= _WHOLE_LOUDNESS_FLOOR_LUFS:
+        lufs = None
+    return {"loudness_lufs": lufs, "lra_lu": lra, "sample_peak_db": sample_peak, "true_peak_db": true_peak}
+
+
+def parse_output_rate(text):
+    """Sample rate of the PCM ffmpeg writes (the OUTPUT stream's, which is the
+    file's own rate since nothing resamples). None when not printed."""
+    out = text[text.find("Output #0"):] if "Output #0" in text else ""
+    m = re.search(r"Audio: pcm_f32le[^\n]*?,\s*(\d+) Hz", out)
+    return int(m.group(1)) if m else None
+
+
+# ffmpeg ends every failure with the same generic line ("Conversion failed!"),
+# the cause is earlier. The first line naming an error is the useful one; the
+# last line stays as the fallback.
+_FFMPEG_ERROR_HINTS = ("error", "invalid", "unable", "no such", "not found", "failed", "refused", "denied", "server returned")
+
+# A stream URL carries the music server's credentials in its query string
+# (Subsonic u/t/s: a token+salt pair is replayable until the password
+# changes). ffmpeg echoes its input URL in errors, and these messages reach
+# run logs and the admin UI, so every URL is cut to scheme + host first.
+_URL_RE = re.compile(r"(https?://)([^/\s?#]+)[^\s]*", re.IGNORECASE)
+
+
+def redact_urls(text):
+    return _URL_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}/…", text or "")
+
+
+def ffmpeg_failure_reason(stderr):
+    lines = [l.strip() for l in redact_urls(stderr or "").splitlines() if l.strip()]
+    if not lines:
+        return "no output"
+    generic = {"conversion failed!"}
+    for l in lines:
+        low = l.lower()
+        if low not in generic and any(h in low for h in _FFMPEG_ERROR_HINTS):
+            return l[:300] if l == lines[-1] else f"{l[:300]} (… {lines[-1][:120]})"
+    return lines[-1][:300]
+
+
+class EdgeScanner:
+    """Streaming silence edges over interleaved float PCM: the first and last
+    sample frame whose peak (over its channels) reaches the ABSOLUTE
+    SILENCE_DBFS floor — the same floor silence_edges_ms uses, never a level
+    relative to the track — and the number of frames decoded. Constant memory,
+    and the answer does not depend on how the stream is chunked."""
+
+    def __init__(self, channels=2, floor_dbfs=None):
+        self.channels = int(channels)
+        self.thr = 10.0 ** ((SILENCE_DBFS if floor_dbfs is None else floor_dbfs) / 20.0)
+        self.frames = 0
+        self.first = None
+        self.last = None
+        self._carry = None
+
+    def feed(self, buf):
+        import numpy as np
+
+        buf = np.asarray(buf, dtype=np.float32).reshape(-1)
+        if self._carry is not None and self._carry.size:
+            buf = np.concatenate([self._carry, buf])
+        whole = (buf.size // self.channels) * self.channels
+        self._carry = buf[whole:].copy()
+        if whole == 0:
+            return
+        peaks = np.max(np.abs(buf[:whole].reshape(-1, self.channels)), axis=1)
+        loud = np.flatnonzero(peaks >= self.thr)
+        if loud.size:
+            if self.first is None:
+                self.first = self.frames + int(loud[0])
+            self.last = self.frames + int(loud[-1])
+        self.frames += peaks.size
+
+    def result(self, sr):
+        """(lead_ms, tail_ms, duration_ms): lead and tail are None when no
+        frame reaches the floor (a silent file says nothing about where music
+        would start); the duration is always the decoded length."""
+        dur_ms = int(round(self.frames * 1000.0 / sr)) if sr else 0
+        if self.first is None:
+            return (None, None, dur_ms)
+        lead_ms = int(round(self.first * 1000.0 / sr))
+        tail_ms = int(round((self.frames - (self.last + 1)) * 1000.0 / sr))
+        return (max(0, lead_ms), max(0, tail_ms), dur_ms)
+
+
+def measure_whole_file(src, loudness=True, edges_wanted=True, timeout_s=None):
+    """One ffmpeg pass over the whole of `src` (a URL or a local path) at its
+    native rate. Returns {"loudness": {loudness_lufs, lra_lu, sample_peak_db,
+    true_peak_db} | None, "edges": (lead_ms, tail_ms, duration_ms) | None,
+    "seconds"}. Loudness and true peak are both set or both None (digital
+    silence), never one without the other. Raises on any ffmpeg failure, so the
+    caller records an attempt instead of a measurement."""
+    import numpy as np
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("ffmpeg not found")
+    limit = timeout_s or WHOLE_FILE_TIMEOUT_S
+    cmd = ["ffmpeg", "-hide_banner", "-nostdin", "-nostats", "-threads", "1",
+           "-i", src, "-map", "0:a:0", "-vn"]
+    if loudness:
+        # framelog=verbose, NOT quiet: `quiet` only exists from ffmpeg 6, and
+        # 5.1 (Debian bookworm, the analyzer image) rejects the whole filter.
+        # verbose sits above the default info level, so the per-frame lines
+        # stay out of stderr and only the summary is printed.
+        cmd += ["-af", "ebur128=peak=sample+true:framelog=verbose"]
+    if edges_wanted:
+        # Stereo float at the file's own rate: a mono file is duplicated (same
+        # peaks), and no resampler runs.
+        cmd += ["-ac", "2", "-f", "f32le", "pipe:1"]
+    else:
+        cmd += ["-f", "null", "-"]
+
+    t0 = time.monotonic()
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    err_chunks = []
+    # stderr drains on its own thread: a chatty decoder must never block the
+    # PCM pipe (or the reverse) and deadlock the pass.
+    drain = threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)
+    drain.start()
+    timed_out = threading.Event()
+
+    def kill():
+        timed_out.set()
+        try:
+            proc.kill()
+        except OSError:
+            pass
+    timer = threading.Timer(limit, kill)
+    timer.start()
+    scanner = EdgeScanner(channels=2) if edges_wanted else None
+    try:
+        if scanner is not None:
+            pending = b""
+            while True:
+                data = proc.stdout.read(_WHOLE_FILE_CHUNK)
+                if not data:
+                    break
+                data = pending + data
+                usable = len(data) - (len(data) % 4)
+                pending = data[usable:]
+                if usable:
+                    scanner.feed(np.frombuffer(data[:usable], dtype="<f4"))
+        else:
+            proc.stdout.read()
+        code = proc.wait()
+    finally:
+        timer.cancel()
+        drain.join(timeout=5)
+    err = (err_chunks[0] if err_chunks else b"").decode("utf-8", errors="replace")
+    if timed_out.is_set():
+        raise RuntimeError(f"whole-file pass timed out after {limit:.0f}s")
+    if code != 0:
+        raise RuntimeError(f"ffmpeg exited {code}: {ffmpeg_failure_reason(err)}")
+
+    out = {"loudness": None, "edges": None, "seconds": round(time.monotonic() - t0, 2)}
+    if loudness:
+        if "Summary:" not in err:
+            raise RuntimeError("ffmpeg printed no ebur128 summary")
+        fig = parse_ebur128_summary(err)
+        if fig["loudness_lufs"] is None or fig["true_peak_db"] is None:
+            # One measurement: a loudness without its peak would let a boost
+            # through with no ceiling, so both go together or neither does.
+            fig["loudness_lufs"] = None
+            fig["true_peak_db"] = None
+        out["loudness"] = fig
+    if scanner is not None:
+        sr = parse_output_rate(err)
+        if not sr:
+            raise RuntimeError("ffmpeg did not report the output sample rate")
+        out["edges"] = scanner.result(sr)
+    return out
+
+
+def whole_file_input(path, complete, url):
+    """What the whole-file facets read: a local copy only when it is known to
+    hold the WHOLE file, otherwise the stream URL (ffmpeg reads it start to
+    end, never capped). None when there is neither."""
+    if path and complete is True:
+        return path
+    return url or None
+
+
+def whole_file_facets(src, wanted):
+    """Answer the whole-file facets in `wanted` from one decode of `src`."""
+    names = [f for f in WHOLE_FILE_FACETS if f in wanted]
+    if not names:
+        return {}
+    if not src:
+        return {f: _unmeasurable("no-whole-file-source") for f in names}
+    try:
+        m = measure_whole_file(src, loudness="loudness" in names, edges_wanted="edges" in names)
+    except Exception as e:  # noqa: BLE001 — one decode, so one failure for both
+        return {f: _failed(e) for f in names}
+    out = {}
+    if "loudness" in names:
+        fig = m.get("loudness") or {}
+        if fig.get("loudness_lufs") is None:
+            out["loudness"] = _unmeasurable("silent")
+        else:
+            data = {"loudness_lufs": fig["loudness_lufs"], "peak_db": fig["true_peak_db"]}
+            for k in ("sample_peak_db", "lra_lu"):
+                if fig.get(k) is not None:
+                    data[k] = fig[k]
+            data["loudness_version"] = WHOLE_FILE_LOUDNESS_VERSION
+            out["loudness"] = _ok(data)
+    if "edges" in names:
+        lead, tail, dur = m.get("edges") or (None, None, 0)
+        if not dur:
+            out["edges"] = _failed("decoded empty audio")
+        elif lead is None:
+            out["edges"] = _unmeasurable("silent-file")
+        else:
+            out["edges"] = _ok({"edge_lead_ms": lead, "edge_tail_ms": tail, "decoded_duration_ms": dur})
+    return out
+
+
 # Field order of analyze()'s flat response, kept stable across the facet split
 # so the emitted JSON is unchanged. Unknown keys (none today) go last.
 _RESULT_ORDER = (
@@ -2355,7 +2625,7 @@ def analyze(
 # A request without `facets` keeps analyze()'s flat response, byte for byte.
 # ---------------------------------------------------------------------------
 
-FACET_NAMES = ("head", "loudness", "tail", "clap", "vocal", "stems")
+FACET_NAMES = ("head", "loudness", "tail", "clap", "vocal", "stems", "edges")
 
 
 class FacetRequestError(ValueError):
@@ -2468,7 +2738,8 @@ def _failed(e):
     return {"status": "failed", "reason": str(e)[:500]}
 
 
-def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False):
+def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False,
+                   whole_input=None):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -2485,14 +2756,24 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
     With `stems_require_marker` a stems root without the marker (a share not
     mounted here) gets no stem writes, and `stems` answers unavailable rather
     than ok/failed, so the controller leaves the track unstamped; the marker
-    is re-checked before each write, as in analyze()."""
+    is re-checked before each write, as in analyze().
+
+    `whole_input` (a URL or a complete local path, see whole_file_input) is
+    what the whole-file facets read: `edges` always, and `loudness`, which is
+    then measured over the whole file at its native rate (v2). Without it
+    `loudness` keeps the analysis window's figures (an older controller sends
+    no stream URL) and `edges` is unmeasurable."""
     out = {}
     wanted = set(facets)
+    whole_wanted = [f for f in WHOLE_FILE_FACETS if f in wanted and (f != "loudness" or whole_input)]
+    if whole_wanted:
+        out.update(whole_file_facets(whole_input, whole_wanted))
 
     # Head window, decoded once with channels: head works off the mono
     # downmix, loudness off the real channels (issue #998).
     y_src = y = sr = None
-    if wanted & {"head", "loudness"}:
+    window = {"head"} | ({"loudness"} if "loudness" not in out else set())
+    if wanted & window:
         try:
             y_src, sr = source.load(librosa, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
             y = librosa.to_mono(y_src) if y_src is not None else None
@@ -2500,7 +2781,7 @@ def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=Fal
                 raise RuntimeError("decoded empty audio")
         except Exception as e:  # noqa: BLE001 — independent windows may still decode
             for name in ("head", "loudness"):
-                if name in wanted:
+                if name in wanted and name not in out:
                     out[name] = _failed(e)
 
     # Tail: needed for the tail facet itself and to gate the Demucs tail pass.
@@ -2628,6 +2909,20 @@ def analyze_facet_request(librosa, req):
     Raises FacetRequestError for a malformed request. Fetch / source-open
     failures fail the request; window failures stay inside their facets."""
     facets = parse_facets(req.get("facets"))
+    # The whole-file facets stream the music server's URL (or read a local
+    # copy known to be complete); `stream_url` rides along with a path request.
+    whole_input = whole_file_input(req.get("path"), req.get("complete"), req.get("stream_url") or req.get("url"))
+    if all(f in WHOLE_FILE_FACETS for f in facets):
+        # Nothing here needs the capped download the window facets decode:
+        # fetching it would read up to ANALYZE_MAX_BYTES for no use.
+        result = whole_file_facets(whole_input, facets)
+        edges = result.get("edges") or {}
+        dur_ms = (edges.get("data") or {}).get("decoded_duration_ms")
+        return {
+            "facets": {name: result[name] for name in FACET_NAMES if name in result},
+            "source": {"kind": "whole-file", "duration_s": round(dur_ms / 1000.0, 3) if dur_ms else None,
+                       "complete": True},
+        }
     source = FileSource.from_request(url=req.get("url"), path=req.get("path"), complete=req.get("complete"))
     try:
         source.open(librosa)
@@ -2635,12 +2930,35 @@ def analyze_facet_request(librosa, req):
             librosa, source, facets, stems_dir=req.get("stems_dir"),
             want_tail_vocals=req.get("tail_vocals") is True,
             stems_require_marker=req.get("stems_require_marker") is True,
+            whole_input=whole_input,
         )
         return {"facets": result, "source": source.describe()}
     finally:
         source.close()
 
+def whole_file_once(stream_in, stream_out):
+    """One-shot whole-file lane: `analyze_worker.py --whole-file` reads ONE
+    facet request (whole-file facets only) from stdin and prints one answer
+    line. No librosa and no model are imported, so it starts in tens of
+    milliseconds and the sidecar can run many side by side, outside the pool
+    whose workers hold CLAP/Demucs."""
+    try:
+        req = json.loads(stream_in.readline() or "{}")
+        facets = parse_facets(req.get("facets"))
+        if not all(f in WHOLE_FILE_FACETS for f in facets):
+            raise FacetRequestError(f"--whole-file serves only the whole-file facets ({', '.join(WHOLE_FILE_FACETS)})")
+        out = {"ok": True, **analyze_facet_request(None, req)}
+    except Exception as e:  # noqa: BLE001 — reported, never a traceback
+        out = {"ok": False, "error": redact_urls(str(e))[:500]}
+    stream_out.write(json.dumps(out) + "\n")
+    stream_out.flush()
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--whole-file":
+        whole_file_once(sys.stdin, sys.stdout)
+        return
+
     try:
         import librosa  # noqa: F401
         import numpy  # noqa: F401
@@ -2698,6 +3016,9 @@ def main():
         "text_embedding_capable": text_capable,
         # Version signal: this worker understands {"facets": [...]} requests.
         "facets_capable": True,
+        # The whole-file facets (loudness v2, edges) need an ffmpeg binary;
+        # older workers never emit the key.
+        "whole_file_capable": shutil.which("ffmpeg") is not None,
     })
 
     for line in sys.stdin:

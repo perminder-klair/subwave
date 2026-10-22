@@ -30,6 +30,7 @@ const SUITES = [
   'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
   'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
   'analyzer_facets_test.py', // facet functions are pure; path wrappers = decode + facet
+  'analyzer_whole_file_test.py', // loudness v2 + edges: one whole-file decode, absolute floor
   'analyzer_stems_marker_test.py', // no stem writes into an unmarked (unmounted) stems root
 ];
 
