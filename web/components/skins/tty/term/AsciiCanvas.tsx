@@ -4,25 +4,39 @@
 // Grid to its box the way a terminal answers SIGWINCH, hands it to `paint`,
 // and puts the result on a canvas:
 //
-//  - Glyphs are rendered once per (code point, colour) into an atlas and
-//    blitted from there, and only cells that changed since the last frame are
-//    repainted — a full-window scene is ~10k cells, and fillText per cell per
-//    frame is what that would otherwise cost.
+//  - Glyphs are rendered once per (code point, colour) into an atlas
+//    (atlas.ts) and blitted from there, and only cells that changed since the
+//    last frame are repainted (damage.ts) — a full-window scene is ~10k
+//    cells, and fillText per cell per frame is what that would otherwise
+//    cost. A frame draws every new glyph into the atlas before it blits any:
+//    interleaved, WebKit flushes the atlas's pending drawing before each blit
+//    that reads it.
 //  - Colours come from the theme tokens (see palette.ts), re-read when the
 //    theme changes under us: the provider writes them onto <html>, so one
-//    MutationObserver there catches every switch.
+//    MutationObserver there catches every switch. It also catches writes
+//    that change nothing, so the atlas is only redrawn for new colours.
 //  - With `glow`, cells whose colour blooms are also painted onto a second
 //    canvas under the first that CSS blurs — the phosphor halo, at the cost
-//    of a compositor filter rather than a per-glyph shadow.
+//    of a compositor filter rather than a per-glyph shadow. Under a 5px blur
+//    device pixels are invisible, so that canvas has one pixel per CSS pixel:
+//    a quarter of the memory and the fill on a 2× iPad.
 //  - `still` (lite mode, reduced motion) paints one frame at `stillAt` and
 //    no loop runs; it repaints only on resize, theme or `frame` change.
+//  - `paused` (hidden behind something opaque) schedules no frames at all,
+//    keeping everything built, and paints afresh when it lifts.
+//
+// Unmounting hands every bitmap back at once: iOS counts canvas memory
+// against a page-wide cap until the GC gets round to it, and past the cap a
+// canvas silently draws nothing.
 
 import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/cn';
 import { Grid, SPACE, WIDE_TAIL, cellWidth } from './grid';
-import { createColorProbe, readThemeRgb, watchTheme } from '@/lib/theme-rgb';
+import { createColorProbe, readThemeRgb, sameThemeRgb, watchTheme } from '@/lib/theme-rgb';
 import { buildPalette, glows, isDarkTheme, type ThemeRgb } from './palette';
-import { drawGlyph, type GlyphMetrics } from './glyphs';
+import type { GlyphMetrics } from './glyphs';
+import { GlyphAtlas } from './atlas';
+import { FULL_REDRAW_SHARE, cellEdges, forEachRun, markDamage } from './damage';
 import styles from './AsciiCanvas.module.css';
 
 export interface PaintEnv {
@@ -52,60 +66,25 @@ interface AsciiCanvasProps {
   frame?: unknown;
   lineHeight?: number;
   glow?: boolean;
+  /** Covered: paint nothing until it lifts. Unlike `still`, changing it
+   *  rebuilds nothing. */
+  paused?: boolean;
   className?: string;
 }
 
-/** Glyphs rendered once per (code point, colour), two cells wide per slot so
- *  a wide glyph fits. When it fills it simply starts over. */
-class GlyphAtlas {
-  readonly canvas: HTMLCanvasElement;
-  private ctx: CanvasRenderingContext2D;
-  private slots = new Map<number, number>();
-  private next = 0;
-  private perRow = 32;
-  private capacity = 0;
-  private m: GlyphMetrics | null = null;
-
-  constructor() {
-    this.canvas = document.createElement('canvas');
-    this.ctx = this.canvas.getContext('2d')!;
-  }
-
-  reset(m: GlyphMetrics): void {
-    this.m = m;
-    this.slots.clear();
-    this.next = 0;
-    const rows = Math.max(8, Math.floor(4096 / Math.max(1, m.h)));
-    this.canvas.width = this.perRow * m.w * 2;
-    this.canvas.height = rows * m.h;
-    this.capacity = this.perRow * rows;
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-  }
-
-  /** Atlas origin of a glyph, rendering it on first use. */
-  locate(cp: number, inkIndex: number, color: string): [number, number] {
-    const m = this.m!;
-    const key = cp * 512 + inkIndex;
-    let slot = this.slots.get(key);
-    if (slot === undefined) {
-      if (this.next >= this.capacity) this.reset(m);
-      slot = this.next++;
-      this.slots.set(key, slot);
-      const sx = (slot % this.perRow) * m.w * 2;
-      const sy = Math.floor(slot / this.perRow) * m.h;
-      this.ctx.save();
-      this.ctx.beginPath();
-      this.ctx.rect(sx, sy, m.w * 2, m.h);
-      this.ctx.clip();
-      drawGlyph(this.ctx, cp, sx, sy, m, color);
-      this.ctx.restore();
-    }
-    return [(slot % this.perRow) * m.w * 2, Math.floor(slot / this.perRow) * m.h];
-  }
+/** A canvas's bitmap and its box. The bitmap only when its size changed:
+ *  assigning `width` reallocates even at the same size. */
+function place(c: HTMLCanvasElement, w: number, h: number, cssW: number, cssH: number, left: string, top: string): void {
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  c.style.width = `${cssW}px`;
+  c.style.height = `${cssH}px`;
+  c.style.left = left;
+  c.style.top = top;
 }
 
 export default function AsciiCanvas({
-  paint, fontSize, fps = 20, still = false, stillAt = 0, frame, lineHeight = 1.2, glow = false, className,
+  paint, fontSize, fps = 20, still = false, stillAt = 0, frame, lineHeight = 1.2, glow = false, paused = false, className,
 }: AsciiCanvasProps) {
   const hostRef = useRef<HTMLSpanElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -116,7 +95,10 @@ export default function AsciiCanvas({
   fontSizeRef.current = fontSize;
   const stillAtRef = useRef(stillAt);
   stillAtRef.current = stillAt;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
   const requestRef = useRef<() => void>(() => {});
+  const resumeRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const host = hostRef.current;
@@ -133,10 +115,21 @@ export default function AsciiCanvas({
     let prevChars = new Uint32Array(0);
     let prevInk = new Uint16Array(0);
     let marks = new Uint8Array(0);
+    let slots = new Int32Array(0);
+    // Cells with a glyph on the glow canvas (both halves of a wide one), and
+    // scratch for the changed ones among them: only those need clearing there.
+    let glowed = new Uint8Array(0);
+    let unglow = new Uint8Array(0);
+    // Cell edges on the glow canvas, which is drawn at a smaller scale.
+    let gx: Int32Array = new Int32Array(0);
+    let gy: Int32Array = new Int32Array(0);
     let full = true;
     let theme = readThemeRgb(host, probe);
     let palette = buildPalette(theme);
     let m: GlyphMetrics | null = null;
+    // The face as measured, not as named: when the theme's font lands it keeps
+    // its name, and often the cell size, while every glyph changes.
+    let face = '';
     let env: PaintEnv | null = null;
     let raf = 0;
     let last = -Infinity;
@@ -159,28 +152,36 @@ export default function AsciiCanvas({
       const descent = tm.fontBoundingBoxDescent || px * dpr * 0.2;
       const cols = Math.floor((rect.width * dpr) / w);
       const rows = Math.floor((rect.height * dpr) / h);
-      const next: GlyphMetrics = {
-        w, h, font,
-        baseline: Math.round((h - (ascent + descent)) / 2 + ascent),
-        stroke: Math.max(1, Math.round(dpr)),
-      };
-      const changed = !m || m.w !== w || m.h !== h || m.font !== font || grid.cols !== cols || grid.rows !== rows;
-      if (changed) {
-        m = next;
+      const baseline = Math.round((h - (ascent + descent)) / 2 + ascent);
+      const stroke = Math.max(1, Math.round(dpr));
+      const measured = `${font}|${tm.width}|${ascent}|${descent}`;
+      const cellChanged = !m || m.w !== w || m.h !== h || m.baseline !== baseline || m.stroke !== stroke || face !== measured;
+      // The atlas outlives a resize that keeps the cell: its glyphs still fit.
+      if (cellChanged) {
+        m = { w, h, font, baseline, stroke };
+        face = measured;
         atlas.reset(m);
+      }
+      if (cellChanged || grid.cols !== cols || grid.rows !== rows) {
+        const n = cols * rows;
         grid = new Grid(cols, rows);
-        prevChars = new Uint32Array(cols * rows);
-        prevInk = new Uint16Array(cols * rows);
-        marks = new Uint8Array(cols * rows);
+        prevChars = new Uint32Array(n);
+        prevInk = new Uint16Array(n);
+        marks = new Uint8Array(n);
+        slots = new Int32Array(n);
+        glowed = new Uint8Array(n);
+        unglow = new Uint8Array(n);
         // Centred: the box rarely divides into whole cells, and an even
         // margin reads as a terminal window rather than a cropped one.
-        for (const c of glowCanvas ? [canvas, glowCanvas] : [canvas]) {
-          c.width = cols * w;
-          c.height = rows * h;
-          c.style.width = `${(cols * w) / dpr}px`;
-          c.style.height = `${(rows * h) / dpr}px`;
-          c.style.left = `${Math.floor((rect.width - (cols * w) / dpr) / 2)}px`;
-          c.style.top = `${Math.floor((rect.height - (rows * h) / dpr) / 2)}px`;
+        const left = `${Math.floor((rect.width - (cols * w) / dpr) / 2)}px`;
+        const top = `${Math.floor((rect.height - (rows * h) / dpr) / 2)}px`;
+        place(canvas, cols * w, rows * h, (cols * w) / dpr, (rows * h) / dpr, left, top);
+        if (glowCanvas) {
+          const s = Math.min(1, 1 / dpr);
+          // One column past the edge, for a wide glyph in the last one.
+          gx = cellEdges(cols + 1, w, s);
+          gy = cellEdges(rows, h, s);
+          place(glowCanvas, gx[cols]!, gy[rows]!, gx[cols]! / (s * dpr), gy[rows]! / (s * dpr), left, top);
         }
         full = true;
       }
@@ -188,30 +189,55 @@ export default function AsciiCanvas({
       return true;
     };
 
+    const clearRun = (i: number, len: number) => {
+      const c = i % grid.cols;
+      ctx.clearRect(c * m!.w, ((i - c) / grid.cols) * m!.h, len * m!.w, m!.h);
+    };
+    const clearGlowRun = (i: number, len: number) => {
+      const c = i % grid.cols;
+      const r = (i - c) / grid.cols;
+      gctx!.clearRect(gx[c]!, gy[r]!, gx[c + len]! - gx[c]!, gy[r + 1]! - gy[r]!);
+    };
+
     const flush = () => {
       if (!m) return;
       const { w, h } = m;
       const { cols, chars, ink } = grid;
       const n = chars.length;
-      if (full) {
+      const dirty = full ? n : markDamage(chars, ink, prevChars, prevInk, marks);
+      full = false;
+      if (dirty === 0) return;
+      if (dirty > n * FULL_REDRAW_SHARE) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        gctx?.clearRect(0, 0, gctx.canvas.width, gctx.canvas.height);
+        if (gctx) {
+          gctx.clearRect(0, 0, gctx.canvas.width, gctx.canvas.height);
+          glowed.fill(0);
+        }
         marks.fill(1);
       } else {
-        for (let i = 0; i < n; i++) marks[i] = chars[i] !== prevChars[i] || ink[i] !== prevInk[i] ? 1 : 0;
-        // A wide glyph spans its tail: repaint it when either half changed.
-        for (let i = 0; i < n - 1; i++) {
-          if (marks[i + 1] && cellWidth(chars[i]!) === 2) marks[i] = 1;
-          if (marks[i] && cellWidth(prevChars[i]!) === 2) marks[i + 1] = 1;
-        }
-        for (let i = 0; i < n; i++) {
-          if (!marks[i]) continue;
-          const x = (i % cols) * w;
-          const y = Math.floor(i / cols) * h;
-          ctx.clearRect(x, y, w, h);
-          gctx?.clearRect(x, y, w, h);
+        forEachRun(marks, cols, clearRun);
+        if (gctx) {
+          for (let i = 0; i < n; i++) {
+            const u = marks[i]! & glowed[i]!;
+            unglow[i] = u;
+            if (u) glowed[i] = 0;
+          }
+          forEachRun(unglow, cols, clearGlowRun);
         }
       }
+
+      // Every glyph this frame needs goes into the atlas first…
+      const generation = atlas.generation;
+      for (let i = 0; i < n; i++) {
+        const cp = chars[i]!;
+        if (!marks[i] || cp === SPACE || cp === WIDE_TAIL) continue;
+        const k = ink[i]!;
+        slots[i] = atlas.locate(cp, k, palette[k] ?? palette[0]!);
+      }
+      // …unless it filled and started over part-way, dropping slots already
+      // found: then this frame locates each glyph as it blits, as it once did.
+      const settled = atlas.generation === generation;
+
       for (let i = 0; i < n; i++) {
         if (!marks[i]) continue;
         const cp = chars[i]!;
@@ -219,15 +245,22 @@ export default function AsciiCanvas({
         prevChars[i] = cp;
         prevInk[i] = k;
         if (cp === SPACE || cp === WIDE_TAIL) continue;
-        const color = palette[k] ?? palette[0]!;
-        const [sx, sy] = atlas.locate(cp, k, color);
-        const sw = cellWidth(cp) === 2 ? w * 2 : w;
-        const x = (i % cols) * w;
-        const y = Math.floor(i / cols) * h;
-        ctx.drawImage(atlas.canvas, sx, sy, sw, h, x, y, sw, h);
-        if (gctx && glows(k)) gctx.drawImage(atlas.canvas, sx, sy, sw, h, x, y, sw, h);
+        const slot = settled ? slots[i]! : atlas.locate(cp, k, palette[k] ?? palette[0]!);
+        const sx = atlas.x(slot);
+        const sy = atlas.y(slot);
+        const wide = cellWidth(cp) === 2;
+        const sw = wide ? w * 2 : w;
+        const c = i % cols;
+        const r = (i - c) / cols;
+        ctx.drawImage(atlas.canvas, sx, sy, sw, h, c * w, r * h, sw, h);
+        if (gctx && glows(k)) {
+          const x0 = gx[c]!;
+          const y0 = gy[r]!;
+          gctx.drawImage(atlas.canvas, sx, sy, sw, h, x0, y0, gx[c + (wide ? 2 : 1)]! - x0, gy[r + 1]! - y0);
+          glowed[i] = 1;
+          if (wide && c + 1 < cols) glowed[i + 1] = 1;
+        }
       }
-      full = false;
     };
 
     const paintAt = (t: number) => {
@@ -239,40 +272,58 @@ export default function AsciiCanvas({
 
     const animating = fps > 0 && !still;
     const tick = (now: number) => {
-      if (disposed) return;
+      raf = 0;
+      if (disposed || pausedRef.current) return;
       raf = requestAnimationFrame(tick);
       if (now - last < 1000 / fps - 2) return;
       last = now;
       paintAt((now - t0) / 1000);
     };
     const paintOnce = () => {
+      if (pausedRef.current) return;
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => { if (!disposed) paintAt(still ? stillAtRef.current : (performance.now() - t0) / 1000); });
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (!disposed && !pausedRef.current) paintAt(still ? stillAtRef.current : (performance.now() - t0) / 1000);
+      });
+    };
+    /** Paint now: the loop from a fresh frame, or the one frame there is. */
+    const start = () => {
+      if (disposed || pausedRef.current) return;
+      if (!animating) { paintOnce(); return; }
+      last = -Infinity;
+      if (!raf) raf = requestAnimationFrame(tick);
     };
     requestRef.current = () => { if (!animating) paintOnce(); };
+    resumeRef.current = start;
 
+    // Repaints only when the layout invalidated what's on the canvas.
     const relayout = () => {
-      if (!layout()) return;
+      if (!layout() || !full) return;
       if (animating) last = -Infinity;
       else paintOnce();
     };
     const retheme = () => {
-      theme = readThemeRgb(host, probe);
-      palette = buildPalette(theme);
-      if (m) atlas.reset(m);
-      full = true;
+      const next = readThemeRgb(host, probe);
+      if (!sameThemeRgb(next, theme)) {
+        theme = next;
+        palette = buildPalette(theme);
+        if (m) atlas.reset(m);
+        full = true;
+      }
+      // Same colours can still be a new face.
       relayout();
     };
 
     const ro = new ResizeObserver(relayout);
     ro.observe(host);
     const unwatch = watchTheme(retheme);
-    // The theme's face may still be loading: its metrics change when it lands.
-    void document.fonts?.ready.then(() => { if (!disposed) { m = null; relayout(); } });
+    // The theme's face may still be loading: re-measured when it lands, and
+    // the atlas redrawn only if it measures differently.
+    void document.fonts?.ready.then(() => { if (!disposed) relayout(); });
 
     layout();
-    if (animating) raf = requestAnimationFrame(tick);
-    else paintOnce();
+    start();
 
     return () => {
       disposed = true;
@@ -280,10 +331,14 @@ export default function AsciiCanvas({
       ro.disconnect();
       unwatch();
       requestRef.current = () => {};
+      resumeRef.current = () => {};
+      atlas.release();
+      for (const c of glowCanvas ? [canvas, glowCanvas] : [canvas]) c.width = c.height = 0;
     };
   }, [fps, still, glow, lineHeight]);
 
   useEffect(() => { requestRef.current(); }, [frame]);
+  useEffect(() => { if (!paused) resumeRef.current(); }, [paused]);
 
   return (
     // A span (display: block) so a drawing can sit inside a <button>.

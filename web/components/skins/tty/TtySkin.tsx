@@ -210,7 +210,10 @@ export default function TtySkin(_props: SkinProps) {
   const like = useTrackLike();
   const calm = useSkinCalm();
 
-  const [focusPref, setFocusPref] = useStoredPref('subwave:tty-focus', '0', isFlag);
+  // The panes' pictures wait for this (every stored pref lands in the same
+  // commit): with focus saved, they'd mount canvases and atlases only for
+  // the stage to replace them a commit later.
+  const [focusPref, setFocusPref, prefsLoaded] = useStoredPref('subwave:tty-focus', '0', isFlag);
   const focus = focusPref === '1';
   const toggleFocus = () => setFocusPref(focus ? '0' : '1');
   const [scenePick, setScenePick] = useStoredPref<ScenePick>('subwave:tty-scene', 'auto', isScenePick);
@@ -311,6 +314,8 @@ export default function TtySkin(_props: SkinProps) {
     live: playing,
   };
   const caption = playing && onMic && voice ? { who: djName, text: voice.text } : null;
+  // The boot screen is opaque: nothing under it needs to animate.
+  const covered = showOverlay && !offline;
 
   const tuneLabel = offline
     ? 'off air'
@@ -371,7 +376,7 @@ export default function TtySkin(_props: SkinProps) {
             className="flex-1"
             bodyClassName="relative overflow-hidden"
           >
-            <FocusStage sceneId={sceneId} weather={weather} info={stage} caption={caption} sample={sample} calm={calm} />
+            <FocusStage sceneId={sceneId} weather={weather} info={stage} caption={caption} sample={sample} calm={calm} paused={covered} />
             <p className="sr-only">
               {offline
                 ? 'Off air.'
@@ -437,7 +442,7 @@ export default function TtySkin(_props: SkinProps) {
                     <div className="h-[150px] w-[150px] border border-[var(--line)] lg:h-[176px] lg:w-[176px]">
                       {rawCover && coverUrl ? (
                         <img src={coverUrl} alt="" className="h-full w-full object-cover" />
-                      ) : (
+                      ) : prefsLoaded && (
                         <AsciiCover url={coverUrl} onTainted={() => setRawCover(true)} />
                       )}
                     </div>
@@ -467,7 +472,7 @@ export default function TtySkin(_props: SkinProps) {
                   className="mt-1 h-[84px] flex-none sm:h-auto sm:min-h-[104px] sm:flex-1"
                   bodyClassName="px-2 pt-3 pb-1.5"
                 >
-                  <Scope id={instrument} sample={sample} calm={calm} />
+                  {prefsLoaded && <Scope id={instrument} sample={sample} calm={calm} paused={covered} />}
                 </Pane>
               </Pane>
 
@@ -646,7 +651,7 @@ export default function TtySkin(_props: SkinProps) {
       </div>
 
       {/* The tap/keypress is the browser's audio-unblock gesture. */}
-      {showOverlay && !offline && (
+      {covered && (
         <button
           type="button"
           onClick={tuneInFromOverlay}

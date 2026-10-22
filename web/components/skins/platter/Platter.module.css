@@ -9,9 +9,11 @@
    record went on spinning after STOP. */
 /* Keep .rim and .record durations equal so the mat and record rotate together. */
 .record { animation: platter-spin 5.9s linear infinite paused; }
+/* Pure white laid over anything at some alpha: screen-blended, white over a
+   colour is white, so plain alpha paints the same, without making WebKit
+   blend one turning layer into another. */
 .sheen {
   animation: platter-sheen 11.8s linear infinite paused;
-  mix-blend-mode: screen;
   background: conic-gradient(
     from 210deg,
     rgba(255, 255, 255, 0) 0deg,
@@ -49,7 +51,8 @@
     0 16px 42px rgba(0, 0, 0, 0.35);
 }
 
-/* Match transform-origin to the pivot in PlatterSkin.tsx. Ease the one-second --pf updates over 1.1s. */
+/* Match transform-origin to the pivot in PlatterSkin.tsx. Ease the one-second --pf updates over 1.1s
+   (unlike the iso deck's SVG arm, this one is a whole element, so the compositor runs the ease). */
 .arm {
   transform-origin: 86% 19%;
   transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
@@ -210,18 +213,24 @@
 .sheen1 { stop-color: #fff; stop-opacity: 0.07; }
 .armShadow { fill: var(--ink); stroke: var(--ink); opacity: 0.16; }
 
-/* The record turns in the plinth's plane: the group's origin is its centre.
-   Paused in the shorthand itself, which would otherwise reset it. */
+/* The label turns in the plinth's plane: the group's origin is the record's
+   centre. Paused in the shorthand itself, which would otherwise reset it. */
 .isoSpin { animation: platter-spin 5.9s linear infinite paused; }
 .isoSpin.playing { animation-play-state: running; }
-/* The arm's angle rides --arm, so the swing eases like the flat deck's. */
-.isoArm {
-  transform: rotate(var(--arm, 98deg));
-  transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
+/* WebKit restyles and repaints a turning SVG group on the CPU, so on iOS (the
+   only browsers -webkit-touch-callout answers to) the label turns in 30 steps
+   a second, as AXO's loop runs there. */
+@supports (-webkit-touch-callout: none) {
+  .isoSpin { animation-timing-function: steps(177); }
 }
+/* The arm's angle rides --arm. It eases like the flat deck's only while
+   .armSwing is on (a change of pose, or a jump to a new song's lead-in), and
+   steps through the creep across a playing record. */
+.isoArm { transform: rotate(var(--arm, 98deg)); }
+.armSwing .isoArm { transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {
   .isoSpin,
   .stageIn { animation: none; }
-  .isoArm { transition: none; }
+  .armSwing .isoArm { transition: none; }
 }

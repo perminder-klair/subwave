@@ -45,14 +45,13 @@
   }
 }
 
-/* Keep white highlights faint to avoid glare on dark themes. */
+/* Keep white highlights faint to avoid glare on dark themes. One 3px tile
+   repeated, its faintness in the colour (0.5 at 0.12 opacity, as it was):
+   WebKit draws a repeating gradient as one gradient with a stop pair per
+   period, and an opacity below 1 drew the brushing through an offscreen
+   buffer on every repaint anywhere in the receiver. */
 .striation {
-  opacity: 0.12;
-  background-image: repeating-linear-gradient(
-    90deg,
-    rgba(255, 255, 255, 0.5) 0 1px,
-    transparent 1px 3px
-  );
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 3px 100%;
 }
 
 .engraved {
@@ -64,7 +63,10 @@
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
 }
 
-/* Keep grille, artwork, and shade masks on the same 9px pitch. */
+/* Keep grille, artwork, and shade masks on the same 9px pitch. The wash and
+   the artwork are each their own layer, so their blur, saturation and mask
+   are drawn once per cover; painted with the receiver, WebKit redrew them on
+   the main thread for every repaint that touched the grille. */
 .grille {
   border: 1px solid var(--u-line);
   background-color: color-mix(
@@ -89,6 +91,7 @@
   -webkit-mask-size: 9px 9px;
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   mask-size: 9px 9px;
+  will-change: transform;
 }
 /* Apply the mask to the full-width layer to align with the base perforation. Fit artwork inside the square child. */
 .grilleArt {
@@ -99,6 +102,7 @@
   -webkit-mask-size: 9px 9px;
   mask-image: radial-gradient(circle at center, #000 3.4px, transparent 3.8px);
   mask-size: 9px 9px;
+  will-change: transform;
 }
 .grilleArtBox {
   height: 100%;
@@ -201,9 +205,9 @@
   );
   box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.1), 0 0 0 1px color-mix(in oklab, var(--u-knob) 70%, #000);
 }
-/* Pointer position rides root CSS vars so both breakpoints' knobs agree. */
-.volInner { transform: rotate(var(--vol-rot, -38deg)); }
-.logInner { transform: rotate(var(--log-rot, 24deg)); }
+/* The pointer's angle is set on the face itself (Knob in UnitSkin.tsx). */
+.volInner { transform: rotate(var(--rot, -38deg)); }
+.logInner { transform: rotate(var(--rot, 24deg)); }
 .knobMarkAccent {
   background: var(--accent, #d94b2a);
   box-shadow: 0 0 10px color-mix(in srgb, var(--accent, #d94b2a) 60%, transparent);

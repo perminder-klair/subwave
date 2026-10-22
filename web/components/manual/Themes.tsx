@@ -142,8 +142,9 @@ export default function Themes() {
           station-wide pick until they clear it; a{' '}
           <em>Use station default</em> / <em>Use station skin</em> button on each
           section&rsquo;s heading drops them back to whatever the operator is
-          running. Lite mode is a URL switch rather than a menu row: open the
-          player once with <code>?lite=1</code> and that browser keeps it, until{' '}
+          running. The same menu carries the per-browser <em>Lite mode</em>{' '}
+          toggle; a kiosk can pin it from its start URL with{' '}
+          <code>?lite=1</code>, which that browser keeps until{' '}
           <code>?lite=0</code>.
         </p>
         <p className="text-muted">
@@ -238,7 +239,7 @@ export default function Themes() {
           <li><strong>Accent</strong> &mdash; <code className="bs-code-inline">--accent</code> the station&rsquo;s accent (active states, on-air pill, focus rings), <code className="bs-code-inline">--accent-2</code> a genuinely different second ink (charts, secondary marks), <code className="bs-code-inline">--accent-soft</code> the accent tinted well into the paper.</li>
           <li><strong>Structure</strong> &mdash; <code className="bs-code-inline">--line</code> crisp hairline, <code className="bs-code-inline">--soft-border</code> the softer hairline between sections, <code className="bs-code-inline">--overlay</code> translucent wash for hover and modal scrims.</li>
           <li><strong>Type</strong> &mdash; <code className="bs-code-inline">--display-font</code> / <code className="bs-code-inline">--mono-font</code>, each a curated id (not a free font string).</li>
-          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1. <code className="bs-code-inline">--texture</code> lays a pattern over the player (<code className="bs-code-inline">scanline</code> or <code className="bs-code-inline">halftone</code>), and <code className="bs-code-inline">--finish</code> runs a filter over everything the skin draws: <code className="bs-code-inline">bloom</code> glows light ink into a dark ground, <code className="bs-code-inline">misregister</code> prints an accent-coloured ghost under dark ink on light paper. Both are off when omitted, both touch the player only, never the admin console, and lite mode drops the finish.</li>
+          <li><strong>Texture</strong> &mdash; <code className="bs-code-inline">--grain</code>, the paper-grain strength, 0&ndash;1. <code className="bs-code-inline">--texture</code> lays a pattern over the player (<code className="bs-code-inline">scanline</code> or <code className="bs-code-inline">halftone</code>), and <code className="bs-code-inline">--finish</code> runs a filter over everything the skin draws: <code className="bs-code-inline">bloom</code> glows light ink into a dark ground, <code className="bs-code-inline">misregister</code> prints an accent-coloured ghost under dark ink on light paper. Both are off when omitted, both touch the player only, never the admin console, and lite mode drops the finish. Safari and every iOS browser skip it too: WebKit runs that filter on the CPU over the whole player on every frame, so they keep the texture alone.</li>
         </ul>
         <p>
           Any CSS colour value works: hex, <code className="bs-code-inline">rgb()</code>,{' '}

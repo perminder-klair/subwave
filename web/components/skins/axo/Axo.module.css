@@ -169,6 +169,28 @@
 .icDim { color: var(--keytext-dim); }
 .icOn { color: var(--lit-txt); }
 .icFill { fill: currentColor; }
+/* The receiver's display line. Its glow is the scene's blur filter, except on
+   iOS (the only browsers -webkit-touch-callout answers to): WebKit re-runs a
+   filter whenever what it filters moves, which a scrolling line does every
+   frame, so there the filter is struck and two wider, fainter copies of the
+   line beneath it glow instead, a soft halo and a brighter rim. The copies
+   show nowhere else, nor in standby, when the line takes no glow. */
+.lcdHalo,
+.lcdGlow { display: none; }
+@supports (-webkit-touch-callout: none) {
+  .lcdHalo,
+  .lcdGlow {
+    display: inline;
+    fill: none;
+    stroke: var(--glass-txt);
+    stroke-linejoin: round;
+  }
+  .lcdHalo { stroke-opacity: 0.09; stroke-width: 2.8; }
+  .lcdGlow { stroke-opacity: 0.16; stroke-width: 1.4; }
+  .dim .lcdHalo,
+  .dim .lcdGlow { display: none; }
+  .lcdLit { filter: none; }
+}
 .mono { font-family: var(--mono-font), ui-monospace, monospace; }
 .doto { font-family: var(--font-doto), var(--mono-font), ui-monospace, monospace; font-weight: 900; }
 .display { font-family: var(--display-font), Georgia, serif; font-style: italic; }

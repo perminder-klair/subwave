@@ -102,3 +102,32 @@ test('the pre-paint script sets the same attributes from the cached theme', () =
   assert.equal(html.getAttribute('data-theme'), 'dark');
   assert.match(html.style.getPropertyValue('--display-font'), /^var\(--font-vt323\)/);
 });
+
+// The registry poll re-resolves every 30 s. Rewriting identical tokens on <html>
+// still invalidates style for the whole document, and on WebKit repaints every
+// layer and re-rasterises every canvas watching the theme, so an unchanged
+// appearance must reach the DOM not at all.
+test('applyAppearance skips a theme the document already shows', (t) => {
+  const html = withDocument(t);
+  let writes = 0;
+  const setProperty = html.style.setProperty;
+  html.style.setProperty = (k: string, v: string) => { writes += 1; setProperty(k, v); };
+
+  assert.equal(applyAppearance({ theme: PLAIN }), true);
+  const first = writes;
+  assert.ok(first > 0);
+
+  assert.equal(applyAppearance({ theme: { ...PLAIN, tokens: { ...PLAIN.tokens } } }), false);
+  assert.equal(writes, first, 'an identical theme writes nothing');
+
+  assert.equal(applyAppearance({ theme: PHOSPHOR }), true);
+  assert.equal(html.getAttribute('data-finish'), 'bloom');
+});
+
+test('a direct applyTheme (the admin builder) counts as what is painted', (t) => {
+  withDocument(t);
+  applyTheme(PHOSPHOR);
+  assert.equal(applyAppearance({ theme: PHOSPHOR }), false);
+  applyTheme(PLAIN);
+  assert.equal(applyAppearance({ theme: PHOSPHOR }), true, 'the poll restores the station theme after a preview');
+});

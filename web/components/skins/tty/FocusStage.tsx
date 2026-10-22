@@ -21,13 +21,15 @@ const NARROW_COLS = 100;
 /** ~150 columns across whatever the window is, within readable bounds. */
 const stageFont = (w: number) => Math.max(10, Math.min(15, Math.round(w / 150 / 0.6)));
 
-export default function FocusStage({ sceneId, weather, info, caption, sample, calm }: {
+export default function FocusStage({ sceneId, weather, info, caption, sample, calm, paused }: {
   sceneId: SceneId;
   weather: Weather;
   info: StageInfo;
   caption: Caption | null;
   sample: (nowMs: number) => Signal;
   calm: boolean;
+  /** Covered by the tune-in screen. */
+  paused: boolean;
 }) {
   const built = useRef<{ key: string; draw: SceneDraw; sky: Grid | null } | null>(null);
   const typed = useRef<{ text: string; at: number } | null>(null);
@@ -80,6 +82,7 @@ export default function FocusStage({ sceneId, weather, info, caption, sample, ca
       stillAt={7.3}
       frame={`${sceneId}|${weather}|${JSON.stringify(info)}|${caption?.text ?? ''}`}
       glow
+      paused={paused}
       className="absolute inset-0"
     />
   );

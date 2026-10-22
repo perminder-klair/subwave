@@ -5,6 +5,7 @@ import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instr
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
+import { WEBKIT_INIT_SCRIPT } from '@/lib/platform';
 import { SKIN_INIT_SCRIPT } from '@/lib/skin';
 import { SITE_URL } from '@/lib/site';
 import { GA_ID } from '@/lib/ga';
@@ -217,6 +218,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
+
+        <script dangerouslySetInnerHTML={{ __html: WEBKIT_INIT_SCRIPT }} />
 
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 

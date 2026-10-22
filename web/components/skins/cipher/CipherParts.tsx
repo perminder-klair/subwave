@@ -5,15 +5,19 @@
 // so the desk and the phone share every component. Every depth — a key's
 // travel, a lamp's socket, the knob's side — runs down the one 30° axis; the
 // finish comes from the hardware variables on the skin root, and standby
-// darkens the glass and the lamps rather than the metal.
+// darkens the glass and the lamps rather than the metal. A part that shows a
+// value the ambient clock changes (a bulb, a held key, a rotor window, a tape
+// character) reads it from the machine's store itself, so the clock re-renders
+// that part and never the machine round it.
 
 import { memo, useId, useRef } from 'react';
 import type { ButtonHTMLAttributes, PointerEvent, ReactNode, WheelEvent } from 'react';
 import styles from './Cipher.module.css';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
-import { ROWS, chr, scatter } from './cipher';
-import type { Spelling } from './useCipherMachine';
+import { ROWS, chr, scatter, volGlyph, type Rotors } from './cipher';
+import { litOf, type MachineStore } from './machineStore';
+import { useMachine } from './useCipherMachine';
 
 /** A framed bay with its name notched into the top rule. */
 export function Panel({
@@ -34,7 +38,7 @@ export function Panel({
 }
 
 /** The four slotted screws in the corners of the desk machine's top plate. */
-export function Screws() {
+export const Screws = memo(function Screws() {
   return (
     <>
       <span className={cn(styles.screw, 'top-[5px] left-[5px]')} aria-hidden="true" />
@@ -43,7 +47,7 @@ export function Screws() {
       <span className={cn(styles.screw, 'right-[5px] bottom-[5px]')} aria-hidden="true" />
     </>
   );
-}
+});
 
 /** The power key: a weighted knob that reads OFF at -45° and ON at +45°, its
  *  side showing down the 30° axis, with a ring rippling out of it while the
@@ -76,11 +80,14 @@ export function PowerKey({
       aria-pressed={on}
       disabled={disabled}
       onClick={onPress}
-      className="v3-focus block cursor-pointer border-0 bg-transparent p-0 disabled:cursor-default"
+      className="v3-focus relative block cursor-pointer border-0 bg-transparent p-0 disabled:cursor-default"
     >
+      {/* Under the drawing (both positioned, so DOM order stacks them), as
+          the SVG circle was: the knob's side still covers its lower right. */}
+      {gate && <span className={styles.ring} aria-hidden="true" />}
       <svg
         viewBox="-64 -64 128 128"
-        className={cn('block overflow-visible', compact ? 'size-[62px]' : 'size-[128px]')}
+        className={cn('relative block overflow-visible', compact ? 'size-[62px]' : 'size-[128px]')}
         aria-hidden="true"
       >
         <defs>
@@ -93,7 +100,6 @@ export function PowerKey({
             <stop offset="0.78" className={styles.pkI1} />
           </radialGradient>
         </defs>
-        <circle r="46" strokeWidth={1.5 * w} className={cn(styles.ring, gate && styles.ringOn)} />
         {compact ? (
           <>
             <text x="-46" y="-44" fontSize={16} fontWeight={700} textAnchor="middle" className={cn(styles.svgTxt, 'font-mono')}>0</text>
@@ -123,7 +129,7 @@ export function PowerKey({
 /** One rotor: keys to step it, its glass window showing the neighbours, and
  *  a knurled thumbwheel that drags. It is a slider to assistive tech and the keyboard.
  *  `max` makes it end-stopped (rotor I, the volume); without it, it wraps. */
-export function Rotor({
+export const Rotor = memo(function Rotor({
   name,
   label,
   value,
@@ -212,28 +218,64 @@ export function Rotor({
       <span className={cn(styles.rotLabel, accent ? 'text-vermilion' : 'text-muted')}>{name}</span>
     </div>
   );
-}
+});
 
-/** The lampboard: one smoked bulb per letter behind the glass, `lit` glowing. Decorative — the tape
- *  says in words what the bulbs spell. */
-export const Lampboard = memo(function Lampboard({ lit }: { lit: string | null }) {
+/** Rotor II or III, whose position the clock steps. */
+export const MachineRotor = memo(function MachineRotor({
+  store,
+  which,
+  name,
+  label,
+  onTurn,
+}: {
+  store: MachineStore;
+  which: keyof Rotors;
+  name: string;
+  label: string;
+  onTurn: (which: keyof Rotors, to: number) => void;
+}) {
+  const value = useMachine(store, s => s.msg.rotors[which]);
+  return <Rotor name={name} label={label} value={value} onChange={v => onTurn(which, v)} />;
+});
+
+/** The rotor readout, e.g. "rotors 18 · K · Q". */
+export const RotorReadout = memo(function RotorReadout({ store, vol }: { store: MachineStore; vol: number }) {
+  const middle = useMachine(store, s => s.msg.rotors.middle);
+  const right = useMachine(store, s => s.msg.rotors.right);
+  return <>{`rotors ${volGlyph(vol)} · ${chr(middle)} · ${chr(right)}`}</>;
+});
+
+/** One bulb. Each reads only whether it is lit, so a new letter re-renders
+ *  the two bulbs that change rather than the board. The lit fill and its
+ *  brighter highlight fade as one layer over the unlit highlight, which the
+ *  opaque fill hides: one opacity change where there were two. */
+const Lamp = memo(function Lamp({ store, c }: { store: MachineStore; c: string }) {
+  const on = useMachine(store, s => litOf(s) === c);
+  return (
+    <div className={cn(styles.lampCell, on && styles.lampOn)}>
+      <div className={styles.lamp}>
+        <div className={styles.lampGlow} />
+        <div className={styles.lampBase} />
+        <div className={styles.lampGlass}>
+          <div className={styles.lampSpec} />
+          <div className={styles.lampFill}>
+            <div className={styles.lampSpec} />
+          </div>
+        </div>
+        <div className={styles.lampRim}>{c}</div>
+      </div>
+    </div>
+  );
+});
+
+/** The lampboard: one smoked bulb per letter behind the glass. Decorative —
+ *  the tape says in words what the bulbs spell. */
+export const Lampboard = memo(function Lampboard({ store }: { store: MachineStore }) {
   return (
     <div aria-hidden="true" className="flex flex-col items-center">
       {ROWS.map(row => (
         <div key={row} className="flex">
-          {Array.from(row, c => (
-            <div key={c} className={cn(styles.lampCell, lit === c && styles.lampOn)}>
-              <div className={styles.lamp}>
-                <div className={styles.lampGlow} />
-                <div className={styles.lampBase} />
-                <div className={styles.lampGlass}>
-                  <div className={styles.lampFill} />
-                  <div className={styles.lampSpec} />
-                </div>
-                <div className={styles.lampRim}>{c}</div>
-              </div>
-            </div>
-          ))}
+          {Array.from(row, c => <Lamp key={c} store={store} c={c} />)}
         </div>
       ))}
     </div>
@@ -248,39 +290,44 @@ export interface KeyHandlers {
   release: () => void;
 }
 
+/** One letter key; it reads only whether it is held. */
+const CapKey = memo(function CapKey({ store, c, keys }: { store: MachineStore; c: string; keys: KeyHandlers }) {
+  const down = useMachine(store, s => s.down === c);
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      aria-label={c}
+      data-cipher-key=""
+      data-down={down ? '' : undefined}
+      onPointerDown={e => {
+        if (e.button > 0) return;
+        e.currentTarget.setPointerCapture?.(e.pointerId);
+        keys.hold(c);
+      }}
+      onPointerUp={keys.release}
+      onPointerCancel={keys.release}
+      onLostPointerCapture={keys.release}
+      onClick={e => { if (e.detail === 0) keys.tap(c); }}
+      className={cn(styles.capCell, 'cursor-pointer border-0 bg-transparent p-0')}
+    >
+      <span className={styles.cap}>
+        <span className={styles.capSkirt} />
+        <span className={styles.capTop}>{c}</span>
+      </span>
+    </button>
+  );
+});
+
 /** The three rows of letter keys, round dark caps. They sit outside the tab
  *  order (the physical keyboard types the same letters) but stay buttons for
  *  assistive tech, which clicks them with detail 0. */
-export const KeyRows = memo(function KeyRows({ down, keys }: { down: string | null; keys: KeyHandlers }) {
+export const KeyRows = memo(function KeyRows({ store, keys }: { store: MachineStore; keys: KeyHandlers }) {
   return (
     <>
       {ROWS.map(row => (
         <div key={row} className="flex">
-          {Array.from(row, c => (
-            <button
-              key={c}
-              type="button"
-              tabIndex={-1}
-              aria-label={c}
-              data-cipher-key=""
-              data-down={down === c ? '' : undefined}
-              onPointerDown={e => {
-                if (e.button > 0) return;
-                e.currentTarget.setPointerCapture?.(e.pointerId);
-                keys.hold(c);
-              }}
-              onPointerUp={keys.release}
-              onPointerCancel={keys.release}
-              onLostPointerCapture={keys.release}
-              onClick={e => { if (e.detail === 0) keys.tap(c); }}
-              className={cn(styles.capCell, 'cursor-pointer border-0 bg-transparent p-0')}
-            >
-              <span className={styles.cap}>
-                <span className={styles.capSkirt} />
-                <span className={styles.capTop}>{c}</span>
-              </span>
-            </button>
-          ))}
+          {Array.from(row, c => <CapKey key={c} store={store} c={c} keys={keys} />)}
         </div>
       ))}
     </>
@@ -328,19 +375,27 @@ export function BlockKey({
 
 /** Title or artist as single characters, so the one on the beat can take the
  *  accent. While the tuning sweep runs, the unresolved tail shows scattered
- *  letters. Words stay whole across a wrap. */
-export function TapeChars({
+ *  letters. Words stay whole across a wrap. It reads only what changes its
+ *  own characters: the title sits still while the artist is spelled, and the
+ *  sweep's seed stops mattering once every letter has resolved. */
+export const TapeChars = memo(function TapeChars({
+  store,
   text,
   base,
-  spelling: { cursor, scramble, seed },
 }: {
+  store: MachineStore;
   text: string;
   /** Where this text starts in the lampboard sequence. */
   base: number;
-  spelling: Spelling;
 }) {
   const chars = Array.from(text);
-  const resolved = Math.floor(scramble * chars.length);
+  const n = chars.length;
+  const hot = useMachine(store, s => {
+    const i = s.frame.cursor - base;
+    return i >= 0 && i < n ? i : -1;
+  });
+  const resolved = useMachine(store, s => Math.floor(s.frame.scramble * n));
+  const seed = useMachine(store, s => (Math.floor(s.frame.scramble * n) < n ? s.frame.seed : 0));
   const words: { ch: string; j: number }[][] = [[]];
   chars.forEach((ch, j) => {
     if (ch === ' ') words.push([]);
@@ -359,7 +414,7 @@ export function TapeChars({
                 if (ch !== ch.toUpperCase()) c = c.toLowerCase();
               }
               return (
-                <span key={j} className={base + j === cursor ? styles.hot : undefined}>{c}</span>
+                <span key={j} className={j === hot ? styles.hot : undefined}>{c}</span>
               );
             })}
           </span>
@@ -367,4 +422,16 @@ export function TapeChars({
       ))}
     </>
   );
-}
+});
+
+/** The DJ's line as far as the clock has typed it, the caret at its head. */
+export const TapeTyped = memo(function TapeTyped({ store, text }: { store: MachineStore; text: string }) {
+  const typed = useMachine(store, s => s.frame.talkN);
+  const chars = Array.from(text);
+  return (
+    <span aria-hidden="true">
+      “{chars.slice(0, typed).join('')}
+      {typed >= chars.length ? '”' : <span className={styles.caret} aria-hidden="true" />}
+    </span>
+  );
+});

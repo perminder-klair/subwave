@@ -6,19 +6,24 @@
 // brushed plates lit from above, dark keys and weighted knobs standing proud
 // at 30°, display glass in the dot-matrix face and smoked bulbs that glow when
 // lit; standby dims the glass and the lamps, never the metal. One rAF loop
-// moves what the music moves (reels, platter, tonearm, cones, sound lines) by
-// writing attributes straight to the nodes; lite mode and reduced motion stop
-// it outright and the render paints one still frame instead, since neither the
-// CSS animation kill nor the media query can reach a JS loop.
+// moves what the music moves (reels, record, tonearm, cones, sound lines) by
+// writing attributes straight to the nodes, and only the ones that changed
+// (loop.ts); lite mode and reduced motion stop it outright and the render
+// paints one still frame instead, since neither the CSS animation kill nor the
+// media query can reach a JS loop. The drawing itself is memoised (Stack):
+// the skin re-renders every second, and only the few parts that read the
+// song's progress (TickCtx) re-render with it.
 
-import { createContext, useContext, useEffect, useId, useRef, useSyncExternalStore } from 'react';
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 import { Heart } from 'lucide-react';
 import styles from './Axo.module.css';
 import { cn } from '@/lib/cn';
 import { useAnalyser } from '@/lib/hooks';
+import { isIOSDevice } from '@/lib/platform';
 import { round2 } from '@/components/iso/geometry';
 import { AXO, LID_SHEET, VIEWBOX, arcOpacity, arcPath, armAngle, knobAngle, type DrawnBlock, type RackLevel } from './geometry';
+import { TOUCH_FRAME_MS, createWriter, frameGate } from './loop';
 import { ROW, SCREEN, SEGMENTS, screenLayout, type LidScreenInfo } from './screen';
 import { foldBpm, isPowered, type ListenPhase } from '../shared';
 import { useSvgTextFit } from '../sharedHooks';
@@ -102,6 +107,15 @@ const paintIds = (uid: string) => Object.fromEntries(PAINTS.map(k => [k, `${uid}
 const url = (id: string) => `url(#${id})`;
 const PaintCtx = createContext<PaintIds>(paintIds('axo'));
 
+/** What changes every second while a song plays. Stack is memoised against
+ *  it, so a tick re-renders only the parts that read this. */
+interface Tick {
+  ratio: number | null;
+  counter: string;
+  screen: LidScreenInfo | null;
+}
+const TickCtx = createContext<Tick>({ ratio: null, counter: '', screen: null });
+
 /** How each kind of part is finished: its face (a gradient or a flat fill),
  *  the side of it that faces up, the side that faces front and the side that
  *  turns away from the light, and the hairline round its face. */
@@ -130,38 +144,26 @@ function faceProps(f: Finish, p: PaintIds, extra?: string) {
     : { className: cn(f.flat, f.rim, extra) };
 }
 
-export default function AxoScene(props: AxoSceneProps) {
-  const {
-    variant, phase, talk, muted, volume, ratio, counter, duration, lcd, tapeLabel,
-    djName, calm, audioRef, like, screen = null, gateTap, onGateTap, onPower, onMute, onVolume,
-    onRequest, onLike,
-  } = props;
-  const mob = variant === 'mobile';
+function AxoScene(props: AxoSceneProps) {
+  const { ratio, counter, screen = null, ...drawn } = props;
+  const { phase, muted, volume, calm, audioRef } = drawn;
   const rootRef = useRef<HTMLDivElement | null>(null);
   // useId's punctuation varies across React versions; keep url(#…) plain.
   const uid = `axo-${useId().replace(/[^\w-]/g, '')}`;
-  const paint = paintIds(uid);
-  const screenIds: ScreenIds = {
+  const paint = useMemo(() => paintIds(uid), [uid]);
+  const screenIds = useMemo<ScreenIds>(() => ({
     clip: `${uid}-scrclip`, scan: `${uid}-scan`, bloom: `${uid}-bloom`, sweep: `${uid}-sweep`,
-  };
+  }), [uid]);
 
   // The screen's rows are laid out by character budget; once drawn, any
-  // still overflowing its window is squeezed.
+  // still overflowing its window is squeezed. Its clock is never squeezed,
+  // so a tick of it doesn't refit the rest.
   const screenText = screen
-    ? [screen.eyebrow, screen.title, screen.artist, screen.detail, screen.foot?.text ?? '', screen.elapsed].join('\n')
+    ? [screen.eyebrow, screen.title, screen.artist, screen.detail, screen.foot?.text ?? ''].join('\n')
     : '';
   useSvgTextFit(rootRef, screenText);
 
-  // False through SSR and hydration. `calm` can differ between the two (the
-  // reduced-motion query only answers in the browser), so nothing printed
-  // may hang off it until hydration is done.
-  const hydrated = useSyncExternalStore(noSubscribe, () => true, () => false);
-
-  const powered = isPowered(phase);
-  const live = phase === 'live';
-  const connecting = phase === 'connecting';
-  const standby = phase === 'standby';
-  const audible = live && !muted && volume > 0;
+  const audible = phase === 'live' && !muted && volume > 0;
 
   // The loop reads the latest props without re-subscribing every render.
   const latest = useRef(props);
@@ -174,8 +176,14 @@ export default function AxoScene(props: AxoSceneProps) {
   useEffect(() => {
     const root = rootRef.current;
     if (calm || !root) return;
+    // Every iPhone and iPad browser is WebKit, which repaints SVG on the CPU:
+    // there the loop runs every other frame, and the platter's strobe ring
+    // holds still.
+    const touch = isIOSDevice();
     const all = <E extends Element>(sel: string) => Array.from(root.querySelectorAll<E>(sel));
-    const spin = all<SVGGElement>('[data-spin]').map(el => ({ el, v: Number(el.dataset.spin) }));
+    const spin = all<SVGGElement>('[data-spin]')
+      .filter(el => !(touch && el.dataset.touchStill != null))
+      .map(el => ({ el, v: Number(el.dataset.spin) }));
     const cones = all<SVGGElement>('[data-cone]').map(el => ({ el, big: el.dataset.cone === 'big' }));
     const arcs = all<SVGPathElement>('[data-arc]').map(el => {
       const [s, k] = (el.dataset.arc ?? '0:0').split(':').map(Number);
@@ -186,6 +194,8 @@ export default function AxoScene(props: AxoSceneProps) {
     const lcds = all<SVGTextElement>('[data-lcd]');
     const marquees = lcds.map(el => ({ el, text: '', len: 0, measured: -Infinity, t0: 0 }));
     const pulses = all<SVGCircleElement>('[data-pulse]');
+    const w = createWriter();
+    const due = frameGate(touch ? TOUCH_FRAME_MS : 0);
 
     let visible = true;
     const io = 'IntersectionObserver' in window
@@ -204,10 +214,14 @@ export default function AxoScene(props: AxoSceneProps) {
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       if (!visible) { last = now; return; }
+      if (!due(now)) return;
       const p = latest.current;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const t = (now - t0) / 1000;
+      // The smoothing below is set per 60 Hz frame; this keeps its pace in
+      // seconds at any frame rate.
+      const ease = (k: number) => 1 - (1 - k) ** (dt * 60);
       const isLive = p.phase === 'live';
       const isTalk = isLive && p.talk;
       const loud = isLive && !p.muted && p.volume > 0;
@@ -232,37 +246,48 @@ export default function AxoScene(props: AxoSceneProps) {
             * (isTalk ? 0.4 : 1) * (0.5 + p.volume * 0.6));
         }
       }
-      lv += (target - lv) * (target > lv ? 0.55 : 0.12);
+      lv += (target - lv) * ease(target > lv ? 0.55 : 0.12);
       // A real signal already pumps; the simulated one needs the kick shape.
       const excite = loud ? (real != null ? lv : kick * lv) : 0;
       const vt = isTalk
         ? Math.abs(Math.sin(t * 8.5)) * (0.55 + 0.45 * Math.sin(t * 1.9)) * (0.7 + Math.random() * 0.3)
         : 0;
-      vo += (vt - vo) * 0.3;
+      vo += (vt - vo) * ease(0.3);
 
       if (isLive) ang += dt;
-      for (const s of spin) s.el.setAttribute('transform', `rotate(${((ang * s.v) % 360).toFixed(1)})`);
+      for (const s of spin) w.attr(s.el, 'transform', `rotate(${((ang * s.v) % 360).toFixed(1)})`);
 
+      // The arm comes to rest on its mark. A playing arm's mark creeps a
+      // hair each second, and chasing it to the hundredth of a degree kept
+      // the arm repainting every frame of every song.
       const armTarget = armAngle(isLive ? 'play' : p.phase === 'connecting' ? 'cue' : 'rest', p.ratio);
       arm += (armTarget - arm) * Math.min(1, dt * 1.6);
-      for (const el of arms) el.setAttribute('transform', `rotate(${arm.toFixed(2)} 190 24)`);
+      if (Math.abs(armTarget - arm) < 0.05) arm = armTarget;
+      const armAt = `rotate(${arm.toFixed(1)} 190 24)`;
+      for (const el of arms) w.attr(el, 'transform', armAt);
 
       for (const c of cones) {
-        c.el.setAttribute('transform', `scale(${(1 + excite * (c.big ? 0.1 : 0.05)).toFixed(3)})`);
+        w.attr(c.el, 'transform', `scale(${(1 + excite * (c.big ? 0.1 : 0.05)).toFixed(3)})`);
       }
 
+      // An unlit line keeps its old shape: nobody sees it.
       const energy = isTalk ? Math.max(vo, lv * 0.6) : lv * 0.6;
       for (const a of arcs) {
-        a.el.setAttribute('d', arcPath(a.s, a.k, energy));
-        a.el.style.opacity = loud || isTalk ? arcOpacity(a.k, energy).toFixed(2) : '0';
+        const o = loud || isTalk ? arcOpacity(a.k, energy) : 0;
+        w.style(a.el, 'opacity', o > 0 ? o.toFixed(2) : '0');
+        if (o > 0) w.attr(a.el, 'd', arcPath(a.s, a.k, energy));
       }
 
       if (p.phase === 'connecting') {
+        // The needle sweeps every frame while tuning, and outside it React
+        // prints the needle's x, so a remembered write could be stale:
+        // these go straight to the node.
         const x = (16 + 104 * (0.5 + 0.5 * Math.sin(t * 1.7))).toFixed(1);
         for (const el of needles) { el.setAttribute('x1', x); el.setAttribute('x2', x); }
-        for (const el of lcds) el.style.opacity = Math.floor(t * 2) % 2 === 0 ? '1' : '0.25';
+        const blink = Math.floor(t * 2) % 2 === 0 ? '1' : '0.25';
+        for (const el of lcds) w.style(el, 'opacity', blink);
       } else {
-        for (const el of lcds) el.style.removeProperty('opacity');
+        for (const el of lcds) w.style(el, 'opacity', null);
       }
 
       for (const m of marquees) {
@@ -273,23 +298,23 @@ export default function AxoScene(props: AxoSceneProps) {
         if (text !== m.text) { m.text = text; m.t0 = t; m.measured = -Infinity; }
         if (t - m.measured > 3) { m.len = m.el.getComputedTextLength(); m.measured = t; }
         const over = m.len - LCD_ROOM;
-        if (over <= 0) { m.el.removeAttribute('transform'); continue; }
+        if (over <= 0) { w.attr(m.el, 'transform', null); continue; }
         const run = over / MARQUEE_SPEED;
         const u = (t - m.t0) % (MARQUEE_HOLD * 2 + run);
         const x = u < MARQUEE_HOLD ? 0 : Math.min(over, (u - MARQUEE_HOLD) * MARQUEE_SPEED);
-        m.el.setAttribute('transform', `translate(${(-x).toFixed(1)} 0)`);
+        w.attr(m.el, 'transform', `translate(${(-x).toFixed(1)} 0)`);
       }
 
       for (const el of pulses) {
         if (p.phase === 'standby') {
           const ph = (t % 1.6) / 1.6;
-          el.setAttribute('r', (10 + ph * 12).toFixed(1));
-          el.style.opacity = ((1 - ph) * 0.9).toFixed(2);
+          w.attr(el, 'r', (10 + ph * 12).toFixed(1));
+          w.style(el, 'opacity', ((1 - ph) * 0.9).toFixed(2));
         } else if (p.phase === 'connecting') {
-          el.setAttribute('r', '12');
-          el.style.opacity = (0.25 + 0.75 * Math.abs(Math.cos(t * Math.PI))).toFixed(2);
+          w.attr(el, 'r', '12');
+          w.style(el, 'opacity', (0.25 + 0.75 * Math.abs(Math.cos(t * Math.PI))).toFixed(2));
         } else {
-          el.style.opacity = '0';
+          w.style(el, 'opacity', '0');
         }
       }
     };
@@ -310,17 +335,58 @@ export default function AxoScene(props: AxoSceneProps) {
     };
   }, [calm]);
 
-  // Still-frame values, used only while calm; otherwise the loop owns these
-  // attributes and React must leave them alone (an undefined prop is never
-  // written, so a one-second re-render can't snap the arm back).
-  const staticArm = `rotate(${armAngle(live ? 'play' : connecting ? 'cue' : 'rest', ratio)} 190 24)`;
+  const tick = useMemo(() => ({ ratio, counter, screen }), [ratio, counter, screen]);
+
+  return (
+    <TickCtx.Provider value={tick}>
+      <Stack {...drawn} rootRef={rootRef} uid={uid} paint={paint} screenIds={screenIds} focus={screen != null} />
+    </TickCtx.Provider>
+  );
+}
+
+export default memo(AxoScene);
+
+/** What the drawing is drawn from: everything but what TickCtx carries. */
+type StackProps = Omit<AxoSceneProps, 'ratio' | 'counter' | 'screen'> & {
+  /** The scene's root, which the loop and the screen's fit search. */
+  rootRef: RefObject<HTMLDivElement | null>;
+  uid: string;
+  paint: PaintIds;
+  screenIds: ScreenIds;
+  /** Focus mode: the cover is a screen, whose card TickCtx carries. */
+  focus: boolean;
+};
+
+/** The drawing and the hit areas over its controls. */
+const Stack = memo(function Stack(props: StackProps) {
+  const {
+    variant, phase, talk, muted, volume, duration, lcd, tapeLabel, djName, calm, like,
+    gateTap, onGateTap, onPower, onMute, onVolume, onRequest, onLike, rootRef, uid, paint, screenIds, focus,
+  } = props;
+  const mob = variant === 'mobile';
+
+  // False through SSR and hydration. `calm` can differ between the two (the
+  // reduced-motion query only answers in the browser), so nothing printed
+  // may hang off it until hydration is done.
+  const hydrated = useSyncExternalStore(noSubscribe, () => true, () => false);
+
+  const powered = isPowered(phase);
+  const live = phase === 'live';
+  const connecting = phase === 'connecting';
+  const standby = phase === 'standby';
+  const audible = live && !muted && volume > 0;
+
+  // The sound lines' still frame, used only while calm; otherwise the loop
+  // owns them and React must leave them alone.
   const staticEnergy = talk && live ? 0.6 : audible ? 0.36 : 0;
-  const needleX = (16 + 104 * (live ? (ratio ?? 0.5) : connecting ? 0.5 : 0)).toFixed(2);
-  const needleOwned = calm || !connecting;
-  const r = ratio ?? 0.5;
   const sigLit = live ? 4 : connecting ? 1 : 0;
   // The loop scrolls a long line; a still frame ends it with an ellipsis.
   const lcdStill = lcd.length > LCD_CHARS ? `${lcd.slice(0, LCD_CHARS - 1)}…` : lcd;
+  const lcdLine = (className: Cls, filter?: string) => (
+    <text data-lcd="" x="17" y="56.4" fontSize={7.5} letterSpacing="0.04em" filter={filter} className={cn(className, styles.doto)}>
+      {hydrated && !calm ? lcd : lcdStill}
+    </text>
+  );
 
   const drag = useRef<{ y: number; v: number } | null>(null);
   const setVol = (v: number) => onVolume(Math.round(clamp01(v) * 100) / 100);
@@ -357,7 +423,7 @@ export default function AxoScene(props: AxoSceneProps) {
       >
         <defs>
           <Paints ids={paint} />
-          {screen && <ScreenDefs ids={screenIds} />}
+          {focus && <ScreenDefs ids={screenIds} />}
         </defs>
 
         <PaintCtx.Provider value={paint}>
@@ -382,35 +448,17 @@ export default function AxoScene(props: AxoSceneProps) {
                 <text x="121" y="34" fontSize={5.5} fontWeight={500} textAnchor="end" className={cn(styles.txGlassDim, styles.mono)}>
                   {duration}
                 </text>
-                {/* A filter can't light a line this straight (its box has no
-                    width, so the filter region has none), so the glow is a
-                    wider, fainter stroke beneath it. The loop moves both. */}
-                {[3.6, 1.4].map(sw => (
-                  <line
-                    key={sw}
-                    data-needle=""
-                    x1={needleOwned ? needleX : undefined}
-                    x2={needleOwned ? needleX : undefined}
-                    y1="10"
-                    y2="38"
-                    strokeWidth={sw}
-                    opacity={sw > 2 ? (powered ? 0.35 : 0) : undefined}
-                    className={styles.sAcc}
-                  />
-                ))}
+                <DialNeedle phase={phase} calm={calm} />
               </Well>
               <Well id={`${uid}-lcd`} x={12} y={42} w={112} h={20} t={2} glass>
-                <text
-                  data-lcd=""
-                  x="17"
-                  y="56.4"
-                  fontSize={7.5}
-                  letterSpacing="0.04em"
-                  filter={powered ? glow : undefined}
-                  className={cn(styles.txGlass, styles.doto)}
-                >
-                  {hydrated && !calm ? lcd : lcdStill}
-                </text>
+                {/* WebKit re-runs a filter whenever what it filters moves, so
+                    a line scrolling through the window blurred itself afresh
+                    every frame. On iOS its glow is two wider, fainter copies
+                    beneath it instead, which the loop scrolls with it; they
+                    are hidden, and the filter kept, everywhere else. */}
+                {lcdLine(styles.lcdHalo)}
+                {lcdLine(styles.lcdGlow)}
+                {lcdLine(cn(styles.txGlass, styles.lcdLit), powered ? glow : undefined)}
               </Well>
               <text x="12" y="74" fontSize={5} fontWeight={700} letterSpacing="0.18em" className={cn(styles.tx, styles.mono)}>AXO-1</text>
               <text x="46" y="74" fontSize={4.5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>SIG</text>
@@ -503,8 +551,7 @@ export default function AxoScene(props: AxoSceneProps) {
                   </clipPath>
                   <rect x="28" y="26" width="78" height="17" rx="2" className={cn(styles.fGlass, styles.ns)} />
                   <g clipPath={`url(#${uid}-cwin)`}>
-                    <circle cx="44" cy="34.5" r={(9 + 7 * (1 - r)).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
-                    <circle cx="90" cy="34.5" r={(9 + 7 * r).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
+                    <Spools />
                     <Reel cx={44} />
                     <Reel cx={90} />
                   </g>
@@ -512,16 +559,7 @@ export default function AxoScene(props: AxoSceneProps) {
                 </Key>
               </Well>
               <Well id={`${uid}-count`} x={134} y={8} w={44} h={14} t={1.5} glass>
-                <text
-                  x="156"
-                  y="18.6"
-                  fontSize={9}
-                  textAnchor="middle"
-                  filter={powered ? glow : undefined}
-                  className={cn(styles.txGlass, styles.doto)}
-                >
-                  {counter}
-                </text>
+                <Counter filter={powered ? glow : undefined} />
               </Well>
               <text x="186" y="18" fontSize={5} fontWeight={700} letterSpacing="0.16em" className={cn(styles.tx, styles.mono)}>TAPE</text>
               <Key on="L" x={134} y={30} w={44} h={16} t={3} finish="key">
@@ -572,7 +610,7 @@ export default function AxoScene(props: AxoSceneProps) {
 
             {/* Turntable. The cover leans back past upright, wholly behind the
                 plinth, so it goes down first and the plinth covers its foot. */}
-            <DustCover screen={screen} powered={powered} ids={screenIds} />
+            <DustCover powered={powered} ids={screenIds} />
             <Face of={AXO.tt} side="L" paint="plate" grain>
               <text x="12" y="15" fontSize={5} fontWeight={700} letterSpacing="0.18em" className={cn(styles.tx, styles.mono)}>
                 AXO-1 · DIRECT DRIVE · 33⅓
@@ -581,24 +619,27 @@ export default function AxoScene(props: AxoSceneProps) {
             <Face of={AXO.tt} side="R" paint="side" />
             <Face of={AXO.tt} side="T" className={styles.fPlateHi} grain>
               {/* The platter stands proud of the plinth and the record lies on
-                  it; each spins in its own group so the cylinder sides, which
-                  face the viewer whatever the angle, stay put, and so does the
-                  light lying across the vinyl. */}
+                  it. Only what looks different turned is turned (WebKit
+                  repaints a turning node on the CPU every frame): the cylinder
+                  sides, the grooves, the label and the light lying across the
+                  vinyl stay put. On iOS so do the strobe dots round the
+                  platter's rim, as a strobe's do at speed; turning, they
+                  repainted the whole platter. */}
               <Boss on="T" cx={96} cy={66} r={58} t={5} finish="plate">
-                <g data-spin={SPIN_PLATTER}>
+                <g data-spin={SPIN_PLATTER} data-touch-still="">
                   <circle r="56.5" strokeWidth={1.6} strokeDasharray="0.8 2.6" strokeLinecap="butt" className={styles.sTxt} />
                 </g>
               </Boss>
               <Boss on="T" cx={91} cy={61} r={53} t={1.5} finish="vinyl">
+                <circle r="49" strokeWidth={0.35} className={styles.groove} />
+                <circle r="45" strokeWidth={0.35} className={styles.groove} />
+                <circle r="38" strokeWidth={0.7} className={styles.grooveHi} />
+                <circle r="33" strokeWidth={0.35} className={styles.groove} />
+                <circle r="27" strokeWidth={0.7} className={styles.grooveHi} />
+                <circle r="23" strokeWidth={0.35} className={styles.groove} />
+                <circle r="18" className={cn(styles.fAcc, styles.ns)} />
+                <circle r="14" strokeWidth={0.4} className={cn(styles.fNone, styles.sBlack)} opacity={0.4} />
                 <g data-spin={SPIN_PLATTER}>
-                  <circle r="49" strokeWidth={0.35} className={styles.groove} />
-                  <circle r="45" strokeWidth={0.35} className={styles.groove} />
-                  <circle r="38" strokeWidth={0.7} className={styles.grooveHi} />
-                  <circle r="33" strokeWidth={0.35} className={styles.groove} />
-                  <circle r="27" strokeWidth={0.7} className={styles.grooveHi} />
-                  <circle r="23" strokeWidth={0.35} className={styles.groove} />
-                  <circle r="18" className={cn(styles.fAcc, styles.ns)} />
-                  <circle r="14" strokeWidth={0.4} className={cn(styles.fNone, styles.sBlack)} opacity={0.4} />
                   <line x1="0" y1="-17" x2="0" y2="-7" strokeWidth={1.8} className={styles.sMetal} />
                   <line x1="0" y1="-53" x2="0" y2="-45" strokeWidth={1.4} className={styles.grooveHi} />
                 </g>
@@ -609,22 +650,7 @@ export default function AxoScene(props: AxoSceneProps) {
               <Boss on="T" cx={182} cy={104} r={3.5} t={7} finish="key" />
               <Boss on="T" cx={190} cy={24} r={11} t={3} finish="plate" />
               <Boss on="T" cx={187} cy={21} r={4.5} t={6} finish="key" />
-              {/* The arm floats above the record, so its shadow lands a little
-                  below it; both swing on the same angle. */}
-              <g transform="translate(-3 -3)">
-                <g data-arm="" transform={calm ? staticArm : undefined} className={styles.shadow}>
-                  <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
-                  <rect x="185" y="100" width="10" height="12" />
-                </g>
-              </g>
-              <g transform="translate(-9 -9)">
-                <g data-arm="" transform={calm ? staticArm : undefined}>
-                  <rect x="186" y="3" width="8" height="11" rx="1" fill={url(paint.knobO)} className={styles.sBlack} />
-                  <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3.4} className={styles.sEdge} />
-                  <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.8} className={styles.sMetal} />
-                  <rect x="185" y="100" width="10" height="12" rx="1" fill={url(paint.key)} className={styles.sBlack} />
-                </g>
-              </g>
+              <Tonearm phase={phase} calm={calm} />
               <Key on="T" x={12} y={108} w={16} h={12} t={1} finish="keyDown">
                 <text x="20" y="116.4" fontSize={5.5} fontWeight={700} textAnchor="middle" className={cn(styles.txAcc, styles.mono)}>33</text>
               </Key>
@@ -753,6 +779,83 @@ export default function AxoScene(props: AxoSceneProps) {
         </g>
       </svg>
     </div>
+  );
+});
+
+/** The dial's needle, where the song has got to. A filter can't light a line
+ *  this straight (its box has no width, so the filter region has none), so
+ *  the glow is a wider, fainter stroke beneath it. While tuning in the loop
+ *  sweeps both, and React leaves their x alone. */
+function DialNeedle({ phase, calm }: { phase: ListenPhase; calm: boolean }) {
+  const { ratio } = useContext(TickCtx);
+  const live = phase === 'live';
+  const connecting = phase === 'connecting';
+  const x = (16 + 104 * (live ? (ratio ?? 0.5) : connecting ? 0.5 : 0)).toFixed(2);
+  const owned = calm || !connecting;
+  return [3.6, 1.4].map(sw => (
+    <line
+      key={sw}
+      data-needle=""
+      x1={owned ? x : undefined}
+      x2={owned ? x : undefined}
+      y1="10"
+      y2="38"
+      strokeWidth={sw}
+      opacity={sw > 2 ? (isPowered(phase) ? 0.35 : 0) : undefined}
+      className={styles.sAcc}
+    />
+  ));
+}
+
+/** The tape counter, on its own display glass. */
+function Counter({ filter }: { filter?: string }) {
+  const { counter } = useContext(TickCtx);
+  return (
+    <text x="156" y="18.6" fontSize={9} textAnchor="middle" filter={filter} className={cn(styles.txGlass, styles.doto)}>
+      {counter}
+    </text>
+  );
+}
+
+/** The tape packed on each spool, seen through the cassette's window: the
+ *  left emptying onto the right as the song plays. */
+function Spools() {
+  const { ratio } = useContext(TickCtx);
+  const r = ratio ?? 0.5;
+  return (
+    <>
+      <circle cx="44" cy="34.5" r={(9 + 7 * (1 - r)).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
+      <circle cx="90" cy="34.5" r={(9 + 7 * r).toFixed(2)} className={cn(styles.fTape, styles.ns)} />
+    </>
+  );
+}
+
+/** The tonearm. It floats above the record, so its shadow lands a little
+ *  below it; both swing on the same angle. The loop owns that angle, and a
+ *  still frame prints it here: an undefined transform is never written, so
+ *  a one-second re-render can't snap a moving arm back. */
+function Tonearm({ phase, calm }: { phase: ListenPhase; calm: boolean }) {
+  const p = useContext(PaintCtx);
+  const { ratio } = useContext(TickCtx);
+  const pose = phase === 'live' ? 'play' : phase === 'connecting' ? 'cue' : 'rest';
+  const still = calm ? `rotate(${armAngle(pose, ratio)} 190 24)` : undefined;
+  return (
+    <>
+      <g transform="translate(-3 -3)">
+        <g data-arm="" transform={still} className={styles.shadow}>
+          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3} />
+          <rect x="185" y="100" width="10" height="12" />
+        </g>
+      </g>
+      <g transform="translate(-9 -9)">
+        <g data-arm="" transform={still}>
+          <rect x="186" y="3" width="8" height="11" rx="1" fill={url(p.knobO)} className={styles.sBlack} />
+          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={3.4} className={styles.sEdge} />
+          <line x1="190" y1="24" x2="190" y2="102" strokeWidth={1.8} className={styles.sMetal} />
+          <rect x="185" y="100" width="10" height="12" rx="1" fill={url(p.key)} className={styles.sBlack} />
+        </g>
+      </g>
+    </>
   );
 }
 
@@ -1011,7 +1114,8 @@ function OnAirSign({ djName, transform }: { djName: string; transform: string })
  *  in front of its edges, and it takes the glint's place — those strokes run
  *  straight through the card's rows, and the lit glass reads as glass without
  *  them. */
-function DustCover({ screen, powered, ids }: { screen: LidScreenInfo | null; powered: boolean; ids: ScreenIds }) {
+function DustCover({ powered, ids }: { powered: boolean; ids: ScreenIds }) {
+  const { screen } = useContext(TickCtx);
   const { lid } = AXO;
   return (
     <>
@@ -1101,107 +1205,112 @@ function LidScreen({ screen, powered, ids }: { screen: LidScreenInfo; powered: b
             </g>
           </>
         )}
-        {/* Keyed by the song, so a new one flickers on rather than swapping. */}
-        <g key={screen.title} filter={powered ? `url(#${ids.bloom})` : undefined} className={styles.screenIn}>
-          {screen.onAir && <circle cx={x + 2.2} cy={L.eyebrow.y - 2.3} r={2.2} className={cn(styles.fAcc, styles.ns)} />}
-          <text
-            data-fit={screen.onAir ? w - 7 : w}
-            x={screen.onAir ? x + 7 : x}
-            y={L.eyebrow.y}
-            fontSize={ROW.eyebrow.size}
-            fontWeight={700}
-            letterSpacing={`${ROW.eyebrow.tracking}em`}
-            className={cn(styles.txAcc, styles.mono)}
-          >
-            {L.eyebrow.text}
-          </text>
-          {L.title.rows.map(r => (
+        {/* Keyed by the song, so a new one flickers on rather than swapping.
+            The flicker rides a group round the bloom, not the bloomed group
+            itself: restyling a filtered node re-runs its filter in WebKit,
+            and the group's opacity lands after the filter either way. */}
+        <g key={screen.title} className={styles.screenIn}>
+          <g filter={powered ? `url(#${ids.bloom})` : undefined}>
+            {screen.onAir && <circle cx={x + 2.2} cy={L.eyebrow.y - 2.3} r={2.2} className={cn(styles.fAcc, styles.ns)} />}
             <text
-              key={r.y}
-              data-fit={w}
-              x={x}
-              y={r.y}
-              fontSize={L.title.size}
-              className={cn(styles.txGlass, styles.doto)}
-            >
-              {r.text}
-            </text>
-          ))}
-          {L.artist && (
-            <text
-              data-fit={w}
-              x={x}
-              y={L.artist.y}
-              fontSize={ROW.artist.size}
+              data-fit={screen.onAir ? w - 7 : w}
+              x={screen.onAir ? x + 7 : x}
+              y={L.eyebrow.y}
+              fontSize={ROW.eyebrow.size}
               fontWeight={700}
-              letterSpacing={`${ROW.artist.tracking}em`}
+              letterSpacing={`${ROW.eyebrow.tracking}em`}
+              className={cn(styles.txAcc, styles.mono)}
+            >
+              {L.eyebrow.text}
+            </text>
+            {L.title.rows.map(r => (
+              <text
+                key={r.y}
+                data-fit={w}
+                x={x}
+                y={r.y}
+                fontSize={L.title.size}
+                className={cn(styles.txGlass, styles.doto)}
+              >
+                {r.text}
+              </text>
+            ))}
+            {L.artist && (
+              <text
+                data-fit={w}
+                x={x}
+                y={L.artist.y}
+                fontSize={ROW.artist.size}
+                fontWeight={700}
+                letterSpacing={`${ROW.artist.tracking}em`}
+                className={cn(styles.txGlass, styles.mono)}
+              >
+                {L.artist.text}
+              </text>
+            )}
+            {L.detail && (
+              <text
+                data-fit={w}
+                x={x}
+                y={L.detail.y}
+                fontSize={ROW.detail.size}
+                fontWeight={500}
+                letterSpacing={`${ROW.detail.tracking}em`}
+                className={cn(styles.txGlassDim, styles.mono)}
+              >
+                {L.detail.text}
+              </text>
+            )}
+            {Array.from({ length: SEGMENTS }, (_, i) => (
+              <rect
+                key={i}
+                x={round2(L.bar.x + i * pitch)}
+                y={L.bar.y}
+                width={round2(pitch * 0.62)}
+                height={L.bar.h}
+                className={cn(i < lit ? styles.fAcc : styles.seg, styles.ns)}
+              />
+            ))}
+            <text
+              x={x}
+              y={L.timeY}
+              fontSize={ROW.time.size}
+              fontWeight={700}
+              letterSpacing={`${ROW.time.tracking}em`}
               className={cn(styles.txGlass, styles.mono)}
             >
-              {L.artist.text}
+              {screen.elapsed}
             </text>
-          )}
-          {L.detail && (
             <text
-              data-fit={w}
-              x={x}
-              y={L.detail.y}
-              fontSize={ROW.detail.size}
+              x={right}
+              y={L.timeY}
+              fontSize={ROW.time.size}
               fontWeight={500}
-              letterSpacing={`${ROW.detail.tracking}em`}
+              letterSpacing={`${ROW.time.tracking}em`}
+              textAnchor="end"
               className={cn(styles.txGlassDim, styles.mono)}
             >
-              {L.detail.text}
+              {screen.duration.toUpperCase()}
             </text>
-          )}
-          {Array.from({ length: SEGMENTS }, (_, i) => (
-            <rect
-              key={i}
-              x={round2(L.bar.x + i * pitch)}
-              y={L.bar.y}
-              width={round2(pitch * 0.62)}
-              height={L.bar.h}
-              className={cn(i < lit ? styles.fAcc : styles.seg, styles.ns)}
-            />
-          ))}
-          <text
-            x={x}
-            y={L.timeY}
-            fontSize={ROW.time.size}
-            fontWeight={700}
-            letterSpacing={`${ROW.time.tracking}em`}
-            className={cn(styles.txGlass, styles.mono)}
-          >
-            {screen.elapsed}
-          </text>
-          <text
-            x={right}
-            y={L.timeY}
-            fontSize={ROW.time.size}
-            fontWeight={500}
-            letterSpacing={`${ROW.time.tracking}em`}
-            textAnchor="end"
-            className={cn(styles.txGlassDim, styles.mono)}
-          >
-            {screen.duration.toUpperCase()}
-          </text>
-          {L.foot?.kind === 'next' && (
-            <text
-              data-fit={w}
-              x={x}
-              y={L.foot.y}
-              fontSize={ROW.next.size}
-              letterSpacing={`${ROW.next.tracking}em`}
-              className={styles.mono}
-            >
-              <tspan fontWeight={700} className={styles.txAcc}>NEXT</tspan>
-              <tspan dx="4" fontWeight={500} className={styles.txGlass}>{L.foot.text}</tspan>
-            </text>
-          )}
-          {L.foot?.kind === 'quote' && (
-            <text data-fit={w} x={x} y={L.foot.y} fontSize={ROW.quote.size} fontWeight={500} className={cn(styles.txGlass, styles.display)}>
-              {L.foot.text}
-            </text>
-          )}
+            {L.foot?.kind === 'next' && (
+              <text
+                data-fit={w}
+                x={x}
+                y={L.foot.y}
+                fontSize={ROW.next.size}
+                letterSpacing={`${ROW.next.tracking}em`}
+                className={styles.mono}
+              >
+                <tspan fontWeight={700} className={styles.txAcc}>NEXT</tspan>
+                <tspan dx="4" fontWeight={500} className={styles.txGlass}>{L.foot.text}</tspan>
+              </text>
+            )}
+            {L.foot?.kind === 'quote' && (
+              <text data-fit={w} x={x} y={L.foot.y} fontSize={ROW.quote.size} fontWeight={500} className={cn(styles.txGlass, styles.display)}>
+                {L.foot.text}
+              </text>
+            )}
+          </g>
         </g>
       </g>
       <path d={GLASS_CORNERS} strokeWidth={0.9} className={powered ? styles.sAcc : styles.sGlass} />
@@ -1301,7 +1410,8 @@ function Posts({ of: level }: { of: RackLevel }) {
   return level.front.map((p, i) => <Post key={i} block={p} />);
 }
 
-/** A cassette hub seen through the window: white plastic, three spokes. */
+/** A cassette hub seen through the window: white plastic, three spokes. Only
+ *  the spokes turn; the ring round them looks the same at any angle. */
 function Reel({ cx }: { cx: number }) {
   return (
     <>
@@ -1309,8 +1419,8 @@ function Reel({ cx }: { cx: number }) {
       <g transform={`translate(${cx} 34.5)`}>
         <g data-spin={SPIN_REEL}>
           <path d="M0 -2.6V-6.2M2.25 1.3L5.37 3.1M-2.25 1.3L-5.37 3.1" strokeWidth={1.3} className={styles.sEdge} />
-          <circle r="2.6" strokeWidth={0.8} className={cn(styles.fNone, styles.sEdge)} />
         </g>
+        <circle r="2.6" strokeWidth={0.8} className={cn(styles.fNone, styles.sEdge)} />
       </g>
     </>
   );

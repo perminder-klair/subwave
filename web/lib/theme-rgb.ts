@@ -59,7 +59,18 @@ export function readThemeRgb(el: Element, probe: CanvasRenderingContext2D): Them
   };
 }
 
-/** Calls `onChange` whenever the theme may have changed; returns the unsubscribe. */
+const THEME_KEYS = ['bg', 'ink', 'muted', 'accent', 'accent2'] as const;
+
+/** The same colours in both readings. */
+export function sameThemeRgb(a: ThemeRgb, b: ThemeRgb): boolean {
+  return THEME_KEYS.every(k => a[k][0] === b[k][0] && a[k][1] === b[k][1] && a[k][2] === b[k][2]);
+}
+
+/** Calls `onChange` whenever the theme may have changed; returns the
+ *  unsubscribe. "May": any write to those attributes fires it, colours
+ *  changed or not, so a reader with real work to redo compares its new
+ *  reading first (sameThemeRgb). The dedupe can't live here — each reader
+ *  reads from its own element, where a subtree may re-declare the tokens. */
 export function watchTheme(onChange: () => void): () => void {
   const mo = new MutationObserver(onChange);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'data-theme'] });
