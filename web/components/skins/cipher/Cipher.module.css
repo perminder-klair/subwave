@@ -79,6 +79,9 @@
   --cap-cell-w: 104px;
   --cap-cell-h: 66px;
   --cap-font: 20px;
+  /* The gate's ring: r 46 of the knob's 128-unit drawing, across its stroke. */
+  --ring: 93.5px;
+  --ring-w: 1.5px;
 }
 .mob {
   --chassis-depth: 10px;
@@ -113,17 +116,22 @@
   --cap-cell-w: 37px;
   --cap-cell-h: 44px;
   --cap-font: 13px;
+  /* The compact knob draws at 62px with a doubled stroke. */
+  --ring: 46px;
+  --ring-w: 1.45px;
 }
 
 /* ── Chassis: a brushed plate on a body with depth ──────────────────── */
 /* The plate is lit from above and brushed; the body's right side and front
    lip show as parallelograms down the 30° axis, the lip in deeper shade, and
-   the whole machine casts its shadow the same way. */
+   the whole machine casts its shadow the same way. The brushing is one 3px
+   tile repeated, not a repeating gradient: WebKit draws a repeating gradient
+   as one gradient with a stop pair per period, ~450 across the plate. */
 .chassis {
   position: relative;
   border: 1px solid var(--ink);
   background:
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.06) 0 1px, transparent 1px 3px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px) 0 0 / 3px 100%,
     linear-gradient(180deg, var(--plate-hi) 0%, var(--plate) 46%, var(--plate-lo) 100%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.5),
@@ -267,20 +275,25 @@
   transition: transform 0.35s ease;
 }
 .keyOn { transform: rotate(45deg); }
-/* The gate's ring. Its resting style is the still frame lite and reduced
-   motion get; the ripple is layered on only where motion is welcome. */
+/* The gate's ring, a box under the knob's drawing rather than a circle in it:
+   rippling an SVG circle repainted the knob's gradients every frame for as
+   long as the gate waited, where a box's transform and opacity run on the
+   compositor. Its resting style is the still frame lite and reduced motion
+   get; the ripple is layered on only where motion is welcome. */
 .ring {
-  fill: none;
-  stroke: var(--accent);
-  opacity: 0;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--ring);
+  height: var(--ring);
+  margin: calc(var(--ring) / -2);
+  border: var(--ring-w) solid var(--accent);
+  border-radius: 50%;
+  opacity: 0.8;
+  pointer-events: none;
 }
-.ringOn { opacity: 0.8; }
 @media (prefers-reduced-motion: no-preference) {
-  .ringOn {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: cipher-ring 1.6s ease-out infinite;
-  }
+  .ring { animation: cipher-ring 1.6s ease-out infinite; }
 }
 @keyframes cipher-ring {
   from { transform: scale(1); opacity: 0.9; }
@@ -391,11 +404,16 @@
   width: calc(var(--lamp) + var(--lamp-drop) * 0.866);
   height: calc(var(--lamp) + var(--lamp-drop) * 0.5);
 }
+/* A bulb changes in two opacities, the halo and the fill (which carries its
+   own highlight), and a rim. Each opacity transition holds a compositing
+   layer while it runs, so the fewer of them the less a lampboard of fading
+   bulbs costs WebKit. */
 .lampGlow,
-.lampFill,
-.lampSpec,
+.lampFill {
+  transition: opacity 320ms ease-in;
+}
 .lampRim {
-  transition: opacity 320ms ease-in, color 260ms ease-in, border-color 260ms ease-in;
+  transition: color 260ms ease-in, border-color 260ms ease-in;
 }
 .lampGlow {
   position: absolute;
@@ -436,6 +454,7 @@
   background: radial-gradient(circle at 34% 28%, #3a3631, #161412 62%, #0b0a09);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
+/* Opaque, so lit it hides the unlit highlight beneath it and shows its own. */
 .lampFill {
   position: absolute;
   inset: 0;
@@ -459,6 +478,7 @@
   opacity: 0.12;
   transform: rotate(-30deg);
 }
+.lampFill .lampSpec { opacity: 0.55; }
 .lampRim {
   top: 0;
   left: 0;
@@ -473,14 +493,12 @@
 .lampOn { z-index: 2; }
 .lampOn .lampGlow,
 .lampOn .lampFill,
-.lampOn .lampSpec,
 .lampOn .lampRim {
   transition-duration: 40ms;
   transition-timing-function: ease-out;
 }
 .lampOn .lampGlow,
 .lampOn .lampFill { opacity: 1; }
-.lampOn .lampSpec { opacity: 0.55; }
 .lampOn .lampRim {
   border-color: color-mix(in oklab, var(--accent) 60%, #000);
   color: #fff4ec;
@@ -560,7 +578,10 @@
 
 /* Block keys (MUTE, KEEP, DEL, SEND, SPACE): a face on a body, --drop deep.
    The body is the face swept down the 30° axis — a hexagon — and the face
-   travels down that axis: while pressed, or for good while latched. */
+   travels down that axis: while pressed, or for good while latched. The
+   shadow is a filter because only a filter follows the hexagon; WebKit reruns
+   it on every repaint, which on touch screens (where nothing inside it
+   glides, see the end of this file) is once per press. */
 .block {
   --t: 0;
   --dx: calc(var(--drop, 6px) * 0.866);
@@ -702,6 +723,18 @@
   transform-origin: 0 0;
 }
 .fit:not([data-fit]) { visibility: hidden; }
+/* WebKit composites an element only while an opacity or transform animation
+   runs on it, and a composited element inside a transformed one drags the
+   transformed one onto a layer with it. So every bulb that faded and every
+   key that travelled moved the whole scaled machine on and off a layer of its
+   own, redrawing all of it at the iPad's pixel ratio each time. Pinned to a
+   layer, the machine is drawn once and the moving parts come and go over it.
+   iOS only (no desktop browser passes this check): Chrome can keep a
+   will-change layer at the scale it was first drawn at, which would blur the
+   machine after a window resize. */
+@supports (-webkit-touch-callout: none) {
+  .fit { will-change: transform; }
+}
 /* A phone too short for the whole machine drops the lampboard rather than
    shrinking every key under a fingertip. */
 .mobBody { height: 516px; }
@@ -712,7 +745,6 @@
    glide. Key travel stays: it is feedback, not ambience. */
 :global(html.lite) .lampGlow,
 :global(html.lite) .lampFill,
-:global(html.lite) .lampSpec,
 :global(html.lite) .lampRim,
 :global(html.lite) .keyTurn {
   transition: none;
@@ -720,9 +752,28 @@
 @media (prefers-reduced-motion: reduce) {
   .lampGlow,
   .lampFill,
-  .lampSpec,
   .lampRim,
   .keyTurn {
     transition: none;
   }
+}
+
+/* Touch screens, for the iPad: WebKit (every iOS browser) pays for each of
+   these on the main thread. The keys still travel, as a cut rather than a
+   70ms glide the finger covers anyway: each glide held a compositing layer
+   for its length. A bulb's rim and letter switch off at once, while its light still
+   fades: a colour fade redrew the letter and its glow every frame, for every
+   bulb the sweep or the typing let go. And the tape's title glows tighter:
+   the sweep rewrites its characters 16 times a second, and each rewrite
+   redrew an 18px blur behind the whole line. */
+@media (hover: none) {
+  .rotBtn,
+  .capSkirt,
+  .capTop,
+  .blockSkirt,
+  .blockFace,
+  .lampRim {
+    transition: none;
+  }
+  .glassBay .tapeTitle { text-shadow: 0 0 5px rgba(244, 240, 230, 0.35); }
 }

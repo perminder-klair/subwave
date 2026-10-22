@@ -2,6 +2,7 @@
 
 
 import {
+  memo,
   useEffect,
   useRef,
   useState,
@@ -226,8 +227,8 @@ function Bars({
   );
 }
 
-/** The pointer indicator rides a root-level CSS var so the desktop and mobile
- *  instances always agree. */
+/** The pointer's angle is set on the knob's own face. On the skin's root, as
+ *  it was, every pointermove of a drag restyled the whole receiver. */
 function Knob({
   outerClass,
   innerClass,
@@ -236,6 +237,7 @@ function Knob({
   label,
   valueNow,
   valueMax,
+  angle,
   onDrag,
   onStep,
 }: {
@@ -246,10 +248,14 @@ function Knob({
   label: string;
   valueNow: number;
   valueMax: number;
+  /** Where the pointer sits, as a CSS angle. */
+  angle: string;
   /** Fraction of a full sweep dragged since pointer-down (up = positive). */
   onDrag: (startValue: number, sweptFrac: number) => void;
   onStep: (dir: 1 | -1) => void;
 }) {
+  const faceRef = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(faceRef, { '--rot': angle });
   const startRef = useRef<{ y: number; value: number } | null>(null);
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -289,7 +295,7 @@ function Knob({
           outerClass,
         )}
       >
-        <div className={cn(styles.knobInner, 'flex items-center justify-center', innerClass)}>
+        <div ref={faceRef} className={cn(styles.knobInner, 'flex items-center justify-center', innerClass)}>
           <span className={markClass} />
         </div>
       </div>
@@ -332,6 +338,54 @@ function Fader({ slotClass, capClass }: { slotClass: string; capClass: string })
   );
 }
 
+/** "track 04 · 1:23 / 4:56". The time ticks every second, so this leaf owns
+ *  the tick (useElapsed says why) and the receiver round it stays still. */
+const TrackLine = memo(function TrackLine({
+  startedAt,
+  duration,
+  trackNo,
+  offline,
+}: {
+  startedAt: number | null;
+  duration: number | undefined;
+  trackNo: string;
+  offline: boolean;
+}) {
+  const elapsed = useElapsed(offline ? null : startedAt);
+  if (offline) return <>signal lost</>;
+  return (
+    <>
+      {duration
+        ? `track ${trackNo} · ${fmtTime(elapsed)} / ${fmtTime(duration)}`
+        : `track ${trackNo} · ${fmtTime(elapsed)} · live`}
+    </>
+  );
+});
+
+/** The progress bar, which carries --pf on itself: on the skin's root, the
+ *  once-a-second change restyled every node of the receiver. */
+const TrackProgress = memo(function TrackProgress({
+  startedAt,
+  duration,
+}: {
+  startedAt: number | null;
+  duration: number | undefined;
+}) {
+  const ratio = progressRatio(useElapsed(startedAt), duration);
+  const ref = useRef<HTMLDivElement | null>(null);
+  useDynamicStyle(ref, { '--pf': ratio ?? 0 });
+  return (
+    <div ref={ref} className={cn(styles.progTrack, 'relative h-1.5 flex-none')}>
+      <div
+        className={cn(
+          'absolute inset-y-0 left-0',
+          ratio == null ? 'w-full bg-[var(--accent)] opacity-40' : styles.progFill,
+        )}
+      />
+    </div>
+  );
+});
+
 const FADER_LABELS = (
   <div
     className={cn(
@@ -355,12 +409,10 @@ export default function UnitSkin(_props: SkinProps) {
   const { showOverlay, showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
   const client = useStationClient();
 
-  const elapsed = useElapsed(trackStartedAt);
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
   const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const meta = trackMeta(nowPlaying);
-  const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const history = (state.history ?? []).slice(0, 60);
   const upNext = (state.upcoming ?? [])[0];
   const playing = tunedIn && status === 'playing' && !offline;
@@ -368,11 +420,9 @@ export default function UnitSkin(_props: SkinProps) {
   const title = offline ? 'off air' : (nowPlaying?.title ?? 'scanning the dial…');
   const artist = offline ? '' : (nowPlaying?.artist ?? '');
   const trackNo = String((history.length % 99) + 1).padStart(2, '0');
-  const trackLine = offline
-    ? 'signal lost'
-    : nowPlaying?.duration
-      ? `track ${trackNo} · ${fmtTime(elapsed)} / ${fmtTime(nowPlaying.duration)}`
-      : `track ${trackNo} · ${fmtTime(elapsed)} · live`;
+  const trackLine = (
+    <TrackLine startedAt={trackStartedAt} duration={nowPlaying?.duration} trackNo={trackNo} offline={offline} />
+  );
   const nextLine = upNext?.title ? `next: ${upNext.title}` : "next: the dj's call";
   const footerRight = `${showName || 'freeform'} · ${djName}`;
   const showLine = [
@@ -430,16 +480,15 @@ export default function UnitSkin(_props: SkinProps) {
     !offline && nowPlaying?.subsonic_id ? client.coverUrl(nowPlaying.subsonic_id) : null;
   const coverColors = useCoverColors(coverUrl);
 
-  // Progress fill, both knob pointers and the grille artwork ride root CSS vars,
-  // never inline styles.
+  // The grille artwork rides root CSS vars, never inline styles. They change
+  // once a track; anything that changes faster (the progress fill, the knob
+  // pointers) sets its var on itself, as a root var restyles every node.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(rootRef, {
-    '--pf': ratio ?? 0,
-    '--vol-rot': `${(-135 + clamp01(volume) * 270).toFixed(1)}deg`,
-    '--log-rot': `${24 + logAt * 18}deg`,
     '--u-cover': coverUrl ? `url("${coverUrl}")` : null,
     '--u-tint': coverUrl ? coverColors.vibrant : null,
   });
+  const volAngle = `${(-135 + clamp01(volume) * 270).toFixed(1)}deg`;
 
   const keyLabel = 'font-mono font-bold tracking-[0.16em] uppercase';
   const hardKey = (
@@ -495,6 +544,7 @@ export default function UnitSkin(_props: SkinProps) {
       label="Volume"
       valueNow={Math.round(volume * 100)}
       valueMax={100}
+      angle={volAngle}
       onDrag={(start, frac) => setVolume(clamp01(start / 100 + frac))}
       onStep={dir => adjustVolume(dir * 0.05)}
     />
@@ -643,6 +693,7 @@ export default function UnitSkin(_props: SkinProps) {
                 label="Play log — turn to scroll history"
                 valueNow={logAt}
                 valueMax={maxLogOffset}
+                angle={`${24 + logAt * 18}deg`}
                 onDrag={(start, frac) =>
                   setLogOffset(
                     Math.min(maxLogOffset, Math.max(0, Math.round(start + frac * 4.5))),
@@ -741,14 +792,7 @@ export default function UnitSkin(_props: SkinProps) {
                 {trackLine}
               </span>
             </div>
-            <div className={cn(styles.progTrack, 'relative h-1.5 flex-none')}>
-              <div
-                className={cn(
-                  'absolute inset-y-0 left-0',
-                  ratio == null ? 'w-full bg-[var(--accent)] opacity-40' : styles.progFill,
-                )}
-              />
-            </div>
+            <TrackProgress startedAt={trackStartedAt} duration={nowPlaying?.duration} />
             <div className="mt-auto flex min-h-[96px] flex-1 items-end">
               <Bars
                 count={7}
