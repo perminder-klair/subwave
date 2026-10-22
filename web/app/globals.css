@@ -584,19 +584,11 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
 }
 
 /* Art-derived ambient wash — two radial pools tinted from the current cover art
-   (hooks/useCoverColors.ts), above --bg and below all content. The tint vars are
-   registered as <color> @properties so they cross-fade on track change instead
-   of snapping. */
-@property --cover-tint {
-    syntax: "<color>";
-    inherits: false;
-    initial-value: transparent;
-}
-@property --cover-tint-2 {
-    syntax: "<color>";
-    inherits: false;
-    initial-value: transparent;
-}
+   (hooks/useCoverColors.ts), above --bg and below all content. A new tint
+   crossfades in on the hidden one of two stacked layers (classic/CoverAmbient
+   .tsx, skins/crossfade.ts), so each layer's pools paint once. Transitioning
+   the tint colours instead (registered <color> properties) repainted both
+   viewport-sized gradients every frame of the fade, on the CPU in WebKit. */
 /* TODO(skins-colocation): the .v3-cover-* block is classic-private and should
    eventually move to a co-located classic module (shared v3- primitives stay
    global). Deferred so the contrast retune below isn't tangled with a move. */
@@ -604,6 +596,15 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
     position: absolute;
     inset: 0;
     pointer-events: none;
+    opacity: 0;
+    transition: opacity 1.1s ease;
+}
+.v3-cover-ambient.v3-cover-ambient-on {
+    opacity: 1;
+}
+.v3-cover-ambient-layer {
+    position: absolute;
+    inset: 0;
     opacity: 0;
     background-image:
         radial-gradient(
@@ -616,18 +617,20 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
             color-mix(in oklab, var(--cover-tint-2) 32%, transparent) 0,
             transparent 72%
         );
-    transition:
-        --cover-tint 1.1s ease,
-        --cover-tint-2 1.1s ease,
-        opacity 1.1s ease;
+    /* Keep in step with FADE_MS in classic/CoverAmbient.tsx. */
+    transition: opacity 1.1s ease;
 }
-.v3-cover-ambient.v3-cover-ambient-on {
+.v3-cover-ambient-layer.v3-cover-ambient-front {
     opacity: 1;
 }
 /* Soft-light compresses on charcoal, so the dark pools run richer mixes to lift
-   the base. Explicit attribute + media query mirror the paper-grain pattern. */
+   the base. The blend sits on the wrapper: the two layers mix normally and the
+   pair soft-lights onto the page as one wash. Explicit attribute + media query
+   mirror the paper-grain pattern. */
 :root[data-theme="dark"] .v3-cover-ambient {
     mix-blend-mode: soft-light;
+}
+:root[data-theme="dark"] .v3-cover-ambient-layer {
     background-image:
         radial-gradient(
             64% 56% at 20% 36%,
@@ -640,12 +643,11 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
             transparent 72%
         );
 }
-:root[data-theme="dark"] .v3-cover-ambient.v3-cover-ambient-on {
-    opacity: 1;
-}
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .v3-cover-ambient {
         mix-blend-mode: soft-light;
+    }
+    :root:not([data-theme="light"]) .v3-cover-ambient-layer {
         background-image:
             radial-gradient(
                 64% 56% at 20% 36%,
@@ -658,8 +660,12 @@ html[data-finish="misregister"]:not(.lite) .sw-theme-stage {
                 transparent 72%
             );
     }
-    :root:not([data-theme="light"]) .v3-cover-ambient.v3-cover-ambient-on {
-        opacity: 1;
+}
+/* Reduced motion snaps the wrapper's fade (the block further down); snap the
+   tint's crossfade with it. */
+@media (prefers-reduced-motion: reduce) {
+    .v3-cover-ambient-layer {
+        transition: none;
     }
 }
 

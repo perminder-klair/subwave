@@ -14,6 +14,7 @@ import Waveform from './Waveform';
 import TransportBar from './TransportBar';
 import TuneInOverlay from './TuneInOverlay';
 import DotRail from './DotRail';
+import CoverAmbient from './CoverAmbient';
 import CommandPalette, { type PlayerDrawer } from './CommandPalette';
 import ShortcutsDialog from './ShortcutsDialog';
 import TimelineDrawer from './drawers/TimelineDrawer';
@@ -28,9 +29,6 @@ import {
 } from '@/components/player/PlayerCore';
 import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { useCoverColors } from '@/hooks/useCoverColors';
-import { useDynamicStyle } from '@/hooks/useDynamicStyle';
-import { cn } from '@/lib/cn';
 import { useStationClient } from '@/lib/stationClient';
 import type { SkinProps } from '@/components/skins/types';
 import type { QueueEntry, RequestResult } from '@/lib/types';
@@ -68,12 +66,6 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   // cached proxy.
   const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
   const coverSrc = coverSubsonicId ? client.coverUrl(coverSubsonicId) : null;
-  const coverColors = useCoverColors(coverSrc);
-  const ambientRef = useRef<HTMLDivElement | null>(null);
-  useDynamicStyle(ambientRef, {
-    '--cover-tint': coverColors.vibrant,
-    '--cover-tint-2': coverColors.average ?? coverColors.vibrant,
-  });
 
   const [requestText, setRequestText] = useState('');
   const [requesterName, setRequesterName] = useState('');
@@ -174,11 +166,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
 
   return (
     <>
-      <div
-        ref={ambientRef}
-        aria-hidden="true"
-        className={cn('v3-cover-ambient', coverColors.vibrant && 'v3-cover-ambient-on')}
-      />
+      <CoverAmbient coverSrc={coverSrc} />
 
       <TopBar
         tunedIn={tunedIn}

@@ -11,6 +11,7 @@ import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore'
 import { useLiteMode } from '@/hooks/useLiteMode';
 import { isRefusedOutcome } from '@/lib/request-outcome';
 import { lastVoiceLine, voiceOnAirMs } from './shared';
+import { crossfadeSettled, crossfadeStart, crossfadeTo, type Crossfade } from './crossfade';
 
 /** Whether a skin may run a JS-driven (motion) transition right now. Lite
  *  mode's `animation: none !important` reaches only CSS keyframes, so a skin
@@ -253,6 +254,27 @@ export function useDjOnAir(): boolean {
   }, [text, t]);
 
   return onAir;
+}
+
+/** Which of two stacked layers shows `value`, for a colour change done as an
+ *  opacity crossfade (see crossfade.ts). `fadeMs` must match the layers' CSS
+ *  opacity transition; 0 means they have none (lite, reduced motion) and the
+ *  swap is instant. */
+export function useCrossfade<T>(value: T, fadeMs: number): Crossfade<T> {
+  const [state, setState] = useState(() => crossfadeStart(value));
+  // Adjusted during render, not in an effect, so the new layer is painted in
+  // the same commit that starts its fade.
+  const next = crossfadeTo(state, value, fadeMs <= 0);
+  if (next !== state) setState(next);
+  // Keyed on `front` as well: a fade queued behind another starts in the same
+  // render that settles the first, so `fading` alone would never re-arm.
+  const { fading, front } = next;
+  useEffect(() => {
+    if (!fading) return;
+    const id = window.setTimeout(() => setState(crossfadeSettled), fadeMs);
+    return () => window.clearTimeout(id);
+  }, [fading, front, fadeMs]);
+  return next;
 }
 
 /** Keyboard/button volume nudge — clamps to [0, 1] on whole-percent steps. */
