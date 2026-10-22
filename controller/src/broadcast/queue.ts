@@ -2377,8 +2377,8 @@ class Queue {
   async announce(
     text,
     kind = 'announcement',
-    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null }:
-      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null } = {},
+    { persona = null, meta = {}, pauseTalkEligible = false, sfx: selectedSfx = null, hostSpeech = null, verbatim = false }:
+      { persona?: Persona | null; meta?: TurnMeta; pauseTalkEligible?: boolean; sfx?: string | null; hostSpeech?: HostSpeechStamp | null; verbatim?: boolean } = {},
   ): Promise<AnnounceOutcome> {
     // Single-voice paths leak the label too — a styled POST /dj/say came back as
     // "Iris : Bonsoir…" with one persona and one voice (#1707).
@@ -2391,7 +2391,7 @@ class Queue {
     // the bug.
     const speaker = persona ?? settings.getEffectivePersona();
     const safeText = normalizeForDisplay(
-      speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || ''),
+      !verbatim && speaker?.name ? stripSpeakerLabel(text || '', [speaker.name]) : (text || ''),
     );
     if (!safeText) return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
@@ -2431,6 +2431,7 @@ class Queue {
           onCompleted: settle,
           notBefore: kind === 'handoff' ? session.handoffBoundaryAt() : null,
           hostSpeech,
+          verbatim,
         });
         if (!accepted) settle(false);
         if (accepted && placement === 'pause-talk') void this.drainToLiquidsoap();
@@ -2633,30 +2634,31 @@ class Queue {
   // here. All bookkeeping (djLog → recap/opener anti-repeat, session turn,
   // webhook) happens at AIR time, so the DJ's memory reflects what reached the
   // stream, not what was merely scheduled.
-  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null } = {}) {
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null, hostSpeech = null, verbatim = false }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null; hostSpeech?: HostSpeechStamp | null; verbatim?: boolean } = {}) {
     // Scheduled segments reach _speak through here too, so they need the same
     // guard as announce(): a label the model prefixed would otherwise be read
     // aloud. Same speaker resolution, for the same reason.
     const scheduledSpeaker = persona ?? settings.getEffectivePersona();
     const safeText = normalizeForDisplay(
-      scheduledSpeaker?.name ? stripSpeakerLabel(text || '', [scheduledSpeaker.name]) : (text || ''),
+      !verbatim && scheduledSpeaker?.name ? stripSpeakerLabel(text || '', [scheduledSpeaker.name]) : (text || ''),
     );
-    if (!safeText) return;
-    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
+    if (!safeText) return false;
+    if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return false;
     if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
       this.log('scheduler', `Dropped ${kind} — the show handoff has already claimed this boundary`);
-      return;
+      return false;
     }
     try {
       const wavPath = await this._speak(safeText, { kind, persona });
-      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
+      if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return false;
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} — the show handoff completed while it rendered`);
-        return;
+        return false;
       }
-      this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart, hostSpeech });
+      return this.holdForNextTrack(kind, [{ text: safeText, wavPath, persona, meta }], { exchange: false, daypart, hostSpeech, verbatim });
     } catch (err) {
       this.log('error', `Deferred announce failed: ${(err as Error).message}`);
+      return false;
     }
   }
 
@@ -2670,7 +2672,8 @@ class Queue {
   // first: a clip that waits across a daypart boundary is dropped at air rather
   // than reading yesterday's part of the day. A caller that already computed
   // the stamp (runStationId, which offers the daypart to the model) passes it;
-  // everything else gets the live one. `null` means the clip made no clock
+  // verbatim idents keep null, and everything else gets the live one.
+  // `null` means the clip made no clock
   // claim the guard could refuse — that is what stationIdDaypartStamp returns
   // with the station clock off, and it fails open on purpose.
   //
@@ -2687,6 +2690,7 @@ class Queue {
     {
       exchange = false,
       daypart,
+      verbatim = false,
       pauseTalk = false,
       sfx: selectedSfx = null,
       onCompleted,
@@ -2695,6 +2699,7 @@ class Queue {
     }: {
       exchange?: boolean;
       daypart?: string | null;
+      verbatim?: boolean;
       pauseTalk?: boolean;
       sfx?: string | null;
       onCompleted?: (aired: boolean) => void;
@@ -2719,7 +2724,7 @@ class Queue {
     this._pendingVoice = {
       kind,
       clips,
-      daypart: daypart ?? stationIdDaypartStamp(getClockContext().spokenDaypart, speakClockAllowed()),
+      daypart: verbatim ? null : daypart ?? stationIdDaypartStamp(getClockContext().spokenDaypart, speakClockAllowed()),
       exchange,
       t: Date.now(),
       pauseTalk,
