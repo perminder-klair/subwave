@@ -4618,8 +4618,9 @@ html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
 .bs-prose p {
     margin: 0 0 1.2em;
 }
-/* Figures / screenshots: full column width, thin ink frame. */
-.bs-prose img {
+/* Figures / screenshots / video: full column width, thin ink frame. */
+.bs-prose img,
+.bs-prose video {
     display: block;
     width: 100%;
     height: auto;
