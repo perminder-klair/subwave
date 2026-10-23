@@ -3,7 +3,7 @@
 //   cd controller && npm run gen:themes
 // CI fails if this drifts from the controller registry.
 
-export type TokenType = 'color' | 'font' | 'grain' | 'keyword';
+export type TokenType = 'color' | 'font' | 'grain' | 'image' | 'keyword';
 export type TokenGroup = 'surface' | 'text' | 'accent' | 'structure' | 'type' | 'texture';
 export type FontSet = 'display' | 'mono';
 export type KeywordSet = 'texture' | 'finish';
@@ -117,6 +117,12 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
     "type": "grain"
   },
   {
+    "key": "--bg-image",
+    "label": "background image",
+    "group": "texture",
+    "type": "image"
+  },
+  {
     "key": "--texture",
     "label": "texture",
     "group": "texture",
@@ -132,7 +138,7 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
   }
 ];
 
-export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain","--texture","--finish"];
+export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain","--bg-image","--texture","--finish"];
 
 export const SWATCH_KEYS = ["--bg","--ink","--accent","--overlay"] as const;
 

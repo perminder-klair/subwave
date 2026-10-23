@@ -25,6 +25,7 @@ import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/Sk
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
 import { StationPasswordGate, useStationAuth } from './StationGate';
+import { shellClass } from './shellClass';
 
 export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
@@ -157,6 +158,9 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           // sw-theme-stage carries the theme's --texture overlay and --finish
           // filter (globals.css), in a showcase embed too.
           'sw-theme-stage inset-0 overflow-hidden bg-bg text-ink',
+          // Showcases reset --bg-image so no skin paints this station's
+          // background inside another station's frame (shellClass.ts).
+          shellClass(contained),
         )}
       >
         {hideFace ? (

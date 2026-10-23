@@ -299,7 +299,7 @@ export default function PlatterSkin(_props: SkinProps) {
   ) : null;
 
   return (
-    <div className="absolute inset-0 flex flex-col overflow-hidden bg-bg font-sans text-ink">
+    <div className={cn(styles.stage, 'absolute inset-0 flex flex-col overflow-hidden bg-bg font-sans text-ink')}>
       <div className="flex flex-none items-center justify-between gap-x-6 border-b border-ink px-5 py-3 sm:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <span className="flex-none text-[15px] font-extrabold tracking-[0.14em]">{stationName.toUpperCase()}</span>

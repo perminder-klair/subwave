@@ -33,6 +33,8 @@ export type AdminThemesResponse = {
 export const adminThemeKeys = {
   all: ['themes'] as const,
   detail: () => ['themes', 'admin'] as const,
+  // Images in state/themes/ for the background-image picker.
+  assets: () => ['themes', 'assets'] as const,
 };
 
 function normalizeThemes(response: AdminThemesResponse): AdminThemesData {
