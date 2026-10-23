@@ -791,6 +791,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
             <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
             {form && (
               <Card title="Crossfade" sub="track transition overlap">
+                <div className="grid gap-3">
                 <div className="field">
                   <div className="flex items-center gap-2">
                     <Label>Crossfade duration</Label>
@@ -815,6 +816,34 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
                   </div>
+                </div>
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Crossfade curve</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'linear', label: 'Linear' },
+                        { id: 'equal-power', label: 'Equal-power' },
+                      ]}
+                      value={form.transitions.equalPowerCrossfade ? 'equal-power' : 'linear'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, transitions: { ...f.transitions, equalPowerCrossfade: id === 'equal-power' } } : f,
+                        )
+                      }
+                    />
+                  </div>
+                  <SettingsFieldError path="transitions.equalPowerCrossfade" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Linear fades dip about 3&nbsp;dB in the middle of a crossfade between two songs,
+                    because the two halves add up in amplitude, not in power. Equal-power keeps the
+                    level steady through the overlap. Applies to plain song-to-song crossfades only:
+                    effects, stem blends, jingles and beds keep their own curves.
+                  </div>
+                </div>
                 </div>
               </Card>
             )}
