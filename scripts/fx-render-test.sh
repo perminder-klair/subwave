@@ -39,6 +39,10 @@
 #       Regression check — a stinger shorter than the crossfade must air dry at
 #       full level, not as its own fade-in under the outgoing track. Lifts the
 #       seam block and the jingle mark from radio.liq.
+#   scripts/fx-render-test.sh sweepstep
+#       Regression check — the sweep must not step the level when it engages,
+#       must hold the blend within 1 dB of the plain crossfade, and must still
+#       choke the outgoing's highs. Lifts both sweep blocks from radio.liq.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -215,18 +219,29 @@ def t(a, b) =
           end
         9000.0 * pow(1100.0 / 9000.0, depth)
       end
+      # Engage ramp + makeup, in lockstep with radio.liq's sweep LEVEL block.
+      def sweep_engage() =
+        e = source.elapsed(sweep_src)
+        e = if e < 0. then 0. else e end
+        t_eng = 0.06 * d
+        x = if e >= t_eng then 1.0 else e / t_eng end
+        3.0 * x * x - 2.0 * x * x * x
+      end
       def sweep_gain() =
         e = source.elapsed(sweep_src)
         e = if e < 0. then 0. else e end
-        g_max = 1.35
-        t_from = 0.30 * d
-        t_to   = 0.50 * d
-        if e <= t_from then 1.0
-        elsif e >= t_to then g_max
-        else
-          x = (e - t_from) / (t_to - t_from)
-          1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
-        end
+        g_early = 1.12
+        g_late  = 0.88
+        t_from = 0.40 * d
+        t_to   = 0.70 * d
+        g =
+          if e <= t_from then g_early
+          elsif e >= t_to then g_late
+          else
+            x = (e - t_from) / (t_to - t_from)
+            g_early + (3.0 * x * x - 2.0 * x * x * x) * (g_late - g_early)
+          end
+        1.0 + sweep_engage() * (g - 1.0)
       end
       # Parallel dry bleed, the "never goes quiet" guarantee. Wetness on cascaded
       # stages multiplies the dry path, so a wetness cap can't hold a floor; an
@@ -235,7 +250,8 @@ def t(a, b) =
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
       amplify(override=null, sweep_gain, add(normalize=false,
-        [amplify(override=null, 0.30, a_src), amplify(override=null, 0.75, swept)]))
+        [amplify(override=null, fun () -> 1.0 - 0.70 * sweep_engage(), a_src),
+         amplify(override=null, fun () -> 0.75 * sweep_engage(), swept)]))
     else a_src end
   a_src =
     if blend_on then
@@ -1077,6 +1093,74 @@ LIQ
   echo "AMPGAIN PASS — the incoming's liq_amplify applies once; the sweep's gains ignore it"
 }
 
+# sweepstep — the sweep must
+# not change the level when it engages, and must hold the blend within 1 dB of
+# the plain crossfade, while still choking the outgoing's highs. The a-side and
+# b-side sweep blocks are LIFTED from radio.liq so the harness cannot drift from
+# the mixer. Deterministic pink noise, A and B at the same level.
+sweepstep_render() { # sweepstep_render <mode dry|sweep> <out>
+  cat > "$WORK/sweepstep.liq" <<LIQ
+settings.log.stdout := true
+settings.log.level := 2
+q = request.queue(id="q")
+q.push(request.create("/work/sweepstep-a.wav"))
+q.push(request.create("/work/sweepstep-b.wav"))
+def t(a, b) =
+  d = 12.
+  sweeping = $( [ "$1" = sweep ] && echo true || echo false )
+  a_source =
+    if sweeping then fade.out(duration=d, type="log", a.source)
+    else fade.out(duration=d, a.source) end
+$(cat "$WORK/sweepstep-a.liq")
+  b_source = fade.in(duration=d, b.source)
+$(cat "$WORK/sweepstep-b.liq")
+  add(normalize=false, [a_source, b_source])
+end
+music = cross(duration=12., t, (q:source))
+output.file(%wav, fallible=true, "/work/$2", music)
+clock.assign_new(sync="none", [music])
+thread.run(delay=40., fun() -> shutdown())
+LIQ
+  liq sweepstep.liq >/dev/null
+}
+
+sweepstep() {
+  local src="$HERE/../liquidsoap/radio.liq"
+  awk '/^  # SWEEP ENVELOPE/{on=1} on{print} on&&/^    end$/{exit}' "$src" > "$WORK/sweepstep-a.liq"
+  awk '/^  # SWEEP, incoming side/{on=1} on{print} on&&/^    end$/{exit}' "$src" > "$WORK/sweepstep-b.liq"
+  grep -q 'sweep_cut' "$WORK/sweepstep-a.liq" && grep -q 'surf_cut' "$WORK/sweepstep-b.liq" \
+    || { echo "SWEEPSTEP FAIL — could not lift the sweep blocks from radio.liq"; return 1; }
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=1:duration=50" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-a.wav"
+  ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=2:duration=40" -af volume=-14dB -ar 44100 -ac 2 "$WORK/sweepstep-b.wav"
+  sweepstep_render dry sweepstep-dry.wav
+  sweepstep_render sweep sweepstep-sweep.wav
+  # A is 50 s and cross() buffers its final 12 s: the blend runs 38 s -> 50 s.
+  local fail=0 x0 dry sw delta
+  diff_db() { # diff_db <start> <len> [filter] — sweep minus dry, dB
+    local f="${3:-anull}" a b
+    a=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-dry.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
+    b=$(ffmpeg -hide_banner -nostats -ss "$1" -t "$2" -i "$WORK/sweepstep-sweep.wav" -af "$f,astats=metadata=0:reset=0" -f null - 2>&1 | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}')
+    awk -v a="$a" -v b="$b" 'BEGIN { printf "%.2f", b - a }'
+  }
+  delta=$(diff_db 38.0 0.25)
+  echo "engage (first 0.25 s): ${delta} dB against the plain fade"
+  awk -v d="$delta" 'BEGIN { exit !(d >= -0.5 && d <= 0.5) }' || { echo "SWEEPSTEP FAIL — the level steps when the sweep engages"; fail=1; }
+  for x0 in 38 39 40 41 42 43 44 45 46 47 48 49; do
+    delta=$(diff_db "$x0" 1)
+    echo "  ${x0}-$((x0 + 1)) s: ${delta} dB"
+    awk -v d="$delta" 'BEGIN { exit !(d >= -1.0 && d <= 1.0) }' || { echo "SWEEPSTEP FAIL — blend level off the plain fade by more than 1 dB at ${x0} s"; fail=1; }
+  done
+  # Still a sweep: the outgoing's highs are choked mid-blend.
+  # 40-42 s: the cutoff is diving while the outgoing still carries the blend
+  # (the plain fade's highs come mostly from it here); later the incoming is
+  # fully open and its own highs fill the band.
+  delta=$(diff_db 40 2 "highpass=f=4000,highpass=f=4000")
+  echo "highs (>4 kHz) mid-blend: ${delta} dB against the plain fade"
+  awk -v d="$delta" 'BEGIN { exit !(d <= -6.0) }' || { echo "SWEEPSTEP FAIL — the sweep no longer chokes the highs"; fail=1; }
+  [ "$fail" = 0 ] && echo "SWEEPSTEP PASS — no step at the engage, blend within 1 dB of the plain fade, highs still choked"
+  return "$fail"
+}
+
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
@@ -1086,7 +1170,8 @@ case "${1:-}" in
   jingledry) jingledry ;;
   eqpower) eqpower ;;
   ampgain) ampgain ;;
+  sweepstep) sweepstep ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | ampgain | sweepstep | xdur | xchain"; exit 2 ;;
 esac
