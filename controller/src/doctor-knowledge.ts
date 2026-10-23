@@ -107,8 +107,10 @@ aren't matched by feel. If coverage is zero/low, recommend running the tagger.
 Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavily'
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
-a self-hosted instance URL. If a keyed provider is selected without a key, news
-segments can't fetch — tell them to add the key or switch to DuckDuckGo/SearXNG.
+a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
+SEARCH_API_KEY only raises its rate limit. If a keyed provider is selected without a
+key, news segments can't fetch — tell them to add the key or switch to
+DuckDuckGo/SearXNG.
 
 ## Backups
 There is a Backup feature (Admin → Backup) that exports settings, personas, custom

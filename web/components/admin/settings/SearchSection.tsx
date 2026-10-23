@@ -21,13 +21,16 @@ const SEARCH_PROVIDER_LABELS: Record<string, string> = {
   tavily: 'Tavily (paid web search)',
   brave: 'Brave Search (API key, free monthly credits)',
   searxng: 'SearXNG (self-hosted)',
+  keenable: 'Keenable (free, no key needed)',
 };
 
-// Providers that authenticate with SEARCH_API_KEY. Both share the key slot —
+// Providers that authenticate with SEARCH_API_KEY. They share the key slot —
 // the controller probes the right endpoint based on the provider we send along.
-const KEYED_PROVIDERS: Record<string, { name: string; placeholder: string; keyUrl: string }> = {
+// `optional` marks a provider that works without a key (the key raises limits).
+const KEYED_PROVIDERS: Record<string, { name: string; placeholder: string; keyUrl: string; optional?: boolean }> = {
   tavily: { name: 'Tavily', placeholder: 'tvly-…', keyUrl: 'https://app.tavily.com/home' },
   brave: { name: 'Brave Search', placeholder: 'BSA…', keyUrl: 'https://api-dashboard.search.brave.com/app/keys' },
+  keenable: { name: 'Keenable', placeholder: 'keen_…', keyUrl: 'https://keenable.ai/console', optional: true },
 };
 
 const searchProviderLabel = (id: string | undefined): string =>
@@ -78,7 +81,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
   });
 
   const savedSearch = data.values?.search || {};
-  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'brave', 'searxng'];
+  const providers = data.search?.providers || ['duckduckgo', 'tavily', 'brave', 'searxng', 'keenable'];
   const provider = form.search.provider;
   const keyed = KEYED_PROVIDERS[provider];
   const searchDirty = provider !== savedSearch.provider
@@ -101,7 +104,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same
-        // SEARCH_API_KEY slot holds a Tavily or a Brave key.
+        // SEARCH_API_KEY slot holds a Tavily, Brave or Keenable key.
         body: JSON.stringify({ key: 'SEARCH_API_KEY', value: value.trim(), provider }),
       });
       const j = await r.json() as { ok: boolean; message: string; latencyMs: number };
@@ -122,8 +125,8 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
           The segment director can air a single line of recent artist context between
           tracks, when the active backend returns something worth saying. DuckDuckGo
           is free and keyless; Tavily and Brave are keyed but return full web results;
-          SearXNG is keyless if you self-host it. Switching here reroutes the next
-          call, no restart.
+          SearXNG is keyless if you self-host it; Keenable returns web results with no
+          key. Switching here reroutes the next call, no restart.
         </>}
         metrics={[{ n: String(providers.length), l: 'providers' }]}
       />
@@ -174,6 +177,8 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
                 : provider === 'brave'
                 ? 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.'
+                : provider === 'keenable'
+                ? 'Keenable web search: real web results with no signup or API key, rate limited per IP. An optional Keenable key raises the limit. SUB/WAVE caches every search for 30 minutes.'
                 : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.'}
             </div>
           </div>
@@ -181,7 +186,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
           {keyed && (
             <>
               <div className="field">
-                <Label>{keyed.name} API key</Label>
+                <Label>{keyed.name} API key{keyed.optional ? ' (optional)' : ''}</Label>
                 <div className="flex flex-wrap items-stretch gap-2 sm:flex-nowrap">
                   <Input
                     type="password"
@@ -205,13 +210,15 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                   </Btn>
                 </div>
                 <div className="field-hint">
+                  {keyed.optional && <>Not needed to search; a key raises the rate limit. </>}
                   Get one at <a href={keyed.keyUrl} target="_blank" rel="noreferrer" className="underline">{keyed.keyUrl.replace(/^https:\/\//, '')}</a>.
                   Stored alongside the other admin settings. Falls back to
                   <code> SEARCH_API_KEY</code> in <code>.env</code> when blank. Set
                   one or the other, not both.
                 </div>
               </div>
-              <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />
+              {/* A keyless provider isn't "missing" anything, so skip the red banner. */}
+              {(!keyed.optional || apiKeySet) && <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />}
               {keyTest && <KeyTestResult result={keyTest} />}
             </>
           )}
