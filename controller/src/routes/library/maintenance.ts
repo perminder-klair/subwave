@@ -1,4 +1,5 @@
 import express from 'express';
+import path from 'node:path';
 import { requireAdmin } from '../../middleware/auth.js';
 import * as library from '../../music/library.js';
 import * as blocklist from '../../music/blocklist.js';
@@ -193,9 +194,18 @@ router.get('/library/tagger/logs', requireAdmin, (_req, res) => {
 router.get('/library/tagger/logs/:id', requireAdmin, (req, res) => {
   const file = taggerLogFile(req.params.id);
   if (!file) return res.status(404).json({ error: 'no such run log' });
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${req.params.id}.log"`);
-  res.sendFile(file);
+  // A root keeps a hidden parent of the state dir (a clone under ~/.local, say)
+  // out of sendFile's dotfile check, as util/audio-response.ts does. The headers
+  // ride the file, so a file pruned since the check answers a plain 404.
+  res.sendFile(path.basename(file), {
+    root: path.dirname(file),
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${req.params.id}.log"`,
+    },
+  }, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'no such run log' });
+  });
 });
 
 // The admin "Analyze audio" button: bpm/key/intro plus CLAP vector backfill.

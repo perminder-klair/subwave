@@ -1,19 +1,24 @@
 // Pins the wiring of broadcast/tagger-run-log.ts into broadcast/tagger.ts: a
 // maintenance child that prints faster than any poll still lands every line,
 // once, in order, in both the cursor feed and the run's file, ending with its
-// exit line, and a second run starts a new log.
+// exit line, and a second run starts a new log. The state dir sits under a
+// hidden directory, which is where a native clone under ~/.local keeps it.
 // Run: npm test -- tagger-run-log-wiring
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 import cp from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
+import type { Server } from 'node:http';
 import { syncBuiltinESMExports } from 'node:module';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-const STATE = createTempDir(join(tmpdir(), 'subwave-tagger-run-log-'));
+const STATE = createTempDir(join(tmpdir(), '.subwave-tagger-run-log-'));
 process.env.STATE_DIR = STATE;
+delete process.env.ADMIN_USER;
+delete process.env.ADMIN_PASS;
 // Nothing in this test may reach a real music server or mixer.
 process.env.NAVIDROME_URL = 'http://127.0.0.1:1';
 process.env.NAVIDROME_USER = 'test';
@@ -95,6 +100,28 @@ test('a second run gets its own log; a cursor from the first reads it from the s
   const files = t.taggerLogFiles().map(f => f.id);
   assert.deepEqual(files, [second, first], 'newest first');
   assert.deepEqual(readdirSync(join(STATE, 'tagger-logs')).sort(), [`${first}.log`, `${second}.log`].sort());
+});
+
+test('the download route serves the run\'s file, from under a hidden state dir too', async () => {
+  const express = (await import('express')).default;
+  const { router } = await import('../src/routes/library/maintenance.js');
+  const app = express();
+  app.use(router);
+  const server = await new Promise<Server>((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+  try {
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/library/tagger/logs`;
+    const id = t.tagger.runLogId!;
+    const res = await fetch(`${base}/${id}`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'text/plain; charset=utf-8');
+    assert.equal(res.headers.get('content-disposition'), `attachment; filename="${id}.log"`);
+    assert.equal(await res.text(), readFileSync(t.taggerLogFile(id)!, 'utf8'));
+    const missing = await fetch(`${base}/tagger-run-20200101-000000-tag`);
+    assert.equal(missing.status, 404);
+    assert.equal(missing.headers.get('content-disposition'), null);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
 });
 
 test('a log id outside the writer\'s pattern reads nothing', () => {

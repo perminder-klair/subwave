@@ -74,7 +74,7 @@ export function taggerLogFiles(): RunLogFileInfo[] {
   return listRunLogs(RUN_LOG_DIR);
 }
 
-// Absolute, because Express's sendFile refuses a relative path.
+// Absolute, so the route can split it into sendFile's root and name.
 export function taggerLogFile(id: unknown): string | null {
   const p = runLogPath(RUN_LOG_DIR, id);
   return p ? path.resolve(p) : null;
