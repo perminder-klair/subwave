@@ -1002,7 +1002,11 @@ async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>, rolled: Ses
   // is about to use, which is the same "quietly switch the unload off" failure
   // the fire-not-window rule above exists to avoid.
   if (plan.kind !== 'jingle') void warmHeavy();
-  return withTalkAir(plan.air, () => runTalkSlotInner(plan, rolled));
+  const fire = () => withTalkAir(plan.air, () => runTalkSlotInner(plan, rolled));
+  // An immediate fire is speech on its way to this song from the moment it
+  // starts writing, so an overlay ID offered meanwhile must stand down. A
+  // 'next-track' fire airs at the next seam, which no overlay can reach.
+  return plan.kind !== 'jingle' && plan.air === 'immediate' ? queue.whileTalkInFlight(fire) : fire();
 }
 
 async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>, rolled: SessionRoll | null) {

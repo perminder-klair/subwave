@@ -239,6 +239,7 @@ function reset() {
   setCache({ ...settings.getDefaults(), jinglePlacement: 'over', jingleRatio: 1 });
   queue._tracksSinceOverlay = 0;
   queue._tracksSinceJingle = 0;
+  queue._talkInFlight = 0;
   queue._pendingJingles.clear();
 }
 const tick = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -347,6 +348,39 @@ test('in both, the queue offers its ID halfway to the rotate and never on the so
     if (rotateDue) queue._tracksSinceJingle = 0; // the talk planner's draw (playRotateJingle)
   }
   assert.deepEqual(offeredAt, [3, 3]);
+});
+
+test('speech still being written or rendered keeps the song opening from an ID', async () => {
+  // A scheduled fire, from the talk tick's wrapper, before it reaches announce().
+  reset(); startSong();
+  let finish!: () => void;
+  const fire = queue.whileTalkInFlight(() => new Promise<void>(resolve => { finish = resolve; }));
+  await queue.maybeAirJingleOverlay();
+  assert.equal(handed.length, 0);
+  finish(); await fire;
+  assert.equal(queue._talkInFlight, 0);
+  // A manual /dj/say outside the talk tick: announce() counts its own render.
+  reset(); startSong();
+  const speak = queue._speak;
+  const air = queue._airVoice;
+  let rendered!: (path: string) => void;
+  queue._speak = (() => new Promise<string>(resolve => { rendered = resolve; })) as unknown as typeof queue._speak;
+  queue._airVoice = (async () => ({ voiceId: 'dj', clipMs: 10, aired: Promise.resolve(null) })) as unknown as typeof airVoice;
+  try {
+    const said = queue.announce('Hello there', 'dj-speak');
+    assert.equal(queue._talkInFlight, 1);
+    await queue.maybeAirJingleOverlay();
+    assert.equal(handed.length, 0);
+    rendered(join(jingleDir, 'a.wav'));
+    const outcome = await said;
+    assert.equal(outcome.accepted, true);
+    assert.equal(queue._talkInFlight, 0);
+    await outcome.completed;
+    await tick(50); // let its voice.end timer fire before the next test's hook exists
+  } finally {
+    queue._speak = speak;
+    queue._airVoice = air;
+  }
 });
 
 test('an overlay ID publishes no voice or DJ webhook, like a manual or rotate jingle', async () => {

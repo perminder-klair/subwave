@@ -441,6 +441,10 @@ class Queue {
   _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
   _tracksSinceOverlay = 0;      // song starts since the last overlay offer — read only in `over`; `both` rides _tracksSinceJingle (jingle-overlay.overlayDue)
   private _overlayBoundary: { at: number; speech: boolean; offered: boolean } | null = null;
+  // Speech that is still being written or rendered has no handoff yet, so
+  // onQueued has not reserved the song for it. Counted so an optional overlay
+  // ID cannot take the song's opening from it (see whileTalkInFlight).
+  _talkInFlight = 0;
   _overlayMixerStatus = async () => overlayMixerStatus(await liquidsoapControl.sendCommand('jingle_overlay_status'));
   _bedCatalog = beds.catalog;
   _bedGetPath = beds.getPath;
@@ -2417,6 +2421,11 @@ class Queue {
       this.log('scheduler', `Dropped ${kind} — the show handoff has already claimed this boundary`);
       return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     }
+    // Until its handoff the clip is invisible to the overlay's song reservation
+    // (onQueued). Speech held for the next boundary cannot meet a song-opening
+    // ID, so only immediate speech counts.
+    const inFlight = currentTalkAir() === 'immediate';
+    if (inFlight) this._talkInFlight++;
     try {
       const wavPath = await this._speak(safeText, { kind, persona });
       if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
@@ -2474,6 +2483,20 @@ class Queue {
     } catch (err) {
       this.log('error', `Announce failed: ${(err as Error).message}`);
       return { accepted: false, deferred: false, completed: Promise.resolve(false) };
+    } finally {
+      if (inFlight) this._talkInFlight--;
+    }
+  }
+
+  // A scheduled fire spends most of its life writing the script, long before
+  // announce() renders it. The talk tick wraps each immediate fire in this so
+  // an overlay offered meanwhile sees speech is coming.
+  async whileTalkInFlight<T>(fn: () => Promise<T>): Promise<T> {
+    this._talkInFlight++;
+    try {
+      return await fn();
+    } finally {
+      this._talkInFlight--;
     }
   }
 
@@ -3433,7 +3456,7 @@ class Queue {
     const placement = jinglePlacement(s);
     // The previous song's stamp governs when this one's opening clears.
     const openingMs = Math.max(s.crossfadeDuration, this.history[0]?.track.crossSec ?? 0) * 1000;
-    const pendingTalk = () => !!this._pendingVoice
+    const pendingTalk = () => !!this._pendingVoice || this._talkInFlight > 0
       || session.handoffInProgress() || !!session.pendingHandoff();
     this.retirePendingJingles();
     const due = overlayDue({
