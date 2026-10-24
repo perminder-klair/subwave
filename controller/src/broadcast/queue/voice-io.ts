@@ -129,6 +129,10 @@ export function airInEstimate(
 }
 
 interface AirVoiceOptions {
+  // Fired SYNCHRONOUSLY, before this clip joins the voice chain — the early
+  // half of the lifecycle a consumer needs in order to prepare for speech
+  // rather than react to it (#1382 follow-up). Everything it reports is known
+  // by now; nothing here waits on anything.
   onQueued?: (q: QueuedVoice) => void;
   voiceId?: string;
   pauseDeliveryId?: string | null;

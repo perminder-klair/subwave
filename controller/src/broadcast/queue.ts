@@ -438,7 +438,7 @@ class Queue {
   // truth for it. Only the CAP is per-caller, which is what `rotate` records.
   _pendingJingles = new Map<string, { at: number; rotate: boolean }>();
   _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
-  _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
+  _lastRotateJingle: string | null = null; // last jingle handed to the mixer (rotate, overlay or operator press) — the anti-repeat fallback when no jingle marker exists yet
   _tracksSinceOverlay = 0;      // song starts since the last overlay offer — read only in `over`; `both` rides _tracksSinceJingle (jingle-overlay.overlayDue)
   private _overlayBoundary: { at: number; speech: boolean; offered: boolean } | null = null;
   // Speech that is still being written or rendered has no handoff yet, so

@@ -89,6 +89,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 **Timing** (`broadcast.md`)
 - **Published timestamps are live-edge**, and listeners sit `stream.bufferSeconds` (22 s) behind. Listener surfaces add the offset; operator surfaces don't. `<burst-size>` is bytes, computed per mount. Never judge the cushion with `buffered.end − currentTime`.
 - **Every scheduled spoken segment is a row in one slot table** (`broadcast/talk-scheduler.ts`), driven by one per-minute `talkTick`, one talker per minute. A slot is a window, and a held row postpones, never cancels. A second talk cron is the bug.
+- **The one sanctioned exception is the over-music jingle ID** (`jinglePlacement: over | both`): the now-playing watcher offers it once per song, at the opening, and it stands down to any speech rather than taking a slot (`broadcast.md`).
 - **A rendered segment is placed, not trimmed**: the lever at a boundary is which boundary it takes (`broadcast/vocal-runway.ts`).
 - **A pause-and-talk break is silence on the music timeline.** The voice still goes through `say.txt`.
 - **A show handoff is prepared for the confirmed final outgoing track**, never by look-ahead alone (`show-boundary-handoffs.md`).
