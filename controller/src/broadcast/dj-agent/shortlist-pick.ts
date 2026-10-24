@@ -11,6 +11,7 @@ import { MUSICAL_REASON_UNAVAILABLE, type PickResolution } from './leanings-revi
 import type { PickerCandidate, ShortlistCandidate, ShortlistSourceRun } from '../../music/shortlist.js';
 import { promptRecapEntries, type PromptMemoryEntry } from '../prompt-memory.js';
 import * as settings from '../../settings.js';
+import { steerClause } from '../../schemas/steer.js';
 
 export type ShortlistPick = z.infer<ReturnType<typeof shortlistPickSchema>> & { selectionReason: string };
 
@@ -276,7 +277,9 @@ export async function djPick({
   // controller-resolved track and safe Booth reason.
   const selection: z.infer<ReturnType<typeof shortlistPickSchema>> = await djObject({
     system: pickSystem(showAt, playlistResolved, true, { host: null, guest: null, promptValue: null }),
-    prompt: shortlistPickPrompt(candidates, context, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }),
+    // The operator's steer, judged at the pick's look-ahead instant like the
+    // show it follows, and kept out of the system prompt like the agent does.
+    prompt: shortlistPickPrompt(candidates, context, { showOnAir: !!settings.resolveActiveShow(showAt ?? undefined) }) + steerClause(settings.activeSteer((showAt ?? new Date()).getTime())?.prompt),
     schema: shortlistPickSchema(ids),
     temperature: 0.5,
     kind: 'djShortlistPick',

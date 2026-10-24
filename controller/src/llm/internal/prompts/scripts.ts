@@ -7,7 +7,8 @@ import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { onAirLocationGrounding } from './grounding.js';
-import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed } from './context.js';
+import { quotedSteer } from '../../../schemas/steer.js';
+import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed, steerLine } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor } from './intro-budget.js';
@@ -133,7 +134,8 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
 
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = false, missedArtist = null, requestSubstitution = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
-  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
+  // A request intro carries the listener's own words, so no operator steer.
+  const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS, steer: !requestText && !requestedBy });
   // Gate on isNamedRequester, not on truthiness: cleanRequesterName returns the
   // ledger stand-in 'anon' for every unsigned request, and that string is
   // truthy (#1347). The gate lives here rather than at the four call sites so a
@@ -353,6 +355,7 @@ export function linkPrompt({
   persona = null,
   includeIntroBudget = true,
   guestContribution = null,
+  steerIntro = null,
 }: any): string {
   const speaker = persona || settings.getEffectivePersona();
   const rules = [
@@ -391,6 +394,29 @@ export function linkPrompt({
     facts,
     context?.episodeEditorial || '',
   ];
+  // The steer's introduction: the one line allowed to say where the music is
+  // heading, so the generic clause, which forbids that, is left out. The
+  // heading goes first, because a DJ-mode trim to the intro runway keeps the
+  // first sentence.
+  if (steerIntro) {
+    const direction = quotedSteer(steerIntro.direction);
+    const run = (Array.isArray(steerIntro.run) ? steerIntro.run : []).filter((t: any) => t?.artist).slice(0, 4);
+    const asks: string[] = [];
+    if (run.length) asks.push(`Coming up right after this one, in this order:\n${run.map((t: any) => `- ${t.title} by ${t.artist}`).join('\n')}`);
+    if (direction) {
+      asks.push(`This link opens a new stretch of music. In its first sentence, say in your own words, as your own idea, where the music is heading, going by this trusted direction from the station operator (not a listener message): "${direction}".${run.length ? ' Name at least one of the coming artists.' : ''}`);
+    } else if (run.length) {
+      asks.push('This link opens a new stretch of music. In its first sentence, name one or two of the coming artists.');
+    }
+    if (asks.length) asks.push('Never mention the operator, a request, or that the music was chosen for you, by anyone, or changed.');
+    if (asks.length) sections.push(asks.join('\n'));
+  } else {
+    // A link builds its own prompt rather than the shared context lines, so the
+    // operator's steer is handed to it here. Pushed only when there is one: a
+    // station that never steers gets the prompt it always got.
+    const steer = steerLine(context);
+    if (steer) sections.push(steer);
+  }
   if (guestContribution?.name) {
     sections.push("Editorial Context:\n- " + String(guestContribution.name).trim() + " had a verified editorial hand in choosing this track. If natural, the host may briefly credit them; do not call it a favourite or explain selection mechanics.");
   }
