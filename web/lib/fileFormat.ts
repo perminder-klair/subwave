@@ -13,7 +13,16 @@ export interface FileFormat {
   channelCount?: number;
 }
 
-const DSD_BASE = 44_100;
+// DSD rates are multiples of 44.1 kHz, or (rarer) of 48 kHz; the MHz shown
+// beside the name tells the two families apart.
+const DSD_BASES = [44_100, 48_000];
+
+function dsdMultiple(sr: number): number | null {
+  for (const base of DSD_BASES) {
+    if (sr % base === 0 && sr / base >= 64) return sr / base;
+  }
+  return null;
+}
 
 function trimZero(n: number, digits: number): string {
   return n.toFixed(digits).replace(/\.0+$/, '');
@@ -25,11 +34,11 @@ export function formatFileFormat(f: FileFormat | null | undefined): string | nul
   if (f.suffix) parts.push(f.suffix.toUpperCase());
 
   const sr = f.samplingRate;
-  // A 1-bit stream at a whole multiple of 44.1 kHz is DSD: its multiple is
-  // the name people use, and its "bit rate" (11,290 kbps) reads as a typo.
-  const dsd = f.bitDepth === 1 && sr && sr % DSD_BASE === 0 && sr / DSD_BASE >= 64;
+  // A 1-bit stream at a whole multiple of 44.1 or 48 kHz is DSD: its multiple
+  // is the name people use, and its "bit rate" (11,290 kbps) reads as a typo.
+  const dsd = f.bitDepth === 1 && sr ? dsdMultiple(sr) : null;
   if (dsd && sr) {
-    parts.push(`DSD${sr / DSD_BASE}`, `${trimZero(sr / 1_000_000, 1)} MHz`);
+    parts.push(`DSD${dsd}`, `${trimZero(sr / 1_000_000, 1)} MHz`);
   } else {
     if (sr) parts.push(`${trimZero(sr / 1000, 1)} kHz`);
     if (f.bitDepth) parts.push(`${f.bitDepth}-bit`);

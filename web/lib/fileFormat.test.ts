@@ -33,6 +33,11 @@ test('DSD reads as DSD64/128/256 with its MHz rate', () => {
   assert.equal(formatFileFormat({ suffix: 'dsf', samplingRate: 11289600, bitDepth: 1 }), 'DSF · DSD256 · 11.3 MHz');
 });
 
+test('48 kHz-family DSD is named the same way, its MHz telling the family apart', () => {
+  assert.equal(formatFileFormat({ suffix: 'dsf', samplingRate: 3072000, bitDepth: 1, bitRate: 6144 }), 'DSF · DSD64 · 3.1 MHz');
+  assert.equal(formatFileFormat({ suffix: 'dsf', samplingRate: 6144000, bitDepth: 1 }), 'DSF · DSD128 · 6.1 MHz');
+});
+
 test('mono and multichannel are named; stereo is the silent default', () => {
   assert.equal(formatFileFormat({ suffix: 'flac', samplingRate: 44100, bitDepth: 16, channelCount: 1 }), 'FLAC · 44.1 kHz · 16-bit · mono');
   assert.equal(formatFileFormat({ suffix: 'flac', samplingRate: 48000, bitDepth: 24, channelCount: 6 }), 'FLAC · 48 kHz · 24-bit · 6 ch');
