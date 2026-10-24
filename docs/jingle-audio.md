@@ -21,6 +21,12 @@ The on-demand `POST /jingles/:filename/play` command always queues the full-leve
 ID at the next safe boundary, regardless of automatic placement or frequency.
 The Imaging page's audio preview remains a local audition.
 
+Every automatic draw, between songs or over music, avoids the ID that aired
+last, read from the mixer's jingle marker, so a manual press counts, and so
+does an ID the mixer drew itself before the controller took over. This also
+changes `between` with `jingleRotate: controller`: that rotate used to avoid
+only its own previous draw.
+
 An overlay starts after the opening crossfade and the normal silent voice
 lead-in, through the same light duck as a DJ link (`ducking.intro`, default
 `0.30`). A song carrying a DJ link or solo intro is reserved for that voice
