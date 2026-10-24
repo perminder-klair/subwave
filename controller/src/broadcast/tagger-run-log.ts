@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TaggerEvent } from '../music/tagger-progress.js';
+import type { MaintenanceMode } from './tagger-followups.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -160,9 +161,13 @@ export class RunLog {
 // ─── File helpers ─────────────────────────────────────────────────────────────
 
 const MODES = new Set(['tag', 'analyze', 'reconcile']);
-const ID_RE = /^tagger-run-(\d{8})-(\d{6})-(tag|analyze|reconcile)$/;
+// The writer's one name grammar: the UTC start stamp, the mode, and `-N` for
+// the Nth run to start within that second. Retention, listing and download
+// accept nothing else, so never widen it.
+const ID_RE = /^tagger-run-(\d{8})-(\d{6})-(tag|analyze|reconcile)(?:-(\d{1,2}))?$/;
+const MAX_SAME_SECOND = 99;
 
-export function runLogId(startedAt: Date, mode: string): string {
+export function runLogId(startedAt: Date, mode: MaintenanceMode, n = 1): string {
   if (!MODES.has(mode)) throw new Error(`unknown run mode: ${mode}`);
   const y = startedAt.getUTCFullYear();
   const mo = String(startedAt.getUTCMonth() + 1).padStart(2, '0');
@@ -170,19 +175,55 @@ export function runLogId(startedAt: Date, mode: string): string {
   const h = String(startedAt.getUTCHours()).padStart(2, '0');
   const mi = String(startedAt.getUTCMinutes()).padStart(2, '0');
   const s = String(startedAt.getUTCSeconds()).padStart(2, '0');
-  return `tagger-run-${y}${mo}${d}-${h}${mi}${s}-${mode}`;
+  return `tagger-run-${y}${mo}${d}-${h}${mi}${s}-${mode}${n > 1 ? `-${n}` : ''}`;
 }
 
 export function isRunLogId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id);
 }
 
-export function parseRunLogId(id: string): { mode: string; startedAt: string } | null {
+export function parseRunLogId(id: string): { mode: string; startedAt: string; n: number } | null {
   const m = ID_RE.exec(id);
   if (!m) return null;
-  const [, ymd, hms, mode] = m;
+  const [, ymd, hms, mode, n] = m;
   const iso = `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}T${hms.slice(0, 2)}:${hms.slice(2, 4)}:${hms.slice(4, 6)}.000Z`;
-  return { mode, startedAt: iso };
+  return { mode, startedAt: iso, n: n ? Number(n) : 1 };
+}
+
+// Newest first: the start stamp, then the count within its second.
+function runOrderKey(id: string): string {
+  const p = parseRunLogId(id)!;
+  return `${p.startedAt}-${String(p.n).padStart(2, '0')}`;
+}
+
+// A second run started in the same second as an earlier one (a retry straight
+// after a failed spawn, Stop then Start) would otherwise get its id: it would
+// append to that run's file, and a page holding that run's cursor would skip
+// the new run's head. Counted across modes, so the count also orders a second's
+// runs, and against the previous run, whose file may never have opened.
+function freeRunLogId(dir: string, startedAt: Date, mode: MaintenanceMode, previousId: string | null): string {
+  const first = runLogId(startedAt, mode);
+  const second = parseRunLogId(first)!.startedAt;
+  let names: string[] = [];
+  try { names = fs.readdirSync(dir); } catch { /* no dir yet */ }
+  const ids = names.filter(n => n.endsWith('.log')).map(n => n.slice(0, -4));
+  if (previousId) ids.push(previousId);
+  let taken = 0;
+  for (const id of ids) {
+    const p = parseRunLogId(id);
+    if (p && p.startedAt === second) taken = Math.max(taken, p.n);
+  }
+  return taken ? runLogId(startedAt, mode, Math.min(taken + 1, MAX_SAME_SECOND)) : first;
+}
+
+// A new run's log: its own id, room made for its file (the newest
+// RUN_LOG_KEEP - 1 kept, so this one is the tenth), and the file opened. A
+// disk that refuses the file costs the download, never the run: the log then
+// lives in memory only.
+export function openRunLog(dir: string, startedAt: Date, mode: MaintenanceMode, previousId: string | null): RunLog {
+  const runId = freeRunLogId(dir, startedAt, mode, previousId);
+  pruneRunLogs(dir, RUN_LOG_KEEP - 1);
+  return new RunLog({ runId, sink: openRunLogSink(dir, runId) });
 }
 
 export function openRunLogSink(dir: string, id: string): RunLogSink | null {
@@ -223,8 +264,11 @@ export function listRunLogs(dir: string): RunLogFileInfo[] {
       results.push({ id, mode: parsed.mode, startedAt: parsed.startedAt, bytes: stat.size });
     } catch { /* skip unreadable */ }
   }
-  // Timestamp-encoded ids sort lexicographically = chronologically.
-  results.sort((a, b) => (b.id < a.id ? -1 : b.id > a.id ? 1 : 0));
+  results.sort((a, b) => {
+    const ka = runOrderKey(a.id), kb = runOrderKey(b.id);
+    if (ka !== kb) return ka < kb ? 1 : -1;
+    return b.id < a.id ? -1 : b.id > a.id ? 1 : 0;
+  });
   return results;
 }
 

@@ -91,7 +91,7 @@ test('every line of a fast run reaches the cursor feed and the file, once, in or
 test('a second run gets its own log; a cursor from the first reads it from the start', async () => {
   const first = t.tagger.runLogId!;
   const end = t.taggerLogSince(0, first)!.nextSeq;
-  await new Promise((r) => setTimeout(r, 1100)); // ids are stamped to the second
+  // No wait: a run started in the same second as the first gets its own id.
   const second = await runOnce();
   assert.notEqual(second, first);
   const page = t.taggerLogSince(end, first);

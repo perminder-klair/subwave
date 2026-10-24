@@ -16,6 +16,7 @@ import {
   runLogId,
   isRunLogId,
   parseRunLogId,
+  openRunLog,
   openRunLogSink,
   listRunLogs,
   runLogPath,
@@ -265,7 +266,8 @@ test('runLogId / isRunLogId / parseRunLogId contract', () => {
   assert.equal(runLogId(d, 'analyze'), 'tagger-run-20261021-052741-analyze');
   assert.equal(runLogId(d, 'tag'), 'tagger-run-20261021-052741-tag');
   assert.equal(runLogId(d, 'reconcile'), 'tagger-run-20261021-052741-reconcile');
-  assert.throws(() => runLogId(d, 'other'), /unknown run mode/);
+  assert.equal(runLogId(d, 'tag', 2), 'tagger-run-20261021-052741-tag-2');
+  assert.throws(() => runLogId(d, 'other' as never), /unknown run mode/);
 
   // isRunLogId
   assert.equal(isRunLogId('tagger-run-20261021-052741-analyze'), true);
@@ -275,10 +277,15 @@ test('runLogId / isRunLogId / parseRunLogId contract', () => {
   assert.equal(isRunLogId(42), false);
   assert.equal(isRunLogId(null), false);
   assert.equal(isRunLogId('tagger-run-20261021-052741-analyze/../../etc'), false);
+  assert.equal(isRunLogId('tagger-run-20261021-052741-analyze-2'), true);
+  assert.equal(isRunLogId('tagger-run-20261021-052741-analyze-x'), false);
+  assert.equal(isRunLogId('tagger-run-20261021-052741-analyze-100'), false);
+  assert.equal(isRunLogId('tagger-run-20261021-052741-2-analyze'), false);
 
   // parseRunLogId
   const parsed = parseRunLogId('tagger-run-20261021-052741-analyze');
-  assert.deepEqual(parsed, { mode: 'analyze', startedAt: '2026-10-21T05:27:41.000Z' });
+  assert.deepEqual(parsed, { mode: 'analyze', startedAt: '2026-10-21T05:27:41.000Z', n: 1 });
+  assert.deepEqual(parseRunLogId('tagger-run-20261021-052741-tag-3'), { mode: 'tag', startedAt: '2026-10-21T05:27:41.000Z', n: 3 });
   assert.equal(parseRunLogId('nope'), null);
   assert.equal(parseRunLogId('tagger-run-20261021-052741-other'), null);
 });
@@ -338,6 +345,63 @@ test('listRunLogs returns only valid .log files, newest first', () => {
   assert.equal(list[0].startedAt, '2026-10-21T05:00:02.000Z');
   assert.equal(list[0].bytes, 'tagger-run-20261021-050002-reconcile'.length);
 
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('listRunLogs orders runs within one second by their count', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+  for (const id of [
+    'tagger-run-20261021-050000-tag-10',
+    'tagger-run-20261021-045959-reconcile',
+    'tagger-run-20261021-050000-tag',
+    'tagger-run-20261021-050000-reconcile-2',
+  ]) fs.writeFileSync(path.join(tmp, `${id}.log`), 'x');
+  assert.deepEqual(listRunLogs(tmp).map(f => f.id), [
+    'tagger-run-20261021-050000-tag-10',
+    'tagger-run-20261021-050000-reconcile-2',
+    'tagger-run-20261021-050000-tag',
+    'tagger-run-20261021-045959-reconcile',
+  ]);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('openRunLog gives a run started in the same second its own id and file', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+  const at = new Date('2026-10-21T05:27:41.100Z');
+  const a = openRunLog(tmp, at, 'tag', null);
+  a.event({ kind: 'info', text: 'first run', at: at.toISOString() }, () => false);
+  a.close();
+  const b = openRunLog(tmp, new Date('2026-10-21T05:27:41.900Z'), 'tag', a.runId);
+  b.event({ kind: 'info', text: 'second run', at: at.toISOString() }, () => false);
+  b.close();
+  // Another mode in the same second still counts on, so the count orders them.
+  const c = openRunLog(tmp, at, 'reconcile', b.runId);
+  c.close();
+  assert.equal(a.runId, 'tagger-run-20261021-052741-tag');
+  assert.equal(b.runId, 'tagger-run-20261021-052741-tag-2');
+  assert.equal(c.runId, 'tagger-run-20261021-052741-reconcile-3');
+  assert.equal(fs.readFileSync(path.join(tmp, `${a.runId}.log`), 'utf8'), '05:27:41  [info] first run\n');
+  assert.equal(fs.readFileSync(path.join(tmp, `${b.runId}.log`), 'utf8'), '05:27:41  [info] second run\n');
+  assert.deepEqual(listRunLogs(tmp).map(f => f.id), [c.runId, b.runId, a.runId]);
+
+  // The previous run counts even when its file never opened.
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+  assert.equal(openRunLog(empty, at, 'tag', a.runId).runId, 'tagger-run-20261021-052741-tag-2');
+  // And a run in another second starts the count again.
+  assert.equal(openRunLog(tmp, new Date('2026-10-21T05:27:42Z'), 'tag', c.runId).runId, 'tagger-run-20261021-052742-tag');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(empty, { recursive: true, force: true });
+});
+
+test('openRunLog keeps the newest nine files, so the new one is the tenth', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+  for (let i = 0; i < RUN_LOG_KEEP + 2; i++) {
+    fs.writeFileSync(path.join(tmp, `tagger-run-20261021-0400${String(i).padStart(2, '0')}-tag.log`), 'x');
+  }
+  openRunLog(tmp, new Date('2026-10-21T05:00:00Z'), 'tag', null).close();
+  const ids = listRunLogs(tmp).map(f => f.id);
+  assert.equal(ids.length, RUN_LOG_KEEP);
+  assert.equal(ids[0], 'tagger-run-20261021-050000-tag');
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
