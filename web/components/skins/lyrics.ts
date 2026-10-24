@@ -83,12 +83,12 @@ export interface TrackLyrics {
   station: StationOffsetControl;
 }
 
-/** Synced lines, the only kind a stage shows: they can follow the song. */
+/** Synced lines, which a stage plays along with the song. */
 export function syncedLyricsReady({ status, lyrics }: Pick<TrackLyrics, 'status' | 'lyrics'>): boolean {
   return status === 'ready' && !!lyrics?.synced && lyrics.lines.length > 0;
 }
 
-/** Untimed lines, which the lyrics settings offer to read instead. */
+/** Untimed lines, which a stage shows in the same place to scroll by hand. */
 export function plainLyricsReady({ status, lyrics }: Pick<TrackLyrics, 'status' | 'lyrics'>): boolean {
   return status === 'ready' && !!lyrics && !lyrics.synced && lyrics.lines.length > 0;
 }
@@ -108,7 +108,7 @@ export function lyricsNote(track: Pick<TrackLyrics, 'status' | 'lyrics'>, shown:
   if (plainLyricsReady(track)) {
     return lyrics.pending
       ? 'Untimed for now, still looking for synced ones.'
-      : 'Not timed, so they can’t follow the song. Here they are to read.';
+      : 'Not timed, so they don’t follow the song. Scroll through them.';
   }
   return lyrics.pending ? 'Looking for lyrics…' : 'No lyrics for this song.';
 }

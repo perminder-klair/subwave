@@ -1,7 +1,7 @@
 'use client';
 
-// Drift's lyrics: while a track has synced lines they become the centre of
-// the page, and DriftSkin shrinks the cover, title and DJ line around them.
+// Drift's lyrics: while a track has lyrics they become the centre of the
+// page, and DriftSkin shrinks the cover, title and DJ line around them.
 //
 // Three lines on one axis: the one just sung fading above, the one being sung
 // large, the next waiting faintly below. Opacity only, as everything in Drift
@@ -9,18 +9,59 @@
 // out), and slower than Classic's: lines dissolve rather than travel. Words
 // brighten as they are sung (lyricMoment() paces them; LRC times lines, not
 // words). Intros and breaks breathe, with Drift's own `breathe`. Under lite
-// mode or reduced motion lines cut and whole lines light at once. The lines
+// mode or reduced motion lines cut and whole lines light at once. Untimed
+// lyrics take the same centre, all of them, quieter, for the listener to
+// scroll by hand: with no timing there is nothing to play along to. The lines
 // carry no controls: the corner's lyrics icon (the ··· panel on a phone) opens
-// their settings, where an untimed song's words are to read (LyricsSettings).
+// their settings (LyricsSettings).
 
 import { memo, useEffect } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { cn } from '@/lib/cn';
-import { lyricMoment, syncedLyricsReady, useLingeringPresence, useLyricClock, type TrackLyrics } from '../lyrics';
+import {
+  lyricMoment,
+  plainLyricsReady,
+  syncedLyricsReady,
+  useLingeringPresence,
+  useLyricClock,
+  type TrackLyrics,
+} from '../lyrics';
 import { useSkinCalm } from '../sharedHooks';
 import styles from './Drift.module.css';
 
 const TICK_MS = 250;
+
+// The scroller's top and bottom fade, so untimed lines dissolve into the page
+// rather than cut off, and the padding that lets the first and last lines
+// scroll clear of them. A mask: no overlay colour would match the washes.
+const FADE =
+  'py-[1.6em] [mask-image:linear-gradient(to_bottom,transparent,#000_1.6em,#000_calc(100%-1.6em),transparent)]';
+
+/** Untimed lyrics: every line, centred, to scroll through by hand. */
+function PlainLyrics({ songId, lines, calm }: { songId?: string | null; lines: Array<{ text: string }>; calm: boolean }) {
+  return (
+    <section aria-label="Lyrics" className="relative flex w-[min(720px,92vw)] flex-col items-center">
+      {/* Keyed by track, so a new song starts at its top. */}
+      <m.div
+        key={songId}
+        initial={calm ? false : { opacity: 0 }}
+        animate={{ opacity: 1, transition: { duration: 0.8, ease: 'easeOut' } }}
+        tabIndex={0}
+        className={cn(
+          'v3-focus pointer-events-auto h-[min(46vh,380px)] w-full [scrollbar-width:none] overflow-y-auto overscroll-contain [&::-webkit-scrollbar]:hidden',
+          'text-center font-display text-[clamp(17px,2.2vw,26px)] leading-[1.45] font-medium text-ink',
+          FADE,
+        )}
+      >
+        {lines.map((line, i) =>
+          line.text.trim()
+            ? <p key={i} className="m-0 opacity-75">{line.text}</p>
+            : <div key={i} aria-hidden="true" className="h-[0.9em]" />,
+        )}
+      </m.div>
+    </section>
+  );
+}
 
 export interface DriftLyricsProps {
   /** The skin's one answer for this track (useTrackLyrics). */
@@ -56,7 +97,8 @@ export default memo(function DriftLyrics({ track, trackStartedAt, onPresenceChan
   const { lyrics } = track;
   const songId = lyrics?.songId;
 
-  const shown = syncedLyricsReady(track);
+  const synced = syncedLyricsReady(track);
+  const shown = synced || plainLyricsReady(track);
   const present = useLingeringPresence(shown);
   useEffect(() => {
     onPresenceChange(present);
@@ -64,6 +106,7 @@ export default memo(function DriftLyrics({ track, trackStartedAt, onPresenceChan
   useEffect(() => () => onPresenceChange(false), [onPresenceChange]);
 
   if (!shown || !lyrics) return null;
+  if (!synced) return <PlainLyrics songId={songId} lines={lyrics.lines} calm={calm} />;
 
   const moment = lyricMoment(lyrics, positionMs);
   const line = moment.current >= 0 ? lyrics.lines[moment.current] : null;

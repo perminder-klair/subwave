@@ -125,8 +125,9 @@ export interface CenterStageProps {
   offline: boolean;
   /** Head of the controller's upcoming queue. Null when the queue is empty. */
   upNext: QueueEntry | null;
-  /** Synced lyrics are showing (AmbientLyrics): the stage gives them the right
-   *  half on wide screens and a band above the waveform on narrow ones. */
+  /** Lyrics are showing (AmbientLyrics), synced or not: the stage gives them
+   *  the right half on wide screens and a band above the waveform on narrow
+   *  ones. */
   lyricsShown?: boolean;
   /** This listener's lyrics; absent while the station has lyrics off. */
   lyrics?: StageLyrics | null;
@@ -223,7 +224,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // waveform shape that breakpoint renders. Short/wide windows bottom-align
     // so long DJ lines grow upward, never over the band. The right reserve
     // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
-    // While synced lyrics show (AmbientLyrics), lg and up hands them the right
+    // While lyrics show (AmbientLyrics), lg and up hands them the right
     // of the stage, and narrower screens add --lyrics-band to the bottom
     // reserve for the band above the waveform. That band is left out on a
     // short screen below lg, so the reserve is too.

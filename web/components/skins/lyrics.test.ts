@@ -139,7 +139,7 @@ test('untimed or absent lyrics give the ambient display nothing to show', () => 
   }
 });
 
-test('the stage takes synced lines, and the settings offer untimed ones to read', () => {
+test('the stage plays synced lines along, and shows untimed ones to scroll', () => {
   const plain: PublicLyricsPayload = { ...synced, synced: false, lines: [{ startMs: null, text: 'a' }] };
   const none: PublicLyricsPayload = { ...synced, synced: false, lines: [] };
   assert.equal(syncedLyricsReady({ status: 'ready', lyrics: synced }), true);

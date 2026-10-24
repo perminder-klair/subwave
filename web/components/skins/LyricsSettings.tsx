@@ -1,15 +1,14 @@
 'use client';
 
 // What a skin's lyrics button opens: this browser's switch for lyrics, a line
-// on what the track has, the timing corrections while synced lyrics show, and
-// a song's untimed lyrics to read. The stage shows only synced lines, which can
-// follow the song, so this is the one place untimed lyrics appear. Classic
-// opens it from the button beside the heart, Drift from its corner icon, and on
-// a phone from its ··· panel. Each skin positions and frames it.
+// on what the track has, and the timing corrections while synced lyrics show.
+// The lyrics themselves stay on the stage, untimed ones included. Classic opens
+// it from the button beside the heart, Drift from its corner icon, and on a
+// phone from its ··· panel. Each skin positions and frames it.
 
 import { useEffect, type RefObject } from 'react';
 import { cn } from '@/lib/cn';
-import { lyricsNote, plainLyricsReady, syncedLyricsReady, type TrackLyrics } from '@/components/skins/lyrics';
+import { lyricsNote, syncedLyricsReady, type TrackLyrics } from '@/components/skins/lyrics';
 import LyricsTiming from '@/components/skins/LyricsTiming';
 
 export interface LyricsSettingsProps {
@@ -50,7 +49,6 @@ export function usePopoverDismiss(
 
 export default function LyricsSettings({ shown, onToggle, track, className }: LyricsSettingsProps) {
   const synced = shown && syncedLyricsReady(track);
-  const plain = shown && plainLyricsReady(track);
   return (
     <div className={cn('grid gap-3 text-left tracking-normal normal-case', className)}>
       <div>
@@ -88,19 +86,6 @@ export default function LyricsSettings({ shown, onToggle, track, className }: Ly
             setDeviceOffsetMs={track.setDeviceOffsetMs}
             station={track.station}
           />
-        </div>
-      )}
-
-      {plain && track.lyrics && (
-        <div
-          className="max-h-[min(34vh,300px)] overflow-y-auto overscroll-contain border-t border-separator-soft pt-3 text-[13px] leading-relaxed text-ink"
-          tabIndex={0}
-          role="region"
-          aria-label="Lyrics to read"
-        >
-          {track.lyrics.lines.map((line, i) => (
-            <p key={i} className={cn('m-0', !line.text.trim() && 'h-3')}>{line.text}</p>
-          ))}
         </div>
       )}
     </div>

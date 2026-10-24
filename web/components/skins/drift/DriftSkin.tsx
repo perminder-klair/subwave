@@ -182,8 +182,8 @@ export default function DriftSkin(_props: SkinProps) {
   const typeSwap = animates ? TYPE_DISSOLVE : TYPE_CUT;
   const coverSwap = animates ? COVER_DISSOLVE : COVER_CUT;
 
-  // Synced lyrics take the centre of the page (DriftLyrics) and everything
-  // else there shrinks around them. The operator's switch rides GET /state;
+  // Lyrics, synced or not, take the centre of the page (DriftLyrics) and
+  // everything else there shrinks around them. The operator's switch rides GET /state;
   // within it, L shows and hides them for this browser, and the corner's
   // lyrics icon (the ··· panel on a phone) opens their settings. One answer
   // per track feeds both the lines and the settings.
@@ -345,7 +345,7 @@ export default function DriftSkin(_props: SkinProps) {
           )}
         >
           {/* Two arrangements that dissolve into each other: the full stack,
-              or one small line while synced lyrics hold the centre. */}
+              or one small line while lyrics hold the centre. */}
           <AnimatePresence mode="wait" initial={false}>
             {focus ? (
               <m.div key="compact" {...typeSwap} className="flex max-w-full items-center gap-3.5">

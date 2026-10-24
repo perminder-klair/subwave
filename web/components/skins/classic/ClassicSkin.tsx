@@ -103,7 +103,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
 
   // Lyrics show on the stage itself (AmbientLyrics), never in a drawer. The
   // operator's switch rides GET /state; within it, L toggles this listener's
-  // own choice, and the stage makes room only while synced lines are showing.
+  // own choice, and the stage makes room only while lines are showing.
   // One answer per track feeds both the stage and the lyrics settings that
   // the button beside the heart opens.
   const lyricsOn = state.lyrics?.enabled === true;
