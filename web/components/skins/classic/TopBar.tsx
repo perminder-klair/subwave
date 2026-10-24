@@ -15,6 +15,8 @@ export interface TopBarProps {
   /** Optional — when provided, the show + host line becomes a button that
    *  opens the Schedule drawer. Omitted on Landing where there's no player. */
   onOpenSchedule?: () => void;
+  /** The stage is split for lyrics (AmbientLyrics); the bar says so from lg. */
+  lyricsLive?: boolean;
 }
 
 export default memo(function TopBar({
@@ -24,6 +26,7 @@ export default memo(function TopBar({
   djName,
   activeShow,
   onOpenSchedule,
+  lyricsLive = false,
 }: TopBarProps) {
   const tagline = buildTagline(context);
   const showName = activeShow?.name || null;
@@ -91,6 +94,12 @@ export default memo(function TopBar({
           )}
         </div>
         <div className="flex shrink-0 items-center">
+          {lyricsLive && (
+            <span className="v3-caption mr-5 hidden items-center gap-1.5 font-bold text-vermilion lg:inline-flex">
+              <span aria-hidden="true" className="size-1.5 bg-vermilion" />
+              Lyrics
+            </span>
+          )}
           <ThemeSwitcher variant="player" />
         </div>
       </div>

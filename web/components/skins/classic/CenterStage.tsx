@@ -224,19 +224,28 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // waveform shape that breakpoint renders. Short/wide windows bottom-align
     // so long DJ lines grow upward, never over the band. The right reserve
     // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
-    // While lyrics show (AmbientLyrics), lg and up hands them the right
-    // of the stage, and narrower screens add --lyrics-band to the bottom
-    // reserve for the band above the waveform. That band is left out on a
-    // short screen below lg, so the reserve is too.
+    // While lyrics show (AmbientLyrics), lg and up splits the stage: the
+    // track info stacks in a 360px column on the left, ruled off from the
+    // lyrics beside it, and keeps only the cover, the title and the artist
+    // line. Narrower screens add --lyrics-band to the bottom reserve for the
+    // band above the waveform. That band is left out on a short screen below
+    // lg, so the reserve is too.
     <div
       className={cn(
         'absolute top-[72px] right-[80px] bottom-[calc(220px+var(--lyrics-band,0px))] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[calc(212px+var(--lyrics-band,0px))] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[calc(300px+var(--lyrics-band,0px))]',
-        lyricsShown && '[--lyrics-band:132px] lg:right-[46%] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
+        lyricsShown && '[--lyrics-band:132px] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
+        // The column's rule runs up to the top bar's (49px at lg).
+        lyricsShown && 'lg:top-[49px] lg:right-auto lg:left-0 lg:w-[360px] lg:border-r lg:border-separator-strong lg:px-8',
       )}
     >
       {/* Above the stage's lyrics (z-[1]), which the lyrics settings can
           overlap on a narrow screen. */}
-      <div className="relative isolate z-[2] flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
+      <div
+        className={cn(
+          'relative isolate z-[2] flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6',
+          lyricsShown && 'lg:flex-col lg:items-start lg:gap-5',
+        )}
+      >
         {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
         <button
           ref={coverRef}
@@ -249,6 +258,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             // cover. The 96px floor is what phones get: 14vw is only ~55px on a
             // 390px screen, too small a target for the tap-to-timeline.
             'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+            lyricsShown && 'lg:h-[min(200px,24vh)] lg:w-[min(200px,24vh)]',
             rippleActive && 'v3-cover-live',
           )}
         >
@@ -332,7 +342,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             >
               {live ? (
                 <>
-                  <h1 className="v3-title m-0 line-clamp-2 text-ink" title={nowPlaying?.title}>
+                  <h1
+                    className={cn(
+                      'v3-title m-0 line-clamp-2 text-ink',
+                      // .v3-title is unlayered, so its size yields only to !.
+                      lyricsShown && 'lg:text-[clamp(30px,3vw,46px)]!',
+                    )}
+                    title={nowPlaying?.title}
+                  >
                     {nowPlaying?.title}
                   </h1>
                   <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
@@ -350,7 +367,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     )}
                   </div>
                   {hasMeta && (
-                    <div className="v3-caption mt-[10px] text-muted">
+                    <div className={cn('v3-caption mt-[10px] text-muted', lyricsShown && 'lg:hidden')}>
                       {metaTokens.join(SEP)}
                       {moodPhrase && (
                         <span className="text-accent-2">
@@ -383,7 +400,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
       </div>
 
       {live && (
-        <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
+        <DjThinkingLine
+          feed={feed}
+          enabled={djLineOn}
+          currentTrackId={subsonicId}
+          buddyOn={boothBuddyOn}
+          onOpenBooth={onOpenBooth}
+          className={cn(lyricsShown && 'lg:hidden')}
+        />
       )}
 
       <AnimatePresence>
@@ -396,7 +420,10 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted"
+            className={cn(
+              'v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted',
+              lyricsShown && 'lg:hidden',
+            )}
           >
             <span className="text-accent-2">↦ up next</span>
             {' · '}
