@@ -15,26 +15,23 @@ const ITEMS: readonly RailItem[] = [
   { k: 'schedule', l: 'Schedule' },
   { k: 'timeline', l: 'Timeline' },
   { k: 'booth',    l: 'Booth' },
-  { k: 'lyrics',   l: 'Lyrics' },
   { k: 'request',  l: 'Request' },
 ];
 
 export interface DotRailProps {
   /** Counts (or icon nodes) keyed by drawer id. `request` is rendered as "+" regardless. */
   counts?: Partial<Record<PlayerDrawer, ReactNode>>;
-  /** Drawers this station does not offer (Lyrics, when the operator has it off). */
-  hidden?: readonly PlayerDrawer[];
   active: PlayerDrawer | null;
   onSelect: (id: PlayerDrawer | null) => void;
 }
 
-export default memo(function DotRail({ counts, hidden, active, onSelect }: DotRailProps) {
+export default memo(function DotRail({ counts, active, onSelect }: DotRailProps) {
   return (
     <div
       // Slimmed on phones; CenterStage's right reserve tracks these widths.
       className="absolute top-20 right-0 bottom-20 z-20 flex w-[76px] flex-col items-center justify-center gap-1 sm:w-24"
     >
-      {ITEMS.filter(item => !hidden?.includes(item.k)).map(item => {
+      {ITEMS.map(item => {
         const isActive = active === item.k;
         const isRequest = item.k === 'request';
         const n: ReactNode = isRequest ? '+' : (counts?.[item.k] ?? 0);

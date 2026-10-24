@@ -55,6 +55,8 @@ export interface UseCurrentLyricsOptions {
   songId?: string | null;
   /** When the listener's audio of this track began (ms epoch, listener time). */
   trackStartedAt: number | null;
+  /** How often the lyric clock advances while synced lyrics are showing. */
+  tickMs?: number;
 }
 
 export interface StationOffsetControl {
@@ -74,6 +76,9 @@ export interface CurrentLyricsState {
   status: LyricsStatus;
   lyrics: PublicLyricsPayload | null;
   activeLineIndex: number;
+  /** Where the lyric clock stands: elapsed time plus both corrections, the
+   *  value each line's `startMs` is compared with. */
+  positionMs: number;
   deviceOffsetMs: number;
   setDeviceOffsetMs: (next: number) => void;
   station: StationOffsetControl;
@@ -106,6 +111,64 @@ export function activeLyricLineIndex(
     active = i;
   }
   return active;
+}
+
+// How a line is paced when only its start is known (LRC times lines, not
+// words): roughly this long per word, never under the floor, and never past the
+// next line. A line left up longer than LINE_HOLD_MS with nothing following is
+// an instrumental break, so the stage rests; the line after it is teased
+// TEASE_MS before it is sung.
+const WORD_MS = 380;
+const MIN_SUNG_MS = 900;
+export const LINE_HOLD_MS = 9_000;
+export const TEASE_MS = 3_500;
+
+export interface LyricMoment {
+  /** The line being sung, or -1 in an intro, a break, or after the last line. */
+  current: number;
+  /** How far through `current`'s words the singing is, 0 to 1. */
+  progress: number;
+  /** The line to show faintly after it, or -1. */
+  next: number;
+  /** Nothing is being sung: an intro, an instrumental break or the outro. */
+  resting: boolean;
+}
+
+/** What an ambient lyrics display shows at `positionMs` on the lyric clock. */
+export function lyricMoment(lyrics: PublicLyricsPayload | null, positionMs: number): LyricMoment {
+  const lines = lyrics?.synced ? lyrics.lines : [];
+  const at = (i: number) => lines[i]?.startMs;
+  const firstTimed = lines.findIndex((l) => l.startMs != null);
+  if (firstTimed < 0) return { current: -1, progress: 0, next: -1, resting: false };
+
+  let active = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const start = at(i);
+    if (start == null) continue;
+    if (start > positionMs) break;
+    active = i;
+  }
+  let following = -1;
+  for (let i = active + 1; i < lines.length; i++) {
+    if (at(i) != null) {
+      following = i;
+      break;
+    }
+  }
+  const teased = (i: number) => (i >= 0 && (at(i) as number) - positionMs <= TEASE_MS ? i : -1);
+
+  if (active < 0) return { current: -1, progress: 0, next: teased(firstTimed), resting: true };
+
+  const start = at(active) as number;
+  const nextStart = following >= 0 ? (at(following) as number) : Number.POSITIVE_INFINITY;
+  // Past the hold with the next line still far off: a break, not a held note.
+  if (positionMs - start > LINE_HOLD_MS && nextStart - start > LINE_HOLD_MS) {
+    return { current: -1, progress: 0, next: teased(following), resting: true };
+  }
+  const words = lines[active]?.text.split(/\s+/).filter(Boolean).length || 1;
+  const sungMs = Math.min(Math.max(words * WORD_MS, MIN_SUNG_MS), nextStart - start);
+  const progress = Math.min(1, Math.max(0, (positionMs - start) / sungMs));
+  return { current: active, progress, next: following, resting: false };
 }
 
 /** When to ask again about an answer marked `pending`, after `asks` such asks;
@@ -143,7 +206,7 @@ interface Answer {
   lyrics: PublicLyricsPayload | null;
 }
 
-export function useCurrentLyrics({ songId, trackStartedAt }: UseCurrentLyricsOptions): CurrentLyricsState {
+export function useCurrentLyrics({ songId, trackStartedAt, tickMs = 500 }: UseCurrentLyricsOptions): CurrentLyricsState {
   const client = useStationClient();
   const { auth, adminFetch } = useAdminAuth();
   const id = songId || null;
@@ -216,9 +279,9 @@ export function useCurrentLyrics({ songId, trackStartedAt }: UseCurrentLyricsOpt
 
   useEffect(() => {
     if (!lyrics?.synced) return;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 500);
+    const timer = window.setInterval(() => setNowMs(Date.now()), tickMs);
     return () => window.clearInterval(timer);
-  }, [lyrics?.synced, trackStartedAt]);
+  }, [lyrics?.synced, trackStartedAt, tickMs]);
 
   const setDeviceOffsetMs = useCallback((next: number) => {
     const clamped = clampLyricOffsetMs(next);
@@ -277,6 +340,7 @@ export function useCurrentLyrics({ songId, trackStartedAt }: UseCurrentLyricsOpt
     status: current.status,
     lyrics,
     activeLineIndex,
+    positionMs: elapsedMs + stationMs + deviceOffsetMs,
     deviceOffsetMs,
     setDeviceOffsetMs,
     station: {

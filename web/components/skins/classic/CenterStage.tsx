@@ -86,11 +86,14 @@ export interface CenterStageProps {
   offline: boolean;
   /** Head of the controller's upcoming queue. Null when the queue is empty. */
   upNext: QueueEntry | null;
+  /** Synced lyrics are showing (AmbientLyrics): the stage gives them the right
+   *  half on wide screens and a band above the waveform on narrow ones. */
+  lyricsShown?: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -170,7 +173,16 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // waveform shape that breakpoint renders. Short/wide windows bottom-align
     // so long DJ lines grow upward, never over the band. The right reserve
     // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
-    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
+    // While synced lyrics show (AmbientLyrics), lg and up hands them the right
+    // of the stage, and narrower screens add --lyrics-band to the bottom
+    // reserve for the band above the waveform. That band is left out on a
+    // short screen below lg, so the reserve is too.
+    <div
+      className={cn(
+        'absolute top-[72px] right-[80px] bottom-[calc(220px+var(--lyrics-band,0px))] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[calc(212px+var(--lyrics-band,0px))] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[calc(300px+var(--lyrics-band,0px))]',
+        lyricsShown && '[--lyrics-band:132px] lg:right-[46%] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
+      )}
+    >
       <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
         <button

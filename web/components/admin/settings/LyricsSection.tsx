@@ -37,12 +37,14 @@ export function LyricsCard({ data, form, setForm }: LyricsPartProps) {
             options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
           />
           <div className="field-hint">
-            Shows the playing song&apos;s lyrics from your music server, highlighting each line
-            as it is sung. Off hides the panel and refuses <code>GET /lyrics/current</code>. On
-            republishes the lyric text to anyone who can open the player, and each track a
-            listener opens costs one lyrics lookup on your music server (cached briefly). If a
-            track&apos;s lyrics run early or late, open the panel in a browser signed in here and
-            fix that track for every listener from its timing controls.
+            Shows the playing song&apos;s synced lyrics large beside the track on the Classic skin,
+            each line lighting up as it is sung; a listener can hide them with <code>L</code>.
+            Tracks with only untimed lyrics show none. Off hides them and refuses{' '}
+            <code>GET /lyrics/current</code>. On republishes the lyric text to anyone who can open
+            the player, and each track costs one lyrics lookup on your music server (cached
+            briefly, shared by every listener). If a track&apos;s lyrics run early or late, use the
+            sliders beside ♪ Lyrics in a browser signed in here to fix that track for every
+            listener.
           </div>
         </div>
         <div className="field">

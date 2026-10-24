@@ -9,7 +9,7 @@ interface Shortcut {
   label: string;
 }
 
-const LYRICS_LABEL = 'Open Lyrics';
+const LYRICS_LABEL = 'Show / hide lyrics';
 
 const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['Space', 'K'], label: 'Tune in / out' },
@@ -20,7 +20,7 @@ const SHORTCUTS: readonly Shortcut[] = [
   { keys: ['2'], label: 'Open Booth feed' },
   { keys: ['3', 'R'], label: 'Make a request' },
   { keys: ['4'], label: 'Open Schedule' },
-  { keys: ['5', 'L'], label: LYRICS_LABEL },
+  { keys: ['L'], label: LYRICS_LABEL },
   { keys: ['S'], label: 'Next player skin' },
   { keys: ['T'], label: 'Next theme' },
   { keys: ['?'], label: 'This shortcuts list' },
@@ -32,7 +32,7 @@ export interface ShortcutsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   container?: HTMLElement | null;
-  /** Whether the station offers the Lyrics panel. */
+  /** Whether the station offers lyrics. */
   lyrics?: boolean;
 }
 
