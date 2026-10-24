@@ -173,6 +173,7 @@ export interface LlmForm {
   segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
+  genreVarietyWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -262,6 +263,11 @@ export interface LikesForm {
   influenceDj: boolean;
   maxTracks: string;
   windowDays: string;
+}
+
+/** The listener Lyrics panel — `settings.lyrics`. */
+export interface LyricsForm {
+  enabled: boolean;
 }
 
 export interface ArchiveForm {
@@ -398,6 +404,7 @@ export interface FormState {
   scrobble: ScrobbleForm;
   privacy: PrivacyForm;
   likes: LikesForm;
+  lyrics: LyricsForm;
   requests: RequestsForm;
 }
 
@@ -554,6 +561,9 @@ export interface SettingsData {
       influenceDj?: boolean;
       maxTracks?: number;
       windowDays?: number;
+    };
+    lyrics?: {
+      enabled?: boolean;
     };
   };
   tts?: {

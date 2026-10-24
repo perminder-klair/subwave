@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-pick-transition-context-'));
 process.env.STATE_DIR = stateRoot;
@@ -44,13 +45,13 @@ before(async () => {
   db.upsertTrackAnalysis(anchor.id, { bpm: 99.4, musicalKey: '8A' });
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   pickerAgent.run = realRun;
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 test('the real library projection supplies candidate-format predecessor facts without a pickable id', () => {

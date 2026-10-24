@@ -18,7 +18,10 @@ import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -47,6 +50,7 @@ import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
 import { router as likesRoutes } from './routes/likes.js';
+import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
 import { router as communityRoutes } from './routes/community.js';
@@ -129,6 +133,7 @@ app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
 app.use(likesRoutes);
+app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
 app.use(communityRoutes);
@@ -317,7 +322,16 @@ app.listen(config.server.port, async (err?: Error) => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  await startStreamIdleMonitor(flushPendingAutoPlaylist);
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: (stale, { skip }) => queue.dropProgrammeFromEarlierShow(stale, skip ? skipTrack : null),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));

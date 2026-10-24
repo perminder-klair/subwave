@@ -2,7 +2,7 @@
 // What these guard is FIDELITY: the hand-rolled branches carry accidental
 // leniency (parseInt truncating a float, `!!`, `patch.beds || {}`) and no
 // conversion may turn a silent repair into a refusal or the reverse.
-// Run: npx tsx scripts/settings-patch-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- settings-patch-schema`.
 // What these tests are really guarding is FIDELITY. The branches being replaced
 import assert from 'node:assert/strict';
 import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
@@ -556,13 +556,13 @@ test('update() still tolerates a key it has never heard of', async () => {
 });
 
 test('the converted keys are exactly the ones with schemas', () => {
-  // The remaining keys and why each resists a stateless schema are in CLAUDE.md.
+  // The remaining keys and why each resists a stateless schema are in docs/internals/schemas.md.
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
     'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
     'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'handover', 'jinglePlacement', 'jingleRatio', 'jingleRotate', 'likes',
-    'locale', 'loudness', 'maxTrackLengthMode', 'maxTrackSeconds', 'moodSchedule', 'moods',
+    'locale', 'loudness', 'lyrics', 'maxTrackLengthMode', 'maxTrackSeconds', 'moodSchedule', 'moods',
     'pauseTalkMinSeconds', 'personas',
     'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',

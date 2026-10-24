@@ -4,15 +4,24 @@
 // tools return only the candidate results recorded in the original session.
 // The fixture's verdict is deliberately about Leanings provenance, not whether
 // a model happens to choose the same track as the live run.
+//
+// The station's model, personas and schedule come from copies in a temp
+// STATE_DIR (test-utils/isolated-state.ts), so the replay's telemetry never
+// reaches the station's logs. The dir is printed and removed on exit.
 
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as settings from '../src/settings.js';
-import { djAgent, djObject, modelTolerant } from '../src/llm/sdk.js';
-import { pickSchema, pickSchemaBase, pickSystem } from '../src/broadcast/dj-agent/schemas.js';
-import { shortlistPickPrompt, shortlistPickSchema } from '../src/broadcast/dj-agent/shortlist-pick.js';
+import { isolateStationState } from './test-utils/isolated-state.js';
+
+// Every src/ import is dynamic and comes after this call: config.ts fixes its
+// state root at import, and a static import would be evaluated first.
+const { dir: isolatedStateDir } = isolateStationState('subwave-agentic-leanings-replay-');
+const settings = await import('../src/settings.js');
+const { djAgent, djObject, modelTolerant } = await import('../src/llm/sdk.js');
+const { pickSchema, pickSchemaBase, pickSystem } = await import('../src/broadcast/dj-agent/schemas.js');
+const { shortlistPickPrompt, shortlistPickSchema } = await import('../src/broadcast/dj-agent/shortlist-pick.js');
 
 type Fixture = {
   name: string;
@@ -163,6 +172,7 @@ async function main() {
     : pickSchema();
 
   console.log(`\n=== Agentic Leanings replay: ${fixture.name} × ${iterations} (${variant}) ===`);
+  console.log(`Isolated STATE_DIR: ${isolatedStateDir}`);
   console.log(`Expected provenance: usedMusicalLeanings=${fixture.expected.usedMusicalLeanings}`);
   console.log(`${fixture.expected.note}\n`);
 

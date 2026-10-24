@@ -47,6 +47,8 @@ export default memo(function TopBar({
             aria-hidden="true"
           />
           <span className="v3-eyebrow shrink-0">{stationName?.trim() || 'SUB/WAVE'}</span>
+          {/* The ▶ is lifted so its middle sits half a cap height up, level with
+              the capitals; the default `middle` hangs it off the x-height. */}
           {showName && (
             onOpenSchedule ? (
               <button
@@ -55,11 +57,11 @@ export default memo(function TopBar({
                 className="v3-caption v3-focus min-w-0 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-ink hover:underline"
                 title={`${showName} — open schedule`}
               >
-                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
+                <Play className="inline size-2.5 fill-current align-[calc(0.5cap-5px)]" strokeWidth={0} /> {showName}
               </button>
             ) : (
               <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
-                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
+                <Play className="inline size-2.5 fill-current align-[calc(0.5cap-5px)]" strokeWidth={0} /> {showName}
               </span>
             )
           )}

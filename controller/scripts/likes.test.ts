@@ -5,7 +5,7 @@
 // break: an operator like is idempotent per song, it is exempt from topLiked()'s
 // window cutoff, and it is exempt from the MAX_RECORDS trim. Get either
 // exemption wrong and the operator's curation silently disappears weeks later.
-// Run: `tsx scripts/likes.test.ts`.
+// Run: `npm test -- likes.test.ts`.
 //
 // node:assert-via-tsx style, matching scripts/blocklist.test.ts.
 

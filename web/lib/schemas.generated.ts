@@ -46,7 +46,7 @@ export interface SeasonWindow {
 // module); pinned by scripts/blocklist-name-fold.test.ts. Punctuation beyond
 // the apostrophe is deliberately not folded (`trip-hop` != `trip hop`).
 export const normText = (s: unknown) =>
-  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
+  String(s ?? '').normalize('NFC').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
 // Number(x) + range test rather than z.number().int(): a numeric STRING from
 // <input type=number> has always been accepted.
@@ -177,14 +177,15 @@ export const blockEntrySchema = z.object({
 
 // ─── from controller/src/schemas/dj.ts ───────────────────────────────────
 
-// Shared shapes for the studio's own queue actions (#1622 FR 4) — today just
-// the block queue, `POST /dj/queue-block`.
+// Shared shapes for the studio's own queue actions (#1622 FR 4) — the block
+// queue, `POST /dj/queue-block` — and the targeted skip, `POST /dj/skip`.
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle by `npm run gen:schemas`, so a project import or a node
 // builtin here breaks the mirror. Everything impure — resolving an album id
-// from a track, reading the blocklist, ordering the songs — lives in
-// broadcast/block-queue.ts and routes/dj.ts.
+// from a track, reading the blocklist, ordering the songs, reading what is on
+// air — lives in broadcast/block-queue.ts, broadcast/skip-policy.ts and
+// routes/dj.ts.
 
 /** What a block is a block OF. */
 export const QUEUE_BLOCK_KINDS = ['album', 'artist'] as const;
@@ -275,6 +276,46 @@ export const queueBlockSchema = z
   });
 
 export type QueueBlockBody = z.infer<typeof queueBlockSchema>;
+
+/**
+ * Why a targeted skip skipped nothing (#2017), the `reason` of its 409.
+ *
+ *   * `track-changed` — now-playing no longer names the track the caller
+ *     meant: it ended, during the commit wait or before the request arrived.
+ *   * `jingle-on-air` — a jingle is on air, or waiting in the crossfade
+ *     buffer behind the outgoing track's tail. Now-playing names the song
+ *     before it, or (from that song's closing seam) the song after it, and a
+ *     skip would cut the jingle or the tail, not the song. The window that
+ *     decides it also covers the first seconds of the song after the jingle,
+ *     so that song is about to play, or has just started: try again once it
+ *     is playing.
+ *   * `bed-on-air` / `break-on-air` — now-playing still names it, but the
+ *     mixer has since placed a bed or a pause-and-talk break after it.
+ *     Neither rewrites now-playing, so the name is stale and a skip would cut
+ *     the item, not the song.
+ */
+export const SKIP_REFUSAL_REASONS = ['track-changed', 'jingle-on-air', 'bed-on-air', 'break-on-air'] as const;
+export type SkipRefusalReason = (typeof SKIP_REFUSAL_REASONS)[number];
+
+/**
+ * Body for `POST /dj/skip`.
+ *
+ * `expectId` is the on-air track's `subsonic_id` as the caller saw it on
+ * `/now-playing`. With it, the skip lands only if that track is still what is
+ * on air; without it (absent or null) the skip is the bare one it always was.
+ * The route took no body before this, so anything that is not a JSON object
+ * — no body, a text body, an array — still reads as no target, and other keys
+ * are dropped rather than refused. The shape is exported on its own for the
+ * MCP tool's input, which takes a raw shape rather than a schema.
+ */
+export const skipBodyShape = { expectId: idField.nullish() };
+
+export const skipBodySchema = z.preprocess(
+  (body) => (body && typeof body === 'object' && !Array.isArray(body) ? body : {}),
+  z.object(skipBodyShape),
+);
+
+export type SkipBody = z.infer<typeof skipBodySchema>;
 
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
@@ -596,6 +637,60 @@ export interface SceneReference {
    *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
 }
+
+// ─── from controller/src/schemas/lyrics.ts ───────────────────────────────
+
+// Shared lyrics shapes: the public `GET /lyrics/current` payload, its query,
+// and the operator's per-track timing offset (`PUT /lyrics/offsets/:trackId`).
+// Mirrored into the web bundle, so the player and the controller read one
+// definition of each and one set of offset bounds.
+
+// The offset is a correction for a lyric file that is out of step with its
+// audio. Thirty seconds either way covers a mistimed LRC; anything past that is
+// a wrong file, not a timing fault.
+export const LYRIC_OFFSET_MIN_MS = -30_000;
+export const LYRIC_OFFSET_MAX_MS = 30_000;
+
+// Positive advances the highlighting (lines appear sooner), negative delays it.
+export const lyricOffsetMsSchema = z
+  .number({ error: 'offsetMs must be a number' })
+  .int('offsetMs must be a whole number of milliseconds')
+  .min(LYRIC_OFFSET_MIN_MS, `offsetMs must be ${LYRIC_OFFSET_MIN_MS} to ${LYRIC_OFFSET_MAX_MS}`)
+  .max(LYRIC_OFFSET_MAX_MS, `offsetMs must be ${LYRIC_OFFSET_MIN_MS} to ${LYRIC_OFFSET_MAX_MS}`);
+
+export const lyricOffsetBodySchema = z.strictObject({ offsetMs: lyricOffsetMsSchema });
+
+// A Subsonic id is opaque; the bound only keeps a query from carrying a novel.
+export const LYRICS_TRACK_ID_MAX = 200;
+
+export const lyricsTrackIdSchema = z.string().trim().min(1).max(LYRICS_TRACK_ID_MAX);
+
+// `songId` names the track the LISTENER is hearing, which sits a stream buffer
+// behind the live edge. Absent means the on-air track.
+export const lyricsQuerySchema = z.object({
+  songId: lyricsTrackIdSchema.optional(),
+});
+
+export const publicLyricLineSchema = z.object({
+  // Milliseconds on the PLAYED timeline (a trimmed head already taken off), so
+  // a player compares it with elapsed time since the track started. Null on a
+  // plain, untimed line.
+  startMs: z.number().nullable(),
+  text: z.string(),
+});
+
+export const publicLyricsPayloadSchema = z.object({
+  songId: z.string().nullable(),
+  synced: z.boolean(),
+  // The station's correction for this track: add it to elapsed time before
+  // choosing the active line. Kept out of `startMs` so the operator can see and
+  // adjust the value that is in force.
+  offsetMs: z.number(),
+  lines: z.array(publicLyricLineSchema),
+});
+
+export type PublicLyricLine = z.infer<typeof publicLyricLineSchema>;
+export type PublicLyricsPayload = z.infer<typeof publicLyricsPayloadSchema>;
 
 // ─── from controller/src/schemas/onboarding.ts ───────────────────────────
 
@@ -3304,6 +3399,14 @@ export const likesPatchSchema = settingsBlockOf({
     { min: 0, max: 365 },
     'likes.windowDays must be 0-365 (0 = all time)',
   ),
+});
+
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). Off by
+// default: it republishes third-party lyric text on an unauthenticated route
+// and turns listener polling into calls against the music server, so an
+// operator opts in.
+export const lyricsPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
 });
 
 export const searchPatchSchema = settingsBlockOf({

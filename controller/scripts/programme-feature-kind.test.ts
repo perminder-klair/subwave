@@ -15,9 +15,10 @@ import type { SessionContext } from '../src/broadcast/session.js';
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-programme-feature-kind-'));
 process.env.STATE_DIR = root;
@@ -28,7 +29,7 @@ const { queue } = await import('../src/broadcast/queue.js');
 const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
 const { narrowPlanKinds } = await import('../src/llm/internal/prompts/programme.js');
-after(() => rm(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 await settings.load();
 
 test('narrowPlanKinds nulls any kind outside the offered menu', () => {

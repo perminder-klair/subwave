@@ -1,10 +1,11 @@
 // Real preparation -> controller search -> selection -> separate link writer.
 // All HTTP is synthetic; assert the model has no executable discovery tools.
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { before, after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-targeted-route-'));
 process.env.STATE_DIR = root;
@@ -95,7 +96,7 @@ function completion(content: string) {
     choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content } }],
     usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 } });
 }
-after(() => { globalThis.fetch = realFetch; Math.random = realRandom; library.shutdown(); rmSync(root, { recursive: true, force: true }); });
+after(async () => { globalThis.fetch = realFetch; Math.random = realRandom; library.shutdown(); await removeTempDir(root); });
 
 async function pick() {
   const ctx = { at: new Date().toISOString(), activeShow: show, dominantMood: null, time: { period: 'day' } };

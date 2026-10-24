@@ -1008,6 +1008,14 @@ export const likesPatchSchema = settingsBlockOf({
   ),
 });
 
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). Off by
+// default: it republishes third-party lyric text on an unauthenticated route
+// and turns listener polling into calls against the music server, so an
+// operator opts in.
+export const lyricsPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+});
+
 export const searchPatchSchema = settingsBlockOf({
   provider: settingsStrictOneOf(
     SETTINGS_SEARCH_PROVIDERS,

@@ -287,7 +287,8 @@ test('production rechecks idle before replacing watched file, and startup awaits
   assert.ok(write >= 0, 'watched file publication must exist');
   assert.ok(gate < write, 'idle recheck must precede publication');
   const server = readFileSync(new URL('../src/server.ts', import.meta.url), 'utf8');
-  assert.match(server, /await startStreamIdleMonitor\(flushPendingAutoPlaylist\)/);
+  // The resume hook still flushes the deferred refresh when the show is the same.
+  assert.match(server, /await startStreamIdleMonitor\(async \(\{ showChanged \}\) => \{\s+if \(!showChanged\) return flushPendingAutoPlaylist\(\);/);
   const adopt = server.indexOf('await startStreamIdleMonitor(');
   const schedule = server.indexOf('  startScheduler();');
   assert.ok(adopt >= 0, 'awaited adoption must exist');

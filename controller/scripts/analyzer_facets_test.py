@@ -490,32 +490,31 @@ def _stems_marker_run(mark, lose_after=None):
     """vocal + stems with stems_require_marker against a real temp root.
     lose_after: separation call count after which the marker disappears
     (the share is unmounted mid-pass)."""
-    import tempfile
-    root = tempfile.mkdtemp(prefix="subwave-facet-stems-")
-    marker = os.path.join(root, aw.STEMS_MARKER)
-    if mark:
-        with open(marker, "w") as f:
-            f.write("{}\n")
-    calls = []
+    with tempfile.TemporaryDirectory(prefix="subwave-facet-stems-") as root:
+        marker = os.path.join(root, aw.STEMS_MARKER)
+        if mark:
+            with open(marker, "w") as f:
+                f.write("{}\n")
+        calls = []
 
-    class Detector:
-        def separate(self, y):
-            calls.append("separate")
-            if lose_after is not None and len(calls) == lose_after and os.path.exists(marker):
-                os.remove(marker)
-            return {"vocals": y}
+        class Detector:
+            def separate(self, y):
+                calls.append("separate")
+                if lose_after is not None and len(calls) == lose_after and os.path.exists(marker):
+                    os.remove(marker)
+                return {"vocals": y}
 
-        def detect(self, y, sr, librosa, min_loud=None, stems=None):
-            return [{"startMs": 1000, "endMs": 3000}]
+            def detect(self, y, sr, librosa, min_loud=None, stems=None):
+                return [{"startMs": 1000, "endMs": 3000}]
 
-    written = []
-    y = np.concatenate([tone(12.0), silence(8.0)])
-    with Patched(get_vocal_detector=lambda force=False: Detector(), measure_loudness=fixed_loudness,
-                 write_stems=lambda stems, window, d: written.append(window),
-                 write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
-        out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"],
-                                stems_dir=os.path.join(root, "track-1"), stems_require_marker=True)
-    return out, written, calls
+        written = []
+        y = np.concatenate([tone(12.0), silence(8.0)])
+        with Patched(get_vocal_detector=lambda force=False: Detector(), measure_loudness=fixed_loudness,
+                     write_stems=lambda stems, window, d: written.append(window),
+                     write_tail_meta=lambda d, off, dur: written.append("meta"), log=lambda *_a: None):
+            out = aw.analyze_facets(FakeLibrosa, FakeSource(tail=(y, SR, 180.0)), ["vocal", "stems"],
+                                    stems_dir=os.path.join(root, "track-1"), stems_require_marker=True)
+        return out, written, calls
 
 
 def t_stems_facet_marked_root_writes():

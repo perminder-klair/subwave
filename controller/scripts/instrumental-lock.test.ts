@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -8,6 +8,7 @@ import { z } from 'zod';
 import express from 'express';
 import { chatCompletion } from './test-utils/llm.js';
 import type { PickerScope } from '../src/llm/internal/tools/picker/scope.js';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-instrumental-lock-'));
 const song = (id: string) => ({ id, title: id, artist: `Artist ${id}`, genre: 'Ambient', duration: 180 });
@@ -94,7 +95,7 @@ after(async () => {
   db.close();
   server.closeAllConnections();
   await new Promise<void>(resolve => server.close(() => resolve()));
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 const bleed = [{ startMs: 1207, endMs: 4168 }];

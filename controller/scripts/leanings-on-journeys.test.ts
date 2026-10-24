@@ -26,10 +26,11 @@
 // `npm test -- leanings-on-journeys`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-leanings-journey-'));
 process.env.STATE_DIR = stateRoot;
@@ -150,13 +151,13 @@ before(async () => {
   };
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   pickerAgent.run = realRun;
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 // getFullContext always sets dominantMood on a live pick: the show's first

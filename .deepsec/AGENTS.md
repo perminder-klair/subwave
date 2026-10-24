@@ -14,7 +14,7 @@ newly registered project gets its own setup prompt at
 - **Set up a new project for scanning**: read `data/<id>/SETUP.md` and
   follow it (read `node_modules/deepsec/SKILL.md`, then fill
   `data/<id>/INFO.md` from the target codebase).
-- **Add a new project**: run `deepsec init-project <root>` — it
+- **Add a new project**: run `pnpm deepsec init-project <root>` — it
   scaffolds `data/<id>/` and prints/writes the setup prompt for the
   new project.
 - **Write a custom matcher** (only after a real true-positive shows you

@@ -157,7 +157,11 @@ async function call(endpoint, params = {}, options: CallOptions = {}) {
       // First 200 chars of the body, so triage sees the real server message.
       let body = '';
       try { body = (await res.text()).slice(0, 200); } catch {}
-      throw new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`);
+      const err = new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`) as Error & {
+        httpStatus?: number;
+      };
+      err.httpStatus = res.status;
+      throw err;
     }
     const data = await res.json() as any;
     const sub = data['subsonic-response'];
@@ -705,26 +709,49 @@ export async function getLyrics(songId) {
 // `startMs` is milliseconds from track start with the entry-level `offset`
 // folded in (positive offset means lyrics appear sooner: start − offset,
 // clamped at 0). synced=false means the line timings are absent.
+//
+// THROWS when the server could not answer (transport, HTTP or API failure),
+// so a caller can tell "this track has no lyrics" from "the server is down".
+// Three refusals are answers rather than failures: Subsonic's "data not found"
+// (70), and an HTTP 404 or 501 for the endpoint itself, which is a server
+// without the OpenSubsonic lyrics extension — it will never have lyrics, and
+// asking again would not change that. The listener lyrics route needs the
+// difference; the analyzer does not, and reads through getStructuredLyrics().
+export async function fetchStructuredLyrics(
+  songId,
+): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
+  let r;
+  try {
+    r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+  } catch (err) {
+    const { subsonicCode, httpStatus } = (err ?? {}) as { subsonicCode?: number; httpStatus?: number };
+    if (subsonicCode === 70 || httpStatus === 404 || httpStatus === 501) return null;
+    throw err;
+  }
+  const structured = r.lyricsList?.structuredLyrics;
+  if (!Array.isArray(structured) || structured.length === 0) return null;
+  // Several versions may exist (languages, synced + unsynced); only a synced
+  // one carries timings.
+  const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
+  const synced = chosen?.synced === true;
+  const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
+  const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
+  const lines = lineArr.map((l) => {
+    const text = typeof l?.value === 'string' ? l.value : '';
+    const rawStart = Number(l?.start);
+    const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
+    return { startMs, text };
+  });
+  return { synced, lines };
+}
+
+// fetchStructuredLyrics with every failure read as "none indexed". The
+// analyzer's vocal-range pass treats both the same way.
 export async function getStructuredLyrics(
   songId,
 ): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
   try {
-    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
-    const structured = r.lyricsList?.structuredLyrics;
-    if (!Array.isArray(structured) || structured.length === 0) return null;
-    // Several versions may exist (languages, synced + unsynced); only a synced
-    // one carries timings.
-    const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
-    const synced = chosen?.synced === true;
-    const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
-    const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
-    const lines = lineArr.map((l) => {
-      const text = typeof l?.value === 'string' ? l.value : '';
-      const rawStart = Number(l?.start);
-      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
-      return { startMs, text };
-    });
-    return { synced, lines };
+    return await fetchStructuredLyrics(songId);
   } catch {
     return null;
   }

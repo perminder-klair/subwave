@@ -500,6 +500,11 @@ export const DEFAULTS = {
     // never costs the station a slot. 0 leaves only the back-to-back guard,
     // which is always on. See broadcast/dj-agent/artist-guard.ts.
     artistVarietyWindow: ARTIST_VARIETY_WINDOW,
+    // Maximum consecutive same-genre airings (a shared label, or labels in the
+    // same small built-in family) before an agent re-pick. 0 is off and makes
+    // no extra reads or calls; unknown tags and unavailable alternatives never
+    // cost a slot.
+    genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an
     // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
     // and matches it locally. Off by default: needs a search provider and costs a
@@ -678,7 +683,7 @@ export const DEFAULTS = {
     stemBlends: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
-    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // and lose all six. Resolved through settings/transition-effects.ts, which
     // reads an absent or malformed block as "all on" — so this default and a
     // station that has never written the block are the same station.
     effects: {
@@ -804,6 +809,13 @@ export const DEFAULTS = {
     influenceDj: false,
     maxTracks: 10,
     windowDays: 30, // 0 = all time
+  },
+
+  // The listener Lyrics panel (`GET /lyrics/current`). Off until an operator
+  // turns it on — it republishes lyric text publicly and costs a music-server
+  // call per track. Per-track timing fixes live in library.db, not here.
+  lyrics: {
+    enabled: false,
   },
 };
 

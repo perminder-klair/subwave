@@ -183,7 +183,7 @@ function mapWeatherCode(code: number) {
 }
 
 // Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)
-// normalises to null so the dominantMood chain (festival > weather > time)
+// normalises to null so the dominantMood chain (show > festival > weather > time)
 // falls through to the time mood, exactly as the old hardcoded default did.
 function weatherToMood(condition) {
   return weatherMoodFor(condition) || null;

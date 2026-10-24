@@ -9,7 +9,7 @@
 // where they are meant to: strict throws, load repairs, and PUT /schedule drops
 // unknown shows with a count.
 //
-// Run: npx tsx scripts/schedule-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- schedule-schema`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';

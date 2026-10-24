@@ -14,13 +14,16 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
-import { artistRootKey, recencyWindowsForLibrary } from '../music/recency.js';
+import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
 import { hardRecentFor, showNoRepeatGuard, strictShowLibraryPool } from '../music/show-recency.js';
 import { isInOrderShow } from '../music/playlist-order.js';
 import { commitInOrderPick, resolveInOrderNext } from '../music/playlist-order-next.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, artistGuardCause, recentArtistsClause, requestRepickCandidates, runArtistGuard } from './dj-agent/artist-guard.js';
 import { albumGuardAnchorRoot, runAlbumGuard } from './dj-agent/album-guard.js';
+import { genreGuardApplies, runGenreGuard, withGenreRepick } from './dj-agent/genre-guard.js';
+import { ownsPickDirection } from '../music/discovery-policy.js';
+import { genreKeysFor } from '../music/genre-facts.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import type { TransitionEffect } from '../settings/vocab.js';
@@ -237,6 +240,35 @@ async function lookupRequestClaim(query: string, scope: PickerScope): Promise<Ma
   return seen;
 }
 
+// The genre guard's one extra discovery call (#1897): a sound-alike lookup
+// seeded from the pick anchor (the mood and lyric index when there is no audio
+// index), through the picker's own tools and scope, so recency, show locks,
+// the blocklist and the track-length floor all apply. No model call. The tool
+// keeps at most eight tracks (`collect()`'s cap) BEFORE the guard drops the
+// run's genre, so when most neighbours share the genre the re-pick sees only
+// a few. New tracks join `seen` so later note grounding can resolve them.
+async function steerAwayCandidates<T>(
+  scope: PickerScope, seed: CandidateLike | null, seen: Map<string, T>,
+): Promise<Map<string, T>> {
+  const found = new Map<string, T>();
+  const seedId = seed?.id ?? null;
+  if (!seedId) return found;
+  const { tools, seen: fresh } = buildPickerTools(scope);
+  // Read as the Shortlist reads its sources: only `execute` is called here.
+  const t = tools as Record<string, { execute?: (args: { songId: string }, options: unknown) => Promise<unknown> } | undefined>;
+  try {
+    await (t.tracksThatSoundLikeThis ?? t.tracksLikeThis)?.execute?.({ songId: seedId }, {
+      toolCallId: 'genre-guard-steer', messages: [], abortSignal: AbortSignal.timeout(PICKER_TOOL_TIMEOUT_MS),
+    });
+  } catch { /* no extra candidates */ }
+  for (const [id, song] of fresh) {
+    if (id === seedId) continue;
+    found.set(id, song);
+    if (!seen.has(id)) seen.set(id, song);
+  }
+  return found;
+}
+
 // Build the exact discovery scope used by a live next-track pick. Diagnostics
 // call this too, so a tool run sees the same recency, show and playlist policy
 // as the DJ rather than a convenient-but-different approximation.
@@ -441,8 +473,7 @@ export function shortlistSignals(
   // Same newest-first set summariseRecent reads: the track on air, then history.
   // An episode, journey or strict playlist owns the direction — the same
   // exemption the shortlist planner makes — so a run is not named there.
-  const ownsDirection = !!(scope.episodeSource || scope.playlistLock || scope.audioWaypoint?.length);
-  const run = hasHistory && !ownsDirection
+  const run = hasHistory && !ownsPickDirection(scope)
     ? genreRun([queue.current?.track, ...queue.history.map((entry: any) => entry?.track)], showGenres)
     : null;
   return {
@@ -985,6 +1016,39 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
           ? 'artist-and-album-repick'
           : 'album-repick';
       }
+    }
+  }
+
+  // Last, so a softer album re-pick cannot restore the genre run. Only agent
+  // selections pass here: requests/operator queueing and pool rescues stay
+  // exempt, and so does any show with its own genre list or an owned
+  // direction (genreGuardApplies). Off performs no history walk or metadata
+  // lookup.
+  const genreWindow = settings.get().llm?.genreVarietyWindow ?? 0;
+  if (genreWindow > 0 && !useShortlist && agentPickResolution
+    && genreGuardApplies(scope, activeShow?.genres ?? scope.genreLock)) {
+    const genreGuarded = await runGenreGuard<CandidateLike>({
+      song, seen: extras.seen, window: genreWindow,
+      // The slots this pick will follow, held queue first, as the artist and
+      // album windows walk them. Under pair drain `current` is one slot early.
+      recentGenres: queue.precedingTracks(genreWindow).map(track => genreKeysFor(track)),
+      // Resolved against the library, like albumKeyOf below: the run's `seen`
+      // values are the model's projection.
+      genreKeysOf: genreKeysFor, recentRoots: neighbourRoots,
+      avoidAnchorRoot: artistRootKey(pickAnchor || {}),
+      repick: guardRepick,
+      recentAlbums: albumHours > 0 ? queue.recentAlbumKeys(albumHours) : undefined,
+      albumKeyOf: albumKeyFor,
+      // Only called when every candidate is in the run's genre.
+      // Seeded from the pick anchor, the predecessor the re-pick is told about.
+      steer: () => steerAwayCandidates(scope, pickAnchor, extras.seen),
+      log: line => queue.log('picker', line),
+      logEvent,
+    });
+    if (genreGuarded.kind === 'repicked') {
+      object = genreGuarded.object;
+      song = genreGuarded.song;
+      agentPickResolution.guardOutcome = withGenreRepick(agentPickResolution.guardOutcome);
     }
   }
 

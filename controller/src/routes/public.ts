@@ -471,6 +471,8 @@ router.get('/state', (req, res) => {
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
     },
+    // Whether a skin offers the Lyrics panel; GET /lyrics/current refuses when off.
+    lyrics: { enabled: s?.lyrics?.enabled === true },
     // For rendering timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,

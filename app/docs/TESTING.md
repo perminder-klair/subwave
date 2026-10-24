@@ -29,7 +29,8 @@ a no-op). Don't rely on such flags anywhere; they do nothing on this RN version.
 RNTP 4.1.2 is not natively New-Architecture-compatible — out of the box, Android
 playback crashes with `You should not use ReactNativeHost directly in the New
 Architecture` from `MusicService`. **The fix is `patches/react-native-track-player+4.1.2.patch`**,
-which makes two source edits:
+whose New Architecture half is two source edits (the rest of the patch is the
+progress and iOS metadata fixes described below):
 
 - `MusicModule.kt` — routes async `@ReactMethod`s through a Unit-returning
   `launch` helper (TurboModule interop requires void-returning async methods).
@@ -194,6 +195,16 @@ properly judged on a **physical device** — the remote-control wiring lives in
 `service.ts` (Play/Pause/Stop; Next/Seek intentionally omitted for a live
 stream).
 
+On Android, `PlaybackService` must **never resolve**. It runs as RNTP's
+headless JS task, and React Native fires JS timers behind a paused activity only
+while a headless task is active. Every background poll is a timer, including the
+`/now-playing` poll that feeds lock-screen and Bluetooth metadata. RN 0.85 never
+registered `HeadlessJsTaskSupport` under bridgeless, so the task never finished.
+RN 0.86 (Expo SDK 57) registers it, and app 1.6.0 shipped with metadata frozen
+behind the lock screen until the phone was unlocked. Device check: tune in, lock
+the phone, and wait through a track change. The notification (or a Bluetooth
+head unit) should show the new title without unlocking.
+
 ### CarPlay — Now-Playing in the car (iOS only)
 
 Scope is **Tier 1**: control the *already-playing* stream from the dash (metadata,
@@ -348,7 +359,7 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 |---|---|---|
 | `tsc --noEmit` | ✅ | ✅ |
 | Native build | ✅ simulator (new arch ON) | ✅ emulator + APK (new arch ON, JDK 17) |
-| RNTP slim patch (2 files) | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
+| RNTP New Architecture patch | ✅ live playback | ✅ `BUILD SUCCESSFUL` after slim |
 | Install + launch | ✅ | ✅ (emulator install) |
 | JS bundle | ✅ 4075 modules | ✅ build path |
 | Onboarding → health check | ✅ all 4 probes OK | (same JS; via skill on device) |

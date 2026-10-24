@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/command';
 import { Kbd } from '@/components/ui/kbd';
 
-export type PlayerDrawer = 'timeline' | 'booth' | 'request' | 'schedule';
+export type PlayerDrawer = 'timeline' | 'booth' | 'request' | 'schedule' | 'lyrics';
 
 export interface CommandPaletteProps {
   open: boolean;
@@ -22,6 +22,8 @@ export interface CommandPaletteProps {
   onOpenDrawer: (kind: PlayerDrawer) => void;
   onToggleMute: () => void;
   onShowShortcuts: () => void;
+  /** Whether the station offers the Lyrics panel. */
+  lyrics?: boolean;
 }
 
 interface PaletteItem {
@@ -41,6 +43,7 @@ export default function CommandPalette({
   onOpenDrawer,
   onToggleMute,
   onShowShortcuts,
+  lyrics = false,
 }: CommandPaletteProps) {
   const run = (fn: () => void) => () => {
     onOpenChange(false);
@@ -53,6 +56,7 @@ export default function CommandPalette({
     { label: 'Open Booth feed', hint: '2', onSelect: run(() => onOpenDrawer('booth')) },
     { label: 'Make a request', hint: '3', onSelect: run(() => onOpenDrawer('request')) },
     { label: 'Open Schedule', hint: '4', onSelect: run(() => onOpenDrawer('schedule')) },
+    ...(lyrics ? [{ label: 'Open Lyrics', hint: '5', onSelect: run(() => onOpenDrawer('lyrics')) }] : []),
     { label: muted ? 'Unmute' : 'Mute', hint: 'M', onSelect: run(onToggleMute) },
     { label: 'Keyboard shortcuts', hint: '?', onSelect: run(onShowShortcuts) },
   ];

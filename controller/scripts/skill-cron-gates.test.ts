@@ -15,7 +15,7 @@
 // needing to fake real settings/listener/budget/programme state — the same
 // split as budgetMode({used, cap, softPct}) in dj-budget.ts.
 //
-// Run: `tsx scripts/skill-cron-gates.test.ts`.
+// Run: `npm test -- skill-cron-gates`.
 
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';

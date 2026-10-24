@@ -34,6 +34,12 @@ export type AgenticLeaningsReviewRejection =
 // selection routes so a field added for one cannot silently go missing from
 // the other. It rides the LLM call records by reference and is filled in only
 // after the guards and enqueue.
+// Which final guards re-picked, each named beside the ones before it.
+export type GuardOutcome =
+  | 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick'
+  | 'genre-repick' | 'artist-and-genre-repick' | 'album-and-genre-repick' | 'artist-album-and-genre-repick'
+  | 'pool-rescue';
+
 export type PickResolution = {
   preliminary?: AgenticTrackRef;
   leaningsReview?: {
@@ -52,7 +58,7 @@ export type PickResolution = {
     evidenceKind?: 'metadata-match' | 'editorial-comparison';
     editorialEvidence?: EditorialLeaningsEvidence;
   };
-  guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+  guardOutcome?: GuardOutcome;
   final?: AgenticTrackRef;
   reason?: string | null;
   queued?: boolean;

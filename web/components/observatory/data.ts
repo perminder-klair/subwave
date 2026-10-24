@@ -33,17 +33,6 @@ export function hashStr(s: string): number {
   return h >>> 0;
 }
 
-// ink → vermilion heat ramp by t∈[0,1]  (ink #4a443d → vermilion #d94b2a)
-export function heat(t: number): string {
-  t = Math.max(0, Math.min(1, t));
-  const a = [74, 68, 61] as const;
-  const b = [217, 75, 42] as const;
-  const r = Math.round(a[0] + (b[0] - a[0]) * t);
-  const g = Math.round(a[1] + (b[1] - a[1]) * t);
-  const bl = Math.round(a[2] + (b[2] - a[2]) * t);
-  return `rgb(${r},${g},${bl})`;
-}
-
 function dist2(a: { x: number; y: number }, b: { x: number; y: number }): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;
@@ -459,26 +448,28 @@ export function layoutTracks(raw: RawTrack[]): {
   return { tracks, genres, centers, soundMap: false };
 }
 
-// Tag-source enum → colour + filled/hollow + short label.
+// Tag-source enum → tone + filled/hollow + short label.
 export interface SourceStyle {
-  color: string;
+  tone: number | null;
   filled: boolean;
   label: string;
 }
+// The LLM's own tags sit between a hand tag and a propagated one.
+export const LLM_TONE = 0.55;
 export function sourceStyle(source: string | null): SourceStyle {
   switch (source) {
     case 'manual':
-      return { color: '#d94b2a', filled: true, label: 'MANUAL' };
+      return { tone: 1, filled: true, label: 'MANUAL' };
     case 'llm':
-      return { color: '#9a5b1f', filled: true, label: 'LLM' };
+      return { tone: LLM_TONE, filled: true, label: 'LLM' };
     case 'uncertain-llm':
-      return { color: '#9a5b1f', filled: false, label: 'UNCERTAIN' };
+      return { tone: LLM_TONE, filled: false, label: 'UNCERTAIN' };
     case 'propagated':
-      return { color: '#4a443d', filled: true, label: 'PROPAGATED' };
+      return { tone: 0, filled: true, label: 'PROPAGATED' };
     case 'legacy-v1':
-      return { color: '#9b948a', filled: false, label: 'LEGACY' };
+      return { tone: null, filled: false, label: 'LEGACY' };
     default:
-      return { color: '#4a443d', filled: true, label: (source || '—').toUpperCase() };
+      return { tone: 0, filled: true, label: (source || '—').toUpperCase() };
   }
 }
 
@@ -553,11 +544,12 @@ export function buildSynapseLinks(tracks: ObsTrack[]): [number, number][] {
   return out;
 }
 
-// Node appearance -- shared by the SVG node layer, hover overlay and canvas
-// renderer so all three stay pixel-identical.
+// Node appearance, shared by the galaxy and its legend. A tone is a place on
+// the galaxy's ramp, 0 quiet to 1 hot, or null for unmeasured; palette.ts
+// turns it into the theme's colour.
 export type ColorBy = 'energy' | 'confidence' | 'source' | 'analysis' | 'loudness' | 'pace' | 'vocal';
 
-// Integrated loudness (LUFS, typically −30…0) → 0..1 for the heat ramp.
+// Integrated loudness (LUFS, typically −30…0) → 0..1 for the tone ramp.
 // null → mid-faint, like the unknown-energy case.
 export function loudnessToVal(lufs: number | null): number {
   if (lufs == null) return 0.5;
@@ -566,20 +558,20 @@ export function loudnessToVal(lufs: number | null): number {
 
 // Reuses the source filled/hollow convention.
 export function vocalStyle(v: Vocal): SourceStyle {
-  if (v === 'vocal') return { color: '#d94b2a', filled: true, label: 'VOCAL' };
-  if (v === 'instrumental') return { color: '#4a443d', filled: true, label: 'INSTRUMENTAL' };
-  return { color: '#9b948a', filled: false, label: 'UNKNOWN' };
+  if (v === 'vocal') return { tone: 1, filled: true, label: 'VOCAL' };
+  if (v === 'instrumental') return { tone: 0, filled: true, label: 'INSTRUMENTAL' };
+  return { tone: null, filled: false, label: 'UNKNOWN' };
 }
 
-export function nodeColor(t: ObsTrack, colorBy: ColorBy): string {
-  if (colorBy === 'energy') return heat(t.energyVal);
-  if (colorBy === 'confidence') return heat(0.15 + (t.confidence ?? 0.5) * 0.85);
-  if (colorBy === 'source') return sourceStyle(t.source).color;
-  if (colorBy === 'analysis') return t.analysed ? '#d94b2a' : '#9b948a';
-  if (colorBy === 'loudness') return t.loudnessLufs == null ? '#9b948a' : heat(loudnessToVal(t.loudnessLufs));
-  if (colorBy === 'pace') return t.paceMean == null ? '#9b948a' : heat(0.1 + t.paceMean * 0.9);
-  if (colorBy === 'vocal') return vocalStyle(t.vocal).color;
-  return '#4a443d';
+export function nodeTone(t: ObsTrack, colorBy: ColorBy): number | null {
+  if (colorBy === 'energy') return t.energyVal;
+  if (colorBy === 'confidence') return 0.15 + (t.confidence ?? 0.5) * 0.85;
+  if (colorBy === 'source') return sourceStyle(t.source).tone;
+  if (colorBy === 'analysis') return t.analysed ? 1 : null;
+  if (colorBy === 'loudness') return t.loudnessLufs == null ? null : loudnessToVal(t.loudnessLufs);
+  if (colorBy === 'pace') return t.paceMean == null ? null : 0.1 + t.paceMean * 0.9;
+  if (colorBy === 'vocal') return vocalStyle(t.vocal).tone;
+  return 0;
 }
 
 export function nodeFilled(t: ObsTrack, colorBy: ColorBy): boolean {

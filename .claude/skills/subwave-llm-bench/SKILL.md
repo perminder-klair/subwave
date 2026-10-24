@@ -70,6 +70,17 @@ keys resolve from `state/secrets.env` and `controller/.env` automatically
 (existing env vars win). If a key exists only inside a prod container's env,
 copy it out first: `export OPENROUTER_API_KEY=$(docker exec sub-wave-controller printenv OPENROUTER_API_KEY)`.
 
+The run never writes to `state/`. It copies the station's `settings.json`,
+`schedule.json` and `secrets.env` into a temp `STATE_DIR` and works there. On a
+multi-station install it copies the active station's files. An exported
+`STATE_DIR` names a different station root to copy from. The temp dir is printed
+as `Isolated STATE_DIR:` and deleted when the run exits, Ctrl-C included. A run
+killed before it can clean up (a Ctrl-C while it is still starting up, which
+tsx turns into SIGKILL, or a closed terminal) leaves its dir, and the next run
+deletes it. A dir left by a `sudo` run belongs to root, and a run as yourself
+leaves it alone.
+`library.db` is not copied, because the fixtures fake the library.
+
 ```bash
 cd <repo>/controller
 npm run llm-bench -- \
@@ -188,9 +199,14 @@ silent).
 
 ## Notes
 
-- Both harnesses append telemetry rows to the controller event log
-  (`state/logs/events-*.jsonl`) and, if `LLM_DEBUG_RAW` is on, raw request
-  bodies to `state/logs/llm-debug.log`. Harmless, filterable.
+- llm-bench's own telemetry stays in its isolated dir and is deleted with it:
+  the event log, and raw request bodies in `llm-debug.log` when
+  `LLM_DEBUG_RAW` or the raw-capture setting is on. Read them from the printed
+  `Isolated STATE_DIR` while the run is going. The JSON report is the record
+  that survives. picker-test.mjs is different: the recipe above points it at
+  the live `state/`, so it appends to the station's event log
+  (`state/logs/events-*.jsonl`), and `assess-models.sh` reads its failure
+  strings from there.
 - The docs page mapping every call kind to its code lives at
   `docs/llm-calls.md`; the harness design spec at
   `docs/superpowers/specs/2026-07-09-llm-bench-design.md`.

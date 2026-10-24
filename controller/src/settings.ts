@@ -65,7 +65,7 @@ import {
   clampMaxOutputTokens,
   clampDiscoverySteps,
   clampNoRepeatWindow,
-  clampArtistVarietyWindow,
+  clampVarietyWindow,
   clampNumCtx,
   clampRepeatPenalty,
   clampTtsGain,
@@ -1064,10 +1064,11 @@ export async function load() {
       // Clamped to [0, 25]; a settings.json written before the field existed
       // picks up the shipped default, so an upgrade turns spacing on rather
       // than silently keeping the on-air-only guard it was filed against.
-      artistVarietyWindow: clampArtistVarietyWindow(
+      artistVarietyWindow: clampVarietyWindow(
         stored.llm?.artistVarietyWindow,
         DEFAULTS.llm.artistVarietyWindow,
       ),
+      genreVarietyWindow: clampVarietyWindow(stored.llm?.genreVarietyWindow, DEFAULTS.llm.genreVarietyWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
@@ -1364,6 +1365,12 @@ export async function load() {
       windowDays: Number.isFinite(Number(stored.likes?.windowDays))
         ? Math.min(365, Math.max(0, Math.round(Number(stored.likes.windowDays))))
         : DEFAULTS.likes.windowDays,
+    },
+    lyrics: {
+      enabled:
+        typeof stored.lyrics?.enabled === 'boolean'
+          ? stored.lyrics.enabled
+          : DEFAULTS.lyrics.enabled,
     },
   };
   setCache(loaded);
@@ -2145,9 +2152,12 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
     if (l.artistVarietyWindow !== undefined) {
-      next.llm.artistVarietyWindow = clampArtistVarietyWindow(
+      next.llm.artistVarietyWindow = clampVarietyWindow(
         Number(l.artistVarietyWindow), next.llm.artistVarietyWindow,
       );
+    }
+    if (l.genreVarietyWindow !== undefined) {
+      next.llm.genreVarietyWindow = clampVarietyWindow(Number(l.genreVarietyWindow), next.llm.genreVarietyWindow);
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
@@ -2629,6 +2639,10 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     ] as const) {
       if (lk[k] !== undefined) (next.likes as Record<string, unknown>)[k] = lk[k];
     }
+  }
+  if ('lyrics' in patch) {
+    const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
+    if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may

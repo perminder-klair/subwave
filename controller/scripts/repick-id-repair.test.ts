@@ -2,17 +2,18 @@
 // type the id as a plain string (#939), so resolveRepickId is where an answer is
 // held to the re-pick's own candidates. State lives in a temp dir.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-repick-id-'));
 process.env.STATE_DIR = stateRoot;
 
 const { resolveRepickId } = await import('../src/broadcast/dj-agent.js');
 
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const seen = new Map<string, unknown>([
   ['aB3dE5gH7jK9mN1pQ3sT5v', { title: 'Teardrop' }],

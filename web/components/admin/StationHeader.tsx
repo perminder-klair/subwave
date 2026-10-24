@@ -161,6 +161,7 @@ export interface StationHeaderProps {
   weatherText: string;
   pickerBusy: boolean;
   busy: string | null;
+  /** Opens the Skip dialog, which also offers the never-play blocks. */
   onSkip: () => void;
 }
 
@@ -283,8 +284,14 @@ export default function StationHeader({
           )}
         </div>
         <div className="flex gap-2">
-          <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
-            {busy === 'skip' ? 'skipping…' : 'Skip track'}
+          <Btn
+            lg
+            tone="danger"
+            disabled={!!busy || !np?.title}
+            onClick={onSkip}
+            title="Skip it, keep it off the air for good, or both"
+          >
+            {busy === 'never-play' ? 'blocking…' : busy === 'skip' ? 'skipping…' : 'Skip track'}
           </Btn>
         </div>
       </div>

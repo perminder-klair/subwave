@@ -1,9 +1,9 @@
 """web/scripts/verify-forms.py
 
 Drives the isolated verify stack (controller :7791, web :7793) through every
-form converted to react-hook-form. Not part of CI — web/ has no test suite
-and the merge gate is lint. This is the evidence for a forms PR; run it
-after touching any converted form.
+form converted to react-hook-form. Not part of CI — the merge gate is lint,
+and `npm test` covers form logic but not the rendered wiring. This is the
+evidence for a forms PR; run it after touching any converted form.
 
 Usage: SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE=1 python3 web/scripts/verify-forms.py [check ...]
 Every check in CHECKS runs with no args; name one or more to run a subset.
@@ -2395,8 +2395,9 @@ def assert_throwaway_stack():
     So the load-bearing check is now a plain opt-in: the caller must set
     `SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE=1` (or any other truthy-looking value —
     see `_env_truthy`) before running this file at all, which the product
-    never sets on its own. `.claude/skills/verify/SKILL.md`'s documented
-    isolated-controller boot is the one place that should ever export it.
+    never sets on its own. Export it by hand only in the shell that booted
+    the isolated stack from `.claude/skills/verify/SKILL.md`; the skill
+    itself does not set it.
 
     The old credential + roster checks are kept, but now purely as a
     SECONDARY sanity check that runs only once the opt-in has already been

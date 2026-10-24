@@ -213,8 +213,10 @@ export const BED_MARKER_FRESH_MS = 10_000;
 
 // The guard window as two numbers: when the clip clears, and how long the window
 // is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
-// as the test seam for the marker's durationSec precedence.
-export function jingleWindow(): { clearAtMs: number; windowMs: number } {
+// as the test seam for the marker's durationSec precedence. `crossSec` replaces
+// the station crossfade as the cross term, for a caller that has to cover the
+// longest tail the jingle can wait behind (the targeted skip, #2017).
+export function jingleWindow(crossSec?: number): { clearAtMs: number; windowMs: number } {
   const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
@@ -228,9 +230,14 @@ export function jingleWindow(): { clearAtMs: number; windowMs: number } {
       || JINGLE_FALLBACK_MS;
     // Overlays are marked at the first word on the post-cross intro layer.
     // Between-track jingles are marked at cross feed and still need its offset.
-    const crossMs = m.placement === 'over' ? 0 : (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
+    const crossMs = m.placement === 'over' ? 0 : (crossSec ?? (Number(settings.get()?.crossfadeDuration) || 10)) * 1000;
     const windowMs = clipMs + crossMs + JINGLE_TAIL_MS;
-    return { clearAtMs: startedMs + windowMs, windowMs };
+    // A jingle fed right behind another one in cross's read-ahead burst airs
+    // only once that one has ended; the mixer says how long it waits. Absent
+    // from an older broadcast image's marker, which keeps the old window.
+    const queuedSec = Number(m?.queuedSec);
+    const queuedMs = Number.isFinite(queuedSec) && queuedSec > 0 ? queuedSec * 1000 : 0;
+    return { clearAtMs: startedMs + queuedMs + windowMs, windowMs: queuedMs + windowMs };
   } catch {
     return none; // no marker (or unreadable) — nothing on air to avoid
   }
@@ -268,8 +275,14 @@ export function lastAiredJingleFilename(): string | null {
 // song after `prevStartedMs` (itself a tick late), so the comparison has
 // minutes of margin. A marker from before the previous song — the files are
 // never deleted — is not after it and so never counts. Unreadable or absent
-// markers count as nothing interposed: this only labels a record.
-export function interposedSince(prevStartedMs: number, now = Date.now()): Interposed | null {
+// markers count as nothing interposed: this only labels a record. `kinds`
+// narrows the markers read; the targeted skip asks for beds and breaks only,
+// since a jingle's marker cannot be ordered against now-playing (#2017).
+export function interposedSince(
+  prevStartedMs: number,
+  now = Date.now(),
+  kinds: readonly Interposed[] = ['jingle', 'bed', 'break'],
+): Interposed | null {
   if (!Number.isFinite(prevStartedMs) || prevStartedMs <= 0) return null;
   const markers: Array<[Interposed, string]> = [
     ['jingle', config.liquidsoap.jinglePlayingFile],
@@ -279,6 +292,7 @@ export function interposedSince(prevStartedMs: number, now = Date.now()): Interp
   let found: Interposed | null = null;
   let latest = 0;
   for (const [kind, file] of markers) {
+    if (!kinds.includes(kind)) continue;
     try {
       const marker = JSON.parse(readFileSync(file, 'utf8'));
       if (marker.placement === 'over') continue; // no item interposed on the music timeline

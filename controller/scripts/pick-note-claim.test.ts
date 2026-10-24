@@ -14,10 +14,11 @@
 
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chatCompletionResponse } from './test-utils/llm.js';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-pick-note-claim-'));
 process.env.STATE_DIR = stateRoot;
@@ -167,13 +168,13 @@ before(async () => {
   }) as typeof fetch;
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   pickerAgent.run = realRun;
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 function context() {

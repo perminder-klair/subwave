@@ -24,6 +24,9 @@ export function useClock(): Date | null {
 export interface Analyser {
   ready: boolean;
   read: () => Uint8Array<ArrayBuffer> | null;
+  /** The raw signal (getByteTimeDomainData, 128 = silence), for a scope
+   *  trace. Null whenever `read` would be. */
+  readWave: () => Uint8Array<ArrayBuffer> | null;
   /** Null until the graph exists. Callers mapping bins to frequencies need it:
    *  44.1k vs 48k shifts every bin. */
   sampleRate: number | null;
@@ -86,6 +89,7 @@ export function useAnalyser(
 ): Analyser {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const binsRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
+  const waveRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const probedRef = useRef(false);
   const [ready, setReadyState] = useState(false);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
@@ -167,5 +171,13 @@ export function useAnalyser(
     return binsRef.current;
   }, []);
 
-  return { ready, read, sampleRate };
+  const readWave = useCallback((): Uint8Array<ArrayBuffer> | null => {
+    const an = analyserRef.current;
+    if (!readyRef.current || !an) return null;
+    if (waveRef.current?.length !== an.fftSize) waveRef.current = new Uint8Array(an.fftSize);
+    an.getByteTimeDomainData(waveRef.current);
+    return waveRef.current;
+  }, []);
+
+  return { ready, read, readWave, sampleRate };
 }

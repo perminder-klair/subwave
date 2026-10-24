@@ -3,9 +3,10 @@
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
 import test, { before, after } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 const root = mkdtempSync(join(tmpdir(), 'subwave-corrective-fallback-'));
 process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = 'http://correction-library.invalid';
@@ -57,7 +58,7 @@ before(async () => {
       } });
   };
 });
-after(() => { globalThis.fetch = realFetch; library.shutdown(); rmSync(root, { recursive: true, force: true }); });
+after(async () => { globalThis.fetch = realFetch; library.shutdown(); await removeTempDir(root); });
 async function pick(cause: 'artist' | 'album' | 'invalid') {
   clearPickerSourceCache(); calls = 0; offered.length = 0; invalidAnswer = cause === 'invalid';
   await settings.update({ picker: { albumHours: cause === 'album' ? 2 : 0 }, llm: { artistVarietyWindow: cause === 'artist' ? 5 : 0 } });

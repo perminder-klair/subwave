@@ -41,10 +41,6 @@ end
 
 np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
-# Second dir for the SAME marker file: jingle-playing.json has two writers (the
-# rotate's on_metadata and jingle_now_queue's hook) whose feeds can overlap
-# inside one crossfade, and a shared dir would tear the write.
-jingle_now_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-now")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
 pause_talk_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-talk")
 pause_voice_accept_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-voice-accept")
@@ -367,39 +363,164 @@ def jingle_duration(fname) =
   end
 end
 
-# Mark a manual jingle from its own source. It is deliberately outside
-# music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
-# station's now-playing row or ICY title.
-jingle_now_queue.on_metadata(synchronous=false, fun (m) -> begin
-  jingle_now_on_air := true
-  fname = m["filename"]
-  file.write(
-    data=json.stringify(compact=true, {
-      filename = fname,
-      durationSec = jingle_duration(fname),
-      startedAt = time()
-    }),
-    atomic=true,
-    temp_dir=jingle_now_tmp_dir,
-    "#{state_dir}/jingle-playing.json"
-  )
-end)
+# Arm the rotate's gate from a manual jingle's own source. The marker is written
+# where every jingle goes on air instead (JINGLE MARKER, below the
+# music_with_jingle_now switch): like any request source, this queue starts the
+# next queued press in the frame that ends the current one, before the switch
+# has chosen it.
+jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := true)
 
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-appropriate
-# tracks; reload_mode="watch" picks up its rewrites.
-
-auto_playlist = playlist(
-  id="auto",
-  reload_mode="watch",
-  mode="randomize",
-  "#{state_dir}/auto.m3u"
+# tracks and sends `auto.reload` after every write (scheduler.ts).
+#
+# A playlist keeps the track it will play next as its `current` request, apart
+# from its queue, and reload() empties only the queue (stdlib playlist.liq). So
+# while a DJ pick is on air the playlist already holds its next track: after an
+# idle pause that resumes into another show, a reload left that old-show track
+# to air first. The fallback's slot is therefore a source.dynamic: when the
+# playlist is not the one on air, `auto.reload` commits a fresh instance, which
+# drops whatever the old one prepared; when it is on air, a plain reload, and the
+# controller's skip ends the track. `OK` means the old fallback is gone.
+#
+# The instances do not watch auto.m3u themselves: radio.liq watches it once
+# (below) and reloads only contents no reload has read yet. The controller's
+# write is followed by `auto.reload` at once, and a playlist's own watch would
+# reload that same write again 0.5s later, emptying the queue `auto.ready` had
+# just reported, so a resume skip landing then aired the emergency loop. Pinned
+# by scripts/liquidsoap-resume-fallback.py. register_server_commands=false:
+# every instance would register auto.skip/auto.next/auto.uri again (nothing
+# calls them); radio.liq registers auto.reload and auto.ready below.
+auto_m3u = "#{state_dir}/auto.m3u"
+def make_auto_playlist() =
+  playlist(
+    id="auto",
+    register_server_commands=false,
+    reload_mode="never",
+    mode="randomize",
+    auto_m3u
+  )
+end
+auto_playlist = ref(make_auto_playlist())
+pending_auto_playlist = ref(null)
+# self_sync=false: a playlist never drives its own clock, and cross() below
+# refuses a source that may.
+auto_slot = source.dynamic(
+  id="auto_slot",
+  self_sync=false,
+  init=auto_playlist(),
+  # The clock thread calls this, while only the server thread below stores a
+  # source; clearing only what was taken never drops one stored meanwhile.
+  fun () -> begin
+    next = pending_auto_playlist()
+    if null.defined(next) then pending_auto_playlist := null end
+    next
+  end
 )
+
+# Whether the track on air is the playlist's own. Any other track (a DJ pick,
+# a request, a jingle below) means the playlist has moved its next track into
+# its current request. A frozen (idle-paused) track keeps the value, which is
+# what a resume asks about.
+auto_on_air = ref(false)
+dj_queue.on_track(synchronous=true, fun (_) -> auto_on_air := false)
+auto_slot.on_track(synchronous=true, fun (_) -> auto_on_air := true)
+
+# What the last reload read from auto.m3u. The watch below skips a write this
+# already holds; `auto.reload` always reloads.
+def read_auto_m3u() =
+  try
+    file.contents(auto_m3u)
+  catch err do
+    log(label="subwave", "auto.m3u unreadable (#{err})")
+    ""
+  end
+end
+auto_m3u_loaded = ref(read_auto_m3u())
+
+server.register(
+  namespace="auto",
+  "reload",
+  description="Reload auto.m3u; off air, a fresh playlist replaces the one holding a prepared track",
+  usage="reload",
+  fun (_) -> begin
+    auto_m3u_loaded := read_auto_m3u()
+    if auto_on_air() then
+      auto_playlist().reload()
+    else
+      fresh = make_auto_playlist()
+      auto_playlist := fresh
+      # The prepared source carries the activation the slot releases when it
+      # replaces it, which shuts the old instance and its request down.
+      pending_auto_playlist := auto_slot.prepare(fresh)
+      # Commit now: the slot only takes a prepared source when asked whether it
+      # is ready, and while DJ picks air nothing asks, sometimes for hours. A
+      # later reload would then reload the pending instance in place, keeping
+      # the track it had prepared.
+      ignore(auto_slot.is_ready())
+    end
+    "OK"
+  end
+)
+
+# Whether the fallback has a track ready to air: a fresh instance fetches its
+# first track after auto.reload, and the controller waits for it before a resume
+# skip, or the skip would air the emergency loop until it arrives. Reloaded in
+# place (on air), the playlist is ready only for the track it is playing: wait
+# for the next one in its queue (queued requests are resolved).
+server.register(
+  namespace="auto",
+  "ready",
+  description="Report whether the fallback has a track ready: ready / pending",
+  usage="ready",
+  fun (_) -> begin
+    ready = if auto_on_air() then list.length(auto_playlist().queue()) > 0 else auto_slot.is_ready() end
+    ready ? "ready" : "pending"
+  end
+)
+
+# The backup for a write whose `auto.reload` never arrived: reload the playlist
+# in place, as a playlist's own watch would (an off-air one keeps the track it
+# prepared until the next `auto.reload`). Settled like the stdlib's watch, so a
+# writer that truncates first is read once it is done. Only the server thread
+# replaces the instance; this thread never stores one. Never raises: it runs
+# in thread.run.
+auto_watch_scheduled = ref(false)
+def auto_m3u_changed() =
+  if
+    not auto_watch_scheduled()
+  then
+    auto_watch_scheduled := true
+    thread.run(
+      delay=0.5,
+      fun () ->
+        begin
+          auto_watch_scheduled := false
+          contents = read_auto_m3u()
+          if
+            contents != auto_m3u_loaded()
+          then
+            auto_m3u_loaded := contents
+            try
+              auto_playlist().reload()
+            catch err do
+              log(label="subwave", "auto.m3u watch reload failed (#{err})")
+            end
+          end
+        end
+    )
+  end
+end
+try
+  if file.exists(auto_m3u) then ignore(file.watch(auto_m3u, auto_m3u_changed)) end
+catch err do
+  log(label="subwave", "auto.m3u is not watched (#{err}); only auto.reload re-reads it")
+end
 
 # MAIN MUSIC SOURCE — queue takes priority, falls back to autonomous.
 music = fallback(
   id="music",
   track_sensitive=true,
-  [dj_queue, auto_playlist]
+  [dj_queue, auto_slot]
 )
 
 # HARD TRACK-LENGTH CAP (#447) — the controller stamps liq_cue_out on autonomous
@@ -1196,6 +1317,11 @@ VOICE_GATE_MAX_SEC = 120.
 # this, so jingles never reach now-playing. An empty jingles.m3u is fine (rotate
 # skips an unavailable source); jingle_ratio 0 = jingles OFF (#997), the rotate
 # is not built at all.
+#
+# True while a rotate jingle is on air: set where it reaches the source cross
+# reads (below the jingle_now switch), released as the playlist starts its next
+# clip or any other track starts there. The rotate's gate holds open for it.
+rotate_jingle_on_air = ref(false)
 music =
   if jingle_ratio() > 0 then
     jingles = playlist(
@@ -1204,32 +1330,41 @@ music =
       reload_mode="watch",
       "#{state_dir}/jingles.m3u"
     )
-    # Announce each jingle to the controller (#997): jingles are otherwise
-    # invisible to it and play outside its airVoice serialiser. Written at FEED
-    # time — the jingle turns audible ~crossfade_duration later — and the
-    # controller holds its voice chain until start + crossfade + clip length.
-    jingles.on_metadata(synchronous=false, fun (m) ->
-      file.write(
-        data=json.stringify(compact=true, {
-          filename = m["filename"],
-          durationSec = jingle_duration(m["filename"]),
-          startedAt = time()
-        }),
-        atomic=true,
-        temp_dir=jingle_tmp_dir,
-        "#{state_dir}/jingle-playing.json"
-      )
-    )
+    # The playlist starts its next clip in the frame that ends the one on air,
+    # and this hook runs inside that frame, before the gate below sees its track
+    # mark. Re-checked at the mark, a closed gate dropped the rest of the frame,
+    # the next clip's head and metadata with it, so that clip later aired under
+    # the previous one's name and length.
+    jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
-    jingles = source.available(jingles, {
+    #
+    # The gate decides only whether a clip may START. Checked on every frame
+    # (the default), a voice clip or bed that began mid-stinger made the source
+    # unavailable, and the rotate left the clip there and played the rest at a
+    # later turn. track_sensitive holds an open gate while it is true, so it is
+    # true only for the clip on air: an open verdict must not outlive its clip,
+    # nor be re-checked at the clip's own end (the release above).
+    #
+    # Except for the starve guard. Served back to back, the next clip is chosen
+    # in the same cycle the last one ends, on that cycle's verdict, which the
+    # flag had held; so with no music to turn to, a held gate was never asked
+    # again and the rotate served stingers forever over a latched starve (#1300
+    # bug 7, measured on the baked image). Once it latches the gate is asked
+    # every cycle again, as before, and cuts the clip on air.
+    jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air() and not music_starved()}, {
       not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
-    # Mark a stinger for dj_transition's JINGLE SEAMS rule. music_meta is
-    # captured above this rotate, so the key never reaches now-playing.
-    jingles = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingles)
+    # Mark a stinger for dj_transition's JINGLE SEAMS rule, and as the rotate's
+    # own for the gate's flag. music_meta is captured above this rotate, so the
+    # keys never reach now-playing.
+    jingles = metadata.map(
+      update=true,
+      fun (_) -> [("subwave_jingle", "true"), ("subwave_jingle_rotate", "true")],
+      jingles
+    )
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
@@ -1237,17 +1372,116 @@ music =
 
 # Manual presses wrap the automatic rotate so they win the next SAFE boundary,
 # even when dj_queue already holds tracks or the rotate is due. While speech or
-# a bed is live the source is unavailable but the request remains queued.
-jingle_now = source.available(jingle_now_queue, {
-  not bed_on_air() and not pause_talk_on_air() and time() > voice_until()
-})
+# a bed is live the press is not chosen but the request remains queued.
+#
+# The gate is the switch's own predicate, which track_sensitive=true asks only
+# when choosing at a track boundary, so a press that started plays to its end.
+# As a source.available gate it was asked on every frame: a bed pre-started at
+# the boundary the press won, or a DJ clip, closed it mid-clip and the fallback
+# left the clip, to play the rest at a later boundary. Measured on 2.4.6: a 14s
+# announcement aired 10s, two songs played, then its last 4s.
+#
 # The same mark as the rotate's jingles. Every jingle arrives here when the
 # controller owns the rotate (#1619), so this one covers both kinds.
-jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now)
-music = fallback(
+jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now_queue)
+music = switch(
   id="music_with_jingle_now",
   track_sensitive=true,
-  [jingle_now, music]
+  [
+    ({not bed_on_air() and not pause_talk_on_air() and time() > voice_until()}, jingle_now),
+    ({true}, music)
+  ]
+)
+# A jingle on air also means the playlist has moved past its last track.
+music.on_track(synchronous=true, fun (m) -> if m["subwave_jingle"] == "true" then auto_on_air := false end)
+# Holds the rotate's gate open for the clip on air (see the rotate). Set where a
+# clip is chosen, never on the playlist, which starts its next clip as this one
+# ends. Every other track releases it, a press included.
+music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_jingle_rotate"] == "true")
+
+# JINGLE MARKER — announce each jingle to the controller (#997): jingles are
+# otherwise invisible to it and play outside its airVoice serialiser. Written at
+# FEED time — the jingle turns audible ~crossfade_duration later — and the
+# controller holds its voice chain until start + crossfade + clip length.
+#
+# ONE writer for both kinds, on the source cross reads, because only here does a
+# jingle starting mean it is going on air. The jingles playlist and
+# jingle_now_queue are request sources, and a request source starts its next
+# ready request in the frame that ends the current one, firing that request's
+# hooks before anything downstream has chosen it. The rotate then takes music
+# for jingle_ratio tracks and the clip waits with its hooks already spent:
+# measured on 2.4.6, the playlist's own hook marked each rotate jingle at the
+# END of the one before, ~N tracks early, and its real airing wrote nothing.
+# Below music_meta, so an uploaded clip's retained ID3 tags never reach
+# now-playing.json or the ICY title.
+#
+# BACK TO BACK: cross reads ahead of the air in bursts, taking a jingle shorter
+# than the crossfade whole and then the head of whatever follows, so a second
+# jingle can be fed milliseconds after the first while it airs only once the
+# first has ended. Stamped at its own feed, its window closed early by about the
+# first one's length (the DJ could talk over its tail), and the first one's
+# marker was overwritten before anything could read it. So each marker also
+# carries `queuedSec`, how long the clip waits behind the jingles fed before it
+# since the last other track, worked out here where the feed order is known:
+# each starts at the later of its own feed and the end of the one before. Only
+# a jingle shorter than the crossfade holds back the next one: a longer one is
+# read at the pace it airs, so whatever follows is fed as its last crossfade's
+# worth is buffered, the distance the controller's window already pads for.
+# 0. when it waits for nothing; an unmeasured length (jingle_duration 0.) adds
+# nothing, which is the window an older mixer gave.
+#
+# The bookkeeping runs on the streaming thread, so it is in feed order. The
+# write needs request.duration and file I/O, so it runs off that thread with
+# everything it needs captured, and stands down once a later jingle has been
+# fed: async tasks run on several threads, and the first of a burst landing
+# last would leave its own, shorter window on disk.
+jingle_burst = ref([])
+jingle_marker_seq = ref(0)
+
+def jingle_queued_sec(fed_at, ahead) =
+  def ends(clear, j) =
+    dur = jingle_duration(fst(j))
+    if dur < crossfade_duration() then max(clear, snd(j)) + dur else 0. end
+  end
+  max(0., list.fold(ends, 0., ahead) - fed_at)
+end
+
+def write_jingle_marker(seq, fname, fed_at, ahead) =
+  dur = jingle_duration(fname)
+  queued = jingle_queued_sec(fed_at, ahead)
+  if seq == jingle_marker_seq() then
+    try
+      file.write(
+        data=json.stringify(compact=true, {
+          filename = fname,
+          durationSec = dur,
+          startedAt = fed_at,
+          queuedSec = queued
+        }),
+        atomic=true,
+        temp_dir=jingle_tmp_dir,
+        "#{state_dir}/jingle-playing.json"
+      )
+    catch err do
+      log(label="subwave", "jingle marker write failed for #{fname} (#{err})")
+    end
+  end
+end
+
+music.on_track(synchronous=true, fun (m) ->
+  if m["subwave_jingle"] == "true" then
+    fname = m["filename"]
+    fed_at = time()
+    ahead = jingle_burst()
+    # Only an unbroken run of jingles grows it; eight is past any real burst.
+    kept = if list.length(ahead) < 8 then ahead else list.tl(ahead) end
+    jingle_burst := [...kept, (fname, fed_at)]
+    jingle_marker_seq := jingle_marker_seq() + 1
+    seq = jingle_marker_seq()
+    thread.run(fast=false, fun () -> write_jingle_marker(seq, fname, fed_at, ahead))
+  else
+    jingle_burst := []
+  end
 )
 
 # Per-track loudness normalisation: the controller stamps `liq_amplify`
@@ -1452,7 +1686,7 @@ voice_queue.on_metadata(synchronous=false, voice_marker("say", voice_tmp_dir))
 intro_queue.on_metadata(synchronous=false, voice_marker("intro", intro_tmp_dir))
 
 # Sound-effects channel — short pre-rendered stingers the DJ agent plays UNDER
-# its voice, path written into sfx.txt (broadcast/sfx.js + queue.playSfx). Not
+# its voice, path written into sfx.txt (broadcast/sfx.ts + queue.playSfx). Not
 # mic-chained: the audio is already produced.
 sfx_queue = request.queue(id="sfx_queue")
 
@@ -1601,7 +1835,7 @@ intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(amplify(override
 #
 # The fade-in is NOT a debounce and must never become one. track_sensitive=false
 # switches the instant `music` reports not-ready, including on brief real gaps
-# (cold boot before auto.m3u resolves, a seam where dj_queue and auto_playlist
+# (cold boot before auto.m3u resolves, a seam where dj_queue and auto_slot
 # are both momentarily unready). Delaying the switch is the wrong fix: fire
 # immediately and ramp the LEVEL. The music branch keeps the stdlib identity
 # transition because coming BACK must be instant.
@@ -1953,8 +2187,9 @@ archive_path = {time.string("#{state_dir}/archive/%Y-%m-%d/%H-00.mp3")}
 def make_stream_outputs() =
   # Every encoder below picks its bitrate from a fixed set of branches because
   # %mp3/%opus/%fdkaac(bitrate=…) each need a parse-time literal int — a ref
-  # won't do. Keep the branches in sync with MP3_BITRATES / OPUS_BITRATES /
-  # AAC_BITRATES in settings.ts.
+  # won't do. Keep the branches in sync with SETTINGS_MP3_BITRATES /
+  # SETTINGS_OPUS_BITRATES / SETTINGS_AAC_BITRATES in
+  # controller/src/schemas/settings.ts.
   br = stream_bitrate()
   mp3_enc =
     if br <= 64 then

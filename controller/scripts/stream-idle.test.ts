@@ -1,6 +1,5 @@
 // Unit tests for the pure idle-pause transition helper in
-// broadcast/stream-idle-pure.ts. Run: `tsx scripts/stream-idle.test.ts`
-// (folded into `npm run test`).
+// broadcast/stream-idle-pure.ts. Run: `npm test -- stream-idle.test.ts`.
 //
 // nextIdleState decides when the programme idle-pauses (zero listeners for
 // the configured window) and when it resumes. The branching is

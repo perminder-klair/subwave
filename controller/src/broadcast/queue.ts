@@ -44,6 +44,8 @@ import type { HostSpeechStamp, TurnMeta } from './session.js';
 import { promptRecapEntries, VERBATIM_META } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
+import { showKeyAt } from './show-boundary.js';
+import { programmeShowKey } from './resume-show.js';
 import { TRANSITION_EFFECTS, type TransitionEffect } from '../settings/vocab.js';
 import type { MixDropReason } from '../schemas/transitions.js';
 import { logEvent } from '../observability/events.js';
@@ -87,10 +89,15 @@ import {
 } from './drain-policy.js';
 import {
   commitSatisfied,
+  skipJingleCrossSec,
   skipPrepAction,
+  songFedAtMs,
+  targetedSkipRefusal,
   SKIP_COMMIT_WAIT_MS,
+  SKIP_ORDERED_MARKERS,
   SKIP_POLL_INTERVAL_MS,
 } from './skip-policy.js';
+import type { SkipRefusalReason } from '../schemas/dj.js';
 import * as stemBlend from './stem-blend.js';
 import type {
   DjLogEntry,
@@ -150,6 +157,8 @@ import {
   speechDurationMs,
   writeHandoff,
   jingleAiredAtMs,
+  jingleWaitMs,
+  jingleWindow,
   lastAiredJingleFilename,
   interposedSince,
   type QueuedVoice,
@@ -1004,6 +1013,7 @@ class Queue {
         : null,
       aiPicked,
       selectionShowAt: Number.isFinite(selectionAt) ? selectionAt : null,
+      showKey: showKeyAt(typeof selectionAt === 'number' && Number.isFinite(selectionAt) ? selectionAt : Date.now()),
       block: block ?? undefined,
       // Only stamp a back-announce target when there's actually an intro/link to
       // air against it; a bare track carries no claim about what preceded it.
@@ -2345,6 +2355,29 @@ class Queue {
       await sleep(SKIP_POLL_INTERVAL_MS);
     }
     return { pending: true, committed: false, waitedMs: Date.now() - t0 };
+  }
+
+  // Why an operator skip aimed at `expectId` must not land, or null when it may
+  // (#2017). Reads now-playing.json from disk, not the watcher's copy (up to a
+  // 1.5s tick old); a jingle through its own window (jingleWindow, widened to
+  // the longest outgoing tail), a bed or break through interposedSince.
+  // skip-policy decides, and says why the two are read differently. A marker
+  // that cannot be read counts as nothing on air, so a lost marker costs the
+  // old bare-skip behaviour, never a refusal; an unreadable now-playing
+  // refuses, because it cannot confirm the one thing the caller asked for.
+  async skipTargetRefusal(expectId: string): Promise<{ reason: SkipRefusalReason; onAirId: string | null } | null> {
+    const np = await this.readNowPlayingFromDisk();
+    const onAirId = typeof np?.subsonic_id === 'string' && np.subsonic_id ? np.subsonic_id : null;
+    const fedAt = songFedAtMs(np);
+    const now = Date.now();
+    const jingle = jingleWindow(skipJingleCrossSec(settings.get()?.crossfadeDuration));
+    const reason = targetedSkipRefusal({
+      expectId,
+      onAirId,
+      jingleOnAir: jingleWaitMs(now, jingle.clearAtMs, jingle.windowMs) > 0,
+      interposed: fedAt == null ? null : interposedSince(fedAt, now, SKIP_ORDERED_MARKERS),
+    });
+    return reason ? { reason, onAirId } : null;
   }
 
   // Speak something without queueing a track — hourly time checks, weather,
@@ -4186,6 +4219,72 @@ class Queue {
     return this.removeUpcomingItem(item);
   }
 
+  // What is on air, and the picks chosen for another show than `onAirShow`,
+  // minus requests. Taken the moment the programme resumes, so that what the
+  // new show picks afterwards is never mistaken for the earlier show's. A pick
+  // chosen for the show on air stays, whenever it was queued: a pick aimed
+  // across the boundary, or one queued while the programme was paused.
+  snapshotProgramme(onAirShow: string): { current: QueueItem | null; upcoming: QueueItem[] } {
+    const isEarlierShow = (item: QueueItem | null) => {
+      if (!item || item.requestedBy) return false;
+      const key = programmeShowKey(item);
+      return key !== null && key !== onAirShow;
+    };
+    // The mixer can start a new track before idle_off is acknowledged.
+    return {
+      current: isEarlierShow(this.current) ? this.current : null,
+      upcoming: this.upcoming.filter(isEarlierShow),
+    };
+  }
+
+  // The programme paused in one show and resumed in another (stream-idle.ts).
+  // The frozen track and the picks queued behind it were chosen for the earlier
+  // show: an afternoon floor-filler would otherwise play on into the night
+  // programme. Remove those picks and skip that track (`skip: null` leaves it
+  // on air). Only what `stale` holds is touched, and requests are kept and
+  // never skipped: someone asked for those, whatever the hour. The caller rebuilds and reloads the fallback
+  // first, or the skip lands on a track Liquidsoap prefetched from the old one.
+  async dropProgrammeFromEarlierShow(
+    stale: { current: QueueItem | null; upcoming: QueueItem[] },
+    skip: (() => Promise<unknown>) | null = liquidsoapControl.skipTrack,
+  ): Promise<{ dropped: number; kept: number; skipped: boolean }> {
+    let dropped = 0;
+    let kept = 0;
+    for (const item of stale.upcoming) {
+      if (!this.upcoming.includes(item)) continue;   // aired or cancelled meanwhile
+      const removed = await this.removeUpcomingItem(item, 'show changed while paused').catch(() => ({ ok: false }));
+      if (removed.ok) dropped += 1;
+      else kept += 1;
+    }
+    // onTrackStarted replaces `current` on every start, so identity tells the
+    // frozen track, or an earlier-show pick that started while the fallback was
+    // rebuilding, from anything else on air. A pick the mixer would not give
+    // back airs next anyway, so cutting the track short would only bring that
+    // one forward.
+    const leftover = (item: QueueItem | null) =>
+      !!item && !item.requestedBy && (item === stale.current || stale.upcoming.includes(item));
+    let skipped = false;
+    if (skip && leftover(this.current) && kept === 0) {
+      try {
+        // A kept request must be committed in dj_queue or the skip airs the fallback instead.
+        await this.commitBeforeSkip();
+        // Playback can advance while the commit waits for a resolved request:
+        // skip whatever is on air then, if it is still one of the earlier show's.
+        if (leftover(this.current)) {
+          await skip();
+          skipped = true;
+        }
+      } catch (err) {
+        this.log('error', `could not skip the track left over from the earlier show: ${(err as Error).message}`);
+      }
+    }
+    this.log('scheduler',
+      `show changed while the programme was paused — dropped ${dropped} queued pick(s)`
+      + (kept ? `, ${kept} already with the mixer and will still air` : '')
+      + (skipped ? ', skipped the leftover track' : ''));
+    return { dropped, kept, skipped };
+  }
+
   // The cancel itself, addressed by ITEM rather than by track id.
   //
   // Split out for the block cancel (#1622 FR 4), which holds the exact items it
@@ -4632,6 +4731,22 @@ class Queue {
     for (const p of this._recentPlays) {
       if (new Date(p.endedAt).getTime() < cutoff) break;
       add(p);
+    }
+    return out;
+  }
+
+  // The n tracks a NEW pick will follow, nearest first: queued-and-unaired
+  // items from the tail (a new pick appends there), the track on air, then
+  // the aired history. The genre guard's run window, walked from the same end
+  // of the queue as the artist and album windows above. Under pair drain the
+  // pick follows the held head, not `current`, so a window that started at
+  // `current` judged the run one slot early (#2007).
+  precedingTracks(n = 0): Track[] {
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const out: Track[] = [];
+    for (const item of [...[...this.upcoming].reverse(), this.current, ...this.history]) {
+      if (out.length >= n) break;
+      if (item?.track) out.push(item.track);
     }
     return out;
   }

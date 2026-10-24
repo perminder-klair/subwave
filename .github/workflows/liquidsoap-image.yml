@@ -10,6 +10,7 @@ on:
       - 'docker/icecast.xml.template'
       - 'liquidsoap/radio.liq'
       - 'scripts/liquidsoap-image-smoke*'
+      - 'scripts/liquidsoap-resume-fallback*'
       - '.github/workflows/liquidsoap-image.yml'
   workflow_dispatch:
 
@@ -41,6 +42,10 @@ jobs:
           diff -u /tmp/broadcast.sha256 /tmp/aio.sha256
       - name: Exercise the baked radio script and all four codecs
         run: python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:smoke
+      - name: Resume into another show airs the new show's fallback
+        run: |
+          python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke --crossfade 4
+          python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke --crossfade 0
       - uses: actions/upload-artifact@v4
         if: always()
         with:
