@@ -275,8 +275,9 @@ function spawnChild(
   tagger.progress = null;
   // One log and one file per run; openRunLog owns the id, retention and the
   // refused-file fallback. The previous id is passed so a run started in the
-  // same second never shares it.
-  runLog?.close();
+  // same second never shares it. The previous log is left open: 'exit' (which
+  // frees the slot) can come before its child's last output has drained, and
+  // its own 'close' handler below closes it once that output is in the file.
   runLog = openRunLog(RUN_LOG_DIR, new Date(startedAt), mode, runLog?.runId ?? null);
   tagger.runLogId = runLog.runId;
   const thisRunLog = runLog;

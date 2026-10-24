@@ -39,10 +39,20 @@ process.stdout.write(out);
 process.stdout.write('[tag] last words\\n', () => process.exit(0));
 `;
 
+// A child that exits while a grandchild still holds its stdout, the shape of
+// npx's wrapper leaving before the worker under it: 'exit' fires, then the
+// grandchild's line, then 'close'.
+const DRAINING_CHILD = `
+const { spawn } = require('node:child_process');
+spawn(process.execPath, ['-e', "setTimeout(() => process.stdout.write('[tag] drained after exit\\\\n'), 300)"], { stdio: ['ignore', 'inherit', 'inherit'] });
+process.stdout.write('[tag] parent done\\n', () => process.exit(0));
+`;
+let childScript = CHILD;
+
 const spawn = cp.spawn;
 cp.spawn = ((command: string, args: readonly string[], opts: cp.SpawnOptions) => {
   if (command === 'npx' && opts?.cwd === '/app') {
-    return spawn(process.execPath, ['-e', CHILD], { ...opts, cwd: STATE });
+    return spawn(process.execPath, ['-e', childScript], { ...opts, cwd: STATE });
   }
   return spawn(command, args, opts);
 }) as typeof cp.spawn;
@@ -100,6 +110,24 @@ test('a second run gets its own log; a cursor from the first reads it from the s
   const files = t.taggerLogFiles().map(f => f.id);
   assert.deepEqual(files, [second, first], 'newest first');
   assert.deepEqual(readdirSync(join(STATE, 'tagger-logs')).sort(), [`${first}.log`, `${second}.log`].sort());
+});
+
+test('a run started before the last one drained leaves that run\'s file whole', async () => {
+  childScript = DRAINING_CHILD;
+  t.startReconcile();
+  const draining = t.tagger.runLogId!;
+  while (t.tagger.running) await new Promise((r) => setTimeout(r, 10));
+  // The first child has exited but its grandchild still holds the pipe, and
+  // the operator presses Start again.
+  childScript = CHILD;
+  const next = await runOnce();
+  assert.notEqual(next, draining);
+  const file = t.taggerLogFile(draining)!;
+  for (let i = 0; i < 200 && !readFileSync(file, 'utf8').includes('[exit'); i++) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  const body = readFileSync(file, 'utf8').trimEnd().split('\n').map(l => l.replace(/^\d\d:\d\d:\d\d {2}/, ''));
+  assert.deepEqual(body, ['[tag] parent done', '[tag] drained after exit', '[exit 0]']);
 });
 
 test('the download route serves the run\'s file, from under a hidden state dir too', async () => {
