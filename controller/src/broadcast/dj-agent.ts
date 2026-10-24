@@ -38,6 +38,10 @@ import {
   breakerFailure,
   breakerOpen,
   breakerSuccess,
+  requestBreakerFailure,
+  requestBreakerOpen,
+  requestBreakerSuccess,
+  RequestIdentificationMiss,
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
@@ -1734,24 +1738,28 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
-export async function runRequest(queue: any, { requester, text }: { requester: string; text: string }) {
-  if (settings.get().llm?.requestMatching !== 'agentic' || breakerOpen()) return null;
+export function requestMatchingEnabled(): boolean {
+  return settings.get().llm?.requestMatching === 'agentic';
+}
+
+export async function runRequest(queue: any, { requester, text, signal }: { requester: string; text: string; signal?: AbortSignal }) {
+  if (!requestMatchingEnabled() || requestBreakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
   // the caller's stateless matcher cascade handle it without a model call.
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text });
-    breakerSuccess();
+    const out = await runRequestViaAgent(queue, { requester, text, signal });
+    requestBreakerSuccess();
     return out;
   } catch (err) {
-    breakerFailure(queue);
+    requestBreakerFailure(queue, err);
     throw err;
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text }: { requester: string; text: string }) {
+async function runRequestViaAgent(queue: any, { requester, text, signal }: { requester: string; text: string; signal?: AbortSignal }) {
   return withTrace({ kind: 'request', requester }, async () => {
     const requestSpeech = session.captureAutomaticHostSpeech(session.onAirPersona());
     // Requests stay near-unfiltered — listeners must be able to re-request a
@@ -1796,6 +1804,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       messages,
       scope,
       persona: requestSpeech.persona,
+      ...(signal ? { abortSignal: signal } : {}),
     });
     const { toolCalls, extras } = run;
     // Reassigned when the unknown-id salvage below (repickRequestFromSeen)
@@ -1820,7 +1829,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       const screened = screenAck(object.ack, echoTexts, 'Heard you loud and clear.');
       if (screened.guard) queue.log('request-guard', `agent chat ack echoed request text — replaced`);
       session.appendTurn({ role: 'dj', kind: 'request', text: screened.ack, meta: { requester, toolCalls } });
-      return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
+      return { ack: screened.ack, track: null, introScript: null, guard: screened.guard, candidateCount: extras.seen.size, confidence: null };
     }
 
     // Whoever voices this answer, the host and guests on the roster, and the
@@ -1890,6 +1899,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       }
     }
     if (!song) {
+      const providerFailure = extras.failures?.find((failure: any) => failure?.providerFailure === true);
+      if (providerFailure) throw providerFailure;
       // idInSessionWindow (D2 telemetry): does the bad id appear verbatim
       // anywhere in the EXACT window this run saw (the local `messages` array
       // built above, not a fresh session.windowMessages() call — a concurrent
@@ -1904,6 +1915,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls,
         idInSessionWindow: !!(object?.id && windowText.includes(object.id)),
       });
+      if (extras.seen.size === 0) {
+        throw new RequestIdentificationMiss(`request agent found no matching track for id ${object?.id ?? 'none'}`);
+      }
       throw new Error(`request agent returned unknown id ${object?.id}`);
     }
 
@@ -2018,7 +2032,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
-      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown', candidateCount: extras.seen.size, confidence: 1 };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -2090,7 +2104,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // The echo guards already ran above even though this pick turned out to
       // be a duplicate — surface the verdict rather than losing it. `refused`
       // for the same reason as the cooldown branch: nothing was queued here.
-      return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
+      return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued', candidateCount: extras.seen.size, confidence: 1 };
     }
     session.appendTurn({
       role: 'dj', kind: 'request',
@@ -2106,6 +2120,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       track: { title: song.title, artist: song.artist, id: song.id },
       introScript: intro || null,
       guard: guardVerdict,
+      candidateCount: extras.seen.size,
+      confidence: 1,
     };
   });
 }

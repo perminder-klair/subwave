@@ -558,7 +558,7 @@ test('update() still tolerates a key it has never heard of', async () => {
 test('the converted keys are exactly the ones with schemas', () => {
   // The remaining keys and why each resists a stateless schema are in docs/internals/schemas.md.
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
-    'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
+    'activeDjPromptId', 'alexa', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
     'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'handover', 'jingleRatio', 'jingleRotate', 'likes',

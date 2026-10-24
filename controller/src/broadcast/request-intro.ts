@@ -9,6 +9,8 @@ import { requestsAllowed } from './dj-budget.js';
 import * as session from './session.js';
 import type { Persona } from './queue/types.js';
 import type { HostSpeechStamp } from './session.js';
+import { dedicationSpeech } from '../alexa/dedications.js';
+import type { RequestDedication } from './request-ledger.js';
 
 export interface QueuedRequestIntro {
   introScript: string | null;
@@ -24,27 +26,42 @@ export async function generateQueuedRequestIntro(
   generate: (args: Record<string, unknown>) => Promise<string> = dj.generateIntro,
 ): Promise<QueuedRequestIntro> {
   const owner = session.captureAutomaticHostSpeech(session.onAirPersona());
+  const dedication = args.dedication as RequestDedication | null | undefined;
+  const { dedication: _dedication, ...promptArgs } = args;
   // Past the hard token cap with requests not exempt, the request still
   // queues and acks; it just airs without a written intro.
   try {
     const script = autoVoiceAllowed() && requestsAllowed()
-      ? await generate({ ...args, requestText, persona: owner.persona })
+      ? await generate({ ...promptArgs, requestText, persona: owner.persona })
       : null;
     // The retry must see no listener-derived text at all, or it can echo again:
     // the request text is withheld, and so is the missed artist's NAME (the miss
     // itself stays flagged, so the retry is still honest about the stand-in).
-    const { missedArtist: _missedArtist, ...withoutListenerText } = args;
+    const { missedArtist: _missedArtist, ...withoutListenerText } = promptArgs;
     const guarded = await guardIntro(script, requestText, () =>
       generate({ ...withoutListenerText, persona: owner.persona }));
     const current = session.finalizeAutomaticHostSpeech(guarded.script, owner);
+    const introScript = dedication?.target
+      ? [dedicationSpeech(dedication.target, dedication.locale), current.text].filter(Boolean).join(' ')
+      : current.text;
     return {
-      introScript: current.text,
+      introScript: introScript || null,
       introPersona: current.persona,
       introHostSpeech: current.hostSpeech,
       guard: guarded.guard,
     };
   } catch (err) {
     console.error(`[request] optional intro failed: ${err instanceof Error ? err.message : String(err)}`);
-    return { introScript: null, introPersona: null, introHostSpeech: null, guard: null, failure: 'intro-failed' };
+    // A dedication is user-visible request metadata, not optional LLM copy.
+    // Keep the deterministic announcement when intro generation is unavailable.
+    return {
+      introScript: dedication?.target
+        ? dedicationSpeech(dedication.target, dedication.locale)
+        : null,
+      introPersona: null,
+      introHostSpeech: null,
+      guard: null,
+      failure: 'intro-failed',
+    };
   }
 }

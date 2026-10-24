@@ -1,0 +1,303 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "intents": [
+        {
+          "name": "StartRadioIntent",
+          "samples": [
+            "start the radio",
+            "start the station",
+            "begin the radio",
+            "start listening"
+          ]
+        },
+        {
+          "name": "PlayRadioIntent",
+          "samples": [
+            "play the station",
+            "play the radio",
+            "begin station playback"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "RequestSongIntent",
+          "samples": [
+            "request {requestText}",
+            "ask for {requestText}",
+            "request the song {requestText}",
+            "ask the radio for {requestText}",
+            "play {requestText}"
+          ]
+        },
+        {
+          "name": "RequestStatusIntent",
+          "samples": [
+            "what is the status of my request",
+            "what did I request",
+            "when will my request play",
+            "is my song request ready"
+          ]
+        },
+        {
+          "name": "CancelRequestIntent",
+          "samples": [
+            "cancel my request",
+            "cancel my song request",
+            "cancel the waiting request"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "ReplaceRequestIntent",
+          "samples": [
+            "replace my request with {requestText}",
+            "change my song request to {requestText}",
+            "replace the waiting request with {requestText}"
+          ]
+        },
+        {
+          "name": "NowPlayingIntent",
+          "samples": [
+            "what is playing right now",
+            "what song is playing",
+            "which song is on the radio"
+          ]
+        },
+        {
+          "name": "WhatIsPlayingIntent",
+          "samples": [
+            "tell me what is playing",
+            "what is playing on the station"
+          ]
+        },
+        {
+          "name": "CurrentSongIntent",
+          "samples": [
+            "tell me the current song",
+            "what is the current track"
+          ]
+        },
+        {
+          "name": "PreviousTrackIntent",
+          "samples": [
+            "what played before this",
+            "what was the previous song",
+            "tell me the last song"
+          ]
+        },
+        {
+          "name": "UpcomingIntent",
+          "samples": [
+            "what plays next",
+            "what is the upcoming song",
+            "which song is next"
+          ]
+        },
+        {
+          "name": "NextSongIntent",
+          "samples": [
+            "tell me the next song",
+            "what song comes after this"
+          ]
+        },
+        {
+          "name": "WhatIsNextIntent",
+          "samples": [
+            "what comes next on the radio",
+            "which track plays next"
+          ]
+        },
+        {
+          "name": "QueuePreviewIntent",
+          "samples": [
+            "what songs are coming up",
+            "tell me the next few songs",
+            "preview the queue"
+          ]
+        },
+        {
+          "name": "StationStatusIntent",
+          "samples": [
+            "is the station online",
+            "is the radio working",
+            "check the station"
+          ]
+        },
+        {
+          "name": "MoreLikeThisIntent",
+          "samples": [
+            "more like this",
+            "play more like this",
+            "give me something like this",
+            "something similar to this song",
+            "play another song like this"
+          ]
+        },
+        {
+          "name": "AnotherByArtistIntent",
+          "samples": [
+            "another song by this artist",
+            "play another by this artist",
+            "give me another song from this artist",
+            "same artist ka ek aur gaana"
+          ]
+        },
+        {
+          "name": "RecentTracksIntent",
+          "samples": [
+            "what played recently",
+            "what songs played recently",
+            "tell me the recent tracks",
+            "what were the last few songs"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "detailType",
+              "type": "AlexaDetailType"
+            }
+          ],
+          "name": "TrackDetailsIntent",
+          "samples": [
+            "tell me the {detailType} of this song",
+            "what is the {detailType} for the current track",
+            "give me all details about this song",
+            "what details do you have about the song"
+          ]
+        },
+        {
+          "name": "CurrentShowIntent",
+          "samples": [
+            "what show is on now",
+            "who is the DJ right now",
+            "what is on air right now",
+            "what programme is playing"
+          ]
+        },
+        {
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery"
+            },
+            {
+              "name": "dedicationTarget",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "name": "DedicationIntent",
+          "samples": [
+            "dedicate {requestText}",
+            "request a dedication for {dedicationTarget}",
+            "dedicate a song",
+            "make a dedication",
+            "dedicate this song",
+            "play a song for someone"
+          ]
+        },
+        {
+          "name": "RequestReminderIntent",
+          "samples": [
+            "remind me before my request plays",
+            "set a reminder for my song request",
+            "remind me when my requested song is coming up",
+            "remind me before my song plays"
+          ]
+        },
+        {
+          "name": "AMAZON.HelpIntent"
+        },
+        {
+          "name": "AMAZON.StopIntent"
+        },
+        {
+          "name": "AMAZON.CancelIntent"
+        },
+        {
+          "name": "AMAZON.PauseIntent"
+        },
+        {
+          "name": "AMAZON.ResumeIntent"
+        },
+        {
+          "name": "AMAZON.FallbackIntent"
+        },
+        {
+          "name": "AMAZON.YesIntent"
+        },
+        {
+          "name": "AMAZON.NoIntent"
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent"
+        }
+      ],
+      "types": [
+        {
+          "name": "AlexaDetailType",
+          "values": [
+            { "name": { "value": "album" } },
+            { "name": { "value": "artist" } },
+            { "name": { "value": "year" } },
+            { "name": { "value": "genre" } },
+            { "name": { "value": "language" } },
+            { "name": { "value": "all", "synonyms": ["details", "everything"] } }
+          ]
+        }
+      ],
+      "invocationName": "__ALEXA_INVOCATION_NAME__"
+    },
+    "dialog": {
+      "delegationStrategy": "ALWAYS",
+      "intents": [
+        {
+          "name": "DedicationIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            {
+              "name": "requestText",
+              "type": "AMAZON.SearchQuery",
+              "elicitationRequired": true,
+              "confirmationRequired": false,
+              "prompts": { "elicitation": "DedicationSongPrompt" }
+            },
+            {
+              "name": "dedicationTarget",
+              "type": "AMAZON.SearchQuery",
+              "elicitationRequired": true,
+              "confirmationRequired": false,
+              "prompts": { "elicitation": "DedicationTargetPrompt" }
+            }
+          ]
+        }
+      ]
+    },
+    "prompts": [
+      {
+        "id": "DedicationSongPrompt",
+        "variations": [
+          { "type": "PlainText", "value": "Tell me the song you want to dedicate." }
+        ]
+      },
+      {
+        "id": "DedicationTargetPrompt",
+        "variations": [
+          { "type": "PlainText", "value": "Who should I dedicate it to?" }
+        ]
+      }
+    ]
+  }
+}

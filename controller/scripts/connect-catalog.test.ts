@@ -20,6 +20,7 @@ import type { SubwaveClient } from '../src/mcp/client.js';
 // Every route module that carries a documented endpoint. Import them and merge
 // their router stacks into one "METHOD path" set of real routes.
 import { router as publicRouter } from '../src/routes/public.js';
+import { router as alexaRouter } from '../src/routes/alexa.js';
 import { router as requestRouter } from '../src/routes/request.js';
 import { router as djRouter } from '../src/routes/dj.js';
 import { router as sfxRouter } from '../src/routes/sfx.js';
@@ -41,7 +42,7 @@ function routeKeys(router: any): Set<string> {
 }
 
 const real = new Set<string>();
-for (const r of [publicRouter, requestRouter, djRouter, sfxRouter, jinglesRouter, statsRouter, listenersRouter]) {
+for (const r of [publicRouter, alexaRouter, requestRouter, djRouter, sfxRouter, jinglesRouter, statsRouter, listenersRouter]) {
   for (const k of routeKeys(r)) real.add(k);
 }
 

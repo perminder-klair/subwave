@@ -98,6 +98,7 @@ interface DjAgentOptions {
   // historical step. Opt-in per agent, OFF by default: a caller's step cap can
   // be load-bearing, so only pick/request ask for it.
   providerDiscoveryBudget?: boolean;
+  abortSignal?: AbortSignal;
 }
 
 // Operator-overridable via settings.llm.maxOutputTokens (#712); 0 keeps this
@@ -181,9 +182,14 @@ function buildRecoveryAgent(leg: Leg, system: string, allTools: ToolSet | undefi
 // every attempt for one pick draws down the same budget, so a slow main run
 // leaves less time for recovery instead of resetting the clock. undefined means
 // no deadline.
-function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label: string, fn: (signal?: AbortSignal) => Promise<T>): Promise<T> {
+function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label: string, fn: (signal?: AbortSignal) => Promise<T>, parentSignal?: AbortSignal): Promise<T> {
+  const combine = (signal?: AbortSignal) => {
+    if (!parentSignal) return signal;
+    if (!signal) return parentSignal;
+    return AbortSignal.any([parentSignal, signal]);
+  };
   if (deadlineAt == null) {
-    return withTransientRetry(kind, () => fn());
+    return withTransientRetry(kind, () => fn(combine()), parentSignal);
   }
   const remaining = deadlineAt - Date.now();
   if (remaining <= 0) {
@@ -192,7 +198,7 @@ function runDeadlinedCall<T>(deadlineAt: number | undefined, kind: string, label
     return Promise.reject(err);
   }
   return withDeadline(remaining, `${kind} ${label}`, (signal) =>
-    withTransientRetry(kind, () => fn(signal), signal));
+    withTransientRetry(kind, () => fn(combine(signal)), combine(signal)));
 }
 
 // The tool-call turns of a run and the tool results answering them, without
@@ -243,12 +249,12 @@ export function remainingDiscoverySteps(budget: number, carriedSteps: StepLike[]
 // finished carried into it.
 export const NATIVE_DEADLINE_SHARE = 0.5;
 
-async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>): Promise<AgentGenerateResult> {
+async function runDeadlined(deadlineAt: number | undefined, kind: string, label: string, agent: AgentLike, messages: ModelMessage[], attempt?: ReturnType<typeof createAgentAttempt>, parentSignal?: AbortSignal): Promise<AgentGenerateResult> {
   try {
     return await runDeadlinedCall(deadlineAt, kind, label, (signal) => agent.generate({
       messages,
       ...(signal ? { abortSignal: signal } : {}),
-    }));
+    }), parentSignal);
   } catch (err) {
     if (attempt && ToolChoiceViolationError.isInstance(err)) return attempt.declined(err);
     throw err;
@@ -266,6 +272,7 @@ export async function djAgent({
   kind = 'sdk.djAgent',
   timeoutMs,
   providerDiscoveryBudget = false,
+  abortSignal = undefined,
   telemetry = {},
   // Caller acceptance check on the NATIVE path's object only — that branch
   // validates schema shape, not content, so a fabricated-but-well-formed answer
@@ -314,7 +321,7 @@ export async function djAgent({
         if (plan === 'object-via-tool') {
           lastVia = 'ai-sdk:tool';
           const { object, perf, warnings } = await runDeadlinedCall(deadlineAt, kind, 'agent object',
-            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal, meter }));
+            (signal) => objectViaToolCall(leg, { system, prompt: undefined, messages, schema, temperature, maxOutputTokens, signal, meter }), abortSignal);
           return {
             value: { object, steps: 0, toolCalls: [] },
             via: lastVia,
@@ -371,7 +378,7 @@ export async function djAgent({
               // throw after every step was billed; nativeAttempt's callbacks
               // count each call as it ends and keep its trail.
             } as any);
-            const nr = await runDeadlined(nativeDeadlineAt, kind, 'native run', nativeAgent, messages);
+            const nr = await runDeadlined(nativeDeadlineAt, kind, 'native run', nativeAgent, messages, undefined, abortSignal);
             const nObj = nr.output;
             const nSteps = nr.steps?.length ?? 0;
             // Require a real discovery call: the cross-provider failure
@@ -473,7 +480,7 @@ export async function djAgent({
           // On the done-tool path the schema lives on `done`, so no agent output.
           ...(schema && !useDoneTool ? { output: Output.object({ schema }) } : {}),
         } as any);
-        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, baseMessages, mainAttempt);
+        let result = await runDeadlined(deadlineAt, kind, 'agent run', agent, baseMessages, mainAttempt, abortSignal);
         let steps = result.steps?.length ?? 0;
 
         // The trail belongs to the MAIN run: `result` is reassigned by the
@@ -521,7 +528,7 @@ export async function djAgent({
           const recoveryMessages = endOnUserTurn(priorMessages.length ? [...baseMessages, ...priorMessages] : baseMessages);
           const recoveryAttempt = createAgentAttempt(meter);
           result = await runDeadlined(deadlineAt, kind, 'agent recovery',
-            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt);
+            buildRecoveryAgent(leg, system, allTools, temperature, maxOutputTokens, forcedChoice, recoveryAttempt), recoveryMessages, recoveryAttempt, abortSignal);
           steps = result.steps?.length ?? 0;
           captureTrail(result);
           noteIfDeclined('recovery', result);
@@ -541,7 +548,7 @@ export async function djAgent({
               const t = await runDeadlinedCall(deadlineAt, kind, 'agent terminal collapse',
                 (signal) => objectViaToolCall(leg, {
                   system, prompt, schema, temperature, maxOutputTokens, signal, meter,
-                }));
+                }), abortSignal);
               terminalObject = t.object;
               terminalPrompt = prompt;
               // A real model call the record should count.

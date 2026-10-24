@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  directRequestUnsupported, explicitRequestAttribute, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
+  classifyListenerRequest, directRequestUnsupported, explicitRequestAttribute, looksLikeLyricRequest, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
   resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
 } from '../src/music/request-match.js';
+
+test('listener requests are classified into deterministic resolver lanes', () => {
+  assert.equal(classifyListenerRequest('Bohemian Rhapsody by Queen'), 'named-song-or-artist');
+  assert.equal(classifyListenerRequest('the song from the new Dune movie'), 'lyrics-or-description');
+  assert.equal(classifyListenerRequest('play energetic Punjabi rock'), 'attributes');
+  assert.equal(classifyListenerRequest('surprise me'), 'ambiguous-music');
+  assert.equal(classifyListenerRequest('how are you today?'), 'non-music-chat');
+});
 
 const exact: RequestSong = { id: 'exact', title: 'Bohemian Rhapsody', artist: 'Queen', album: 'A Night at the Opera', genre: 'Rock' };
 const other: RequestSong = { id: 'other', title: 'Another Song', artist: 'Queen', album: 'Other Album', genre: 'Jazz' };
@@ -120,6 +128,52 @@ test('a named title selects only the recording satisfying its language requireme
   const result = await resolveDirectRequest({ ...songRequest, language: 'French' }, f.deps);
   assert.equal(result.track?.id, french.id);
   assert.equal(result.outcome, 'matched');
+});
+
+test('spoken number variants match the named recording without widening the artist', async () => {
+  const patient = { ...exact, id: 'patient-zero', title: 'Patient Zero', artist: 'Taylor Swift' };
+  const f = fixture({
+    searchPage: async query => ({
+      songs: query === 'patient 0' ? [patient] : [],
+      rawCount: query === 'patient 0' ? 1 : 0,
+    }),
+  });
+  const result = await resolveDirectRequest(
+    { title: 'patient 0', artist: 'Taylor Swift', literal: true },
+    { ...f.deps, text: 'patient 0 by Taylor swift', exactOnly: true },
+  );
+  assert.equal(result.track?.id, patient.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(f.fallbackCalls(), 0);
+});
+
+test('spoken number variants are searched in both directions', async () => {
+  const patient = { ...exact, id: 'patient-zero', title: 'Patient Zero', artist: 'Taylor Swift' };
+  const queries: string[] = [];
+  const f = fixture({
+    searchPage: async query => {
+      queries.push(query);
+      return query === 'patient zero' ? { songs: [patient], rawCount: 1 } : { songs: [], rawCount: 0 };
+    },
+  });
+  const result = await resolveDirectRequest(
+    { title: 'patient 0', artist: 'Taylor Swift', literal: true },
+    { ...f.deps, text: 'patient 0 by Taylor swift', exactOnly: true },
+  );
+  assert.equal(result.track?.id, patient.id);
+  assert.ok(queries.includes('patient zero'));
+});
+
+test('exact-only named requests never fall back to another track', async () => {
+  const f = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }) });
+  const result = await resolveDirectRequest(
+    { title: 'Missing Song', artist: 'Queen', literal: true },
+    { ...f.deps, text: 'Missing Song by Queen', exactOnly: true },
+  );
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(f.fallbackCalls(), 0);
+  assert.deepEqual(f.albums, ['old', 'new']);
 });
 
 for (const requirement of [{ language: 'French' }, { genre: 'Classical' }]) {
@@ -383,6 +437,36 @@ test('artist, genre and language requirements are combined before a broad pick',
   assert.equal(r.outcome, 'matched');
 });
 
+test('a Punjabi genre tag can satisfy the overlapping Punjabi language request', async () => {
+  const punjabi = { ...filler, id: 'punjabi-pop', genre: 'Punjabi Pop', language: 'pa' };
+  const f = fixture({
+    getGenres: async () => [{ value: 'Punjabi Pop', songCount: 1 }],
+    getSongsByGenreSampled: async () => [punjabi],
+  });
+  const r = await resolveDirectRequest(
+    { genre: 'Punjabi', language: 'Punjabi' },
+    { ...f.deps, text: 'play some Punjabi music' },
+  );
+  assert.equal(r.track?.id, punjabi.id);
+  assert.equal(r.outcome, 'matched');
+});
+
+test('a named Punjabi recording can use Punjabi genre metadata when language metadata is an ISO code', async () => {
+  const punjabi = { ...exact, id: 'punjabi-named', title: 'Punjabi Song', artist: 'Punjabi Artist', genre: 'Punjabi Pop', language: 'pa' };
+  const f = fixture({
+    searchPage: async () => ({ songs: [punjabi], rawCount: 1 }),
+    resolveArtist: async () => ({ id: 'punjabi-artist', name: punjabi.artist }),
+    getGenres: async () => [{ value: 'Punjabi Pop', songCount: 1 }],
+    getSongsByGenreSampled: async () => [punjabi],
+  });
+  const r = await resolveDirectRequest(
+    { title: punjabi.title, artist: punjabi.artist, language: 'Punjabi', search_terms: [punjabi.title] },
+    { ...f.deps, text: `play ${punjabi.title} by ${punjabi.artist} in Punjabi` },
+  );
+  assert.equal(r.track?.id, punjabi.id);
+  assert.equal(r.outcome, 'matched');
+});
+
 test('unverified language text matches do not masquerade as a language match', async () => {
   const f = fixture({ resolveGenreName: async () => null });
   const r = await resolveDirectRequest({ language: 'French', search_terms: [] }, f.deps);
@@ -518,6 +602,99 @@ for (const text of ['Queen, Bohemian Rhapsody', 'Please play Bohemian Rhapsody b
 test('model-free artist requests do not invent a song title', () => {
   assert.equal(modelFreeRequest('play some Queen').artist, 'Queen');
   assert.equal(modelFreeRequest('play anything by Queen').title, null);
+  assert.equal(modelFreeRequest('play the song by Taylor Swift').title, null);
+  assert.equal(modelFreeRequest('play the song by Taylor Swift').artist, 'Taylor Swift');
+});
+
+test('model-free requests recognise multilingual genre, language, mood, and energy forms', () => {
+  assert.equal(modelFreeRequest('play some Punjabi music').language, 'Punjabi');
+  assert.equal(modelFreeRequest('play some rock music').genre, 'rock');
+  assert.equal(modelFreeRequest('play something chill').mood, 'calm');
+  assert.equal(modelFreeRequest('play something upbeat').energy, 'high');
+  assert.equal(modelFreeRequest('कुछ शांत संगीत बजाओ').mood, 'calm');
+  assert.equal(modelFreeRequest('ਪੰਜਾਬੀ ਸੰਗੀਤ ਚਲਾਓ').language, 'Punjabi');
+});
+
+test('model-free requests retain combined genre, energy, and language constraints', () => {
+  const energeticPunjabi = modelFreeRequest('play something energetic in Punjabi');
+  assert.equal(energeticPunjabi.energy, 'high');
+  assert.equal(energeticPunjabi.language, 'Punjabi');
+  const rockPunjabi = modelFreeRequest('play some rock in Punjabi');
+  assert.equal(rockPunjabi.genre, 'rock');
+  assert.equal(rockPunjabi.language, 'Punjabi');
+});
+
+test('short transliterated lyric prose is routed to evidence resolution', () => {
+  assert.equal(looksLikeLyricRequest('chite suit te daag pai gaye gali teri vich gara'), true);
+  assert.equal(looksLikeLyricRequest('gali teri vich gara'), true);
+  assert.equal(looksLikeLyricRequest('mujhe chhod ke mat jaana'), true);
+  assert.equal(looksLikeLyricRequest('The Ballad of the Lonesome Cowboy, Ennio Morricone'), false);
+  assert.equal(looksLikeLyricRequest('play something energetic in Punjabi'), false);
+});
+
+test('model interpretation cannot erase combined deterministic conditions', () => {
+  const repaired = repairRequestMatch(
+    { kind: 'track', genre: 'rock', title: null, artist: null },
+    'play something energetic rock in Punjabi',
+  );
+  assert.equal(repaired.energy, 'high');
+  assert.equal(repaired.language, 'Punjabi');
+});
+
+test('a high-confidence title typo can resolve through a bounded fuzzy search', async () => {
+  const wanted = { id: 'soni', title: 'Soni De Nakhre', artist: 'Pritam', genre: 'Punjabi' };
+  const f = fixture({
+    searchPage: async query => ({ songs: /soni|nakhre|nakhree|pritam/i.test(query) ? [wanted] : [], rawCount: 1 }),
+  });
+  const result = await resolveDirectRequest(
+    { title: 'Soni De Nakhree', artist: 'Pritam', search_terms: ['Soni De Nakhree', 'Pritam'], scope: 'song' },
+    { ...f.deps, exactOnly: true },
+  );
+  assert.equal(result.track?.id, wanted.id);
+  assert.equal(result.outcome, 'matched');
+  assert.ok((result.confidence || 0) >= 0.92);
+});
+
+test('ambiguous fuzzy title matching returns alternatives instead of guessing', async () => {
+  const first = { id: 'one', title: 'Hello', artist: 'Adele' };
+  const second = { id: 'two', title: 'Hello', artist: 'Lionel Richie' };
+  const f = fixture({ searchPage: async () => ({ songs: [first, second], rawCount: 2 }) });
+  const result = await resolveDirectRequest(
+    { title: 'Helo', artist: null, search_terms: ['Helo'], scope: 'song' },
+    { ...f.deps, exactOnly: true },
+  );
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(result.alternatives?.length, 2);
+});
+
+test('energy is a soft preference for named tracks and a selectable pool for generic requests', async () => {
+  const low = { id: 'low', title: 'Slow Song', artist: 'Band', energy: 'low' };
+  const high = { id: 'high', title: 'Fast Song', artist: 'Band', energy: 'high' };
+  const f = fixture({
+    searchPage: async query => ({ songs: /slow/i.test(query) ? [low] : [], rawCount: 1 }),
+    getSongsByGenreSampled: async () => [high],
+  });
+  const named = await resolveDirectRequest({ title: low.title, artist: low.artist, energy: 'high', search_terms: [low.title], scope: 'song' }, f.deps);
+  assert.equal(named.track?.id, low.id);
+  assert.deepEqual(named.unmetPreferences, ['energy']);
+  const generic = await resolveDirectRequest({ energy: 'high', scope: 'song' }, { ...f.deps, energySongs: async () => [high] });
+  assert.equal(generic.track?.id, high.id);
+});
+
+test('a long lyric beginning with a discourse comma is not an explicit artist-title pair', () => {
+  const text = "No, it’s not a bad time at all I heard somebody saying there's trouble in paradise And my lips are sealed tight now";
+  const parsed = modelFreeRequest(text);
+  assert.equal(parsed.artist, null);
+  assert.equal(parsed.title, text);
+});
+
+test('explicit by/from titles retain dedication-like words as part of the title', () => {
+  for (const [text, title] of [
+    ['Looking for the Summer by Chris Rea', 'Looking for the Summer'],
+    ['For the First Time by The Script', 'For the First Time'],
+    ['Do It for My Baby by Example', 'Do It for My Baby'],
+  ]) assert.equal(modelFreeRequest(text).title, title, text);
 });
 
 

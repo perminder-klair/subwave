@@ -680,6 +680,11 @@ export default function DashPanel() {
                               >
                                 {turn.kind}
                               </span>
+                              {turn.kind === 'request' && turn.meta?.source === 'alexa' && (
+                                <span className="border border-vermilion px-1 py-px text-[8px] font-bold tracking-[0.18em] text-vermilion uppercase">
+                                  ALEXA REQUEST
+                                </span>
+                              )}
                             </div>
                             <BoothTurnText turn={turn} />
                           </MessageContent>

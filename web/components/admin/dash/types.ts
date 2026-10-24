@@ -171,6 +171,7 @@ export function trustedProxyHint(s: TrustedProxyState | undefined): string | nul
 // Mirrors the durable record the controller's request-log writes (GET /requests).
 export interface RequestEntry {
   t?: string;
+  source?: 'browser' | 'alexa' | null;
   requester?: string;
   text?: string;
   status?: string;
@@ -270,4 +271,3 @@ export function sortConnections(
     return cmp * sign;
   });
 }
-

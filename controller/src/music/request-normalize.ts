@@ -1,0 +1,258 @@
+import { transliterate } from 'transliteration';
+
+export type RequestEnergy = 'low' | 'medium' | 'high';
+
+const LANGUAGE_CODES = [
+  'aa', 'ab', 'af', 'am', 'ar', 'as', 'az', 'ba', 'be', 'bg', 'bn', 'bo', 'br', 'bs',
+  'ca', 'cs', 'cy', 'da', 'de', 'el', 'en', 'es', 'et', 'eu', 'fa', 'fi', 'fil', 'fj',
+  'fo', 'fr', 'fy', 'ga', 'gd', 'gl', 'gu', 'ha', 'he', 'hi', 'hr', 'hu', 'hy', 'id',
+  'is', 'it', 'ja', 'jv', 'ka', 'kk', 'km', 'kn', 'ko', 'ku', 'ky', 'la', 'lb', 'lo',
+  'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'ne', 'nl', 'no',
+  'oc', 'om', 'or', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru', 'rw', 'sa', 'sd', 'si', 'sk',
+  'sl', 'so', 'sq', 'sr', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'th', 'tk', 'tl', 'tr',
+  'tt', 'ug', 'uk', 'ur', 'uz', 'vi', 'wo', 'xh', 'yi', 'yo', 'zh', 'zu', 'yue',
+] as const;
+
+const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
+
+const LANGUAGE_ALIASES: Record<string, string> = {
+  // Common Indian-language spellings and scripts. CLDR names cover the rest.
+  hindi: 'hi', 'हिंदी': 'hi', hin: 'hi',
+  punjabi: 'pa', 'ਪੰਜਾਬੀ': 'pa', panjabi: 'pa', pa: 'pa',
+  bengali: 'bn', 'বাংলা': 'bn', bangla: 'bn', bn: 'bn',
+  tamil: 'ta', 'தமிழ்': 'ta', ta: 'ta',
+  telugu: 'te', 'తెలుగు': 'te', te: 'te',
+  marathi: 'mr', 'मराठी': 'mr', mr: 'mr',
+  gujarati: 'gu', 'ગુજરાતી': 'gu', gu: 'gu',
+  kannada: 'kn', 'ಕನ್ನಡ': 'kn', kn: 'kn',
+  malayalam: 'ml', 'മലയാളം': 'ml', ml: 'ml',
+  urdu: 'ur', 'اردو': 'ur', ur: 'ur',
+  english: 'en', en: 'en',
+  french: 'fr', français: 'fr', francais: 'fr', frances: 'fr', fr: 'fr',
+  german: 'de', deutsch: 'de', de: 'de',
+  spanish: 'es', español: 'es', espanol: 'es', es: 'es',
+  italian: 'it', italiano: 'it', it: 'it',
+  portuguese: 'pt', português: 'pt', portugues: 'pt', pt: 'pt',
+  russian: 'ru', русский: 'ru', ru: 'ru',
+  arabic: 'ar', العربية: 'ar', ar: 'ar',
+  japanese: 'ja', 日本語: 'ja', ja: 'ja',
+  korean: 'ko', 한국어: 'ko', ko: 'ko',
+  chinese: 'zh', mandarin: 'zh', 中文: 'zh', zh: 'zh', cantonese: 'yue', yue: 'yue',
+  turkish: 'tr', türkçe: 'tr', turkce: 'tr', tr: 'tr',
+};
+
+const MOOD_ALIASES: Record<string, string> = {
+  energetic: 'energetic', energy: 'energetic', upbeat: 'energetic', pumped: 'energetic',
+  lively: 'energetic', hype: 'energetic', josh: 'energetic', 'जोश': 'energetic',
+  calm: 'calm', chill: 'calm', relaxing: 'calm', relaxed: 'calm', peaceful: 'calm',
+  shaant: 'calm', shant: 'calm', 'शांत': 'calm', 'ਸ਼ਾਂਤ': 'calm',
+  reflective: 'reflective', thoughtful: 'reflective', melancholy: 'reflective', sad: 'reflective',
+  romantic: 'romantic', love: 'romantic', romance: 'romantic',
+  celebratory: 'celebratory', celebration: 'celebration', party: 'celebratory', festive: 'celebratory',
+  spiritual: 'spiritual', devotional: 'spiritual', bhajan: 'spiritual', kirtan: 'spiritual',
+  focus: 'focus', study: 'focus', work: 'focus', concentration: 'focus',
+  workout: 'workout', gym: 'workout', exercise: 'workout', running: 'workout',
+  driving: 'driving', roadtrip: 'driving', 'road trip': 'driving',
+  cooking: 'cooking', rainy: 'rainy', rain: 'rainy', sunny: 'sunny',
+  night: 'night', midnight: 'night', morning: 'morning', evening: 'evening',
+  festival: 'festival', cultural: 'cultural', diwali: 'festival', holi: 'festival', vaisakhi: 'festival',
+};
+
+const ENERGY_ALIASES: Record<string, RequestEnergy> = {
+  low: 'low', mellow: 'low', slow: 'low', soft: 'low', gentle: 'low', chill: 'low', relaxed: 'low',
+  medium: 'medium', moderate: 'medium', mid: 'medium', balanced: 'medium', steady: 'medium',
+  high: 'high', energetic: 'high', upbeat: 'high', pumped: 'high', lively: 'high', intense: 'high',
+};
+
+const GENRE_ALIASES: Record<string, string> = {
+  rock: 'rock', pop: 'pop', jazz: 'jazz', blues: 'blues', soul: 'soul', rap: 'rap', hiphop: 'hip hop',
+  'hip hop': 'hip hop', rnb: 'r&b', 'r&b': 'r&b', metal: 'metal', punk: 'punk', folk: 'folk', country: 'country',
+  classical: 'classical', electronic: 'electronic', dance: 'dance', house: 'house', techno: 'techno', trance: 'trance',
+  disco: 'disco', reggae: 'reggae', afrobeats: 'afrobeats', indie: 'indie', lofi: 'lofi', 'lo fi': 'lofi',
+  bhangra: 'bhangra', bollywood: 'bollywood', devotional: 'devotional', gospel: 'gospel', soundtrack: 'soundtrack',
+  kpop: 'k-pop', 'k pop': 'k-pop', jpop: 'j-pop', 'j pop': 'j-pop', punjabi: 'punjabi',
+};
+
+function compact(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+export function requestName(value: unknown): string {
+  return compact(String(value ?? '')
+    .normalize('NFKC')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('en')
+    .replace(/[’‘']/g, '')
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, ' '));
+}
+
+export function transliteratedRequestName(value: unknown): string {
+  try {
+    return requestName(transliterate(String(value ?? '')));
+  } catch {
+    return requestName(value);
+  }
+}
+
+export function requestNameVariants(value: unknown): string[] {
+  const original = requestName(value);
+  const translit = transliteratedRequestName(value);
+  return [...new Set([original, translit].filter(Boolean))];
+}
+
+export function resolveLanguageCode(value: unknown): string | undefined {
+  const names = requestNameVariants(value);
+  for (const name of names) {
+    const explicit = LANGUAGE_ALIASES[name];
+    if (explicit) return explicit;
+    const match = LANGUAGE_CODES.find(code => requestName(displayNames.of(code)) === name);
+    if (match) return match;
+    // ISO codes are accepted when the whole value is the code. A two-letter
+    // alias must not be found inside prose: French "de", Spanish "en", and
+    // similar words are ordinary prepositions, not language evidence.
+    const token = name.split(' ').find(word => word.length > 2 && LANGUAGE_ALIASES[word]);
+    if (token) return LANGUAGE_ALIASES[token];
+  }
+  return undefined;
+}
+
+export function languageTerms(value: unknown): string[] {
+  const code = resolveLanguageCode(value);
+  if (!code) return requestNameVariants(value);
+  const terms = new Set<string>([...requestNameVariants(value), code]);
+  // Include every explicit alias for the resolved code. This covers common
+  // spellings that Intl.DisplayNames does not emit, such as francais,
+  // espanol, deutsch, and transliterated regional names.
+  for (const [alias, aliasCode] of Object.entries(LANGUAGE_ALIASES)) {
+    if (aliasCode === code) for (const variant of requestNameVariants(alias)) terms.add(variant);
+  }
+  for (const locale of ['en', 'hi', 'pa', 'bn', 'ta', 'te', 'mr', 'ur']) {
+    try {
+      const label = new Intl.DisplayNames([locale], { type: 'language' }).of(code);
+      if (label) for (const variant of requestNameVariants(label)) terms.add(variant);
+    } catch {
+      // A missing ICU locale must not make local matching fail.
+    }
+  }
+  return [...terms];
+}
+
+export function resolveRequestMood(value: unknown, allowed: readonly string[] = []): string | null {
+  const names = requestNameVariants(value);
+  const allowedNames = new Map(allowed.map(mood => [requestName(mood), mood]));
+  for (const name of names) {
+    const canonical = MOOD_ALIASES[name] || name;
+    const allowedMood = allowedNames.get(requestName(canonical));
+    if (allowedMood) return allowedMood;
+    if (Object.prototype.hasOwnProperty.call(MOOD_ALIASES, name)) return MOOD_ALIASES[name];
+    const token = name.split(' ').find(word => MOOD_ALIASES[word]);
+    if (token) return MOOD_ALIASES[token];
+  }
+  return null;
+}
+
+export function resolveRequestEnergy(value: unknown): RequestEnergy | null {
+  const names = requestNameVariants(value);
+  for (const name of names) {
+    if (ENERGY_ALIASES[name]) return ENERGY_ALIASES[name];
+    if (name.includes('high energy') || name.includes('full power')) return 'high';
+    if (name.includes('low energy') || name.includes('easy listening')) return 'low';
+    if (name.includes('medium energy')) return 'medium';
+    const token = name.split(' ').find(word => ENERGY_ALIASES[word]);
+    if (token) return ENERGY_ALIASES[token];
+  }
+  return null;
+}
+
+export function resolveRequestGenre(value: unknown): string | null {
+  const names = requestNameVariants(value);
+  for (const name of names) {
+    const compactName = name.replace(/\s+/g, ' ');
+    if (GENRE_ALIASES[compactName]) return GENRE_ALIASES[compactName];
+    const token = compactName.split(' ').find(word => GENRE_ALIASES[word]);
+    if (token) return GENRE_ALIASES[token];
+  }
+  return null;
+}
+
+export function languageDisplayName(value: unknown): string | null {
+  const code = resolveLanguageCode(value);
+  if (!code) return null;
+  return displayNames.of(code) || null;
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a) return b.length;
+  if (!b) return a.length;
+  let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        current[j - 1]! + 1,
+        previous[j]! + 1,
+        previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    previous = current;
+  }
+  return previous[b.length]!;
+}
+
+export function requestTextSimilarity(want: unknown, got: unknown): number {
+  const wanted = requestNameVariants(want);
+  const actual = requestNameVariants(got);
+  if (!wanted.length || !actual.length) return 0;
+  let best = 0;
+  for (const left of wanted) for (const right of actual) {
+    if (left === right) best = Math.max(best, 1);
+    const leftTokens = new Set(left.split(' ').filter(Boolean));
+    const rightTokens = new Set(right.split(' ').filter(Boolean));
+    const overlap = [...leftTokens].filter(token => rightTokens.has(token)).length;
+    const tokenScore = Math.max(leftTokens.size, rightTokens.size) ? overlap / Math.max(leftTokens.size, rightTokens.size) : 0;
+    const editScore = 1 - levenshtein(left.replace(/ /g, ''), right.replace(/ /g, ''))
+      / Math.max(left.replace(/ /g, '').length, right.replace(/ /g, '').length, 1);
+    // Token overlap protects word order and multi-word identities. The raw
+    // edit score is also important for a single speech-recognition typo in a
+    // longer title, where one misspelled token would otherwise dilute an
+    // otherwise high-confidence identity.
+    best = Math.max(best, tokenScore * 0.45 + editScore * 0.55, editScore);
+  }
+  return Math.max(0, Math.min(1, best));
+}
+
+export function looksLikeLyricRequest(text: string): boolean {
+  const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const content = text
+    .replace(/^\s*(?:please\s+)?(?:play|request|queue|find|search\s+for|listen\s+to)\s+/iu, '')
+    .trim();
+  const normalized = requestName(content);
+  const words = normalized.split(' ').filter(Boolean);
+  if (lines.length >= 2 || words.length >= 18) return true;
+
+  // A listener may paste a short verse in transliterated Hindi or Punjabi.
+  // English-only cues and an eighteen-word floor missed inputs such as
+  // "chite suit te daag pai gaye gali teri vich gara". Keep explicit names
+  // and attribute requests on the deterministic path, but treat a longer
+  // free-form phrase as lyric evidence so the web resolver gets a chance.
+  if (/\b(?:lyrics?|words?|line from|verse|song goes|sung by|gane ke bol|gaane ke bol|gane ke lyrics|gaane ke lyrics|geet ke bol)\b/i.test(normalized)) return true;
+  // Short comma and dash forms are commonly "title, artist" or "title -
+  // artist" requests. Preserve those as named identities instead of sending
+  // them through lyric search. Long pasted verses still qualify above.
+  const hasIdentityDelimiter = /\s(?:by|from)\s/i.test(content)
+    || (/[,،]/u.test(content) && words.length <= 12)
+    || (/\s[-–—]\s/u.test(content) && words.length <= 12);
+  const hasAttribute = Boolean(
+    resolveRequestMood(text)
+    || resolveRequestEnergy(text)
+    || resolveRequestGenre(text)
+    || languageDisplayName(text),
+  );
+  // Four or more free-form words are enough for a short transliterated line
+  // such as "gali teri vich gara". Generic attributes and identity forms are
+  // excluded first, so this does not turn mood, genre, or title-by-artist
+  // requests into web searches.
+  return words.length >= 4 && !hasIdentityDelimiter && !hasAttribute;
+}

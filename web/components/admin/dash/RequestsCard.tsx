@@ -84,6 +84,7 @@ function RequestRow({ r, tz, locale }: { r: RequestEntry; tz?: string; locale?: 
       </summary>
       <div className="grid gap-2 px-2.5 pt-1 pb-2.5 text-[12px]">
         <div className="flex flex-wrap items-center gap-1.5">
+          {r.source === 'alexa' && <Pill tone="accent">Alexa</Pill>}
           {r.path && <Pill tone="accent">{r.path}</Pill>}
           {r.pickSource && <Pill>{r.pickSource}</Pill>}
         </div>
@@ -128,4 +129,3 @@ function RequestField({ label, children }: { label: string; children: ReactNode 
     </div>
   );
 }
-
