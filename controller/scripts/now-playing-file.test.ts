@@ -121,6 +121,21 @@ test('route: nothing from the library playing (a jingle, a bed) answers nulls', 
   await s.close();
 });
 
+test('route: ?id= naming the track on air answers its format', async () => {
+  const f = fakeSongs({ a: FLAC });
+  const s = await serve({ nowPlaying: async () => ({ subsonic_id: 'a' }), lookup: createFileFormatLookup({ getSong: f.getSong }) });
+  assert.deepEqual(await (await fetch(`${s.url}/now-playing/file?id=a`)).json(), { id: 'a', format: fileFormatOf(FLAC) });
+  await s.close();
+});
+
+test('route: ?id= naming a track no longer on air answers the on-air id and no format, without a lookup', async () => {
+  const f = fakeSongs({ a: FLAC, b: MP3 });
+  const s = await serve({ nowPlaying: async () => ({ subsonic_id: 'b' }), lookup: createFileFormatLookup({ getSong: f.getSong }) });
+  assert.deepEqual(await (await fetch(`${s.url}/now-playing/file?id=a`)).json(), { id: 'b', format: null });
+  assert.deepEqual(f.calls, []);
+  await s.close();
+});
+
 test('route: an unreachable Navidrome is a null format, not an error', async () => {
   const f = fakeSongs({});
   const s = await serve({ nowPlaying: async () => ({ subsonic_id: 'gone' }), lookup: createFileFormatLookup({ getSong: f.getSong }) });

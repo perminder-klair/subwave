@@ -3,12 +3,15 @@
 // Admin-only by choice, not by sensitivity: it is an operator detail, and the
 // public /now-playing shape every listener polls stays exactly as it was.
 // Answers for the track ON AIR only (no arbitrary-id lookup), so it can never
-// become a generic Navidrome proxy. `id` comes back with the format, so the
-// Dash can tell an answer about the previous track from one about this one.
+// become a generic Navidrome proxy. `?id=` names the track the Dash is
+// showing, and is only compared: when a different track is on air the answer
+// carries that track's id and a null format, with no lookup, so an answer the
+// Dash caches under one track is always about that track.
 //
 //   200 { id: string, format: FileFormat | null }   a library track (format
 //                                                    null = Navidrome did not
-//                                                    answer; retried later)
+//                                                    answer, or ?id= named a
+//                                                    track no longer on air)
 //   200 { id: null, format: null }                   nothing from the library
 //                                                    on air (jingle, bed, boot)
 
@@ -25,14 +28,15 @@ export function createNowPlayingFileRouter(deps: {
   lookup: (id: string) => Promise<FileFormat | null>;
 }): Router {
   const router = Router();
-  router.get('/now-playing/file', requireAdmin, async (_req, res) => {
+  router.get('/now-playing/file', requireAdmin, async (req, res) => {
     let id: string | null = null;
     try {
       const np = await deps.nowPlaying();
       id = typeof np?.subsonic_id === 'string' && np.subsonic_id ? np.subsonic_id : null;
     } catch { /* treated as nothing on air */ }
-    if (!id) {
-      res.json({ id: null, format: null });
+    const asked = typeof req.query.id === 'string' && req.query.id ? req.query.id : null;
+    if (!id || (asked && asked !== id)) {
+      res.json({ id, format: null });
       return;
     }
     let format: FileFormat | null = null;

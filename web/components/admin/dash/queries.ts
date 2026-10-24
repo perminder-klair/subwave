@@ -27,9 +27,9 @@ export const dashKeys = {
   takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
-  // Keyed by track: the format of one file never changes, so it is fetched
-  // once per track and never re-polled .
-  fileFormat: (id: string) => ['dash', 'file-format', id] as const,
+  // Keyed by the track the request names (?id=): the format of one file never
+  // changes, so a known one is fetched once per track.
+  nowPlayingFile: (id: string) => ['dash', 'now-playing-file', id] as const,
 };
 
 async function degradedJson<T>(request: Promise<T>): Promise<T | null> {
@@ -201,13 +201,14 @@ export async function fetchMusicStarved(fetcher: AdminFetch, signal: AbortSignal
   return body.musicStarved === true;
 }
 
-/** the playing file's own format. `id` is the track the controller
- *  answered about; the caller ignores an answer for a track no longer on air. */
+/** the playing file's own format. `id` is the track on air: when it is not
+ *  the one asked about, that track has finished, `format` is null and the
+ *  caller shows nothing. */
 export interface NowPlayingFile {
   id: string | null;
   format: import('../../../lib/fileFormat').FileFormat | null;
 }
 
-export function fetchNowPlayingFile(fetcher: AdminFetch, signal: AbortSignal): Promise<NowPlayingFile> {
-  return adminJson(fetcher, '/now-playing/file', undefined, signal);
+export function fetchNowPlayingFile(fetcher: AdminFetch, id: string, signal: AbortSignal): Promise<NowPlayingFile> {
+  return adminJson(fetcher, `/now-playing/file?id=${encodeURIComponent(id)}`, undefined, signal);
 }

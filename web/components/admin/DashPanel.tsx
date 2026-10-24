@@ -438,12 +438,12 @@ export default function DashPanel() {
   };
 
   const np = status?.nowPlaying;
-  // one lookup per track: keyed by the id, never re-polled (a file's
-  // format does not change), and an answer about a previous track is ignored.
+  // one lookup per track: asked for by its id, never re-polled once known (a
+  // file's format does not change), and an answer about another track is ignored.
   const npId = np?.subsonic_id || '';
   const fileQuery = useAdminQuery({
-    key: dashKeys.fileFormat(npId), adminFetch, enabled: ready && !!npId,
-    staleTime: Infinity, request: fetchNowPlayingFile, toastOnError: false,
+    key: dashKeys.nowPlayingFile(npId), adminFetch, enabled: ready && !!npId,
+    staleTime: Infinity, request: (fetcher, signal) => fetchNowPlayingFile(fetcher, npId, signal), toastOnError: false,
     // Navidrome did not answer: ask again a minute later (the controller backs
     // off the same minute), instead of leaving the format blank for the track.
     refetchInterval: (query) => (query.state.data && query.state.data.format === null ? 60_000 : false),

@@ -39,7 +39,7 @@ const defaultOwnershipRegistry = [
   },
   {
     file: 'dash/queries.ts', function: 'fetchNowPlayingFile',
-    reads: [{ callee: 'adminJson', method: 'GET', path: '/now-playing/file', signal: 'signal' }],
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/now-playing/file?id=${}', signal: 'signal' }],
     consumers: [{ file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
   },
   {
