@@ -2,17 +2,66 @@
 // (auth.getToken → operator authorizes → auth.getSession), which persists the
 // minted session key into settings. The fan-out itself is broadcast/scrobble.ts.
 import express from 'express';
-import { requireAdmin } from '../middleware/auth.js';
+import { ADMIN_AUTH_REQUIRED, requireAdmin, requireAdminUi } from '../middleware/auth.js';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import {
   testNowPlaying,
   lastfmGetAuthToken,
   lastfmCompleteAuth,
+  personalScrobbleProviders,
+  reportPersonalPlayback,
   type ScrobbleProvider,
 } from '../broadcast/scrobble.js';
+import { personalAiringAt } from '../broadcast/personal-scrobble.js';
 
 export const router = express.Router();
+
+// Unlike ordinary admin routes, personal scrobbling cannot fall through the
+// development-mode open gate: without configured credentials there is no
+// authenticated listener identity to attribute a play to.
+function requirePersonalAdmin(req, res, next) {
+  if (!ADMIN_AUTH_REQUIRED) {
+    return res.status(503).json({ error: 'admin authentication must be configured' });
+  }
+  return requireAdminUi(req, res, next);
+}
+
+router.get('/scrobble/personal', requirePersonalAdmin, (_req, res) => {
+  const providers = personalScrobbleProviders();
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ available: providers.length > 0, providers });
+});
+
+router.post('/scrobble/personal', requirePersonalAdmin, (req, res) => {
+  const playbackId = typeof req.body?.playbackId === 'string' ? req.body.playbackId : '';
+  const state = req.body?.state;
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(playbackId)) {
+    return res.status(400).json({ error: 'invalid playbackId' });
+  }
+  if (state !== 'playing' && state !== 'stopped') {
+    return res.status(400).json({ error: 'state must be "playing" or "stopped"' });
+  }
+  const providers = personalScrobbleProviders();
+  if (!providers.length) {
+    return res.status(409).json({
+      error: 'configure Last.fm or ListenBrainz with station-wide scrobbling off before enabling personal scrobbling',
+    });
+  }
+  const nowMs = Date.now();
+  const bufferSeconds = Number(settings.get()?.stream?.bufferSeconds) || 0;
+  const airing = state === 'playing'
+    ? personalAiringAt(queue.current, queue.history, bufferSeconds, nowMs)
+    : null;
+  const result = reportPersonalPlayback({
+    playbackId,
+    playing: state === 'playing',
+    airing,
+    nowMs,
+  });
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true, providers, ...result });
+});
 
 router.post('/scrobble/test', requireAdmin, async (req, res) => {
   const provider = req.body?.provider as ScrobbleProvider | undefined;

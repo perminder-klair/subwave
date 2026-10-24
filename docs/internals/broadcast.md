@@ -142,3 +142,24 @@ executes one configured data tool, behind its existing eight-second deadline,
 and bounds catalogue lookup to twelve seconds. Purpose-aware `skillEligible`
 reserves the configured skill from automatic speech while retaining the enabled
 and host checks for data preparation. Manual commands remain exempt.
+
+## Personal scrobbling
+
+The public player exposes an operator-only, per-browser opt-in and reports only
+`playing`/`stopped` heartbeats plus a random tab id to the admin-authenticated
+`/scrobble/personal` endpoint. Track identity and audible timing are never
+trusted from the browser: the controller resolves the track against the
+canonical queue at `now - stream.bufferSeconds`. `PersonalScrobbleTracker`
+unions confirmed listening intervals across tabs, so overlap, reconnects and
+repeated reports cannot double-count a play.
+
+A first heartbeat claims no time, pause or stop closes the current interval,
+and a gap longer than 75 seconds claims nothing after the last confirmed
+heartbeat. Track boundaries split intervals at the server's audible boundary;
+the resulting coverage uses the same `isEligibleScrobble` rule as station
+scrobbling. Credentials remain server-side. Last.fm and ListenBrainz are
+eligible only when configured and their station-wide switch is off, making
+personal mode usable independently without sending the same track through both
+paths. Anonymous players and contained showcase players never mount the
+reporter. This behavior is pinned by `scripts/personal-scrobble.test.ts` and
+`web/lib/personalScrobble.test.ts`.

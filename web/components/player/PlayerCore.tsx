@@ -15,11 +15,13 @@ import {
 } from 'react';
 import { useStationFeed, type StationFeed } from '@/hooks/useStationFeed';
 import { usePlayer, type PlayerStatus } from '@/hooks/usePlayer';
+import { usePersonalScrobble } from '@/hooks/usePersonalScrobble';
 import { useSignal, type Signal } from '@/hooks/useSignal';
 import { useMediaSession } from '@/hooks/useMediaSession';
 import { useStationClient, type LikeResult, type LikeStatus } from '@/lib/stationClient';
 import { listenerRequestSchema } from '@/lib/schemas.generated';
 import type { RequestResult } from '@/lib/types';
+import { PersonalScrobbleProvider } from './PersonalScrobbleContext';
 
 export interface PlayerAudio {
   audioRef: RefObject<HTMLAudioElement | null>;
@@ -79,7 +81,13 @@ export function usePlayerActions(): PlayerActions {
   return useRequired(ActionsContext, 'usePlayerActions');
 }
 
-export function PlayerCoreProvider({ children }: { children: ReactNode }) {
+export function PlayerCoreProvider({
+  children,
+  personalScrobble = true,
+}: {
+  children: ReactNode;
+  personalScrobble?: boolean;
+}) {
   const client = useStationClient();
   // Feed first: usePlayer's Opus upgrade is gated on the mount the station says
   // it actually serves (#1300).
@@ -104,6 +112,10 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   // Only an explicit false is offline — see PlayerAudio.offline.
   const offline = feed.streamOnline === false;
   const signal = useSignal({ tunedIn, status, offline });
+  const personalScrobbleState = usePersonalScrobble({
+    allowed: personalScrobble,
+    playbackActive: tunedIn && status === 'playing' && !muted,
+  });
 
   // usePlayer's tune/stop/toggleMute close over per-render state, so bridge
   // through refs and create the actions context value exactly once.
@@ -201,10 +213,12 @@ export function PlayerCoreProvider({ children }: { children: ReactNode }) {
   );
 
   return (
-    <FeedContext.Provider value={feedValue}>
-      <AudioContext.Provider value={audioValue}>
-        <ActionsContext.Provider value={actions}>{children}</ActionsContext.Provider>
-      </AudioContext.Provider>
-    </FeedContext.Provider>
+    <PersonalScrobbleProvider value={personalScrobbleState}>
+      <FeedContext.Provider value={feedValue}>
+        <AudioContext.Provider value={audioValue}>
+          <ActionsContext.Provider value={actions}>{children}</ActionsContext.Provider>
+        </AudioContext.Provider>
+      </FeedContext.Provider>
+    </PersonalScrobbleProvider>
   );
 }

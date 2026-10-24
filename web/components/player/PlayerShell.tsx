@@ -37,7 +37,7 @@ export interface PlayerShellProps {
 
 export default function PlayerShell({ skin, contained = false }: PlayerShellProps) {
   return (
-    <PlayerCoreProvider>
+    <PlayerCoreProvider personalScrobble={!contained}>
       <ShellChrome skin={skin} contained={contained} />
     </PlayerCoreProvider>
   );

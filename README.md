@@ -87,7 +87,7 @@ here stays complete and free either way.
 - **Private station mode.** Two independent locks over one station password: hide the web player behind a prompt, and/or require listener auth on every stream mount.
 - **Multi-station profiles.** Keep several stations in one install — each with its own library pool, DJ roster, schedule, and settings — and switch which one is live from the admin.
 - **Hourly archives (opt-in).** Save every hour as MP3 for later replay.
-- **Scrobbling.** Every spin can report to Last.fm and ListenBrainz, including self-hosted ListenBrainz instances.
+- **Scrobbling.** Every station spin, or only the authenticated operator's actual browser listening, can report to Last.fm and ListenBrainz, including self-hosted ListenBrainz instances.
 - **DJ Doc.** A built-in station check-up: runs diagnostics across the stack, then has your configured LLM review the findings.
 - **Admin console.** Live status, queue, booth log, personas, shows, skills, playlists, moods, imaging, stations, stats, and a debug view of recent LLM calls.
 - **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.

@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Palette, Zap } from 'lucide-react';
+import { Headphones, Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { resolveFont, type Theme } from '@/lib/theme';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeProvider';
 import { useSkinSelection } from './skins/SkinContext';
+import { usePersonalScrobbleContext } from './player/PersonalScrobbleContext';
 
 // The skin miniatures only matter once the menu is open, so they load with it
 // rather than riding every skin's first paint; hovering or focusing the trigger
@@ -142,6 +143,7 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
   const [, setPreviewLoaded] = useState(false);
   const activeChipRef = useRef<HTMLButtonElement>(null);
   const { lite, setLite } = useLiteMode();
+  const personalScrobble = usePersonalScrobbleContext();
 
   // Opened before the warm-up below landed: the cards draw empty and fill in
   // when the chunk arrives, without suspending anything around them.
@@ -367,6 +369,58 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
                   })}
                 </div>
                 {shownSkin && <Readout name={shownSkin.name} description={shownSkin.description} />}
+              </section>
+            )}
+
+            {personalScrobble?.authenticated && (
+              <section className="grid gap-1.5">
+                <div className="border-b border-soft-border px-1 pb-1">
+                  <span className="v3-eyebrow text-[10px] tracking-[0.3em]">Listening history</span>
+                </div>
+                <button
+                  type="button"
+                  aria-pressed={personalScrobble.enabled}
+                  disabled={!personalScrobble.enabled && personalScrobble.available !== true}
+                  onClick={() => personalScrobble.setEnabled(!personalScrobble.enabled)}
+                  className={cn(
+                    'v3-focus mx-1 mt-1.5 flex cursor-pointer items-center gap-2.5 border px-3 py-2 text-left transition-colors duration-150',
+                    personalScrobble.enabled
+                      ? 'border-vermilion bg-[var(--accent-soft)]'
+                      : 'border-ink bg-bg hover:bg-[var(--overlay)]',
+                    !personalScrobble.enabled
+                      && personalScrobble.available !== true
+                      && 'cursor-not-allowed opacity-55',
+                  )}
+                >
+                  <Headphones
+                    className={cn(
+                      'h-4 w-4 shrink-0',
+                      personalScrobble.enabled ? 'text-vermilion' : 'text-muted',
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="truncate text-[10px] font-bold tracking-[0.14em] uppercase">
+                      Scrobble my listening
+                    </span>
+                    <span className="truncate text-[10px] leading-[1.3] text-muted">
+                      {personalScrobble.available === null
+                        ? 'Checking configured accounts…'
+                        : personalScrobble.available
+                          ? `Only while this player is audible · ${personalScrobble.providers.join(' + ')}`
+                          : 'Configure a provider in admin and leave its station-wide switch off'}
+                    </span>
+                  </span>
+                  <span
+                    className={cn(
+                      'shrink-0 font-mono text-[9px] font-bold tracking-[0.2em] uppercase',
+                      personalScrobble.enabled ? 'text-vermilion' : 'text-muted',
+                    )}
+                    aria-hidden="true"
+                  >
+                    {personalScrobble.enabled ? 'On' : 'Off'}
+                  </span>
+                </button>
               </section>
             )}
 
