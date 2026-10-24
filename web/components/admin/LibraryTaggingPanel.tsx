@@ -311,11 +311,18 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const [logTall, setLogTall] = useState(false);
   const [pickedLog, setPickedLog] = useState('');
   const runLog = useTaggerRunLog(p.logOpen, p.tagger);
-  // Every line fetched for this run; before the first read (or with no run
-  // since the controller started) the snapshot's short tail stands in.
-  const logLines = runLog.log && runLog.log.runId === p.tagger?.runLogId
-    ? runLog.log.entries.map(e => e.line)
-    : (p.tagger?.lastLog ?? []);
+  // Every line fetched for this run, keyed by its seq; before the first read
+  // (or with no run since the controller started) the snapshot's short tail
+  // stands in, keyed by position.
+  const ownLog = runLog.log && runLog.log.runId === p.tagger?.runLogId ? runLog.log : null;
+  const logRows: { key: number | string; line: string | TaggerEvent }[] = ownLog
+    ? ownLog.entries.map(e => ({ key: e.seq, line: e.line }))
+    : (p.tagger?.lastLog ?? []).map((line, i) => ({ key: `tail-${i}`, line }));
+  // Moves with every new line, including once the page holds its 5000 and
+  // the count has stopped growing.
+  const logEnd = logRows.length ? logRows[logRows.length - 1]!.key : null;
+  // A picked run that retention has since removed falls back to the newest.
+  const pickedLogId = runLog.files.some(f => f.id === pickedLog) ? pickedLog : runLog.files[0]?.id;
   const moodFillRef = useRef<HTMLSpanElement>(null);
   const acousticFillRef = useRef<HTMLSpanElement>(null);
   const audioFillRef = useRef<HTMLSpanElement>(null);
@@ -542,7 +549,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
 
   useEffect(() => {
     if (p.logOpen && logRef.current && logStick.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [p.logOpen, logLines.length, logTall]);
+  }, [p.logOpen, logRows.length, logEnd, logTall]);
   const downloadLog = (id: string) => {
     runLog.download(id).catch((e: unknown) => notify.err(e instanceof Error ? e.message : String(e)));
   };
@@ -1241,7 +1248,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <select
               aria-label="Run log to download"
               className="rounded border border-separator-strong bg-transparent px-1 py-0.5 text-[11px]"
-              value={pickedLog || runLog.files[0]?.id}
+              value={pickedLogId}
               onChange={e => setPickedLog(e.target.value)}
             >
               {runLog.files.map(f => (
@@ -1253,7 +1260,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             <button
               type="button"
               className="inline-flex items-center gap-1.5 font-bold text-muted hover:text-ink"
-              onClick={() => downloadLog(pickedLog || runLog.files[0]!.id)}
+              onClick={() => downloadLog(pickedLogId!)}
             >
               <Download size={13} /> Download log
             </button>
@@ -1274,16 +1281,16 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             logStick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
           }}
         >
-          {runLog.log?.gap && runLog.log.runId === p.tagger?.runLogId && (
+          {ownLog?.gap && (
             <div className="text-muted">… earlier lines are no longer held here; download the log for the whole run.</div>
           )}
-          {logLines.length
-            ? logLines.map((line, i) => {
+          {logRows.length
+            ? logRows.map(({ key, line }) => {
                 // Structured events render by kind; raw strings fall back.
                 if (typeof line === 'object' && line !== null) {
                   const st = EVENT_STYLE[line.kind] ?? EVENT_STYLE.info;
                   return (
-                    <div key={i} className={cn('whitespace-pre-wrap', st.cls)}>
+                    <div key={key} className={cn('whitespace-pre-wrap', st.cls)}>
                       {st.emoji ? `${st.emoji}  ` : ''}
                       {line.text}
                     </div>
@@ -1291,7 +1298,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
                 }
                 const f = beautifyLog(String(line));
                 return (
-                  <div key={i} className={cn('whitespace-pre-wrap', f.cls)}>
+                  <div key={key} className={cn('whitespace-pre-wrap', f.cls)}>
                     {f.text}
                   </div>
                 );
