@@ -21,7 +21,7 @@ for (const cue of cues) {
     startTimeSec: probe?.startTimeSec ?? null,
     rawLateSec: probe ? cueLateSec(probe.packets, cueSec, RAW_PACKET_RULE) : null,
     validated: probe ? probe.codec in CODEC_RULES : false,
-    // The rule's prediction even where it is not stampable (negative = early).
+    // The rule's prediction even where it is out of the stampable range (negative = early).
     ruleLateSec: probe && CODEC_RULES[probe.codec] ? (() => {
       const rule = CODEC_RULES[probe.codec];
       const raw = cueLateSec(probe.packets, cueSec, { ...rule, subtractStartTime: false });

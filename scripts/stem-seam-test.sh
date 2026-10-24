@@ -126,10 +126,11 @@ modes="${STEM_SEAM_MODES:-verbatim controller}"
 stations="${STEM_SEAM_STATIONS:-0 0.1 $default_cross}"
 # STEM_SEAM_Y_FORMATS: Y's encodings. `flac` (libsndfile, 4096-sample blocks)
 # lands the cue 126 samples late; `flac-3600` 2430 samples (55 ms), so a
-# regression that only shows at large offsets is caught too. `mp3` is opt-in
-# and expected to fail placement: an MP3 lands EARLY (encoder delay), which a
-# delay cannot correct (docs/stem-transitions-research.md).
-yformats="${STEM_SEAM_Y_FORMATS:-flac flac-3600}"
+# regression that only shows at large offsets is caught too. `mp3` (LAME CBR
+# 320) lands 979 samples EARLY, by its encoder delay less the frame offset,
+# which radio.liq takes out of the clip seam's slack (#2077). `mp3-v0` is
+# opt-in: the same delay, with the longer post-seek reservoir silence.
+yformats="${STEM_SEAM_Y_FORMATS:-flac flac-3600 mp3}"
 verdict=0
 for yformat in $yformats; do
  yfile=$(py y-format /work "$yformat")

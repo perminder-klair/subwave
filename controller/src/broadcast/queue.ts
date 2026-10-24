@@ -2237,6 +2237,8 @@ class Queue {
         // frame at or after its cue, up to ~93ms late, and at a clip -> Y seam
         // both sides are Y's own audio (a comb filter, or a flam). Probe how
         // late, once, and stamp it so the mixer delays Y by the same amount.
+        // An MP3 with a LAME header lands early instead (#2077): the stamp is
+        // negative and the mixer starts Y that much sooner.
         // Only for a stem seam whose cue-in IS the clip's hand-off; any
         // failure is fail-open (no stamp = the seam aligns on the cue as before).
         // Budgeted against the same clock as the intro render: the probe is a
@@ -2256,7 +2258,10 @@ class Queue {
               : await cueLanding.probeCueLanding(source, cueSec, { timeoutMs: probeBudgetMs });
           if (landing.ok) {
             clipCueLate = { cueSec, lateSec: landing.lateSec };
-            this.log('mix', `stem seam cue-in lands +${(landing.lateSec * 1000).toFixed(1)}ms late (${landing.codec}) — clip→Y lead shortened`);
+            const ms = Math.abs(landing.lateSec * 1000).toFixed(1);
+            this.log('mix', landing.lateSec < 0
+              ? `stem seam cue-in lands ${ms}ms early (${landing.codec}) — clip→Y lead lengthened`
+              : `stem seam cue-in lands +${ms}ms late (${landing.codec}) — clip→Y lead shortened`);
           } else {
             this.log('mix', `cue landing unknown (${landing.codec ?? 'n/a'}: ${landing.reason}) — clip→Y aligned on the stamped cue`);
           }

@@ -10,7 +10,7 @@ import * as blocklist from './blocklist.js';
 import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
-import { CUE_LATE_MAX_SEC } from './cue-landing.js';
+import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -969,11 +969,12 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // aligns the clip on it; an older mixer ignores the key.
   if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
   // The incoming side of a stem-blend clip seam: how late Y's liq_cue_in will
-  // really land (music/cue-landing.ts, #2003). radio.liq delays Y by it at the
-  // clip -> Y seam only. Six decimals, NOT ms: rounding to ms would bring back
-  // up to 22 samples of the comb filter this removes. Bounded like the reader.
-  if (opts.clipCueLateSec != null && Number.isFinite(opts.clipCueLateSec)
-    && opts.clipCueLateSec > 0 && opts.clipCueLateSec < CUE_LATE_MAX_SEC) {
+  // really land, negative when early (music/cue-landing.ts, #2003, #2077).
+  // radio.liq shifts Y by it at the clip -> Y seam only. Six decimals, NOT ms:
+  // rounding to ms would bring back up to 22 samples of the comb filter this
+  // removes. Bounded like the reader.
+  if (opts.clipCueLateSec != null && Number.isFinite(opts.clipCueLateSec) && opts.clipCueLateSec !== 0
+    && opts.clipCueLateSec > -CUE_EARLY_MAX_SEC && opts.clipCueLateSec < CUE_LATE_MAX_SEC) {
     fields.push(`liq_clip_cue_late="${opts.clipCueLateSec.toFixed(6)}"`);
   }
   // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify

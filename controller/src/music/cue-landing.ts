@@ -14,6 +14,9 @@
 // comb filter (2.9 ms) or a flam (tens of ms). The controller probes the
 // packets around the cue here and stamps the result on Y as
 // `liq_clip_cue_late`; radio.liq's dj_transition delays Y by it at clip -> Y.
+// An MP3 with a LAME header lands EARLY instead (its encoder delay, below), so
+// its stamp is negative and Y starts that much sooner, out of the slack the
+// clip seam already buffers (#2077).
 //
 // Only codecs whose prediction `scripts/stem-seam-test.sh cuein` validated
 // against real Liquidsoap renders carry a rule. Anything else returns null and
@@ -24,6 +27,11 @@ import { spawn } from 'node:child_process';
 
 // Writer-side bound; radio.liq enforces the same bound (and < clip lead).
 export const CUE_LATE_MAX_SEC = 0.15;
+// How EARLY a landing may be and still be stamped. Y can only start sooner by
+// the slack radio.liq buffers past the clip lead (`clip_seam_slack`, 0.1 s),
+// less the frame `cross` may drop: 0.08 s on 2.4.6, which radio.liq enforces.
+// An MP3's encoder delay is 25 ms at 44.1 kHz and 50 ms at 22.05 kHz.
+export const CUE_EARLY_MAX_SEC = 0.06;
 
 // Float slack for a cue that sits exactly on a packet boundary: Liquidsoap
 // keeps a packet whose pts equals the target.
@@ -57,10 +65,10 @@ export const CODEC_RULES: Readonly<Record<string, CodecRule>> = Object.freeze({
 export interface CuePacket { pts: number }
 
 // Pure: how late a cue lands given the packet start times (seconds) around
-// it, on the timeline the clip's stems were cut from. Null when no packet
-// starts at or after the cue, or when the result is outside
-// [0, CUE_LATE_MAX_SEC): a NEGATIVE result (an MP3 whose encoder delay puts Y
-// early) cannot be fixed by delaying Y, so it is not stamped.
+// it, on the timeline the clip's stems were cut from. NEGATIVE means early (an
+// MP3 whose encoder delay puts Y ahead of its cue). Null when no packet starts
+// at or after the cue, or when the result is outside
+// (-CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC).
 export function cueLateSec(packets: CuePacket[], cueSec: number, rule: CodecRule | null | undefined,
   startTimeSec: number | null = null): number | null {
   if (!rule || !Number.isFinite(cueSec)) return null;
@@ -75,7 +83,7 @@ export function cueLateSec(packets: CuePacket[], cueSec: number, rule: CodecRule
   const start = rule.subtractStartTime && Number.isFinite(startTimeSec) ? Number(startTimeSec) : 0;
   const late = Math.max(0, first - cueSec) - start;
   if (late < 0 && late > -PTS_EPSILON_SEC) return 0;
-  return late >= 0 && late < CUE_LATE_MAX_SEC ? late : null;
+  return late > -CUE_EARLY_MAX_SEC && late < CUE_LATE_MAX_SEC ? late : null;
 }
 
 // The plain packet rule (inclusive boundary, no start_time): what the
@@ -192,7 +200,7 @@ export async function probeCueLanding(source: string, cueSec: number, opts: { ti
     const raw = cueLateSec(probe.packets, cueSec, RAW_PACKET_RULE);
     const late = cueLateSec(probe.packets, cueSec, rule, probe.startTimeSec);
     if (raw == null) return { ok: false, codec: probe.codec, reason: 'no packet at or after the cue' };
-    if (late == null) return { ok: false, codec: probe.codec, reason: `lands ${((raw - (rule.subtractStartTime ? probe.startTimeSec ?? 0 : 0)) * 1000).toFixed(1)}ms off — outside the delayable range` };
+    if (late == null) return { ok: false, codec: probe.codec, reason: `lands ${((raw - (rule.subtractStartTime ? probe.startTimeSec ?? 0 : 0)) * 1000).toFixed(1)}ms off — outside the range the seam can absorb` };
     return { ok: true, lateSec: late, codec: probe.codec, rawLateSec: raw };
   } catch (e) {
     return { ok: false, codec: null, reason: redactSource(`probe failed: ${(e as Error)?.message ?? e}`) };

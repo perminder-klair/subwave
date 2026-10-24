@@ -23,7 +23,7 @@
   analyse-render <wav> <log> <fixture.json> <clip-sec> <tolerance-ms>
       Locates seams from the measured overlaps, checks buffers and beat grid,
       and the sample-level placement of Y against the clip at clip -> Y.
-  y-format <work-dir> <flac|flac-3600|mp3>
+  y-format <work-dir> <flac|flac-3600|mp3|mp3-v0>
       Re-encodes Y so its cue lands at another distance from a codec frame.
   cuein-prepare <work-dir> / cuein-script <work-dir> <case> /
   cuein-analyse <work-dir> <predictions.json> <label>
@@ -154,14 +154,16 @@ def y_format(work, fmt):
     """Re-encode Y so its cue lands elsewhere relative to a codec frame. Prints
     the file name. `flac` = the libsndfile original (4096-sample blocks:
     11.7 s lands 126 samples late); `flac-3600` = 3600-sample blocks (2430
-    samples, 55 ms late); `mp3` = LAME CBR 320 (lands EARLY by its encoder
-    delay minus the frame offset: not compensable, expected to fail)."""
+    samples, 55 ms late); `mp3` = LAME CBR 320 and `mp3-v0` = LAME V0 (both
+    land EARLY by the encoder delay minus the frame offset, 979 samples, which
+    the mixer takes out of the clip seam's slack, #2077)."""
     import subprocess
     if fmt == "flac":
         print("y.flac")
         return
     args = {"flac-3600": (["-c:a", "flac", "-frame_size", "3600"], "y-3600.flac"),
-            "mp3": (["-c:a", "libmp3lame", "-b:a", "320k"], "y.mp3")}
+            "mp3": (["-c:a", "libmp3lame", "-b:a", "320k"], "y.mp3"),
+            "mp3-v0": (["-c:a", "libmp3lame", "-q:a", "0"], "y-v0.mp3")}
     if fmt not in args:
         raise ValueError(f"unknown Y format {fmt}")
     codec, name = args[fmt]

@@ -13,7 +13,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  CODEC_RULES, CUE_LATE_MAX_SEC, cueLateSec, parseProbeJson, probeCueLanding, probeCueLate, redactSource,
+  CODEC_RULES, CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC, cueLateSec, parseProbeJson, probeCueLanding, probeCueLate, redactSource,
 } from '../src/music/cue-landing.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 
@@ -49,17 +49,31 @@ test('an AAC packet exactly on the cue is dropped too (Liquidsoap 2.4.6)', () =>
   assert.equal(samples(cueLateSec(grid(1024, 510000, 16), 11.7, CODEC_RULES.aac)), 126);
 });
 
-test('an MP3 subtracts its encoder delay, and an early landing is not stamped', () => {
+test('an MP3 subtracts its encoder delay, and an early landing is negative (#2077)', () => {
   // LAME: start_time 1105 samples. Packet 1108 samples past the cue → Y
-  // starts 3 samples late on the gapless timeline; 126 past → 979 EARLY,
-  // which no delay can fix.
+  // starts 3 samples late on the gapless timeline; 126 past → 979 EARLY
+  // (the measured clip → Y offset), which the mixer takes out of its slack.
   const start = 1105 / SR;
   const cue = 40.961;
   const late = cueLateSec(grid(1152, 1800000, 20), cue, CODEC_RULES.mp3, start);
   assert.ok(late != null && Math.abs(late * SR - (1806336 + 1152 - cue * SR - 1105)) < 1e-6, `got ${late}`);
-  assert.equal(cueLateSec(grid(1152, 500000, 20), 11.7, CODEC_RULES.mp3, start), null);
+  assert.equal(samples(cueLateSec(grid(1152, 500000, 20), 11.7, CODEC_RULES.mp3, start)), -979);
+  // A cue exactly on a packet: the whole encoder delay early.
+  assert.equal(samples(cueLateSec(grid(1152, 1800000, 20), 40.96, CODEC_RULES.mp3, start)), -1105);
   // Without a LAME header (start_time 0) the packet rule stands as is.
   assert.equal(samples(cueLateSec(grid(1152, 500000, 20), 11.7, CODEC_RULES.mp3, 0)), 126);
+});
+
+test('a landing earlier than the seam slack can absorb is null', () => {
+  // A 22.05 kHz MP3's 1105-sample delay (50 ms) still fits; an absurd
+  // start_time does not.
+  const cue = 40.96;
+  const onPacket = grid(1152, 1800000, 20);
+  assert.ok(cueLateSec(onPacket, cue, CODEC_RULES.mp3, 1105 / 22050) != null);
+  assert.equal(cueLateSec(onPacket, cue, CODEC_RULES.mp3, CUE_EARLY_MAX_SEC + 0.001), null);
+  assert.equal(cueLateSec(onPacket, cue, CODEC_RULES.mp3, 0.5), null);
+  // radio.liq accepts down to -(clip_seam_slack - frame): 0.1 - 0.02 on 2.4.6.
+  assert.ok(CUE_EARLY_MAX_SEC > 1105 / 22050 && CUE_EARLY_MAX_SEC <= 0.08);
 });
 
 test('no packet at or after the cue, or a landing past the bound, is null', () => {

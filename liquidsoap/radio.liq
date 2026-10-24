@@ -654,33 +654,39 @@ def dj_transition(a, b) =
   # to ~93ms late. At clip -> Y both sides are Y's own audio, so that is a
   # comb filter or a flam. The controller probes how late Y lands and stamps
   # it on Y (liq_clip_cue_late); here Y waits that much longer, so its first
-  # sample meets the clip at the same instant of Y. Read only when the
-  # OUTGOING side is the clip: X -> clip and every other seam are untouched.
-  # Bounded (0 < late < min(lead, 0.15s)); anything else is logged, ignored.
+  # sample meets the clip at the same instant of Y. An MP3 with a LAME header
+  # lands EARLY by its encoder delay (#2077): the stamp is negative and Y waits
+  # that much less, out of clip_seam_slack. Read only when the OUTGOING side is
+  # the clip: X -> clip and every other seam are untouched. Bounded
+  # (-(slack - frame) < late < min(lead, 0.15s)): the buffer can be a frame
+  # short of lead + slack, and an earlier Y would need more than it holds.
+  # Anything else is logged and ignored.
   cue_late =
     if a.metadata["subwave_clip"] == "1" then
       float_of_string(default=0., b.metadata["liq_clip_cue_late"])
     else 0. end
+  cue_early_max = clip_seam_slack - frame.duration()
   seam_lead =
-    if clip_lead >= 0. and cue_late > 0. and cue_late < min(clip_lead, 0.15) then
+    if clip_lead >= 0. and cue_late > 0. - cue_early_max and cue_late < min(clip_lead, 0.15) then
       clip_lead - cue_late
     else clip_lead end
   if cue_late != 0. and seam_lead == clip_lead then
-    log(label="clip.seam", level=2, "cue-in landing #{cue_late}s is outside (0, min(#{clip_lead}s, 0.15s)) — ignored, aligned on the cue")
+    log(label="clip.seam", level=2, "cue-in landing #{cue_late}s is outside (-#{cue_early_max}s, min(#{clip_lead}s, 0.15s)) — ignored, aligned on the cue")
   end
   # Bounded: cross_stamps buffers a clip seam lead + slack, give or take one
   # frame. A larger buffer means the seam was sized by something else (a
   # non-clip stamp between X and the clip would hold the clip back ~9.7s), so
   # it is logged and left as a plain crossfade rather than delayed. Sized
-  # from the clip's own lead: the landing only shortens the aligned lead.
+  # from the clip's own lead: a landing moves the aligned lead by less than
+  # the slack, so it never needs a bigger buffer.
   clip_max_d = clip_lead + clip_seam_slack + frame.duration()
   b_delay =
     if clip_lead >= 0. and d > seam_lead and d <= clip_max_d then d - seam_lead
     else 0. end
   if clip_lead >= 0. then
     log(label="clip.seam", level=3, "buffered #{d}s, cue lead #{clip_lead}s, cue-in landing #{cue_late}s: incoming waits #{b_delay}s")
-    if d < clip_lead then
-      log(label="clip.seam", level=2, "buffer #{d}s is shorter than the cue lead #{clip_lead}s — this seam is #{clip_lead - d}s off")
+    if d < seam_lead then
+      log(label="clip.seam", level=2, "buffer #{d}s is shorter than the aligned lead #{seam_lead}s — this seam is #{seam_lead - d}s off")
     elsif d > clip_max_d then
       log(label="clip.seam", level=2, "buffer #{d}s is past the cue lead #{clip_lead}s + slack — not aligned, plain crossfade")
     end

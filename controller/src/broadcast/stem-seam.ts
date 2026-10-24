@@ -5,7 +5,8 @@
 // past it and starts the incoming side exactly crossSec before the outgoing one ends.
 // Y's liq_cue_in itself lands on the next codec frame, up to ~93ms late; the drain
 // probes how late (music/cue-landing.ts) and stamps `liq_clip_cue_late` so the mixer
-// shortens the clip -> Y lead by it (#2003).
+// shortens the clip -> Y lead by it (#2003). An MP3 lands early by its encoder delay,
+// so its stamp is negative and lengthens the lead (#2077).
 // scripts/stem-seam-test.sh, #1774, docs/stem-transitions-research.md.
 export const CLIP_SEAM_CROSS_SEC = 0.3;
 
