@@ -814,6 +814,11 @@ export const DEFAULTS = {
   // call per track. Per-track timing fixes live in library.db, not here.
   lyrics: {
     enabled: false,
+    // Look up synced lyrics on LRCLIB for an on-air track the music server has
+    // no timed lyrics for (music/lyrics-sources.ts). Off until the operator
+    // asks: it sends each such track's artist, title, album and length to
+    // lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
+    lrclib: false,
   },
 };
 

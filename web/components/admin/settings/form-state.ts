@@ -338,6 +338,7 @@ export function settingsForm(v: NonNullable<SettingsData['values']>): FormState 
     // Off unless the station has said otherwise: the controller's default.
     lyrics: {
       enabled: v.lyrics?.enabled === true,
+      lrclib: v.lyrics?.lrclib === true,
     },
   };
 }

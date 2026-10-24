@@ -29,6 +29,13 @@ const DEVICE_OFFSET_STORAGE_KEY = 'subwave:lyrics-device-offset-ms';
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 60_000;
 
+// A station still looking a track up on LRCLIB says `pending`. It starts the
+// lookup as the track goes on air, a stream buffer before the listener hears
+// it, but LRCLIB often refuses a first try and the station asks again 5s and
+// 15s later, so the panel keeps asking for 40s; past that it keeps what it has.
+export const PENDING_RECHECK_MS = 4_000;
+export const PENDING_MAX_ASKS = 10;
+
 export type LyricsStatus =
   /** No library track to ask about. */
   | 'idle'
@@ -101,6 +108,12 @@ export function activeLyricLineIndex(
   return active;
 }
 
+/** When to ask again about an answer marked `pending`, after `asks` such asks;
+ *  null once the panel should settle for what it has. */
+export function pendingRecheckDelayMs(asks: number): number | null {
+  return asks < PENDING_MAX_ASKS ? PENDING_RECHECK_MS : null;
+}
+
 /** How long to wait before asking again after the `attempt`th miss (0-based). */
 export function lyricsRetryDelayMs(attempt: number, retryAfterSec: number | null): number {
   const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempt));
@@ -157,6 +170,7 @@ export function useCurrentLyrics({ songId, trackStartedAt }: UseCurrentLyricsOpt
     let cancelled = false;
     let timer: number | undefined;
     let attempt = 0;
+    let pendingAsks = 0;
     setAnswer({ songId: id, status: 'loading', lyrics: null });
     const ask = async () => {
       const result = await client.currentLyrics(id);
@@ -164,9 +178,20 @@ export function useCurrentLyrics({ songId, trackStartedAt }: UseCurrentLyricsOpt
       if (result.kind === 'ok') {
         // The station answers for the id it was asked about; anything else
         // cannot be shown as this track's lyrics.
-        setAnswer(result.payload.songId === id
-          ? { songId: id, status: 'ready', lyrics: result.payload }
-          : { songId: id, status: 'gone', lyrics: null });
+        if (result.payload.songId !== id) {
+          setAnswer({ songId: id, status: 'gone', lyrics: null });
+          return;
+        }
+        // Shown at once, and asked again while the station says a better
+        // answer (LRCLIB's timed lyrics) may be on its way. Once the panel
+        // stops asking, it stops saying it is looking.
+        const delay = result.payload.pending ? pendingRecheckDelayMs(pendingAsks) : null;
+        const payload = result.payload.pending && delay == null ? { ...result.payload, pending: false } : result.payload;
+        setAnswer({ songId: id, status: 'ready', lyrics: payload });
+        if (delay != null) {
+          pendingAsks += 1;
+          timer = window.setTimeout(ask, delay);
+        }
         return;
       }
       if (result.kind !== 'unavailable') {

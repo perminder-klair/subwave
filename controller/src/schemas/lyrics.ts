@@ -38,6 +38,10 @@ export const publicLyricLineSchema = z.object({
   text: z.string(),
 });
 
+// Where the lines came from: the station's music server, or LRCLIB for a
+// track the music server has no timed lyrics for (music/lyrics-sources.ts).
+export const LYRICS_SOURCES = ['music-server', 'lrclib'] as const;
+
 export const publicLyricsPayloadSchema = z.object({
   songId: z.string().nullable(),
   synced: z.boolean(),
@@ -46,6 +50,14 @@ export const publicLyricsPayloadSchema = z.object({
   // adjust the value that is in force.
   offsetMs: z.number(),
   lines: z.array(publicLyricLineSchema),
+  // Both optional, so a player reads a station from before the fallback and a
+  // station answers a player that ignores them. null when there are no lines,
+  // and a source this player does not know reads as null rather than failing
+  // the whole payload, so a newer station's third source still shows its lines.
+  source: z.enum(LYRICS_SOURCES).nullable().optional().catch(null),
+  // True while the station is still looking this track up on LRCLIB: the
+  // answer may improve, so ask again shortly.
+  pending: z.boolean().optional(),
 });
 
 export type PublicLyricLine = z.infer<typeof publicLyricLineSchema>;

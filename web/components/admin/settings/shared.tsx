@@ -268,6 +268,8 @@ export interface LikesForm {
 /** The listener Lyrics panel — `settings.lyrics`. */
 export interface LyricsForm {
   enabled: boolean;
+  /** Look up synced lyrics on LRCLIB for tracks the music server has untimed. */
+  lrclib: boolean;
 }
 
 export interface ArchiveForm {
@@ -563,6 +565,7 @@ export interface SettingsData {
     };
     lyrics?: {
       enabled?: boolean;
+      lrclib?: boolean;
     };
   };
   tts?: {

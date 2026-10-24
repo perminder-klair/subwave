@@ -98,6 +98,8 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   if (status !== 'ready' || !lyrics) return <Note>Pulling lyrics from the library…</Note>;
 
   if (!lyrics.lines.length) {
+    // The station is still asking LRCLIB; the hook asks again shortly.
+    if (lyrics.pending) return <Note>Looking for synced lyrics…</Note>;
     return (
       <div>
         <div className="text-[9px] tracking-[0.3em] text-muted uppercase">No lyrics indexed</div>
@@ -115,6 +117,12 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           <div className="min-w-0">
             <div className="truncate text-[14px] leading-tight font-semibold">{title || 'Now playing'}</div>
             {artist && <div className="mt-1 truncate text-[10px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
+            {lyrics.source === 'lrclib' && (
+              <div className="mt-1 text-[9px] tracking-[0.18em] text-muted uppercase">
+                Lyrics via{' '}
+                <a className="v3-focus underline" href="https://lrclib.net" target="_blank" rel="noreferrer">LRCLIB</a>
+              </div>
+            )}
           </div>
           {lyrics.synced && (
             <div className="flex shrink-0 items-center gap-2">

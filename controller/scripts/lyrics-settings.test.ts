@@ -1,4 +1,5 @@
-// settings.lyrics.enabled — the operator's switch for the listener Lyrics panel.
+// settings.lyrics — the operator's switches for the listener Lyrics panel and its
+// LRCLIB fallback.
 // A new settings field needs DEFAULTS, the update() branch AND a line in
 // load()'s composition; one missing from load() still saves and works until
 // the next restart, then silently reverts. So the switch is pinned through a
@@ -52,6 +53,28 @@ test('a save survives a cold load, both ways', async () => {
   assert.equal(settings.get().lyrics.enabled, false);
 });
 
+test('the LRCLIB fallback loads off unless saved on, and survives a cold load', async () => {
+  // Off is the behaviour before the fallback existed: nothing leaves the station.
+  assert.equal((await coldLoadSettings({})).lyrics.lrclib, false);
+  assert.equal((await coldLoadSettings({ lyrics: { enabled: true } })).lyrics.lrclib, false);
+  assert.equal((await coldLoadSettings({ lyrics: { lrclib: 'yes' } })).lyrics.lrclib, false);
+  assert.equal((await coldLoadSettings({ lyrics: { lrclib: true } })).lyrics.lrclib, true);
+
+  await coldLoadSettings({});
+  await settings.update({ lyrics: { enabled: true, lrclib: true } } as never);
+  setCache(null);
+  await settings.load();
+  assert.deepEqual(settings.get().lyrics, { enabled: true, lrclib: true });
+
+  // A patch naming only the panel switch leaves the fallback where it was.
+  await settings.update({ lyrics: { enabled: false } } as never);
+  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: true });
+  await settings.update({ lyrics: { lrclib: false } } as never);
+  setCache(null);
+  await settings.load();
+  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: false });
+});
+
 test('the route accepts the key, and a patch without it leaves the switch alone', async () => {
   assert.equal(validateSettingsPatch({ lyrics: { enabled: true } }), null);
   await settings.update({ lyrics: { enabled: true } } as never);
@@ -62,10 +85,10 @@ test('the route accepts the key, and a patch without it leaves the switch alone'
 test('the admin form reads the switch back, so a likes save cannot turn it off', async () => {
   // GET /settings `values` is an allowlist. Missing from it, the Listeners form
   // hydrated the switch as off and every likes save posted `enabled: false`.
-  await settings.update({ lyrics: { enabled: true } } as never);
+  await settings.update({ lyrics: { enabled: true, lrclib: true } } as never);
   const read = await fetch(`${base}/settings`, { headers: { authorization } });
-  const body = await read.json() as { values?: { lyrics?: { enabled?: boolean } } };
-  assert.deepEqual(body.values?.lyrics, { enabled: true });
+  const body = await read.json() as { values?: { lyrics?: { enabled?: boolean; lrclib?: boolean } } };
+  assert.deepEqual(body.values?.lyrics, { enabled: true, lrclib: true });
 
   const save = await fetch(`${base}/settings`, {
     method: 'POST',
@@ -73,5 +96,5 @@ test('the admin form reads the switch back, so a likes save cannot turn it off',
     body: JSON.stringify({ likes: { starInNavidrome: false }, lyrics: body.values?.lyrics }),
   });
   assert.equal(save.status, 200);
-  assert.equal(settings.get().lyrics.enabled, true);
+  assert.deepEqual(settings.get().lyrics, { enabled: true, lrclib: true }, 'the fallback rides the same block');
 });

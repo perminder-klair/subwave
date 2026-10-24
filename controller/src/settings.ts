@@ -1370,6 +1370,10 @@ export async function load() {
         typeof stored.lyrics?.enabled === 'boolean'
           ? stored.lyrics.enabled
           : DEFAULTS.lyrics.enabled,
+      lrclib:
+        typeof stored.lyrics?.lrclib === 'boolean'
+          ? stored.lyrics.lrclib
+          : DEFAULTS.lyrics.lrclib,
     },
   };
   setCache(loaded);
@@ -2635,6 +2639,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   if ('lyrics' in patch) {
     const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
     if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
+    if (ly.lrclib !== undefined) next.lyrics.lrclib = ly.lrclib as boolean;
   }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may

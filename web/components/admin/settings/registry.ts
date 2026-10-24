@@ -318,6 +318,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
 
   // ── lyrics ─────────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics words synced karaoke lrc timing' },
+  { label: 'LRCLIB fallback', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics synced timed lrc lrclib fallback missing' },
 
   // ── scrobbling ─────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'listeners', card: 'Last.fm', keywords: 'lastfm scrobble spins' },

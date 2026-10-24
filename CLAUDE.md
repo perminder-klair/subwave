@@ -117,6 +117,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - The seed track id is not a pick (`util/pick-seed.ts`).
 - The blocklist is absolute, with no never-starve anywhere, requests included. Its rules ride the existing chokepoints, and every name tier keys through one fold (`recency.nameKey`).
 - The stem cache's scan order and eviction order are one rule (`music/stem-priority.ts`).
+- LRCLIB lyrics reach the listener Lyrics panel only, never the analyzer, and are looked up at air time, never on the read path (`music/lyrics-sources.ts`).
 - LLM calls go through the `llm/sdk` primitives, and provider quirks live only in `llm/internal/provider/capabilities.ts`. The default provider is a slow homelab Ollama, so add no aggressive retry.
 - TTS goes through `tts.speak(text, {kind})`. The rescue chain is a list of voice slots, and a rescue target is engine + provider.
 

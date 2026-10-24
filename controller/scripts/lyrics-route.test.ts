@@ -144,6 +144,8 @@ test('the on-air track, on the played timeline of the cue its play was given', a
       { startMs: 2250, text: 'first sung line' },
       { startMs: 5750, text: 'second sung line' },
     ],
+    source: 'music-server',
+    pending: false,
   });
   assert.deepEqual((await get('/lyrics/current?songId=song-live')).body, r.body, 'naming it is the same answer');
 });
@@ -194,7 +196,7 @@ test('no lyrics and an unknown song are answers; an outage is a 503, asked again
     queue.current = play(id, { source: 'dj' }) as never;
     const r = await get('/lyrics/current');
     assert.equal(r.status, 200, `${id} is an answer`);
-    assert.deepEqual(r.body, { songId: id, synced: false, offsetMs: 0, lines: [] });
+    assert.deepEqual(r.body, { songId: id, synced: false, offsetMs: 0, lines: [], source: null, pending: false });
   }
 
   onAir = 'song-down';
@@ -242,7 +244,7 @@ test('nothing on air answers an empty payload rather than an error', async () =>
   queue.current = null;
   const r = await get('/lyrics/current');
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body, { songId: null, synced: false, offsetMs: 0, lines: [] });
+  assert.deepEqual(r.body, { songId: null, synced: false, offsetMs: 0, lines: [], source: null, pending: false });
 });
 
 test('a cross-origin player may send the station password and read Retry-After', async () => {

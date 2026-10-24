@@ -141,7 +141,10 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         summary: 'Lyrics for the track a listener is hearing',
         description:
           'Lyrics for a library track, normalized from the music server\'s ' +
-          'structured lyrics. A listener hears the stream a buffer behind the live ' +
+          'structured lyrics, or from LRCLIB for a track the music server has no ' +
+          'timed lyrics for when the operator has that fallback on (`source` says ' +
+          'which; `pending: true` means a lookup is running, so ask again shortly). ' +
+          'A listener hears the stream a buffer behind the live ' +
           'edge, so pass the `songId` the player is showing; the station answers ' +
           'for the on-air track or one of the three before it, and 409s anything ' +
           'older. Omit it for the on-air track. Timed lines carry `startMs` on the ' +
@@ -169,6 +172,8 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
             { startMs: 12500, text: 'First lyric line' },
             { startMs: 15300, text: 'Second lyric line' },
           ],
+          source: 'music-server',
+          pending: false,
         },
       },
       {

@@ -3,7 +3,9 @@
 // and the offset and hands them in.
 import { isInstrumentalMarker } from './lyric-vocal.js';
 import { shiftOnsetByCueMs } from './silence-trim.js';
-import type { PublicLyricsPayload } from '../schemas/lyrics.js';
+import type { LYRICS_SOURCES, PublicLyricsPayload } from '../schemas/lyrics.js';
+
+export type LyricsSource = (typeof LYRICS_SOURCES)[number];
 
 export type { PublicLyricLine, PublicLyricsPayload } from '../schemas/lyrics.js';
 
@@ -18,15 +20,19 @@ export interface PublicLyricsOptions {
   /** Seconds into the file where this play began (`liq_cue_in`), or null when
    *  the file played from byte zero. */
   cueInSec?: number | null;
+  /** Where `lyrics` came from (music/lyrics-sources.ts). */
+  source?: LyricsSource;
+  /** An LRCLIB lookup for this track is still in flight. */
+  pending?: boolean;
 }
 
 export function toPublicLyricsPayload(
   songId: string | null,
   lyrics: StructuredLyricsInput | null,
-  { offsetMs = 0, cueInSec = null }: PublicLyricsOptions = {},
+  { offsetMs = 0, cueInSec = null, source = 'music-server', pending = false }: PublicLyricsOptions = {},
 ): PublicLyricsPayload {
   if (!songId || !lyrics) {
-    return { songId: songId || null, synced: false, offsetMs, lines: [] };
+    return { songId: songId || null, synced: false, offsetMs, lines: [], source: null, pending };
   }
 
   // Drop blank lines AND instrumental markers. Navidrome/LRC bodies commonly
@@ -51,5 +57,7 @@ export function toPublicLyricsPayload(
     synced: lyrics.synced === true && lines.some((line) => line.startMs != null),
     offsetMs,
     lines,
+    source: lines.length ? source : null,
+    pending,
   };
 }

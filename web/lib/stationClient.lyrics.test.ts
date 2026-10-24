@@ -32,6 +32,17 @@ test('a well-formed answer is ok, and the song id travels encoded', async () => 
   assert.equal(calls[0]?.url, 'http://station.test/api/lyrics/current?songId=a%20b');
 });
 
+test('the LRCLIB fields come through, and a station without them still parses', async () => {
+  const fromLrclib = { ...payload, source: 'lrclib', pending: true };
+  answer(200, fromLrclib);
+  assert.deepEqual(await client.currentLyrics('a b'), { kind: 'ok', payload: fromLrclib });
+  // A newer station's unknown source must not turn its lines into an outage.
+  answer(200, { ...payload, source: 'somewhere-new' });
+  const r = await client.currentLyrics('a b');
+  assert.equal(r.kind, 'ok');
+  assert.equal(r.kind === 'ok' && r.payload.source, null);
+});
+
 test('refusals are answers, not outages', async () => {
   answer(403, { error: 'off', enabled: false });
   assert.deepEqual(await client.currentLyrics('s'), { kind: 'disabled' });

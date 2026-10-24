@@ -9,14 +9,17 @@
 // accepts the on-air track or one of the few just before it. Answering only for
 // the live edge left a player opened in a song's last `bufferSeconds` asking
 // about a track the live edge had already left, which no retry could fix.
+//
+// The lines are the music server's, or LRCLIB's for a track it has no timed
+// lyrics for when the operator has that fallback on; music/lyrics-sources.ts
+// decides, and the route never waits on LRCLIB.
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
-import * as subsonic from '../music/subsonic.js';
 import { resolveSilenceTrim } from '../music/silence-trim.js';
-import { toPublicLyricsPayload, type StructuredLyricsInput } from '../music/lyrics-public.js';
-import { BoundedLyricsCache } from '../music/lyrics-cache.js';
+import { toPublicLyricsPayload } from '../music/lyrics-public.js';
+import { LYRICS_RETRY_AFTER_SEC, listenerLyrics } from '../music/lyrics-sources.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { requireStationAuth } from '../middleware/station-auth.js';
 import { validateBody } from '../middleware/validate.js';
@@ -29,14 +32,9 @@ export const router = express.Router();
 // it, so one is not enough. Every one of them is already public on GET /state.
 export const RECENT_PLAYS = 3;
 
-// How long a player should wait after the music server failed to answer.
-// Matches the cache's negative TTL, inside which a retry would only be told
-// the same thing.
-export const LYRICS_RETRY_AFTER_SEC = 10;
-
-const lyricCache = new BoundedLyricsCache<StructuredLyricsInput>({
-  negativeTtlMs: LYRICS_RETRY_AFTER_SEC * 1000,
-});
+// Which source answers, and the music-server cache, live in
+// music/lyrics-sources.ts, shared with the on-air LRCLIB lookup.
+export { LYRICS_RETRY_AFTER_SEC };
 
 interface PlayRecord {
   track?: { id?: string | null } | null;
@@ -95,9 +93,9 @@ router.get('/lyrics/current', lyricsEnabled, requireStationAuth, async (req, res
       return res.status(409).json({ error: 'That track is no longer on air', songId: onAirId });
     }
 
-    let lyrics: StructuredLyricsInput | null;
+    let chosen;
     try {
-      lyrics = await lyricCache.get(songId, () => subsonic.fetchStructuredLyrics(songId));
+      chosen = await listenerLyrics(songId);
     } catch {
       // Not "no lyrics": the server did not answer, and the player must say so
       // and ask again rather than tell the listener the library has none.
@@ -108,9 +106,16 @@ router.get('/lyrics/current', lyricsEnabled, requireStationAuth, async (req, res
       });
     }
 
+    // An LRCLIB file is moved by the same cue and corrected by the same
+    // offset: both are properties of the play and the track, not the source.
     const offsetMs = await library.getLyricOffset(songId);
     const cueInSec = cueInFor(play, () => resolveSilenceTrim(library.get(songId)).cueInSec);
-    res.json(toPublicLyricsPayload(songId, lyrics, { offsetMs, cueInSec }));
+    res.json(toPublicLyricsPayload(songId, chosen.lyrics, {
+      offsetMs,
+      cueInSec,
+      source: chosen.source,
+      pending: chosen.pending,
+    }));
   } catch (err) {
     queue.log('error', `/lyrics/current failed: ${err instanceof Error ? err.message : String(err)}`);
     res.status(500).json({ error: 'internal error' });

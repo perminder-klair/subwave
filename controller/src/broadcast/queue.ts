@@ -10,6 +10,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
+import * as lyricsSources from '../music/lyrics-sources.js';
 import * as loudness from '../music/loudness.js';
 import { aboveKnownTrackCeiling } from '../music/track-duration.js';
 import * as silenceTrim from '../music/silence-trim.js';
@@ -3620,6 +3621,11 @@ class Queue {
     } else {
       webhooks.notify('track.play', trackPayload);
     }
+
+    // LRCLIB synced-lyrics fallback (music/lyrics-sources.ts): looked up now, a
+    // stream buffer before any listener hears the track. Fire-and-forget, and
+    // gated inside on the operator's switch.
+    lyricsSources.onTrackStarted(this.current.track.id || null);
 
     // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on
     // listener count > 0 (fail-closed) and per-backend enable flags.

@@ -1,6 +1,7 @@
 // The pure half of the shared lyrics hook (components/skins/lyrics.ts): which
 // line is being sung, how the two timing corrections combine, and how long the
-// panel waits before asking a station that did not answer.
+// panel waits before asking a station that did not answer, or one still
+// looking a track up on LRCLIB.
 //
 // Run: `npm test -- lyrics`.
 import assert from 'node:assert/strict';
@@ -12,6 +13,9 @@ import {
   clampLyricOffsetMs,
   formatLyricOffset,
   lyricsRetryDelayMs,
+  pendingRecheckDelayMs,
+  PENDING_MAX_ASKS,
+  PENDING_RECHECK_MS,
 } from './lyrics';
 import type { PublicLyricsPayload } from '@/lib/schemas.generated';
 
@@ -66,4 +70,15 @@ test('retries back off to a minute and never come sooner than Retry-After', () =
   assert.equal(lyricsRetryDelayMs(0, 10), 10_000, 'the station asked for ten seconds');
   assert.equal(lyricsRetryDelayMs(2, 10), 20_000, 'the backoff is already longer');
   assert.equal(lyricsRetryDelayMs(0, 3600), 60_000, 'a huge Retry-After still re-asks within a minute');
+});
+
+test('a pending answer is asked again a few times, then the panel settles', () => {
+  for (let asks = 0; asks < PENDING_MAX_ASKS; asks++) {
+    assert.equal(pendingRecheckDelayMs(asks), PENDING_RECHECK_MS);
+  }
+  assert.equal(pendingRecheckDelayMs(PENDING_MAX_ASKS), null);
+  // Long enough to outlast a lookup whose first try LRCLIB refused (the station
+  // retries 5s then 15s later), short enough to read as live.
+  assert.ok(PENDING_RECHECK_MS * PENDING_MAX_ASKS >= 20_000);
+  assert.ok(PENDING_RECHECK_MS * PENDING_MAX_ASKS <= 60_000);
 });

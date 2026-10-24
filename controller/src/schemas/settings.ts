@@ -1008,6 +1008,9 @@ export const likesPatchSchema = settingsBlockOf({
 // operator opts in.
 export const lyricsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
+  // The LRCLIB fallback for tracks with no timed lyrics on the music server.
+  // Its own opt-in: it sends what the station plays to a third party.
+  lrclib: settingsBoolLike(),
 });
 
 export const searchPatchSchema = settingsBlockOf({

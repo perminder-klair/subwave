@@ -12,6 +12,8 @@ test('empty when there is no current library song', () => {
     synced: false,
     offsetMs: 0,
     lines: [],
+    source: null,
+    pending: false,
   });
 });
 
@@ -37,6 +39,8 @@ test('trims blank lines and preserves synced timing', () => {
         { startMs: 1000, text: 'first line' },
         { startMs: 3000, text: 'second line' },
       ],
+      source: 'music-server',
+      pending: false,
     },
   );
 });
@@ -56,6 +60,8 @@ test('unsynced lyrics publish null start offsets', () => {
       synced: false,
       offsetMs: -400,
       lines: [{ startMs: null, text: 'plain lyric line' }],
+      source: 'music-server',
+      pending: false,
     },
   );
 });
@@ -68,7 +74,7 @@ test('an all-marker instrumental body publishes as no lyrics', () => {
       synced: true,
       lines: [{ startMs: 0, text: '[au: instrumental]' }],
     }),
-    { songId: 'abc123', synced: false, offsetMs: 0, lines: [] },
+    { songId: 'abc123', synced: false, offsetMs: 0, lines: [], source: null, pending: false },
   );
 });
 
@@ -106,6 +112,8 @@ test('markers are dropped without discarding the real lines around them', () => 
       synced: true,
       offsetMs: 0,
       lines: [{ startMs: 4000, text: 'the words start here' }],
+      source: 'music-server',
+      pending: false,
     },
   );
 });
@@ -158,4 +166,15 @@ test('the station offset rides beside the lines, never folded into them', () => 
   );
   assert.equal(payload.offsetMs, 2900);
   assert.deepEqual(payload.lines, [{ startMs: 6000, text: 'line' }]);
+});
+
+test('the payload names its source, and none when there are no lines', () => {
+  const line = { synced: true, lines: [{ startMs: 1000, text: 'line' }] };
+  assert.equal(toPublicLyricsPayload('abc123', line, { source: 'lrclib' }).source, 'lrclib');
+  assert.equal(toPublicLyricsPayload('abc123', line).source, 'music-server', 'the music server unless told otherwise');
+  assert.equal(
+    toPublicLyricsPayload('abc123', { synced: true, lines: [{ startMs: 0, text: 'Instrumental' }] }, { source: 'lrclib' }).source,
+    null,
+  );
+  assert.equal(toPublicLyricsPayload('abc123', null, { pending: true }).pending, true, 'pending rides an empty answer too');
 });

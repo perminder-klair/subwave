@@ -114,7 +114,9 @@ for the on-air track.
   "lines": [
     { "startMs": 12500, "text": "First lyric line" },
     { "startMs": 15300, "text": "Second lyric line" }
-  ]
+  ],
+  "source": "music-server",
+  "pending": false
 }
 ```
 
@@ -132,6 +134,23 @@ for the on-air track.
   endpoint (it answers that call with HTTP 404 or 501).
 - `503` means the music server did not answer. It is never "no lyrics": retry
   after the `Retry-After` seconds.
+- `source` is where the lines came from: `music-server`, or `lrclib` (below).
+  It is `null` when there are no lines. A player can credit LRCLIB with it.
+- `pending: true` means the station is still looking the track up on LRCLIB and
+  the answer may improve, so ask again after a few seconds. Both fields are
+  optional: a station from before the fallback omits them.
+
+**The LRCLIB fallback.** With **Settings → Listeners → Lyrics panel → LRCLIB
+fallback** on (`settings.lyrics.lrclib`, off by default, and only while the
+panel itself is on), a track whose music-server lyrics are untimed or missing is
+looked up on [LRCLIB](https://lrclib.net) when it goes on air. That sends the
+track's artist, title, album and length to lrclib.net, or to `LRCLIB_URL` for a
+self-hosted instance. Only a file within 2 seconds of the track's length is
+used, so a different cut is not timed against this one. The music server's
+timed lyrics always win, and LRCLIB lyrics reach this panel only, never the
+DJ's vocal timing. The station remembers each answer, so a track is asked about
+once (a miss again after 30 days). The station offset and the trim shift apply
+to LRCLIB lines exactly as to the music server's.
 
 The operator sets the correction with `PUT /lyrics/offsets/:trackId` (admin),
 body `{ "offsetMs": 2900 }`, a whole number from `-30000` to `30000`; `0`

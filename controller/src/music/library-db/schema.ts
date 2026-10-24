@@ -483,6 +483,25 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 30');
   }
 
+  if (userVersion < 31) {
+    // What LRCLIB answered for a track the music server has no timed lyrics
+    // for (music/lyrics-sources.ts). A row with neither body is a stored miss,
+    // so a track is asked about again only once its checked_at is old enough.
+    // id-adoption.ts carries it across an ID rotation like the offsets.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS lyrics_external (
+        track_id     TEXT PRIMARY KEY,
+        source       TEXT NOT NULL,
+        synced_lrc   TEXT,
+        plain_text   TEXT,
+        instrumental INTEGER NOT NULL DEFAULT 0,
+        external_id  TEXT,
+        checked_at   TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 31');
+  }
+
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
