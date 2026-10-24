@@ -9,20 +9,22 @@
 // out), and slower than Classic's: lines dissolve rather than travel. Words
 // brighten as they are sung (lyricMoment() paces them; LRC times lines, not
 // words). Intros and breaks breathe, with Drift's own `breathe`. Under lite
-// mode or reduced motion lines cut and whole lines light at once.
+// mode or reduced motion lines cut and whole lines light at once. The lines
+// carry no controls: the corner's lyrics icon (the ··· panel on a phone) opens
+// their settings, where an untimed song's words are to read (LyricsSettings).
 
-import { memo, useEffect, useRef, useState } from 'react';
+import { memo, useEffect } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { cn } from '@/lib/cn';
-import { lyricMoment, useCurrentLyrics, useLingeringPresence } from '../lyrics';
+import { lyricMoment, syncedLyricsReady, useLingeringPresence, useLyricClock, type TrackLyrics } from '../lyrics';
 import { useSkinCalm } from '../sharedHooks';
-import LyricsTiming from '../LyricsTiming';
 import styles from './Drift.module.css';
 
 const TICK_MS = 250;
 
 export interface DriftLyricsProps {
-  songId?: string | null;
+  /** The skin's one answer for this track (useTrackLyrics). */
+  track: TrackLyrics;
   trackStartedAt: number | null;
   /** Whether lyrics are showing, so the page can shrink everything else. */
   onPresenceChange: (shown: boolean) => void;
@@ -48,35 +50,18 @@ function Words({ text, lit }: { text: string; lit: number }) {
   );
 }
 
-export default memo(function DriftLyrics({ songId, trackStartedAt, onPresenceChange }: DriftLyricsProps) {
+export default memo(function DriftLyrics({ track, trackStartedAt, onPresenceChange }: DriftLyricsProps) {
   const calm = useSkinCalm();
-  const { status, lyrics, positionMs, deviceOffsetMs, setDeviceOffsetMs, station } =
-    useCurrentLyrics({ songId, trackStartedAt, tickMs: TICK_MS });
-  const [timingOpen, setTimingOpen] = useState(false);
-  const rootRef = useRef<HTMLElement | null>(null);
+  const positionMs = useLyricClock(track, trackStartedAt, TICK_MS);
+  const { lyrics } = track;
+  const songId = lyrics?.songId;
 
-  const shown = status === 'ready' && !!lyrics?.synced && lyrics.lines.length > 0;
+  const shown = syncedLyricsReady(track);
   const present = useLingeringPresence(shown);
   useEffect(() => {
     onPresenceChange(present);
   }, [present, onPresenceChange]);
   useEffect(() => () => onPresenceChange(false), [onPresenceChange]);
-
-  useEffect(() => {
-    if (!timingOpen) return;
-    const onDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setTimingOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setTimingOpen(false);
-    };
-    document.addEventListener('pointerdown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('pointerdown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [timingOpen]);
 
   if (!shown || !lyrics) return null;
 
@@ -100,11 +85,7 @@ export default memo(function DriftLyrics({ songId, trackStartedAt, onPresenceCha
       });
 
   return (
-    <section
-      ref={rootRef}
-      aria-label="Lyrics"
-      className="pointer-events-auto relative flex w-[min(880px,92vw)] flex-col items-center"
-    >
+    <section aria-label="Lyrics" className="relative flex w-[min(880px,92vw)] flex-col items-center">
       {/* A fixed height, so the page around the lyrics never moves with them. */}
       <div className="flex h-[5.6em] w-full flex-col items-center justify-center font-display text-[clamp(26px,5.2vw,60px)] text-ink">
         <AnimatePresence mode="popLayout" initial={false}>
@@ -151,32 +132,6 @@ export default memo(function DriftLyrics({ songId, trackStartedAt, onPresenceCha
             </m.p>
           )}
         </AnimatePresence>
-      </div>
-
-      <div className="relative mt-3 flex items-baseline gap-2 font-mono text-[9px] tracking-[0.3em] text-muted uppercase">
-        <span>
-          ♪ lyrics
-          {lyrics.source === 'lrclib' && (
-            <>
-              {' · via '}
-              <a className="v3-focus underline hover:text-ink" href="https://lrclib.net" target="_blank" rel="noreferrer">lrclib</a>
-            </>
-          )}
-        </span>
-        <span aria-hidden>·</span>
-        <button
-          type="button"
-          onClick={() => setTimingOpen((open) => !open)}
-          aria-expanded={timingOpen}
-          className="v3-focus cursor-pointer border-0 bg-transparent p-0 font-mono text-[9px] tracking-[0.3em] text-muted uppercase hover:text-ink"
-        >
-          timing
-        </button>
-        {timingOpen && (
-          <div className="absolute bottom-full left-1/2 z-10 mb-3 w-[min(320px,calc(100vw-2rem))] -translate-x-1/2 border border-soft-border bg-[var(--bg)]/95 p-4 text-left tracking-normal normal-case">
-            <LyricsTiming deviceOffsetMs={deviceOffsetMs} setDeviceOffsetMs={setDeviceOffsetMs} station={station} />
-          </div>
-        )}
       </div>
     </section>
   );

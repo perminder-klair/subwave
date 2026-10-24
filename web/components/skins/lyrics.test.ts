@@ -1,7 +1,7 @@
-// The pure half of the shared lyrics hook (components/skins/lyrics.ts): which
-// line is being sung, how the two timing corrections combine, and how long the
+// The pure half of the shared lyrics hooks (components/skins/lyrics.ts): which
+// line is being sung, how the two timing corrections combine, how long the
 // panel waits before asking a station that did not answer, or one still
-// looking a track up on LRCLIB.
+// looking a track up on LRCLIB, and what the lyrics settings say a track has.
 //
 // Run: `npm test -- lyrics`.
 import assert from 'node:assert/strict';
@@ -19,6 +19,9 @@ import {
   LINE_HOLD_MS,
   TEASE_MS,
   lyricMoment,
+  lyricsNote,
+  plainLyricsReady,
+  syncedLyricsReady,
 } from './lyrics';
 import type { PublicLyricsPayload } from '@/lib/schemas.generated';
 
@@ -134,4 +137,37 @@ test('untimed or absent lyrics give the ambient display nothing to show', () => 
   for (const lyrics of [null, plain]) {
     assert.deepEqual(lyricMoment(lyrics, 20_000), { current: -1, progress: 0, next: -1, resting: false });
   }
+});
+
+test('the stage takes synced lines, and the settings offer untimed ones to read', () => {
+  const plain: PublicLyricsPayload = { ...synced, synced: false, lines: [{ startMs: null, text: 'a' }] };
+  const none: PublicLyricsPayload = { ...synced, synced: false, lines: [] };
+  assert.equal(syncedLyricsReady({ status: 'ready', lyrics: synced }), true);
+  assert.equal(plainLyricsReady({ status: 'ready', lyrics: synced }), false);
+  assert.equal(syncedLyricsReady({ status: 'ready', lyrics: plain }), false);
+  assert.equal(plainLyricsReady({ status: 'ready', lyrics: plain }), true);
+  for (const lyrics of [none, null]) {
+    assert.equal(syncedLyricsReady({ status: 'ready', lyrics }), false);
+    assert.equal(plainLyricsReady({ status: 'ready', lyrics }), false);
+  }
+  assert.equal(syncedLyricsReady({ status: 'loading', lyrics: synced }), false, 'only a settled answer');
+});
+
+test('the settings say what a track has, and why there is nothing', () => {
+  const plain: PublicLyricsPayload = { ...synced, synced: false, lines: [{ startMs: null, text: 'a' }] };
+  const none: PublicLyricsPayload = { ...synced, synced: false, lines: [] };
+  const note = (status: Parameters<typeof lyricsNote>[0]['status'], lyrics: PublicLyricsPayload | null, shown = true) =>
+    lyricsNote({ status, lyrics }, shown);
+  assert.equal(note('ready', synced, false), 'Hidden on this device.', 'hidden says so, whatever the track has');
+  assert.match(note('ready', { ...synced, source: 'lrclib' }), /from LRCLIB/);
+  assert.match(note('ready', { ...synced, source: 'music-server' }), /station’s library/);
+  assert.match(note('ready', synced), /station’s library/, 'an older station names no source');
+  assert.match(note('ready', plain), /Not timed/);
+  assert.match(note('ready', { ...plain, pending: true }), /still looking/);
+  assert.equal(note('ready', none), 'No lyrics for this song.');
+  assert.equal(note('ready', { ...none, pending: true }), 'Looking for lyrics…');
+  assert.equal(note('loading', null), 'Looking for lyrics…');
+  assert.match(note('unavailable', null), /Trying again/);
+  assert.match(note('disabled', null), /switched off/);
+  assert.equal(note('gone', null), 'No lyrics for this song.');
 });

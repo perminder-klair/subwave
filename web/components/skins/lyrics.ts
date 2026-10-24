@@ -1,10 +1,13 @@
 'use client';
 
-// The shared lyrics hook behind a skin's Lyrics panel. It asks for the track
-// the LISTENER is hearing (the feed's now-playing, a stream buffer behind the
-// live edge), retries only when the station could not answer, and combines two
+// The shared lyrics hooks behind a skin's lyrics. useTrackLyrics asks for the
+// track the LISTENER is hearing (the feed's now-playing, a stream buffer behind
+// the live edge), retries only when the station could not answer, and holds two
 // timing corrections: the station's, which the operator sets once per track for
 // everyone, and this device's own nudge, which never leaves the browser.
+// useLyricClock is where in those lines the song stands. A skin calls the first
+// once, so its lyrics display and its lyrics settings share one answer, and
+// only the display runs the clock, so the tick re-renders nothing else.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
@@ -58,15 +61,6 @@ export type LyricsStatus =
   /** A private station wants its password, and this browser has not got it. */
   | 'locked';
 
-export interface UseCurrentLyricsOptions {
-  /** The listener's now-playing `subsonic_id`. */
-  songId?: string | null;
-  /** When the listener's audio of this track began (ms epoch, listener time). */
-  trackStartedAt: number | null;
-  /** How often the lyric clock advances while synced lyrics are showing. */
-  tickMs?: number;
-}
-
 export interface StationOffsetControl {
   /** True when this browser is signed in to this station's admin console. */
   canTune: boolean;
@@ -80,16 +74,43 @@ export interface StationOffsetControl {
   save: () => Promise<void>;
 }
 
-export interface CurrentLyricsState {
+/** The lyrics of the track this listener is hearing, and their corrections. */
+export interface TrackLyrics {
   status: LyricsStatus;
   lyrics: PublicLyricsPayload | null;
-  activeLineIndex: number;
-  /** Where the lyric clock stands: elapsed time plus both corrections, the
-   *  value each line's `startMs` is compared with. */
-  positionMs: number;
   deviceOffsetMs: number;
   setDeviceOffsetMs: (next: number) => void;
   station: StationOffsetControl;
+}
+
+/** Synced lines, the only kind a stage shows: they can follow the song. */
+export function syncedLyricsReady({ status, lyrics }: Pick<TrackLyrics, 'status' | 'lyrics'>): boolean {
+  return status === 'ready' && !!lyrics?.synced && lyrics.lines.length > 0;
+}
+
+/** Untimed lines, which the lyrics settings offer to read instead. */
+export function plainLyricsReady({ status, lyrics }: Pick<TrackLyrics, 'status' | 'lyrics'>): boolean {
+  return status === 'ready' && !!lyrics && !lyrics.synced && lyrics.lines.length > 0;
+}
+
+/** One line for the lyrics settings on what this track has, or why nothing. */
+export function lyricsNote(track: Pick<TrackLyrics, 'status' | 'lyrics'>, shown: boolean): string {
+  if (!shown) return 'Hidden on this device.';
+  const { status, lyrics } = track;
+  if (status === 'disabled') return 'The station has lyrics switched off.';
+  if (status === 'loading') return 'Looking for lyrics…';
+  if (status === 'unavailable') return 'The station isn’t answering. Trying again…';
+  if (status === 'idle') return 'No lyrics right now.';
+  if (status !== 'ready' || !lyrics) return 'No lyrics for this song.';
+  if (syncedLyricsReady(track)) {
+    return lyrics.source === 'lrclib' ? 'Synced lyrics, from LRCLIB.' : 'Synced lyrics, from the station’s library.';
+  }
+  if (plainLyricsReady(track)) {
+    return lyrics.pending
+      ? 'Untimed for now, still looking for synced ones.'
+      : 'Not timed, so they can’t follow the song. Here they are to read.';
+  }
+  return lyrics.pending ? 'Looking for lyrics…' : 'No lyrics for this song.';
 }
 
 export function clampLyricOffsetMs(value: number): number {
@@ -253,12 +274,13 @@ interface Answer {
   lyrics: PublicLyricsPayload | null;
 }
 
-export function useCurrentLyrics({ songId, trackStartedAt, tickMs = 500 }: UseCurrentLyricsOptions): CurrentLyricsState {
+/** The lyrics of `songId`, the listener's now-playing `subsonic_id`; null asks
+ *  for nothing (lyrics hidden, or nothing from the library on air). */
+export function useTrackLyrics(songId?: string | null): TrackLyrics {
   const client = useStationClient();
   const { auth, adminFetch } = useAdminAuth();
   const id = songId || null;
   const [answer, setAnswer] = useState<Answer>({ songId: null, status: 'idle', lyrics: null });
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const [deviceOffsetMs, setDeviceOffsetState] = useState(0);
   const [draft, setDraft] = useState<{ songId: string; offsetMs: number } | null>(null);
   // Keyed by track, like the draft: a save still in flight when the song
@@ -324,12 +346,6 @@ export function useCurrentLyrics({ songId, trackStartedAt, tickMs = 500 }: UseCu
   const current = answer.songId === id ? answer : { songId: id, status: id ? 'loading' as const : 'idle' as const, lyrics: null };
   const lyrics = current.lyrics;
 
-  useEffect(() => {
-    if (!lyrics?.synced) return;
-    const timer = window.setInterval(() => setNowMs(Date.now()), tickMs);
-    return () => window.clearInterval(timer);
-  }, [lyrics?.synced, trackStartedAt, tickMs]);
-
   const setDeviceOffsetMs = useCallback((next: number) => {
     const clamped = clampLyricOffsetMs(next);
     setDeviceOffsetState(clamped);
@@ -377,28 +393,41 @@ export function useCurrentLyrics({ songId, trackStartedAt, tickMs = 500 }: UseCu
     }
   }, [adminFetch, draftMs, id]);
 
-  const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
-  const activeLineIndex = useMemo(
-    () => activeLyricLineIndex(lyrics, elapsedMs, stationMs + deviceOffsetMs),
-    [lyrics, elapsedMs, stationMs, deviceOffsetMs],
-  );
-
-  return {
-    status: current.status,
+  // Stable while nothing changes, so the memoized displays and settings that
+  // take it re-render only when the answer or a correction does.
+  const status = current.status;
+  const dirty = draftMs != null && draftMs !== savedMs;
+  const saving = savingFor != null && savingFor === id;
+  const error = saveError && saveError.songId === id ? saveError.message : null;
+  return useMemo(() => ({
+    status,
     lyrics,
-    activeLineIndex,
-    positionMs: elapsedMs + stationMs + deviceOffsetMs,
     deviceOffsetMs,
     setDeviceOffsetMs,
     station: {
       canTune,
       offsetMs: stationMs,
       savedMs,
-      dirty: draftMs != null && draftMs !== savedMs,
-      saving: savingFor != null && savingFor === id,
-      error: saveError && saveError.songId === id ? saveError.message : null,
+      dirty,
+      saving,
+      error,
       set: setStation,
       save: saveStation,
     },
-  };
+  }), [status, lyrics, deviceOffsetMs, setDeviceOffsetMs, canTune, stationMs, savedMs, dirty, saving, error, setStation, saveStation]);
+}
+
+/** Where the lyric clock stands: elapsed time plus both corrections, the value
+ *  each line's `startMs` is compared with. It ticks every `tickMs` while the
+ *  lines are synced, so only the component that calls it re-renders. */
+export function useLyricClock(track: TrackLyrics, trackStartedAt: number | null, tickMs = 500): number {
+  const synced = !!track.lyrics?.synced;
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (!synced) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), tickMs);
+    return () => window.clearInterval(timer);
+  }, [synced, trackStartedAt, tickMs]);
+  const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
+  return elapsedMs + track.station.offsetMs + track.deviceOffsetMs;
 }

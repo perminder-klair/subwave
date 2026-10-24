@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { Captions, CaptionsOff, Coins, Heart } from 'lucide-react';
 import { cn } from '@/lib/cn';
@@ -13,6 +13,8 @@ import CountUp from './CountUp';
 import { Ripple } from '@/components/ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
+import type { TrackLyrics } from '@/components/skins/lyrics';
+import LyricsSettings, { usePopoverDismiss } from '@/components/skins/LyricsSettings';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
 
 /** Seconds before the end of the track that the "up next" tease fades in. The
@@ -70,20 +72,36 @@ function LikeHeart() {
   );
 }
 
-/** The listener's lyrics switch, beside the heart: shown whenever the
- *  station offers lyrics, so they can be turned back on from where they were. */
-function LyricsToggle({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
+/** This listener's lyrics, as the stage offers them: their switch, and the
+ *  track's answer for the settings the button beside the heart opens. */
+export interface StageLyrics {
+  shown: boolean;
+  onToggle: () => void;
+  track: TrackLyrics;
+}
+
+/** The lyrics button beside the heart: shown whenever the station offers
+ *  lyrics, so they can be turned back on from where they were. It opens the
+ *  lyrics settings; L still shows and hides them at once. */
+function LyricsButton({ shown, open, onOpen, buttonRef }: {
+  shown: boolean;
+  open: boolean;
+  onOpen: () => void;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+}) {
   const Icon = shown ? Captions : CaptionsOff;
   return (
     <button
+      ref={buttonRef}
       type="button"
-      onClick={onToggle}
-      aria-pressed={shown}
-      aria-label={shown ? 'Hide lyrics' : 'Show lyrics'}
-      title={shown ? 'Hide lyrics (L)' : 'Show lyrics (L)'}
+      onClick={onOpen}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label="Lyrics settings"
+      title="Lyrics (L shows or hides them)"
       className={cn(
         'v3-focus ml-[10px] inline-flex cursor-pointer items-center border-0 bg-transparent p-0 align-middle transition-colors',
-        shown ? 'text-ink' : 'text-muted hover:text-ink',
+        shown || open ? 'text-ink' : 'text-muted hover:text-ink',
       )}
     >
       <Icon size={15} strokeWidth={1.75} aria-hidden="true" />
@@ -110,13 +128,13 @@ export interface CenterStageProps {
   /** Synced lyrics are showing (AmbientLyrics): the stage gives them the right
    *  half on wide screens and a band above the waveform on narrow ones. */
   lyricsShown?: boolean;
-  /** This listener's lyrics switch; absent while the station has lyrics off. */
-  lyricsToggle?: { shown: boolean; onToggle: () => void } | null;
+  /** This listener's lyrics; absent while the station has lyrics off. */
+  lyrics?: StageLyrics | null;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyricsToggle = null, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyrics = null, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -184,6 +202,15 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
 
   const rippleActive = trackBurst || djBurst;
 
+  // The lyrics settings hang under the track info, outside the title's swap,
+  // so a new track leaves them open rather than remounting them.
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  const toggleLyricsOpen = useCallback(() => setLyricsOpen((open) => !open), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
+
   // The hover-glitch ghosts (globals.css `.v3-cover-*`) paint from `--cover`.
   // useDynamicStyle keeps this off the lint-forbidden `style` prop.
   const coverRef = useRef<HTMLButtonElement>(null);
@@ -206,7 +233,9 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
         lyricsShown && '[--lyrics-band:132px] lg:right-[46%] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
       )}
     >
-      <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
+      {/* Above the stage's lyrics (z-[1]), which the lyrics settings can
+          overlap on a narrow screen. */}
+      <div className="relative isolate z-[2] flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
         {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
         <button
           ref={coverRef}
@@ -253,7 +282,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           <span className="v3-cover-tick v3-cover-tick--bl" aria-hidden="true" />
           <span className="v3-cover-tick v3-cover-tick--br" aria-hidden="true" />
         </button>
-        <div className="min-w-0">
+        <div className="relative min-w-0">
           <div className="v3-caption mb-[14px] text-muted">
             {offline ? (
               'Off air'
@@ -310,7 +339,14 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
                     <LikeHeart />
-                    {lyricsToggle && <LyricsToggle shown={lyricsToggle.shown} onToggle={lyricsToggle.onToggle} />}
+                    {lyrics && (
+                      <LyricsButton
+                        shown={lyrics.shown}
+                        open={lyricsOpen}
+                        onOpen={toggleLyricsOpen}
+                        buttonRef={lyricsButtonRef}
+                      />
+                    )}
                   </div>
                   {hasMeta && (
                     <div className="v3-caption mt-[10px] text-muted">
@@ -331,6 +367,17 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
               )}
             </m.div>
           </AnimatePresence>
+          {lyrics && lyricsOpen && live && (
+            <div
+              ref={lyricsPopoverRef}
+              role="dialog"
+              aria-label="Lyrics settings"
+              // Short of the DotRail (80px on a phone), which draws above it.
+              className="absolute top-full left-0 z-10 mt-3 w-[min(340px,calc(100vw-6rem))] border border-line bg-bg p-3 shadow-lg"
+            >
+              <LyricsSettings shown={lyrics.shown} onToggle={lyrics.onToggle} track={lyrics.track} />
+            </div>
+          )}
         </div>
       </div>
 

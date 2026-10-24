@@ -2,8 +2,8 @@
 
 // The two lyric timing corrections, as one compact panel: this device's nudge
 // (kept in this browser) and, for a browser signed in to this station's admin
-// console, the station-wide fix for the track's lyric file. Shared by the skins
-// that show lyrics: Classic opens it beside ♪ Lyrics, Drift under its lyrics.
+// console, the station-wide fix for the track's lyric file. Part of the lyrics
+// settings (LyricsSettings) that each skin's lyrics button opens.
 
 import { useId, type ChangeEvent } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';

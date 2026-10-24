@@ -1,7 +1,7 @@
 'use client';
 
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { Captions, CaptionsOff, Headphones, Heart } from 'lucide-react';
 import styles from './Drift.module.css';
@@ -32,7 +32,8 @@ import {
   turnClock,
 } from '../shared';
 import { CAP_CENTRE } from '../capCentre';
-import { useLyricsPreference } from '../lyrics';
+import { useLyricsPreference, useTrackLyrics } from '../lyrics';
+import LyricsSettings, { usePopoverDismiss } from '../LyricsSettings';
 import { useCrossfade, useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 import DriftLyrics from './DriftLyrics';
@@ -183,14 +184,22 @@ export default function DriftSkin(_props: SkinProps) {
 
   // Synced lyrics take the centre of the page (DriftLyrics) and everything
   // else there shrinks around them. The operator's switch rides GET /state;
-  // the corner's lyrics control (or L) is this browser's own choice.
+  // within it, L shows and hides them for this browser, and the corner's
+  // lyrics icon (the ··· panel on a phone) opens their settings. One answer
+  // per track feeds both the lines and the settings.
   const lyricsOn = state.lyrics?.enabled === true;
   const lyricsPref = useLyricsPreference();
   const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
   const [lyricsPresent, setLyricsPresent] = useState(false);
   const focus = showLyrics && lyricsPresent;
 
   const [panelOpen, setPanelOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
   const slip = useRequestSlip({
     sent: 'the DJ has it.',
     refused: 'not this time.',
@@ -292,16 +301,21 @@ export default function DriftSkin(_props: SkinProps) {
         {lyricsOn && (
           // An icon, like the heart beside it, and from sm up only: on a phone
           // the corner already reaches the ··· button, whose panel carries the
-          // same switch.
+          // same settings.
           <button
+            ref={lyricsButtonRef}
             type="button"
-            onClick={() => void lyricsPref.toggle()}
-            aria-pressed={lyricsPref.shown}
-            aria-label={lyricsPref.shown ? 'Hide lyrics' : 'Show lyrics'}
-            title={lyricsPref.shown ? 'Hide lyrics (L)' : 'Show lyrics (L)'}
+            onClick={() => {
+              setPanelOpen(false);
+              setLyricsOpen((open) => !open);
+            }}
+            aria-expanded={lyricsOpen}
+            aria-haspopup="dialog"
+            aria-label="Lyrics settings"
+            title="Lyrics (L shows or hides them)"
             className={cn(
               'v3-focus hidden cursor-pointer items-baseline border-0 bg-transparent p-0 hover:text-ink sm:inline-flex',
-              lyricsPref.shown ? 'text-ink' : 'text-muted',
+              lyricsPref.shown || lyricsOpen ? 'text-ink' : 'text-muted',
             )}
           >
             {lyricsPref.shown
@@ -423,7 +437,7 @@ export default function DriftSkin(_props: SkinProps) {
               change of arrangement never refetches or resets the lyrics. */}
           {showLyrics && (
             <DriftLyrics
-              songId={nowPlaying?.subsonic_id}
+              track={lyricsTrack}
               trackStartedAt={trackStartedAt}
               onPresenceChange={setLyricsPresent}
             />
@@ -450,7 +464,10 @@ export default function DriftSkin(_props: SkinProps) {
       {!showOverlay && (
         <button
           type="button"
-          onClick={() => setPanelOpen(o => !o)}
+          onClick={() => {
+            setLyricsOpen(false);
+            setPanelOpen(o => !o);
+          }}
           aria-expanded={panelOpen}
           className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border/50 bg-[var(--field)]/25 px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted backdrop-blur-md hover:bg-[var(--field)]/45 hover:text-ink"
         >
@@ -526,21 +543,23 @@ export default function DriftSkin(_props: SkinProps) {
             </div>
           )}
           {lyricsOn && (
-            <div className="flex items-baseline justify-between border-t border-soft-border pt-2.5 font-mono text-[10px] tracking-[0.2em] text-muted uppercase">
-              <span>lyrics</span>
-              <button
-                type="button"
-                onClick={() => void lyricsPref.toggle()}
-                aria-pressed={lyricsPref.shown}
-                className={cn(
-                  'v3-focus cursor-pointer border-0 bg-transparent p-0 font-mono text-[10px] tracking-[0.2em] uppercase hover:text-ink',
-                  lyricsPref.shown && 'text-[var(--accent)]',
-                )}
-              >
-                {lyricsPref.shown ? 'on' : 'off'}
-              </button>
+            // A phone's way to the lyrics settings; from sm up the corner
+            // icon opens them.
+            <div className="border-t border-soft-border pt-2.5 sm:hidden">
+              <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
             </div>
           )}
+        </div>
+      )}
+
+      {lyricsOn && lyricsOpen && !showOverlay && (
+        <div
+          ref={lyricsPopoverRef}
+          role="dialog"
+          aria-label="Lyrics settings"
+          className="absolute right-8 bottom-14 z-30 w-[min(340px,calc(100vw-2rem))] border border-soft-border bg-[var(--bg)]/95 p-4"
+        >
+          <LyricsSettings shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
         </div>
       )}
 

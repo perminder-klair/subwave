@@ -30,7 +30,7 @@ import {
 } from '@/components/player/PlayerCore';
 import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
-import { useLyricsPreference } from '@/components/skins/lyrics';
+import { useLyricsPreference, useTrackLyrics } from '@/components/skins/lyrics';
 import { useStationClient } from '@/lib/stationClient';
 import type { SkinProps } from '@/components/skins/types';
 import type { QueueEntry, RequestResult } from '@/lib/types';
@@ -104,18 +104,22 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   // Lyrics show on the stage itself (AmbientLyrics), never in a drawer. The
   // operator's switch rides GET /state; within it, L toggles this listener's
   // own choice, and the stage makes room only while synced lines are showing.
+  // One answer per track feeds both the stage and the lyrics settings that
+  // the button beside the heart opens.
   const lyricsOn = state.lyrics?.enabled === true;
   const lyricsPref = useLyricsPreference();
   const [lyricsPresent, setLyricsPresent] = useState(false);
   const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const lyricsTrack = useTrackLyrics(showLyrics ? nowPlaying?.subsonic_id : null);
   const { toggle: flipLyrics } = lyricsPref;
   const toggleLyrics = useCallback(() => {
     toast(flipLyrics() ? 'Lyrics on' : 'Lyrics hidden', { duration: 1600 });
   }, [flipLyrics]);
-  // Stable while nothing changes, for the memoized stage.
-  const lyricsToggle = useMemo(
-    () => (lyricsOn ? { shown: lyricsPref.shown, onToggle: toggleLyrics } : null),
-    [lyricsOn, lyricsPref.shown, toggleLyrics],
+  // Stable while nothing changes, for the memoized stage. The settings' own
+  // switch shows what it did, so it needs no toast.
+  const stageLyrics = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onToggle: flipLyrics, track: lyricsTrack } : null),
+    [lyricsOn, lyricsPref.shown, flipLyrics, lyricsTrack],
   );
 
   // Haptics live here rather than at each call site so every entry point
@@ -208,14 +212,14 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         offline={offline}
         upNext={upNext}
         lyricsShown={showLyrics && lyricsPresent}
-        lyricsToggle={lyricsToggle}
+        lyrics={stageLyrics}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
       />
 
       {showLyrics && (
         <AmbientLyrics
-          songId={nowPlaying?.subsonic_id}
+          track={lyricsTrack}
           trackStartedAt={trackStartedAt}
           onPresenceChange={setLyricsPresent}
         />
