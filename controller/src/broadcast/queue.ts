@@ -2497,9 +2497,12 @@ class Queue {
   // whole value of the event is that it lands early. Nothing is logged or
   // persisted here: this is a forecast, and the booth log records what aired.
   onQueued(q: QueuedVoice, { kind, channel, text, meta = {}, persona = null }: SegmentDesc) {
+    // A jingle is one kind of event on air however it was placed (playJingle):
+    // it is not DJ speech, so it reserves no song and publishes no voice.* event.
+    if (kind === 'jingle') return;
     // Remember speech for the whole song, even after its handoff was consumed
     // or its clip finished. An optional ID never follows another voice on it.
-    if (kind !== 'jingle' && this._overlayBoundary) this._overlayBoundary.speech = true;
+    if (this._overlayBoundary) this._overlayBoundary.speech = true;
     try {
       const safeText = normalizeForDisplay(text);
       notifyQueued({
@@ -2548,17 +2551,22 @@ class Queue {
           ...(durationMs != null ? { durationMs } : {}),
         },
       });
-      notifySpoken({
-        voiceId: handoff.voiceId,
-        kind,
-        channel,
-        text: safeText,
-        durationMs: handoff.clipMs,
-        airedAt,
-        legacy,
-        personaId: persona?.id ?? (meta.personaId as string | undefined) ?? null,
-        personaName: persona?.name ?? (meta.personaName as string | undefined) ?? null,
-      });
+      // An overlay ID gets the booth line and session turn every jingle gets,
+      // but, like a manual or rotate jingle, no voice.* or dj.say webhook: a
+      // relay posting DJ speech would otherwise post the ID every N songs.
+      if (kind !== 'jingle') {
+        notifySpoken({
+          voiceId: handoff.voiceId,
+          kind,
+          channel,
+          text: safeText,
+          durationMs: handoff.clipMs,
+          airedAt,
+          legacy,
+          personaId: persona?.id ?? (meta.personaId as string | undefined) ?? null,
+          personaName: persona?.name ?? (meta.personaName as string | undefined) ?? null,
+        });
+      }
       return true;
     } catch (err) {
       this.log('error', `Post-air bookkeeping failed: ${(err as Error).message}`);
@@ -3487,7 +3495,6 @@ class Queue {
       const seg: SegmentDesc = { kind: 'jingle', channel: 'intro', text, meta: { ...VERBATIM_META } };
       const handoff = await this._airVoice(config.liquidsoap.introFile, path, text, 0, {
         skipIfBusy: true, beforeWrite: stillSafe, jingleOverlay: true, jingleOverlayTrackAt: boundary.at,
-        onQueued: q => this.onQueued(q, seg),
       });
       if (!handoff) return;
       this._lastRotateJingle = filename;

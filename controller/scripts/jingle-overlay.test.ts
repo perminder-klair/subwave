@@ -241,6 +241,7 @@ function reset() {
   queue._tracksSinceJingle = 0;
   queue._pendingJingles.clear();
 }
+const tick = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 after(async () => {
   queue._airVoice = realAirVoice;
   queue.airIntro = realAirIntro;
@@ -346,6 +347,41 @@ test('in both, the queue offers its ID halfway to the rotate and never on the so
     if (rotateDue) queue._tracksSinceJingle = 0; // the talk planner's draw (playRotateJingle)
   }
   assert.deepEqual(offeredAt, [3, 3]);
+});
+
+test('an overlay ID publishes no voice or DJ webhook, like a manual or rotate jingle', async () => {
+  const received: { event: string; voiceId?: string; text?: string }[] = [];
+  const hook = await listen((req, res) => {
+    let raw = '';
+    req.on('data', c => { raw += c; });
+    req.on('end', () => {
+      try {
+        const body = JSON.parse(raw);
+        received.push({ event: body.event, voiceId: body.data?.voiceId ?? body.voiceId, text: body.data?.text ?? body.text });
+      } catch { /* not ours */ }
+      res.writeHead(200).end('ok');
+    });
+  });
+  const fromOverlay = () => received.filter(r => r.voiceId === 'test' || /Station [AB]/.test(r.text ?? ''));
+  try {
+    reset();
+    setCache({ ...settings.get(), webhooks: [{ id: 'overlay_hook', url: `${hook.url}/hook`,
+      events: ['dj.say', 'dj.link', 'voice.queued', 'voice.start', 'voice.end'], enabled: true, authHeader: '' }] });
+    startSong(); await queue.maybeAirJingleOverlay();
+    assert.equal(handed.length, 1);
+    assert.equal(queue.djLog[0]?.kind, 'jingle', 'the ID still gets its booth line');
+    await tick(700);
+    assert.equal(fromOverlay().length, 0, JSON.stringify(fromOverlay()));
+    // The fixture does deliver: ordinary speech through the same bookkeeping arrives.
+    await queue.onSpoken({ voiceId: 'control', clipMs: 10, aired: Promise.resolve(Date.now()) },
+      { kind: 'link', channel: 'intro', text: 'Control line' });
+    const control = () => received.filter(r => r.voiceId === 'control').map(r => r.event);
+    for (let i = 0; i < 150 && !control().includes('dj.link'); i++) await tick(20);
+    assert.ok(control().includes('voice.start') && control().includes('dj.link'), JSON.stringify(received));
+  } finally {
+    hook.server.closeAllConnections();
+    await hook.close();
+  }
 });
 
 test('the first overlay waits for its first voice marker and earns post-air bookkeeping', async () => {
