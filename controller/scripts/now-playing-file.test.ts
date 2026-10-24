@@ -26,9 +26,9 @@ const FLAC = { id: 'a', suffix: 'flac', contentType: 'audio/flac', bitRate: 979,
 const MP3 = { id: 'b', suffix: 'MP3', contentType: 'audio/mpeg', bitRate: 192, samplingRate: 44100, bitDepth: 0, channelCount: 2 };
 const DSF = { id: 'c', suffix: 'dsf', contentType: 'audio/x-dsf', bitRate: 11290, samplingRate: 5644800, bitDepth: 1, channelCount: 2 };
 
-test('projection: every known field of a FLAC', () => {
+test('projection: every field the Dash shows, off a FLAC', () => {
   assert.deepEqual(fileFormatOf(FLAC), {
-    suffix: 'flac', contentType: 'audio/flac', bitRate: 979, samplingRate: 44100, bitDepth: 16, channelCount: 2,
+    suffix: 'flac', bitRate: 979, samplingRate: 44100, bitDepth: 16, channelCount: 2,
   });
 });
 

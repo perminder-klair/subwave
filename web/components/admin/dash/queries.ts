@@ -8,6 +8,7 @@ import {
   type ConnectionsState,
   type DashStatus,
   type HealthStats,
+  type NowPlayingFile,
   type QueueState,
   type RequestEntry,
 } from './types';
@@ -199,14 +200,6 @@ export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): 
 export async function fetchMusicStarved(fetcher: AdminFetch, signal: AbortSignal): Promise<boolean> {
   const body = await adminJson<{ musicStarved?: boolean }>(fetcher, '/state', undefined, signal);
   return body.musicStarved === true;
-}
-
-/** the playing file's own format. `id` is the track on air: when it is not
- *  the one asked about, that track has finished, `format` is null and the
- *  caller shows nothing. */
-export interface NowPlayingFile {
-  id: string | null;
-  format: import('../../../lib/fileFormat').FileFormat | null;
 }
 
 export function fetchNowPlayingFile(fetcher: AdminFetch, id: string, signal: AbortSignal): Promise<NowPlayingFile> {

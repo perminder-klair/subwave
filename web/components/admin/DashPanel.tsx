@@ -444,7 +444,7 @@ export default function DashPanel() {
   const npId = np?.subsonic_id || '';
   const fileQuery = useAdminQuery({
     key: dashKeys.nowPlayingFile(npId), adminFetch, enabled: ready && !!npId,
-    staleTime: Infinity, request: (fetcher, signal) => fetchNowPlayingFile(fetcher, npId, signal), toastOnError: false,
+    staleTime: Infinity, request: (fetcher, signal) => fetchNowPlayingFile(fetcher, npId, signal),
     // Navidrome did not answer, or the request itself failed (queries here
     // never retry): ask again after the minute the controller backs off,
     // instead of leaving the format blank for the rest of the track.

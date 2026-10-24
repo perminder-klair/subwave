@@ -6,7 +6,6 @@
  */
 export interface FileFormat {
   suffix?: string;
-  contentType?: string;
   bitRate?: number;
   samplingRate?: number;
   bitDepth?: number;

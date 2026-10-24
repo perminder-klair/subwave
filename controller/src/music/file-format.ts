@@ -15,7 +15,6 @@ import { FILE_FORMAT_RETRY_MS } from '../schemas/file-format.js';
 
 export interface FileFormat {
   suffix?: string;
-  contentType?: string;
   /** kbps, as Subsonic reports it. */
   bitRate?: number;
   /** Hz. */
@@ -24,7 +23,7 @@ export interface FileFormat {
   channelCount?: number;
 }
 
-const pos = (v: unknown): number | undefined =>
+const positiveInt = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : undefined;
 
 /** Pure projection of a Subsonic song onto the fields the Dash shows. */
@@ -32,11 +31,10 @@ export function fileFormatOf(song: unknown): FileFormat {
   const s = (song && typeof song === 'object' ? song : {}) as Record<string, unknown>;
   const out: FileFormat = {};
   if (typeof s.suffix === 'string' && s.suffix.trim()) out.suffix = s.suffix.trim().toLowerCase();
-  if (typeof s.contentType === 'string' && s.contentType.trim()) out.contentType = s.contentType.trim();
-  const bitRate = pos(s.bitRate); if (bitRate) out.bitRate = bitRate;
-  const samplingRate = pos(s.samplingRate); if (samplingRate) out.samplingRate = samplingRate;
-  const bitDepth = pos(s.bitDepth); if (bitDepth) out.bitDepth = bitDepth;
-  const channelCount = pos(s.channelCount); if (channelCount) out.channelCount = channelCount;
+  const bitRate = positiveInt(s.bitRate); if (bitRate) out.bitRate = bitRate;
+  const samplingRate = positiveInt(s.samplingRate); if (samplingRate) out.samplingRate = samplingRate;
+  const bitDepth = positiveInt(s.bitDepth); if (bitDepth) out.bitDepth = bitDepth;
+  const channelCount = positiveInt(s.channelCount); if (channelCount) out.channelCount = channelCount;
   return out;
 }
 
