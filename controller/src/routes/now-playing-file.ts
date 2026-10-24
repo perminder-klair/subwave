@@ -14,6 +14,8 @@
 
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/auth.js';
+import { queue } from '../broadcast/queue.js';
+import * as subsonic from '../music/subsonic.js';
 import { createFileFormatLookup, type FileFormat } from '../music/file-format.js';
 
 type NowPlaying = { subsonic_id?: string | null; [k: string]: unknown } | null | undefined;
@@ -40,20 +42,7 @@ export function createNowPlayingFileRouter(deps: {
   return router;
 }
 
-// The live wiring, imported lazily so the factory above (and its test) never
-// loads the queue.
-export const router = Router();
-let live: Router | null = null;
-router.use(async (req, res, next) => {
-  if (!live) {
-    const [{ queue }, subsonic] = await Promise.all([
-      import('../broadcast/queue.js'),
-      import('../music/subsonic.js'),
-    ]);
-    live = createNowPlayingFileRouter({
-      nowPlaying: () => queue.getNowPlaying(),
-      lookup: createFileFormatLookup({ getSong: subsonic.getSong }),
-    });
-  }
-  live(req, res, next);
+export const router = createNowPlayingFileRouter({
+  nowPlaying: () => queue.getNowPlaying(),
+  lookup: createFileFormatLookup({ getSong: subsonic.getSong }),
 });
