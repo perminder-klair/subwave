@@ -811,16 +811,17 @@ export const DEFAULTS = {
     windowDays: 30, // 0 = all time
   },
 
-  // The listener Lyrics panel (`GET /lyrics/current`). Off until an operator
-  // turns it on — it republishes lyric text publicly and costs a music-server
-  // call per track. Per-track timing fixes live in library.db, not here.
+  // The listener Lyrics panel (`GET /lyrics/current`). On out of the box, and
+  // an upgrade turns it on too: it republishes lyric text publicly and costs a
+  // music-server call per track, which an operator can switch off. Per-track
+  // timing fixes live in library.db, not here.
   lyrics: {
-    enabled: false,
-    // Look up synced lyrics on LRCLIB for an on-air track the music server has
-    // no timed lyrics for (music/lyrics-sources.ts). Off until the operator
-    // asks: it sends each such track's artist, title, album and length to
-    // lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
-    lrclib: false,
+    enabled: true,
+    // Look up synced lyrics on LRCLIB for a queued or on-air track the music
+    // server has no timed lyrics for (music/lyrics-sources.ts). On by default
+    // with the panel: it sends each such track's artist, title, album and
+    // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
+    lrclib: true,
   },
 };
 

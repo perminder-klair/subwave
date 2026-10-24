@@ -119,10 +119,12 @@ beforeEach(async () => {
     play('older-2', { source: 'dj' }),
     play('too-old', { source: 'dj' }),
   ] as never;
-  await settings.update({ lyrics: { enabled: true }, privacy: { privatePlayer: false, listenerAuth: false } } as never);
+  // The music server's answers alone: the LRCLIB fallback (on by default) has
+  // its own file, lyrics-lrclib-route.test.ts, with a fake LRCLIB.
+  await settings.update({ lyrics: { enabled: true, lrclib: false }, privacy: { privatePlayer: false, listenerAuth: false } } as never);
 });
 
-test('switched off by default: the read refuses and /state says so', async () => {
+test('switched off: the read refuses and /state says so', async () => {
   await settings.update({ lyrics: { enabled: false } } as never);
   const r = await get('/lyrics/current');
   assert.equal(r.status, 403);

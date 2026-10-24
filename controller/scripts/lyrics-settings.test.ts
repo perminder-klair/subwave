@@ -33,11 +33,13 @@ const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 const authorization = `Basic ${Buffer.from('admin:admin-pass').toString('base64')}`;
 after(() => server.close());
 
-test('absent or malformed loads as off, the behaviour before the panel existed', async () => {
-  assert.equal((await coldLoadSettings({})).lyrics.enabled, false);
-  assert.equal((await coldLoadSettings({ lyrics: null })).lyrics.enabled, false);
-  assert.equal((await coldLoadSettings({ lyrics: { enabled: 'yes' } })).lyrics.enabled, false);
-  assert.equal((await coldLoadSettings({ lyrics: { enabled: true } })).lyrics.enabled, true);
+test('absent or malformed loads as on, and a saved off stays off', async () => {
+  // On by default, upgrades included: an install that never saved the key
+  // gets the panel. An operator's saved off is the only way to keep it off.
+  assert.equal((await coldLoadSettings({})).lyrics.enabled, true);
+  assert.equal((await coldLoadSettings({ lyrics: null })).lyrics.enabled, true);
+  assert.equal((await coldLoadSettings({ lyrics: { enabled: 'yes' } })).lyrics.enabled, true);
+  assert.equal((await coldLoadSettings({ lyrics: { enabled: false } })).lyrics.enabled, false);
 });
 
 test('a save survives a cold load, both ways', async () => {
@@ -53,33 +55,34 @@ test('a save survives a cold load, both ways', async () => {
   assert.equal(settings.get().lyrics.enabled, false);
 });
 
-test('the LRCLIB fallback loads off unless saved on, and survives a cold load', async () => {
-  // Off is the behaviour before the fallback existed: nothing leaves the station.
-  assert.equal((await coldLoadSettings({})).lyrics.lrclib, false);
-  assert.equal((await coldLoadSettings({ lyrics: { enabled: true } })).lyrics.lrclib, false);
-  assert.equal((await coldLoadSettings({ lyrics: { lrclib: 'yes' } })).lyrics.lrclib, false);
-  assert.equal((await coldLoadSettings({ lyrics: { lrclib: true } })).lyrics.lrclib, true);
+test('the LRCLIB fallback loads on unless saved off, and survives a cold load', async () => {
+  // On by default with the panel; a saved off keeps the station's plays home.
+  assert.equal((await coldLoadSettings({})).lyrics.lrclib, true);
+  assert.equal((await coldLoadSettings({ lyrics: { enabled: true } })).lyrics.lrclib, true);
+  assert.equal((await coldLoadSettings({ lyrics: { lrclib: 'yes' } })).lyrics.lrclib, true);
+  assert.equal((await coldLoadSettings({ lyrics: { lrclib: false } })).lyrics.lrclib, false);
 
   await coldLoadSettings({});
-  await settings.update({ lyrics: { enabled: true, lrclib: true } } as never);
+  await settings.update({ lyrics: { enabled: true, lrclib: false } } as never);
   setCache(null);
   await settings.load();
-  assert.deepEqual(settings.get().lyrics, { enabled: true, lrclib: true });
+  assert.deepEqual(settings.get().lyrics, { enabled: true, lrclib: false });
 
   // A patch naming only the panel switch leaves the fallback where it was.
   await settings.update({ lyrics: { enabled: false } } as never);
-  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: true });
-  await settings.update({ lyrics: { lrclib: false } } as never);
+  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: false });
+  await settings.update({ lyrics: { lrclib: true } } as never);
   setCache(null);
   await settings.load();
-  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: false });
+  assert.deepEqual(settings.get().lyrics, { enabled: false, lrclib: true });
 });
 
 test('the route accepts the key, and a patch without it leaves the switch alone', async () => {
   assert.equal(validateSettingsPatch({ lyrics: { enabled: true } }), null);
-  await settings.update({ lyrics: { enabled: true } } as never);
+  // Off, the opposite of the default, so a patch that reset it would show.
+  await settings.update({ lyrics: { enabled: false } } as never);
   await settings.update({ likes: { enabled: false } } as never);
-  assert.equal(settings.get().lyrics.enabled, true);
+  assert.equal(settings.get().lyrics.enabled, false);
 });
 
 test('the admin form reads the switch back, so a likes save cannot turn it off', async () => {

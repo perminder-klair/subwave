@@ -94,9 +94,10 @@ the player's password box, which has a separate one.
 ## Lyrics
 
 `GET /lyrics/current` serves lyrics to listener-facing players and custom
-skins. It is off until the operator turns on **Settings → Listeners → Lyrics**
-(`settings.lyrics.enabled`); while off it answers `403` and `GET /state` carries
-`lyrics: { enabled: false }`, which is how a skin knows to hide its panel. It is
+skins. It is on by default, and the operator can turn it off under **Settings →
+Listeners → Lyrics** (`settings.lyrics.enabled`); while off it answers `403` and
+`GET /state` carries `lyrics: { enabled: false }`, which is how a skin knows to
+hide its panel. It is
 a **station** read, gated like `/similar-tracks`: open on a public station, and
 on a private one it needs the station password (`x-station-auth` header).
 
@@ -141,9 +142,10 @@ for the on-air track.
   optional: a station from before the fallback omits them.
 
 **The LRCLIB fallback.** With **Settings → Listeners → Lyrics panel → LRCLIB
-fallback** on (`settings.lyrics.lrclib`, off by default, and only while the
+fallback** on (`settings.lyrics.lrclib`, on by default, and only while the
 panel itself is on), a track whose music-server lyrics are untimed or missing is
-looked up on [LRCLIB](https://lrclib.net) when it goes on air. That sends the
+looked up on [LRCLIB](https://lrclib.net) when it joins the queue, and again
+when it goes on air if that first try failed. That sends the
 track's artist, title, album and length to lrclib.net, or to `LRCLIB_URL` for a
 self-hosted instance. Only a file within 2 seconds of the track's length is
 used, so a different cut is not timed against this one. The music server's

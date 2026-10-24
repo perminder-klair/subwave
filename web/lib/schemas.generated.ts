@@ -3426,14 +3426,15 @@ export const likesPatchSchema = settingsBlockOf({
   ),
 });
 
-// The listener Lyrics panel and its public read (`GET /lyrics/current`). Off by
-// default: it republishes third-party lyric text on an unauthenticated route
-// and turns listener polling into calls against the music server, so an
-// operator opts in.
+// The listener Lyrics panel and its public read (`GET /lyrics/current`). On by
+// default, and an operator can switch it off: it republishes third-party lyric
+// text on an unauthenticated route and turns listener polling into calls
+// against the music server.
 export const lyricsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   // The LRCLIB fallback for tracks with no timed lyrics on the music server.
-  // Its own opt-in: it sends what the station plays to a third party.
+  // Its own switch, also on by default: it sends what the station plays to a
+  // third party.
   lrclib: settingsBoolLike(),
 });
 

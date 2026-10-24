@@ -212,7 +212,7 @@ test('a miss is remembered, and not asked about again', async () => {
   assert.equal(askedAbout('miss-1'), asked);
 });
 
-test('an LRCLIB failure is not stored as a miss, and is not asked again at once', async () => {
+test('an LRCLIB failure is not stored as a miss, and listeners do not ask again at once', async () => {
   putOnAir('fail-1');
   await lyricsFor('fail-1');
   await until(() => askedAbout('fail-1') > 0, 'the failed request');
@@ -220,9 +220,43 @@ test('an LRCLIB failure is not stored as a miss, and is not asked again at once'
   assert.equal(db.getExternalLyrics('fail-1'), null);
   const asked = askedAbout('fail-1');
   await lyricsFor('fail-1');
-  lyricsSources.onTrackStarted('fail-1');
+  lyricsSources.onTrackQueued('fail-1');
   await new Promise((r) => setTimeout(r, 100));
   assert.equal(askedAbout('fail-1'), asked, 'backing off');
+});
+
+test('a track is looked up when it is queued, before it airs', async () => {
+  lyricsSources.onTrackQueued('plain-queued');
+  await until(() => db.getExternalLyrics('plain-queued') !== null, 'the stored answer');
+  const asked = askedAbout('plain-queued');
+  putOnAir('plain-queued');
+  lyricsSources.onTrackStarted('plain-queued');
+  const r = await lyricsFor('plain-queued');
+  assert.equal(r.body.source, 'lrclib');
+  assert.equal(r.body.pending, false, 'answered before it aired');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(askedAbout('plain-queued'), asked, 'airing a settled track asks nothing');
+});
+
+test('a failure at queue time still leaves the play its own on-air try', async () => {
+  // The queue-time lookup fails and backs the track off. The on-air hook is
+  // exempt once per play: LRCLIB refuses in bursts, and the backoff is longer
+  // than a song, so honouring it there would cost this play its lyrics.
+  lyricsSources.onTrackQueued('fail-queued');
+  await until(() => askedAbout('fail-queued') > 0, 'the queue-time request');
+  await new Promise((r) => setTimeout(r, 100));
+  const asked = askedAbout('fail-queued');
+  putOnAir('fail-queued');
+  lyricsSources.onTrackStarted('fail-queued');
+  await until(() => askedAbout('fail-queued') > asked, 'the on-air request');
+  assert.equal(db.getExternalLyrics('fail-queued'), null, 'still nothing stored');
+});
+
+test('queue.push() starts the lookup for the track it queues', async () => {
+  await queue.push({ track: { id: 'plain-pushed', title: 'Pushed', artist: 'A' } } as never);
+  await until(() => db.getExternalLyrics('plain-pushed') !== null, 'the stored answer');
+  assert.ok(lrclibAsked.includes('/api/get Title plain-pushed'));
+  queue.upcoming = [] as never;
 });
 
 test('the music server down: a stored timed answer stands in, and nothing stored is still a 503', async () => {

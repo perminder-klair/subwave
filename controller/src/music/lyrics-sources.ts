@@ -10,18 +10,26 @@
 // the station offset fixes it, but in the analyzer it would mistime the DJ
 // talking over the vocals.
 //
-// The lookup runs when a track goes ON AIR (`onTrackStarted`, called by the
-// queue), not when a listener asks. Listeners hear the live edge
-// `stream.bufferSeconds` later, so the answer is normally stored before anyone
-// opens the panel. The read path never waits on LRCLIB (degrade immediately,
-// never through a timeout): a listener who asks first gets the music server's
-// answer marked `pending`, and asking again picks up the stored one.
+// The lookup runs when a track is QUEUED (`onTrackQueued`, called by
+// `queue.push()`), minutes before it airs, and again when it goes ON AIR
+// (`onTrackStarted`) if that left it unanswered; never because a listener
+// asked. The on-air hook alone was too late: LRCLIB refuses in bursts, and its
+// three tries span about 20 s, close to the whole `stream.bufferSeconds`
+// before listeners reach the track (measured 2026-10-24: a station's first two
+// on-air lookups were each refused three times, and the same requests were
+// answered minutes later). A track that never went through the queue (the
+// auto playlist) still gets the on-air lookup. The read path never waits on
+// LRCLIB (degrade immediately, never through a timeout): a listener who asks
+// first gets the music server's answer marked `pending`, and asking again
+// picks up the stored one.
 //
 // Every answer is kept in library.db (`lyrics_external`). A synced hit is kept
 // for good; a miss or an untimed hit is asked about again after
 // RECHECK_AFTER_DAYS, so a library that cycles the same tracks costs LRCLIB
 // one request per track per month at most. A failure is not an answer and is
-// never stored; that track waits FAILURE_BACKOFF_MS instead.
+// never stored; that track waits FAILURE_BACKOFF_MS instead, which keeps
+// listener polls from asking again. The on-air hook is exempt, once per play,
+// so a refusal at queue time cannot cost the play it was queued for.
 import * as settings from '../settings.js';
 import * as library from './library.js';
 import * as subsonic from './subsonic.js';
@@ -137,17 +145,22 @@ function toStored(record: LrclibRecord | null): Omit<ExternalLyrics, 'checkedAt'
 /**
  * Start (or join) the LRCLIB lookup for a track when one is owed: the switch
  * is on, `stored` (the track's row, read by the caller) is missing or stale,
- * and the track is not backing off from a failure. Returns the lookup, or null
- * when none is owed, decided before returning so a caller can tell a listener
+ * and the track is not backing off from a failure (unless `pastBackoff`, the
+ * on-air hook's once-per-play exemption). Returns the lookup, or null when
+ * none is owed, decided before returning so a caller can tell a listener
  * whether to ask again. Never rejects.
  */
-export function ensureLookup(trackId: string | null | undefined, stored: ExternalLyrics | null): Promise<void> | null {
+export function ensureLookup(
+  trackId: string | null | undefined,
+  stored: ExternalLyrics | null,
+  { pastBackoff = false }: { pastBackoff?: boolean } = {},
+): Promise<void> | null {
   if (!trackId || !fallbackEnabled()) return null;
   const running = inFlight.get(trackId);
   if (running) return running;
   if (!needsRecheck(stored)) return null;
   const failed = failedAt.get(trackId);
-  if (failed !== undefined && Date.now() - failed < FAILURE_BACKOFF_MS) return null;
+  if (!pastBackoff && failed !== undefined && Date.now() - failed < FAILURE_BACKOFF_MS) return null;
 
   const lookup = (async () => {
     try {
@@ -170,19 +183,37 @@ export function ensureLookup(trackId: string | null | undefined, stored: Externa
   return lookup;
 }
 
-/**
- * A track went on air: look it up now, a stream buffer before any listener
- * hears it, unless the music server already has it timed. Fire-and-forget.
- */
-export function onTrackStarted(trackId: string | null | undefined): void {
+// Look a track up unless LRCLIB already answered for it or the music server
+// has it timed. The stored answer is read first, so a track already settled
+// costs the music server nothing. Fire-and-forget.
+function lookupUnlessTimed(trackId: string | null | undefined, when: string, pastBackoff: boolean): void {
   if (!trackId || !fallbackEnabled()) return;
   void (async () => {
+    const stored = await library.getExternalLyrics(trackId);
+    if (!needsRecheck(stored)) return;
     const lyrics = await musicServerLyrics(trackId).catch(() => null);
     if (isTimed(lyrics)) return;
-    await ensureLookup(trackId, await library.getExternalLyrics(trackId));
+    await ensureLookup(trackId, stored, { pastBackoff });
   })().catch((err) => {
-    console.warn(`[lyrics] on-air lookup for ${trackId} failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.warn(`[lyrics] ${when} lookup for ${trackId} failed: ${err instanceof Error ? err.message : String(err)}`);
   });
+}
+
+/**
+ * A track joined the queue: look it up now, minutes before it airs, so a
+ * refusal has time to clear before the on-air hook asks again.
+ */
+export function onTrackQueued(trackId: string | null | undefined): void {
+  lookupUnlessTimed(trackId, 'queued', false);
+}
+
+/**
+ * A track went on air: look it up now, a stream buffer before any listener
+ * hears it, if the queue-time lookup left it unanswered. Exempt from the
+ * failure backoff, so this play gets its own try.
+ */
+export function onTrackStarted(trackId: string | null | undefined): void {
+  lookupUnlessTimed(trackId, 'on-air', true);
 }
 
 export class LyricsServerDown extends Error {

@@ -1052,6 +1052,10 @@ class Queue {
     this.warnIfSwallowedByCrossfade(item);
     this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
+    // LRCLIB synced-lyrics fallback (music/lyrics-sources.ts): asked now, while
+    // the track waits its turn, so a refused lookup has minutes to clear before
+    // the on-air hook tries again. Fire-and-forget, gated inside.
+    lyricsSources.onTrackQueued(track.id || null);
     return this.upcoming.length;
   }
 
@@ -3799,9 +3803,10 @@ class Queue {
       webhooks.notify('track.play', trackPayload);
     }
 
-    // LRCLIB synced-lyrics fallback (music/lyrics-sources.ts): looked up now, a
-    // stream buffer before any listener hears the track. Fire-and-forget, and
-    // gated inside on the operator's switch.
+    // LRCLIB synced-lyrics fallback (music/lyrics-sources.ts): the second
+    // chance after push()'s lookup, and the only one for an auto-playlist
+    // track, a stream buffer before any listener hears it. Fire-and-forget,
+    // and gated inside on the operator's switch.
     lyricsSources.onTrackStarted(this.current.track.id || null);
 
     // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on

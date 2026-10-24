@@ -43,6 +43,11 @@
 // writes outside its STATE_DIR must use createTempDir. A test with a tight
 // timing margin can still fail under `--jobs auto` on a busy host, so re-run a
 // parallel-only failure alone before treating it as real.
+//
+// LRCLIB_URL is pinned the same way, over the shell's: the lyrics fallback is
+// on by default, so any test that queues or airs a library track would
+// otherwise send its title to lrclib.net. Port 9 has no listener, so such a
+// lookup fails at once and backs off. A file that tests LRCLIB sets its own.
 
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -97,7 +102,10 @@ const { status } = spawnSync(
     '--test-reporter=spec',
     ...files.map((f) => join(scriptsDir, f)),
   ],
-  { stdio: 'inherit', env: { ...process.env, STATE_DIR: stateDir, SUBWAVE_TEST_RUN_STATE_DIR: stateDir } },
+  {
+    stdio: 'inherit',
+    env: { ...process.env, STATE_DIR: stateDir, SUBWAVE_TEST_RUN_STATE_DIR: stateDir, LRCLIB_URL: 'http://127.0.0.1:9' },
+  },
 );
 
 rmSync(stateDir, { recursive: true, force: true });

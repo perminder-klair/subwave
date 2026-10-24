@@ -62,7 +62,8 @@ export function LyricsCard({ data, form, setForm }: LyricsPartProps) {
           <div className="field-hint">
             When your music server has no timed lyrics for a track, look it up on{' '}
             <a href="https://lrclib.net" target="_blank" rel="noreferrer" className="underline">LRCLIB</a>, a community
-            database of synced lyrics, as the track goes on air. On sends that track&apos;s artist,
+            database of synced lyrics, when the track is queued (and again as it goes on air, if
+            that failed). On sends that track&apos;s artist,
             title, album and length to lrclib.net (or to <code>LRCLIB_URL</code>, for a self-hosted
             instance). Only a file within 2 seconds of the track&apos;s length is used, each answer
             is remembered, and your music server&apos;s own timed lyrics always win. Works only
