@@ -115,10 +115,16 @@ test('route: the playing track\'s id and format', async () => {
   await s.close();
 });
 
-test('route: nothing from the library playing (a jingle, a bed) answers nulls', async () => {
-  const s = await serve({ nowPlaying: async () => ({ title: 'Jingle' }), lookup: async () => { throw new Error('must not be called'); } });
-  assert.deepEqual(await (await fetch(`${s.url}/now-playing/file`)).json(), { id: null, format: null });
-  await s.close();
+// A jingle or bed never writes now-playing.json, so it is not this case: the
+// song before it stays on record. Nulls mean no song on record at all.
+test('route: no song on record (boot, or the stream idled down) answers nulls', async () => {
+  for (const np of [null, { title: 'T', subsonic_id: '' }]) {
+    const f = fakeSongs({ a: FLAC });
+    const s = await serve({ nowPlaying: async () => np, lookup: createFileFormatLookup({ getSong: f.getSong }) });
+    assert.deepEqual(await (await fetch(`${s.url}/now-playing/file`)).json(), { id: null, format: null });
+    assert.deepEqual(f.calls, []);
+    await s.close();
+  }
 });
 
 test('route: ?id= naming the track on air answers its format', async () => {

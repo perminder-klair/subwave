@@ -12,8 +12,14 @@
 //                                                    null = Navidrome did not
 //                                                    answer, or ?id= named a
 //                                                    track no longer on air)
-//   200 { id: null, format: null }                   nothing from the library
-//                                                    on air (jingle, bed, boot)
+//   200 { id: null, format: null }                   no library song on record:
+//                                                    boot before the first one,
+//                                                    the stream idled down, or
+//                                                    a song with no library id
+//
+// The track on air is the song now-playing.json names, which is also the
+// Dash's title. A jingle, bed or pause-talk break never writes that file, so
+// while one airs the answer is still the song before it, as the title is.
 
 import { Router } from 'express';
 import { requireAdmin } from '../middleware/auth.js';
