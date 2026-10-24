@@ -914,10 +914,10 @@ for (const [title, artist] of [['A Day in the Life', 'The Beatles'], ['Your Hand
   });
 }
 
-test('review: an unknown literal language cannot silently fall back to another language', async () => {
+test('review: a valid but unavailable language cannot silently fall back to another language', async () => {
   modelError = true;
   const result = await submit('Bohemian Rhapsody by Queen in Klingon');
-  assert.equal(result.outcome, 'unsupported');
+  assert.equal(result.outcome, 'no-match');
   assert.equal(queue.upcoming.length, 0);
 });
 
@@ -968,6 +968,14 @@ test('Punjabi request accepts ISO language metadata and Punjabi genre tags', asy
   assert.equal(queue.upcoming[0].track.id, punjabi.id);
 });
 
+test('Punjabi genre alone cannot satisfy a language request', async () => {
+  const genreOnly = { ...exact, id: 'genre-only', title: 'Punjabi Song', artist: 'Punjabi Artist', genre: 'Punjabi Pop', language: undefined };
+  catalogueSongs = [genreOnly];
+  modelOutput = { title: genreOnly.title, artist: genreOnly.artist, language: 'Punjabi' };
+  const result = await submit(`play ${genreOnly.title} by ${genreOnly.artist} in Punjabi`);
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
+});
 for (const [text, genre] of [['Play some hiphop', 'Hip Hop'], ['Play some hip hop', 'HipHop']]) {
   test(`canonical genre spelling cannot relax an explicit requirement: ${text}`, async () => {
     modelOutput = { genre, title: null, artist: null, search_terms: [] };

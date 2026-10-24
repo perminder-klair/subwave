@@ -22,9 +22,6 @@ const MODE_VARIANT: Record<TrackMode, TableVariant> = {
 
 export interface TracksTabProps {
   trackMode: TrackMode; setTrackMode: (m: TrackMode) => void;
-  // coverage.total - coverage.tagged, or null while coverage is unknown.
-  // Labels the Needs-tags toggle and the Card subtitle.
-  remaining: number | null;
   // Starts a full tagger run — the "Tag all" quick action.
   onTagAll: () => void;
   taggerRunning: boolean;
@@ -32,13 +29,13 @@ export interface TracksTabProps {
 }
 
 export default function TracksTab({
-  trackMode, setTrackMode, remaining, onTagAll, taggerRunning, taggerBusy,
+  trackMode, setTrackMode, onTagAll, taggerRunning, taggerBusy,
 }: TracksTabProps) {
   const { likeIndex } = useLibrary();
 
   // All three run; `enabled` gates the fetch. See useTrackModes.
   const recent = useRecentTracks(trackMode === 'all');
-  const untagged = useUntaggedTracks(trackMode === 'needs');
+  const untagged = useUntaggedTracks(trackMode === 'needs', 'needs');
   const liked = useLikedTracks(trackMode === 'liked');
 
   const rows =
@@ -52,7 +49,7 @@ export default function TracksTab({
 
   const sub =
     trackMode === 'liked' ? `${num(liked.total)} liked track${liked.total === 1 ? '' : 's'}`
-      : trackMode === 'needs' ? `${untagged.rows.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
+      : trackMode === 'needs' ? `${untagged.rows.length} loaded${untagged.hasMore ? ' · more available' : ''}`
       : (recent.rows ? `${recent.rows.length} tracks` : '');
 
   // Read off the already-fetched index so the mode label stays correct after an
@@ -71,7 +68,7 @@ export default function TracksTab({
               value={trackMode}
               options={[
                 { id: 'all', label: 'All' },
-                { id: 'needs', label: `Needs tags${remaining != null ? ` · ${num(remaining)}` : ''}` },
+                { id: 'needs', label: 'Needs tags' },
                 { id: 'liked', label: `Liked${likedCount ? ` · ${num(likedCount)}` : ''}` },
               ]}
               onChange={(v: string) => setTrackMode(v as TrackMode)}

@@ -27,7 +27,7 @@ export async function phaseEmbed(
   }
   const unique = [...new Set(needsEmbed)];
   if (unique.length === 0) {
-    console.log('[tag] phase-1 nothing to embed');
+    logEvent('info', 'Similarity vectors skipped — all tracks already have current vectors');
     return;
   }
   logEvent('info', `Building similarity vectors for ${unique.length.toLocaleString('en-GB')} tracks…`);

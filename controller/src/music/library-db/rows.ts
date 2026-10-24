@@ -2,15 +2,28 @@
 // column as JSON is parsed here, defensively — a row written by an older schema
 // version must degrade to null rather than throw a query.
 
-import type { ExplicitStatus, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
+import type { ExplicitStatus, LanguageMode, LanguageSource, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackKeyRange, TrackLanguageTag, TrackOutro, TrackPaceSpan, TrackRecord, TrackRow, TrackSection } from './types.js';
 import { parseOutroVocalJson, parseTailVocalRangesJson, parseVocalRangesJson } from '../lyric-vocal.js';
 
 export function rowToTrack(row: TrackRow): TrackRecord {
+  const language = row.language_checked_at && row.language_mode && row.language_source && row.language_confidence
+    ? {
+        primaryLanguage: row.language_primary ?? null,
+        languages: row.languages ? safeParseArray(row.languages) : [],
+        mode: row.language_mode as LanguageMode,
+        source: row.language_source as LanguageSource,
+        confidence: row.language_confidence as TrackLanguageTag['confidence'],
+        contractVersion: row.language_contract_version ?? 1,
+        model: row.language_model ?? null,
+        checkedAt: row.language_checked_at,
+      }
+    : null;
   return {
     id: row.id,
     title: row.title,
     artist: row.artist,
     album: row.album,
+    musicBrainzId: row.musicbrainz_id ?? null,
     albumId: row.album_id ?? null,
     artistId: row.artist_id ?? null,
     year: row.year,
@@ -31,7 +44,9 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,
     lastfmTrackTagsAt: row.lastfm_track_tags_at ?? null,
     lyricExcerpt: row.lyric_excerpt,
+    lyricLanguage: row.lyrics_language ?? null,
     enrichedAt: row.enriched_at,
+    language,
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
     source: row.source ?? null,
@@ -214,6 +229,8 @@ export function rowToMoodPool(row: MoodPoolRow): MoodPoolRecord {
     moods: row.moods ? safeParseArray(row.moods) : [], energy: row.energy ?? null,
     durationSec: row.duration_sec,
     explicitStatus: row.explicit_status ?? null,
+    language: row.language_primary ?? null,
+    languages: row.languages ? safeParseArray(row.languages) : [],
   };
 }
 

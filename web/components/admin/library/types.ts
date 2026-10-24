@@ -20,6 +20,9 @@ export interface Track {
   isCompilation?: boolean | null;
   eraUntrusted?: boolean | null;
   genre?: string | null;
+  language?: { primaryLanguage: string | null; languages: string[]; mode: 'single' | 'mixed' | 'instrumental' | 'unknown'; source?: string; confidence?: string } | null;
+  languages?: string[];
+  languageMode?: 'single' | 'mixed' | 'instrumental' | 'unknown' | null;
   duration?: number | null;
   moods?: string[];
   energy?: string | null;
@@ -71,6 +74,10 @@ export interface BrowseResponse {
     byMood: Record<string, number>;
     byEnergy: Record<string, number>;
     byGenre: Record<string, number>;
+    byLanguage: Record<string, number>;
+    languageUnknown: number;
+    languageMixed: number;
+    languageInstrumental: number;
     updatedAt: string | null;
   };
 }
@@ -201,7 +208,7 @@ export type Tab = 'tracks' | 'browse' | 'search' | 'history' | 'blocked';
 // TableVariant keys TrackTable's per-view behaviour (empty-state copy, accent Tag
 // button) on what's actually shown, independent of the tab's All / Needs-tags toggle.
 export type TrackMode = 'all' | 'needs' | 'liked';
-export type TableVariant = 'recent' | 'browse' | 'search' | 'untagged' | 'liked';
+export type TableVariant = 'recent' | 'browse' | 'search' | 'untagged' | 'language' | 'liked';
 export type LikedSort = 'recent' | 'count' | 'artist';
 export type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 export type Energy = 'any' | 'low' | 'medium' | 'high';

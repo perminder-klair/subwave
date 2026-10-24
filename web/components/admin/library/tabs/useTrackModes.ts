@@ -7,6 +7,7 @@ import { libraryKeys } from '../queries';
 import { adminJson, useQueryErrorToast } from '../../../../lib/admin-query';
 import { useAdminQuery } from '../useAdminQuery';
 import type { LikedResponse, LikedSort, Track, UntaggedResponse } from '../types';
+import type { UntaggedScope } from '../queries';
 import { PAGE_SIZE } from '../types';
 
 // One hook per Tracks mode. All three are CALLED unconditionally — hooks cannot
@@ -34,20 +35,19 @@ export function useRecentTracks(enabled: boolean) {
   };
 }
 
-export function useUntaggedTracks(enabled: boolean) {
+export function useUntaggedTracks(enabled: boolean, scope: UntaggedScope = 'mood') {
   const { adminFetch, ready } = useLibrary();
   // Cursor paging, unlike Liked's offset pager: /library/untagged hands back a
   // nextCursor and has no cheap total.
   const q = useInfiniteQuery<UntaggedResponse>({
-    queryKey: libraryKeys.untagged(),
+    queryKey: libraryKeys.untagged(scope),
     enabled: enabled && ready,
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam, signal }) => {
       const params = new URLSearchParams({ limit: '50' });
       if (pageParam) params.set('cursor', pageParam as string);
-      return adminJson<UntaggedResponse>(
-        adminFetch, `/library/untagged?${params}`, undefined, signal,
-      );
+      if (scope !== 'mood') params.set('scope', scope);
+      return adminJson<UntaggedResponse>(adminFetch, `/library/untagged?${params}`, undefined, signal);
     },
     getNextPageParam: last => last.nextCursor ?? undefined,
   });
