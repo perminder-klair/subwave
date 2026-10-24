@@ -98,7 +98,7 @@ export const SLUG_RE = SKILL_SLUG_RE;
 // shadow these (seeded kinds are added below, once discovered). 'jingle' and
 // 'default' are the station-voice kinds in audio/tts.ts: a skill announcing
 // under one would speak outside the persona rules every other skill gets.
-const QUEUE_INTERNAL_KINDS = ['link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check', 'jingle', 'default'];
+const QUEUE_INTERNAL_KINDS = ['sleeve-notes', 'link', 'dj-speak', 'announcement', 'station-id', 'hourly', 'hourly-check', 'jingle', 'default'];
 
 // Derived at boot from the template directories. Exported as live sets that
 // callers (.has()) read after boot. `SEEDED_KINDS` is the set of shipped kinds;

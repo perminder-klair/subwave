@@ -20,6 +20,7 @@ import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
+import * as sleeveNotesDb from '../sleeve-notes/db.js';
 
 export const BACKUP_FORMAT = 'subwave-backup';
 export const BACKUP_VERSION = 1;
@@ -80,6 +81,15 @@ export async function buildBackupZip(): Promise<AdmZip> {
       await library.load(); // ensure the DB handle is open before backing up
       await libraryDb.backup(dbTmp);
       zip.addLocalFile(dbTmp, '', 'library.db');
+    }
+
+    // Research, operator corrections, feedback and confirmed airings are durable.
+    // Disabled collection must not exclude its saved database from backups.
+    if (existsSync(sleeveNotesDb.DB_PATH)) {
+      tmpDir ??= await mkdtemp(join(tmpdir(), 'subwave-backup-'));
+      const notesTmp = join(tmpDir, 'sleeve-notes.db');
+      await sleeveNotesDb.backup(notesTmp);
+      zip.addLocalFile(notesTmp, '', 'sleeve-notes.db');
     }
 
     for (const f of INCLUDE_FILES) {

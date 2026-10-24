@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Label } from '../../ui/label';
 import { Input } from '../../ui/input';
@@ -74,6 +75,7 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
       llm: {
         segmentRuntime: form.llm.segmentRuntime,
       },
+      sleeveNotes: form.sleeveNotes,
     });
   };
 
@@ -187,7 +189,17 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
         </div>
       </Card>
 
-      <Advanced note="the pause-and-talk threshold, prompt memory and what's coming">
+      <Card title="Extended Sleeve Notes">
+        <CueRow id="extended-sleeve-notes" label="Enable Extended Sleeve Notes" on={form.djBehaviour.extendedSleeveNotes}
+          onChange={on=>setBehaviour({extendedSleeveNotes:on})}
+          hint="Research stories, credits and connections about your music, and let your DJs use them on air. Enables the Sleeve Notes pages, Station Brain and Dash card." />
+        <p className="mt-3 text-[13px] font-bold">Additional LLM usage</p>
+        <p className="mt-1 text-[13px] text-muted">Background research, flagged-item reviews and on-air segments make extra LLM calls and consume tokens. With a paid LLM Provider, this can increase costs. Allow roughly 2,000 additional tokens per track played for background research. Actual usage varies; reviews and on-air segments add further usage. Research may continue without listeners if your station allows it.</p>
+        <p className="mt-3 text-xs text-muted">Turning this off hides the feature and stops its processing. Saved research is retained for next time.</p>
+        {form.djBehaviour.extendedSleeveNotes&&<Link href="/admin/notes?tab=config" className="mt-3 inline-block text-[13px] text-primary hover:underline">Open Sleeve Notes Settings →</Link>}
+      </Card>
+
+      <Advanced note="the pause-and-talk threshold and prompt memory">
         <Card title="Pause-and-talk" sub="the length that earns a real pause">
           <div className="field" data-invalid={pauseTalkAria.invalid || undefined}>
             <Label {...pauseTalkAria.labelProps}>Minimum segment length (seconds)</Label>
@@ -243,15 +255,6 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
             Every DJ script carries this much recent aired speech so the host can avoid repeating topics
             and phrasing. Larger values use more model context. The session rolls after four hours;
             extended and storyteller segments keep their longer per-line detail automatically.
-          </div>
-        </Card>
-
-        <Card title="Extended Sleeve Notes" sub="coming soon">
-          <div className="field-hint">
-            Soon, the DJ will be able to add optional, source-backed editorial notes, such as release
-            credits or wider artist context, with provider provenance. Album, trusted release year and
-            station-play history already come from today&apos;s Verified Facts packet; this future layer
-            will stay opt-in and separate from show steering.
           </div>
         </Card>
       </Advanced>

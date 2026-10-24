@@ -24,7 +24,7 @@ import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
 import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
-import { startListenerMonitor } from './broadcast/listeners.js';
+import { gatedListenerCount, startListenerMonitor } from './broadcast/listeners.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import * as likes from './broadcast/likes.js';
@@ -62,6 +62,19 @@ import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
+import { router as sleeveNotesRoutes } from './routes/sleeve-notes.js';
+import * as sleeveNotesDb from './sleeve-notes/db.js';
+import { recoverInterruptedResearchJobs } from './sleeve-notes/research-repository.js';
+import { startMusicBrainzMatchWorker } from './sleeve-notes/musicbrainz-worker.js';
+import { startMusicBrainzSeriesWorker } from './sleeve-notes/musicbrainz-series-worker.js';
+import { startMusicBrainzSeriesLibraryWorker } from './sleeve-notes/musicbrainz-series-library-worker.js';
+import { startWikipediaWorker } from './sleeve-notes/wikipedia-worker.js';
+import { startResearchWorker } from './sleeve-notes/research-worker.js';
+import { startGeniusResearchWorker } from './sleeve-notes/genius-worker.js';
+import { startConnectionLibraryWorker } from './sleeve-notes/connection-library-worker.js';
+import { stopConnectionCompute } from './sleeve-notes/connection-compute.js';
+import { startBrainArtistPopulation } from './sleeve-notes/brain-library.js';
+import {researchBlockReason} from './sleeve-notes/research-availability.js';
 import { router as nowPlayingFileRoutes } from './routes/now-playing-file.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadNavidromeConfig } from './setup/config.js';
@@ -83,6 +96,7 @@ process.on('unhandledRejection', (reason: any) => {
 // (#786). Synchronous work only.
 let shuttingDown = false;
 function shutdown(signal: string): void {
+  stopConnectionCompute();
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal} — reaping TTS workers + closing library DB`);
@@ -99,6 +113,11 @@ function shutdown(signal: string): void {
     library.shutdown();
   } catch (err: any) {
     console.error('[shutdown] library close failed:', err.message);
+  }
+  try {
+    sleeveNotesDb.close();
+  } catch (err: any) {
+    console.error('[shutdown] Sleeve Notes DB close failed:', err.message);
   }
   process.exit(0);
 }
@@ -146,6 +165,7 @@ app.use(generateRoutes);
 app.use(doctorRoutes);
 app.use(connectRoutes);
 app.use(mcpRoutes);
+app.use(sleeveNotesRoutes);
 app.use(nowPlayingFileRoutes);
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(httpErrorHandler);
@@ -209,6 +229,18 @@ app.listen(config.server.port, async (err?: Error) => {
     }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
+  }
+
+  // A restart can interrupt a quiet-time worker after it claims durable work.
+  // Put those jobs back before any workers are allowed to start, but leave the
+  // Sleeve Notes DB unopened when the feature itself remains disabled.
+  if (settings.get().djBehaviour.extendedSleeveNotes === true) {
+    try {
+      const recovered = recoverInterruptedResearchJobs();
+      if (recovered) console.log(`[sleeve-notes] recovered ${recovered} interrupted research job${recovered === 1 ? '' : 's'}`);
+    } catch (err: any) {
+      console.error('[sleeve-notes] job recovery failed:', err.message);
+    }
   }
 
   // Must be in memory before the first auto-playlist build and queue push.
@@ -338,6 +370,24 @@ app.listen(config.server.port, async (err?: Error) => {
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
+  // The entire Sleeve Notes pipeline shares the listener-aware research gate.
+  // Otherwise, an unattended autoplay stream could keep queuing MusicBrainz
+  // and Wikipedia work while its LLM extractor is paused. The opt-in setting
+  // permits deliberate empty-station catch-up, but its default keeps the
+  // backlog stable until a listener returns.
+  const sleeveNotesQuietGate = {
+    isQuiet: () => researchBlockReason() === null,
+    isEmptyMaintenanceAllowed: () => gatedListenerCount() === 0
+      && settings.get().djBehaviour.sleeveNotesMaintenanceWhenEmpty === true,
+  };
+  startMusicBrainzMatchWorker(sleeveNotesQuietGate);
+  startMusicBrainzSeriesWorker(sleeveNotesQuietGate);
+  startMusicBrainzSeriesLibraryWorker(sleeveNotesQuietGate);
+  startWikipediaWorker(sleeveNotesQuietGate);
+  startResearchWorker(sleeveNotesQuietGate);
+  startGeniusResearchWorker(sleeveNotesQuietGate);
+  startConnectionLibraryWorker(sleeveNotesQuietGate);
+  startBrainArtistPopulation(sleeveNotesQuietGate);
   jingles
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));

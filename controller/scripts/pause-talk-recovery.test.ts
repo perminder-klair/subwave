@@ -217,6 +217,25 @@ test('restart after controller acknowledgement performs cleanup only', async () 
   await waitFor(() => !existsSync(PAUSE_TALK_COMMIT_FILE));
 });
 
+test('disabling Sleeve Notes preserves committed silence and delivers its voice exactly once',async()=>{
+ clearPauseProtocol();const store=await import('../src/settings/store.js');const saved=settings.get();
+ const pauseId='eeeeeeeeeeeeeeee';let completed=0;
+ try {
+  store.setCache({...saved,djBehaviour:{...saved.djBehaviour,extendedSleeveNotes:true}});
+  Object.assign(queue,{_pendingVoice:{kind:'sleeve-notes',clips:[clip('A committed story')],daypart:null,
+   exchange:false,t:Date.now(),pauseTalk:true,pauseId,pauseArmedAt:Date.now(),pauseIncomingCrossMs:0,
+   onCompleted:()=>{completed++;}}});
+  store.setCache({...settings.get(),djBehaviour:{...settings.get().djBehaviour,extendedSleeveNotes:false}});
+  assert.equal(queue.pendingVoiceTalk()?.kind,'sleeve-notes');
+  writeFileSync(config.liquidsoap.pauseTalkPlayingFile,JSON.stringify({pauseId,startedAt:Date.now()/1000}));
+  queue.onPauseTalkStarted();queue.onPauseTalkStarted();
+  await waitFor(()=>existsSync(config.liquidsoap.sayFile),5000);
+  assert.ok(readFileSync(config.liquidsoap.sayFile,'utf8').includes(`subwave_pause_delivery="${pauseId}"`));
+  acceptAndStart(pauseId);await waitFor(()=>queue.pendingVoiceTalk()===null);await waitFor(()=>completed===1);
+  queue.onPauseTalkStarted();assert.equal(completed,1);
+ }finally{store.setCache(saved);}
+});
+
 test('announce reports a held delivery and pause eligibility wins over boundary mode', async () => {
   await settings.load();
   const personaId = settings.get().personas[0].id;

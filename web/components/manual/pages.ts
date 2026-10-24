@@ -23,5 +23,6 @@ export const MANUAL_PAGES: ManualPageEntry[] = [
   { href: '/manual/analysis', label: 'Acoustic Analysis' },
   { href: '/manual/mcp', label: 'Agent Access' },
   { href: '/manual/concepts', label: 'Concepts' },
+  { href: '/manual/sleeve-notes', label: 'Extended Sleeve Notes' },
   { href: '/manual/faq', label: 'FAQ' },
 ];

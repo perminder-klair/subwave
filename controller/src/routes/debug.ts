@@ -23,6 +23,8 @@ import * as tts from '../audio/tts.js';
 import { ttsCalls } from '../stats.js';
 import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
+import { recentProviderCalls } from '../sleeve-notes/telemetry.js';
+import { researchStoreReadout } from '../sleeve-notes/research-repository.js';
 import { getFullContext } from '../context.js';
 import * as settings from '../settings.js';
 import { queue } from '../broadcast/queue.js';
@@ -430,6 +432,16 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     out.subsonic = subsonicLog.snapshot(out.library?.total ?? null);
   } catch (err) {
     out.subsonic = { error: err.message };
+  }
+
+  // Kept adjacent to LLM diagnostics, but deliberately separate: these are
+  // durable non-LLM jobs and HTTP metadata calls, never model prompts.
+  try {
+    const active = settingsSnapshot?.djBehaviour?.extendedSleeveNotes === true;
+    const readout = active ? researchStoreReadout() : null;
+    out.sleeveNotes = { recentCalls: recentProviderCalls(), active, jobs: readout?.jobs ?? [] };
+  } catch (err: any) {
+    out.sleeveNotes = { recentCalls: recentProviderCalls(), jobs: [], error: err?.message || String(err) };
   }
 
   try {

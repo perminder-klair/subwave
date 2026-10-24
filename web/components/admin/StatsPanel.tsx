@@ -41,6 +41,7 @@ interface ByKindRow {
   kind: string;
   count: number;
   ok: number;
+  deferred?: number;
   avgMs?: number;
   tokens?: number;
 }
@@ -96,6 +97,7 @@ interface LlmStats {
   window: number;
   count: number;
   ok: number;
+  deferred?: number;
   failed: number;
   successRate?: number;
   latency: LatencyStats;
@@ -121,7 +123,15 @@ interface LlmStats {
   };
 }
 
+interface TtsPace {
+  window:number;samples:number;audioSamples:number;
+  generationWordsPerSecond:number|null;spokenWordsPerSecond:number|null;
+}
+interface TtsVoicePace extends TtsPace {engine:string;persona:string|null;}
+
 interface TtsStats {
+  recentPace?:TtsPace;
+  paceByVoice?:TtsVoicePace[];
   window: number;
   count: number;
   ok: number;
@@ -143,6 +153,7 @@ interface ByPathRow {
   path: string;
   count: number;
   ok: number;
+  deferred?: number;
 }
 
 interface ByPickSourceRow {
@@ -946,7 +957,7 @@ export default function StatsPanel() {
               <div className="grid gap-0">
                 <MetricStrip>
                   <StatCell label="Calls" value={fmtInt(llm.count)}
-                    sub={`${llm.ok} ok · ${llm.failed} failed`} />
+                    sub={`${llm.ok} ok · ${llm.failed} failed${llm.deferred ? ` · ${llm.deferred} deferred` : ''}`} />
                   <StatCell label="Success rate" value={fmtPct(llm.successRate)}
                     danger={llm.successRate != null && llm.successRate < 0.9} />
                   <StatCell label="Avg latency" value={fmtMs(llm.latency.avg)}
@@ -972,7 +983,9 @@ export default function StatsPanel() {
                         { key: 'count', label: 'Calls', align: 'right',
                           render: r => <span className="mono-num">{r.count}</span> },
                         { key: 'ok', label: 'OK', align: 'right',
-                          render: r => <span className="mono-num">{r.ok}/{r.count}</span> },
+                          render: r => <span className="mono-num">{r.count === (r.deferred || 0) ? '—' : `${r.ok}/${r.count - (r.deferred || 0)}`}</span> },
+                        { key: 'deferred', label: 'Deferred', align: 'right',
+                          render: r => <span className="mono-num">{r.deferred || 0}</span> },
                         { key: 'avgMs', label: 'Avg', align: 'right',
                           render: r => <span className="mono-num">{fmtMs(r.avgMs)}</span> },
                         { key: 'tokens', label: 'Tokens', align: 'right',
@@ -1090,6 +1103,24 @@ export default function StatsPanel() {
                   <StatCell label="Characters" value={fmtTokens(tts.chars)} last
                     sub="voiced" />
                 </MetricStrip>
+
+                <MetricStrip>
+                  <StatCell label="Generation speed" value={tts.recentPace?.generationWordsPerSecond==null?'—':`${tts.recentPace.generationWordsPerSecond.toFixed(2)} words/s`}
+                    sub={`${tts.recentPace?.samples??0} recent successful renders`} />
+                  <StatCell label="Speaking pace" value={tts.recentPace?.spokenWordsPerSecond==null?'—':`${tts.recentPace.spokenWordsPerSecond.toFixed(2)} words/s`} last
+                    sub={`${tts.recentPace?.audioSamples??0} measured audio clips`} />
+                </MetricStrip>
+                <p className="border-b border-separator-soft px-3.5 py-3 text-xs text-muted">Rates use the latest {tts.recentPace?.window??20} successful renders in the retained history. Generation includes processing and fallback delays; speaking pace uses measured audio length without broadcast padding. Words are counted from the full text sent to TTS, excluding control tags. Measurements reset on controller restart.</p>
+                {!!tts.paceByVoice?.length && <div className="border-b border-separator-soft p-3.5">
+                  <div className="caption mb-2">Recent pace by engine and presenter</div>
+                  <Table<TtsVoicePace> empty="Waiting for measurements" rows={tts.paceByVoice} cols={[
+                    {key:'engine',label:'Engine'},
+                    {key:'persona',label:'Presenter',render:r=>r.persona||'Station voice'},
+                    {key:'samples',label:'Renders',align:'right'},
+                    {key:'generationWordsPerSecond',label:'Generated words/s',align:'right',render:r=>r.generationWordsPerSecond==null?'—':r.generationWordsPerSecond.toFixed(2)},
+                    {key:'spokenWordsPerSecond',label:'Spoken words/s',align:'right',render:r=>r.spokenWordsPerSecond==null?'—':r.spokenWordsPerSecond.toFixed(2)},
+                  ]} />
+                </div>}
 
                 <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
                   <div className="border-b border-separator-soft p-3.5 sm:border-r sm:border-b-0">

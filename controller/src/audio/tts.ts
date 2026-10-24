@@ -22,9 +22,18 @@ import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
+import {ttsMeasurements} from './tts-measurements.js';
 import { energyForDaypart } from '../context.js';
+import { recordExtendedSleeveNoteTtsRequest, recordExtendedSleeveNoteTtsRendered } from '../sleeve-notes/link-selection.js';
 
 export const ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts', 'cloud', 'remote', 'gemini'];
+
+let activeTtsRenders = 0;
+
+/** True while Subwave is awaiting audio from any TTS engine. */
+export function ttsRenderActive(): boolean {
+  return activeTtsRenders > 0;
+}
 
 // Kinds NOT voiced by the on-air persona: they use the global defaultEngine.
 // Every other kind takes engine+voice from the effective persona's `tts`.
@@ -230,6 +239,19 @@ export function stationGeminiPick(opts: any, personaTts: any): { voice?: string;
 }
 
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
+  activeTtsRenders++;
+  try {
+    return await speakWithEngine(engine, text, opts, personaTts);
+  } finally {
+    activeTtsRenders--;
+  }
+}
+
+async function speakWithEngine(engine: string, text: string, opts: {
+  lang?: string; cloudModel?: string; geminiModel?: string; voiceStyle?: string;
+  cloudVoiceSettings?: Record<string, unknown>; fishSettings?: Record<string, unknown>;
+  [key: string]: unknown;
+}, personaTts: {engine?: string; voice?: string; cloudProvider?: string} | null) {
   if (engine === 'kokoro') {
     const voice = (personaTts && personaTts.engine === 'kokoro' && personaTts.voice)
       ? personaTts.voice
@@ -398,7 +420,13 @@ async function finishClip(path: string, kind?: string): Promise<void> {
 // DJ never goes silent. Every call is timed into the TTS ring buffer (stats.js).
 export async function speak(
   text: string,
-  { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
+  { kind = 'default', outPath, speedScale, persona, sleeveClaimUseId }: {
+    kind?: string;
+    outPath?: string;
+    speedScale?: number;
+    persona?: any;
+    sleeveClaimUseId?: string | null;
+  } = {},
 ) {
   // Resolve before normalising the text: the same value owns both the cloud
   // pronunciation hint and the unsupported-script safety boundary.
@@ -439,6 +467,15 @@ export async function speak(
     : '';
   const rescueText = fallbackTextFor(requested, cloudCueFamily, speakText);
   const primaryText = primaryFellBack ? rescueText : speakText;
+  const recordSparkSpeech = (attemptText: string, engine: string, rendered = false) => {
+    if (kind !== 'link' || !sleeveClaimUseId) return;
+    try {
+      if (rendered) recordExtendedSleeveNoteTtsRendered(sleeveClaimUseId);
+      else recordExtendedSleeveNoteTtsRequest(sleeveClaimUseId, attemptText, engine);
+    } catch (error) {
+      console.warn(`[sleeve-notes] TTS history update failed (useId=${sleeveClaimUseId}): ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   // Persona soul rides to the cloud engine so delivery matches the writing
   // (#579), like `language` does for pronunciation (#558). DJ-voiced kinds only.
   // Cloud and Gemini consume the character; other engines ignore it.
@@ -457,14 +494,17 @@ export async function speak(
     persona: GLOBAL_VOICE_KINDS.has(kind) ? null : (personaFor(persona)?.name || null),
   };
   try {
+    recordSparkSpeech(primaryText, primary);
     const result = await speakWith(primary, primaryText, { outPath, speedScale: scale, language, soul, voiceStyle }, primaryPersonaTts);
     // Bake 40ms edge fades in so hard file boundaries never reach the broadcast
     // compressor as a click. Render time is the only place the tail can be
     // faded. Best-effort: non-WAV output (cloud mp3) is left as-is.
     if (typeof result === 'string') await finishClip(result, kind);
+    if (result) recordSparkSpeech(primaryText, primary, true);
     recordTts({
       ...callBase, engine: primary, fellBack: primaryFellBack,
-      ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+      ms: Date.now() - started, ...ttsMeasurements(result,primaryText),
+      ok: true, t: new Date().toISOString(),
     });
     return result;
   } catch (err) {
@@ -489,11 +529,14 @@ export async function speak(
         // the credentials the chain probe just rejected. What rides is the
         // slot's own override (null for hardcoded rungs, the operator's
         // engine+voice for their configured one), so probe and call agree.
+        recordSparkSpeech(rescueText, fallback);
         const result = await speakWith(fallback, rescueText, { outPath, speedScale: scale, language, soul, voiceStyle }, slot.personaTts);
         if (typeof result === 'string') await finishClip(result, kind);
+        if (result) recordSparkSpeech(rescueText, fallback, true);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,
-          ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+          ms: Date.now() - started, ...ttsMeasurements(result,rescueText),
+          ok: true, t: new Date().toISOString(),
         });
         return result;
       } catch (err2) {

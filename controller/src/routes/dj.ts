@@ -2,6 +2,7 @@ import { showPreparation } from '../broadcast/show-preparation.js';
 // Admin-gated DJ command center behind /admin/dash. Manual triggers are an
 // operator override: they bypass the shouldFire frequency gate and cooldowns.
 import express from 'express';
+import { brainQueueSelectionSchema, selectBrainQueueTrack } from '../sleeve-notes/brain-queue.js';
 import cron from 'node-cron';
 import AdmZip from 'adm-zip';
 import { requireAdmin } from '../middleware/auth.js';
@@ -968,11 +969,21 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
 // Push a /dj/search result to the queue. No DJ intro is generated; an auto-link
 // still fires if auto-link is on.
 router.post('/dj/queue-track', requireAdmin, async (req, res) => {
-  const track = req.body || {};
-  if (!track.id || !track.title) {
+  let track = req.body || {};
+  const selection=track.selection;
+  let reason:string|undefined;
+  if (!selection && (!track.id || !track.title)) {
     return res.status(400).json({ error: 'id and title are required' });
   }
   try {
+    if (selection) {
+      if(!settings.get().djBehaviour.extendedSleeveNotes)return res.status(409).json({error:'Extended Sleeve Notes is disabled'});
+      const parsed=brainQueueSelectionSchema.safeParse(selection);
+      if (!parsed.success) return res.status(400).json({error:'Choose a supported Station Brain artist, album or track.'});
+      const selected=await selectBrainQueueTrack(parsed.data);
+      if (!settings.get().djBehaviour.extendedSleeveNotes) return res.status(409).json({error:'Extended Sleeve Notes is disabled'});
+      track=selected.track;reason=selected.reason;
+    }
     // Explicit operator action — bypass the request/AI dedup guard (#619) so a
     // deliberate manual queue always fires, even for an already-queued track.
     //
@@ -990,12 +1001,13 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
     }
     res.json({
       ok: true,
-      track: { title: track.title, artist: track.artist || null },
+      track: { id:track.id, title: track.title, artist: track.artist || null },
+      reason,
       queuePosition,
     });
   } catch (err) {
     queue.log('error', `/dj/queue-track failed: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(err.status??500).json({ error: err.message });
   }
 });
 

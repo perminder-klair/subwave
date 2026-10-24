@@ -642,6 +642,16 @@ export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
   return rejectArchive(r.album?.song || []);
 }
 
+/** Album identity plus playable songs for background, source-backed matching. */
+export async function getAlbumWithSongs(id: string, { requireComplete = false, signal }: { requireComplete?: boolean; signal?: AbortSignal } = {}): Promise<{ album: any; songs: any[] } | null> {
+  const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
+  if (requireComplete && (!r.album || r.album.id !== id || !Array.isArray(r.album.song))) {
+    throw new Error(`Incomplete Navidrome walk: malformed album ${id}`);
+  }
+  if (!r.album) return null;
+  return { album: r.album, songs: rejectArchive(r.album.song || []) };
+}
+
 // Single song lookup. The Child carries albumId, which is how manual album
 // tagging resolves a whole album from one track id.
 export async function getSong(id) {
@@ -649,8 +659,8 @@ export async function getSong(id) {
   return r.song || null;
 }
 
-export async function getArtist(id) {
-  const r = await call('getArtist', { id }, RETRY_FAST_TRANSPORT);
+export async function getArtist(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getArtist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artist || null;
 }
 
@@ -1040,8 +1050,9 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
   return `annotate:${fields.join(',')}:${clipPath}`;
 }
 
-export async function getLibraryArtists(): Promise<Array<{ id: string; name: string }>> {
+export async function getLibraryArtists({ requireComplete = false }: { requireComplete?: boolean } = {}): Promise<Array<{ id: string; name: string }>> {
   const result = await call('getArtists', {}, RETRY_FAST_TRANSPORT);
-  const schema = z.object({ artists: z.object({ index: z.array(z.object({ artist: z.array(z.object({ id: z.string(), name: z.string() })) })).default([]) }) });
+  const index = z.array(z.object({ artist: z.array(z.object({ id: z.string().trim().min(1), name: z.string().trim().min(1) })) }));
+  const schema = z.object({ artists: z.object({ index: requireComplete ? index : index.default([]) }) });
   return schema.parse(result).artists.index.flatMap(index => index.artist);
 }

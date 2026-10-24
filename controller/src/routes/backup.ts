@@ -11,6 +11,8 @@ import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
+import * as sleeveNotesDb from '../sleeve-notes/db.js';
+import { clearConnectionComputeCache } from '../sleeve-notes/connection-compute.js';
 import {
   BACKUP_FORMAT,
   BACKUP_VERSION,
@@ -181,7 +183,19 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
   const restored: string[] = [];
   let requiresRestart = false;
   let tmpDir: string | null = null;
+  let releaseResearchRestore:(()=>void)|null=null;
   try {
+    // Validate research before applying media/settings. Older archives omit it
+    // and leave the station's current research untouched.
+    const notesEntry = zip.getEntry('sleeve-notes.db');
+    if (notesEntry) {
+      tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
+      zip.extractEntryTo(notesEntry, tmpDir, false, true);
+      try { sleeveNotesDb.prepareBackupRestore(join(tmpDir, 'sleeve-notes.db')); }
+      catch { return { ok: false, status: 400, error: 'invalid or unsupported sleeve-notes.db in backup' }; }
+      releaseResearchRestore=sleeveNotesDb.acquireResearchRestore();
+      if(!releaseResearchRestore)return {ok:false,status:409,error:'Sleeve Notes research or backup is in progress; retry the restore when it finishes'};
+    }
     // 1) Media — must run BEFORE settings.update(): settings validation resolves
     //    theme.active / shows[].themeId against themes read from state/themes/,
     //    so a custom theme not yet on disk aborts the whole restore (#917).
@@ -230,7 +244,7 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
     // 3) Tag DB — extract to tmp, swap the live file, reopen.
     const dbEntry = zip.getEntry('library.db');
     if (dbEntry) {
-      tmpDir = await mkdtemp(join(tmpdir(), 'subwave-restore-'));
+      tmpDir ??= await mkdtemp(join(tmpdir(), 'subwave-restore-'));
       const dbTmp = join(tmpDir, 'library.db');
       zip.extractEntryTo(dbEntry, tmpDir, false, true);
       await libraryDb.restoreFromFile(dbTmp);
@@ -238,8 +252,15 @@ async function applyBackupZip(body: Buffer): Promise<RestoreOutcome> {
       restored.push('library.db');
     }
 
+    if (notesEntry) {
+      sleeveNotesDb.restorePreparedBackup(join(tmpDir!, 'sleeve-notes.db'));
+      clearConnectionComputeCache();
+      restored.push('sleeve-notes.db');
+    }
+
     return { ok: true, status: 200, restored, requiresRestart, skipped, skillsAwaitingReview };
   } finally {
+    releaseResearchRestore?.();
     if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 }

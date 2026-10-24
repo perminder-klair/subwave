@@ -48,21 +48,24 @@ interface SegmentButtonProps {
   busyHere: boolean;
   anyBusy: boolean;
   onFire: () => void;
+  busyLabel?: string;
+  title?: string;
 }
 
 // All visual states live in .seg-pad (globals.css).
-export function SegmentButton({ label, icon: Icon, busyHere, anyBusy, onFire }: SegmentButtonProps) {
+export function SegmentButton({ label, icon: Icon, busyHere, anyBusy, onFire, busyLabel = 'on air', title }: SegmentButtonProps) {
   return (
     <button
       type="button"
       disabled={anyBusy}
+      title={title}
       onClick={onFire}
       className={cn('seg-pad', busyHere && 'is-firing')}
     >
       <span className="seg-led" aria-hidden />
       <Icon className="seg-glyph" strokeWidth={1.5} aria-hidden />
       <span className="seg-label">{label}</span>
-      <span className="seg-cta">{busyHere ? 'on air' : 'fire'}</span>
+      <span className="seg-cta">{busyHere ? busyLabel : 'fire'}</span>
     </button>
   );
 }

@@ -14,6 +14,7 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Terminal, TerminalContent } from '../ai-elements/terminal';
 import { BudgetMeter } from './debug/BudgetMeter';
+import { SleeveNotesCalls } from './debug/SleeveNotesCalls';
 import { StateTree } from './debug/StateTree';
 import { DjContext } from './debug/DjContext';
 import { PlaybackFailures } from './debug/PlaybackFailures';
@@ -158,6 +159,7 @@ export default function DebugPanel() {
           )}
 
           <LlmCalls llm={data.llm} />
+          <SleeveNotesCalls sleeveNotes={data.sleeveNotes} timezone={data.timezone} />
 
           <SubsonicCalls subsonic={data.subsonic} />
 

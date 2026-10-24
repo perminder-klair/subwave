@@ -1110,6 +1110,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   let rawLink = '';
   let linkPersona: ReturnType<typeof session.onAirPersona> = null;
   let linkHostSpeech: ReturnType<typeof session.captureHostSpeech> = null;
+  let linkSleeveClaimUseId: string | null = null;
   if (wantLink && pickAnchor) {
     try {
       const generated = await generatePickLink({
@@ -1122,6 +1123,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
       rawLink = generated.link || '';
       linkPersona = generated.introPersona;
       linkHostSpeech = generated.hostSpeech;
+      linkSleeveClaimUseId = generated.sleeveClaimUseId;
     } catch (err: any) {
       queue.log('error', `DJ link failed: ${err.message}`);
     }
@@ -1159,7 +1161,7 @@ async function pickViaSelectionRoute(queue, ctx, { wantLink, audioWaypoint = nul
   // can drop the link if a request jumps ahead of this pick before it airs.
   // Re-budget the original output: a second strip of `say` could eat a nested
   // leading name that the first pass deliberately kept as spoken text.
-  const queued = await enqueuePick(queue, song, object.reason, 'agent', link ? rawLink : null, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech, showAt });
+  const queued = await enqueuePick(queue, song, object.reason, 'agent', link ? rawLink : null, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed), introPersona: linkPersona, hostSpeech: linkHostSpeech, sleeveClaimUseId: linkSleeveClaimUseId, showAt });
   // Pick was already queued/on-air and got deduped — don't record a session turn
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
@@ -1330,6 +1332,7 @@ async function enqueueSelected(
   let link: string | null = null;
   let linkPersona: ReturnType<typeof session.onAirPersona> = null;
   let linkHostSpeech: ReturnType<typeof session.captureHostSpeech> = null;
+  let linkSleeveClaimUseId: string | null = null;
   // Resolved HERE rather than up in runTrackEvent: the pick call above has
   // already spent part of the runway, and linkClockAt reads the live clock, so
   // asking now is the most honest the forecast can be on this path (#1314).
@@ -1360,6 +1363,7 @@ async function enqueueSelected(
       link = generated.link;
       linkPersona = generated.introPersona;
       linkHostSpeech = generated.hostSpeech;
+      linkSleeveClaimUseId = generated.sleeveClaimUseId;
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);
     }
@@ -1403,6 +1407,7 @@ async function enqueueSelected(
     linkClockAt: linkClockStampFor(airAt, clockAllowed),
     introPersona: linkPersona,
     hostSpeech: linkHostSpeech,
+    sleeveClaimUseId: linkSleeveClaimUseId,
     showAt,
   });
   // Even the pool landed on an already-queued track (a tiny library whose pool

@@ -47,6 +47,8 @@ interface DebugTtsSpoken {
 /** One entry from the controller's TTS call ring (stats.ts ttsCalls): every speak()
  * outcome since boot, newest first, including silent engine fallbacks. */
 export interface TtsCall {
+  words?:number|null;
+  audioMs?:number|null;
   ok?: boolean;
   kind?: string;
   engine?: string;
@@ -87,6 +89,8 @@ export interface DebugSession {
 }
 
 interface LlmCall {
+  outcome?: 'deferred';
+  deferredReason?: 'research-budget' | 'broadcast-priority';
   ok?: boolean;
   kind?: string;
   model?: string;
@@ -99,6 +103,17 @@ interface LlmCall {
   systemPreview?: string;
   messages?: Array<{ role?: string; content?: unknown }>;
   toolCalls?: Array<{ name?: string; args?: unknown; result?: unknown }>;
+  extendedSleeveNote?: {
+    status?: 'unavailable' | 'available' | 'offered' | 'chosen' | 'cooldown';
+    claimId?: string | null;
+    entityType?: 'artist' | 'recording' | 'release' | 'release-group' | null;
+    category?: string | null;
+    topic?: string | null;
+    wordingLevel?: 'full' | 'short' | null;
+    runwayMs?: number | null;
+    candidateCount?: number;
+    detection?: string | null;
+  };
   shortlistResolution?: {
     preliminary?: { id?: string; title?: string | null; artist?: string | null };
     leaningsReview?: {
@@ -179,6 +194,35 @@ export interface DebugLlm {
     file?: string;
     max?: number;
   };
+}
+
+interface SleeveNotesCall {
+  t?: string;
+  endpoint?: 'search' | 'song';
+  title?: string;
+  artist?: string | null;
+  ok?: boolean;
+  status?: number | null;
+  ms?: number;
+  error?: string;
+}
+
+interface SleeveNotesJob {
+  provider?: string;
+  subjectType?: string;
+  capability?: string;
+  state?: string;
+  priority?: number;
+  attempts?: number;
+  runAfter?: string | null;
+  updatedAt?: string;
+}
+
+export interface DebugSleeveNotes {
+  recentCalls?: SleeveNotesCall[];
+  active?: boolean;
+  jobs?: SleeveNotesJob[];
+  error?: string;
 }
 
 interface SubsonicEndpoint {
@@ -273,6 +317,7 @@ export interface DebugData {
   context?: DebugContext | null;
   tts?: DebugTts;
   subsonic?: DebugSubsonic;
+  sleeveNotes?: DebugSleeveNotes;
   session?: DebugSession;
   config?: Record<string, unknown>;
   mounts?: DebugMounts;
