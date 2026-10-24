@@ -1,9 +1,32 @@
+// The full log of one maintenance run (tag, analyze, reconcile): every line,
+// numbered, for the Library page's log box, and one file per run under
+// state/tagger-logs/ for download (#2063). `tagger.lastLog` stays the short
+// tail every snapshot carries; this is what the page reads while the box is open.
+//
+// A reader asks for the lines after the last seq it saw, so a run that prints
+// faster than the poll loses nothing. The page used to re-read a 30-line tail of
+// a 100-line buffer every few seconds and never saw what scrolled past between
+// two reads, which on a large library was usually the part worth reading. The
+// newest RUN_LOG_CAP lines are held in memory; a reader that fell further
+// behind is told `gap`, and the file still has them all.
+//
+// A raw line is held RUN_LOG_HOLD_MS before it is committed, because the child's
+// makeEventLogger prints a terse echo just before each [event] sentinel and the
+// event replaces it, exactly as lastLog drops it. A held line keeps the time it
+// arrived. The log closes on the child's 'close', once its pipes have drained,
+// never on 'exit' and never because the next run started, and the page keeps
+// reading until the log reports `closed`.
+//
+// The file name grammar is the safety property, as in backup/pure.ts: retention
+// deletes, and the download route opens a file named by the request. Only
+// `tagger-run-YYYYMMDD-HHMMSS-<mode>[-N]` is ours to touch, so never widen the
+// pattern. A disk that refuses the file, or fails a write, costs the download,
+// never the run.
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { TaggerEvent } from '../music/tagger-progress.js';
 import type { MaintenanceMode } from './tagger-followups.js';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 export type RunLogLine = string | TaggerEvent;
 
@@ -23,14 +46,10 @@ export interface RunLogSink { write(text: string): void; close(): void }
 
 export interface RunLogFileInfo { id: string; mode: string; startedAt: string; bytes: number }
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
 export const RUN_LOG_CAP = 5000;
 export const RUN_LOG_HOLD_MS = 400;
 export const RUN_LOG_KEEP = 10;
 export const RUN_LOG_DIR_NAME = 'tagger-logs';
-
-// ─── Helpers (internal) ───────────────────────────────────────────────────────
 
 function hhmmss(ts: number): string {
   const d = new Date(ts);
@@ -42,8 +61,6 @@ function hhmmss(ts: number): string {
 
 // Newlines break the one-entry-per-line contract on disk.
 function oneLine(text: string): string { return text.replace(/\n/g, ' '); }
-
-// ─── RunLog class ─────────────────────────────────────────────────────────────
 
 export class RunLog {
   readonly runId: string;
@@ -87,17 +104,19 @@ export class RunLog {
     // The raw echo duplicates the event—drop it silently.
     if (this.pending && isEcho(this.pending.line)) this.pending = null;
     else this.commitPending();
-    // Commit exactly {kind, text, at}.
+    // Only kind, text and at, as lastLog keeps them: the sentinel is parsed
+    // JSON, and any other key it carried would ride into every page.
     this.commitEvent({ kind: ev.kind, text: ev.text, at: ev.at });
   }
 
   since(after: number): RunLogPage {
-    // Sanitise the cursor.
+    // The cursor comes from a query string: NaN or a negative reads from the
+    // start, a fraction floors.
     let a = Number(after);
     if (!Number.isFinite(a) || a < 0) a = 0;
     a = Math.floor(a);
 
-    // Commit pending if it's been held long enough.
+    // A held line no echo claimed in time is the reader's now.
     if (!this.closed && this.pending && this.nowFn() - this.pending.heldAt >= this.holdMs) this.commitPending();
 
     const filtered = this.entries.filter(e => e.seq > a);
@@ -121,8 +140,6 @@ export class RunLog {
       try { this.sink.close(); } catch { /* best effort */ }
     }
   }
-
-  // ─── Private ──────────────────────────────────────────────────────────────
 
   // A held line is stamped with when it arrived, not when it was committed:
   // with nobody polling, the next line is what commits it, and that can be
@@ -163,8 +180,6 @@ export class RunLog {
     }
   }
 }
-
-// ─── File helpers ─────────────────────────────────────────────────────────────
 
 const MODES = new Set(['tag', 'analyze', 'reconcile']);
 // The writer's one name grammar: the UTC start stamp, the mode, and `-N` for
