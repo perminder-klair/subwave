@@ -26,6 +26,7 @@ const ROUTES = [
   '/manual/clients',
   '/manual/skills',
   '/manual/themes',
+  '/manual/alexa',
   '/manual/analysis',
   '/manual/observatory',
   '/manual/concepts',

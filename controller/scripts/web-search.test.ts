@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 process.env.STATE_DIR = createTempDir(join(tmpdir(), 'subwave-web-search-'));
-const { parseBraveResponse, buildSearxngUrl, parseSearxngResponse, searchWeb } =
+const { parseBraveResponse, buildSearxngUrl, parseSearxngResponse, searchWeb, searchCacheSize, isWebSearchProviderError } =
   await import('../src/skills/web-search.js');
 const settings = await import('../src/settings.js');
 const here = dirname(fileURLToPath(import.meta.url));
@@ -209,4 +209,142 @@ test('dispatcher cache separates recency windows and reuses each answer', async 
   assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION'), all);
   assert.deepEqual(await searchWeb('RECENCY-CACHE-REGRESSION', { recency: 'week' }), week);
   assert.equal(windows.length, 2, 'repeats of both windows use their cached answers');
+});
+
+test('empty provider responses are retried instead of cached for the full TTL', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://empty-search.test' } });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response(JSON.stringify({ results: [] }));
+  });
+  const query = `empty-cache-regression-${Date.now()}`;
+  assert.deepEqual(await searchWeb(query), { answer: '', results: [] });
+  assert.deepEqual(await searchWeb(query), { answer: '', results: [] });
+  assert.equal(calls, 2, 'an empty result must not be reused from the long-lived cache');
+  assert.ok(searchCacheSize() >= 0);
+});
+
+test('dispatcher cache is isolated by SearXNG base URL and engine selection', async t => {
+  await settings.load();
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    calls.push(url.toString());
+    return Response.json({ results: [{ title: url.host, content: url.searchParams.get('engines') || 'default' }] });
+  });
+  const query = `provider-config-cache-${Date.now()}`;
+
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://first.test', searxngEngines: 'google' } });
+  const first = await searchWeb(query);
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://second.test', searxngEngines: 'wikipedia' } });
+  const second = await searchWeb(query);
+
+  assert.equal(calls.length, 2, 'each provider configuration gets its own cache entry');
+  assert.notDeepEqual(first, second);
+  assert.match(calls[0], /first\.test/);
+  assert.match(calls[0], /engines=google/);
+  assert.match(calls[1], /second\.test/);
+  assert.match(calls[1], /engines=wikipedia/);
+});
+
+test('concurrent identical searches share one provider request', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://dedupe.test', searxngEngines: '' } });
+  let calls = 0;
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    await blocked;
+    return Response.json({ results: [{ title: 'Shared', content: 'one result' }] });
+  });
+  const query = `concurrent-search-${Date.now()}`;
+  const first = searchWeb(query);
+  const second = searchWeb(query);
+  await new Promise(resolve => setImmediate(resolve));
+  const callsWhilePending = calls;
+  release();
+  assert.deepEqual(await first, await second);
+  assert.equal(callsWhilePending, 1);
+  assert.equal(calls, 1);
+});
+
+test('rate limits become typed provider failures and are never cached', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://rate-limit.test', searxngEngines: '' } });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response('slow down', { status: 429 });
+  });
+  const query = `rate-limit-${Date.now()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(searchWeb(query), error => {
+      assert.ok(isWebSearchProviderError(error));
+      assert.equal(error.provider, 'searxng');
+      assert.equal(error.reason, 'rate-limit');
+      return true;
+    });
+  }
+  assert.equal(calls, 2);
+});
+
+test('malformed provider data becomes a typed failure and is never cached', async t => {
+  await settings.load();
+  await settings.update({ search: { provider: 'searxng', baseUrl: 'https://malformed.test', searxngEngines: '' } });
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    return new Response('{not-json', { status: 200, headers: { 'content-type': 'application/json' } });
+  });
+  const query = `malformed-${Date.now()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(searchWeb(query), error => {
+      assert.ok(isWebSearchProviderError(error));
+      assert.equal(error.provider, 'searxng');
+      assert.equal(error.reason, 'malformed');
+      return true;
+    });
+  }
+  assert.equal(calls, 2);
+});
+
+test('dispatcher honors every configured search provider without cross-provider fallback', async t => {
+  await settings.load();
+  const calls: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    calls.push(`${url.origin}${url.pathname}`);
+    if (url.origin === 'https://api.tavily.com') {
+      return Response.json({ answer: 'Tavily answer', results: [{ title: 'Tavily', content: 'evidence' }] });
+    }
+    if (url.origin === 'https://api.search.brave.com') {
+      return Response.json({ web: { results: [{ title: 'Brave', description: 'evidence' }] } });
+    }
+    if (url.origin === 'https://api.duckduckgo.com') {
+      return Response.json({ AbstractText: 'DDG answer', RelatedTopics: [{ Text: 'evidence', FirstURL: 'https://example.test' }] });
+    }
+    // The real endpoints are intentionally replaced by the fixture response;
+    // the request shape still proves the selected dispatcher branch.
+    if (init?.method === 'POST') return Response.json({ answer: 'Tavily answer', results: [] });
+    return Response.json({ web: { results: [{ title: 'Brave', description: 'evidence' }] } });
+  });
+
+  await settings.update({ search: { provider: 'tavily', apiKey: 'fixture-key' } });
+  const tavily = await searchWeb(`provider-tavily-${Date.now()}`);
+  await settings.update({ search: { provider: 'brave', apiKey: 'fixture-key' } });
+  const brave = await searchWeb(`provider-brave-${Date.now()}`);
+  await settings.update({ search: { provider: 'duckduckgo' } });
+  const duck = await searchWeb(`provider-duck-${Date.now()}`);
+
+  assert.equal(tavily.answer, 'Tavily answer');
+  assert.equal(brave.results[0]?.title, 'Brave');
+  assert.equal(duck.answer, 'DDG answer');
+  assert.deepEqual(calls, [
+    'https://api.tavily.com/search',
+    'https://api.search.brave.com/res/v1/web/search',
+    'https://api.duckduckgo.com/',
+  ]);
 });

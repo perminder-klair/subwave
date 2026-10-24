@@ -1,0 +1,77 @@
+{
+  "manifest": {
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "sslCertificateType": "Wildcard",
+          "uri": "__ALEXA_ENDPOINT_URL__"
+        },
+        "regions": {
+          "NA": {
+            "endpoint": {
+              "sslCertificateType": "Wildcard",
+              "uri": "__ALEXA_ENDPOINT_URL__"
+            }
+          },
+          "EU": {
+            "endpoint": {
+              "sslCertificateType": "Wildcard",
+              "uri": "__ALEXA_ENDPOINT_URL__"
+            }
+          },
+          "FE": {
+            "endpoint": {
+              "sslCertificateType": "Wildcard",
+              "uri": "__ALEXA_ENDPOINT_URL__"
+            }
+          }
+        },
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          }
+        ],
+        "locales": {}
+      }
+    },
+    "manifestVersion": "1.0",
+    "permissions": [
+      {
+        "name": "alexa::alerts:reminders:skill:readwrite"
+      }
+    ],
+    "publishingInformation": {
+      "category": "KNOWLEDGE_AND_TRIVIA",
+      "distributionCountries": [],
+      "isAvailableWorldwide": true,
+      "locales": {
+        "en-US": {
+          "description": "__ALEXA_DESCRIPTION__",
+          "examplePhrases": [
+            "Alexa open __ALEXA_INVOCATION_NAME__",
+            "ask __ALEXA_INVOCATION_NAME__ what is playing",
+            "ask __ALEXA_INVOCATION_NAME__ for help"
+          ],
+          "keywords": [],
+          "name": "__ALEXA_SKILL_NAME__",
+          "summary": "__ALEXA_SUMMARY__"
+        },
+        "hi-IN": {
+          "name": "__ALEXA_SKILL_NAME__"
+        },
+        "en-IN": {
+          "description": "__ALEXA_DESCRIPTION__",
+          "examplePhrases": [
+            "Alexa open __ALEXA_INVOCATION_NAME__",
+            "ask __ALEXA_INVOCATION_NAME__ what is playing",
+            "ask __ALEXA_INVOCATION_NAME__ for help"
+          ],
+          "keywords": [],
+          "name": "__ALEXA_SKILL_NAME__",
+          "summary": "__ALEXA_SUMMARY__"
+        }
+      },
+      "testingInstructions": "__ALEXA_TESTING_INSTRUCTIONS__"
+    }
+  }
+}

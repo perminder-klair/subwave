@@ -45,6 +45,15 @@ docs/screenshots/
 docker-compose.override.yml
 scripts/.fx-render/
 
+# Generated Alexa skill package and local deployment configuration
+alexa-skill-package/alexa.env
+alexa-skill-package/skill.json
+alexa-skill-package/interactionModels/custom/en-US.json
+alexa-skill-package/interactionModels/custom/en-IN.json
+alexa-skill-package/interactionModels/custom/hi-IN.json
+ask-resources.json
+.ask/
+
 # llm-bench reports (local benchmark artifacts)
 controller/scripts/llm-bench/reports/
 

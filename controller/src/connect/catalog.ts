@@ -357,6 +357,67 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
     ],
   },
   {
+    id: 'alexa',
+    label: 'Alexa Custom Skill',
+    blurb:
+          'The self-hosted Alexa Custom Skill integration. Configure the webhook in '
+          + 'your own Alexa Developer Console skill and select the stream mount Alexa '
+          + 'should play. If listener authentication is enabled, playback uses a '
+          + 'temporary signed URL; the station password is never returned.',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/alexa/connection',
+        summary: 'Alexa skill configuration',
+          description:
+            'Admin-only configuration for the deployment-owned Alexa Custom Skill. '
+          + 'Returns the station URL, webhook URL, selected stream mount, available '
+          + 'stream formats, direct-skill settings, and the signed-token lifetime. '
+          + 'Protected listener streams are supported through temporary signed URLs. '
+          + 'It never returns station passwords or Alexa credentials.',
+        auth: 'admin',
+        responseExample: {
+          station: 'Example Station',
+          streamUrl: 'https://radio.example.com/stream.mp3',
+          streamMount: '/stream.mp3',
+          streamOptions: [
+            { mount: '/stream.mp3', label: 'MP3', enabled: true },
+            { mount: '/stream.opus', label: 'Opus', enabled: false },
+            { mount: '/stream.flac', label: 'FLAC', enabled: false },
+            { mount: '/stream.aac', label: 'AAC', enabled: false },
+          ],
+          listenerAuth: false,
+          directSkill: { enabled: false, skillId: '', tokenTtlHours: 24 },
+        },
+      },
+      {
+        method: 'POST',
+        path: '/alexa/connection/test',
+        summary: 'Test Alexa skill connection',
+        description:
+          'Admin-only diagnostic that checks the public HTTPS origin, direct skill '
+          + 'configuration, listener accessibility (including signed access for a '
+          + 'protected stream), selected stream format, and '
+          + 'Alexa webhook reachability using the unsaved draft values in the request body.',
+        auth: 'admin',
+        bodyExample: {
+          enabled: true,
+          skillId: 'amzn1.ask.skill.example',
+          streamMount: '/stream.mp3',
+          tokenTtlHours: 24,
+        },
+        responseExample: {
+          ok: true,
+          checks: [
+            { id: 'site-url', label: 'Public URL', ok: true },
+            { id: 'stream', label: 'Public stream', ok: true },
+            { id: 'webhook', label: 'Alexa webhook', ok: true },
+          ],
+        },
+      },
+    ],
+  },
+  {
     id: 'dj-control',
     label: 'DJ Control',
     blurb:

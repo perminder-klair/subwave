@@ -923,9 +923,11 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null }: {
+  async push({ track, requestId = null, requestedBy = null, dedication = null, operator = false, block = null, intent = null, introScript = null, introLabelChecked = false, introKind = 'dj-speak', introPersona = null, introHostSpeech = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null, selectionShowAt = null }: {
     track: Track;
+    requestId?: string | null;
     requestedBy?: string | null;
+    dedication?: QueueItem['dedication'];
     operator?: boolean;
     block?: QueueItem['block'] | null;
     intent?: string | null;
@@ -990,7 +992,7 @@ class Queue {
       introScript = normalizeForDisplay(stripSpeakerLabel(introScript, speaker?.name ? [speaker.name] : []));
     }
     const item = {
-      track, requestedBy, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
+      track, requestId, requestedBy, dedication, operator, intent, introScript, introLabelChecked: true, introKind, introPersona, introHostSpeech,
       // Links are editorially scoped to the session that wrote them. Preserve
       // the key alongside the persona: persona alone cannot distinguish two
       // adjacent shows hosted by the same DJ.
@@ -4111,6 +4113,15 @@ class Queue {
     const item = this.upcoming.find(i => i.track?.id === trackId);
     if (!item) return { ok: false, reason: 'not-queued' };
     return this.removeUpcomingItem(item);
+  }
+
+  async removeUpcomingRequest(requestId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    const item = this.upcoming.find(i => i.requestId === requestId);
+    if (!item) {
+      if (this.current?.requestId === requestId) return { ok: false, reason: 'already-playing' };
+      return { ok: false, reason: 'not-queued' };
+    }
+    return this.removeUpcomingItem(item, 'listener request cancellation');
   }
 
   // What is on air, and the picks chosen for another show than `onAirShow`,

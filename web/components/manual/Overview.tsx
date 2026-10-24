@@ -39,6 +39,11 @@ const GUIDE = [
     blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
   },
   {
+    href: '/manual/alexa',
+    label: 'Alexa',
+    blurb: 'Connect a station-owned Alexa Custom Skill, choose a reliable invocation name, and test it in development mode.',
+  },
+  {
     href: '/manual/themes',
     label: 'Skins & Themes',
     blurb: 'Swap the player face between eight built-in skins, pick the station-wide palette, or fork the reference player entirely.',

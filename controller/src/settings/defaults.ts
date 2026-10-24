@@ -196,6 +196,11 @@ export const DEFAULTS = {
   // handing over every one at once is opt-in. GET /dj is deliberately unaffected:
   // it has always published the ON-AIR soul, one at a time.
   privacy: { privatePlayer: false, listenerAuth: false, password: '', publishPersonaSouls: false },
+  // Optional direct Alexa Custom Skill integration. Disabled until the operator
+  // supplies the one Skill ID created in the Alexa Developer Console. When
+  // listener auth is on, Alexa receives a short-lived signed URL whose lifetime
+  // is controlled by tokenTtlHours.
+  alexa: { enabled: false, skillId: '', streamMount: '/stream.mp3', tokenTtlHours: 24 },
   // Listener-request gates, all applied live. They bound the rate from several
   // angles at once: queue depth, requests/hour station-wide, per-track repeat
   // cooldown (0 = off), minimum gap between any two, and a single IP's share.
@@ -504,10 +509,10 @@ export const DEFAULTS = {
     // cost a slot.
     genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an
-    // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
-    // and matches it locally. Off by default: needs a search provider and costs a
-    // web round-trip plus a small extraction call per use. No-op unless
-    // searchReady().
+    // `identifyRequestedTrack` resolves described tracks and pasted lyrics via
+    // web search, then verifies the result against this library. Keep this
+    // opt-in for existing installations: it needs a search provider and costs
+    // a web round-trip plus a small extraction call per described request.
     requestWebResolve: false,
     // Hard wall-clock ceiling on a single DJ-agent generation, enforced by
     // withDeadline. Main, recovery and terminal runs share one budget per

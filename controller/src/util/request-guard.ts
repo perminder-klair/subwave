@@ -1,7 +1,7 @@
 // Pure on-air safety policy for listener requests: the one chokepoint for
 // routes/request.ts and broadcast/dj-agent.ts. Never inline a copy of these
 // checks at a call site.
-import { REQUEST_NAME_MAX } from '../schemas/request.js';
+import { DEDICATION_TARGET_MAX, REQUEST_NAME_MAX } from '../schemas/request.js';
 
 // The ONE normaliser for listener text, run before every check below and before
 // the text is stored. NFKC folds full-width and compatibility forms onto their
@@ -187,6 +187,25 @@ export function cleanRequesterName(raw: string | null | undefined, reserved: str
     .trim();
   if (!cleaned) return ANON_REQUESTER;
   if (impersonatesReserved(cleaned, reserved)) return ANON_REQUESTER;
+  return cleaned;
+}
+
+/**
+ * A dedication target is spoken on air, so keep it to display-safe data and
+ * refuse it rather than truncating a phrase into a different recipient.
+ */
+export function cleanDedicationTarget(raw: string | null | undefined): string | null {
+  const normalized = normalizeListenerText(raw).trim();
+  if (!normalized || /<|>|\[\/?(?:inst|system|assistant|developer)\]|\b(?:ignore|disregard|forget|override)\b/i.test(normalized)) {
+    return null;
+  }
+  const stripped = stripScriptedOpener(sanitizeRequestText(normalized));
+  if (stripped.injection) return null;
+  const cleaned = stripped.text
+    .replace(/[^\p{L}\p{M}\p{N}\s\-_.''&+]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || cleaned.length > DEDICATION_TARGET_MAX) return null;
   return cleaned;
 }
 

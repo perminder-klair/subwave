@@ -97,6 +97,7 @@ import {
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
+import { effectiveAlexaStreamMount, isAlexaStreamMountEnabled } from './alexa/stream.js';
 // A bound on the engine's composed prompt, not a validated vocabulary — it lives
 // beside the engine that enforces it (web/lib/geminiLimits.ts mirrors it for the
 // admin field, pinned by scripts/gemini-tts-settings.test.ts).
@@ -763,6 +764,27 @@ export async function load() {
         typeof stored.privacy?.publishPersonaSouls === 'boolean'
           ? stored.privacy.publishPersonaSouls
           : DEFAULTS.privacy.publishPersonaSouls,
+    },
+    alexa: {
+      enabled:
+        typeof stored.alexa?.enabled === 'boolean'
+          ? stored.alexa.enabled
+          : DEFAULTS.alexa.enabled,
+      skillId:
+        typeof stored.alexa?.skillId === 'string'
+          ? stored.alexa.skillId.trim().slice(0, 200)
+          : DEFAULTS.alexa.skillId,
+      streamMount: effectiveAlexaStreamMount(
+        stored.alexa?.streamMount,
+        stored.stream,
+      ),
+      tokenTtlHours:
+        typeof stored.alexa?.tokenTtlHours === 'number'
+          && Number.isInteger(stored.alexa.tokenTtlHours)
+          && stored.alexa.tokenTtlHours >= 1
+          && stored.alexa.tokenTtlHours <= 168
+          ? stored.alexa.tokenTtlHours
+          : DEFAULTS.alexa.tokenTtlHours,
     },
     // Listener-request pipeline gates. Absent/malformed settings.json (every
     // install predating this key) coerces field-by-field to DEFAULTS.requests,
@@ -2502,6 +2524,16 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       if (ui[k] !== undefined) (next.ui as Record<string, unknown>)[k] = ui[k];
     }
   }
+  if ('alexa' in patch) {
+    const ax = parseSettingsPatchKey<Record<string, unknown>>('alexa', patch.alexa);
+    if (ax.enabled !== undefined) next.alexa.enabled = ax.enabled as boolean;
+    if (ax.skillId !== undefined) next.alexa.skillId = ax.skillId as string;
+    if (ax.streamMount !== undefined) next.alexa.streamMount = ax.streamMount as string;
+    if (ax.tokenTtlHours !== undefined) next.alexa.tokenTtlHours = ax.tokenTtlHours as number;
+    if (next.alexa.enabled && !next.alexa.skillId) {
+      throw new Error('Alexa integration requires a Skill ID before it can be enabled');
+    }
+  }
   if ('privacy' in patch) {
     // Field rules on the shared schema; the lock-needs-a-password invariant
     // below is NOT one of them — it reads the MERGED state, so a lock turned on
@@ -2544,6 +2576,9 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     ) {
       throw new Error('set a station password before turning on a privacy lock');
     }
+  }
+  if (!isAlexaStreamMountEnabled(next.alexa.streamMount, next.stream)) {
+    throw new Error('enable the selected Alexa stream mount before using it');
   }
   if ('requests' in patch) {
     // The schema decides "usable or absent" per field; the fallback to the

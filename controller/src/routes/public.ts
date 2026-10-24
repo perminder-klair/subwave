@@ -509,12 +509,13 @@ router.post(
   async (req, res) => {
     await settings.load();
     const s = settings.get();
+    const mount = typeof req.body?.mount === 'string' ? req.body.mount : '';
     const allow = listenerAuthDecision({
       enabled: s?.privacy?.listenerAuth === true,
       password: s?.privacy?.password || '',
       action: typeof req.body?.action === 'string' ? req.body.action : '',
       pass: typeof req.body?.pass === 'string' ? req.body.pass : '',
-      mount: typeof req.body?.mount === 'string' ? req.body.mount : '',
+      mount,
     });
     if (allow) {
       res.setHeader('icecast-auth-user', '1');

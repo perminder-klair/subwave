@@ -3,7 +3,7 @@ import helmet from 'helmet';
 import { z } from 'zod';
 import { cors } from './cors.js';
 
-export function configureHttp(app: Express): void {
+export function configureHttp(app: Express, options: { parseJson?: boolean } = {}): void {
   // Preserve the Express 4 query contract, including repeated and bracketed keys.
   app.set('query parser', 'extended');
   // Cross-origin artwork and audio previews need cross-origin CORP. The web
@@ -16,6 +16,11 @@ export function configureHttp(app: Express): void {
   }));
   // Parser failures must carry CORS headers too, so cross-origin clients can read them.
   app.use(cors);
+  if (options.parseJson !== false) configureJsonBody(app);
+}
+
+/** Mount the controller JSON parser after any route that must verify raw bytes. */
+export function configureJsonBody(app: Express): void {
   app.use(express.json({ limit: '600kb' }));
   app.use((req, _res, next) => {
     // Express 5 leaves unparsed bodies undefined. Optional-body routes and

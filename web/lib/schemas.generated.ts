@@ -1961,6 +1961,7 @@ export function normalizeRecipeRow(raw: unknown): {
 // is an alias of this.
 export const REQUEST_TEXT_MAX = 280;
 export const REQUEST_NAME_MAX = 40;
+export const DEDICATION_TARGET_MAX = 60;
 
 // Explicit null reads as absent. (Named per-module: the mirror is one flat file.)
 const requestNullToUndefined = (v: unknown) => (v == null ? undefined : v);
@@ -1989,6 +1990,17 @@ export const listenerRequestSchema = z.object({
       .default(''),
   ),
 });
+
+export const listenerDedicationSchema = z.object({
+  target: z
+    .string({ error: 'Tell me who the dedication is for.' })
+    .trim()
+    .min(1, 'Tell me who the dedication is for.')
+    .max(DEDICATION_TARGET_MAX, `Keep the dedication under ${DEDICATION_TARGET_MAX} characters.`),
+  locale: z.enum(['en-US', 'en-IN', 'hi-IN']).default('en-IN'),
+});
+
+export type ListenerDedication = z.infer<typeof listenerDedicationSchema>;
 
 // ─── from controller/src/schemas/schedule.ts ─────────────────────────────
 
@@ -3478,6 +3490,31 @@ export const privacyPatchSchema = settingsBlockOf({
       }
     })
     .transform((raw) => String(raw ?? '').trim()),
+});
+
+// Alexa is a direct, station-owned integration. The merged-state check that
+// requires a Skill ID lives in settings.update(), because enabled and skillId
+// may arrive in the same patch. Protected listener streams use a temporary
+// signed URL, so listener authentication is intentionally compatible with Alexa.
+export const ALEXA_STREAM_MOUNTS = [
+  '/stream.mp3',
+  '/stream.opus',
+  '/stream.flac',
+  '/stream.aac',
+] as const;
+export type AlexaStreamMount = typeof ALEXA_STREAM_MOUNTS[number];
+
+export const alexaPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  skillId: settingsTrimmedString(200, 'alexa.skillId must be 200 chars or fewer'),
+  streamMount: settingsStrictOneOf(
+    ALEXA_STREAM_MOUNTS,
+    `alexa.streamMount must be one of: ${ALEXA_STREAM_MOUNTS.join(', ')}`,
+  ),
+  tokenTtlHours: settingsIntLike(
+    { min: 1, max: 168 },
+    'alexa.tokenTtlHours must be an integer from 1 to 168',
+  ),
 });
 
 /**

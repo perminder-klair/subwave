@@ -1141,6 +1141,31 @@ export const privacyPatchSchema = settingsBlockOf({
     .transform((raw) => String(raw ?? '').trim()),
 });
 
+// Alexa is a direct, station-owned integration. The merged-state check that
+// requires a Skill ID lives in settings.update(), because enabled and skillId
+// may arrive in the same patch. Protected listener streams use a temporary
+// signed URL, so listener authentication is intentionally compatible with Alexa.
+export const ALEXA_STREAM_MOUNTS = [
+  '/stream.mp3',
+  '/stream.opus',
+  '/stream.flac',
+  '/stream.aac',
+] as const;
+export type AlexaStreamMount = typeof ALEXA_STREAM_MOUNTS[number];
+
+export const alexaPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  skillId: settingsTrimmedString(200, 'alexa.skillId must be 200 chars or fewer'),
+  streamMount: settingsStrictOneOf(
+    ALEXA_STREAM_MOUNTS,
+    `alexa.streamMount must be one of: ${ALEXA_STREAM_MOUNTS.join(', ')}`,
+  ),
+  tokenTtlHours: settingsIntLike(
+    { min: 1, max: 168 },
+    'alexa.tokenTtlHours must be an integer from 1 to 168',
+  ),
+});
+
 /**
  * `requests` — every field falls back to the CURRENT stored value, so the
  * schema's job is to decide "usable or absent" and let update() spread the
