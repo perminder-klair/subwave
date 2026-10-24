@@ -15,7 +15,8 @@ import { listen } from './test-utils/http.js';
 delete process.env.ADMIN_USER;
 delete process.env.ADMIN_PASS;
 
-const { fileFormatOf, createFileFormatLookup, FAILURE_RETRY_MS } = await import('../src/music/file-format.js');
+const { fileFormatOf, createFileFormatLookup } = await import('../src/music/file-format.js');
+const { FILE_FORMAT_RETRY_MS } = await import('../src/schemas/file-format.js');
 const { createNowPlayingFileRouter } = await import('../src/routes/now-playing-file.js');
 const express = (await import('express')).default;
 
@@ -82,7 +83,7 @@ test('lookup: a failure answers null and is retried only after the back-off', as
   assert.equal(await lookup('x'), null);
   assert.equal(await lookup('x'), null);
   assert.deepEqual(f.calls, ['x'], 'a Dash polling every 3 s must not hammer a down Navidrome');
-  now += FAILURE_RETRY_MS + 1;
+  now += FILE_FORMAT_RETRY_MS + 1;
   await lookup('x');
   assert.deepEqual(f.calls, ['x', 'x']);
 });

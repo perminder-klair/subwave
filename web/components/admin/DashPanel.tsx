@@ -8,6 +8,7 @@ import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
 import { formatFileFormat } from '../../lib/fileFormat';
+import { FILE_FORMAT_RETRY_MS } from '../../lib/schemas.generated';
 import { clientLabel, fmtConnected } from '../../lib/clientLabel';
 import type { QueueEntry } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
@@ -444,9 +445,12 @@ export default function DashPanel() {
   const fileQuery = useAdminQuery({
     key: dashKeys.nowPlayingFile(npId), adminFetch, enabled: ready && !!npId,
     staleTime: Infinity, request: (fetcher, signal) => fetchNowPlayingFile(fetcher, npId, signal), toastOnError: false,
-    // Navidrome did not answer: ask again a minute later (the controller backs
-    // off the same minute), instead of leaving the format blank for the track.
-    refetchInterval: (query) => (query.state.data && query.state.data.format === null ? 60_000 : false),
+    // Navidrome did not answer, or the request itself failed (queries here
+    // never retry): ask again after the minute the controller backs off,
+    // instead of leaving the format blank for the rest of the track.
+    refetchInterval: (query) => (
+      query.state.status === 'error' || query.state.data?.format === null ? FILE_FORMAT_RETRY_MS : false
+    ),
   });
   const fileFormat = fileQuery.data?.id === npId ? formatFileFormat(fileQuery.data.format) : null;
   const ctx = status?.context;

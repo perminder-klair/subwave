@@ -11,6 +11,8 @@
 // Unknown is ABSENT, never zero: Navidrome reports bitDepth 0 for a lossy
 // file, and "0-bit" is not a property any file has.
 
+import { FILE_FORMAT_RETRY_MS } from '../schemas/file-format.js';
+
 export interface FileFormat {
   suffix?: string;
   contentType?: string;
@@ -38,16 +40,13 @@ export function fileFormatOf(song: unknown): FileFormat {
   return out;
 }
 
-/** A failed lookup is not retried before this: a Dash polling a down
- *  Navidrome every 3 s must cost one call a minute, not twenty. */
-export const FAILURE_RETRY_MS = 60_000;
-
 type Entry = { format: FileFormat } | { failedAt: number };
 
 /**
  * One getSong per track id, shared by every concurrent ask, held in a small
  * LRU (the Dash only ever asks about the track on air, so a handful covers a
- * skip back and forth). A failure answers null and backs off.
+ * skip back and forth). A failure answers null and backs off for
+ * FILE_FORMAT_RETRY_MS.
  */
 export function createFileFormatLookup(deps: {
   getSong: (id: string) => Promise<unknown>;
@@ -71,7 +70,7 @@ export function createFileFormatLookup(deps: {
       remember(id, hit); // LRU touch
       return hit.format;
     }
-    if (hit && now() - hit.failedAt < FAILURE_RETRY_MS) return null;
+    if (hit && now() - hit.failedAt < FILE_FORMAT_RETRY_MS) return null;
     const running = inflight.get(id);
     if (running) return running;
     const p = (async () => {
