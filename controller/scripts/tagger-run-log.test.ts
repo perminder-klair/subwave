@@ -207,12 +207,13 @@ test('close() flushes pending, calls sink.close once, ignores subsequent writes'
 test('a sink that throws on write does not crash the run', () => {
   t = 1_000_000;
   let writeCount = 0;
+  let closeCount = 0;
   const badSink: { write(text: string): void; close(): void } = {
     write(_text: string): void {
       writeCount++;
       if (writeCount === 2) throw new Error('disk full');
     },
-    close() { /* no-op */ },
+    close() { closeCount++; },
   };
   const log = new RunLog({ runId: 'r10', now, sink: badSink });
   log.event({ kind: 'info', text: 'one', at: '2026-10-21T05:00:00.000Z' }, () => false); // write 1 ok
@@ -223,10 +224,12 @@ test('a sink that throws on write does not crash the run', () => {
   const p = log.since(0);
   assert.equal(p.entries.length, 3);
   assert.equal(writeCount, 2); // not called a 3rd time
+  assert.equal(closeCount, 1, 'the failed file is closed straight away, not held open for the run');
 
-  // close() must not call write again.
+  // close() must not call write again, nor close the dropped file twice.
   log.close();
   assert.equal(writeCount, 2);
+  assert.equal(closeCount, 1);
 });
 
 // ─── (k) sink line format ────────────────────────────────────────────────────

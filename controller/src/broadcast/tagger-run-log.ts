@@ -152,8 +152,11 @@ export class RunLog {
     try {
       this.sink.write(text);
     } catch {
-      // Disk is failing—continue in memory only.
+      // Disk is failing—continue in memory only, and give the file back now:
+      // close() skips a sink it no longer holds.
+      const failed = this.sink;
       this.sink = null;
+      try { failed.close(); } catch { /* best effort */ }
     }
   }
 }
