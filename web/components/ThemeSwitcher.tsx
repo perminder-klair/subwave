@@ -222,8 +222,10 @@ export default function ThemeSwitcher({ variant = 'player', className }: ThemeSw
             'v3-modal-pop fixed top-1/2 left-1/2 z-50 flex flex-col border border-ink bg-bg text-ink shadow-drawer outline-none',
             '-translate-x-1/2 -translate-y-1/2',
             // Four skin cards a row want the room; the admin's theme strip alone
-            // doesn't. Clamped to the viewport either way.
-            'max-h-[calc(100vh-3rem)]',
+            // doesn't. Clamped to the viewport either way: dvh, not vh, because
+            // mobile vh counts the space under the browser's toolbars and the
+            // centred box overflowed both edges.
+            'max-h-[calc(100dvh-2rem)]',
             showSkins ? 'w-[min(760px,calc(100vw-2rem))]' : 'w-[min(560px,calc(100vw-2rem))]',
           )}
         >
