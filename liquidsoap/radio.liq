@@ -1404,8 +1404,9 @@ music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_j
 # FEED time — the jingle turns audible ~crossfade_duration later — and the
 # controller holds its voice chain until start + crossfade + clip length.
 #
-# ONE writer for both kinds, on the source cross reads, because only here does a
-# jingle starting mean it is going on air. The jingles playlist and
+# ONE writer for both between-song kinds, on the source cross reads, because
+# only here does a jingle starting mean it is going on air. (An over-music
+# overlay ID never reaches this switch; voice_marker marks it as it airs.) The jingles playlist and
 # jingle_now_queue are request sources, and a request source starts its next
 # ready request in the frame that ends the current one, firing that request's
 # hooks before anything downstream has chosen it. The rotate then takes music
@@ -1661,13 +1662,19 @@ def voice_marker(channel, tmp_dir) =
             30.
           end
         voice_until := now + min(dur, VOICE_GATE_MAX_SEC) + 2.
+        # The second writer of jingle-playing.json (the first is the JINGLE
+        # MARKER on the switch's output). An overlay never reaches that switch,
+        # and intro_queue sits directly under its duck, so this hook fires as
+        # the ID airs. Its duration is jingle_duration's, 0. when unmeasured,
+        # never this hook's 30s gate fallback: the controller reads 0. as
+        # "measure it yourself".
         if m["subwave_jingle_overlay"] == "true" then
           try
             file.write(
               data=json.stringify(compact=true, {
                 filename = fname,
                 startedAt = now,
-                durationSec = dur,
+                durationSec = jingle_duration(fname),
                 placement = "over"
               }),
               atomic=true,

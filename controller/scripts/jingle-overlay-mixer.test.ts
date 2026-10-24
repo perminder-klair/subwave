@@ -117,3 +117,10 @@ test('the offer gate checks presses, handoff files and both voice queues once, w
   }
   assert.match(body('poll_intro'), /jingle_overlay_safe\(\)/);
 });
+
+test('the overlay marker carries the measured length, 0. when unmeasured, never the voice gate fallback', () => {
+  const marker = body('voice_marker');
+  assert.match(marker, /durationSec = jingle_duration\(fname\)/);
+  assert.doesNotMatch(marker, /durationSec = dur\b/);
+  assert.match(body('jingle_duration'), /null\.get\(default=0\./);
+});
