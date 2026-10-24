@@ -2,7 +2,7 @@
 // (components/iso/geometry.ts): every box is its three faces in a shear
 // matrix, silhouettes traced separately at a heavier pen. Pure data, no React.
 
-import { drawBlock, poly, project, round2, type DrawnBlock, type Pt } from '@/components/iso/geometry';
+import { drawBlock, hatchStrip, poly, project, round2, type DrawnBlock, type Pt } from '@/components/iso/geometry';
 
 export type { DrawnBlock };
 
@@ -135,12 +135,8 @@ export const AXO = {
   /** Hinge knuckles straddling the plinth's back edge, over the cover's foot. */
   hinges: [drawBlock({ x: 40, y: 7, z: 256, w: 14, d: 7, h: 4 }), drawBlock({ x: 166, y: 7, z: 256, w: 14, d: 7, h: 4 })],
   /** The shadow each floor-standing piece casts on the floor beside it, away
-   *  from the light: flat strips at z = 0, faded outward along world x. */
-  floor: [
-    drawBlock({ x: -50, y: 26, z: 0, w: 26, d: 94, h: 0 }),
-    drawBlock({ x: 240, y: 8, z: 0, w: 30, d: 142, h: 0 }),
-    drawBlock({ x: 370, y: 26, z: 0, w: 26, d: 94, h: 0 }),
-  ],
+   *  from the light, hatched in pen. */
+  hatch: hatchStrip(-50, -24, 26, 120, 7) + hatchStrip(240, 270, 8, 150, 7) + hatchStrip(370, 396, 26, 120, 7),
   lid: {
     /** The top panel, seen from inside through the open rim. */
     panel: lidQuad([[L0, 0, LH], [L1, 0, LH], [L1, LD, LH], [L0, LD, LH]]),

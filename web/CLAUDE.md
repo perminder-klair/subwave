@@ -38,7 +38,7 @@ Next.js App Router + Tailwind. Read [`DEPENDENCIES.md`](DEPENDENCIES.md) before 
 ## Drawings
 
 - The isometric kit (`components/iso/`) is shared by AXO, Platter and the landing and admin figures. Construction lines mean not built, not checked or nothing yet; ink means real. A figure's resting CSS is its finished still frame: motion layers on only under `prefers-reduced-motion: no-preference`, and `html.lite` kills it. Words a reader needs go in HTML beside the drawing, never in SVG text.
-- An SVG `filter` on a perfectly vertical or horizontal line has a zero-width box, so its default filter region is empty and the line vanishes. Glow such a line with a wider, fainter stroke beneath it (AXO's dial needle and knob pointer).
+- An SVG `filter` on a perfectly vertical or horizontal line has a zero-width box, so its default filter region is empty and the line vanishes. Glow such a line with a wider, fainter stroke beneath it.
 - A canvas or WebGL drawing reads theme colours through `lib/theme-rgb.ts` (`readThemeRgb` + `watchTheme`), never a hex literal. The Observatory galaxy names tones, and `observatory/palette.ts` turns them into the live theme's night sky, ramp and labels.
 - The landing "Press Run" plates (`lib/press-run-plates.ts`) are screenshots. When a skin's look changes, re-capture them against a running station with `cd web && npm i --no-save playwright sharp && npx tsx scripts/capture-gallery.mjs`.
 

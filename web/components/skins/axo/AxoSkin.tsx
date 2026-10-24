@@ -1,9 +1,10 @@
 'use client';
 
-// AXO — the player as a hi-fi stack at 30° isometric, built in Unit SW-9's
-// hardware. The drawing is the interface (see AxoScene); the column beside it
-// is a brushed plate carrying the facts a drawing can't, the now-playing card
-// on display glass, and the dimmed glass before tune-in is the gate. Focus
+// AXO — the player as a hi-fi stack drawn in pen at 30° isometric. The
+// drawing is the interface (see AxoScene); the column beside it is a brushed
+// plate in Unit SW-9's hardware carrying the facts a drawing can't, the
+// now-playing card on display glass, and the dimmed glass before tune-in is
+// the gate. Focus
 // mode (desktop, F) folds the column away and hands the now-playing card to the
 // open dust cover, lit as a screen (screen.ts lays it out).
 // Desktop and mobile are two trees switched by CSS rather than a JS media
