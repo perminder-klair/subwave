@@ -302,7 +302,10 @@ aligned lead becomes `liq_clip_lead − late`, so Y waits `late` longer and its
 first sample meets the clip at the same instant of Y. The reader accepts
 `0 < late < min(lead, 0.15 s)` and logs anything else. Without a stamp the
 URI and the seam are unchanged. Codecs that were not validated, a probe
-failure and the 2-second timeout all mean no stamp.
+failure and a timeout all mean no stamp. The probe waits at most 2 s, and
+only out of the runway left past the drain's commit reserve
+(`drain-policy.cueProbeBudgetMs`), so it never delays Y's handoff into that
+reserve.
 
 `bash scripts/stem-seam-test.sh cuein` measures it. It encodes one
 non-periodic reference into every format below, renders

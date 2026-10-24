@@ -81,6 +81,7 @@ import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
 import {
+  cueProbeBudgetMs,
   drainAction,
   introRenderBudgetSec,
   playableDurationSec,
@@ -2214,6 +2215,8 @@ class Queue {
         // late, once, and stamp it so the mixer delays Y by the same amount.
         // Only for a stem seam whose cue-in IS the clip's hand-off; any
         // failure is fail-open (no stamp = the seam aligns on the cue as before).
+        // Budgeted against the same clock as the intro render: the probe is a
+        // garnish on the seam and must never eat the commit reserve.
         let clipCueLate: { cueSec: number; lateSec: number } | null = null;
         if (item.stemSeam && item.stemCueInSec && item.cueInSec === item.stemCueInSec) {
           const cueSec = item.cueInSec;
@@ -2221,9 +2224,12 @@ class Queue {
           try {
             source = subsonic.getLocalPath(item.track) || (item.track.id ? subsonic.getRawStreamUrl(item.track.id) : null);
           } catch { /* no Subsonic config: no probe */ }
-          const landing: cueLanding.CueLanding = source
-            ? await cueLanding.probeCueLanding(source, cueSec, { timeoutMs: 2000 })
-            : { ok: false, codec: null, reason: 'no source' };
+          const probeBudgetMs = cueProbeBudgetMs(this.remainingUntilItemAirs(item));
+          const landing: cueLanding.CueLanding = !source
+            ? { ok: false, codec: null, reason: 'no source' }
+            : probeBudgetMs === 0
+              ? { ok: false, codec: null, reason: 'airs too soon to probe' }
+              : await cueLanding.probeCueLanding(source, cueSec, { timeoutMs: probeBudgetMs });
           if (landing.ok) {
             clipCueLate = { cueSec, lateSec: landing.lateSec };
             this.log('mix', `stem seam cue-in lands +${(landing.lateSec * 1000).toFixed(1)}ms late (${landing.codec}) — clip→Y lead shortened`);
