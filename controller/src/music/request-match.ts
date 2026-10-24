@@ -111,6 +111,23 @@ export interface RequestCandidateEvidence {
   lyricsById?: ReadonlyMap<string, string> | Readonly<Record<string, string | null | undefined>>;
 }
 
+export type LatestReleaseKind = 'single' | 'album';
+
+export interface LatestReleaseEvidence {
+  kind: LatestReleaseKind;
+  title: string;
+  artist: string;
+  releaseDate: string;
+  source: string;
+  sourceUrls?: string[];
+}
+
+export type LatestReleaseUnavailableReason = 'artist-not-found' | 'no-evidence' | 'ambiguous' | 'provider-error' | 'not-in-library';
+
+export type LatestReleaseLookup =
+  | { status: 'verified'; release: LatestReleaseEvidence }
+  | { status: 'unavailable'; reason: LatestReleaseUnavailableReason; provider?: string };
+
 export interface RankedRequestCandidate {
   song: RequestSong;
   score: number;
@@ -182,6 +199,12 @@ export interface RequestSelection {
   required?: string[];
   confidence?: number;
   alternatives?: Array<{ id: string; title: string; artist: string; confidence: number }>;
+  releaseResolution?: {
+    kind: LatestReleaseKind;
+    mode: 'verified' | 'local-fallback';
+    evidence?: LatestReleaseEvidence;
+    reason?: LatestReleaseUnavailableReason;
+  };
 }
 
 // The resolver named the track but declined to queue it: it played recently,
@@ -860,6 +883,58 @@ export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): b
     && !asksForKindOfMusic(text);
 }
 
+type LatestReleaseScope = 'song' | 'album';
+
+function latestReleaseScope(noun: string): LatestReleaseScope {
+  return /album|record|एल्बम/iu.test(noun) ? 'album' : 'song';
+}
+
+function latestReleaseMatch(artist: string | null, scope: LatestReleaseScope): RequestMatch {
+  const cleanArtist = artist?.replace(/[.!?]+$/u, '').trim() || null;
+  return {
+    kind: 'track', title: null, album: null, artist: cleanArtist,
+    genre: null, language: null, mood: null, energy: null,
+    sort: 'latest', scope, search_terms: cleanArtist ? [cleanArtist] : [],
+    intent: scope === 'album' ? 'Wants a track from the newest official album.' : 'Wants the newest official single.',
+    ack: '',
+  };
+}
+
+/**
+ * Recognise release recency before the generic `title by artist` parser. The
+ * generic parser must treat every unknown left-hand side as a literal title,
+ * which is correct for `The Latest by X` but wrong for `latest song by X`.
+ * Keep this grammar narrow so a recording whose real title contains these
+ * words is still handled by the literal path.
+ */
+function latestReleaseRequest(text: string): RequestMatch | null {
+  const source = text.trim()
+    .replace(/^(?:(?:what(?:['’]s|\s+is)|tell\s+me|show\s+me|give\s+me|play|queue|request)\s+)(?:the\s+)?/iu, '')
+    .replace(/^the\s+/iu, '')
+    .replace(/[.!?]+$/u, '').trim();
+  if (!source || /"|“|”|‘|’/u.test(source)) return null;
+  const noun = '(song|track|single|tune|album|record|गाना|गाने|गीत|ट्रैक|सिंगल|एल्बम|रिकॉर्ड)';
+  const recency = '(?:latest|newest|most\\s+recent|recent|new)';
+  const byArtist = source.match(new RegExp(`^${recency}\\s+${noun}\\s+(?:by|from)\\s+(.+)$`, 'iu'));
+  if (byArtist?.[2]) return latestReleaseMatch(byArtist[2], latestReleaseScope(byArtist[1]));
+
+  const possessive = source.match(new RegExp(`^(.+?)['’]s\\s+${recency}\\s+${noun}$`, 'iu'));
+  if (possessive?.[1]) return latestReleaseMatch(possessive[1], latestReleaseScope(possessive[2]));
+
+  const suffix = source.match(new RegExp(`^(.+?)\\s+${recency}\\s+${noun}$`, 'iu'));
+  if (suffix?.[1]) return latestReleaseMatch(suffix[1], latestReleaseScope(suffix[2]));
+
+  // Common Hinglish and Hindi Alexa transcriptions: "X ka sabse naya gana"
+  // and "X का सबसे नया गाना". The artist remains data; only the small release
+  // frame is interpreted.
+  const indic = source.match(/^(.+?)\s+(?:ka|ki|ke|का|की|के)\s+(?:(?:sabse|सबसे)\s+)?(?:latest|newest|naya|nayi|naye|नया|नई|नए|नवीनतम|लेटेस्ट)\s+(song|track|single|album|record|gana|gaana|गाना|गाने|गीत|ट्रैक|सिंगल|एल्बम|रिकॉर्ड)$/iu);
+  if (indic?.[1]) return latestReleaseMatch(indic[1], latestReleaseScope(indic[2]));
+
+  const bare = source.match(new RegExp(`^${recency}\\s+${noun}$`, 'iu'));
+  if (bare?.[1]) return latestReleaseMatch(null, latestReleaseScope(bare[1]));
+  return null;
+}
+
 export function modelFreeRequest(text: string): RequestMatch {
   const cleaned = text.replace(REQUEST_LEAD, '').replace(/\s+please[.!?]*$/i, '').trim();
   const unquote = (s: string) => s.replace(/^["'“‘]|["'”’][.!?]*$/g, '').trim();
@@ -966,6 +1041,14 @@ export function modelFreeRequest(text: string): RequestMatch {
     && requestLanguageCode(languageHint[1]) ? languageHint : null;
   const unverifiedConditions = languageHint && !language ? ['unparsed language condition'] : [];
   const query = language ? cleaned.slice(0, language.index) : cleaned;
+  const latest = latestReleaseRequest(query);
+  if (latest) {
+    return {
+      ...latest,
+      language: language?.[1] || null,
+      unverifiedConditions,
+    };
+  }
   // Keep offsets into the original text, but never split a quoted name on its
   // own "by", comma or spaced dash.
   const separators = query.replace(QUOTED_NAMES, name => '\u0000'.repeat(name.length));
@@ -1315,6 +1398,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // Exact catalogue proof only. Bare words get no fuzzy reading, or "rock"
   // would land on a track called "Rocks".
   exactIdentity?: boolean;
+  // Recency evidence is resolved outside this pure catalogue module. The
+  // callback may use MusicBrainz/web metadata, but the returned release still
+  // has to be verified against this local catalogue before it is queued.
+  latestRelease?(artist: string, kind: LatestReleaseKind, signal?: AbortSignal): Promise<LatestReleaseLookup>;
   random?: () => number;
   // `ranked` says the pool is best-first, so order matters to the choice.
   choose?(pool: RequestSong[], options?: { ranked?: boolean }): RequestSong | null;
@@ -1329,6 +1416,9 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
+  if (match.sort === 'latest' && !match.artist?.trim() && !match.title?.trim() && !match.album?.trim()) {
+    return { track: null, source: 'no-match', outcome: 'no-match', errors };
+  }
   const unsupported = deps.text === undefined ? classifyUnsupportedLabels(match.unsupported).conditions : directRequestUnsupported(deps.text, match);
   if (unsupported.length) return { track: null, source: 'unsupported', outcome: 'unsupported', errors, unsupported };
   // Model-supplied names can hide instructions just as literal names can.
@@ -1354,6 +1444,26 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   let artistName = match.artist;
   let titleOnlyArtistFallback = false;
   let actTried = false;
+  const releaseRequest = match.sort === 'latest'
+    && !title
+    && !!artistName
+    && !match.album
+    && (match.scope === undefined || match.scope === 'song' || match.scope === 'album');
+  const releaseKind: LatestReleaseKind = match.scope === 'album' ? 'album' : 'single';
+  const chronologicalRequest = !title && (match.sort === 'latest' || match.sort === 'oldest');
+  let deterministicReleaseSelection = chronologicalRequest;
+  let releaseLookup: LatestReleaseLookup | null = null;
+  let releaseResolution: RequestSelection['releaseResolution'] | undefined;
+  const decorateRelease = (selection: RequestSelection): RequestSelection => {
+    if (!releaseResolution) return selection;
+    return {
+      ...selection,
+      outcome: releaseResolution.mode === 'local-fallback' && selection.outcome === 'matched'
+        ? 'substituted'
+        : selection.outcome,
+      releaseResolution,
+    };
+  };
   const requiredGenre = !!match.genre && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.genre));
   const requiredLanguage = !!match.language && (deps.text === undefined || explicitRequestAttribute(deps.text, match, match.language));
   const required = [requiredGenre && 'genre', requiredLanguage && 'language'].filter((value): value is string => !!value);
@@ -1440,6 +1550,9 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       + Number(!!match.language && !requiredLanguage && languageMatches(song));
     const best = songs.reduce((best, song) => Math.max(best, score(song)), 0);
     const pool = songs.filter(song => score(song) === best);
+    if (deterministicReleaseSelection) {
+      return [...pool].sort((a, b) => String(a.id).localeCompare(String(b.id)))[0] || null;
+    }
     if (deps.choose) return deps.choose(pool);
     return pool[Math.min(pool.length - 1, Math.floor((deps.random || Math.random)() * pool.length))] || null;
   };
@@ -1824,7 +1937,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         const direction = match.sort === 'latest' ? -1 : 1;
         albums = [...albums].sort((a, b) => {
           const left = requestReleaseRank(a), right = requestReleaseRank(b);
-          return !left ? 1 : !right ? -1 : direction * (left - right);
+          return !left ? 1 : !right ? -1 : direction * (left - right)
+            || String(a.id).localeCompare(String(b.id));
         });
       } else if (albums.length) {
         const offset = Math.floor((deps.random || Math.random)() * albums.length);
@@ -1833,8 +1947,40 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const rankedSongs: Array<{ song: RequestSong; rank: number }> = [];
       const artistMoodPool: RequestSong[] = [];
       const rankIndividualTracks = !title && match.scope !== 'album' && (match.sort === 'latest' || match.sort === 'oldest');
-      for (const album of albums.slice(0, 20)) {
+      const releaseFallbackAlbums: Array<{ album: typeof albums[number]; songs: RequestSong[] }> = [];
+      let releaseExactRequest = false;
+      if (releaseRequest && deps.latestRelease) {
+        releaseLookup = await safe('latest release lookup', () => deps.latestRelease!(resolvedArtistName || artistName!, releaseKind, deps.signal), {
+          status: 'unavailable', reason: 'provider-error',
+        });
+        if (releaseLookup.status === 'verified') {
+          releaseExactRequest = true;
+          releaseResolution = { kind: releaseKind, mode: 'verified', evidence: releaseLookup.release };
+          if (releaseKind === 'single') title = releaseLookup.release.title;
+        } else {
+          releaseResolution = { kind: releaseKind, mode: 'local-fallback', reason: releaseLookup.reason };
+        }
+      }
+      // Latest-release resolution must inspect the complete artist catalogue:
+      // a recent or unavailable first page can otherwise hide the newest
+      // eligible track on a later album. Ordinary artist requests retain the
+      // bounded scan because they do not need chronological proof.
+      const albumsToScan = releaseRequest ? albums : albums.slice(0, 20);
+      for (const album of albumsToScan) {
         const songs = await safe('album tracks', () => catalog.getAlbum(album.id, { signal: deps.signal }), []);
+        if (releaseRequest && deps.latestRelease) {
+          releaseFallbackAlbums.push({ album, songs });
+          if (releaseExactRequest) {
+            const releaseAlbum = releaseLookup?.status === 'verified' ? releaseLookup.release.title : '';
+            const isReleaseAlbum = releaseKind !== 'album'
+              || requestName(album.name || album.title) === requestName(releaseAlbum);
+            if (isReleaseAlbum) {
+              const result = select(songs, 'artist-latest-release');
+              if (result) return decorateRelease(result);
+            }
+          }
+          continue;
+        }
         if (title) artistAlternatives.push(...songs.filter(song => requestCandidateArtistMatches(resolvedArtistName, song)));
         if (rankIndividualTracks) {
           rankedSongs.push(...songs.map(song => ({ song, rank: requestReleaseRank(song) || requestReleaseRank(album) })));
@@ -1847,6 +1993,42 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         const result = select(songs, 'artist-albums');
         // Album order is no evidence of popularity, but a named song is itself.
         if (result) return match.sort === 'popular' && !title ? { ...result, outcome: 'substituted' } : result;
+      }
+      if (releaseRequest && deps.latestRelease) {
+        if (releaseExactRequest) {
+          // The provider identified a real release, but the station does not
+          // carry that exact recording/release. Keep the fallback in the
+          // verified artist catalogue and make its reason visible to callers.
+          releaseResolution = { kind: releaseKind, mode: 'local-fallback', reason: 'not-in-library' };
+          title = null;
+        }
+        deterministicReleaseSelection = true;
+        if (releaseKind === 'album') {
+          for (const { songs } of releaseFallbackAlbums) {
+            const result = select(songs, 'artist-latest-local-fallback');
+            if (result) return decorateRelease(result);
+          }
+        } else {
+          const rankedReleaseSongs = releaseFallbackAlbums.flatMap(({ album, songs }) => songs.map(song => ({
+            song,
+            rank: requestReleaseRank(song) || requestReleaseRank(album),
+          })));
+          const ranks = [...new Set(rankedReleaseSongs.map(row => row.rank))]
+            .sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || b - a);
+          for (const rank of ranks) {
+            const result = select(rankedReleaseSongs.filter(row => row.rank === rank).map(row => row.song), 'artist-latest-local-fallback');
+            if (result) return decorateRelease(result);
+          }
+        }
+        const releaseRefusal = refusal();
+        if (releaseRefusal) return decorateRelease(releaseRefusal);
+        return {
+          track: null,
+          source: errors.length ? 'lookup-error' : 'no-match',
+          outcome: 'no-match',
+          errors,
+          releaseResolution,
+        };
       }
       if (artistMoodPool.length) {
         const result = select(artistMoodPool, 'artist-mood');

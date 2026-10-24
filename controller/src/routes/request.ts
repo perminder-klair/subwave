@@ -30,8 +30,10 @@ import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { asksForKindOfMusic, carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
 import { canonicalLanguage } from '../music/request-normalize.js';
+import { lookupLatestRelease } from '../music/request-release.js';
+import type { RequestSelection } from '../music/request-match.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
-import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
+import { latestReleaseFallbackAck, matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
 import { ARTIST_VARIETY_WINDOW, drawRankedRequestCandidate, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 import { agentDeadline, RequestIdentificationMiss } from '../broadcast/dj-agent/breaker.js';
 import { isWebSearchProviderError } from '../skills/web-search.js';
@@ -118,6 +120,7 @@ export interface ListenerRequestEntry {
   interpretationFallback?: boolean;
   introFailure?: string | null;
   introScript?: string | null;
+  releaseResolution?: RequestSelection['releaseResolution'];
 }
 
 // In-memory request index for fast polling and admission checks. The durable
@@ -278,6 +281,7 @@ function recordOutcome(entry) {
       message: entry.message || null,
       guard: entry.guard ?? null,
       introFailure: entry.introFailure ?? null,
+      releaseResolution: entry.releaseResolution ?? null,
     });
   } catch (err) {
     queue.log('error', `request-log record failed: ${err.message}`);
@@ -920,6 +924,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
         },
       }
       : {}),
+    latestRelease: (artist, kind, latestSignal) => lookupLatestRelease(artist, kind, latestSignal),
   });
   // With no reading the listener's whole words are still an exact title and
   // artist, whatever attribute or comparison the literal parse found in them:
@@ -975,6 +980,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   entry.outcome = selection.outcome;
   entry.lookupErrors = selection.errors;
   entry.unmetPreferences = selection.unmetPreferences || [];
+  entry.releaseResolution = selection.releaseResolution;
   for (const error of selection.errors) queue.log('error', `request lookup ${error}`);
   if (!pick) {
     entry.pickSource = pickSource;
@@ -1027,6 +1033,11 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     const screened = screenAck(matched.ack, text, 'Found a match — your track is on the way.');
     if (screened.guard) flagGuard(entry, screened.guard);
     ack = screened.ack;
+  }
+  if (selection.releaseResolution?.mode === 'local-fallback') {
+    const artist = pick.artist || matched.artist || 'that artist';
+    const unavailable = selection.releaseResolution.reason === 'not-in-library';
+    ack = latestReleaseFallbackAck(selection.releaseResolution.kind, artist, unavailable);
   }
 
   // 3. DJ intro. On a miss, flag it (and pass the cleaned name, when one
@@ -1200,6 +1211,10 @@ export async function submitListenerRequest(input: {
         ? "Couldn't read a song request in that — try just the artist, title, or a vibe."
         : 'Empty request',
     };
+  }
+  const literalRequest = modelFreeRequest(text);
+  if (literalRequest.sort === 'latest' && !literalRequest.artist && !literalRequest.title && !literalRequest.album) {
+    return { accepted: false, statusCode: 400, message: 'Which artist should I look up?' };
   }
   const s = settings.get() as any;
   const reservedNames = [

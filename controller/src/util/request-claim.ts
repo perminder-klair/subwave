@@ -951,3 +951,23 @@ export function plainRequestAck(track: ClaimTrack, requester: string | null | un
     ? `Coming up for you, ${String(requester).trim()}: ${trackLabel(track)}.`
     : `Coming up for you: ${trackLabel(track)}.`;
 }
+
+// A latest-release lookup may be authoritative about the artist's catalogue
+// without the station carrying that exact release. The resolver marks that
+// distinction; this module owns the fixed acknowledgement so every request
+// surface describes the fallback consistently.
+export function latestReleaseFallbackAck(
+  kind: 'single' | 'album',
+  artist: string,
+  unavailable: boolean,
+): string {
+  const name = artist.trim() || 'that artist';
+  if (kind === 'album') {
+    return unavailable
+      ? `The latest official album by ${name} isn't in this station, so I queued a track from the newest album available here.`
+      : `I couldn't verify the latest official album by ${name}, so I queued a track from the newest album available here.`;
+  }
+  return unavailable
+    ? `The latest official single by ${name} isn't in this station, so I queued the newest available track by ${name}.`
+    : `I couldn't verify the latest official single by ${name}, so I queued the newest available track by ${name}.`;
+}

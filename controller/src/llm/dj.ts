@@ -9,7 +9,7 @@ export {
   CONTEXT_FIELDS,
 } from './internal/prompts/context.js';
 export { enforceIntroBudget, firstVocalMsFor } from './internal/prompts/intro-budget.js';
-export { matchRequest } from './internal/prompts/request.js';
+export { identifyLatestReleaseFromText, matchRequest } from './internal/prompts/request.js';
 export {
   AIR_TIME_CLAUSE,
   REQUESTER_NAME_CLAUSE,

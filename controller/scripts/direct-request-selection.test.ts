@@ -377,6 +377,93 @@ for (const attributes of [{ genre: 'rock' }, { sort: 'latest' }]) {
   });
 }
 
+test('latest release lookup selects the verified single from the same artist', async () => {
+  const newest = { ...other, id: 'newest-single', title: 'New Single', album: 'New Album', releaseDate: '2025-02-01' };
+  const f = fixture({
+    getArtist: async () => ({ album: [{ id: 'new', name: 'New Album', year: 2025 }] }),
+    getAlbum: async () => [newest],
+  });
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'song' },
+    { ...f.deps, latestRelease: async () => ({
+      status: 'verified',
+      release: { kind: 'single', title: 'New Single', artist: 'Queen', releaseDate: '2025-02-01', source: 'test' },
+    }) });
+  assert.equal(result.track?.id, newest.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.releaseResolution?.mode, 'verified');
+});
+
+test('latest album lookup constrains selection to the verified local album', async () => {
+  const albumTrack = { ...other, id: 'newest-album-track', title: 'Album Track', album: 'Newest Album' };
+  const f = fixture({
+    getArtist: async () => ({ album: [
+      { id: 'old', name: 'Old Album', year: 2010 },
+      { id: 'new', name: 'Newest Album', year: 2025 },
+    ] }),
+    getAlbum: async id => id === 'new' ? [albumTrack] : [exact],
+  });
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'album' },
+    { ...f.deps, latestRelease: async () => ({
+      status: 'verified',
+      release: { kind: 'album', title: 'Newest Album', artist: 'Queen', releaseDate: '2025', source: 'test' },
+    }) });
+  assert.equal(result.track?.id, albumTrack.id);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.releaseResolution?.evidence?.title, 'Newest Album');
+});
+
+test('latest release lookup falls back to the newest eligible local track', async () => {
+  const f = fixture();
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'song' },
+    { ...f.deps, latestRelease: async () => ({ status: 'unavailable', reason: 'no-evidence' }) });
+  assert.equal(result.track?.id, other.id);
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.releaseResolution?.mode, 'local-fallback');
+  assert.equal(result.releaseResolution?.reason, 'no-evidence');
+});
+
+test('latest release selection skips the current and recent local tracks', async () => {
+  const f = fixture();
+  f.deps.currentId = other.id;
+  f.deps.recentIds.add(other.id);
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'song' },
+    { ...f.deps, latestRelease: async () => ({ status: 'unavailable', reason: 'provider-error' }) });
+  assert.equal(result.track?.id, exact.id);
+  assert.equal(result.outcome, 'substituted');
+});
+
+test('latest release fallback scans beyond the first twenty albums', async () => {
+  const albums = Array.from({ length: 21 }, (_, index) => ({
+    id: `album-${index}`,
+    name: `Album ${index}`,
+    year: 2026 - index,
+  }));
+  const lateCandidate = { ...other, id: 'album-20-track', title: 'Late Catalogue Track', year: 2006 };
+  const f = fixture({
+    getArtist: async () => ({ album: albums }),
+    getAlbum: async id => id === 'album-20' ? [lateCandidate] : [],
+  });
+  for (const album of albums.slice(0, 20)) f.deps.recentIds.add(`${album.id}-track`);
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'song' },
+    { ...f.deps, latestRelease: async () => ({ status: 'unavailable', reason: 'no-evidence' }) },
+  );
+  assert.equal(result.track?.id, lateCandidate.id);
+  assert.equal(result.outcome, 'substituted');
+});
+
+test('a bare latest request asks for an artist and never selects a fallback', async () => {
+  const f = fixture();
+  const result = await resolveDirectRequest(modelFreeRequest('latest song'), f.deps);
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.deepEqual(f.albums, []);
+});
+
 test('a legacy title+artist search reply never becomes an artist-results lottery', async () => {
   const f = fixture();
   f.deps.random = () => 0.99;
@@ -854,6 +941,31 @@ test('model-free requests recognise album framing', () => {
   assert.equal(match.album, 'Fearless');
   assert.equal(match.scope, 'album');
   assert.deepEqual(match.search_terms, ['Fearless']);
+});
+
+test('model-free requests parse latest release phrasing before title-by-artist parsing', () => {
+  for (const text of [
+    'latest song by Taylor Swift',
+    'play the latest song by Taylor Swift',
+    "what's Taylor Swift's latest single",
+    'latest track from Taylor Swift',
+    "Taylor Swift's latest single",
+    'Taylor Swift latest album',
+    'Taylor Swift ka sabse naya gana',
+  ]) {
+    const match = modelFreeRequest(text);
+    assert.equal(match.title, null, text);
+    assert.equal(match.artist, 'Taylor Swift', text);
+    assert.equal(match.sort, 'latest', text);
+    assert.equal(match.scope, /album/i.test(text) ? 'album' : 'song', text);
+  }
+});
+
+test('latest-looking quoted titles remain literal requests', () => {
+  const match = modelFreeRequest('play "Latest Song" by Taylor Swift');
+  assert.equal(match.title, 'Latest Song');
+  assert.equal(match.artist, 'Taylor Swift');
+  assert.equal(match.sort, null);
 });
 
 test('short transliterated lyric prose is routed to evidence resolution', () => {
