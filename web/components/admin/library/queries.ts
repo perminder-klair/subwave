@@ -7,9 +7,11 @@ import type { BlockRef, Energy, LikedSort, SearchMode, Sort, TagEvent, Track, Vo
 // LibraryContext: that would be a context → queries → context cycle.
 
 export interface BrowseKeyFilters {
-  moods: string[]; energy: Energy; vocal: Vocal; genre: string;
+  moods: string[]; energy: Energy; vocal: Vocal; genre: string; language: string;
   yearFrom: string; yearTo: string; q: string; sort: Sort; page: number;
 }
+
+export type UntaggedScope = 'mood' | 'language' | 'needs';
 
 // Keys nest so a filter matches a family. Every cached list of Tracks sits under
 // ['library','rows'], so one setQueriesData reaches all of them. Never file a
@@ -20,7 +22,7 @@ export const libraryKeys = {
   browse: (f: BrowseKeyFilters) => ['library', 'rows', 'browse', f] as const,
   browseAll: ['library', 'rows', 'browse'] as const,
   search: (q: string, mode: SearchMode) => ['library', 'rows', 'search', q, mode] as const,
-  untagged: () => ['library', 'rows', 'untagged'] as const,
+  untagged: (scope: UntaggedScope = 'mood') => ['library', 'rows', 'untagged', scope] as const,
   recent: () => ['library', 'rows', 'recent'] as const,
   liked: (sort: LikedSort, page: number) => ['library', 'rows', 'liked', sort, page] as const,
   likedAll: ['library', 'rows', 'liked'] as const,

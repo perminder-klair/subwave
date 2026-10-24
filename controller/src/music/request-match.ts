@@ -1,6 +1,15 @@
 // Direct requests: interpret once, then resolve identity and eligibility in code.
 // No model tools or station/session state belong in this module.
 import { artistNameKey, artistParticipantKeys, nameKey } from './recency.js';
+import {
+  languageTerms,
+  requestNameVariants,
+  resolveLanguageCode,
+  canonicalLanguage,
+} from './request-normalize.js';
+
+// Keep the long-standing request-match exports stable for scripts and route
+// consumers while the shared normalization helpers live in their own module.
 
 export interface RequestMatch {
   kind?: string;
@@ -49,6 +58,7 @@ export interface RequestCatalog {
   resolveGenreName(name: string): Promise<string | null>;
   getGenres?(): Promise<Array<{ value: string }>>;
   getSongsByGenreSampled(genre: string, options: { count: number }): Promise<RequestSong[]>;
+  languageSongs?(language: string): Promise<RequestSong[]>;
 }
 
 export interface RequestSelection {
@@ -174,35 +184,43 @@ export function nameSearchTerms(match: RequestMatch): string[] {
   });
 }
 
-// ICU supplies translated names for the languages recognised by literal
-// recovery. Never treat short ISO codes such as "en" or "de" as request
-// evidence: they are ordinary prepositions in other languages.
-const requestLanguageCodes = ['en', 'fr', 'de', 'es', 'it', 'pt', 'pa', 'hi', 'ur', 'tr', 'ar', 'ja', 'ko', 'zh', 'yue', 'ru', 'pl', 'nl', 'bn', 'ta', 'te', 'mr'];
-const englishLanguageNames = new Intl.DisplayNames(['en'], { type: 'language' });
-const translatedLanguageNames = new Map<string, string[]>();
-
 function requestLanguageCode(name: string): string | undefined {
-  const term = requestName(name);
-  return requestLanguageCodes.find(code => requestName(englishLanguageNames.of(code)) === term)
-    || (term === 'mandarin' ? 'zh' : undefined);
+  return resolveLanguageCode(name);
 }
 
 function requestLanguageTerms(name: string): string[] {
-  const term = requestName(name);
-  const code = requestLanguageCode(name);
-  if (!code) return [term];
-  // Cache only the fixed set of language codes, never arbitrary model strings.
-  if (!translatedLanguageNames.has(code)) {
-    translatedLanguageNames.set(code, [...new Set(requestLanguageCodes.map(locale =>
-      requestName(new Intl.DisplayNames([locale], { type: 'language' }).of(code))))]);
-  }
-  return [term, ...translatedLanguageNames.get(code)!];
+  return languageTerms(name);
+}
+
+// Navidrome installations do not agree on where language metadata lives. A
+// tag may be an ISO-639 code (`pa`), a language name (`Punjabi`), or a style
+// tag that carries the language (`Punjabi Pop`). Treat those as equivalent
+// only when the requested language is a recognised language name or code. This
+// keeps unknown words strict while allowing real-world library metadata to
+// satisfy an explicit language request.
+export function requestLanguageTagMatches(want: string, got: string): boolean {
+  const code = requestLanguageCode(want);
+  const gotCode = canonicalLanguage(got);
+  const wantedCanonical = code ? canonicalLanguage(code) : undefined;
+  if (wantedCanonical && gotCode === wantedCanonical) return true;
+  const terms = [...requestLanguageTerms(want), ...(code ? [code] : [])].filter(Boolean);
+  const tag = requestName(got);
+  const exact = terms.some(term => tag === requestName(term));
+  if (exact) return true;
+  // A genre such as "Punjabi Pop" is not language evidence. Language
+  // requests must use first-class language metadata so regional languages do
+  // not become accidental genre matches.
+  return false;
 }
 
 export function explicitRequestAttribute(text: string, match: RequestMatch, value: string | null | undefined): boolean {
   if (!value) return false;
   const prose = requestName(requestConditionProse(text, match));
-  const terms = value === match.language ? requestLanguageTerms(value) : [requestName(value)];
+  const requestedName = requestName(value);
+  const terms = (value === match.language ? requestLanguageTerms(value) : [requestedName])
+    // ISO codes are valid metadata but short codes such as "de" and "en"
+    // are ordinary prepositions in many listener languages.
+    .filter(term => term.length > 2 || term === requestedName);
   return terms.some(term => {
     // Spacing/punctuation may change during canonicalisation (hiphop/hip hop),
     // but a shared substring inside a different word (rap/trap) is no evidence.
@@ -211,9 +229,20 @@ export function explicitRequestAttribute(text: string, match: RequestMatch, valu
   });
 }
 
-function requestGenreMatches(want: string, got: string): boolean {
-  const target = requestName(want), tag = requestName(got);
-  return !!target && (target.replace(/ /g, '') === tag.replace(/ /g, '') || ` ${tag} `.includes(` ${target} `));
+export function requestGenreMatches(want: string, got: string): boolean {
+  const targets = requestNameVariants(want).filter(Boolean);
+  const tags = requestNameVariants(got).filter(Boolean);
+  return targets.some(target => tags.some(tag => {
+    if (target === tag) return true;
+    const targetTokens = target.split(' ').filter(Boolean);
+    const tagTokens = tag.split(' ').filter(Boolean);
+    // A catalogue style tag such as "Punjabi Pop" or "classic rock" can
+    // carry a requested one-word genre, but never by substring: rap must not
+    // match trap and soul must not match soulful.
+    return targetTokens.length === 1
+      ? tagTokens.includes(targetTokens[0]!)
+      : targetTokens.every(token => tagTokens.includes(token));
+  }));
 }
 
 // Request-only strictness: shared genre resolution remains fuzzy for shows,
@@ -375,6 +404,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   queuedIds: Set<string>;
   currentId?: string | null;
   moodSongs(mood: string): Promise<RequestSong[]>;
+  languageSongs?(language: string): Promise<RequestSong[]>;
   fallbackSongs(): Promise<RequestSong[]>;
   similarSongs?(): Promise<RequestSong[]>;
   random?: () => number;
@@ -416,17 +446,20 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     && requestArtistMatches(resolvedArtistName, song) && (!match.album || requestName(song.album) === requestName(match.album));
   const tags = (song: RequestSong) => [song.genre, ...(song.genres || []).map(g => typeof g === 'string' ? g : g.name)].map(requestName).filter(Boolean);
   let genre: string | null = null;
-  let languageGenre: string | null = null;
+  let languagePool: RequestSong[] = [];
   // Small models may guess attributes despite the prompt. Only terms present
   // outside recognised names are hard requirements; guesses stay preferences.
   if (match.genre) genre = await safe('genre resolution', () => resolveRequestGenre(catalog, match.genre!), null);
-  if (match.language) languageGenre = await safe('language resolution', () => resolveRequestGenre(catalog, match.language!), null);
+  if (match.language && deps.languageSongs) {
+    const code = canonicalLanguage(match.language) || match.language;
+    languagePool = await safe('language tracks', () => deps.languageSongs!(code), []);
+  }
   const genreMatches = (song: RequestSong) => !match.genre || tags(song).some(g => requestGenreMatches(genre || match.genre!, g));
   const languageMatches = (song: RequestSong) => !match.language
-    || [song.language, ...(song.languages || []), ...tags(song)].map(requestName).includes(requestName(match.language));
+    || [song.language, ...(song.languages || [])].some(value => requestLanguageTagMatches(match.language!, String(value ?? '')));
   const constraints = (song: RequestSong, source: string) =>
     (!requiredGenre || (genre && source === `genre:${genre}`) || genreMatches(song))
-    && (!requiredLanguage || (languageGenre && source === `language-genre:${languageGenre}`) || languageMatches(song));
+    && (!requiredLanguage || (source === 'language-library' && languagePool.length > 0) || languageMatches(song));
   const eligible = (song: RequestSong) => !recentIds.has(song.id) && !queuedIds.has(song.id) && song.id !== currentId;
   const unique = (songs: RequestSong[]) => [...new Map(songs.filter(s => s?.id).map(s => [s.id, s])).values()];
   const choose = (songs: RequestSong[]) => {
@@ -586,8 +619,8 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       const result = select(await safe('genre tracks', () => catalog.getSongsByGenreSampled(genre!, { count: 100 }), []), `genre:${genre}`);
       if (result) return result;
     }
-    if (languageGenre) {
-      const result = select(await safe('language tracks', () => catalog.getSongsByGenreSampled(languageGenre!, { count: 100 }), []), `language-genre:${languageGenre}`);
+    if (languagePool.length) {
+      const result = select(languagePool, 'language-library');
       if (result) return result;
     }
     if (match.mood) {

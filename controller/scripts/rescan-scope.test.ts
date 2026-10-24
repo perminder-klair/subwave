@@ -16,34 +16,34 @@ function flags(over: Partial<Parameters<typeof planRun>[0]> = {}) {
   return {
     rescan: false,
     reseed: false, reEnrich: false, reAnalyze: false, upgrade: false,
-    skipEnrich: false, skipTag: false, skipAnalyze: false,
+    skipEnrich: false, skipTag: false, skipAnalyze: false, skipLanguages: false,
     ...over,
   };
 }
 
 test('a plain run does the full forward pass, no re-* passes', () => {
   assert.deepEqual(planRun(flags()), {
-    enrich: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
+    enrich: true, language: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
   });
 });
 test('--skip-tag drops forward tagging but keeps enrich + analyze', () => {
   assert.deepEqual(planRun(flags({ skipTag: true })), {
-    enrich: true, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
+    enrich: true, language: true, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
   });
 });
 test('--skip-enrich / --skip-analyze gate just their own phase', () => {
   assert.deepEqual(planRun(flags({ skipEnrich: true })), {
-    enrich: false, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
+    enrich: false, language: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
   });
   assert.deepEqual(planRun(flags({ skipAnalyze: true })), {
-    enrich: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: false,
+    enrich: true, language: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: false,
   });
 });
 test('re-* flags WITHOUT --rescan (raw CLI) do NOT suppress forward discovery', () => {
   // The legacy meaning: `npm run tag -- --re-analyze` is a forward pass that also
   // re-analyses. Only the admin Re-scan tab (which adds --rescan) scopes things.
   assert.deepEqual(planRun(flags({ reAnalyze: true })), {
-    enrich: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
+    enrich: true, language: true, forwardTag: true, reEmbed: false, reDecide: false, analyze: true,
   });
 });
 
@@ -59,27 +59,30 @@ test('re-scan ALWAYS suppresses forward discovery (the core invariant)', () => {
 });
 test('re-scan: each pass fires iff its own flag is set', () => {
   assert.deepEqual(planRun(flags({ rescan: true, reEnrich: true })), {
-    enrich: true, forwardTag: false, reEmbed: false, reDecide: false, analyze: false,
+    enrich: true, language: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: false,
   });
   assert.deepEqual(planRun(flags({ rescan: true, reseed: true })), {
-    enrich: false, forwardTag: false, reEmbed: true, reDecide: false, analyze: false,
+    enrich: false, language: false, forwardTag: false, reEmbed: true, reDecide: false, analyze: false,
   });
   assert.deepEqual(planRun(flags({ rescan: true, upgrade: true })), {
-    enrich: false, forwardTag: false, reEmbed: false, reDecide: true, analyze: false,
+    enrich: false, language: false, forwardTag: false, reEmbed: false, reDecide: true, analyze: false,
   });
   assert.deepEqual(planRun(flags({ rescan: true, reAnalyze: true })), {
-    enrich: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
+    enrich: false, language: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
+  });
+  assert.deepEqual(planRun(flags({ rescan: true, reLanguage: true })), {
+    enrich: false, language: true, forwardTag: false, reEmbed: false, reDecide: false, analyze: false,
   });
 });
 test('full re-scan runs every pass but still no forward discovery', () => {
   assert.deepEqual(
     planRun(flags({ rescan: true, reseed: true, reEnrich: true, reAnalyze: true, upgrade: true })),
-    { enrich: true, forwardTag: false, reEmbed: true, reDecide: true, analyze: true },
+    { enrich: true, language: false, forwardTag: false, reEmbed: true, reDecide: true, analyze: true },
   );
 });
 test('re-scan ignores forward skip-flags (they belong to the Run tab)', () => {
   // Even if skip-flags leaked in, a re-scan is driven purely by the re-* flags.
   assert.deepEqual(planRun(flags({ rescan: true, reAnalyze: true, skipAnalyze: true, skipEnrich: true })), {
-    enrich: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
+    enrich: false, language: false, forwardTag: false, reEmbed: false, reDecide: false, analyze: true,
   });
 });

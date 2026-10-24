@@ -480,6 +480,25 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
         updated_at TEXT NOT NULL
       );
     `);
+
+    // Independent language evidence. The checked timestamp means an unknown
+    // result is still a completed answer and is not retried on every normal
+    // tagger run. Manual language tags are protected at the write boundary.
+    // musicbrainz_id is walked from Navidrome and is only used for exact
+    // MusicBrainz lookups, never fuzzy language guesses.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    const add: Array<[string, string]> = [
+      ['musicbrainz_id', 'TEXT'],
+      ['language_primary', 'TEXT'],
+      ['languages', 'TEXT'],
+      ['language_mode', 'TEXT'],
+      ['language_source', 'TEXT'],
+      ['language_confidence', 'TEXT'],
+      ['language_checked_at', 'TEXT'],
+      ['language_model', 'TEXT'],
+      ['language_contract_version', 'INTEGER'],
+    ].filter((entry): entry is [string, string] => !have.has(entry[0]));
+    if (add.length) runDdl(d, add.map(([name, type]) => `ALTER TABLE tracks ADD COLUMN ${name} ${type};`).join('\n'));
     d.pragma('user_version = 30');
   }
 
@@ -499,6 +518,12 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
         checked_at   TEXT NOT NULL
       );
     `);
+
+    // Preserve the language metadata returned by the lyrics provider during
+    // enrichment. The independent language phase can then reuse it without
+    // making a second provider call or discarding exact provider evidence.
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    if (!have.has('lyrics_language')) runDdl(d, 'ALTER TABLE tracks ADD COLUMN lyrics_language TEXT;');
     d.pragma('user_version = 31');
   }
 

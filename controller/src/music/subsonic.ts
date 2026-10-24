@@ -705,6 +705,39 @@ export async function getLyrics(songId) {
   }
 }
 
+// Lyrics plus OpenSubsonic's optional language/kind metadata. The legacy
+// getLyrics() surface stays unchanged for existing consumers; the language
+// tagger uses this evidence-preserving seam instead.
+export async function getLyricsEvidence(songId): Promise<{
+  text: string;
+  taggedLanguage: string | null;
+  kind: string | null;
+} | null> {
+  try {
+    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+    const structured = r.lyricsList?.structuredLyrics;
+    if (Array.isArray(structured) && structured.length) {
+      const chosen = structured.find((s) => s?.kind === 'original' || s?.kind === 'main')
+        ?? structured.find((s) => s?.synced === true)
+        ?? structured[0];
+      const lines = (Array.isArray(chosen?.line) ? chosen.line : [])
+        .map((l) => typeof l?.value === 'string' ? l.value.trim() : '')
+        .filter(Boolean);
+      return {
+        text: lines.join(' '),
+        taggedLanguage: typeof chosen?.lang === 'string' ? chosen.lang : null,
+        kind: typeof chosen?.kind === 'string' ? chosen.kind : null,
+      };
+    }
+    if (typeof r.lyrics?.value === 'string') {
+      return { text: r.lyrics.value, taggedLanguage: null, kind: null };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // Timed lyrics, preserving the per-line offsets getLyrics() drops (#1125) —
 // raw material for lyric-derived vocal ranges. null when none are indexed.
 // `startMs` is milliseconds from track start with the entry-level `offset`
@@ -797,6 +830,7 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
         for (const s of songs) {
           yield {
             ...s,
+            musicBrainzId: s.musicBrainzId ?? s.musicbrainzId ?? null,
             // A Child's albumId is optional in the spec; the album being
             // iterated is the authoritative fallback.
             albumId: s.albumId ?? r.album?.id ?? album.id ?? null,

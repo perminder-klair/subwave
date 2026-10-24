@@ -22,7 +22,7 @@ const NEVER_WRITTEN = ['id', 'genre'];
 // adoption carries tags onto it), so the next search re-keys it from the merged
 // sources. Carrying them could leave old keys marked fresh.
 const WALK_OWNED = [
-  'title', 'artist', 'album', 'album_id', 'artist_id', 'year',
+  'title', 'artist', 'album', 'musicbrainz_id', 'album_id', 'artist_id', 'year',
   'genres', 'duration_sec', 'is_compilation', 'era_untrusted',
   ...SEARCH_KEY_DDL.columns,
 ];
@@ -31,7 +31,12 @@ const WALK_OWNED = [
 // failure counters follow analysis_version so successful new analysis does not inherit old
 // failures.
 const GROUPS: Array<{ anchor: string; cols: string[] }> = [
-  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'enriched_at'] },
+  { anchor: 'enriched_at', cols: ['lastfm_tags', 'lyric_excerpt', 'lyrics_language', 'enriched_at'] },
+  {
+    anchor: 'language_checked_at',
+    cols: ['language_primary', 'languages', 'language_mode', 'language_source',
+      'language_confidence', 'language_checked_at', 'language_model', 'language_contract_version'],
+  },
   { anchor: 'moods', cols: ['moods', 'energy', 'source', 'confidence', 'tagger_version', 'prompt_hash', 'model', 'tagged_at'] },
   {
     anchor: 'analysis_version',
@@ -124,6 +129,26 @@ function mergeRow(plan: ColumnPlan, oldRow: Row, newRow: Row, movedTextVector: b
   for (const g of plan.grouped) {
     const take = newRow[g.anchor] == null;
     for (const c of g.cols) merged[c] = take ? oldRow[c] : newRow[c];
+  }
+  // Manual language evidence is an operator decision, not a cache. A newly
+  // walked row must not displace it merely because the replacement id already
+  // received an automatic answer in the same reconcile.
+  if (oldRow.language_source === 'manual' && newRow.language_source !== 'manual') {
+    for (const c of ['language_primary', 'languages', 'language_mode', 'language_source',
+      'language_confidence', 'language_checked_at', 'language_model', 'language_contract_version']) {
+      if (plan.all.includes(c)) merged[c] = oldRow[c];
+    }
+  }
+  // A rotated id can point at a recording with a different MusicBrainz
+  // identity. Do not carry automatic language evidence from the old recording
+  // into the new one; a manual override remains protected above.
+  const mbidChanged = plan.all.includes('musicbrainz_id')
+    && oldRow.musicbrainz_id !== newRow.musicbrainz_id;
+  if (mbidChanged && oldRow.language_source !== 'manual' && newRow.language_source == null) {
+    for (const c of ['language_primary', 'languages', 'language_mode', 'language_source',
+      'language_confidence', 'language_checked_at', 'language_model', 'language_contract_version']) {
+      if (plan.all.includes(c)) merged[c] = null;
+    }
   }
   for (const c of plan.coalesced) merged[c] = newRow[c] ?? oldRow[c];
 

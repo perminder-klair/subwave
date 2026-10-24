@@ -467,10 +467,10 @@ for (const [title, artist] of [['A Day in the Life', 'The Beatles'], ['Your Hand
   });
 }
 
-test('review: an unknown literal language cannot silently fall back to another language', async () => {
+test('review: a valid but unavailable language cannot silently fall back to another language', async () => {
   modelError = true;
   const result = await submit('Bohemian Rhapsody by Queen in Klingon');
-  assert.equal(result.outcome, 'unsupported');
+  assert.equal(result.outcome, 'no-match');
   assert.equal(queue.upcoming.length, 0);
 });
 
@@ -510,6 +510,24 @@ test('translated language selects the eligible recording rather than merely refu
   const result = await submit('Joue Bohemian Rhapsody de Queen en français');
   assert.equal(result.outcome, 'matched');
   assert.equal(queue.upcoming[0].track.id, french.id);
+});
+
+test('Punjabi request requires first-class language metadata', async () => {
+  const punjabi = { ...exact, id: 'punjabi-recording', title: 'Punjabi Song', artist: 'Punjabi Artist', genre: 'Punjabi Pop', language: 'pa' };
+  catalogueSongs = [punjabi];
+  modelOutput = { title: punjabi.title, artist: punjabi.artist, language: 'Punjabi' };
+  const result = await submit(`play ${punjabi.title} by ${punjabi.artist} in Punjabi`);
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, punjabi.id);
+});
+
+test('Punjabi genre alone cannot satisfy a language request', async () => {
+  const genreOnly = { ...exact, id: 'genre-only', title: 'Punjabi Song', artist: 'Punjabi Artist', genre: 'Punjabi Pop', language: undefined };
+  catalogueSongs = [genreOnly];
+  modelOutput = { title: genreOnly.title, artist: genreOnly.artist, language: 'Punjabi' };
+  const result = await submit(`play ${genreOnly.title} by ${genreOnly.artist} in Punjabi`);
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(queue.upcoming.length, 0);
 });
 
 for (const [text, genre] of [['Play some hiphop', 'Hip Hop'], ['Play some hip hop', 'HipHop']]) {

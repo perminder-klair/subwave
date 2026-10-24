@@ -102,6 +102,7 @@ router.post('/tag-library', requireAdmin, (req, res) => {
   const reseed = req.body?.reseed === true;
   const reEnrich = req.body?.reEnrich === true;
   const reAnalyze = req.body?.reAnalyze === true;
+  const reLanguage = req.body?.reLanguage === true;
   const upgrade = req.body?.upgrade === true;
   // "Re-embed, then continue tagging". Only acted on when reseed is the sole re-*
   // pass, which startTagger enforces.
@@ -114,11 +115,13 @@ router.post('/tag-library', requireAdmin, (req, res) => {
     reseed,
     reEnrich,
     reAnalyze,
+    reLanguage,
     upgrade,
     thenTag,
     reconcile: stepBool(req.body?.reconcile),
     enrich: stepBool(req.body?.enrich),
     tagMoods: stepBool(req.body?.tagMoods),
+    tagLanguages: stepBool(req.body?.tagLanguages),
     analyze: stepBool(req.body?.analyze),
     vocal: stepBool(req.body?.vocal),
   });

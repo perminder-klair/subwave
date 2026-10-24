@@ -18,6 +18,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
+  const language = opts.language || null;
   const vocal = opts.vocal === 'instrumental' || opts.vocal === 'vocal' ? opts.vocal : null;
   const yearFrom = Number.isFinite(opts.yearFrom as number) ? (opts.yearFrom as number) : null;
   const yearTo = Number.isFinite(opts.yearTo as number) ? (opts.yearTo as number) : null;
@@ -27,7 +28,10 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const offset = Math.max(0, opts.offset ?? 0);
 
   // Tagged tracks only, else rows the metadata/analysis walk inserted show up here.
-  const where: string[] = [SQL_HAS_MOODS];
+  // The normal browse remains mood-tagged, but a language filter must be able
+  // to see tracks completed by the independent language phase before mood
+  // tagging has run.
+  const where: string[] = [language ? `(${SQL_HAS_MOODS} OR language_checked_at IS NOT NULL)` : SQL_HAS_MOODS];
   const params: unknown[] = [];
   if (moods.length) {
     const placeholders = moods.map(() => '?').join(', ');
@@ -41,6 +45,18 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   if (genre) {
     where.push(`EXISTS (SELECT 1 FROM json_each(tracks.genres) WHERE value = ?)`);
     params.push(genre);
+  }
+  if (language) {
+    if (language === 'mixed') {
+      where.push(`language_checked_at IS NOT NULL AND language_mode = 'mixed'`);
+    } else if (language === 'unknown') {
+      where.push(`language_checked_at IS NOT NULL AND language_primary IS NULL AND language_mode = 'unknown'`);
+    } else if (language === 'instrumental') {
+      where.push(`language_checked_at IS NOT NULL AND language_mode = 'instrumental'`);
+    } else {
+      where.push(`(language_primary = ? OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(languages) THEN languages ELSE '[]' END) WHERE value = ?))`);
+      params.push(language, language);
+    }
   }
   if (vocal === 'instrumental') {
     where.push('is_instrumental(vocal_ranges_json) = 1');
@@ -119,6 +135,8 @@ interface ObservatoryTrackRow {
   year: number | null;
   genres: string[];
   genre: string | null;
+  language: TrackRecord['language'];
+  languages: string[];
   durationSec: number | null;
   moods: string[];
   energy: string | null;
@@ -135,6 +153,8 @@ interface ObservatoryTrackRow {
 }
 
 const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duration_sec,
+  language_primary, languages, language_mode, language_source, language_confidence,
+  language_checked_at, language_model, language_contract_version,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
   loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
 
@@ -158,6 +178,19 @@ export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     year: row.year,
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
+    language: row.language_checked_at && row.language_mode && row.language_source && row.language_confidence
+      ? {
+          primaryLanguage: row.language_primary ?? null,
+          languages: row.languages ? safeParseArray(row.languages) : [],
+          mode: row.language_mode,
+          source: row.language_source,
+          confidence: row.language_confidence,
+          contractVersion: row.language_contract_version ?? 1,
+          model: row.language_model ?? null,
+          checkedAt: row.language_checked_at,
+        }
+      : null,
+    languages: row.languages ? safeParseArray(row.languages) : [],
     durationSec: row.duration_sec,
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
@@ -210,5 +243,3 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
   `;
   return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
 }
-
-

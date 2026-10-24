@@ -62,7 +62,8 @@ test('public pools preserve payloads and required acoustic values', () => {
   const mood = library.songsByMood('reflective').find(r => r.id === 'payload');
   assert.deepEqual(mood, { id: 'payload', title: 'payload', artist: 'Artist', album: 'Album',
     albumId: 'album', artistId: 'artist', year: 2000, genres: ['Rock'], genre: 'Rock',
-    moods: ['reflective'], energy: 'low', durationSec: 180 });
+    moods: ['reflective'], energy: 'low', durationSec: 180,
+    language: null, languages: [] });
   const energy = library.songsByEnergy('low').find(r => r.id === 'payload');
   assert.deepEqual(energy, { ...mood, originalYear: 1990, isCompilation: true,
     yearUntrusted: true, audioMoods: ['reflective', 'Custom'], bpm: 120, musicalKey: '8A',
@@ -265,13 +266,13 @@ test('concurrent upgrading connections build exactly one complete index', async 
 
 test('energy projection preserves unmeasured and defensively parsed acoustic states', () => {
   seed('unmeasured', ['parser']);
-  let energy = library.songsByEnergy('low').find(r => r.id === 'unmeasured');
+  let energy = library.songsByEnergy('low').find(r => r.id === 'unmeasured')!;
   assert.equal(energy.structure, null);
   assert.equal(energy.vocalRanges, null);
   assert.equal(energy.paceMean, null);
   db.getDb()!.prepare(`UPDATE tracks SET structure_json='broken',
     vocal_ranges_json='broken', pace_json='broken' WHERE id='unmeasured'`).run();
-  energy = library.songsByEnergy('low').find(r => r.id === 'unmeasured');
+  energy = library.songsByEnergy('low').find(r => r.id === 'unmeasured')!;
   assert.equal(energy.structure, null);
   assert.equal(energy.vocalRanges, null);
   assert.equal(energy.vocalRangesInvalid, false);

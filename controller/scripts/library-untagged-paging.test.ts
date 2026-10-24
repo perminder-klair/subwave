@@ -119,3 +119,52 @@ test('a negative cursor is clamped to the start of the walk', async () => {
   assert.equal(p.rows.length, 0);
   assert.notEqual(p.nextCursor, null);
 });
+
+test('language scope lists mood-tagged tracks with unresolved language results', async () => {
+  db.upsertTrackLanguage(songId(0), {
+    primaryLanguage: 'eng',
+    languages: ['eng'],
+    mode: 'single',
+    source: 'manual',
+    confidence: 'high',
+    contractVersion: 1,
+    model: null,
+  });
+  db.upsertTrackLanguage(songId(1), {
+    primaryLanguage: null,
+    languages: [],
+    mode: 'unknown',
+    source: 'llm',
+    confidence: 'review',
+    contractVersion: 1,
+    model: null,
+  });
+
+  const res = await fetch(`${base}/library/untagged?scope=language&limit=50`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json() as { rows: { id: string }[]; nextCursor: string | null };
+  assert.equal(body.rows.length, 50);
+  assert.equal(body.rows[0]?.id, songId(1), 'unknown language results remain unresolved');
+  assert.equal(body.rows.some(row => row.id === songId(0)), false);
+  assert.notEqual(body.nextCursor, null);
+});
+
+test('needs scope combines gaps and preserves existing track tags', async () => {
+  const res = await fetch(`${base}/library/untagged?scope=needs&limit=50`, {
+    signal: AbortSignal.timeout(30_000),
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json() as {
+    rows: { id: string; moods?: string[]; energy?: string | null; language?: { mode?: string } | null; bpm?: number | null; musicalKey?: string | null }[];
+    nextCursor: string | null;
+  };
+  assert.equal(body.rows.length, 50);
+  assert.equal(body.rows[0]?.id, songId(1), 'mood-tagged rows missing language are included');
+  assert.deepEqual(body.rows[0]?.moods, ['warm'], 'existing moods remain visible');
+  assert.equal(body.rows[0]?.energy, 'medium', 'existing energy remains visible');
+  assert.equal(body.rows[0]?.language?.mode, 'unknown', 'unresolved language results remain visible');
+  assert.equal(body.rows.some(row => row.id === songId(0)), false, 'fully tagged rows are excluded');
+  assert.notEqual(body.nextCursor, null);
+});

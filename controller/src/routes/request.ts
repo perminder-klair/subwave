@@ -442,15 +442,41 @@ async function resolveRequest(entry) {
   const searches: Array<{ term: string; hits: any[] }> = [];
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
   const cdMin = Number(settings.get().requests.repeatCooldownMin ?? 120);
+  if (matched.language) {
+    // Language-constrained requests need the local language projection while
+    // remote catalogue candidates are decorated with first-class metadata.
+    try { await library.load(); } catch { /* language pool reports no rows */ }
+  }
+  const decorateLanguage = (song: any) => {
+    const record = song?.id ? library.get(song.id) : null;
+    const language = record?.language;
+    return language
+      ? { ...song, language: language.primaryLanguage, languages: language.languages }
+      : song;
+  };
+  const decorateLanguages = (songs: any[]) => songs.map(decorateLanguage);
+  const requestSongs = (songs: library.LibraryTrack[]) => songs.map(song => ({
+    ...song,
+    title: song.title ?? undefined,
+    artist: song.artist ?? undefined,
+    album: song.album ?? undefined,
+    year: song.year ?? undefined,
+    genre: song.genre ?? undefined,
+    language: song.language ?? undefined,
+  }));
   const selection = await resolveDirectRequest(matched, {
     text,
     catalog: {
       ...subsonic,
       searchPage: async (term, options) => {
         const page = await subsonic.searchPage(term, options);
-        searches.push({ term, hits: page.songs });
-        return page;
+        const songs = decorateLanguages(page.songs);
+        searches.push({ term, hits: songs });
+        return { ...page, songs };
       },
+      getAlbum: async id => decorateLanguages(await subsonic.getAlbum(id)),
+      getTopSongs: async (name, options) => decorateLanguages(await subsonic.getTopSongs(name, options)),
+      getSongsByGenreSampled: async (genre, options) => decorateLanguages(await subsonic.getSongsByGenreSampled(genre, options)),
     },
     choose: pool => {
       const isStandIn = matchedRequestStandIn(named, {
@@ -469,6 +495,7 @@ async function resolveRequest(entry) {
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
+    languageSongs: async language => { await library.load(); return requestSongs(library.songsByLanguage(language)); },
     fallbackSongs: async () => {
       let moodSongs: any[] = [];
       if (ctx.dominantMood) {
