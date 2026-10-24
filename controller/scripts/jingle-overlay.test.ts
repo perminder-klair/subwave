@@ -384,6 +384,47 @@ test('an overlay ID publishes no voice or DJ webhook, like a manual or rotate ji
   }
 });
 
+test('a mixer that refuses an overlay frees the voice lock once the start is overdue, not after the clip', async () => {
+  const long = join(jingleDir, 'long.wav');
+  wav(long, 6);
+  rmSync(config.liquidsoap.jinglePlayingFile, { force: true });
+  rmSync(config.liquidsoap.introFile, { force: true });
+  resetVoiceMarkers();
+  const t0 = Date.now();
+  const handoff = await airVoice(config.liquidsoap.introFile, long, 'ID', 0,
+    { skipIfBusy: true, jingleOverlay: true, jingleOverlayTrackAt: t0 });
+  assert.ok(handoff);
+  rmSync(config.liquidsoap.introFile); // poll_intro consumed the file and dropped the ID
+  assert.equal(voiceBusy(), true);
+  while (voiceBusy() && Date.now() - t0 < 8000) await tick(50);
+  const releasedAfter = Date.now() - t0;
+  // The old hold was the whole clip plus lead-in and tail: 7.5s here.
+  assert.ok(releasedAfter >= 3000 && releasedAfter < 4500, `released after ${releasedAfter}ms`);
+  resetVoiceMarkers();
+});
+
+test('an accepted overlay holds the voice lock for its clip from the measured start', async () => {
+  const clip = join(jingleDir, 'clip.wav');
+  wav(clip, 4.5);
+  rmSync(config.liquidsoap.jinglePlayingFile, { force: true });
+  rmSync(config.liquidsoap.introFile, { force: true });
+  resetVoiceMarkers();
+  const t0 = Date.now();
+  const handoff = await airVoice(config.liquidsoap.introFile, clip, 'ID', 0,
+    { skipIfBusy: true, jingleOverlay: true, jingleOverlayTrackAt: t0 });
+  const voiceId = readFileSync(config.liquidsoap.introFile, 'utf8').match(/subwave_voice="([^"\n]+)"/)?.[1];
+  rmSync(config.liquidsoap.introFile);
+  writeFileSync(config.liquidsoap.voicePlayingFile, JSON.stringify({ voiceId, startedAt: Date.now() / 1000, channel: 'intro' }));
+  pollVoiceMarker();
+  assert.ok(await handoff!.aired);
+  await tick(4200 - (Date.now() - t0));
+  assert.equal(voiceBusy(), true, 'still inside the clip, past the start grace');
+  while (voiceBusy() && Date.now() - t0 < 8000) await tick(50);
+  const releasedAfter = Date.now() - t0;
+  assert.ok(releasedAfter >= 5000 && releasedAfter < 6000, `released after ${releasedAfter}ms`);
+  resetVoiceMarkers();
+});
+
 test('the first overlay waits for its first voice marker and earns post-air bookkeeping', async () => {
   reset(); startSong();
   resetVoiceMarkers();

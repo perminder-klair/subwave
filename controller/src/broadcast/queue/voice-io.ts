@@ -75,6 +75,12 @@ export const HANDOFF_TO_AIR_MS = 250 + VOICE_LEADIN_MS;
 // Cap a single hold so a wildly-wrong duration estimate (or a clip that never
 // really aired) can't wedge the voice channel for minutes.
 export const VOICE_HOLD_MAX_MS = 90_000;
+// How long an overlay ID's start marker may take after its handoff: the mixer's
+// 0.5 s poll, the lead-in, the marker poller's own 0.5 s, and slack for a busy
+// host. Past it the mixer has refused the ID. A start later than this only
+// releases the lock early, and the mixer still drops the ID the moment other
+// speech is queued.
+const OVERLAY_START_GRACE_MS = HANDOFF_TO_AIR_MS + 2_500;
 
 // What a caller gets back once its clip has been handed to Liquidsoap. The
 // handoff itself is still awaited (this resolves at the same moment airVoice
@@ -175,19 +181,31 @@ export async function airVoice(
       await waitForJingleClear();
       return writeHandoff(path, uri, { beforeWrite });
     });
-  // Extend the shared lock until this clip has (about) finished playing.
-  _voiceChain = turn.then(written => written ? sleep(holdMs) : undefined)
-    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
-  if (!await turn) return null;
-  // Registered AFTER the handoff resolves, so the timeout measures the wait for
+  // Registered when the handoff resolves, so the timeout measures the wait for
   // AIR and not the wait for this clip's turn on the shared voice chain (which
   // can legitimately be a whole segment long). The marker reader keeps a short
-  // buffer of ids it saw first, so losing this race costs nothing.
-  return {
-    voiceId,
-    clipMs,
-    aired: airMarkerPromise ?? awaitVoiceAir(voiceId, undefined, { requireMarker: jingleOverlay }),
+  // buffer of ids it saw first, so losing this race costs nothing. One reader
+  // per clip: the hold below and the caller share it.
+  const aired: Promise<number | null> = turn
+    .then(written => written
+      ? airMarkerPromise ?? awaitVoiceAir(voiceId, undefined, { requireMarker: jingleOverlay })
+      : null)
+    .catch(() => null);
+  // Extend the shared lock until this clip has (about) finished playing. The
+  // mixer may refuse an optional overlay ID after consuming its handoff, and a
+  // refused ID never starts: hold until its start is overdue, then for the
+  // clip from its real start.
+  const hold = (written: boolean) => {
+    if (!written) return undefined;
+    if (!jingleOverlay) return sleep(holdMs);
+    return Promise.race([aired, sleep(OVERLAY_START_GRACE_MS).then(() => null)])
+      .then(at => at == null ? undefined
+        : sleep(Math.min(VOICE_HOLD_MAX_MS, Math.max(0, at + clipMs + VOICE_TAIL_MS - Date.now()))));
   };
+  _voiceChain = turn.then(hold)
+    .then(() => {}, () => {}).finally(() => { _voiceHolders--; });
+  if (!await turn) return null;
+  return { voiceId, clipMs, aired };
 }
 
 // Short, URI-safe, and unique per clip — the whole job is telling one segment's
