@@ -7,7 +7,7 @@ import type { TaggerState } from '../LibraryTaggingPanel';
 import { useLibrary } from './LibraryContext';
 import { libraryKeys } from './queries';
 
-import { mergeRunLog, type RunLogFileInfo, type RunLogPage, type RunLogView } from './run-log';
+import { mergeRunLog, orphanRunLog, type RunLogFileInfo, type RunLogPage, type RunLogView } from './run-log';
 
 export type { RunLogFileInfo, RunLogView } from './run-log';
 
@@ -31,11 +31,13 @@ export function useTaggerRunLog(open: boolean, tagger: TaggerState | null) {
       const j = await adminJson<{ log?: RunLogPage | null }>(
         adminFetch, `/library/tagger/log?after=${after}${run}`, undefined, signal,
       );
-      return j.log ? mergeRunLog(prev, j.log) : (prev ?? null);
+      return j.log ? mergeRunLog(prev, j.log) : orphanRunLog(prev);
     },
     enabled: ready && open,
     staleTime: 0,
-    refetchInterval: running ? POLL_MS : false,
+    // `running` clears on the child's 'exit'; its last lines and the [exit]
+    // line can land after that, so keep reading until the log says closed.
+    refetchInterval: (q) => (running || (q.state.data && !q.state.data.closed) ? POLL_MS : false),
   });
 
   const filesQuery = useQuery({
@@ -50,8 +52,8 @@ export function useTaggerRunLog(open: boolean, tagger: TaggerState | null) {
     staleTime: 0,
   });
 
-  // A run that just ended printed its last lines after the final poll, and a
-  // new run has a new file: one read each time the run state or id moves.
+  // A run that just started or ended moves the poll at once, and a new run
+  // has a new file: one read each time the run state or id moves.
   const seen = useRef<{ running: boolean; runId: string | null } | null>(null);
   useEffect(() => {
     const was = seen.current;

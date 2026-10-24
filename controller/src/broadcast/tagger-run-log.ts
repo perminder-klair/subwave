@@ -14,6 +14,9 @@ export interface RunLogPage {
   entries: RunLogEntry[];
   nextSeq: number;
   gap: boolean;
+  // Every line of the run is in: its child's pipes have closed, which can be
+  // after 'exit' has already cleared `running`. A reader polls until this.
+  closed: boolean;
 }
 
 export interface RunLogSink { write(text: string): void; close(): void }
@@ -107,7 +110,7 @@ export class RunLog {
       line: typeof e.line === 'string' ? e.line : { kind: e.line.kind, text: e.line.text, at: e.line.at },
     }));
 
-    return { runId: this.runId, entries, nextSeq: this.seq, gap };
+    return { runId: this.runId, entries, nextSeq: this.seq, gap, closed: this.closed };
   }
 
   close(): void {

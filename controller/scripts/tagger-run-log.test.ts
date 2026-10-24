@@ -50,6 +50,7 @@ test('seq starts at 1 and is contiguous; since(0) returns everything', () => {
   const p2 = log.since(p.nextSeq);
   assert.equal(p2.entries.length, 0);
   assert.equal(p2.nextSeq, 2);
+  assert.equal(p2.closed, false, 'an open run is still printing');
 });
 
 // ─── (b) pending raw line held then committed after holdMs ───────────────────
@@ -183,10 +184,11 @@ test('close() flushes pending, calls sink.close once, ignores subsequent writes'
   log.raw('pending');
   log.close();
 
-  // Pending was committed.
+  // Pending was committed, and the page says the run's output is all in.
   const p = log.since(0);
   assert.equal(p.entries.length, 1);
   assert.equal(p.entries[0].line, 'pending');
+  assert.equal(p.closed, true);
   assert.equal(sink.closedCount, 1);
 
   // Writes after close are silently ignored.

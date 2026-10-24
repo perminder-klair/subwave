@@ -86,6 +86,7 @@ test('every line of a fast run reaches the cursor feed and the file, once, in or
   ];
   assert.deepEqual(lines, expected, 'no line lost or doubled; the echo folds into its event');
   assert.deepEqual(page.entries.map(e => e.seq), expected.map((_, i) => i + 1));
+  assert.equal(page.closed, true, 'the pipes have closed');
   // The snapshot keeps its short tail, unchanged.
   assert.ok(t.taggerView().lastLog.length <= 30);
 
@@ -117,6 +118,7 @@ test('a run started before the last one drained leaves that run\'s file whole', 
   t.startReconcile();
   const draining = t.tagger.runLogId!;
   while (t.tagger.running) await new Promise((r) => setTimeout(r, 10));
+  assert.equal(t.taggerLogSince(0, draining)?.closed, false, "'exit' came first: a reader keeps polling");
   // The first child has exited but its grandchild still holds the pipe, and
   // the operator presses Start again.
   childScript = CHILD;

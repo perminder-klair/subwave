@@ -3,13 +3,14 @@
 // Run from web/: `npm test -- run-log`.
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeRunLog, type RunLogPage } from './run-log';
+import { mergeRunLog, orphanRunLog, type RunLogPage } from './run-log';
 
-const page = (runId: string, seqs: number[], gap = false): RunLogPage => ({
+const page = (runId: string, seqs: number[], gap = false, closed = false): RunLogPage => ({
   runId,
   entries: seqs.map(seq => ({ seq, line: `line ${seq}` })),
   nextSeq: seqs.length ? seqs[seqs.length - 1]! : 0,
   gap,
+  closed,
 });
 const seqsOf = (v: { entries: { seq: number }[] }) => v.entries.map(e => e.seq);
 
@@ -29,7 +30,7 @@ test('a page that repeats lines already held never duplicates them', () => {
 
 test('an empty page keeps the cursor where it was', () => {
   const a = mergeRunLog(null, page('r1', [1, 2]));
-  const b = mergeRunLog(a, { runId: 'r1', entries: [], nextSeq: 2, gap: false });
+  const b = mergeRunLog(a, { runId: 'r1', entries: [], nextSeq: 2, gap: false, closed: false });
   assert.deepEqual(seqsOf(b), [1, 2]);
   assert.equal(b.nextSeq, 2);
 });
@@ -56,4 +57,20 @@ test('the browser keeps the newest 5000 lines and says it dropped some', () => {
   assert.equal(v.entries[0]!.seq, 4);
   assert.equal(v.nextSeq, 5003);
   assert.equal(v.gap, true);
+});
+
+test('the view follows the controller on whether the run\'s output is all in', () => {
+  const a = mergeRunLog(null, page('r1', [1, 2]));
+  assert.equal(a.closed, false);
+  const b = mergeRunLog(a, page('r1', [3], false, true));
+  assert.equal(b.closed, true, 'the last page after the pipes closed');
+  assert.equal(mergeRunLog(b, page('r2', [1])).closed, false, 'a new run is open again');
+});
+
+test('a log the controller no longer holds reads as closed, so polling stops', () => {
+  const a = mergeRunLog(null, page('r1', [1, 2]));
+  const o = orphanRunLog(a);
+  assert.equal(o?.closed, true);
+  assert.deepEqual(o?.entries, a.entries, 'what was fetched stays on the page');
+  assert.equal(orphanRunLog(null), null);
 });
