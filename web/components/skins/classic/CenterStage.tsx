@@ -126,8 +126,8 @@ export interface CenterStageProps {
   /** Head of the controller's upcoming queue. Null when the queue is empty. */
   upNext: QueueEntry | null;
   /** Lyrics are showing (AmbientLyrics), synced or not: the stage gives them
-   *  the right half on wide screens and a band above the waveform on narrow
-   *  ones. */
+   *  the right half on wide screens, everything under a one-row header on a
+   *  phone, and a band above the waveform in between. */
   lyricsShown?: boolean;
   /** This listener's lyrics; absent while the station has lyrics off. */
   lyrics?: StageLyrics | null;
@@ -230,12 +230,19 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // line. Narrower screens add --lyrics-band to the bottom reserve for the
     // band above the waveform. That band is left out on a short screen below
     // lg, so the reserve is too.
+    // A phone (below sm, tall enough for the lyrics) had no room for the band:
+    // the cover stacked over a two-line title, the tags and the DJ line ran
+    // out of the stage, up under the top bar and down into the lyrics. There
+    // the stage shrinks to one row under the top bar, a 64px cover beside a
+    // one-line title and the artist, and drops what lg drops. AmbientLyrics
+    // starts the lyrics at a fixed 152px below it, so the row stays ~65px.
     <div
       className={cn(
         'absolute top-[72px] right-[80px] bottom-[calc(220px+var(--lyrics-band,0px))] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[calc(212px+var(--lyrics-band,0px))] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[calc(300px+var(--lyrics-band,0px))]',
         lyricsShown && '[--lyrics-band:132px] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
         // The column's rule runs up to the top bar's (49px at lg).
         lyricsShown && 'lg:top-[49px] lg:right-auto lg:left-0 lg:w-[360px] lg:border-r lg:border-separator-strong lg:px-8',
+        lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:bottom-auto',
       )}
     >
       {/* Above the stage's lyrics (z-[1]), which the lyrics settings can
@@ -244,6 +251,8 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
         className={cn(
           'relative isolate z-[2] flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6',
           lyricsShown && 'lg:flex-col lg:items-start lg:gap-5',
+          // Full width, so the one-line title truncates rather than widening the row.
+          lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:w-full [@media(max-width:639px)_and_(min-height:700px)]:flex-row [@media(max-width:639px)_and_(min-height:700px)]:items-center',
         )}
       >
         {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
@@ -258,7 +267,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             // cover. The 96px floor is what phones get: 14vw is only ~55px on a
             // 390px screen, too small a target for the tap-to-timeline.
             'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
-            lyricsShown && 'lg:h-[min(200px,24vh)] lg:w-[min(200px,24vh)]',
+            lyricsShown && 'lg:h-[min(200px,24vh)] lg:w-[min(200px,24vh)] [@media(max-width:639px)_and_(min-height:700px)]:size-16',
             rippleActive && 'v3-cover-live',
           )}
         >
@@ -293,31 +302,34 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           <span className="v3-cover-tick v3-cover-tick--bl" aria-hidden="true" />
           <span className="v3-cover-tick v3-cover-tick--br" aria-hidden="true" />
         </button>
-        <div className="relative min-w-0">
-          <div className="v3-caption mb-[14px] text-muted">
+        {/* Static in the phone view, so the lyrics settings hang from the
+            whole row rather than from beside the cover. */}
+        <div className={cn('relative min-w-0', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:static')}>
+          <div className={cn('v3-caption mb-[14px] text-muted', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:mb-1 [@media(max-width:639px)_and_(min-height:700px)]:truncate')}>
             {offline ? (
               'Off air'
             ) : (
               <>
-                Now playing
+                {/* The phone view's row is plainly the track on air, and the
+                    label would push the clock off a narrow phone. */}
+                <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
+                  Now playing{live ? ' — ' : ''}
+                </span>
                 {live && duration > 0 ? (
-                  <>
-                    {' — '}
-                    <button
-                      type="button"
-                      onClick={toggleClock}
-                      title={showRemaining ? 'Show elapsed time' : 'Show time remaining'}
-                      aria-label={showRemaining ? 'Time remaining — switch to elapsed' : 'Elapsed time — switch to remaining'}
-                      className="v3-focus v3-tab-num cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-inherit uppercase"
-                    >
-                      {showRemaining
-                        ? `-${fmtTime(remaining)} / ${fmtTime(duration)}`
-                        : `${fmtTime(elapsed)} / ${fmtTime(duration)}`}
-                    </button>
-                  </>
-                ) : live ? ` — ${fmtTime(elapsed)}` : ''}
+                  <button
+                    type="button"
+                    onClick={toggleClock}
+                    title={showRemaining ? 'Show elapsed time' : 'Show time remaining'}
+                    aria-label={showRemaining ? 'Time remaining — switch to elapsed' : 'Elapsed time — switch to remaining'}
+                    className="v3-focus v3-tab-num cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-inherit uppercase"
+                  >
+                    {showRemaining
+                      ? `-${fmtTime(remaining)} / ${fmtTime(duration)}`
+                      : `${fmtTime(elapsed)} / ${fmtTime(duration)}`}
+                  </button>
+                ) : live ? fmtTime(elapsed) : ''}
                 {llmTokens != null && (
-                  <>
+                  <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
                     {' · '}
                     <span
                       className="inline-flex items-center gap-1 align-middle text-ink-faint"
@@ -327,7 +339,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                       <Coins size={12} strokeWidth={1.75} aria-hidden="true" />
                       <CountUp value={llmTokens} className="v3-tab-num" />
                     </span>
-                  </>
+                  </span>
                 )}
               </>
             )}
@@ -345,17 +357,28 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                   <h1
                     className={cn(
                       'v3-title m-0 line-clamp-2 text-ink',
-                      // .v3-title is unlayered, so its size yields only to !.
+                      // .v3-title is unlayered, so its size yields only to !,
+                      // and its text-wrap to a nowrap that is !, too.
                       lyricsShown && 'lg:text-[clamp(30px,3vw,46px)]!',
+                      lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:block [@media(max-width:639px)_and_(min-height:700px)]:truncate! [@media(max-width:639px)_and_(min-height:700px)]:text-[20px]! [@media(max-width:639px)_and_(min-height:700px)]:leading-[1.2]!',
                     )}
                     title={nowPlaying?.title}
                   >
                     {nowPlaying?.title}
                   </h1>
-                  <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
-                    <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
-                    {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
-                    {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
+                  {/* One line in the phone view: the artist truncates so the
+                      heart and the lyrics button stay on it. */}
+                  <div
+                    className={cn(
+                      'mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted',
+                      lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:flex [@media(max-width:639px)_and_(min-height:700px)]:items-center',
+                    )}
+                  >
+                    <span className={cn('text-ink', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:min-w-0 [@media(max-width:639px)_and_(min-height:700px)]:truncate')}>
+                      {nowPlaying?.artist || 'Unknown artist'}
+                    </span>
+                    {nowPlaying?.album && <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}> · {nowPlaying.album}</span>}
+                    {nowPlaying?.year && <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}> · {nowPlaying.year}</span>}
                     <LikeHeart />
                     {lyrics && (
                       <LyricsButton
@@ -367,7 +390,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     )}
                   </div>
                   {hasMeta && (
-                    <div className={cn('v3-caption mt-[10px] text-muted', lyricsShown && 'lg:hidden')}>
+                    <div className={cn('v3-caption mt-[10px] text-muted', lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
                       {metaTokens.join(SEP)}
                       {moodPhrase && (
                         <span className="text-accent-2">
@@ -406,7 +429,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           currentTrackId={subsonicId}
           buddyOn={boothBuddyOn}
           onOpenBooth={onOpenBooth}
-          className={cn(lyricsShown && 'lg:hidden')}
+          className={cn(lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden')}
         />
       )}
 
@@ -422,7 +445,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             exit={{ opacity: 0 }}
             className={cn(
               'v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted',
-              lyricsShown && 'lg:hidden',
+              lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden',
             )}
           >
             <span className="text-accent-2">↦ up next</span>

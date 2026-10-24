@@ -4,8 +4,9 @@
 // so the line being sung holds the centre, larger, while the lines around it
 // fade, those already sung more than those to come. From lg the stage splits:
 // the track info stacks in a column on the left (CenterStage) and the lyrics
-// fill the rest above the waveform; narrower screens give them a band above
-// the waveform.
+// fill the rest above the waveform. On a phone the track info shrinks to one
+// row under the top bar and the lyrics fill everything below it; the widths
+// in between give them a band above the waveform.
 //
 // Words light up as they are sung, the newest in the accent, paced from the
 // line's own timing (LRC times lines, not words, so lyricMoment() spreads the
@@ -60,14 +61,18 @@ function useWideStage(): boolean {
 // Where the lyrics sit. Below lg: a band just above the waveform, the stage's
 // own bottom reserves plus a gap (CenterStage makes room with --lyrics-band),
 // left out on a screen too short for it, where the track info needs the room
-// more. lg and up: right of the track info's column (CenterStage's 360px),
-// beside the rail, above the waveform.
+// more. On a phone (below sm) they run from just under CenterStage's one-row
+// header (72px down, ~65px tall) to the same bottom: the room that header
+// frees by shrinking the cover and dropping the tags and the DJ line. lg and
+// up: right of the track info's column (CenterStage's 360px), beside the
+// rail, above the waveform.
 const PLACE = cn(
   'absolute z-[1] font-display text-ink',
   'right-[80px] left-4 h-[124px] sm:right-24 sm:left-8',
   'bottom-[228px] [@media(min-width:640px)_and_(max-width:1023px)]:bottom-[220px]',
   '[@media(min-width:640px)_and_(max-width:1023px)_and_(min-height:760px)]:bottom-[308px]',
   '[@media(max-width:1023px)_and_(max-height:699px)]:hidden',
+  '[@media(max-width:639px)_and_(min-height:700px)]:top-[152px] [@media(max-width:639px)_and_(min-height:700px)]:h-auto',
   'lg:top-[72px] lg:right-28 lg:left-[360px] lg:h-auto',
   '[@media(min-width:1024px)_and_(min-height:760px)]:bottom-[300px]',
   '[@media(min-width:1024px)_and_(max-height:759px)]:bottom-[212px]',

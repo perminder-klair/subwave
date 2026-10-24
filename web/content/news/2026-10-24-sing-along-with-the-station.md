@@ -18,10 +18,10 @@ On Classic, a wide screen splits in two. The cover, title and artist stack in a 
 
 ![The Classic skin in Classic Light with lyrics on: the cover, title and artist of Last Boat Home in a column on the left, and the song's lines down the right, the line being sung large and dark at the centre with its newest word in vermilion, the lines around it fading, and the waveform below](/screenshots/lyrics-classic.webp)
 
-On a phone or a narrow window the lyrics sit in a band just above the waveform.
+On a phone the cover, title and artist shrink to one row at the top, and the lyrics fill the screen below it, down to the waveform. A tablet or a narrow window gives them a band just above the waveform.
 
 <figure data-shot="phone">
-  <img src="/screenshots/lyrics-phone.webp" alt="Classic on a phone in Classic Dark: the track title, tags and the DJ's last line at the top, three lines of lyrics in a band above the waveform with the sung line in white and its newest word in red, and the tuning bar along the bottom" />
+  <img src="/screenshots/lyrics-phone.webp" alt="Classic on a phone in Classic Dark: a small cover beside the title Last Boat Home and Lantern Static in one row at the top, the song's lines filling the screen below with the sung line in white and its newest word in red, and the waveform along the bottom" />
 </figure>
 
 Drift makes them the middle of the page. The cover and title shrink to one small row, and three lines share the centre: the one just sung, faint above, the one being sung, large, and the next one waiting below. Lines fade in and out in place, at Drift's slower pace.
