@@ -50,6 +50,7 @@
     "node-cron": "^4.6.0",
     "re2js": "^2.8.6",
     "sqlite-vec": "^0.1.9",
+    "transliteration": "^2.6.2",
     "tsx": "^4.23.15",
     "umap-js": "^1.4.0",
     "yaml": "^2.9.1",

@@ -504,10 +504,10 @@ export const DEFAULTS = {
     // cost a slot.
     genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an
-    // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
-    // and matches it locally. Off by default: needs a search provider and costs a
-    // web round-trip plus a small extraction call per use. No-op unless
-    // searchReady().
+    // `identifyRequestedTrack` resolves described tracks and pasted lyrics via
+    // web search, then verifies the result against this library. Keep this
+    // opt-in for existing installations: it needs a search provider and costs
+    // a web round-trip plus a small extraction call per described request.
     requestWebResolve: false,
     // Hard wall-clock ceiling on a single DJ-agent generation, enforced by
     // withDeadline. Main, recovery and terminal runs share one budget per

@@ -55,6 +55,62 @@ export interface MbRecording {
   'artist-credit'?: Array<{ name?: string; artist?: { name?: string } }>;
 }
 
+export interface MbReleaseGroup {
+  id?: string;
+  score?: number;
+  title?: string;
+  'first-release-date'?: string;
+  'primary-type'?: string;
+  'secondary-types'?: string[];
+  'artist-credit'?: Array<{ name?: string; artist?: { name?: string; id?: string } }>;
+}
+
+function mbNameKey(value: unknown): string {
+  return String(value ?? '').normalize('NFKC').toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function mbDateRank(value: unknown, now = new Date()): { rank: number; precision: number } | null {
+  const match = String(value ?? '').match(/^(\d{4})(?:-(\d{2}))?(?:-(\d{2}))?$/u);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = match[2] ? Number(match[2]) : 0;
+  const day = match[3] ? Number(match[3]) : 0;
+  if (year < MIN_YEAR || month > 12 || day > 31) return null;
+  const currentYear = now.getUTCFullYear();
+  const currentRank = currentYear * 10000 + (now.getUTCMonth() + 1) * 100 + now.getUTCDate();
+  const rank = year * 10000 + month * 100 + day;
+  if (rank > currentRank) return null;
+  return { rank, precision: match[3] ? 3 : match[2] ? 2 : 1 };
+}
+
+const EXCLUDED_RELEASE_TYPES = new Set([
+  'audio drama', 'audiobook', 'compilation', 'demo', 'dj-mix', 'field recording',
+  'interview', 'live', 'mixtape/street', 'remix', 'soundtrack', 'spokenword',
+]);
+
+export function isCoreReleaseGroup(group: MbReleaseGroup, kind: 'single' | 'album'): boolean {
+  const primary = String(group['primary-type'] || '').toLocaleLowerCase();
+  if (primary !== kind) return false;
+  return !(group['secondary-types'] || []).some(type => EXCLUDED_RELEASE_TYPES.has(String(type).toLocaleLowerCase()));
+}
+
+export function latestCoreReleaseGroup(
+  groups: MbReleaseGroup[],
+  kind: 'single' | 'album',
+  now = new Date(),
+): MbReleaseGroup | null {
+  return groups
+    .filter(group => isCoreReleaseGroup(group, kind) && mbDateRank(group['first-release-date'], now))
+    .sort((left, right) => {
+      const l = mbDateRank(left['first-release-date'], now)!;
+      const r = mbDateRank(right['first-release-date'], now)!;
+      return r.rank - l.rank
+        || r.precision - l.precision
+        || mbNameKey(left.title).localeCompare(mbNameKey(right.title))
+        || String(left.id || '').localeCompare(String(right.id || ''));
+    })[0] || null;
+}
+
 function creditNames(r: MbRecording): string[] {
   return (r['artist-credit'] ?? [])
     .flatMap((c) => [c?.name, c?.artist?.name])
@@ -133,6 +189,88 @@ async function searchRecordings(query: string): Promise<MbRecording[]> {
   if (!res.ok) return [];
   const body = (await res.json()) as { recordings?: MbRecording[] };
   return Array.isArray(body.recordings) ? body.recordings : [];
+}
+
+async function searchLatestArtist(name: string, signal?: AbortSignal): Promise<{ id: string; name: string } | null> {
+  const escaped = name.replace(/[\\"]/g, '\\$&');
+  const url = `${MB_API}/artist/?query=${encodeURIComponent(`artist:"${escaped}"`)}&fmt=json&limit=10`;
+  const res = await throttled(() => fetchWithTimeout(url, {
+    timeoutMs: TIMEOUT_MS,
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    signal,
+  }));
+  if (!res.ok) return null;
+  const body = await res.json() as { artists?: Array<{ id?: string; name?: string; score?: number; aliases?: Array<{ name?: string; primary?: boolean }> }> };
+  const wanted = mbNameKey(name);
+  const candidates = (Array.isArray(body.artists) ? body.artists : [])
+    .filter(artist => artist.id && artist.name && (artist.score || 0) >= MIN_SCORE)
+    .filter(artist => mbNameKey(artist.name) === wanted
+      || (artist.aliases || []).some(alias => mbNameKey(alias.name) === wanted))
+    .sort((left, right) => (right.score || 0) - (left.score || 0)
+      || mbNameKey(left.name).localeCompare(mbNameKey(right.name))
+      || String(left.id).localeCompare(String(right.id)));
+  const best = candidates[0];
+  return best?.id && best.name ? { id: best.id, name: best.name } : null;
+}
+
+async function searchLatestReleaseGroups(
+  artistId: string,
+  kind: 'single' | 'album',
+  fromYear: number,
+  toYear: number,
+  signal?: AbortSignal,
+): Promise<MbReleaseGroup[]> {
+  const primaryType = kind === 'album' ? 'Album' : 'Single';
+  const query = `arid:${artistId} AND primarytype:${primaryType} AND firstreleasedate:[${fromYear} TO ${toYear}]`;
+  const url = `${MB_API}/release-group/?query=${encodeURIComponent(query)}&fmt=json&limit=100`;
+  const res = await throttled(() => fetchWithTimeout(url, {
+    timeoutMs: TIMEOUT_MS,
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+    signal,
+  }));
+  if (!res.ok) return [];
+  const body = await res.json() as { 'release-groups'?: MbReleaseGroup[] };
+  return Array.isArray(body['release-groups']) ? body['release-groups'] : [];
+}
+
+/**
+ * Find the newest core official release for an artist. The search is bounded
+ * to three date windows; generic web evidence remains the freshness fallback
+ * when MusicBrainz does not return a confident result.
+ */
+export async function lookupLatestReleaseGroup(
+  artistName: string,
+  kind: 'single' | 'album',
+  signal?: AbortSignal,
+): Promise<{ title: string; artist: string; releaseDate: string; source: 'musicbrainz'; sourceUrls: string[] } | null> {
+  try {
+    const artist = await searchLatestArtist(artistName, signal);
+    if (!artist) return null;
+    const currentYear = new Date().getUTCFullYear();
+    const windows: Array<[number, number]> = [
+      [currentYear, currentYear],
+      [Math.max(MIN_YEAR, currentYear - 5), currentYear - 1],
+      [MIN_YEAR, Math.max(MIN_YEAR, currentYear - 6)],
+    ];
+    const groups: MbReleaseGroup[] = [];
+    for (const [fromYear, toYear] of windows) {
+      if (fromYear > toYear) continue;
+      groups.push(...await searchLatestReleaseGroups(artist.id, kind, fromYear, toYear, signal));
+      const best = latestCoreReleaseGroup(groups, kind);
+      if (best?.title && best['first-release-date'] && best.id) {
+        return {
+          title: best.title,
+          artist: artist.name,
+          releaseDate: best['first-release-date'],
+          source: 'musicbrainz',
+          sourceUrls: [`https://musicbrainz.org/release-group/${best.id}`],
+        };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 // Escape a value for use inside a quoted Lucene phrase.

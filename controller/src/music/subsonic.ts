@@ -294,8 +294,8 @@ const rejectArchive = (arr: any[]) =>
 // `includeBlocked` is for the admin search surface only (/dj/search), so the
 // operator can review a blocked track; queue.push still refuses it. Every
 // airing path takes the default and never sees blocked songs.
-export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
-  return (await searchPage(query, { songCount, songOffset, includeBlocked })).songs;
+export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false, signal }: { songCount?: number; songOffset?: number; includeBlocked?: boolean; signal?: AbortSignal } = {}) {
+  return (await searchPage(query, { songCount, songOffset, includeBlocked, signal })).songs;
 }
 
 // search() plus `rawCount`: how many songs the server returned for the page
@@ -321,26 +321,26 @@ export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { s
   return rejectArchive(r.randomSongs?.song || []);
 }
 
-export async function getSongsByGenre(genre, { count = 20, offset = 0 } = {}) {
-  const r = await call('getSongsByGenre', { genre, count, offset }, RETRY_FAST_TRANSPORT);
+export async function getSongsByGenre(genre, { count = 20, offset = 0, signal }: { count?: number; offset?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getSongsByGenre', { genre, count, offset }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.songsByGenre?.song || []);
 }
 
 // A random page of a genre — offset-less getSongsByGenre returns the same head
 // every call. Offset is sized from the genre's songCount; an empty deep page
 // falls back to page 0, so this can only widen the reach, never starve it.
-export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
+export async function getSongsByGenreSampled(genre, { count = 20, signal }: { count?: number; signal?: AbortSignal } = {}) {
   let offset = 0;
   try {
-    const genres = await getGenres();
+    const genres = await getGenres({ signal });
     const norm = (s) => String(s ?? '').toLowerCase();
     const total = Number(genres.find((g) => norm(g.value) === norm(genre))?.songCount) || 0;
     const maxOffset = Math.max(0, total - count);
     if (maxOffset > 0) offset = Math.floor(Math.random() * (maxOffset + 1));
   } catch {}
-  const page = await getSongsByGenre(genre, { count, offset });
+  const page = await getSongsByGenre(genre, { count, offset, signal });
   if (page.length || offset === 0) return page;
-  return getSongsByGenre(genre, { count });
+  return getSongsByGenre(genre, { count, signal });
 }
 
 // Every genre tag on a song, deduped. OpenSubsonic `genres: [{name}]` is
@@ -365,9 +365,9 @@ const GENRES_TTL_MS = 5 * 60 * 1000;
 // All genre tags in the library, each { value, songCount, albumCount }. Cached
 // 5 min (resolveGenreName is called once per value, per pool builder); the set
 // only moves on a Navidrome rescan. Failures are NOT cached — they propagate.
-export async function getGenres() {
+export async function getGenres({ signal }: { signal?: AbortSignal } = {}) {
   if (genresCache && Date.now() - genresCache.at < GENRES_TTL_MS) return genresCache.genres;
-  const r = await call('getGenres', {}, RETRY_FAST_TRANSPORT);
+  const r = await call('getGenres', {}, { ...RETRY_FAST_TRANSPORT, signal });
   const genres = r.genres?.genre || [];
   genresCache = { genres, at: Date.now() };
   return genres;
@@ -375,12 +375,12 @@ export async function getGenres() {
 
 // Fuzzy-match free text ("hip hop") against a real genre tag ("Hip-Hop"):
 // exact normalised match wins, then substring either way. null when no hit.
-export async function resolveGenreName(name) {
+export async function resolveGenreName(name, { signal }: { signal?: AbortSignal } = {}) {
   if (!name) return null;
   const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const target = norm(name);
   if (!target) return null;
-  const genres = await getGenres();
+  const genres = await getGenres({ signal });
   let hit = genres.find(g => norm(g.value) === target);
   if (!hit) {
     hit = genres.find(g => {
@@ -644,8 +644,8 @@ export async function getSong(id) {
   return r.song || null;
 }
 
-export async function getArtist(id) {
-  const r = await call('getArtist', { id }, RETRY_FAST_TRANSPORT);
+export async function getArtist(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getArtist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artist || null;
 }
 
@@ -677,9 +677,9 @@ export async function getArtistLastfmTags(id, { count = 20 } = {}) {
 
 // Plain-text lyrics, or '' when none are indexed. Both the modern and legacy
 // response shapes normalise to a string.
-export async function getLyrics(songId) {
+export async function getLyrics(songId, { signal }: { signal?: AbortSignal } = {}) {
   try {
-    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+    const r = await call('getLyricsBySongId', { id: songId }, { ...RETRY_FAST_TRANSPORT, signal });
     // Modern: { lyricsList: { structuredLyrics: [{ line: [{ value }] }] } }
     const structured = r.lyricsList?.structuredLyrics;
     if (Array.isArray(structured) && structured.length) {
@@ -695,7 +695,8 @@ export async function getLyrics(songId) {
     // Legacy: { lyrics: { value } }
     if (typeof r.lyrics?.value === 'string') return r.lyrics.value;
     return '';
-  } catch {
+  } catch (err) {
+    if (signal?.aborted) throw err;
     return '';
   }
 }
