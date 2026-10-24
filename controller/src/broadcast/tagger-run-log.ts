@@ -51,12 +51,11 @@ export const RUN_LOG_HOLD_MS = 400;
 export const RUN_LOG_KEEP = 10;
 export const RUN_LOG_DIR_NAME = 'tagger-logs';
 
+const pad2 = (n: number) => String(n).padStart(2, '0');
+
 function hhmmss(ts: number): string {
   const d = new Date(ts);
-  const h = String(d.getUTCHours()).padStart(2, '0');
-  const m = String(d.getUTCMinutes()).padStart(2, '0');
-  const s = String(d.getUTCSeconds()).padStart(2, '0');
-  return `${h}:${m}:${s}`;
+  return `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
 }
 
 // Newlines break the one-entry-per-line contract on disk.
@@ -190,13 +189,10 @@ const MAX_SAME_SECOND = 99;
 
 export function runLogId(startedAt: Date, mode: MaintenanceMode, n = 1): string {
   if (!MODES.has(mode)) throw new Error(`unknown run mode: ${mode}`);
-  const y = startedAt.getUTCFullYear();
-  const mo = String(startedAt.getUTCMonth() + 1).padStart(2, '0');
-  const d = String(startedAt.getUTCDate()).padStart(2, '0');
-  const h = String(startedAt.getUTCHours()).padStart(2, '0');
-  const mi = String(startedAt.getUTCMinutes()).padStart(2, '0');
-  const s = String(startedAt.getUTCSeconds()).padStart(2, '0');
-  return `tagger-run-${y}${mo}${d}-${h}${mi}${s}-${mode}${n > 1 ? `-${n}` : ''}`;
+  const d = startedAt;
+  const ymd = `${d.getUTCFullYear()}${pad2(d.getUTCMonth() + 1)}${pad2(d.getUTCDate())}`;
+  const hms = `${pad2(d.getUTCHours())}${pad2(d.getUTCMinutes())}${pad2(d.getUTCSeconds())}`;
+  return `tagger-run-${ymd}-${hms}-${mode}${n > 1 ? `-${n}` : ''}`;
 }
 
 export function isRunLogId(id: unknown): id is string {
@@ -217,10 +213,10 @@ function runOrderKey(id: string): string {
   return `${p.startedAt}-${String(p.n).padStart(2, '0')}`;
 }
 
-// A second run started in the same second as an earlier one (a retry straight
-// after a failed spawn, Stop then Start) would otherwise get its id: it would
-// append to that run's file, and a page holding that run's cursor would skip
-// the new run's head. Counted across modes, so the count also orders a second's
+// Without the count, a run started in the same second as an earlier one (a
+// retry straight after a failed spawn, Stop then Start) gets the same id: it
+// appends to that run's file, and a page holding that run's cursor skips the
+// new run's head. Counted across modes, so the count also orders a second's
 // runs, and against the previous run, whose file may never have opened.
 function freeRunLogId(dir: string, startedAt: Date, mode: MaintenanceMode, previousId: string | null): string {
   const first = runLogId(startedAt, mode);

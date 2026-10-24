@@ -179,9 +179,9 @@ router.get('/library/tagger', requireAdmin, (_req, res) => {
 // from an earlier run reads the new one from its start. `log: null` = no run
 // since the controller started (earlier runs are in the files below).
 router.get('/library/tagger/log', requireAdmin, (req, res) => {
-  const after = Number(req.query.after);
+  // RunLog.since() sanitises the cursor: NaN or a negative reads from the start.
   const run = typeof req.query.run === 'string' ? req.query.run : null;
-  res.json({ log: taggerLogSince(Number.isFinite(after) ? after : 0, run) });
+  res.json({ log: taggerLogSince(Number(req.query.after), run) });
 });
 
 // The kept run logs, newest first (state/tagger-logs/, the last ten runs).

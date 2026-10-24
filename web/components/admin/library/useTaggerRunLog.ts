@@ -41,7 +41,7 @@ export function useTaggerRunLog(open: boolean, tagger: TaggerState | null) {
   });
 
   const filesQuery = useQuery({
-    queryKey: libraryKeys.taggerLogs(),
+    queryKey: libraryKeys.taggerLogFiles(),
     queryFn: async ({ signal }) => {
       const j = await adminJson<{ logs?: RunLogFileInfo[] }>(
         adminFetch, '/library/tagger/logs', undefined, signal,
@@ -61,7 +61,7 @@ export function useTaggerRunLog(open: boolean, tagger: TaggerState | null) {
     if (!was || !open) return;
     if (was.running !== running || was.runId !== runId) {
       void qc.invalidateQueries({ queryKey: libraryKeys.taggerLog(), exact: true });
-      void qc.invalidateQueries({ queryKey: libraryKeys.taggerLogs(), exact: true });
+      void qc.invalidateQueries({ queryKey: libraryKeys.taggerLogFiles(), exact: true });
     }
   }, [running, runId, open, qc]);
 
