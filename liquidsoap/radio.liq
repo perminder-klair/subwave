@@ -1512,16 +1512,17 @@ music = cross(
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
 
-# Gates that remain meaningful DURING an overlay, excluding its own intro
-# queue and voice_until deadline. Rechecked on every audio frame, not just at
-# the file handoff: idle/off-air freezes audio, but wall-clock holds expire.
-def jingle_overlay_environment_safe() =
+# Gates that remain meaningful DURING an overlay, rechecked on every audio
+# frame because idle/off-air freezes audio while wall-clock holds expire. This
+# runs on the streaming thread, so it reads refs and queues only, never a file.
+# A manual press is not here: it waits for a track boundary and for the
+# voice_until this ID set, so it can never meet the ID mid-clip, and cutting
+# the ID for it would only lose the ID. Presses and the handoff files are
+# checked once, when the offer is consumed (jingle_overlay_safe, below).
+def jingle_overlay_live_safe() =
   stream_on() and not idle_mode() and not music_starved() and
   source.is_ready(music_meta) and not bed_on_air() and not pause_talk_on_air() and
-  not jingle_now_on_air() and source.remaining(voice_queue) <= 0. and
-  list.length(voice_queue.queue()) == 0 and list.length(jingle_now_queue.queue()) == 0 and
-  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
-  not file.exists("#{state_dir}/jingle-now.txt")
+  source.remaining(voice_queue) <= 0. and list.length(voice_queue.queue()) == 0
 end
 
 # One generation for BOTH the lead-in and ID, including requests already
@@ -1536,7 +1537,7 @@ end
 
 def jingle_overlay_valid(epoch, song_stamp) =
   epoch == "#{jingle_overlay_epoch()}" and
-  song_stamp == "#{overlay_music_timestamp()}" and jingle_overlay_environment_safe()
+  song_stamp == "#{overlay_music_timestamp()}" and jingle_overlay_live_safe()
 end
 
 intro_queue.on_metadata(synchronous=true, fun(m) -> intro_overlay_metadata := m)
@@ -1721,7 +1722,10 @@ thread.run(every=0.5, poll_voice)
 # wins the race costs the optional ID, never its slot. Do not use is_ready on
 # voice queues: it latches true after their first push (see voice_until).
 def jingle_overlay_safe() =
-  jingle_overlay_environment_safe() and time() > voice_until() and
+  jingle_overlay_live_safe() and not jingle_now_on_air() and
+  list.length(jingle_now_queue.queue()) == 0 and
+  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
+  not file.exists("#{state_dir}/jingle-now.txt") and time() > voice_until() and
   source.remaining(intro_queue) <= 0. and list.length(intro_queue.queue()) == 0
 end
 

@@ -25,7 +25,7 @@ test('an accepted lead-in/ID stays cancelled after idle/off-air even when wall-c
   const valid = predicate('jingle_overlay_valid', {
     jingle_overlay_epoch: () => epoch,
     overlay_music_timestamp: () => song,
-    jingle_overlay_environment_safe: () => safe,
+    jingle_overlay_live_safe: () => safe,
   });
   assert.equal(valid('1', '100'), true);
   // Check the production cancellation generation change. There is no
@@ -65,24 +65,55 @@ test('both intro requests carry cancellation identity and cancelled audio is mut
 });
 
 
-test('live overlay safety rechecks paused music and every competing voice path', () => {
-  const gates: Record<string, boolean> = {};
-  const safe = predicate('jingle_overlay_environment_safe', {
+function mixerScope(gates: Record<string, boolean>) {
+  return {
     stream_on: () => !gates.offAir, idle_mode: () => !!gates.idle,
     music_starved: () => !!gates.starved, music_meta: 'music',
     bed_on_air: () => !!gates.bed, pause_talk_on_air: () => !!gates.pauseTalk,
     jingle_now_on_air: () => !!gates.manualJingle,
-    source: { is_ready: () => !gates.unready, remaining: () => gates.voicePlaying ? 10 : 0 },
-    voice_queue: { queue: () => gates.voiceQueued ? ['voice'] : [] },
+    source: { is_ready: () => !gates.unready, remaining: (q: { remaining: () => number }) => q.remaining() },
+    voice_queue: { queue: () => gates.voiceQueued ? ['voice'] : [], remaining: () => gates.voicePlaying ? 10 : 0 },
+    intro_queue: { queue: () => gates.introQueued ? ['intro'] : [], remaining: () => gates.introPlaying ? 10 : 0 },
     jingle_now_queue: { queue: () => gates.jingleQueued ? ['jingle'] : [] },
     list: { length: (items: unknown[]) => items.length }, state_dir: '/fixture',
     file: { exists: (path: string) => !!gates[path.split('/').pop()!] },
-  });
-  assert.equal(safe(), true);
-  for (const key of ['offAir', 'idle', 'starved', 'unready', 'bed', 'pauseTalk', 'manualJingle',
-    'voicePlaying', 'voiceQueued', 'jingleQueued', 'say.txt', 'intro.txt', 'jingle-now.txt']) {
+    time: () => 100, voice_until: () => gates.voiceDeadline ? 200 : 0,
+  };
+}
+const AIRING = ['offAir', 'idle', 'starved', 'unready', 'bed', 'pauseTalk', 'voicePlaying', 'voiceQueued'];
+const BOUNDARY_ONLY = ['manualJingle', 'jingleQueued', 'say.txt', 'intro.txt', 'jingle-now.txt'];
+
+test('live overlay safety rechecks paused music and competing voice every frame, with no file I/O', () => {
+  const gates: Record<string, boolean> = {};
+  const live = predicate('jingle_overlay_live_safe', mixerScope(gates));
+  assert.equal(live(), true);
+  for (const key of AIRING) {
     gates[key] = true;
-    assert.equal(safe(), false, key);
+    assert.equal(live(), false, key);
     gates[key] = false;
   }
+  // A press waits for a track boundary and for this ID's voice_until, so it can
+  // never meet the ID mid-clip: cutting the ID for it would only lose the ID.
+  for (const key of BOUNDARY_ONLY) {
+    gates[key] = true;
+    assert.equal(live(), true, `${key} must not cut an ID already playing`);
+    gates[key] = false;
+  }
+  // The per-frame gate runs on Liquidsoap's single streaming thread.
+  assert.doesNotMatch(body('jingle_overlay_live_safe'), /file\.|jingle_now/);
+  assert.match(body('intro_overlay_gain'), /jingle_overlay_valid/);
+  assert.match(body('jingle_overlay_valid'), /jingle_overlay_live_safe\(\)/);
+});
+
+test('the offer gate checks presses, handoff files and both voice queues once, when the ID is consumed', () => {
+  const gates: Record<string, boolean> = {};
+  const offer = predicate('jingle_overlay_safe', { ...mixerScope(gates),
+    jingle_overlay_live_safe: predicate('jingle_overlay_live_safe', mixerScope(gates)) });
+  assert.equal(offer(), true);
+  for (const key of [...AIRING, ...BOUNDARY_ONLY, 'voiceDeadline', 'introQueued', 'introPlaying']) {
+    gates[key] = true;
+    assert.equal(offer(), false, key);
+    gates[key] = false;
+  }
+  assert.match(body('poll_intro'), /jingle_overlay_safe\(\)/);
 });
