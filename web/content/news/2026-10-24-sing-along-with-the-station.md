@@ -8,11 +8,17 @@ excerpt: The Classic and Drift skins can show the playing song's lyrics in time 
 
 The player can show the words now. Turn lyrics on and the Classic and Drift skins put the playing song's lyrics on the stage, in time with the music, each word lighting up as it is sung.
 
-![The Classic skin in Classic Light with lyrics on: the cover, title and artist of Last Boat Home in a column on the left, and the song's lines down the right, the line being sung large and dark at the centre with its newest word in vermilion, the lines around it fading, and the waveform below](/screenshots/lyrics-classic.webp)
+<video controls playsinline preload="metadata" poster="/video/sing-along-with-the-station.webp" aria-label="A 34-second tour of synced lyrics: Burn It Down by Juniper Static on the Classic skin, its lines lighting up word by word as the column glides, a close look at the lyrics button beside the heart, then the same song in the centre of the Drift skin, ending on the words Now with synced lyrics">
+  <source src="/video/sing-along-with-the-station.mp4" type="video/mp4">
+</video>
 
 ## What's new
 
-On Classic, a wide screen splits in two. The cover, title and artist stack in a column on the left, ruled off from the lyrics beside them. The song runs down the right as one column that glides so the line being sung holds the centre, larger than the rest. Lines already sung fade further than the ones still to come. During an intro or an instrumental break, the next line waits at the centre. On a phone or a narrow window the lyrics sit in a band just above the waveform.
+On Classic, a wide screen splits in two. The cover, title and artist stack in a column on the left, ruled off from the lyrics beside them. The song runs down the right as one column that glides so the line being sung holds the centre, larger than the rest. Lines already sung fade further than the ones still to come. During an intro or an instrumental break, the next line waits at the centre.
+
+![The Classic skin in Classic Light with lyrics on: the cover, title and artist of Last Boat Home in a column on the left, and the song's lines down the right, the line being sung large and dark at the centre with its newest word in vermilion, the lines around it fading, and the waveform below](/screenshots/lyrics-classic.webp)
+
+On a phone or a narrow window the lyrics sit in a band just above the waveform.
 
 <figure data-shot="phone">
   <img src="/screenshots/lyrics-phone.webp" alt="Classic on a phone in Classic Dark: the track title, tags and the DJ's last line at the top, three lines of lyrics in a band above the waveform with the sung line in white and its newest word in red, and the tuning bar along the bottom" />
