@@ -22,8 +22,7 @@ import {
   runLogPath,
   pruneRunLogs,
 } from '../src/broadcast/tagger-run-log.js';
-
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 let t = 1_000_000;
 const now = () => t;
@@ -32,7 +31,15 @@ function makeSink() {
   return { lines: [] as string[], closedCount: 0, write(s: string) { this.lines.push(s); }, close() { this.closedCount++; } };
 }
 
-// ─── (a) seq contiguity ──────────────────────────────────────────────────────
+// A dir for each file test, removed however the test ends.
+async function withTempDir(fn: (dir: string) => void | Promise<void>): Promise<void> {
+  const dir = createTempDir(path.join(os.tmpdir(), 'tagger-run-log-'));
+  try {
+    await fn(dir);
+  } finally {
+    await removeTempDir(dir);
+  }
+}
 
 test('seq starts at 1 and is contiguous; since(0) returns everything', () => {
   t = 1_000_000;
@@ -53,8 +60,6 @@ test('seq starts at 1 and is contiguous; since(0) returns everything', () => {
   assert.equal(p2.closed, false, 'an open run is still printing');
 });
 
-// ─── (b) pending raw line held then committed after holdMs ───────────────────
-
 test('a raw line is held until holdMs elapses', () => {
   t = 1_000_000;
   const log = new RunLog({ runId: 'r2', now });
@@ -71,8 +76,6 @@ test('a raw line is held until holdMs elapses', () => {
   assert.equal(p2.entries[0].seq, 1);
 });
 
-// ─── (c) second raw flushes the first immediately ────────────────────────────
-
 test('a second raw commits the first without waiting for holdMs', () => {
   t = 1_000_000;
   const log = new RunLog({ runId: 'r3', now });
@@ -84,8 +87,6 @@ test('a second raw commits the first without waiting for holdMs', () => {
   assert.equal(p.entries[0].line, 'a');
   assert.equal(p.entries[0].seq, 1);
 });
-
-// ─── (d) echo dropped ────────────────────────────────────────────────────────
 
 test('event echo suppresses the preceding raw line', () => {
   t = 1_000_000;
@@ -104,8 +105,6 @@ test('event echo suppresses the preceding raw line', () => {
   assert.equal(sink.lines[0], '05:27:41  [success] Tagged 3 tracks\n');
 });
 
-// ─── (e) non-echo raw kept before event ──────────────────────────────────────
-
 test('non-echo raw is committed before the event', () => {
   t = 1_000_000;
   const log = new RunLog({ runId: 'r5', now });
@@ -118,8 +117,6 @@ test('non-echo raw is committed before the event', () => {
   assert.deepEqual(p.entries[1].line, { kind: 'info', text: 'y', at: '2026-10-21T05:00:00.000Z' });
   assert.equal(p.entries[1].seq, 2);
 });
-
-// ─── (f) cap and gap ─────────────────────────────────────────────────────────
 
 test('cap evicts oldest entries and reports gap correctly', () => {
   t = 1_000_000;
@@ -141,8 +138,6 @@ test('cap evicts oldest entries and reports gap correctly', () => {
   assert.equal(p4.gap, false);
 });
 
-// ─── (g) since() sanitises after ─────────────────────────────────────────────
-
 test('since() sanitises NaN, negative, Infinity, and fractional cursors', () => {
   t = 1_000_000;
   const log = new RunLog({ runId: 'r7', now });
@@ -161,8 +156,6 @@ test('since() sanitises NaN, negative, Infinity, and fractional cursors', () => 
   assert.equal(p.entries[0].seq, 2);
 });
 
-// ─── (h) returned entries are copies ─────────────────────────────────────────
-
 test('mutating a returned entry does not alter the log', () => {
   t = 1_000_000;
   const log = new RunLog({ runId: 'r8', now });
@@ -174,8 +167,6 @@ test('mutating a returned entry does not alter the log', () => {
   const p2 = log.since(0);
   assert.equal((p2.entries[0].line as unknown as { text: string }).text, 'original');
 });
-
-// ─── (i) close commits pending and is idempotent ─────────────────────────────
 
 test('close() flushes pending, calls sink.close once, ignores subsequent writes', () => {
   t = 1_000_000;
@@ -203,8 +194,6 @@ test('close() flushes pending, calls sink.close once, ignores subsequent writes'
   // since still works after close.
   assert.equal(log.since(0).entries.length, 1);
 });
-
-// ─── (j) sink failure ────────────────────────────────────────────────────────
 
 test('a sink that throws on write does not crash the run', () => {
   t = 1_000_000;
@@ -234,8 +223,6 @@ test('a sink that throws on write does not crash the run', () => {
   assert.equal(closeCount, 1);
 });
 
-// ─── (k) sink line format ────────────────────────────────────────────────────
-
 test('sink line format: HH:MM:SS prefix and newlines collapsed', () => {
   t = Date.parse('2026-10-21T05:27:41Z');
   const sink = makeSink();
@@ -263,8 +250,6 @@ test('a held line keeps its arrival time in the file, however late it is committ
     '10:05:00  [tag] batch 3: model answered\n',
   ]);
 });
-
-// ─── (l) runLogId / isRunLogId / parseRunLogId ───────────────────────────────
 
 test('runLogId / isRunLogId / parseRunLogId contract', () => {
   const d = new Date('2026-10-21T05:27:41.123Z');
@@ -295,10 +280,7 @@ test('runLogId / isRunLogId / parseRunLogId contract', () => {
   assert.equal(parseRunLogId('tagger-run-20261021-052741-other'), null);
 });
 
-// ─── (m) openRunLogSink file I/O ─────────────────────────────────────────────
-
-test('openRunLogSink creates nested dirs, appends, rejects bad ids', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('openRunLogSink creates nested dirs, appends, rejects bad ids', () => withTempDir((tmp) => {
   const nested = path.join(tmp, 'a', 'b');
   const id = 'tagger-run-20261021-052741-analyze';
 
@@ -320,13 +302,9 @@ test('openRunLogSink creates nested dirs, appends, rejects bad ids', () => {
   const sBad = openRunLogSink(tmp, '../evil');
   assert.equal(sBad, null);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
-// ─── (n) listRunLogs ─────────────────────────────────────────────────────────
-
-test('listRunLogs returns only valid .log files, newest first', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('listRunLogs returns only valid .log files, newest first', () => withTempDir((tmp) => {
   const ids = [
     'tagger-run-20261021-050000-tag',
     'tagger-run-20261021-050001-analyze',
@@ -350,11 +328,9 @@ test('listRunLogs returns only valid .log files, newest first', () => {
   assert.equal(list[0].startedAt, '2026-10-21T05:00:02.000Z');
   assert.equal(list[0].bytes, 'tagger-run-20261021-050002-reconcile'.length);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
-test('listRunLogs orders runs within one second by their count', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('listRunLogs orders runs within one second by their count', () => withTempDir((tmp) => {
   for (const id of [
     'tagger-run-20261021-050000-tag-10',
     'tagger-run-20261021-045959-reconcile',
@@ -367,11 +343,9 @@ test('listRunLogs orders runs within one second by their count', () => {
     'tagger-run-20261021-050000-tag',
     'tagger-run-20261021-045959-reconcile',
   ]);
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
-test('openRunLog gives a run started in the same second its own id and file', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('openRunLog gives a run started in the same second its own id and file', () => withTempDir((tmp) => {
   const at = new Date('2026-10-21T05:27:41.100Z');
   const a = openRunLog(tmp, at, 'tag', null);
   a.event({ kind: 'info', text: 'first run', at: at.toISOString() }, () => false);
@@ -389,17 +363,19 @@ test('openRunLog gives a run started in the same second its own id and file', ()
   assert.equal(fs.readFileSync(path.join(tmp, `${b.runId}.log`), 'utf8'), '05:27:41  [info] second run\n');
   assert.deepEqual(listRunLogs(tmp).map(f => f.id), [c.runId, b.runId, a.runId]);
 
-  // The previous run counts even when its file never opened.
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
-  assert.equal(openRunLog(empty, at, 'tag', a.runId).runId, 'tagger-run-20261021-052741-tag-2');
-  // And a run in another second starts the count again.
-  assert.equal(openRunLog(tmp, new Date('2026-10-21T05:27:42Z'), 'tag', c.runId).runId, 'tagger-run-20261021-052742-tag');
-  fs.rmSync(tmp, { recursive: true, force: true });
-  fs.rmSync(empty, { recursive: true, force: true });
-});
+  // A run in another second starts the count again.
+  const d = openRunLog(tmp, new Date('2026-10-21T05:27:42Z'), 'tag', c.runId);
+  d.close();
+  assert.equal(d.runId, 'tagger-run-20261021-052742-tag');
+}));
 
-test('openRunLog keeps the newest nine files, so the new one is the tenth', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('openRunLog counts the previous run even when its file never opened', () => withTempDir((empty) => {
+  const log = openRunLog(empty, new Date('2026-10-21T05:27:41.100Z'), 'tag', 'tagger-run-20261021-052741-tag');
+  log.close();
+  assert.equal(log.runId, 'tagger-run-20261021-052741-tag-2');
+}));
+
+test('openRunLog keeps the newest nine files, so the new one is the tenth', () => withTempDir((tmp) => {
   for (let i = 0; i < RUN_LOG_KEEP + 2; i++) {
     fs.writeFileSync(path.join(tmp, `tagger-run-20261021-0400${String(i).padStart(2, '0')}-tag.log`), 'x');
   }
@@ -407,17 +383,13 @@ test('openRunLog keeps the newest nine files, so the new one is the tenth', () =
   const ids = listRunLogs(tmp).map(f => f.id);
   assert.equal(ids.length, RUN_LOG_KEEP);
   assert.equal(ids[0], 'tagger-run-20261021-050000-tag');
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
 test('listRunLogs on a missing directory returns []', () => {
   assert.deepEqual(listRunLogs('/no/such/dir/xyzzy'), []);
 });
 
-// ─── (o) pruneRunLogs ────────────────────────────────────────────────────────
-
-test('pruneRunLogs removes oldest beyond keep, leaves non-log files', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('pruneRunLogs removes oldest beyond keep, leaves non-log files', () => withTempDir((tmp) => {
   // Create 12 valid log files with sequential timestamps.
   const validIds: string[] = [];
   for (let i = 0; i < 12; i++) {
@@ -453,17 +425,13 @@ test('pruneRunLogs removes oldest beyond keep, leaves non-log files', () => {
   assert.equal(fs.existsSync(path.join(tmp, 'notes.log')), true);
   assert.equal(fs.existsSync(path.join(tmp, 'subwave-auto-backup-2026-10-21-000000.zip')), true);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
 test('pruneRunLogs on a missing directory returns 0', () => {
   assert.equal(pruneRunLogs('/no/such/dir/prune-xyzzy'), 0);
 });
 
-// ─── (p) runLogPath ──────────────────────────────────────────────────────────
-
-test('runLogPath returns existing valid path or null', () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
+test('runLogPath returns existing valid path or null', () => withTempDir((tmp) => {
   const id = 'tagger-run-20261021-052741-tag';
   fs.writeFileSync(path.join(tmp, `${id}.log`), 'x');
 
@@ -476,21 +444,18 @@ test('runLogPath returns existing valid path or null', () => {
   // Path traversal attempt.
   assert.equal(runLogPath(tmp, '../etc/passwd'), null);
 
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
 
-test('the defaults: 5000 lines in memory, ten files on disk, under state/tagger-logs', () => {
+test('the defaults: 5000 lines in memory, ten files on disk, under state/tagger-logs', () => withTempDir((tmp) => {
   assert.equal(RUN_LOG_DIR_NAME, 'tagger-logs');
   const log = new RunLog({ runId: 'defaults' });
   for (let i = 0; i <= RUN_LOG_CAP; i++) log.event({ kind: 'info', text: `l${i}`, at: '2026-10-21T05:00:00.000Z' }, () => false);
   const page = log.since(0);
   assert.equal(page.entries.length, RUN_LOG_CAP);
   assert.equal(page.gap, true);
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tagger-run-log-'));
   for (let i = 0; i < RUN_LOG_KEEP + 3; i++) {
     fs.writeFileSync(path.join(tmp, `tagger-run-20261021-0600${String(i).padStart(2, '0')}-analyze.log`), 'x');
   }
   assert.equal(pruneRunLogs(tmp), 3);
   assert.equal(listRunLogs(tmp).length, RUN_LOG_KEEP);
-  fs.rmSync(tmp, { recursive: true, force: true });
-});
+}));
