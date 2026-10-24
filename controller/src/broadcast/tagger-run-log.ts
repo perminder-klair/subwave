@@ -74,21 +74,15 @@ export class RunLog {
   raw(line: string): void {
     if (this.closed) return;
     // Flush previous pending before parking the new one.
-    if (this.pending) this.commitRaw(this.pending.line);
+    this.commitPending();
     this.pending = { line, heldAt: this.nowFn() };
   }
 
   event(ev: TaggerEvent, isEcho: (raw: string) => boolean): void {
     if (this.closed) return;
-    if (this.pending) {
-      if (isEcho(this.pending.line)) {
-        // The raw echo duplicates the event—drop it silently.
-        this.pending = null;
-      } else {
-        this.commitRaw(this.pending.line);
-        this.pending = null;
-      }
-    }
+    // The raw echo duplicates the event—drop it silently.
+    if (this.pending && isEcho(this.pending.line)) this.pending = null;
+    else this.commitPending();
     // Commit exactly {kind, text, at}.
     this.commitEvent({ kind: ev.kind, text: ev.text, at: ev.at });
   }
@@ -100,10 +94,7 @@ export class RunLog {
     a = Math.floor(a);
 
     // Commit pending if it's been held long enough.
-    if (!this.closed && this.pending && this.nowFn() - this.pending.heldAt >= this.holdMs) {
-      this.commitRaw(this.pending.line);
-      this.pending = null;
-    }
+    if (!this.closed && this.pending && this.nowFn() - this.pending.heldAt >= this.holdMs) this.commitPending();
 
     const filtered = this.entries.filter(e => e.seq > a);
     const firstSeq = filtered.length > 0 ? filtered[0].seq : (this.entries.length > 0 ? this.entries[0].seq : 0);
@@ -121,10 +112,7 @@ export class RunLog {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.pending) {
-      this.commitRaw(this.pending.line);
-      this.pending = null;
-    }
+    this.commitPending();
     if (this.sink) {
       try { this.sink.close(); } catch { /* best effort */ }
     }
@@ -132,10 +120,15 @@ export class RunLog {
 
   // ─── Private ──────────────────────────────────────────────────────────────
 
-  private commitRaw(line: string): void {
+  // A held line is stamped with when it arrived, not when it was committed:
+  // with nobody polling, the next line is what commits it, and that can be
+  // minutes later when the step in between is a slow one.
+  private commitPending(): void {
+    if (!this.pending) return;
+    const { line, heldAt } = this.pending;
     this.pending = null;
     this.push({ seq: ++this.seq, line });
-    this.writeToSink(`${hhmmss(this.nowFn())}  ${oneLine(line)}\n`);
+    this.writeToSink(`${hhmmss(heldAt)}  ${oneLine(line)}\n`);
   }
 
   private commitEvent(ev: TaggerEvent): void {

@@ -243,6 +243,21 @@ test('sink line format: HH:MM:SS prefix and newlines collapsed', () => {
   assert.equal(sink.lines[1], '05:27:41  line1 line2\n');
 });
 
+test('a held line keeps its arrival time in the file, however late it is committed', () => {
+  t = Date.parse('2026-10-21T10:00:00Z');
+  const sink = makeSink();
+  const log = new RunLog({ runId: 'r11b', now, sink });
+  log.raw('[tag] batch 3: asking the model');
+  t += 5 * 60_000; // a slow model call, and no page polling
+  log.raw('[tag] batch 3: model answered');
+  t += 1_000;
+  log.close();
+  assert.deepEqual(sink.lines, [
+    '10:00:00  [tag] batch 3: asking the model\n',
+    '10:05:00  [tag] batch 3: model answered\n',
+  ]);
+});
+
 // ─── (l) runLogId / isRunLogId / parseRunLogId ───────────────────────────────
 
 test('runLogId / isRunLogId / parseRunLogId contract', () => {
