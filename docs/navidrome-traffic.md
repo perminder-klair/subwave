@@ -49,6 +49,7 @@ Entering idle also does not cancel downloads or maintenance already in flight.
 | Tagger / reconcile | Catalogue walk, optional per-track enrichment, post-run recipe playlist sync | A maintenance run, including confirmed Navidrome ID-rotation recovery. No periodic full-catalogue scan. |
 | Acoustic analysis | Capped audio prefetch and optional structured lyrics | An active analysis pass. A remote backend unable to see the shared file, or a failed prefetch, may download by URL itself. |
 | Artwork proxy | `getCoverArt` on an in-process cache miss | Cover requests from players/admin pages; successful covers also receive a browser/edge cache header. |
+| Dash file format | One `getSong` per track on air | Only while an admin Dash is open (`GET /now-playing/file`). An answer is held for the last 16 tracks, and a failed lookup is retried at most once a minute. |
 | Connectivity / Doctor | `ping` | Connection tests, open admin banner polls with a 20-second cache, Doctor runs including the nightly run. |
 | Navidrome scrobbling | Now-playing and eligible completed-play `scrobble` calls | Opt-in, disabled by default; continues for empty-room broadcasts to rotate smart playlists. |
 
