@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { listen } from './test-utils/http.js';
-import { overlayOffer, overlayFits, overlayMixerStatus, type OverlayOffer } from '../src/broadcast/jingle-overlay.js';
+import {
+  bothOverlayCount, overlayDue, overlayOffer, overlayOpening, overlayFits, overlayMixerStatus, type OverlayOffer,
+} from '../src/broadcast/jingle-overlay.js';
 import { jinglePlacement, jingleRotateOwner, mixerJingleRatioFile, rotateJingleDue } from '../src/broadcast/jingle-rotate.js';
 import { jinglePlacementSchema } from '../src/schemas/settings.js';
 
@@ -22,16 +24,19 @@ const { airVoice, voiceBusy, jingleWindow, interposedSince } = await import('../
 const { renderSettingsSnapshot } = await import('../src/doctor/review.js');
 
 const offer: OverlayOffer = {
-  placement: 'over', ratio: 3, tracksSinceOverlay: 3,
-  elapsedMs: 11_000, crossfadeMs: 10_000, headWindowMs: 3000,
+  due: true, elapsedMs: 11_000, crossfadeMs: 10_000, headWindowMs: 3000,
   trackVoice: false, voiceBusy: false, pendingTalk: false, pendingJingle: false,
 };
+const counts = { ratio: 3, tracksSinceOverlay: 3, tracksSinceJingle: 0 };
 
 test('between is the default and never offers an overlay; malformed load values preserve it', () => {
   for (const bad of [undefined, null, '', 'Over', false, 42, {}, []]) {
     assert.equal(jinglePlacement({ jinglePlacement: bad }), 'between');
   }
-  assert.equal(overlayOffer({ ...offer, placement: 'between' }), 'skip');
+  for (let n = 0; n <= 6; n++) {
+    assert.equal(overlayDue({ placement: 'between', ratio: 3, tracksSinceOverlay: n, tracksSinceJingle: n }), false);
+  }
+  assert.equal(overlayOffer({ ...offer, due: false }), 'skip');
   assert.equal(jinglePlacementSchema.safeParse('Over').success, false);
   assert.ok(validateSettingsPatch({ jinglePlacement: 'Over' }));
   assert.equal(validateSettingsPatch({ jinglePlacement: 'over' }), null);
@@ -44,11 +49,51 @@ test('DJ links, solo voices, a busy voice chain and pending speech/jingles each 
 });
 
 test('frequency 0 is off; every Nth song gets one offer after its crossfade, never mid-song', () => {
-  assert.equal(overlayOffer({ ...offer, ratio: 0 }), 'skip');
-  assert.equal(overlayOffer({ ...offer, tracksSinceOverlay: 2 }), 'skip');
+  assert.equal(overlayDue({ placement: 'over', ...counts, ratio: 0 }), false);
+  assert.equal(overlayDue({ placement: 'over', ...counts, tracksSinceOverlay: 2 }), false);
+  assert.equal(overlayDue({ placement: 'over', ...counts }), true);
   assert.equal(overlayOffer({ ...offer, elapsedMs: 9000 }), 'wait');
   assert.equal(overlayOffer(offer), 'draw');
   assert.equal(overlayOffer({ ...offer, elapsedMs: 14_000 }), 'skip');
+});
+
+test('the opening window is one rule: shut inside the crossfade, open for the head window, then shut for good', () => {
+  const at = (elapsedMs: number) => overlayOpening({ elapsedMs, crossfadeMs: 10_000, headWindowMs: 3000 });
+  assert.equal(at(9999), 'early');
+  assert.equal(at(10_000), 'open');
+  assert.equal(at(13_000), 'open');
+  assert.equal(at(13_001), 'closed');
+});
+
+test('in both, the overlay and the between-songs rotate never come due on the same song', () => {
+  for (let ratio = 1; ratio <= 40; ratio++) {
+    // The talk planner may hold a due rotate for a few songs before it draws.
+    for (const delay of [0, 1, 3]) {
+      let sinceJingle = 0;
+      let overlaysThisCycle = 0;
+      let waited = 0;
+      let cycles = 0;
+      for (let song = 0; cycles < 5; song++) {
+        sinceJingle++; // onTrackStarted
+        const rotate = rotateJingleDue({ owner: 'controller', placement: 'both', ratio, tracksSinceJingle: sinceJingle });
+        const overlay = overlayDue({ placement: 'both', ratio, tracksSinceOverlay: song, tracksSinceJingle: sinceJingle });
+        assert.ok(!(rotate && overlay), `ratio ${ratio}, delay ${delay}, song ${song}`);
+        if (overlay) overlaysThisCycle++;
+        if (rotate && waited++ >= delay) {
+          // One overlay per between-songs ID, as the frequency promises; ratio 1 has no room.
+          assert.equal(overlaysThisCycle, ratio >= 2 ? 1 : 0, `ratio ${ratio}, delay ${delay}, cycle ${cycles}`);
+          overlaysThisCycle = 0; waited = 0; cycles++;
+          sinceJingle = 0; // playRotateJingle
+        }
+      }
+    }
+  }
+  // Halfway between two between-songs IDs, and never on the rotate's own song.
+  assert.equal(bothOverlayCount(1), null);
+  assert.equal(bothOverlayCount(2), 1);
+  assert.equal(bothOverlayCount(30), 16);
+  // `over` keeps its own count and ignores the rotate's.
+  assert.equal(overlayDue({ placement: 'over', ratio: 4, tracksSinceOverlay: 4, tracksSinceJingle: 4 }), true);
 });
 
 test('a short/capped song or an ID past the measured vocal onset has no room', () => {
@@ -193,6 +238,7 @@ function reset() {
   handed = [];
   setCache({ ...settings.getDefaults(), jinglePlacement: 'over', jingleRatio: 1 });
   queue._tracksSinceOverlay = 0;
+  queue._tracksSinceJingle = 0;
   queue._pendingJingles.clear();
 }
 after(async () => {
@@ -285,6 +331,21 @@ test('fit uses the current song exit stamp, independently of its incoming crossf
       assert.equal(handed.length, expected, `exit stamp ${stamp}, remaining ${remainingMs}`);
     }
   } finally { queue._overlayMixerStatus = status; }
+});
+
+test('in both, the queue offers its ID halfway to the rotate and never on the song the rotate is due', async () => {
+  reset(); setCache({ ...settings.get(), jinglePlacement: 'both', jingleRatio: 4 });
+  const offeredAt: number[] = [];
+  for (let n = 1; n <= 8; n++) {
+    const before = handed.length;
+    startSong(); await queue.maybeAirJingleOverlay();
+    const since = queue.rotateJingleTracksSince();
+    const rotateDue = rotateJingleDue({ owner: 'controller', placement: 'both', ratio: 4, tracksSinceJingle: since });
+    if (handed.length > before) offeredAt.push(since);
+    assert.ok(!(rotateDue && handed.length > before), `song ${n}`);
+    if (rotateDue) queue._tracksSinceJingle = 0; // the talk planner's draw (playRotateJingle)
+  }
+  assert.deepEqual(offeredAt, [3, 3]);
 });
 
 test('the first overlay waits for its first voice marker and earns post-air bookkeeping', async () => {

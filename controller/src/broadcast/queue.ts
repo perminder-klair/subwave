@@ -35,7 +35,7 @@ import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as jingles from './jingles.js';
 import { jinglePlacement, pickRotateJingle, onJingleRotateOwnerChange } from './jingle-rotate.js';
-import { overlayOffer, overlayFits, overlayMixerStatus } from './jingle-overlay.js';
+import { overlayDue, overlayEnabled, overlayOffer, overlayOpening, overlayFits, overlayMixerStatus } from './jingle-overlay.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
@@ -170,6 +170,8 @@ import { createHandoverEdge, notifyCoastHandover, type HandoverReason } from './
 import { picksAllowed } from './dj-budget.js';
 
 const NOW_PLAYING_POLL_MS = 1500;
+// Two watcher ticks, so a song's opening always gets at least one offer.
+const OVERLAY_HEAD_WINDOW_MS = NOW_PLAYING_POLL_MS * 2;
 
 // Everything the outside world is told about ONE spoken segment, held in a
 // single value because it is now read twice — once when the clip is committed
@@ -437,7 +439,7 @@ class Queue {
   _pendingJingles = new Map<string, { at: number; rotate: boolean }>();
   _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
   _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
-  _tracksSinceOverlay = 0;
+  _tracksSinceOverlay = 0;      // song starts since the last overlay offer — read only in `over`; `both` rides _tracksSinceJingle (jingle-overlay.overlayDue)
   private _overlayBoundary: { at: number; speech: boolean; offered: boolean } | null = null;
   _overlayMixerStatus = async () => overlayMixerStatus(await liquidsoapControl.sendCommand('jingle_overlay_status'));
   _bedCatalog = beds.catalog;
@@ -3420,20 +3422,25 @@ class Queue {
     const item = this.current;
     if (!boundary || boundary.offered || !item) return;
     const s = settings.get();
-    const crossfadeMs = Math.max(s.crossfadeDuration, this.history[0]?.track.crossSec ?? 0) * 1000;
+    const placement = jinglePlacement(s);
+    // The previous song's stamp governs when this one's opening clears.
+    const openingMs = Math.max(s.crossfadeDuration, this.history[0]?.track.crossSec ?? 0) * 1000;
+    const pendingTalk = () => !!this._pendingVoice
+      || session.handoffInProgress() || !!session.pendingHandoff();
     this.retirePendingJingles();
+    const due = overlayDue({
+      placement, ratio: s.jingleRatio,
+      tracksSinceOverlay: this._tracksSinceOverlay, tracksSinceJingle: this._tracksSinceJingle,
+    });
     const decision = overlayOffer({
-      placement: jinglePlacement(s), ratio: s.jingleRatio,
-      tracksSinceOverlay: this._tracksSinceOverlay,
-      elapsedMs: Date.now() - boundary.at, crossfadeMs,
-      headWindowMs: NOW_PLAYING_POLL_MS * 2,
+      due, elapsedMs: Date.now() - boundary.at, crossfadeMs: openingMs, headWindowMs: OVERLAY_HEAD_WINDOW_MS,
       trackVoice: boundary.speech || !!(item.introScript || item.introWav || item.introAired || item.bedded || item.stemSeam),
-      voiceBusy: voiceBusy(), pendingTalk: !!this._pendingVoice || session.handoffInProgress() || !!session.pendingHandoff(),
+      voiceBusy: voiceBusy(), pendingTalk: pendingTalk(),
       pendingJingle: this._pendingJingles.size > 0,
     });
     if (decision === 'wait') return;
     boundary.offered = true; // claim before any await; watcher ticks can overlap
-    if (jinglePlacement(s) === 'between' || !(s.jingleRatio > 0) || this._tracksSinceOverlay < s.jingleRatio) return;
+    if (!due) return;
     this._tracksSinceOverlay = 0; // unsafe offers are spent, never banked
     this.persist();
     if (decision !== 'draw') return;
@@ -3456,17 +3463,19 @@ class Queue {
       // with a zero station default. Unstamped songs use the running mixer.
       const exitCrossfadeMs = item.track.crossSec != null && item.track.crossSec >= 0
         ? item.track.crossSec * 1000 : mixer.crossfadeMs;
+      // Same opening window as the offer. The running mixer's crossfade joins
+      // the bound because it can outlast the saved one until a restart.
+      const crossfadeMs = Math.max(openingMs, mixer.crossfadeMs);
       const checkedAt = Date.now();
       const stillSafe = () => {
         const live = settings.get();
+        const elapsedMs = Date.now() - boundary.at;
         return this._overlayBoundary === boundary && this.current === item && !boundary.speech
-          && jinglePlacement(live) !== 'between' && live.jingleRatio > 0
-          && !this._pendingVoice && !session.handoffInProgress() && !session.pendingHandoff()
-          && !this._pendingJingles.size
-          && Date.now() - boundary.at >= mixer.crossfadeMs
-          && Date.now() - boundary.at <= crossfadeMs + NOW_PLAYING_POLL_MS * 2
+          && overlayEnabled(jinglePlacement(live), live.jingleRatio)
+          && !pendingTalk() && !this._pendingJingles.size
+          && overlayOpening({ elapsedMs, crossfadeMs, headWindowMs: OVERLAY_HEAD_WINDOW_MS }) === 'open'
           && overlayFits({
-            elapsedMs: Date.now() - boundary.at,
+            elapsedMs,
             windowMs: windowMs + HANDOFF_TO_AIR_MS,
             remainingMs: mixer.remainingMs - (Date.now() - checkedAt),
             exitCrossfadeMs,
