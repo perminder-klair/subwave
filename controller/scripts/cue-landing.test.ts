@@ -5,7 +5,7 @@
 // `scripts/stem-seam-test.sh cuein` (docs/stem-transitions-research.md,
 // "Cue-in landing"), restated as packet grids: e.g. a 4096-sample FLAC cued at
 // 11.7 s starts on the block at 516096, 126 samples past 515970.
-// Run: `tsx scripts/cue-landing.test.ts` (folded into `npm test`).
+// Run: `npm test -- cue-landing`.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
