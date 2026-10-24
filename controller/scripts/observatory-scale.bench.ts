@@ -26,10 +26,18 @@
 // Budgets are deliberately loose (≈3–5× a warm dev-box run) — they exist to
 // catch an accidental O(n²) or a new per-row JSON.parse, not scheduler jitter.
 //
-// Row count is env-tunable:   OBS_SCALE_N=200000 npm test -- observatory-scale
-// (default 200000; OBS_SCALE_TMP overrides the temp dir — /tmp is tmpfs on
-// some distros and the seeded DB is ~0.5 GB at 200k).
-// Run: `npm test -- observatory-scale`.
+// Not part of `npm test`: at 200k it peaks at ~1.3 GB RSS and seeds a ~0.9 GB
+// DB, which on a host where /tmp is tmpfs is RAM too, so it OOM'd dev boxes
+// running it alongside lint and other suites. Run it by hand, on its own,
+// after touching the observatory read path or the web layout pipeline:
+//
+//   OBS_SCALE_TMP=/var/tmp npm run bench:observatory
+//
+// Row count is env-tunable with OBS_SCALE_N (default 200000, floor 1000).
+// OBS_SCALE_TMP overrides the temp dir; point it at real disk where /tmp is
+// tmpfs, or the seed fails with SQLITE_IOERR_WRITE once tmpfs fills. The file
+// sets its own STATE_DIR before importing config, so it is safe outside the
+// test runner.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
