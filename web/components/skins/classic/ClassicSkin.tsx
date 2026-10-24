@@ -30,6 +30,7 @@ import {
 } from '@/components/player/PlayerCore';
 import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useLyricsPreference } from '@/components/skins/lyrics';
 import { useStationClient } from '@/lib/stationClient';
 import type { SkinProps } from '@/components/skins/types';
 import type { QueueEntry, RequestResult } from '@/lib/types';
@@ -41,8 +42,6 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   schedule: 'Schedule',
 };
 
-// This listener's choice to see lyrics, kept in this browser; on by default.
-const LYRICS_PREF_KEY = 'subwave:lyrics';
 
 // Hoisted so the DotRail counts memo below keeps stable element references —
 // recreating these per render would defeat DotRail's React.memo.
@@ -106,22 +105,18 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   // operator's switch rides GET /state; within it, L toggles this listener's
   // own choice, and the stage makes room only while synced lines are showing.
   const lyricsOn = state.lyrics?.enabled === true;
-  const [lyricsPref, setLyricsPref] = useState(true);
+  const lyricsPref = useLyricsPreference();
   const [lyricsPresent, setLyricsPresent] = useState(false);
-  const showLyrics = lyricsOn && lyricsPref && !offline;
-  useEffect(() => {
-    try {
-      if (localStorage.getItem(LYRICS_PREF_KEY) === '0') setLyricsPref(false);
-    } catch {}
-  }, []);
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline;
+  const { toggle: flipLyrics } = lyricsPref;
   const toggleLyrics = useCallback(() => {
-    setLyricsPref((on) => {
-      const next = !on;
-      try { localStorage.setItem(LYRICS_PREF_KEY, next ? '1' : '0'); } catch {}
-      toast(next ? 'Lyrics on' : 'Lyrics hidden', { duration: 1600 });
-      return next;
-    });
-  }, []);
+    toast(flipLyrics() ? 'Lyrics on' : 'Lyrics hidden', { duration: 1600 });
+  }, [flipLyrics]);
+  // Stable while nothing changes, for the memoized stage.
+  const lyricsToggle = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onToggle: toggleLyrics } : null),
+    [lyricsOn, lyricsPref.shown, toggleLyrics],
+  );
 
   // Haptics live here rather than at each call site so every entry point
   // (DotRail, shortcut, palette, swipe-dismiss) feels the same.
@@ -213,6 +208,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         offline={offline}
         upNext={upNext}
         lyricsShown={showLyrics && lyricsPresent}
+        lyricsToggle={lyricsToggle}
         onOpenBooth={openBooth}
         onOpenTimeline={openTimeline}
       />
@@ -291,7 +287,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
         onToggleMute={toggleMute}
         onShowShortcuts={() => setShortcutsOpen(true)}
         lyrics={lyricsOn}
-        lyricsShown={lyricsPref}
+        lyricsShown={lyricsPref.shown}
         onToggleLyrics={toggleLyrics}
       />
 

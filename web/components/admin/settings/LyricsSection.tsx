@@ -23,7 +23,7 @@ export function LyricsCard({ data, form, setForm }: LyricsPartProps) {
   const saved = data.values?.lyrics?.enabled === true;
   const savedLrclib = data.values?.lyrics?.lrclib === true;
   return (
-    <Card title="Lyrics panel" sub="time-synced lyrics beside the song, on the Classic skin">
+    <Card title="Lyrics panel" sub="time-synced lyrics on the Classic and Drift skins">
       <div className="grid gap-[18px]">
         <div className="field">
           <div className="flex items-center gap-2">
@@ -37,14 +37,15 @@ export function LyricsCard({ data, form, setForm }: LyricsPartProps) {
             options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
           />
           <div className="field-hint">
-            Shows the playing song&apos;s synced lyrics large beside the track on the Classic skin,
-            each line lighting up as it is sung; a listener can hide them with <code>L</code>.
+            Shows the playing song&apos;s synced lyrics on the Classic skin (large, beside the track)
+            and the Drift skin (the centre of the page), each line lighting up as it is sung. A
+            listener can hide them with the lyrics button beside the track, or <code>L</code>.
             Tracks with only untimed lyrics show none. Off hides them and refuses{' '}
             <code>GET /lyrics/current</code>. On republishes the lyric text to anyone who can open
             the player, and each track costs one lyrics lookup on your music server (cached
-            briefly, shared by every listener). If a track&apos;s lyrics run early or late, use the
-            sliders beside ♪ Lyrics in a browser signed in here to fix that track for every
-            listener.
+            briefly, shared by every listener). If a track&apos;s lyrics run early or late, open their
+            timing controls (beside ♪ Lyrics) in a browser signed in here to fix that track for
+            every listener.
           </div>
         </div>
         <div className="field">

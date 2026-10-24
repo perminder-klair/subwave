@@ -2,7 +2,7 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { Coins, Heart } from 'lucide-react';
+import { Captions, CaptionsOff, Coins, Heart } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useTrackLike } from '@/components/skins/sharedHooks';
 import { fmtTime } from '@/lib/format';
@@ -70,6 +70,27 @@ function LikeHeart() {
   );
 }
 
+/** The listener's lyrics switch, beside the heart: shown whenever the
+ *  station offers lyrics, so they can be turned back on from where they were. */
+function LyricsToggle({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
+  const Icon = shown ? Captions : CaptionsOff;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={shown}
+      aria-label={shown ? 'Hide lyrics' : 'Show lyrics'}
+      title={shown ? 'Hide lyrics (L)' : 'Show lyrics (L)'}
+      className={cn(
+        'v3-focus ml-[10px] inline-flex cursor-pointer items-center border-0 bg-transparent p-0 align-middle transition-colors',
+        shown ? 'text-ink' : 'text-muted hover:text-ink',
+      )}
+    >
+      <Icon size={15} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  );
+}
+
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   /** Epoch ms when the current track started (from useStationFeed). */
@@ -89,11 +110,13 @@ export interface CenterStageProps {
   /** Synced lyrics are showing (AmbientLyrics): the stage gives them the right
    *  half on wide screens and a band above the waveform on narrow ones. */
   lyricsShown?: boolean;
+  /** This listener's lyrics switch; absent while the station has lyrics off. */
+  lyricsToggle?: { shown: boolean; onToggle: () => void } | null;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyricsToggle = null, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -287,6 +310,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
                     <LikeHeart />
+                    {lyricsToggle && <LyricsToggle shown={lyricsToggle.shown} onToggle={lyricsToggle.onToggle} />}
                   </div>
                   {hasMeta && (
                     <div className="v3-caption mt-[10px] text-muted">

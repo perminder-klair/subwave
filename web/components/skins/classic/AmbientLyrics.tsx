@@ -18,8 +18,8 @@ import { AnimatePresence, m } from 'motion/react';
 import { SlidersHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useSkinCalm } from '@/components/skins/sharedHooks';
-import { lyricMoment, useCurrentLyrics } from '@/components/skins/lyrics';
-import LyricsTiming from './LyricsTiming';
+import { lyricMoment, useCurrentLyrics, useLingeringPresence } from '@/components/skins/lyrics';
+import LyricsTiming from '@/components/skins/LyricsTiming';
 
 // Four steps a second is enough for word-by-word lighting; the drawer's 500ms
 // left a word lit late by up to half a second.
@@ -85,9 +85,11 @@ export default memo(function AmbientLyrics({ songId, trackStartedAt, onPresenceC
   const rootRef = useRef<HTMLElement | null>(null);
 
   const shown = status === 'ready' && !!lyrics?.synced && lyrics.lines.length > 0;
+  // The stage keeps its room through the moment the next track's lines load.
+  const present = useLingeringPresence(shown);
   useEffect(() => {
-    onPresenceChange(shown);
-  }, [shown, onPresenceChange]);
+    onPresenceChange(present);
+  }, [present, onPresenceChange]);
   useEffect(() => () => onPresenceChange(false), [onPresenceChange]);
 
   // The timing panel closes on Escape or a press anywhere else.

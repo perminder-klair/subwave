@@ -6,7 +6,7 @@
 // timing corrections: the station's, which the operator sets once per track for
 // everyone, and this device's own nudge, which never leaves the browser.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '@/lib/adminAuth';
 import { useStationClient } from '@/lib/stationClient';
 import { DEFAULT_STATION_ORIGIN } from '@/lib/stationOrigin';
@@ -23,6 +23,14 @@ export const LYRIC_OFFSET_NUDGE_MS = 100;
 // One value for every track: a device's delay (Bluetooth, a receiver) is the
 // same whatever is playing. A track's own mistiming is the station's to fix.
 const DEVICE_OFFSET_STORAGE_KEY = 'subwave:lyrics-device-offset-ms';
+
+// This browser's choice to see lyrics at all, shared by every skin.
+const LYRICS_PREF_KEY = 'subwave:lyrics';
+
+// How long a skin stays laid out for lyrics after they stop showing. Between
+// two tracks that both have them the new lines take a moment to load, and
+// dropping out of the lyrics layout for that moment would flick the page.
+export const LYRICS_LAYOUT_HOLD_MS = 1500;
 
 // Backoff for a station that did not answer: 5s, 10s, 20s, 40s, then every
 // 60s while the panel stays open. Never sooner than the station's Retry-After.
@@ -169,6 +177,45 @@ export function lyricMoment(lyrics: PublicLyricsPayload | null, positionMs: numb
   const sungMs = Math.min(Math.max(words * WORD_MS, MIN_SUNG_MS), nextStart - start);
   const progress = Math.min(1, Math.max(0, (positionMs - start) / sungMs));
   return { current: active, progress, next: following, resting: false };
+}
+
+/** This browser's choice to show lyrics, on by default. `toggle` returns the
+ *  new value, so a skin can say what it did. */
+export function useLyricsPreference(): { shown: boolean; toggle: () => boolean } {
+  const [shown, setShown] = useState(true);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(LYRICS_PREF_KEY) === '0') setShown(false);
+    } catch {}
+  }, []);
+  const toggle = useCallback(() => {
+    const next = !shown;
+    setShown(next);
+    try {
+      localStorage.setItem(LYRICS_PREF_KEY, next ? '1' : '0');
+    } catch {}
+    return next;
+  }, [shown]);
+  return { shown, toggle };
+}
+
+/** True while `shown`, and for LYRICS_LAYOUT_HOLD_MS after it stops; never
+ *  before it has started. */
+export function useLingeringPresence(shown: boolean, holdMs = LYRICS_LAYOUT_HOLD_MS): boolean {
+  const [lingering, setLingering] = useState(false);
+  const wasShown = useRef(shown);
+  useEffect(() => {
+    if (shown) {
+      wasShown.current = true;
+      return;
+    }
+    if (!wasShown.current) return;
+    wasShown.current = false;
+    setLingering(true);
+    const timer = window.setTimeout(() => setLingering(false), holdMs);
+    return () => window.clearTimeout(timer);
+  }, [shown, holdMs]);
+  return shown || lingering;
 }
 
 /** When to ask again about an answer marked `pending`, after `asks` such asks;
