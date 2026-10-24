@@ -31,15 +31,21 @@ export async function phaseEnrich(
   const trackTagIds = trackTagsOn
     ? selectTrackTagIds({ reEnrich, limit, ids, owed: db.idsNeedingLastfmTrackTags() })
     : [];
-  if (ids.length === 0 && yearIds.length === 0 && trackTagIds.length === 0) return;
+  if (ids.length === 0 && yearIds.length === 0 && trackTagIds.length === 0) {
+    logEvent('info', reEnrich
+      ? 'Metadata enrichment skipped — no previously enriched tracks need refreshing'
+      : 'Metadata enrichment skipped — no tracks need enrichment');
+    return;
+  }
   if (!lastfmEnabled && !lyricsEnabled && yearIds.length === 0) {
-    console.log('[tag] phase-0 skipped: lastfmTags and lyrics disabled, no original-year lookups pending');
+    logEvent('info', 'Metadata enrichment skipped — Last.fm tags and lyrics are disabled, with no original-year lookups pending');
     return;
   }
   if (lastfmEnabled) {
     const methods = trackTagsOn ? 'track.getTopTags + artist.getTopTags' : 'artist.getTopTags';
-    console.log(
-      `[tag] phase-0 Last.fm tags via ${hasKey ? `direct API (${methods})` : 'Navidrome getArtistInfo2 (no api_key — likely empty)'}`,
+    logEvent(
+      'info',
+      `Phase 0 Last.fm tags via ${hasKey ? `direct API (${methods})` : 'Navidrome getArtistInfo2 (no api_key — likely empty)'}`,
     );
   }
   reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: 0, total: ids.length });
@@ -82,16 +88,18 @@ export async function phaseEnrich(
     }
 
     let lyricExcerpt: string | null = null;
+    let lyricLanguage: string | null = null;
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
-        if (typeof raw === 'string' && raw.trim()) {
-          lyricExcerpt = raw.trim();
+        const evidence = await subsonic.getLyricsEvidence(id);
+        if (typeof evidence?.text === 'string' && evidence.text.trim()) {
+          lyricExcerpt = evidence.text.trim();
         }
+        lyricLanguage = evidence?.taggedLanguage || null;
       } catch { /* ignore */ }
     }
 
-    db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt });
+    db.upsertTrackEnrichment(id, { lastfmTags, lyricExcerpt, lyricLanguage });
     enrichedTracks += 1;
     if (!trackTagsOn && lastfmTags && lastfmTags.length) enrichedTags += 1;
     if (lyricExcerpt) enrichedLyrics += 1;
@@ -206,4 +214,3 @@ export async function backfillOriginalYears(
   });
   return resolvedYears;
 }
-

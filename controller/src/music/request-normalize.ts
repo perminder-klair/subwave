@@ -1,4 +1,5 @@
 import { transliterate } from 'transliteration';
+import { iso6393 } from 'iso-639-3';
 
 export type RequestEnergy = 'low' | 'medium' | 'high';
 
@@ -39,6 +40,9 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   korean: 'ko', 한국어: 'ko', ko: 'ko',
   chinese: 'zh', mandarin: 'zh', 中文: 'zh', zh: 'zh', cantonese: 'yue', yue: 'yue',
   turkish: 'tr', türkçe: 'tr', turkce: 'tr', tr: 'tr',
+  haryanvi: 'bgc', hariyanvi: 'bgc', haryanavi: 'bgc', bgc: 'bgc',
+  bhojpuri: 'bho', bhojpuriya: 'bho', bho: 'bho',
+  maithili: 'mai', mai: 'mai', konkani: 'kok', kok: 'kok',
 };
 
 const MOOD_ALIASES: Record<string, string> = {
@@ -177,11 +181,24 @@ export function requestIdentityVariants(value: unknown, other: unknown): string[
 // name, below any exact one, so it can be offered but never matched.
 export const LOSSY_READING_SIMILARITY = 0.9;
 
+// Keep the request surface open to every current ISO 639-3 entry. The
+// registry supplies code, ISO 639-1/2 aliases and names, so adding support
+// for another community or historical language does not require editing this
+// file.
+const ISO6393_BY_NAME = new Map<string, string>();
+for (const language of iso6393) {
+  for (const value of [language.name, language.iso6393, language.iso6391, language.iso6392B, language.iso6392T]) {
+    if (value) ISO6393_BY_NAME.set(requestName(value), language.iso6393);
+  }
+}
+
 export function resolveLanguageCode(value: unknown): string | undefined {
   const names = requestNameVariants(value);
   for (const name of names) {
     const explicit = LANGUAGE_ALIASES[name];
     if (explicit) return explicit;
+    const registryMatch = ISO6393_BY_NAME.get(name);
+    if (registryMatch) return registryMatch;
     const match = LANGUAGE_CODES.find(code => requestName(displayNames.of(code)) === name);
     if (match) return match;
     // ISO codes are accepted when the whole value is the code. A two-letter

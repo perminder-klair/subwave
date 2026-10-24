@@ -38,7 +38,8 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec, t.explicit_status,
+  t.language_primary, t.languages`;
 
 export interface LanguagePoolRecord {
   id: string;
@@ -213,6 +214,20 @@ export function enrichedIds(): string[] {
       .prepare('SELECT id FROM tracks WHERE enriched_at IS NOT NULL')
       .all() as Array<{ id: string }>
   ).map(r => r.id);
+}
+
+// Language coverage is independent of mood coverage. Unknown and instrumental
+// decisions carry language_checked_at, so normal runs do not keep re-querying
+// tracks that genuinely lack usable evidence.
+export function languagePendingIds(retry = false): string[] {
+  const where = retry
+    ? "language_checked_at IS NOT NULL AND COALESCE(language_source, '') != 'manual'"
+    : 'language_checked_at IS NULL';
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE ${where} ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
+}
+
+export function languageTaggedIds(): string[] {
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE language_checked_at IS NOT NULL ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
 }
 
 export function untaggedIds(limit?: number): string[] {

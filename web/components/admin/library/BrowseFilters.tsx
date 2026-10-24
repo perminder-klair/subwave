@@ -12,6 +12,7 @@ import { cn } from '../../../lib/cn';
  
 import type { Energy, QueryError, Sort, Vocal } from './types';
 import { EnergyMeter } from './bits';
+import { languageLabel } from './language-labels';
 
 // The search box's examples, phrased as what a person wants. Clicking one puts
 // it in the box. The first three are the empty box's suggestions.
@@ -32,10 +33,15 @@ interface BrowseFiltersProps {
   moodCounts: Record<string, number>;
   energyCounts: Record<string, number>;
   genreList: { value: string; songCount: number }[];
+  languageCounts?: Record<string, number>;
+  languageUnknown?: number;
+  languageMixed?: number;
+  languageInstrumental?: number;
   moods: string[]; setMoods: (m: string[]) => void;
   energy: Energy; setEnergy: (e: Energy) => void;
   vocal: Vocal; setVocal: (v: Vocal) => void;
   genre: string; setGenre: (g: string) => void;
+  language?: string; setLanguage?: (l: string) => void;
   yearFrom: string; setYearFrom: (s: string) => void;
   yearTo: string; setYearTo: (s: string) => void;
   q: string; setQ: (s: string) => void;
@@ -190,6 +196,24 @@ export function BrowseFilters(p: BrowseFiltersProps) {
       </div>
 
       <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
+        <div className="flex min-w-[12rem] flex-col gap-2">
+          <div className="caption">language</div>
+          <Select value={p.language || '__any'} onValueChange={v => p.setLanguage?.(v === '__any' ? '' : v)}>
+            <SelectTrigger><SelectValue placeholder="Any language" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__any">Any language</SelectItem>
+              {Object.entries(p.languageCounts || {}).sort(([, a], [, b]) => b - a).map(([code, count]) => (
+                <SelectItem key={code} value={code}>{languageLabel(code)}<span className="ml-2 text-muted">{count}</span></SelectItem>
+              ))}
+              <SelectItem value="mixed">Mixed language · {p.languageMixed || 0}</SelectItem>
+              <SelectItem value="unknown">Unknown · {p.languageUnknown || 0}</SelectItem>
+              <SelectItem value="instrumental">Instrumental · {p.languageInstrumental || 0}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
         <div className="flex flex-col gap-2">
           <div className="caption">energy</div>
           <div className="flex flex-wrap border border-ink">
@@ -279,4 +303,3 @@ export function BrowseFilters(p: BrowseFiltersProps) {
     </section>
   );
 }
-
