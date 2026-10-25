@@ -156,7 +156,8 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
 
   const api = useMemo(
     // createApi stores the getter and calls it only when a stream URL is built
-    // (tune, reconnect, cast) — never during render.
+    // (tune, reconnect, cast) or a station-gated read is sent (lyrics) — never
+    // during render.
     // eslint-disable-next-line react-hooks/refs
     () => (base ? createApi(base, credentials, () => stationPasswordRef.current) : null),
     [base, credentials],

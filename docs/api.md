@@ -160,7 +160,9 @@ clears it. It applies to every listener. The Classic and Drift players show
 synced lyrics on the stage (Classic beside the track info, Drift as the centre of
 the page), and their timing controls (beside **♪ Lyrics**) offer this control to
 a browser signed in to the admin console. A listener hides or shows lyrics with
-the lyrics button beside the track, or `L`.
+the lyrics button beside the track, or `L`. The native app shows them on its Live
+page under a one-row track header, applies this offset, and offers only the
+device's own timing nudge, since it has no admin sign-in.
 
 ## OpenAPI
 

@@ -19,10 +19,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
+import { useLingeringPresence } from '@/hooks/useLingeringPresence';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
+import { useLyricsPreference } from '@/hooks/useLyricsPreference';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
@@ -31,8 +34,10 @@ import { useStationFeed } from '@/hooks/useStationFeed';
 import { useStationGate } from '@/hooks/useStationGate';
 import { useStreamFormat } from '@/hooks/useStreamFormat';
 import { useTrackLike } from '@/hooks/useTrackLike';
+import { useTrackLyrics } from '@/hooks/useTrackLyrics';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
+import { plainLyricsReady, syncedLyricsReady } from '@/lib/lyrics';
 import { formatLabel } from '@/lib/streamFormat';
 import type {
   ActiveShow,
@@ -45,6 +50,7 @@ import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
+import StageLyrics from './StageLyrics';
 import StationGate from './StationGate';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
@@ -53,6 +59,7 @@ import AboutDrawer from './drawers/AboutDrawer';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import FormatDrawer from './drawers/FormatDrawer';
+import LyricsDrawer from './drawers/LyricsDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
 import SleepDrawer from './drawers/SleepDrawer';
@@ -175,6 +182,7 @@ export default function PlayerScreen() {
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
+  const appActive = useAppActive();
 
   // bgPoll bridges the feed/player cycle: streamInfo validates the player
   // format, while tunedIn enables background feed polling.
@@ -237,6 +245,19 @@ export default function PlayerScreen() {
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
+
+  // Lyrics take the Live page while the track has them, synced or not, and
+  // the track info shrinks to one row above them. Never asked for while a
+  // locked station is still waiting for its password: a refusal spends the
+  // household's station-read attempts, and the lyrics ask again once unlocked.
+  const lyricsOn = state.lyrics?.enabled === true;
+  const lyricsPref = useLyricsPreference();
+  const gateOpen = gate.phase === 'open' || gate.phase === 'ok';
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline && gateOpen;
+  const lyricsTrack = useTrackLyrics(api, showLyrics ? nowPlaying?.subsonic_id : null, appActive);
+  const lyricsPresent = useLingeringPresence(
+    showLyrics && (syncedLyricsReady(lyricsTrack) || plainLyricsReady(lyricsTrack)),
+  );
 
   // Disarm on tune-out so the next listening session cannot inherit this timer.
   const sleep = useSleepTimer(stop);
@@ -347,9 +368,18 @@ export default function PlayerScreen() {
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
   // Share one sheet to avoid competing dismissal callbacks.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | 'about' | null>(
-    null,
+  const [activeSheet, setActiveSheet] = useState<
+    'panel' | 'sleep' | 'themes' | 'format' | 'about' | 'lyrics' | null
+  >(null);
+  const openLyrics = useCallback(() => setActiveSheet('lyrics'), []);
+  const stageLyrics = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onOpen: openLyrics } : null),
+    [lyricsOn, lyricsPref.shown, openLyrics],
   );
+  // The operator switching lyrics off takes their settings with them.
+  useEffect(() => {
+    if (!lyricsOn) setActiveSheet((open) => (open === 'lyrics' ? null : open));
+  }, [lyricsOn]);
   const themeName = useMemo(
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
@@ -458,7 +488,16 @@ export default function PlayerScreen() {
                     live={tunedIn}
                     onOpenBooth={openBooth}
                     onOpenTimeline={openTimeline}
+                    lyrics={stageLyrics}
+                    compact={lyricsPresent}
                   />
+                  {lyricsPresent ? (
+                    <StageLyrics
+                      track={lyricsTrack}
+                      trackStartedAt={trackStartedAt}
+                      running={appActive && active === HOME_INDEX}
+                    />
+                  ) : null}
                   <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
                 </View>
               </View>
@@ -544,7 +583,9 @@ export default function PlayerScreen() {
                 ? 'Stream format'
                 : activeSheet === 'about'
                   ? 'About SUB/WAVE'
-                  : 'Theme'
+                  : activeSheet === 'lyrics'
+                    ? 'Lyrics'
+                    : 'Theme'
         }
       >
         {activeSheet === 'panel' ? (
@@ -578,6 +619,9 @@ export default function PlayerScreen() {
           />
         ) : null}
         {activeSheet === 'themes' ? <ThemesDrawer /> : null}
+        {activeSheet === 'lyrics' ? (
+          <LyricsDrawer shown={lyricsPref.shown} onToggle={lyricsPref.toggle} track={lyricsTrack} />
+        ) : null}
         {activeSheet === 'about' ? (
           <AboutDrawer
             onAddStation={() => {

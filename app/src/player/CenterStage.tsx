@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import { Coins, Heart } from 'lucide-react-native';
+import { Captions, CaptionsOff, Coins, Heart } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import CoverArt from './CoverArt';
@@ -39,6 +39,15 @@ export interface CenterStageProps {
   live: boolean;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
+  /** This device's lyrics choice, for the button beside the heart: shown
+   *  whenever the station offers lyrics, so they can be turned back on from
+   *  where they were. Absent while the station has lyrics off. */
+  lyrics?: { shown: boolean; onOpen: () => void } | null;
+  /** Lyrics are showing below (StageLyrics), so the track info shrinks to one
+   *  row: a 64px cover beside the clock, a one-line title and the artist. It
+   *  drops the album, year, tags, token count, "Now playing" label and DJ
+   *  line, as the Classic skin does on a phone. */
+  compact?: boolean;
 }
 
 export default function CenterStage({
@@ -52,6 +61,8 @@ export default function CenterStage({
   live,
   onOpenBooth,
   onOpenTimeline,
+  lyrics = null,
+  compact = false,
 }: CenterStageProps) {
   const { colors } = useTheme();
   const has = !!nowPlaying?.title;
@@ -89,11 +100,103 @@ export default function CenterStage({
 
   const burst = trackBurst || djBurst;
 
-  const elapsedLabel = has
-    ? duration
-      ? ` — ${fmtTime(elapsed)} / ${fmtTime(duration)}`
-      : ` — ${fmtTime(elapsed)}`
-    : '';
+  const clock = has ? (duration ? `${fmtTime(elapsed)} / ${fmtTime(duration)}` : fmtTime(elapsed)) : '';
+  // The compact row is plainly the track on air, and the label would push the
+  // clock off a narrow phone.
+  const caption = compact ? clock : `NOW PLAYING${clock ? ` — ${clock}` : ''}`;
+  const LyricsIcon = lyrics?.shown ? Captions : CaptionsOff;
+
+  const metaRow = (
+    <View className="flex-row items-center" style={{ marginBottom: compact ? 4 : 12, gap: 5 }}>
+      <Text className="font-mono text-muted" style={{ fontSize: 11, letterSpacing: 2 }}>
+        {caption}
+      </Text>
+      {llmTokens != null && !compact ? (
+        <View
+          className="flex-row items-center"
+          style={{ gap: 3 }}
+          accessible
+          accessibilityLabel={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
+        >
+          <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+          <Coins size={11} color={colors.muted} strokeWidth={1.75} />
+          <Text className="font-mono text-muted" style={{ fontSize: 11 }}>
+            {llmTokens.toLocaleString('en-US')}
+          </Text>
+        </View>
+      ) : null}
+      {trackLike.available ? (
+        <Pressable
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            void trackLike.like();
+          }}
+          disabled={trackLike.pending || trackLike.liked}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: trackLike.pending || trackLike.liked, selected: trackLike.liked }}
+          accessibilityLabel={trackLike.liked ? 'Liked' : 'Like this track'}
+          className="flex-row items-center"
+          style={{ gap: 3, opacity: trackLike.pending ? 0.6 : 1 }}
+        >
+          <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+          <Heart
+            size={13}
+            color={trackLike.liked ? colors.accent : colors.muted}
+            fill={trackLike.liked ? colors.accent : 'none'}
+            strokeWidth={1.75}
+          />
+          {trackLike.count > 0 ? (
+            <Text
+              className="font-mono"
+              style={{ fontSize: 11, color: trackLike.liked ? colors.accent : colors.muted }}
+            >
+              {trackLike.count}
+            </Text>
+          ) : null}
+        </Pressable>
+      ) : null}
+      {lyrics && has ? (
+        <Pressable
+          onPress={() => {
+            Haptics.selectionAsync().catch(() => {});
+            lyrics.onOpen();
+          }}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel={lyrics.shown ? 'Lyrics settings' : 'Lyrics settings, lyrics hidden'}
+          className="flex-row items-center"
+          style={{ gap: 3 }}
+        >
+          <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+          <LyricsIcon size={14} color={lyrics.shown ? colors.ink : colors.muted} strokeWidth={1.75} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+
+  if (compact && has) {
+    return (
+      <View className="flex-row items-center px-5" style={{ gap: 14, paddingTop: 12 }}>
+        {coverSrc ? (
+          <CoverArt uri={coverSrc} live={live} burst={burst} size={64} onPress={onOpenTimeline} />
+        ) : null}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          {metaRow}
+          <Text
+            className="font-display text-ink"
+            style={{ fontSize: 20, lineHeight: 24 }}
+            numberOfLines={1}
+          >
+            {nowPlaying?.title}
+          </Text>
+          <Text className="font-body-medium text-ink" style={{ fontSize: 14, marginTop: 2 }} numberOfLines={1}>
+            {nowPlaying?.artist || 'Unknown artist'}
+          </Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View className="flex-1 justify-center px-5">
@@ -103,56 +206,7 @@ export default function CenterStage({
         </View>
       ) : null}
 
-      <View className="flex-row items-center" style={{ marginBottom: 12, gap: 5 }}>
-        <Text className="font-mono text-muted" style={{ fontSize: 11, letterSpacing: 2 }}>
-          NOW PLAYING{elapsedLabel}
-        </Text>
-        {llmTokens != null ? (
-          <View
-            className="flex-row items-center"
-            style={{ gap: 3 }}
-            accessible
-            accessibilityLabel={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
-          >
-            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
-            <Coins size={11} color={colors.muted} strokeWidth={1.75} />
-            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>
-              {llmTokens.toLocaleString('en-US')}
-            </Text>
-          </View>
-        ) : null}
-        {trackLike.available ? (
-          <Pressable
-            onPress={() => {
-              Haptics.selectionAsync().catch(() => {});
-              void trackLike.like();
-            }}
-            disabled={trackLike.pending || trackLike.liked}
-            hitSlop={12}
-            accessibilityRole="button"
-            accessibilityState={{ disabled: trackLike.pending || trackLike.liked, selected: trackLike.liked }}
-            accessibilityLabel={trackLike.liked ? 'Liked' : 'Like this track'}
-            className="flex-row items-center"
-            style={{ gap: 3, opacity: trackLike.pending ? 0.6 : 1 }}
-          >
-            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
-            <Heart
-              size={13}
-              color={trackLike.liked ? colors.accent : colors.muted}
-              fill={trackLike.liked ? colors.accent : 'none'}
-              strokeWidth={1.75}
-            />
-            {trackLike.count > 0 ? (
-              <Text
-                className="font-mono"
-                style={{ fontSize: 11, color: trackLike.liked ? colors.accent : colors.muted }}
-              >
-                {trackLike.count}
-              </Text>
-            ) : null}
-          </Pressable>
-        ) : null}
-      </View>
+      {metaRow}
 
       {has ? (
         <>

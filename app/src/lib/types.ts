@@ -232,6 +232,34 @@ export interface StationState {
    *  `listenerAuth` makes every stream mount demand it. Absent on an older
    *  controller = fully public. */
   privacy?: { privatePlayer?: boolean; listenerAuth?: boolean };
+  /** Whether the operator has the Lyrics panel on; GET /lyrics/current
+   *  refuses while it is off. Absent on an older controller = off. */
+  lyrics?: { enabled?: boolean };
+}
+
+/** One line of `GET /lyrics/current`. `startMs` is on the PLAYED timeline
+ *  (a trimmed head already taken off), null on an untimed line. */
+export interface PublicLyricLine {
+  startMs: number | null;
+  text: string;
+}
+
+/** Where the lines came from: the station's music server, or LRCLIB. */
+export type LyricsSource = 'music-server' | 'lrclib';
+
+/** `GET /lyrics/current` (controller/src/schemas/lyrics.ts). */
+export interface PublicLyricsPayload {
+  songId: string | null;
+  synced: boolean;
+  /** The station's correction for this track's lyric file, added to elapsed
+   *  time before choosing the line; never folded into `startMs`. */
+  offsetMs: number;
+  lines: PublicLyricLine[];
+  /** null when there are no lines, or the source is one this app doesn't
+   *  know; absent on a station from before the LRCLIB fallback. */
+  source?: LyricsSource | null;
+  /** The station is still looking the track up on LRCLIB: ask again soon. */
+  pending?: boolean;
 }
 
 /** A single turn in the live DJ session. After a hard roll, GET /session
