@@ -1,14 +1,24 @@
-// Synced lyrics for the track this listener is hearing. Source of truth is
-// web/components/skins/lyrics.ts (the pure half) and the payload schema in
-// controller/src/schemas/lyrics.ts; keep in sync. The app has no admin
-// sign-in, so it applies the station's per-track offset but never edits it:
-// the only correction a listener makes is this device's own nudge.
+// Synced lyrics for the track this listener is hearing, copied from the web
+// so the two players time lines alike. Sources of truth, each kept in sync by
+// scripts/lyrics.test.ts:
+//   - web/components/skins/lyrics.ts, the pure half: every function and
+//     constant it shares with this file keeps the web's body;
+//   - web/components/skins/classic/AmbientLyrics.tsx, the focus rule
+//     (lyricFocusLine) and the tick;
+//   - web/lib/stationClient.ts currentLyrics, the status mapping
+//     (lyricsResultFor);
+//   - controller/src/schemas/lyrics.ts, the payload, its sources and the
+//     offset bounds, which parseLyricsPayload checks by hand (no zod here).
+// The app has no admin sign-in, so it applies the station's per-track offset
+// but never edits it: the only correction a listener makes is this device's
+// own nudge.
 
 import type { LyricsSource, PublicLyricLine, PublicLyricsPayload } from './types';
 
 // The controller's bounds on either correction (LYRIC_OFFSET_MIN_MS/MAX_MS).
 export const LYRIC_OFFSET_MIN_MS = -30_000;
 export const LYRIC_OFFSET_MAX_MS = 30_000;
+export const LYRIC_OFFSET_STEP_MS = 50;
 export const LYRIC_OFFSET_NUDGE_MS = 100;
 
 // How long the stage stays laid out for lyrics after they stop showing.
@@ -16,8 +26,16 @@ export const LYRIC_OFFSET_NUDGE_MS = 100;
 // and dropping out of the lyrics layout for that moment would flick the page.
 export const LYRICS_LAYOUT_HOLD_MS = 1500;
 
+// The web's phone layout needs a screen at least this tall, and below it
+// leaves the lyrics out so the track info keeps the room
+// (AmbientLyrics' max-height:699px rule). Points here, CSS pixels there.
+export const LYRICS_MIN_SCREEN_HEIGHT = 700;
+
 // Backoff for a station that did not answer: 5s, 10s, 20s, 40s, then every
-// 60s while lyrics stay on. Never sooner than the station's Retry-After.
+// 60s while lyrics stay on. A Retry-After waits longer, up to that same
+// minute: the station's own lyrics retry asks for 10s, and a station-read
+// 429, which can ask for minutes, answers an early ask with another 429
+// without spending an attempt.
 const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 60_000;
 
@@ -52,7 +70,7 @@ export type LyricsResult =
   | { kind: 'locked' }
   | { kind: 'unavailable'; retryAfterSec: number | null };
 
-const SOURCES: readonly LyricsSource[] = ['music-server', 'lrclib'];
+export const LYRICS_SOURCES: readonly LyricsSource[] = ['music-server', 'lrclib'];
 
 function parseLine(raw: unknown): PublicLyricLine | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -83,7 +101,7 @@ export function parseLyricsPayload(raw: unknown): PublicLyricsPayload | null {
   }
   const payload: PublicLyricsPayload = { songId, synced, offsetMs, lines: parsed };
   if (source !== undefined) {
-    payload.source = SOURCES.includes(source as LyricsSource) ? (source as LyricsSource) : null;
+    payload.source = LYRICS_SOURCES.includes(source as LyricsSource) ? (source as LyricsSource) : null;
   }
   if (pending !== undefined) payload.pending = pending;
   return payload;
@@ -103,9 +121,14 @@ export function lyricsResultFor(status: number, retryAfter: string | null, body:
   return payload ? { kind: 'ok', payload } : { kind: 'unavailable', retryAfterSec: null };
 }
 
-interface LyricsAnswer {
+export interface LyricsAnswer {
   status: LyricsStatus;
   lyrics: PublicLyricsPayload | null;
+}
+
+/** An answer, and the track it answers for. */
+export interface TrackAnswer extends LyricsAnswer {
+  songId: string | null;
 }
 
 /** Synced lines, which the stage plays along with the song. */
@@ -148,16 +171,20 @@ export function formatLyricOffset(ms: number): string {
   return `${ms > 0 ? '+' : '-'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
 }
 
-/** The last line started by `positionMs` on the lyric clock, -1 before the
- *  first. */
-export function activeLyricLineIndex(lyrics: PublicLyricsPayload | null, positionMs: number): number {
+/** The line being sung `elapsedMs` into the track, -1 before the first. */
+export function activeLyricLineIndex(
+  lyrics: PublicLyricsPayload | null,
+  elapsedMs: number,
+  offsetMs: number,
+): number {
   if (!lyrics?.synced) return -1;
-  const at = Math.max(0, positionMs);
+  // The corrections apply to the clock, never to the lines.
+  const adjustedElapsedMs = Math.max(0, elapsedMs + offsetMs);
   let active = -1;
   for (let i = 0; i < lyrics.lines.length; i += 1) {
     const startMs = lyrics.lines[i]?.startMs;
     if (startMs == null) continue;
-    if (startMs > at) break;
+    if (startMs > adjustedElapsedMs) break;
     active = i;
   }
   return active;
@@ -184,7 +211,8 @@ export interface LyricMoment {
   resting: boolean;
 }
 
-/** What the lyrics display shows at `positionMs` on the lyric clock. */
+/** What the lyrics display shows at `positionMs` on the lyric clock. Its
+ *  word count is lyricWordCount's, inlined to keep the web's body. */
 export function lyricMoment(lyrics: PublicLyricsPayload | null, positionMs: number): LyricMoment {
   const lines = lyrics?.synced ? lyrics.lines : [];
   const at = (i: number) => lines[i]?.startMs;
@@ -222,10 +250,28 @@ export function lyricMoment(lyrics: PublicLyricsPayload | null, positionMs: numb
 }
 
 /** The line the column centres: the one being sung; in an intro or a break,
- *  the one to come; after the last, the last. */
+ *  the one to come; after the last, the last. AmbientLyrics' SyncedColumn
+ *  works this out inline; `positionMs` already carries both corrections. */
 export function lyricFocusLine(lyrics: PublicLyricsPayload, moment: LyricMoment, positionMs: number): number {
   if (moment.current >= 0) return moment.current;
-  return Math.min(lyrics.lines.length - 1, activeLyricLineIndex(lyrics, positionMs) + 1);
+  return Math.min(lyrics.lines.length - 1, activeLyricLineIndex(lyrics, positionMs, 0) + 1);
+}
+
+/** How many words lyricMoment paces `text` by. */
+export function lyricWordCount(text: string): number {
+  return text.split(/\s+/).filter(Boolean).length;
+}
+
+/** `text` split for lighting word by word: the spaces are kept, so wrapping
+ *  sees the real text, and each word carries its place among lyricWordCount's
+ *  words (-1 on a space). */
+export function lyricWordParts(text: string): { part: string; index: number }[] {
+  const parts: { part: string; index: number }[] = [];
+  let words = 0;
+  for (const part of text.split(/(\s+)/)) {
+    if (part) parts.push({ part, index: part.trim() ? words++ : -1 });
+  }
+  return parts;
 }
 
 /** When to ask again about an answer marked `pending`, after `asks` such asks;
@@ -239,4 +285,55 @@ export function lyricsRetryDelayMs(attempt: number, retryAfterSec: number | null
   const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** Math.max(0, attempt));
   const floor = retryAfterSec != null && retryAfterSec > 0 ? retryAfterSec * 1000 : 0;
   return Math.max(backoff, Math.min(floor, RETRY_MAX_MS));
+}
+
+/** An answer that asking again would not change. */
+export function lyricsSettled(answer: LyricsAnswer): boolean {
+  if (answer.status === 'ready') return !answer.lyrics?.pending;
+  return answer.status === 'disabled' || answer.status === 'gone' || answer.status === 'locked';
+}
+
+/** What one reply to `GET /lyrics/current?songId=id` does to the ask loop in
+ *  useTrackLyrics. */
+export interface LyricsStep {
+  /** The answer to show, given the one showing (a state updater). */
+  answer: (shown: TrackAnswer) => TrackAnswer;
+  /** When to ask again, or null to stop asking. */
+  askAgainMs: number | null;
+  /** That ask is a recheck of a pending answer, which counts toward
+   *  PENDING_MAX_ASKS, rather than a retry, which counts toward the backoff. */
+  recheck: boolean;
+}
+
+/** `attempt` is the retries already made in this run of the loop;
+ *  `pendingAsks` is the rechecks already made for this track in any run, so
+ *  the cap holds across trips to the background. */
+export function lyricsStep(id: string, result: LyricsResult, attempt: number, pendingAsks: number): LyricsStep {
+  if (result.kind === 'ok') {
+    // The station answers for the id it was asked about; anything else
+    // cannot be shown as this track's lyrics.
+    if (result.payload.songId !== id) {
+      return { answer: () => ({ songId: id, status: 'gone', lyrics: null }), askAgainMs: null, recheck: false };
+    }
+    // Shown at once, and asked again while the station says a better answer
+    // (LRCLIB's timed lyrics) may be on its way. Once the app stops asking,
+    // it stops saying it is looking.
+    const delay = result.payload.pending ? pendingRecheckDelayMs(pendingAsks) : null;
+    const payload = result.payload.pending && delay == null ? { ...result.payload, pending: false } : result.payload;
+    return { answer: () => ({ songId: id, status: 'ready', lyrics: payload }), askAgainMs: delay, recheck: true };
+  }
+  if (result.kind !== 'unavailable') {
+    const status = result.kind;
+    return { answer: () => ({ songId: id, status, lyrics: null }), askAgainMs: null, recheck: false };
+  }
+  // Unlike the web, lyrics already showing stay up while the station does not
+  // answer a recheck: a phone drops requests far more often than a desk, and
+  // blanking them would flip the Live page out of its lyrics layout for the
+  // backoff. They stop claiming a better answer is coming, since nothing says
+  // so any more; a later answer can say it again.
+  const answer = (shown: TrackAnswer): TrackAnswer => {
+    if (shown.songId !== id || !shown.lyrics) return { songId: id, status: 'unavailable', lyrics: null };
+    return shown.lyrics.pending ? { ...shown, lyrics: { ...shown.lyrics, pending: false } } : shown;
+  };
+  return { answer, askAgainMs: lyricsRetryDelayMs(attempt, result.retryAfterSec), recheck: false };
 }

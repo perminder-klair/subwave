@@ -27,11 +27,14 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { useLyricClock, type TrackLyrics } from '@/hooks/useTrackLyrics';
-import { lyricFocusLine, lyricMoment, syncedLyricsReady } from '@/lib/lyrics';
+import { lyricFocusLine, lyricMoment, lyricWordCount, lyricWordParts, syncedLyricsReady } from '@/lib/lyrics';
 import type { PublicLyricsPayload } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
 const EASE = Easing.bezier(0.3, 0.7, 0.2, 1);
+
+// Four steps a second is enough for word-by-word lighting (the web's tick).
+const TICK_MS = 250;
 
 // The sung line grows by GROW from its left edge, so every line wraps at
 // 1/GROW of the column and the grown one still fits.
@@ -74,19 +77,17 @@ function useReduceMotion(): boolean {
   return reduce;
 }
 
-function Words({ text, lit, front }: { text: string; lit: number; front: boolean }) {
+/** The sung line's words: the first `lit` lit, and while the line is still
+ *  being sung (`accentNewest`) the newest of them in the accent. */
+function Words({ text, lit, accentNewest }: { text: string; lit: number; accentNewest: boolean }) {
   const { colors } = useTheme();
-  // Split on spaces but keep them, so wrapping sees the real text; each word
-  // part carries its place among the words. Nested Text takes no opacity, and
-  // a theme colour may be rgb(), so unsung words wear the muted ink.
-  const parts: { part: string; index: number }[] = [];
-  let words = 0;
-  for (const part of text.split(/(\s+)/)) parts.push({ part, index: part.trim() ? words++ : -1 });
+  // Nested Text takes no opacity, and a theme colour may be rgb(), so unsung
+  // words wear the muted ink.
   return (
     <>
-      {parts.map(({ part, index }, i) => {
+      {lyricWordParts(text).map(({ part, index }, i) => {
         if (index < 0) return part;
-        const newest = front && index === lit - 1;
+        const newest = accentNewest && index === lit - 1;
         const color = newest ? colors.accent : index < lit ? colors.ink : colors.muted;
         return (
           <Text key={i} style={{ color }}>
@@ -106,19 +107,19 @@ const Line = memo(function Line({
   text,
   tone,
   lit,
-  front,
+  accentNewest,
   fade,
-  calm,
+  reduceMotion,
   onMeasure,
 }: {
   index: number;
   text: string;
   tone: Tone;
   lit: number;
-  front: boolean;
+  accentNewest: boolean;
   /** 0 to 1: how far inside the column's clear middle the line sits. */
   fade: number;
-  calm: boolean;
+  reduceMotion: boolean;
   onMeasure: (index: number, centre: number) => void;
 }) {
   const { colors } = useTheme();
@@ -128,7 +129,7 @@ const Line = memo(function Line({
   const [scale] = useState(() => new Animated.Value(scaleTo));
 
   useEffect(() => {
-    if (calm) {
+    if (reduceMotion) {
       opacity.setValue(opacityTo);
       scale.setValue(scaleTo);
       return;
@@ -139,7 +140,7 @@ const Line = memo(function Line({
     ]);
     run.start();
     return () => run.stop();
-  }, [calm, opacity, opacityTo, scale, scaleTo]);
+  }, [reduceMotion, opacity, opacityTo, scale, scaleTo]);
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { y, height } = e.nativeEvent.layout;
@@ -160,7 +161,7 @@ const Line = memo(function Line({
           transformOrigin: 'left center',
         }}
       >
-        {tone === 'sung' ? <Words text={text} lit={lit} front={front} /> : text}
+        {tone === 'sung' ? <Words text={text} lit={lit} accentNewest={accentNewest} /> : text}
       </Animated.Text>
     </View>
   );
@@ -170,18 +171,18 @@ const Line = memo(function Line({
 function SyncedColumn({
   lyrics,
   positionMs,
-  calm,
+  reduceMotion,
 }: {
   lyrics: PublicLyricsPayload;
   positionMs: number;
-  calm: boolean;
+  reduceMotion: boolean;
 }) {
   const { lines } = lyrics;
   const moment = lyricMoment(lyrics, positionMs);
   const focus = lyricFocusLine(lyrics, moment, positionMs);
   const sung = moment.current >= 0 ? lines[moment.current] : null;
-  const wordCount = sung ? sung.text.split(/\s+/).filter(Boolean).length : 0;
-  const lit = calm ? wordCount : Math.max(1, Math.ceil(moment.progress * wordCount));
+  const wordCount = sung ? lyricWordCount(sung.text) : 0;
+  const lit = reduceMotion ? wordCount : Math.max(1, Math.ceil(moment.progress * wordCount));
 
   const [height, setHeight] = useState(0);
   const onContainerLayout = (e: LayoutChangeEvent) => {
@@ -208,17 +209,17 @@ function SyncedColumn({
   useEffect(() => {
     if (!measured) return;
     // The first placement is a cut, not a glide in from the top.
-    if (!placed.current || calm) {
+    if (!placed.current || reduceMotion) {
       placed.current = true;
       y.setValue(target);
-      if (calm) shown.setValue(1);
+      if (reduceMotion) shown.setValue(1);
       else Animated.timing(shown, { toValue: 1, duration: 500, easing: EASE, useNativeDriver: true }).start();
       return;
     }
     const run = Animated.timing(y, { toValue: target, duration: 600, easing: EASE, useNativeDriver: true });
     run.start();
     return () => run.stop();
-  }, [measured, target, calm, y, shown]);
+  }, [measured, target, reduceMotion, y, shown]);
 
   const half = height / 2;
   const focusCentre = centres[focus] ?? 0;
@@ -255,9 +256,9 @@ function SyncedColumn({
               text={line.text}
               tone={tone}
               lit={tone === 'sung' ? lit : 0}
-              front={tone === 'sung' && !calm && moment.progress < 1}
+              accentNewest={tone === 'sung' && !reduceMotion && moment.progress < 1}
               fade={fadeFor(i)}
-              calm={calm}
+              reduceMotion={reduceMotion}
               onMeasure={onMeasure}
             />
           );
@@ -310,8 +311,8 @@ export interface StageLyricsProps {
 }
 
 export default memo(function StageLyrics({ track, trackStartedAt, running }: StageLyricsProps) {
-  const calm = useReduceMotion();
-  const positionMs = useLyricClock(track, trackStartedAt, running);
+  const reduceMotion = useReduceMotion();
+  const positionMs = useLyricClock(track, trackStartedAt, running, TICK_MS);
   const { lyrics } = track;
   const synced = syncedLyricsReady(track);
   const lines = useMemo(() => lyrics?.lines ?? [], [lyrics]);
@@ -326,7 +327,7 @@ export default memo(function StageLyrics({ track, trackStartedAt, running }: Sta
             key={`${lyrics.songId ?? ''}:${lines.length}`}
             lyrics={lyrics}
             positionMs={positionMs}
-            calm={calm}
+            reduceMotion={reduceMotion}
           />
         ) : (
           <PlainColumn key={lyrics.songId ?? ''} lines={lines} />
