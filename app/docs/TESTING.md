@@ -87,6 +87,14 @@ and progress must also be checked in the car.
   `react-native-google-cast` runs under the New Architecture in **compat
   (interop) mode** (v5 will be native); if a Cast API breaks after an RN/Expo
   upgrade, check the library's v5 status before patching.
+- **The Android Cast SDK is pinned** (`androidPlayServicesCastFrameworkVersion`
+  on the `react-native-google-cast` plugin in `app.json`). The library defaults
+  to `play-services-cast-framework:+`, so every build takes Google's newest, and
+  23.0.0 pulls `androidx.mediarouter:mediarouter:1.9.0-beta01`, which needs
+  compileSdk 37 and AGP 9.1: `:app:checkReleaseAarMetadata` fails the build.
+  Raise the pin alongside an Expo SDK upgrade that moves compileSdk/AGP, and
+  ship it in a binary for both platforms, because the plugin options are in the
+  shared app config, so the pin is in the iOS fingerprint too.
 
 ---
 
