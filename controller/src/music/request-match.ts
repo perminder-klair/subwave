@@ -847,6 +847,7 @@ export function asksForKindOfMusic(text: string): boolean {
 }
 
 export function isLyricOrFilmDescription(text: string): boolean {
+  const eraRequest = /\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d0s\b/iu.test(text);
   return looksLikeLyricRequest(text)
     // A listener may name the film without saying "movie" or "film":
     // "a song from The Devil Wears Prada 2". Keep that relation on the
@@ -857,7 +858,7 @@ export function isLyricOrFilmDescription(text: string): boolean {
     // is a structured language-plus-genre request and must stay on the
     // deterministic language resolver. Explicit movie wording still remains
     // evidence-oriented through the lyric/film cues above.
-    || /\b(?:song|track|music)\s+from\s+\S/iu.test(text);
+    || (!eraRequest && /\b(?:song|track|music)\s+from\s+\S/iu.test(text));
 }
 export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): boolean {
   const lyricLike = looksLikeLyricRequest(text);

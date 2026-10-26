@@ -845,6 +845,8 @@ test('era remains a soft preference alongside language', () => {
   const match = modelFreeRequest('play music from the 1990s in Hindi');
   assert.equal(match.language, 'Hindi');
   assert.deepEqual(match.era, { from: 1990, to: 1999, label: '1990s' });
+  assert.equal(isLyricOrFilmDescription('play music from the 1990s in Hindi'), false);
+  assert.equal(isLyricOrFilmDescription('play Punjabi music from the 2000s'), false);
 });
 
 test('from remains part of a title unless a generic artist frame owns it', () => {
