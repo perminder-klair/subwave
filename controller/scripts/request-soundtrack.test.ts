@@ -100,6 +100,27 @@ test('allows provider credits that include omitted featured artists', async () =
   assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
 });
 
+test('matches soundtrack credits independently of local join formatting and keeps alternates in the pool', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'subha', title: 'Subha Hone Na De', artist: 'Mika Singh & Shefali Alvares' },
+    { id: 'allah', title: 'Allah Maaf Kare', artist: 'Sonu Nigam & Shilpa Rao' },
+    { id: 'let', title: 'Let It Be', artist: 'Shaan' },
+    { id: 'jhak', title: 'Jhak Maar Ke', artist: 'Neeraj Shridhar | Harshdeep Kaur' },
+    { id: 'jhak-extra', title: 'Jhak Maar Ke', artist: 'Pritam / Neeraj Shridhar / Harshdeep Kaur / Irshad Kamil' },
+  ], {
+    enabled: true,
+    provider: provider(tracklist('musicbrainz', [
+      ['Subha Hone Na De', ['Mika Singh', 'Shefali Alvares']],
+      ['Jhak Maar Ke', ['Neeraj Shridhar', 'Harshdeep Kaur']],
+      ['Allah Maaf Kare', ['Sonu Nigam', 'Shilpa Rao']],
+      ['Let It Be', 'Shaan'],
+    ])),
+  });
+  assert.equal(result.status, 'matched');
+  assert.deepEqual(result.status === 'matched' ? result.candidates.map(candidate => candidate.id).sort() : [], ['allah', 'jhak', 'let', 'subha']);
+});
+
 test('does not match a soundtrack credit that is only part of a local combined credit', async () => {
   clearSoundtrackResolutionCache();
   const result = await resolveSoundtrackCandidates(context, [

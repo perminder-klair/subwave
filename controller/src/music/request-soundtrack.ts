@@ -161,36 +161,57 @@ function artistVariants(value: unknown): string[] {
     .filter(Boolean);
 }
 
-// MusicBrainz exposes each credited artist separately, while Navidrome often
-// stores the same credit as one joined string. This is intentionally local to
-// soundtrack evidence. The general request artist matcher must not split on
-// commas or ampersands because a partial credit can be a false artist match.
-function soundtrackCreditParts(value: unknown): string[] {
-  const raw = String(value ?? '').trim();
-  if (!raw) return [];
-  return raw.split(/\s*(?:,|&|\/|\band\b|\bfeat(?:uring)?\.?|\bft\.?)\s*/iu)
-    .map(part => requestName(part).replace(/^the (?=\S)/u, '').trim())
-    .filter(Boolean);
+// MusicBrainz exposes each credited artist separately, while Navidrome may
+// serialize the same credit as one display string. The display separator is
+// not identity data: it varies by tagger, server version, and source format.
+//
+// Compare canonical name spans in a token stream instead. This accepts any
+// punctuation or join marker between real credits without maintaining a list
+// of delimiters. It also keeps the important safety rule: a local row can omit
+// provider-only featured credits, but every non-connector identity token in
+// the local row must be covered by a provider credit. For example, provider
+// credit "Fire" cannot verify local "Earth, Wind & Fire" because "earth" and
+// "wind" remain uncovered.
+const SOUNDTRACK_CONNECTORS = new Set(['and', 'feat', 'featuring', 'ft', 'with']);
+
+function soundtrackCreditTokens(value: unknown): string[] {
+  const normalized = requestName(value).replace(/^the (?=\S)/u, '').trim();
+  return normalized ? normalized.split(' ').filter(Boolean) : [];
 }
 
-function soundtrackCreditSet(values: readonly unknown[], splitJoined = true): string[] {
-  return [...new Set(values.flatMap(value => splitJoined ? soundtrackCreditParts(value) : [requestName(value)]).filter(Boolean))].sort();
+function soundtrackCreditSet(values: readonly unknown[]): string[] {
+  return [...new Set(values.map(value => soundtrackCreditTokens(value).join(' ')).filter(Boolean))].sort();
+}
+
+function coversProviderCredit(localTokens: string[], wantedTokens: string[][]): boolean {
+  if (!localTokens.length || !wantedTokens.length) return false;
+  const occupied = new Array<boolean>(localTokens.length).fill(false);
+  let covered = false;
+
+  // Match longer names first so a short artist name cannot consume the start
+  // of a longer credited name and leave a false remainder.
+  for (const wanted of [...wantedTokens].sort((a, b) => b.length - a.length || a.join(' ').localeCompare(b.join(' ')))) {
+    if (!wanted.length) continue;
+    for (let start = 0; start <= localTokens.length - wanted.length; start++) {
+      if (wanted.some((token, offset) => occupied[start + offset] || localTokens[start + offset] !== token)) continue;
+      for (let offset = 0; offset < wanted.length; offset++) occupied[start + offset] = true;
+      covered = true;
+      break;
+    }
+  }
+  if (!covered) return false;
+  return localTokens.every((token, index) => occupied[index] || SOUNDTRACK_CONNECTORS.has(token));
 }
 
 function artistsMatch(wanted: readonly string[], local: SoundtrackLocalCandidate): boolean {
-  const localCredits = [local.artist, ...(local.artists || []).map(artist => typeof artist === 'string' ? artist : artist?.name)];
-  // MusicBrainz gives us one entry per credited artist. Keep those entries
-  // intact: a provider name such as "Earth, Wind & Fire" is one artist, not
-  // three credits. Navidrome may instead join several real credits into one
-  // local artist string, so only the local side is split.
-  const wantedKeys = soundtrackCreditSet(wanted, false);
-  const localKeys = soundtrackCreditSet(localCredits);
+  const wantedKeys = soundtrackCreditSet(wanted);
+  const wantedTokens = wantedKeys.map(value => value.split(' '));
+  const localDisplay = local.artist
+    || (local.artists || []).map(artist => typeof artist === 'string' ? artist : artist?.name).filter(Boolean).join(' ');
   // A local tag can omit featured credits that the provider knows about. It
   // must not invent a credit absent from the provider, and an empty or wholly
   // unrelated local credit must never pass on title evidence alone.
-  return wantedKeys.length > 0
-    && localKeys.length > 0
-    && localKeys.every(credit => wantedKeys.includes(credit));
+  return coversProviderCredit(soundtrackCreditTokens(localDisplay), wantedTokens);
 }
 
 function sourceKey(track: Pick<SoundtrackEvidenceTrack, 'title' | 'artists'>): string {
