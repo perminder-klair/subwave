@@ -816,6 +816,37 @@ test('model-free requests recognise multilingual genre, language, and mood forms
   assert.equal(modelFreeRequest('ਪੰਜਾਬੀ ਸੰਗੀਤ ਚਲਾਓ').language, 'Punjabi');
 });
 
+test('model-free language and genre attributes are order-independent and owned once', () => {
+  for (const text of ['play Punjabi pop music', 'play pop Punjabi music', 'play pop music in Punjabi']) {
+    const match = modelFreeRequest(text);
+    assert.equal(match.language, 'Punjabi', text);
+    assert.equal(match.genre, 'pop', text);
+    assert.deepEqual(match.search_terms, [], text);
+    assert.equal(looksLikeLyricRequest(text), false, text);
+    assert.equal(isLyricOrFilmDescription(text), false, text);
+  }
+  const languageOnly = modelFreeRequest('play Punjabi song');
+  assert.equal(languageOnly.language, 'Punjabi');
+  assert.equal(languageOnly.genre, null);
+});
+
+test('language aliases, endonyms, and bounded typos resolve without genre evidence', () => {
+  for (const text of ['play Panjabi music', 'play ਪੰਜਾਬੀ music', 'play Hindii music']) {
+    const match = modelFreeRequest(text);
+    assert.ok(match.language, text);
+    assert.equal(match.genre, null, text);
+  }
+  const title = modelFreeRequest('play Spanish Eyes');
+  assert.equal(title.language, null);
+  assert.equal(title.title, 'Spanish Eyes');
+});
+
+test('era remains a soft preference alongside language', () => {
+  const match = modelFreeRequest('play music from the 1990s in Hindi');
+  assert.equal(match.language, 'Hindi');
+  assert.deepEqual(match.era, { from: 1990, to: 1999, label: '1990s' });
+});
+
 test('from remains part of a title unless a generic artist frame owns it', () => {
   const named = modelFreeRequest('Letter from America by The Proclaimers');
   assert.equal(named.title, 'Letter from America');
