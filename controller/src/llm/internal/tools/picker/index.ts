@@ -75,10 +75,15 @@ export type { PickerToolModule } from './defs.js';
 
 // Builds a fresh tool set scoped to one pick. Takes the scope whole — callers
 // pass the object through, never its fields.
-export function buildPickerTools(scope: Partial<PickerScope> = {}): { tools: ToolSet; seen: Map<string, any>; failures: unknown[] } {
+export function buildPickerTools(
+  scope: Partial<PickerScope> = {},
+  options: { only?: readonly string[] } = {},
+): { tools: ToolSet; seen: Map<string, any>; failures: unknown[] } {
   const ctx = buildPickerContext(pickerScope(scope));
   const tools: ToolSet = {};
+  const only = options.only ? new Set(options.only) : null;
   for (const mod of PICKER_TOOLS) {
+    if (only && !only.has(mod.name)) continue;
     if (mod.available && !mod.available(ctx)) continue;
     tools[mod.name] = withToolDeadline(mod.name, mod.build(ctx));
   }

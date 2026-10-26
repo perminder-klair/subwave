@@ -856,6 +856,68 @@ test('model-free requests recognise album framing', () => {
   assert.deepEqual(match.search_terms, ['Fearless']);
 });
 
+test('album context keeps the album and artist separate across natural request forms', () => {
+  const cases: Array<[string, string | null, string | null, string | null, string]> = [
+    ['Play a song from Pyaas album by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Play any track from the album Pyaas by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Can you play a track from Babbu Maan’s Pyaas album', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Play the album Pyaas by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Play Mittran Di Chhatri from the album Pyaas by Babbu Maan', 'Mittran Di Chhatri', 'Pyaas', 'Babbu Maan', 'song'],
+    ['Play something from Pyaas by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Please play one song off Babbu Maan album Pyaas', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['I want a song from Pyaas album by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+  ];
+  for (const [text, title, album, artist, scope] of cases) {
+    const parsed = modelFreeRequest(text);
+    assert.equal(parsed.title, title, text);
+    assert.equal(parsed.album, album, text);
+    assert.equal(parsed.artist, artist, text);
+    assert.equal(parsed.scope, scope, text);
+  }
+  assert.equal(modelFreeRequest('play a song from The Proclaimers').artist, 'The Proclaimers');
+});
+
+test('connector words inside a title are not promoted to an artist', () => {
+  assert.equal(modelFreeRequest('Play Stand by Me').title, 'Stand by Me');
+  assert.equal(modelFreeRequest('Play Stand by Me').artist, null);
+  assert.equal(modelFreeRequest('Play Stand by Me by Ben E. King').title, 'Stand by Me');
+  assert.equal(modelFreeRequest('Play Stand by Me by Ben E. King').artist, 'Ben E. King');
+});
+
+test('an explicitly named artist resolves a one-edit album typo, but only uniquely', async () => {
+  const wanted = { id: 'pyaas-track', title: 'Mittran Di Chhatri', artist: 'Babbu Maan', album: 'Pyaas' };
+  const f = fixture({
+    searchPage: async () => ({ songs: [], rawCount: 0 }),
+    resolveArtist: async () => ({ id: 'babbu', name: 'Babbu Maan' }),
+    getArtist: async () => ({ album: [{ id: 'pyaas', name: 'Pyaas' }, { id: 'other', name: 'Amli Anthem' }] }),
+    getAlbum: async id => id === 'pyaas' ? [wanted] : [],
+  });
+  const result = await resolveDirectRequest(modelFreeRequest('play a song from Pyass album by Babbu Maan'), {
+    ...f.deps,
+    text: 'play a song from Pyass album by Babbu Maan',
+    exactOnly: true,
+  });
+  assert.equal(result.track?.id, wanted.id);
+  assert.equal(result.outcome, 'matched');
+});
+
+test('an album miss never falls back to another album by the same artist', async () => {
+  const otherAlbum = { id: 'other-track', title: 'Other Track', artist: 'Babbu Maan', album: 'Amli Anthem' };
+  const f = fixture({
+    searchPage: async () => ({ songs: [otherAlbum], rawCount: 1 }),
+    resolveArtist: async () => ({ id: 'babbu', name: 'Babbu Maan' }),
+    getArtist: async () => ({ album: [{ id: 'other', name: 'Amli Anthem' }] }),
+    getAlbum: async () => [otherAlbum],
+  });
+  const result = await resolveDirectRequest(modelFreeRequest('play a song from Missing Record by Babbu Maan'), {
+    ...f.deps,
+    text: 'play a song from Missing Record by Babbu Maan',
+    exactOnly: true,
+  });
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+});
+
 test('short transliterated lyric prose is routed to evidence resolution', () => {
   assert.equal(looksLikeLyricRequest('chite suit te daag pai gaye gali teri vich gara'), true);
   assert.equal(looksLikeLyricRequest('gali teri vich gara'), true);

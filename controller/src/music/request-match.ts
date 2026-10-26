@@ -261,16 +261,46 @@ export function directRequestUnsupported(text: string, match: RequestMatch = {})
 
 const QUOTED_NAMES = /"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|(?<![\p{L}\p{N}])'[^'\n]+'(?![\p{L}\p{N}])/gu;
 
-// The framing before a name: "could you play", "please put on".
+// The framing before a name: "could you play", "please put on". Keep the
+// expression deliberately narrow. In particular, "I Want It That Way" is a
+// real title, so a generic "I want" strip would damage the identity before
+// the catalogue gets a chance to prove it.
 const REQUEST_LEAD = /^\s*(?:(?:please\s+)?(?:can|could|would)\s+you\s+)?(?:(?:please\s+)?(?:play|put on|queue|request)\s+)?/i;
+
+function stripRequestLead(text: string): string {
+  let cleaned = text.trim();
+  const leads = [
+    /^(?:please\s+)?(?:can|could|would)\s+(?:you\s+)?(?:please\s+)?(?:play|put\s+on|queue|request|hear|listen\s+to)\s+/iu,
+    /^(?:please\s+)?(?:can|could|may)\s+i\s+(?:please\s+)?(?:play|put\s+on|queue|request|hear|listen\s+to)\s+/iu,
+    /^(?:please\s+)?i(?:['’]d|\s+would)?\s+(?:like|love|want|need)\s+(?:to\s+)?(?:play|put\s+on|queue|request|hear|listen\s+to)\s+/iu,
+    /^(?:please\s+)?i(?:['’]d|\s+would)?\s+(?:like|love|want|need)\s+(?=(?:a|an|the|any|some|something|anything|one|music|song|track)\b)/iu,
+    /^(?:please\s+)?(?:give\s+me|let\s+me\s+hear)\s+/iu,
+  ];
+  for (const lead of leads) {
+    const next = cleaned.replace(lead, '');
+    if (next !== cleaned) {
+      cleaned = next.trim();
+      break;
+    }
+  }
+  return cleaned.replace(REQUEST_LEAD, '').replace(/^please\s+/iu, '').trim();
+}
 
 // The name quoted right after the request's framing, without whatever follows
 // its closing quote: `play "X" for my mum` names X. A bare "please" frames a
 // quote too (`please "X"`), though never an unquoted name ("Please Please Me").
 export function leadingQuotedName(text: string): string | null {
-  const head = text.replace(REQUEST_LEAD, '').replace(/^please\s+/i, '');
+  const head = stripRequestLead(text);
   const span = head.match(QUOTED_NAMES)?.[0];
   return span && head.startsWith(span) ? span.slice(1, -1).trim() || null : null;
+}
+
+function lastUnquotedMatch(text: string, pattern: RegExp): RegExpMatchArray | null {
+  const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+  const global = new RegExp(pattern.source, flags);
+  let found: RegExpMatchArray | null = null;
+  for (const match of text.matchAll(global)) found = match;
+  return found;
 }
 
 // Replace whole names in the listener's text with `token`, and every quoted
@@ -514,6 +544,25 @@ function releaseContextFuzzyMatches(context: NonNullable<RequestMatch['releaseCo
     }
     return edits === 1;
   });
+}
+
+// Album names are resolved only inside an explicitly named artist catalogue.
+// Permit one small speech-recognition typo there, but keep numeric sequel and
+// edition markers exact and never fuzzy-match a bare album against the whole
+// library. The caller also requires a unique candidate before accepting this.
+function albumNameFuzzyMatches(want: string, got: string | undefined): boolean {
+  const wanted = requestName(want).split(' ').filter(Boolean);
+  const actual = requestName(got).split(' ').filter(Boolean);
+  if (!wanted.length || wanted.length !== actual.length) return false;
+  let edits = 0;
+  for (let index = 0; index < wanted.length; index++) {
+    const left = wanted[index]!;
+    const right = actual[index]!;
+    if (left === right) continue;
+    if (/^(?:\d+|[ivxlcdm]+)$/iu.test(left) || /^(?:\d+|[ivxlcdm]+)$/iu.test(right)
+      || left.length < 4 || right.length < 4 || !oneEditApart(left, right) || ++edits > 1) return false;
+  }
+  return edits === 1;
 }
 
 // Credits key through recency's shared name fold and split only on
@@ -861,16 +910,68 @@ export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): b
 }
 
 export function modelFreeRequest(text: string): RequestMatch {
-  const cleaned = text.replace(REQUEST_LEAD, '').replace(/\s+please[.!?]*$/i, '').trim();
+  const cleaned = stripRequestLead(text).replace(/\s+please[.!?]*$/iu, '').trim();
   const unquote = (s: string) => s.replace(/^["'“‘]|["'”’][.!?]*$/g, '').trim();
+  const makeAlbumMatch = (albumValue: string, artistValue: string | null, titleValue: string | null = null): RequestMatch => {
+    const album = unquote(albumValue);
+    const artist = artistValue ? unquote(artistValue) : null;
+    const title = titleValue ? unquote(titleValue) : null;
+    return {
+      kind: 'track', title, album, artist, genre: null, language: null,
+      mood: null, energy: null, sort: null, scope: title ? 'song' : 'album',
+      search_terms: [album, artist, title].filter((value): value is string => !!value),
+      intent: album ? `Wants a track from the album ${album}${artist ? ` by ${artist}` : ''}.` : 'Wants a track from an album.', ack: '',
+    };
+  };
+  const stripAlbumMarker = (value: string): string => value
+    .replace(/^(?:the\s+)?(?:album|record|lp)\s+/iu, '')
+    .replace(/\s+(?:album|record|lp)$/iu, '')
+    .trim();
   const albumPhrase = cleaned.match(/^(?:the\s+)?album\s+(.+?)[.!?]*$/iu);
   if (albumPhrase) {
+    const masked = cleaned.replace(QUOTED_NAMES, name => '\u0000'.repeat(name.length));
+    const by = lastUnquotedMatch(masked, /\s+by\s+/iu);
+    if (by) return makeAlbumMatch(
+      cleaned.slice(0, by.index!).replace(/^(?:the\s+)?album\s+/iu, ''),
+      cleaned.slice(by.index! + by[0].length).replace(/[.!?]*$/u, ''),
+    );
     const album = unquote(albumPhrase[1]);
     return {
       kind: 'track', title: null, album, artist: null, genre: null, language: null,
       mood: null, sort: null, scope: 'album', search_terms: album ? [album] : [],
       intent: album ? `Wants a track from the album ${album}.` : 'Wants a track from an album.', ack: '',
     };
+  }
+  const maskedCleaned = cleaned.replace(QUOTED_NAMES, name => '\u0000'.repeat(name.length));
+  const releaseRelation = maskedCleaned.match(/\s+(?:from|off|of)\s+/iu);
+  if (releaseRelation) {
+    const before = cleaned.slice(0, releaseRelation.index).trim();
+    const afterStart = releaseRelation.index! + releaseRelation[0].length;
+    const after = cleaned.slice(afterStart).replace(/[.!?]*$/u, '').trim();
+    const genericFrame = /^(?:(?:a|an|any|some|one|the)\s+)?(?:song|track|tune|music|something|anything)$/iu.test(before);
+    const afterMasked = maskedCleaned.slice(afterStart);
+    const by = lastUnquotedMatch(afterMasked, /\s+by\s+/iu);
+    const releaseSpec = by
+      ? { release: after.slice(0, by.index).trim(), artist: after.slice(by.index! + by[0].length).trim() }
+      : { release: after, artist: '' };
+    const release = stripAlbumMarker(releaseSpec.release);
+    const explicitAlbum = /^(?:the\s+)?(?:album|record|lp)\b/iu.test(releaseSpec.release)
+      || /\b(?:album|record|lp)$/iu.test(releaseSpec.release);
+    const possessive = releaseSpec.release.match(/^(.+?)[’']s\s+(?:the\s+)?(.+?)\s+(?:album|record|lp)$/iu);
+    const artistFirst = releaseSpec.release.match(/^(.+?)\s+(?:album|record|lp)\s+(.+)$/iu);
+    if (possessive) {
+      return makeAlbumMatch(possessive[2], possessive[1], genericFrame ? null : before);
+    }
+    if (artistFirst && !by) {
+      return makeAlbumMatch(artistFirst[2], artistFirst[1], genericFrame ? null : before);
+    }
+    if (by && (genericFrame || explicitAlbum)) {
+      return makeAlbumMatch(release, releaseSpec.artist, genericFrame ? null : before);
+    }
+    // `a song from Album by Artist` is an album request even when the word
+    // album was omitted. For a named title, the same shape remains a release
+    // context and is verified by the normal title/context resolver below.
+    if (by && genericFrame && release) return makeAlbumMatch(release, releaseSpec.artist);
   }
   const attributeBody = cleaned
     .replace(/^(?:(?:some|something|music|songs?|tracks?|a\s+song|a\s+track)\s+)+/iu, '')
@@ -978,7 +1079,7 @@ export function modelFreeRequest(text: string): RequestMatch {
   // `from` is a relationship in generic frames ("a song from Artist"), not
   // an identity separator. Treating it like `by` turns "Letter from America
   // by The Proclaimers" into the title "Letter" and artist "America by ...".
-  const by = pair(separators.match(/\s+by\s+/i), true);
+  const by = pair(lastUnquotedMatch(separators, /\s+by\s+/iu), true);
   const artistOnly = query.match(/^(?:some|(?:anything|something|music|a song|a track) (?:by|from))\s+(.+?)[.!?]*$/i);
   const describedArtist = query.match(/^(?:some|anything|something|music|a song|a track)\s+(.+?)\s+by\s+(.+?)[.!?]*$/i);
   // "Anything but Love" and "Something except ..." are literal title
@@ -987,7 +1088,12 @@ export function modelFreeRequest(text: string): RequestMatch {
   const knownMood = describedArtist
     && !/^(?:anything|something)\s+(?:but|except|other than)\b/iu.test(describedArtist[0])
     && !!resolveRequestMood(describedArtist[1]);
-  const genericPair = by && /^(?:(?:the|a|some|my)\s+)?(?:song|track|tune|music)$/iu.test(unquote(by[1]));
+  const byIsTitleConnector = !!by && /^(?:me|you|us|him|her|them)$/iu.test(unquote(by[2]));
+  const genericPair = by && !byIsTitleConnector && /^(?:(?:the|a|some|my)\s+)?(?:song|track|tune|music)$/iu.test(unquote(by[1]));
+  if (byIsTitleConnector) {
+    return { kind: 'track', title: unquote(query), album: null, artist: null, genre: null, language: language?.[1] || null,
+      mood: null, energy: null, sort: null, scope: 'song', search_terms: [unquote(query)], ack: '' };
+  }
   if (artistOnly || knownMood || genericPair) return { kind: 'track', artist: unquote(artistOnly?.[1] || describedArtist?.[2] || by![2]), title: null,
     unverifiedConditions, language: language?.[1] || null, mood: knownMood ? resolveRequestMood(describedArtist?.[1]) : null,
     album: null, search_terms: [], scope: 'song', ack: '' };
@@ -1161,6 +1267,9 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   // omit soundtrack context or turn it into an artist, but it cannot rewrite
   // that relationship.
   if (literal.releaseContext && !match.releaseContext) match = { ...match, releaseContext: literal.releaseContext };
+  if (literal.album) {
+    match = { ...match, album: literal.album, scope: literal.scope || match.scope };
+  }
   if (literal.similarTo) {
     return {
       ...match,
@@ -1241,17 +1350,17 @@ export function pinExplicitRequestMatch(match: RequestMatch, text: string): Requ
     kind: 'track',
     title: null,
     artist: exactArtist,
-    album: null,
-    scope: 'song',
+    album: literal.album || null,
+    scope: literal.scope || 'song',
   }, text);
   return {
     ...identity,
     kind: 'track',
     title: exactTitle,
     artist: exactArtist,
-    album: null,
-    scope: 'song',
-    search_terms: [exactTitle, exactArtist],
+    album: literal.album || null,
+    scope: literal.scope || 'song',
+    search_terms: [exactTitle, exactArtist, literal.album].filter((value): value is string => !!value),
     literal: true,
     reversible: literal.reversible,
     // The model can mistake title words such as "with no" for a condition.
@@ -1386,9 +1495,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const contextProven = (song: RequestSong) => !match.releaseContext
     || title === match.releaseContext.wholeTitle
     || releaseContextMatches(match.releaseContext, song);
+  let resolvedAlbumName = match.album;
   const identity = (song: RequestSong, scripts: TitleScripts = 'across') => (!title || requestTitleMatches(title, song.title, scripts))
     && requestCandidateArtistMatches(resolvedArtistName, song)
-    && (!match.album || requestName(song.album) === requestName(match.album))
+    && (!resolvedAlbumName || requestName(song.album) === requestName(resolvedAlbumName))
     && contextProven(song);
   const tags = (song: RequestSong) => [song.genre, ...(song.genres || []).map(g => typeof g === 'string' ? g : g.name)].map(requestName).filter(Boolean);
   let genre: string | null = null;
@@ -1819,7 +1929,21 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
       }
       const full = await safe('artist albums', () => catalog.getArtist(artist.id, { signal: deps.signal }), null);
       let albums = full?.album || [];
-      if (match.album) albums = albums.filter(a => requestName(a.name || a.title) === requestName(match.album));
+      if (match.album) {
+        const exactAlbums = albums.filter(a => requestName(a.name || a.title) === requestName(match.album));
+        if (exactAlbums.length) {
+          albums = exactAlbums;
+          resolvedAlbumName = exactAlbums[0]!.name || exactAlbums[0]!.title || match.album;
+        } else {
+          const fuzzyAlbums = albums.filter(a => albumNameFuzzyMatches(match.album!, a.name || a.title));
+          if (fuzzyAlbums.length === 1) {
+            albums = fuzzyAlbums;
+            resolvedAlbumName = fuzzyAlbums[0]!.name || fuzzyAlbums[0]!.title || match.album;
+          } else {
+            albums = [];
+          }
+        }
+      }
       if (match.sort === 'latest' || match.sort === 'oldest') {
         const direction = match.sort === 'latest' ? -1 : 1;
         albums = [...albums].sort((a, b) => {

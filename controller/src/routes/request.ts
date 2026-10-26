@@ -847,7 +847,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     recentIds: requestCooldownIds(),
     queuedIds: queue.queuedIds(),
     currentId: queue.current?.track?.id,
-    exactOnly,
+    exactOnly: exactOnly || Boolean(matched.album) || Boolean(matched.releaseContext) || Boolean(matched.similarTo),
     signal,
     heldBack,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },

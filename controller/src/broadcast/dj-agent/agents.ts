@@ -27,6 +27,10 @@ export interface RequestRunArgs {
   // Captured before the asynchronous request run so its prompt cannot switch
   // hosts halfway through and then relabel the resulting intro.
   persona: Persona | null;
+  // Evidence requests may use only the web-backed local-identity tool. This
+  // prevents a film/lyric miss from falling through to a random or mood
+  // stand-in before the deterministic cascade gets a chance to refuse it.
+  evidenceOnly?: boolean;
 }
 
 // What buildTools hands back for the caller to resolve the chosen id against.
@@ -74,15 +78,18 @@ export const requestAgent = defineAgent<RequestRunArgs, PickerExtras>({
   maxSteps: 2,
   providerDiscoveryBudget: true,
   timeoutMs: agentDeadline,
-  buildSystem: ({ persona }) => requestSystem(persona),
+  buildSystem: ({ persona, evidenceOnly }) => requestSystem(persona)
+    + (evidenceOnly
+      ? '\nThis is an evidence-only identification request. Use identifyRequestedTrack as the only discovery source. If it returns no candidates, do not choose a stand-in; return no track so the controller can report an honest no-match.'
+      : ''),
   // resolveReferences adds the web-backed reference resolver (request path only;
   // no-op without a search provider) behind settings.llm.requestWebResolve.
   // Set here rather than at the call site: it is a property of THIS agent.
-  buildTools: ({ scope }) => {
+  buildTools: ({ scope, evidenceOnly }) => {
     const { tools, seen, failures } = buildPickerTools({
       ...scope,
       resolveReferences: settings.get().llm?.requestWebResolve ?? false,
-    });
+    }, evidenceOnly ? { only: ['identifyRequestedTrack'] } : undefined);
     return { tools, extras: { seen, failures } };
   },
   // Same native-path acceptance as pickerAgent.

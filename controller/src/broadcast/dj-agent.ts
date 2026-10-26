@@ -1760,6 +1760,7 @@ export function requestMatchingEnabled(): boolean {
   return settings.get().llm?.requestMatching === 'agentic';
 }
 
+<<<<<<< HEAD
 type RequestRunOptions = {
   requester: string;
   text: string;
@@ -1771,9 +1772,12 @@ type RequestRunOptions = {
   repickBudgetMs?: () => number;
   // Called when the run really used identifyRequestedTrack, whatever it answers.
   onEvidenceRun?: () => void;
+  // Restrict discovery to verified film/lyric evidence when requested by the
+  // caller. The normal request agent keeps its existing tool set.
+  evidenceOnly?: boolean;
 };
 
-export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun }: RequestRunOptions) {
+export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun, evidenceOnly }: RequestRunOptions) {
   if (!requestMatchingEnabled() || requestBreakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
@@ -1781,7 +1785,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun });
+    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun, evidenceOnly });
     requestBreakerSuccess();
     return out;
   } catch (err) {
@@ -1790,7 +1794,7 @@ export async function runRequest(queue: any, { requester, text, signal, introBud
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun }: RequestRunOptions) {
+async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, repickBudgetMs, onEvidenceRun, evidenceOnly }: RequestRunOptions) {
   return withTrace({ kind: 'request', requester }, async () => {
     const throwIfAborted = () => {
       if (!signal?.aborted) return;
@@ -1842,6 +1846,7 @@ async function runRequestViaAgent(queue: any, { requester, text, signal, introBu
       messages,
       scope,
       persona: requestSpeech.persona,
+      ...(evidenceOnly ? { evidenceOnly: true } : {}),
       ...(signal ? { abortSignal: signal } : {}),
     });
     throwIfAborted();
