@@ -4,7 +4,7 @@
 // the loader / settings / admin editor, and the parsed-body → SKILL.md field
 // mapping every write path goes through.
 //
-// Run: npx tsx scripts/skill-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- skill-schema`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';

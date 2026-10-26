@@ -11,10 +11,11 @@
 
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type ServerResponse } from 'node:http';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-picker-tool-bounds-'));
 
@@ -115,7 +116,7 @@ after(async () => {
   db.close();
   server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
-  await rm(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 const opts = (abortSignal?: AbortSignal) => ({ toolCallId: 't', messages: [], ...(abortSignal ? { abortSignal } : {}) });

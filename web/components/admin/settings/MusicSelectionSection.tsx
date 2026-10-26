@@ -55,6 +55,7 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
         requestWebResolve: form.llm.requestWebResolve,
         noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
         artistVarietyWindow: Math.max(0, parseInt(form.llm.artistVarietyWindow, 10) || 0),
+        genreVarietyWindow: Math.max(0, parseInt(form.llm.genreVarietyWindow, 10) || 0),
         discoverySteps: form.llm.discoverySteps,
         agentTimeoutMs: form.llm.agentTimeoutMs,
       },
@@ -171,15 +172,44 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
             <Seg
               value={form.llm.requestMatching}
               options={[
-                { id: 'direct', label: 'Direct', title: 'Fast, tool-free matching for straightforward requests' },
+                { id: 'direct', label: 'Direct', title: 'Named songs and artists, tracks from albums, genres and simple moods' },
                 { id: 'agentic', label: 'Agent-assisted', title: 'Uses music-search tools for detailed or compound requests' },
               ]}
               onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestMatching: v as 'agentic' | 'direct' } }))}
             />
-            <div className="field-hint">
-              Direct matching covers most artist, title, genre and simple-mood requests in one call.
-              Agent-assisted matching can untangle detailed or compound requests, but needs a
-              tool-capable model and takes longer.
+            <div className="field-hint space-y-2">
+              <p>
+                Direct handles named music, genres and simple moods.
+                Agent-assisted explores more detailed requests with a tool-capable model.
+              </p>
+              <details className="group">
+                <summary className="w-fit cursor-pointer text-ink underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2">
+                  <span className="group-open:hidden">Read more</span>
+                  <span className="hidden group-open:inline">Read less</span>
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <p>
+                    <strong>Direct</strong> matches named songs and artists, tracks from named albums,
+                    genres and simple moods — for example, &ldquo;play something by Queen&rdquo; or
+                    &ldquo;something calm&rdquo;.
+                  </p>
+                  <p>
+                    It cannot reliably identify songs from remembered lyrics, films or current trends,
+                    refer back to earlier conversations, or follow exclusions and complex conditions
+                    such as &ldquo;anything except Queen&rdquo; or &ldquo;instrumental tracks from the
+                    1990s&rdquo;. Language requests depend on your library&apos;s tags or metadata.
+                    Recognised unsupported conditions are declined. Mood is a preference; an exact
+                    recording stays a match even when its mood cannot be verified. Explicit genre and language requirements are never
+                    relaxed to queue an alternative.
+                  </p>
+                  <p>
+                    <strong>Agent-assisted</strong> can explore more detailed requests, but needs a
+                    tool-capable model and may take longer. Identifying described songs via the web also
+                    needs &ldquo;Resolve described requests via web&rdquo; enabled and a configured
+                    web-search provider.
+                  </p>
+                </div>
+              </details>
             </div>
           </div>
           {form.llm.requestMatching === 'agentic' && (
@@ -262,6 +292,28 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
                 its model call fails. Spacing can relax when eligible choices are limited or a re-pick
                 fails, and the picker logs why. <strong>0 = off</strong>; both routes still avoid repeating
                 the pick-anchor artist. Listener requests are exempt. 0&ndash;25.
+              </div>
+            </div>
+            <div className="field">
+              <Label>Genre run limit (tracks)</Label>
+              <Input
+                type="number" min={0} max={25} step={1}
+                value={form.llm.genreVarietyWindow}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setForm(f => ({ ...f, llm: { ...f.llm, genreVarietyWindow: e.target.value } }))}
+                placeholder="0"
+                className="max-w-[200px]"
+              />
+              <div className="field-hint">
+                For whole-library programming on the Agentic route. Shows that set their own genre list,
+                prepared episodes, strict playlists and sonic journeys are left alone. After this many
+                tracks in a row in one genre family, the agent tries a candidate outside that family. Two
+                labels count as the same genre when they match, ignoring case and punctuation, or when a
+                small built-in family list groups them (for example reggae, dub and ska). If every
+                candidate is in the family, the picker makes one extra search for a different sound. It
+                never breaks artist spacing or the album cooldown to leave a genre: with nothing eligible,
+                it keeps the original pick and logs why. <strong>0 = off</strong> (the default), with no
+                extra reads or calls. Requests and operator-queued tracks count toward a run but are never
+                replaced. 0&ndash;25.
               </div>
             </div>
             <div className="field">

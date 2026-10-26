@@ -351,8 +351,9 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
-- **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
-  non-obvious constraints behind each subsystem.
+- **[`CLAUDE.md`](CLAUDE.md):** the architecture map and one line per
+  non-obvious constraint, each pointing at its reasoning in
+  [`docs/internals/`](docs/internals/).
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
 - **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
@@ -386,6 +387,12 @@ public-domain recordings.
 
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
+
+## Credits
+
+SUB/WAVE is built on Liquidsoap, Icecast, Navidrome, and many other open-source
+projects, models, and services. [CREDITS.md](CREDITS.md) lists them all, with
+their licences.
 
 ## License
 

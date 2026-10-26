@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-shortlist-discovery-'));
 process.env.STATE_DIR = stateRoot;
@@ -31,10 +32,10 @@ globalThis.fetch = async input => {
       : { starred: { song: [] } };
   return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...data } });
 };
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 test('autonomous mood guides discovery, and show moods retain precedence', () => {

@@ -13,7 +13,7 @@
 // failure would look like "validation stopped working" and be invisible here
 // without this file.
 //
-// Run: npx tsx scripts/validate-wire-shape.test.ts (auto-discovered by npm test).
+// Run: `npm test -- validate-wire-shape`.
 import assert from 'node:assert/strict';
 import { runMiddlewareAsync } from './test-utils/middleware.js';
 import { createTempDir } from './test-utils/temp-dir.js';

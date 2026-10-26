@@ -1,5 +1,5 @@
 // fs-level pins for the station manager against a throwaway root.
-// Run: npx tsx scripts/stations-manager.test.ts
+// Run: `npm test -- stations-manager`.
 
 import assert from 'node:assert/strict';
 import {

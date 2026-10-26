@@ -1,7 +1,7 @@
 import { prepareEpisodeContext, showPreparation } from '../broadcast/show-preparation.js';
 import type { ArtistEpisodeSource } from './episode-source.js';
-// The "pool path": build a balanced candidate pool from 7 Subsonic/library
-// sources, one LLM call to pick one. Fallback for the session DJ agent.
+// The "pool path": build a balanced candidate pool from the Subsonic and
+// library sources in buildCandidates(), one LLM call to pick one. Fallback for the session DJ agent.
 
 import * as subsonic from './subsonic.js';
 import { clearPickerSourceCache } from '../llm/tools.js';

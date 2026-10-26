@@ -22,10 +22,11 @@
 
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-coast-handover-'));
 process.env.STATE_DIR = root;
@@ -86,7 +87,7 @@ after(async () => {
   if (q._recentPlaysTimer) clearTimeout(q._recentPlaysTimer);
   library.shutdown();
   await new Promise<void>(resolve => mixer.close(() => resolve()));
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 const coastIds = () => readFileSync(join(root, 'auto.m3u'), 'utf8').split('\n')
@@ -481,7 +482,9 @@ test('auto-pick off hands over where the last queued track starts, and at the sw
 
 test('auto-pick off rebuilds the coast only when it holds what the operator aired', async () => {
   reset();
-  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null } as never);
+  // libraryCalls stands in for "a rebuild reached Navidrome", so the LRCLIB
+  // fallback's own lyrics read for the queued track (on by default) is off.
+  await settings.update({ llm: { pauseWhenEmpty: false }, shows: [], scheduleOverride: null, lyrics: { lrclib: false } } as never);
   listenersNow = 1;
   await listeners.refresh();
   queue.setAutoPick(false);

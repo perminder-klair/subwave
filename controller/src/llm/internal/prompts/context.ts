@@ -51,6 +51,7 @@ export const ANGLES = {
     'Say it like a signature at the bottom of a letter — brief, warm, done.',
     'Fold the ident into a quiet promise of what the next stretch holds — more of this, whatever this is.',
   ],
+  // No light, dark, season or weather: HOURLY_NO_WEATHER_RULE bans them (#2056).
   hourly: [
     'State the time as a small fact, then anchor it with one observation about the day.',
     'Treat the hour mark like a quiet check-in, not a bulletin.',
@@ -61,11 +62,6 @@ export const ANGLES = {
     'Mark the hour as a small milestone in the day: one down, or one to go, or the halfway point.',
     'Mention the time as if answering someone who just asked — offhand, unbothered.',
     'Let the hour prompt a tiny aside about how fast or slow the day is moving, time folded in.',
-    // Grounded in fields the hourly context actually carries (season, the
-    // "after dark" tag) — the old wording ("what the sky is probably doing")
-    // asked the model to guess the weather, which #471 removed from these
-    // calls precisely so it couldn't be invented.
-    'Tie the hour to the season\'s light — how early the dark comes, how long the evening stretches — and slip the time in after.',
   ],
 };
 

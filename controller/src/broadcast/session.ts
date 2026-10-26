@@ -149,7 +149,7 @@ const WINDOW_TURNS = 40;                    // turns fed to the agent
 // the trim.
 const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
-const PERSIST_DEBOUNCE_MS = 1000;
+export const PERSIST_DEBOUNCE_MS = 1000;
 
 let _session: Session | null = null;
 let _writeTimer: NodeJS.Timeout | null = null;

@@ -425,11 +425,12 @@ const SidebarMenuItem = React.forwardRef<
 SidebarMenuItem.displayName = "SidebarMenuItem"
 
 /* Newsprint retune: same shadcn structure, data-attrs and behavior, restyled.
-   The active state is transparent + text-bg so the motion layoutId ink fill
-   (a sibling span inside the item) shows through; the button owns only the ink
-   border and inverted text. */
+   The active state is transparent so the motion layoutId accent fill (a sibling
+   span inside the item) shows through; the button owns the accent border and
+   the --on-accent text. The ink ring keeps focus visible against the accent
+   fill. */
 const sidebarMenuButtonVariants = cva(
-  "peer/menu-button relative flex w-full items-center gap-2 overflow-hidden rounded-none border border-line bg-[var(--card-bg)] p-2 text-left text-[11px] tracking-[0.16em] uppercase ring-sidebar-ring transition-colors outline-none group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 hover:border-ink hover:bg-[color-mix(in_oklab,var(--card-bg)_90%,var(--ink))] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:border-ink data-[active=true]:bg-transparent data-[active=true]:text-bg [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
+  "peer/menu-button relative flex w-full items-center gap-2 overflow-hidden rounded-none border border-line bg-[var(--card-bg)] p-2 text-left text-[11px] font-semibold tracking-[0.16em] uppercase ring-sidebar-ring transition-colors outline-none group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 hover:border-ink hover:bg-[color-mix(in_oklab,var(--card-bg)_90%,var(--ink))] focus-visible:ring-2 disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:border-[var(--accent)] data-[active=true]:bg-transparent data-[active=true]:text-[var(--on-accent)] data-[active=true]:ring-ink data-[active=true]:hover:border-[var(--accent)] [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0",
   {
     variants: {
       variant: {
@@ -523,7 +524,7 @@ const SidebarMenuAction = React.forwardRef<
       ref={ref}
       data-sidebar="menu-action"
       className={cn(
-        "absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring transition-transform outline-none peer-hover/menu-button:text-sidebar-accent-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
+        "absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring transition-transform outline-none peer-hover/menu-button:text-sidebar-accent-foreground peer-data-[active=true]/menu-button:text-[var(--on-accent)] hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
         // Increases the hit area of the button on mobile.
         "after:absolute after:-inset-2 after:md:hidden",
         "peer-data-[size=sm]/menu-button:top-1",
@@ -549,7 +550,7 @@ const SidebarMenuBadge = React.forwardRef<
     data-sidebar="menu-badge"
     className={cn(
       "pointer-events-none absolute right-1.5 flex h-4 items-center justify-center rounded-none border border-current px-1.5 text-[9px] tracking-[0.16em] text-muted uppercase select-none",
-      "peer-data-[active=true]/menu-button:border-[var(--accent)] peer-data-[active=true]/menu-button:bg-[var(--accent)] peer-data-[active=true]/menu-button:text-white",
+      "peer-data-[active=true]/menu-button:border-[var(--on-accent)] peer-data-[active=true]/menu-button:text-[var(--on-accent)]",
       "peer-data-[size=sm]/menu-button:top-1.5",
       "peer-data-[size=default]/menu-button:top-2",
       "peer-data-[size=lg]/menu-button:top-2.5",

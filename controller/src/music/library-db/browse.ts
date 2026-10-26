@@ -5,8 +5,16 @@ import { SQL_HAS_MOODS, requireDb } from './handle.js';
 import { instrumentalFromJson } from '../lyric-vocal.js';
 import type { FilterOpts, TrackRecord, TrackRow } from './types.js';
 import { parsePaceSpans, rowToTrack, safeParseArray } from './rows.js';
+import { refreshSearchKeys } from './search-keys.js';
 
-export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[] } {
+// SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
+// `yearUntrusted`'s composition and the two must move together.
+export const ERA_YEAR_SQL =
+  `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
+
+// `reindexing` (set only for a query search): the stored search keys are still
+// being rebuilt after a bulk change, so the answer may be missing tracks.
+export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[]; reindexing?: boolean } {
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
@@ -39,10 +47,6 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   } else if (vocal === 'vocal') {
     where.push('is_instrumental(vocal_ranges_json) = 0');
   }
-  // SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
-  // `yearUntrusted`'s composition and the two must move together.
-  const ERA_YEAR_SQL =
-    `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {
@@ -51,6 +55,16 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     );
     const pat = `%${q}%`;
     params.push(pat, pat, pat);
+  }
+  let reindexing: boolean | undefined;
+  if (opts.query) {
+    // The compiled query reads the stored search keys; bring them up to date.
+    // Bounded and never throws: a bulk re-key finishes in the background.
+    reindexing = !refreshSearchKeys();
+    // Matched in a subquery that reads only the covering search index, never the
+    // wide rows (#1937, search-keys.ts); the queries below read just the matches.
+    where.push(`rowid IN (SELECT rowid FROM tracks WHERE ${opts.query.sql})`);
+    params.push(...opts.query.params);
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -85,13 +99,13 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     d.prepare(`SELECT id FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
       .all(...params, limit, offset) as Array<{ id: string }>
   ).map(r => r.id);
-  if (ids.length === 0) return { total, rows: [] };
+  if (ids.length === 0) return { total, rows: [], ...(reindexing !== undefined && { reindexing }) };
   const byId = new Map(
     (d.prepare(`SELECT * FROM tracks WHERE id IN (${ids.map(() => '?').join(', ')})`)
       .all(...ids) as TrackRow[]).map(r => [r.id, r]),
   );
   const rows = ids.map(id => byId.get(id)).filter((r): r is TrackRow => r !== undefined);
-  return { total, rows: rows.map(rowToTrack) };
+  return { total, rows: rows.map(rowToTrack), ...(reindexing !== undefined && { reindexing }) };
 }
 
 // Lean row shape for the Observatory bulk endpoint. rowToTrack would JSON-parse

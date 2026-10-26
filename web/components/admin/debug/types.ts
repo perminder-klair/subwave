@@ -115,7 +115,9 @@ interface LlmCall {
       proposedReplacementId?: string | null;
       rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'basis-already-supported-by-baseline' | 'not-flow-tie' | 'weak-musical-reason' | null;
     };
-    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick'
+      | 'genre-repick' | 'artist-and-genre-repick' | 'album-and-genre-repick' | 'artist-album-and-genre-repick'
+      | 'pool-rescue';
     final?: { id?: string; title?: string | null; artist?: string | null };
     reason?: string | null;
     queued?: boolean;
@@ -144,7 +146,9 @@ interface LlmCall {
       proposedReplacementId?: string | null;
       rejectionReason?: 'unknown-candidate' | 'missing-leanings-basis' | 'basis-not-in-leanings' | 'basis-not-supported-by-candidate' | 'basis-already-supported-by-baseline' | 'not-flow-tie' | 'weak-musical-reason' | null;
     };
-    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+    guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick'
+      | 'genre-repick' | 'artist-and-genre-repick' | 'album-and-genre-repick' | 'artist-album-and-genre-repick'
+      | 'pool-rescue';
     final?: { id?: string; title?: string | null; artist?: string | null };
     reason?: string | null;
     queued?: boolean;

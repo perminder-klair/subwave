@@ -12,10 +12,11 @@
 // Run: `npm test -- changeover-pick-clause`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-changeover-pick-'));
 process.env.STATE_DIR = stateRoot;
@@ -55,13 +56,13 @@ before(async () => {
   globalThis.fetch = async () => new Response('not found', { status: 404 });
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   pickerAgent.run = realRun;
   if (queue._persistTimer) clearTimeout(queue._persistTimer);
   if (queue._recentPlaysTimer) clearTimeout(queue._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 function context(activeShow: typeof show | null) {

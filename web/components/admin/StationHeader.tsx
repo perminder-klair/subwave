@@ -161,7 +161,12 @@ export interface StationHeaderProps {
   weatherText: string;
   pickerBusy: boolean;
   busy: string | null;
+  /** Opens the Skip dialog, which also offers the never-play blocks. */
   onSkip: () => void;
+  /** The playing file's own format line ("FLAC · 44.1 kHz · 16-bit"),
+   *  shown after the artist in the caption style of the album · DJ line
+   *  below it; null while unknown, so nothing renders. */
+  fileFormat?: string | null;
 }
 
 export default function StationHeader({
@@ -173,6 +178,7 @@ export default function StationHeader({
   pickerBusy,
   busy,
   onSkip,
+  fileFormat,
 }: StationHeaderProps) {
   // Latest targets, read by the animation loop without re-subscribing.
   const targets = useRef(metrics);
@@ -273,6 +279,11 @@ export default function StationHeader({
             <>
               <div className="text-[18px] leading-[1.2] font-bold tracking-[-0.01em]">
                 {np.title} <span className="font-semibold text-muted">— {np.artist}</span>
+                {fileFormat && (
+                  <span className="caption ml-2 align-middle" title="Format of the file on air, from Navidrome">
+                    · {fileFormat}
+                  </span>
+                )}
               </div>
               <div className="caption mt-1.5">
                 {np.album ? `album · ${np.album} · ` : ''}DJ {djName} · {showName}
@@ -283,8 +294,14 @@ export default function StationHeader({
           )}
         </div>
         <div className="flex gap-2">
-          <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
-            {busy === 'skip' ? 'skipping…' : 'Skip track'}
+          <Btn
+            lg
+            tone="danger"
+            disabled={!!busy || !np?.title}
+            onClick={onSkip}
+            title="Skip it, keep it off the air for good, or both"
+          >
+            {busy === 'never-play' ? 'blocking…' : busy === 'skip' ? 'skipping…' : 'Skip track'}
           </Btn>
         </div>
       </div>

@@ -6,9 +6,10 @@
 // Drives the real fetch -> filter chain.
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'blocklist-playlist-rule-'));
 process.env.STATE_DIR = root;
@@ -24,9 +25,9 @@ globalThis.fetch = async input => {
   assert.equal(url.pathname.split('/').at(-1), 'getPlaylist');
   return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', playlist: { entry: members } } });
 };
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 test('a playlist rule keeps its members across refreshes', async () => {

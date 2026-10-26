@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { coldLoadSettings } from './test-utils/settings.js';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-ogg-metadata-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-ogg-metadata-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');

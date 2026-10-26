@@ -9,7 +9,7 @@
 // The fold is a MATCHING widening, so it must stay out of the blocklist's
 // fold (nameKey / artistParticipantKeys): that list is absolute, with no
 // never-starve behind it.
-// Run: `tsx --test scripts/artist-key-separators.test.ts` (folded into `npm test`).
+// Run: `npm test -- artist-key-separators`.
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';

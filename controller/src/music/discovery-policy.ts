@@ -2,6 +2,15 @@
 // current show. Each rule is reached from the pool picker, the auto.m3u coast,
 // the discovery tools and the Shortlist planner, so it lives here once.
 
+// A prepared episode, a strict playlist or a sonic journey already decides
+// where the pick goes. The Shortlist planner keeps those lanes first, #1907's
+// named genre run stays silent, and the genre-run guard (#1897) stands down.
+export function ownsPickDirection(scope: {
+  episodeSource?: unknown; playlistLock?: unknown; audioWaypoint?: readonly unknown[] | null;
+}): boolean {
+  return !!(scope.episodeSource || scope.playlistLock || scope.audioWaypoint?.length);
+}
+
 // #642: configured or resolved show playlists own the curated-playlist lane,
 // including stale pins.
 export function allowsMoodPlaylistDiscovery({ hasPlaylistAnchor = false, playlistTracks, playlistLock }: {

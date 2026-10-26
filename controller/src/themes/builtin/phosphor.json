@@ -1,0 +1,26 @@
+{
+  "id": "phosphor",
+  "name": "Phosphor",
+  "description": "A lab oscilloscope at night: green phosphor ink on black glass, amber for anything live, scanlines over the tube and every bright stroke blooming into the glass.",
+  "mode": "dark",
+  "tokens": {
+    "--bg": "#04110a",
+    "--surface": "#0a1d12",
+    "--surface-border": "rgba(140, 255, 178, 0.18)",
+    "--field": "color-mix(in oklab, #04110a 90%, #8cffb2)",
+    "--ink": "#8cffb2",
+    "--muted": "#4fae74",
+    "--ink-faint": "#357a51",
+    "--accent": "#ffb02e",
+    "--accent-2": "#6fd3ff",
+    "--accent-soft": "color-mix(in oklab, #ffb02e 16%, #04110a)",
+    "--line": "rgba(140, 255, 178, 0.30)",
+    "--soft-border": "rgba(140, 255, 178, 0.18)",
+    "--overlay": "rgba(0, 6, 3, 0.60)",
+    "--display-font": "vt323",
+    "--mono-font": "ibm-plex-mono",
+    "--grain": "0.06",
+    "--texture": "scanline",
+    "--finish": "bloom"
+  }
+}

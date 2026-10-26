@@ -22,8 +22,14 @@ const FRAME_MS = 30;
 // dead and walks synthetic bars instead.
 const DEAD_MS = 2000;
 
+// Cadence of the synthetic walk: stepWalk's 0.45 lerp is tuned for ~60 ms
+// steps and flickers at 30 ms. Both walks run on rAF and step on the first
+// frame past it, so every step lands on a frame (four at 60 Hz); a 60 ms
+// interval drifted against vsync and showed steps 50 and 67 ms apart.
+const WALK_MS = 60;
+
 // One step of the synthetic fallback: heavier motion on the left, easing off
-// toward the right edge. Shared by the fallback interval and the watchdog.
+// toward the right edge. Shared by the fallback loop and the watchdog.
 function stepWalk(levels: Float32Array): void {
   for (let i = 0; i < BARS; i++) {
     const target = Math.pow(Math.random(), 1.4) * (1 - i / (BARS * 2.2));
@@ -180,19 +186,27 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
   }, [draw]);
 
   // Three modes: calm / not tuned in paints the resting strip once; a real
-  // analyser drives rAF; and where the analyser can't attach, a 60 ms interval
-  // walks synthetic bars -- iOS and some desktop-Safari builds return only zeros
-  // from createMediaElementSource on a live MP3 stream (#298/#302).
+  // analyser drives rAF; and where the analyser can't attach, a rAF loop walks
+  // synthetic bars every WALK_MS -- iOS and some desktop-Safari builds return
+  // only zeros from createMediaElementSource on a live MP3 stream (#298/#302).
   useEffect(() => {
     const levels = levelsRef.current;
     if (calm || !tunedIn || !ready) {
       levels.fill(0);
       draw();
       if (calm || !tunedIn) return;
-      return pollWhileVisible(() => {
+      // rAF also pauses in a hidden tab, as the interval it replaced did.
+      let walkRaf = 0;
+      let lastStep = 0;
+      const walk = (now: number) => {
+        walkRaf = requestAnimationFrame(walk);
+        if (now - lastStep < WALK_MS) return;
+        lastStep = now;
         stepWalk(levels);
         draw();
-      }, 60);
+      };
+      walkRaf = requestAnimationFrame(walk);
+      return () => cancelAnimationFrame(walkRaf);
     }
     let raf = 0;
     let last = 0;
@@ -221,9 +235,8 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
       } else {
         if (deadSince == null) deadSince = now;
         if (now - deadSince >= DEAD_MS) {
-          // Walk at the fallback interval's cadence: the 0.45 lerp is tuned for
-          // ~60 ms steps and flickers at 30 ms.
-          if (now - lastWalk >= 60) {
+          // Walk at the fallback loop's cadence (WALK_MS).
+          if (now - lastWalk >= WALK_MS) {
             lastWalk = now;
             stepWalk(levels);
             draw();

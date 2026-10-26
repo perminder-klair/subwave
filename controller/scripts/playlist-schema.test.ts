@@ -4,7 +4,7 @@
 // the knobs never throw, the request wrappers do. These tests pin that line, the
 // shared intent predicate, and the recipe-store repair.
 //
-// Run: npx tsx scripts/playlist-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- playlist-schema`.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

@@ -132,15 +132,19 @@ const ARTIST_ROOT_ALIASES = new Map<string, string>([
 ]);
 
 // The one fold under every free-text NAME comparison (artist credit, album
-// title, operator-typed text): case, apostrophes, whitespace. Nothing here
+// title, operator-typed text): Unicode NFC (a tagger's decomposed "ö" is the
+// composed one), case, apostrophes, whitespace. Nothing here
 // changes which thing a string names, which is what makes it safe in front of
 // the ABSOLUTE blocklist, whose artist (#1603) and album (#1611) tiers key both
 // sides through it. Deliberately NOT artistRootKey's further folding, which
 // widens a MATCHING key — wrong for a hard drop with no never-starve behind it.
 // `schemas/blocklist.ts` normText RESTATES this fold (a mirrored schema module
 // may import only zod); scripts/blocklist-name-fold.test.ts pins them in step.
+// Its output is also STORED, as the Library search keys
+// (library-db/search-keys.ts): a change here needs a migration that clears
+// `search_fresh`, or every stored key stays on the old fold.
 export function nameKey(raw: unknown): string {
-  return String(raw ?? '').toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
+  return String(raw ?? '').normalize('NFC').toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
 }
 
 // Artist-facing alias for the same fold — one function, two names, so neither
