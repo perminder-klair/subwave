@@ -6,6 +6,10 @@
 import { readFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
+import * as beds from '../broadcast/beds.js';
+import * as jingles from '../broadcast/jingles.js';
+import { jingleRotateOwner } from '../broadcast/jingle-rotate.js';
+import { allowedForShow } from '../broadcast/show-allowlist.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import type { Finding, FixAction } from './types.js';
 import { dirSize, fmtBytes } from './util.js';
@@ -28,6 +32,38 @@ export async function checkContent(): Promise<Finding[]> {
     fix: { id: 'generate-jingles', label: 'Generate jingles' },
   }));
 
+  out.push(...await showListFindings());
+  return out;
+}
+
+// Per-show imaging allowlists (#1875, #1188): the mixer's own rotate cannot see
+// which show is on air, and a list whose entries were all deleted skips that
+// show's jingle slots or beds (broadcast/show-allowlist.ts).
+async function showListFindings(): Promise<Finding[]> {
+  const s = settings.get();
+  const shows = s.shows || [];
+  if (!shows.some(sh => sh.allowedJingles?.length || sh.allowedBeds?.length)) return [];
+  const out: Finding[] = [];
+  const listing = shows.filter(sh => sh.allowedJingles?.length).length;
+  if (listing && jingleRotateOwner(s) === 'mixer') {
+    out.push({
+      label: 'show jingles',
+      status: 'warn',
+      detail: `${listing} show(s) list jingles`,
+      hint: 'Show jingle lists apply only when the controller counts. Imaging → Jingles → counted by: Controller, then restart the mixer.',
+    });
+  }
+  const jingleNames = (await jingles.list()).map(j => j.filename);
+  const bedNames = (await beds.list()).map(b => b.name);
+  const hint = "Edit the show's Imaging section: re-pick from the library or clear the list.";
+  for (const sh of shows) {
+    if (sh.allowedJingles?.length && !allowedForShow(jingleNames, sh.allowedJingles, n => n).length) {
+      out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed jingle exists — its automatic jingle slots are skipped`, hint });
+    }
+    if (s.beds?.enabled && sh.allowedBeds?.length && !allowedForShow(bedNames, sh.allowedBeds, n => n).length) {
+      out.push({ label: 'show lists', status: 'warn', detail: `"${sh.name}": no listed bed exists — its links air without a bed`, hint });
+    }
+  }
   return out;
 }
 
