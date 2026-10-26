@@ -86,6 +86,20 @@ test('matches comma and and soundtrack credits in local metadata', async () => {
   assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
 });
 
+test('allows provider credits that include omitted featured artists', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'local', title: 'Dildaara (Stand by Me)', artist: 'Shafqat Amanat Ali' },
+  ], {
+    enabled: true,
+    provider: provider(tracklist('musicbrainz', [[
+      'Dildaara (Stand by Me)', ['Shafqat Amanat Ali', 'Vishal Dadlani', 'Shekhar Ravjiani', 'Clinton Cerejo'],
+    ]])),
+  });
+  assert.equal(result.status, 'matched');
+  assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
+});
+
 test('does not match a soundtrack credit that is only part of a local combined credit', async () => {
   clearSoundtrackResolutionCache();
   const result = await resolveSoundtrackCandidates(context, [

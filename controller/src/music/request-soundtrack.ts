@@ -173,17 +173,24 @@ function soundtrackCreditParts(value: unknown): string[] {
     .filter(Boolean);
 }
 
-function soundtrackCreditSet(values: readonly unknown[]): string[] {
-  return [...new Set(values.flatMap(soundtrackCreditParts))].sort();
+function soundtrackCreditSet(values: readonly unknown[], splitJoined = true): string[] {
+  return [...new Set(values.flatMap(value => splitJoined ? soundtrackCreditParts(value) : [requestName(value)]).filter(Boolean))].sort();
 }
 
 function artistsMatch(wanted: readonly string[], local: SoundtrackLocalCandidate): boolean {
   const localCredits = [local.artist, ...(local.artists || []).map(artist => typeof artist === 'string' ? artist : artist?.name)];
-  const wantedKeys = soundtrackCreditSet(wanted);
+  // MusicBrainz gives us one entry per credited artist. Keep those entries
+  // intact: a provider name such as "Earth, Wind & Fire" is one artist, not
+  // three credits. Navidrome may instead join several real credits into one
+  // local artist string, so only the local side is split.
+  const wantedKeys = soundtrackCreditSet(wanted, false);
   const localKeys = soundtrackCreditSet(localCredits);
+  // A local tag can omit featured credits that the provider knows about. It
+  // must not invent a credit absent from the provider, and an empty or wholly
+  // unrelated local credit must never pass on title evidence alone.
   return wantedKeys.length > 0
-    && wantedKeys.length === localKeys.length
-    && wantedKeys.every(want => localKeys.includes(want));
+    && localKeys.length > 0
+    && localKeys.every(credit => wantedKeys.includes(credit));
 }
 
 function sourceKey(track: Pick<SoundtrackEvidenceTrack, 'title' | 'artists'>): string {
