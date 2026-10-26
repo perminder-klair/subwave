@@ -1,6 +1,8 @@
 import express from 'express';
 import { requireAdmin } from '../../middleware/auth.js';
 import * as blocklist from '../../music/blocklist.js';
+import * as neverPlayIgnore from '../../music/never-play-ignore.js';
+import { reverseNeverPlayIgnore, reverseNeverPlayIgnoreMany } from '../../broadcast/never-play-again.js';
 import * as db from '../../music/library-db.js';
 import * as subsonic from '../../music/subsonic.js';
 import { queue } from '../../broadcast/queue.js';
@@ -139,9 +141,17 @@ router.delete('/library/blocklist/:type/:id', requireAdmin, async (req, res) => 
     return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
   }
   try {
+    const entry = blocklist.list().find((e) => e.type === type && e.id === id);
     const removed = await blocklist.remove(type as blocklist.BlockType, id);
     if (!removed) return res.status(404).json({ error: 'not on the blocklist' });
     queue.log('blocked', `${type} ${id} removed from the never-play blocklist`);
+    const { warning } = await reverseNeverPlayIgnore({
+      ignoreEnabled: () => neverPlayIgnore.isEnabled(),
+      ignoreRemove: (rel) => neverPlayIgnore.remove(rel),
+      startScan: () => subsonic.startScan(),
+      log: (kind, message) => queue.log(kind, message),
+    }, entry?.libraryPath ?? null);
+    if (warning) return res.status(200).json({ removed: true, warning });
     res.status(204).end();
   } catch (err) {
     queue.log('error', `/library/blocklist delete failed: ${err.message}`);
@@ -171,10 +181,21 @@ router.delete('/library/blocklist', requireAdmin, async (req, res) => {
     targets.push({ type, id });
   }
   try {
+    const before = targets.map((t) => blocklist.list().find((e) => e.type === t.type && e.id === t.id));
     const { removed, missing } = await blocklist.removeMany(targets);
     if (removed) {
       queue.log('blocked', `${removed} entr${removed === 1 ? 'y' : 'ies'} removed from the never-play blocklist`);
     }
+    const libraryPaths = before
+      .filter((e): e is blocklist.BlockEntry => !!e?.libraryPath)
+      .map((e) => e.libraryPath as string);
+    const { warning } = await reverseNeverPlayIgnoreMany({
+      ignoreEnabled: () => neverPlayIgnore.isEnabled(),
+      ignoreRemove: (rel) => neverPlayIgnore.remove(rel),
+      startScan: () => subsonic.startScan(),
+      log: (kind, message) => queue.log(kind, message),
+    }, libraryPaths);
+    if (warning) return res.json({ removed, missing, warning });
     res.json({ removed, missing });
   } catch (err) {
     queue.log('error', `/library/blocklist bulk delete failed: ${err.message}`);

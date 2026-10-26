@@ -39,11 +39,15 @@ export async function deleteBlockEntry(
   e: { type: BlockType; id: string },
 ): Promise<void> {
   try {
-    await adminResponse(
+    const r = await adminResponse(
       fetcher,
       `/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`,
       { method: 'DELETE' },
     );
+    if (r.status === 200) {
+      const j = await r.json().catch(() => ({})) as { warning?: string };
+      if (j.warning) notify.info(j.warning);
+    }
   } catch (error) {
     if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
   }

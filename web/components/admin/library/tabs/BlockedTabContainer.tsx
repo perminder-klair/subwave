@@ -32,19 +32,21 @@ export default function BlockedTabContainer() {
     }
   };
 
-  const bulkUnblock = useAdminMutation<number, BlockEntry[]>({
+  const bulkUnblock = useAdminMutation<{ removed: number; warning?: string }, BlockEntry[]>({
     // One request, not N concurrent DELETEs: the controller rewrites
     // blocklist.json once, so parallel removes could persist a stale snapshot.
     request: async (batch, fetcher) => {
-      const j = await adminJson<{ removed?: number }>(fetcher, '/library/blocklist', {
+      const j = await adminJson<{ removed?: number; warning?: string }>(fetcher, '/library/blocklist', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ entries: batch.map(e => ({ type: e.type, id: e.id })) }),
       });
-      return j.removed ?? 0;
+      return { removed: j.removed ?? 0, warning: j.warning };
     },
-    onDone: async (removed, _batch, qc) => {
+    onDone: async (result, _batch, qc) => {
+      const { removed, warning } = result;
       notify.ok(`${removed} entr${removed === 1 ? 'y' : 'ies'} can play again`);
+      if (warning) notify.info(warning);
       // Refetching replaces the hand-rolled filter over local state, and unlike
       // it also picks up anything the server dropped alongside the batch.
       await qc.invalidateQueries({ queryKey: libraryKeys.blocked() });

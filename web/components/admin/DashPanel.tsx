@@ -70,6 +70,7 @@ import type {
   ConnectionsState,
   DashStatus,
   HealthStats,
+  NeverPlayAgainResponse,
   QueueState,
   RequestEntry,
   SortState,
@@ -117,6 +118,8 @@ export default function DashPanel() {
   // Drives the PromptInputSubmit glyph: ready → submitted → error flash → ready.
   const [sayStatus, setSayStatus] = useState<ChatStatus>('ready');
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const [confirmNeverPlayAgain, setConfirmNeverPlayAgain] = useState(false);
+  const [neverPlayAgainTarget, setNeverPlayAgainTarget] = useState<{ id: string; title: string | null; artist: string | null } | null>(null);
 
   // Hardcoded set until the controller has a generated batch. The GET on mount
   // never calls a model; the refresh button's POST does.
@@ -218,6 +221,30 @@ export default function DashPanel() {
       return null;
     } finally {
       setBusy(null);
+    }
+  };
+
+  const doNeverPlayAgain = async () => {
+    if (!neverPlayAgainTarget?.id) {
+      notify.err('never play again: no track was captured when the dialog opened — try again');
+      return;
+    }
+    setBusy('never-play-again');
+    try {
+      const j = await actionMutation.mutateAsync({
+        path: '/dj/never-play-again',
+        body: { expectedSubsonicId: neverPlayAgainTarget.id },
+      }) as NeverPlayAgainResponse;
+      const name = j.blocked?.name;
+      const artist = j.blocked?.artist;
+      const who = name ? (artist ? `“${name}” — ${artist}` : `“${name}”`) : 'current track';
+      notify.ok(`Never Play Again: ${who} blocked & skipped`);
+      if (j.warning) notify.info(j.warning);
+    } catch (e) {
+      notify.err(`never play again: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+      void queryClient.invalidateQueries({ queryKey: dashKeys.status() });
     }
   };
 
@@ -522,6 +549,14 @@ export default function DashPanel() {
         pickerBusy={!!q.pickerBusy}
         busy={busy}
         onSkip={openSkip}
+        onNeverPlayAgain={() => {
+          if (np?.subsonic_id) {
+            setNeverPlayAgainTarget({ id: np.subsonic_id, title: np.title ?? null, artist: np.artist ?? null });
+            setConfirmNeverPlayAgain(true);
+          } else {
+            notify.err('never play again: no track id available for the current track');
+          }
+        }}
         fileFormat={fileFormat}
       />
 
@@ -979,6 +1014,21 @@ export default function DashPanel() {
         confirmLabel={skipChoice === 'skip' ? 'skip track' : 'block + skip now'}
         danger
         onConfirm={() => void (skipChoice === 'skip' ? doSkip() : doNeverPlay(skipChoice, true))}
+      />
+
+      <V3AlertDialog
+        open={confirmNeverPlayAgain}
+        onOpenChange={setConfirmNeverPlayAgain}
+        title="Never play this track again"
+        description={
+          (neverPlayAgainTarget?.title
+            ? `Block “${neverPlayAgainTarget.title}”${neverPlayAgainTarget.artist ? ` — ${neverPlayAgainTarget.artist}` : ''} `
+            : 'Block the current track ')
+          + 'in SUB/WAVE, exclude it from Navidrome when configured, and skip it immediately. If the track changes before this completes, the action is refused rather than applied to the wrong track.'
+        }
+        confirmLabel="never play again"
+        danger
+        onConfirm={() => void doNeverPlayAgain()}
       />
     </div>
   );

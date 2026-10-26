@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { Ban } from 'lucide-react';
 import type { NowPlayingTrack } from '../../lib/types';
 import { Btn } from './ui';
 import { latencyZone } from './dash/latency-gauge';
@@ -163,6 +164,8 @@ export interface StationHeaderProps {
   busy: string | null;
   /** Opens the Skip dialog, which also offers the never-play blocks. */
   onSkip: () => void;
+  /** Permanently block the current track, exclude it from Navidrome when configured, and skip it. */
+  onNeverPlayAgain: () => void;
   /** The playing file's own format line ("FLAC · 44.1 kHz · 16-bit"),
    *  shown after the artist in the caption style of the album · DJ line
    *  below it; null while unknown, so nothing renders. */
@@ -178,6 +181,7 @@ export default function StationHeader({
   pickerBusy,
   busy,
   onSkip,
+  onNeverPlayAgain,
   fileFormat,
 }: StationHeaderProps) {
   // Latest targets, read by the animation loop without re-subscribing.
@@ -302,6 +306,17 @@ export default function StationHeader({
             title="Skip it, keep it off the air for good, or both"
           >
             {busy === 'never-play' ? 'blocking…' : busy === 'skip' ? 'skipping…' : 'Skip track'}
+          </Btn>
+          <Btn
+            lg
+            tone="danger"
+            disabled={!!busy || !np?.title}
+            onClick={onNeverPlayAgain}
+            title="Block this track in SUB/WAVE, also exclude it from Navidrome when configured, and skip it now"
+            className="border-2 border-[#2e7d32] bg-[#2e7d32] hover:border-[#1b5e20] hover:bg-[#1b5e20] focus-visible:border-[#1b5e20] focus-visible:bg-[#1b5e20] active:border-[#1b5e20] active:bg-[#1b5e20]"
+          >
+            <Ban aria-hidden />
+            {busy === 'never-play-again' ? 'BLOCKING…' : 'NEVER PLAY AGAIN'}
           </Btn>
         </div>
       </div>
