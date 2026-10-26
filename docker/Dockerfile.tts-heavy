@@ -120,9 +120,13 @@ ENV PATH=/opt/server/venv/bin:$PATH \
 WORKDIR /app
 COPY docker/tts-heavy/server.py /app/server.py
 # The SAME workers the controller runs in-process — single source of truth,
-# including the PocketTTS RMS normalisation.
+# including the on-air leveller both import from beside them.
 COPY controller/scripts/chatterbox_worker.py /app/workers/chatterbox_worker.py
 COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
+COPY controller/scripts/voice_level.py /app/workers/voice_level.py
+RUN for py in /opt/chatterbox/venv/bin/python /opt/pocket-tts/venv/bin/python; do \
+      "$py" -c "import sys; sys.path.insert(0, '/app/workers'); import voice_level" || exit 1; \
+    done
 
 # Shared state mount — WAVs land in /var/sub-wave/voice/* and the controller
 # hands the paths to Liquidsoap. mkdir'd here so the image runs standalone too.
