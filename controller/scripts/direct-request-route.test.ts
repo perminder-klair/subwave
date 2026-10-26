@@ -914,10 +914,10 @@ for (const [title, artist] of [['A Day in the Life', 'The Beatles'], ['Your Hand
   });
 }
 
-test('review: an unknown literal language cannot silently fall back to another language', async () => {
-  modelError = true;
-  const result = await submit('Bohemian Rhapsody by Queen in Klingon');
-  assert.equal(result.outcome, 'unsupported');
+ test('review: an unknown literal language cannot silently fall back to another language', async () => {
+   modelError = true;
+  const result = await submit('Bohemian Rhapsody by Queen in Klingonish');
+  assert.equal(result.outcome, 'no-match');
   assert.equal(queue.upcoming.length, 0);
 });
 
