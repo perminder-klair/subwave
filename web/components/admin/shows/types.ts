@@ -1,3 +1,5 @@
+import type { JingleRotateOwner, JinglePlacement } from '@/lib/schemas.generated';
+import type { JingleEntry } from '../settings/shared';
 
 import {
   EXCLUDED_PLAYLISTS_PER_SHOW,
@@ -98,6 +100,12 @@ export interface Show {
   /** Operator organisation tags. They filter and group this list and nothing
    *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
+  /** Jingle filenames the automatic rotate and over-music ID may draw while
+   *  this show airs. Empty = every jingle. */
+  allowedJingles: string[];
+  /** Bed names a link or request bed may use while this show airs. Empty =
+   *  every bed. */
+  allowedBeds: string[];
 }
 
 /** Mirrors the controller's EraWindow. Multiple windows let a show span
@@ -251,6 +259,12 @@ export interface SettingsResponse {
     /** Station-wide picking windows; `minTrackLengthSeconds` is the default a
      *  show inherits when its own field is null. */
     picker?: { albumHours?: number; minTrackLengthSeconds?: number };
+    /** Who counts the between-songs jingle rotate. Only the controller can
+     *  honour a show's jingle list. */
+    jingleRotate?: JingleRotateOwner;
+    jinglePlacement?: JinglePlacement;
   };
   tts?: { moods?: string[] };
+  /** The station's jingle library (files that exist), for the Imaging lists. */
+  jingles?: JingleEntry[];
 }

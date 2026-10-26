@@ -2,7 +2,7 @@
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
 import { eraLabelOf } from './types';
-import type { Persona, Schedule, Show } from './types';
+import type { Persona, PlaylistIndexStatus, Schedule, SettingsResponse, Show } from './types';
 import {
   migrateLegacyShowFields,
   type ShowSchemaContext,
@@ -49,6 +49,8 @@ export function hydrateShow(s: Partial<Show>): Show {
     segmentSkill: m.segmentSkill ?? '',
     preparationSkill: m.preparationSkill ?? '',
     tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
+    allowedJingles: Array.isArray(m.allowedJingles) ? m.allowedJingles : [],
+    allowedBeds: Array.isArray(m.allowedBeds) ? m.allowedBeds : [],
   };
 }
 
@@ -131,7 +133,30 @@ export function showPayload(s: Show) {
     preparationSkill: s.preparationSkill || '',
     // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
+    allowedJingles: s.allowedJingles || [],
+    allowedBeds: s.allowedBeds || [],
   };
+}
+
+// The controller's jingleRotateOwner rule: only a between-songs rotate left to
+// the mixer ignores a show's jingle list (the mixer cannot see the show).
+export function jingleListIgnored(values: NonNullable<SettingsResponse['values']>): boolean {
+  return (values.jinglePlacement ?? 'between') === 'between' && values.jingleRotate !== 'controller';
+}
+
+// Why a show's draws are skipped: a non-empty list none of whose entries exist
+// in the library. Says nothing until the library has loaded, so a pending or
+// failed fetch never reads as "deleted".
+export function allowlistSkipNotice(
+  kind: 'jingle' | 'bed',
+  listed: readonly string[],
+  libraryIds: readonly string[],
+  status: PlaylistIndexStatus,
+): string | null {
+  if (status !== 'ready' || !listed.length || listed.some(id => libraryIds.includes(id))) return null;
+  return kind === 'jingle'
+    ? "This show's automatic jingle slots are skipped: none of its listed jingles exist in the library any more."
+    : "This show's links air without a bed: none of its listed beds exist in the library any more.";
 }
 
 
