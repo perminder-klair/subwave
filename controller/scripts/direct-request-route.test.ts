@@ -414,6 +414,47 @@ test('latest release requests keep browser and Alexa on the same local fallback 
   assert.match(resolved.ack || '', /newest available track/i);
 });
 
+test('latest release wording with from stays on the deterministic release route', async () => {
+  artistSongs = [{ id: 'queen-latest-from', title: 'Newest Local Track', artist: 'Queen', album: 'Sheer Heart Attack' }];
+  const result = await submit('latest track from Queen');
+  assert.equal(result.outcome, 'substituted');
+  assert.equal(result.track.title, 'Newest Local Track');
+  assert.match(result.ack, /newest available track/i);
+  assert.equal(bodies.length, 0, 'latest-release requests must not enter the evidence agent or interpreter');
+  const log = requestLog.snapshot(1)[0];
+  assert.equal(log.artist, 'Queen');
+  assert.equal(log.scope, 'song');
+  assert.equal(log.sort, 'latest');
+  assert.equal(log.pickSource, 'artist-latest-local-fallback');
+});
+
+test('latest album phrasing stays strict and never substitutes a standalone local release', async () => {
+  artistSongs = [{
+    id: 'queen-standalone-release',
+    title: 'Standalone Track',
+    artist: 'Queen',
+    album: 'Standalone Track',
+  }];
+  for (const text of ['latest album by Queen', 'Queen latest album']) {
+    const result = await submit(text);
+    assert.equal(result.outcome, 'no-match');
+    assert.equal(result.track, null);
+    assert.match(result.message || '', /latest official album/i);
+    assert.equal(queue.upcoming.length, 0);
+    const log = requestLog.snapshot(1)[0];
+    assert.equal(log.artist, 'Queen');
+    assert.equal(log.scope, 'album');
+    assert.equal(log.sort, 'latest');
+    queue.upcoming = [];
+  }
+  artistSongs = [];
+  const missingArtist = await submit('Queen latest album');
+  assert.equal(missingArtist.outcome, 'no-match');
+  assert.equal(missingArtist.track, null);
+  assert.match(missingArtist.message || '', /latest official album/i);
+  assert.equal(queue.upcoming.length, 0);
+});
+
 test('a latest request without an artist is rejected before admission', async () => {
   const response = await realFetch(`${base}/request`, {
     method: 'POST',

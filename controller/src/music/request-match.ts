@@ -201,7 +201,7 @@ export interface RequestSelection {
   alternatives?: Array<{ id: string; title: string; artist: string; confidence: number }>;
   releaseResolution?: {
     kind: LatestReleaseKind;
-    mode: 'verified' | 'local-fallback';
+    mode: 'verified' | 'local-fallback' | 'unavailable';
     evidence?: LatestReleaseEvidence;
     reason?: LatestReleaseUnavailableReason;
   };
@@ -1958,7 +1958,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
           releaseResolution = { kind: releaseKind, mode: 'verified', evidence: releaseLookup.release };
           if (releaseKind === 'single') title = releaseLookup.release.title;
         } else {
-          releaseResolution = { kind: releaseKind, mode: 'local-fallback', reason: releaseLookup.reason };
+          // A latest-album request is an identity request, not permission to
+          // choose an unrelated album. Singles may still use the existing
+          // newest-local-track fallback below, but albums must remain strict.
+          releaseResolution = {
+            kind: releaseKind,
+            mode: releaseKind === 'album' ? 'unavailable' : 'local-fallback',
+            reason: releaseLookup.reason,
+          };
         }
       }
       // Latest-release resolution must inspect the complete artist catalogue:
@@ -1995,6 +2002,21 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         if (result) return match.sort === 'popular' && !title ? { ...result, outcome: 'substituted' } : result;
       }
       if (releaseRequest && deps.latestRelease) {
+        if (releaseKind === 'album') {
+          if (releaseExactRequest) {
+            // The provider identified a real album, but the station does not
+            // carry that exact album. Never substitute a track from another
+            // album, including a standalone track whose album is self-named.
+            releaseResolution = { kind: releaseKind, mode: 'unavailable', reason: 'not-in-library' };
+          }
+          return {
+            track: null,
+            source: errors.length ? 'lookup-error' : 'no-match',
+            outcome: 'no-match',
+            errors,
+            releaseResolution,
+          };
+        }
         if (releaseExactRequest) {
           // The provider identified a real release, but the station does not
           // carry that exact recording/release. Keep the fallback in the
@@ -2003,22 +2025,15 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
           title = null;
         }
         deterministicReleaseSelection = true;
-        if (releaseKind === 'album') {
-          for (const { songs } of releaseFallbackAlbums) {
-            const result = select(songs, 'artist-latest-local-fallback');
-            if (result) return decorateRelease(result);
-          }
-        } else {
-          const rankedReleaseSongs = releaseFallbackAlbums.flatMap(({ album, songs }) => songs.map(song => ({
-            song,
-            rank: requestReleaseRank(song) || requestReleaseRank(album),
-          })));
-          const ranks = [...new Set(rankedReleaseSongs.map(row => row.rank))]
-            .sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || b - a);
-          for (const rank of ranks) {
-            const result = select(rankedReleaseSongs.filter(row => row.rank === rank).map(row => row.song), 'artist-latest-local-fallback');
-            if (result) return decorateRelease(result);
-          }
+        const rankedReleaseSongs = releaseFallbackAlbums.flatMap(({ album, songs }) => songs.map(song => ({
+          song,
+          rank: requestReleaseRank(song) || requestReleaseRank(album),
+        })));
+        const ranks = [...new Set(rankedReleaseSongs.map(row => row.rank))]
+          .sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || b - a);
+        for (const rank of ranks) {
+          const result = select(rankedReleaseSongs.filter(row => row.rank === rank).map(row => row.song), 'artist-latest-local-fallback');
+          if (result) return decorateRelease(result);
         }
         const releaseRefusal = refusal();
         if (releaseRefusal) return decorateRelease(releaseRefusal);
@@ -2042,6 +2057,18 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
         }
       }
     }
+    if (releaseRequest && deps.latestRelease && !releaseResolution) {
+      // A latest-release request must never escape into the generic artist,
+      // search, or fallback pools when the named artist could not be resolved.
+      releaseResolution = { kind: releaseKind, mode: 'unavailable', reason: 'artist-not-found' };
+      return {
+        track: null,
+        source: errors.length ? 'lookup-error' : 'no-match',
+        outcome: 'no-match',
+        errors,
+        releaseResolution,
+      };
+    }
     // Song artists on compilations need not have an artist-album index entry.
     if (!title) {
       searched = await search(match.album || artistName);
@@ -2052,6 +2079,20 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     searched = await search(match.album);
     const result = select(searched, 'search');
     if (result) return result;
+  }
+  if (releaseRequest && deps.latestRelease && !releaseResolution) {
+    // A latest-release request must never escape into the generic artist,
+    // search, or fallback pools when the named artist could not be resolved.
+    // That would turn "Queen latest album" into an unrelated track whose
+    // title merely contains the artist name.
+    releaseResolution = { kind: releaseKind, mode: 'unavailable', reason: 'artist-not-found' };
+    return {
+      track: null,
+      source: errors.length ? 'lookup-error' : 'no-match',
+      outcome: 'no-match',
+      errors,
+      releaseResolution,
+    };
   }
   const identityRefusal = refusal();
   if (identityRefusal) return identityRefusal;

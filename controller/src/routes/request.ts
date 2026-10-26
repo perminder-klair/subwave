@@ -517,7 +517,16 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   }
 
   const literal = modelFreeMatch(text);
-  const lyricLike = isLyricOrFilmDescription(text);
+  // A latest-release reading can contain the same release-context words that
+  // the lyric/film heuristic watches (especially "from"). Once the literal
+  // parser has proved the artist and recency frame, keep it on the
+  // deterministic latest-release route instead of letting evidence-agent
+  // output bypass release verification.
+  const latestReleaseIntent = literal.sort === 'latest'
+    && Boolean(literal.artist?.trim())
+    && !literal.title?.trim()
+    && !literal.album?.trim();
+  const lyricLike = isLyricOrFilmDescription(text) && !latestReleaseIntent;
   // A framed request with a concrete, attribute-free name is still a named
   // recording even when the lyric heuristic sees four or more free-form
   // words. Without this distinction, `play qzxv impossible recording 918273`
@@ -547,7 +556,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // stateless cascade below, so a request is never dropped. Agentic mode is
   // intentionally agent-first for the shipped request-matching contract;
   // deterministic-first routing belongs to a separate follow-up policy.
-  const needsEvidenceIdentification = isLyricOrFilmDescription(text) && !framedTitleOnly;
+  const needsEvidenceIdentification = lyricLike && !framedTitleOnly;
   if (djAgent.requestMatchingEnabled()) {
     // A miss ends the request only when identifyRequestedTrack actually looked.
     // With requestWebResolve off the tool is never offered, and without this a
@@ -990,6 +999,14 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     }
     if (selection.required?.length) {
       return failed('Could not verify a track meeting the requested language or genre requirements. Try simplifying the request.');
+    }
+    if (selection.releaseResolution?.mode === 'unavailable') {
+      const artist = matched.artist || 'that artist';
+      const release = selection.releaseResolution.kind === 'album' ? 'album' : 'single';
+      if (selection.releaseResolution.reason === 'not-in-library') {
+        return failed(`The latest official ${release} by ${artist} isn't in this station.`);
+      }
+      return failed(`I couldn't verify the latest official ${release} by ${artist}. Try naming an album or song.`);
     }
     if (selection.alternatives?.length) {
       const choices = selection.alternatives

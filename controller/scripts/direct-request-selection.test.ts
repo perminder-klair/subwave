@@ -414,6 +414,36 @@ test('latest album lookup constrains selection to the verified local album', asy
   assert.equal(result.releaseResolution?.evidence?.title, 'Newest Album');
 });
 
+test('latest album does not substitute a standalone local release when the verified album is absent', async () => {
+  const standalone = { ...other, id: 'standalone', title: 'I Knew It, I Knew You', album: 'I Knew It, I Knew You', year: 2026 };
+  const f = fixture({
+    getArtist: async () => ({ album: [
+      { id: 'standalone-album', name: 'I Knew It, I Knew You', year: 2026 },
+      { id: 'older-album', name: 'Older Album', year: 2025 },
+    ] }),
+    getAlbum: async id => id === 'standalone-album' ? [standalone] : [],
+  });
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'album' },
+    { ...f.deps, latestRelease: async () => ({
+      status: 'verified',
+      release: { kind: 'album', title: 'The Life of a Showgirl: The Encore', artist: 'Queen', releaseDate: '2026', source: 'test' },
+    }) });
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.deepEqual(result.releaseResolution, { kind: 'album', mode: 'unavailable', reason: 'not-in-library' });
+});
+
+test('latest album with unavailable evidence does not fall back to a local album', async () => {
+  const f = fixture();
+  const result = await resolveDirectRequest(
+    { artist: 'Queen', sort: 'latest', scope: 'album' },
+    { ...f.deps, latestRelease: async () => ({ status: 'unavailable', reason: 'ambiguous' }) });
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.deepEqual(result.releaseResolution, { kind: 'album', mode: 'unavailable', reason: 'ambiguous' });
+});
+
 test('latest release lookup falls back to the newest eligible local track', async () => {
   const f = fixture();
   const result = await resolveDirectRequest(
@@ -949,6 +979,8 @@ test('model-free requests parse latest release phrasing before title-by-artist p
     'play the latest song by Taylor Swift',
     "what's Taylor Swift's latest single",
     'latest track from Taylor Swift',
+    'latest album by Taylor Swift',
+    'play latest album by Taylor Swift',
     "Taylor Swift's latest single",
     'Taylor Swift latest album',
     'Taylor Swift ka sabse naya gana',
