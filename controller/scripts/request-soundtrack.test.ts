@@ -9,11 +9,16 @@ import {
 
 const context = { name: 'The Devil Wears Prada 2', kind: 'movie' as const, explicit: true };
 
-function tracklist(source: 'musicbrainz' | 'lastfm', rows: Array<[string, string]>): SoundtrackProviderTracklist[] {
+function tracklist(source: 'musicbrainz' | 'lastfm', rows: Array<[string, string | string[]]>): SoundtrackProviderTracklist[] {
   return [{
     source,
     releaseName: 'The Devil Wears Prada 2 (Music from the Motion Picture)',
-    tracks: rows.map(([title, artist], index) => ({ title, artists: [artist], order: index + 1, source })),
+    tracks: rows.map(([title, artist], index) => ({
+      title,
+      artists: Array.isArray(artist) ? artist : [artist],
+      order: index + 1,
+      source,
+    })),
   }];
 }
 
@@ -51,6 +56,47 @@ test('never turns a same-artist title collision into a soundtrack match', async 
   });
   assert.equal(result.status, 'matched');
   assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'right');
+});
+
+test('matches soundtrack credits stored as a combined local artist string', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'local', title: 'Khaabon Ke Parinday', artist: 'Alyssa Mendonsa & Mohit Chauhan' },
+  ], {
+    enabled: true,
+    provider: provider(tracklist('musicbrainz', [[
+      'Khaabon Ke Parinday', ['Alyssa Mendonsa', 'Mohit Chauhan'],
+    ]])),
+  });
+  assert.equal(result.status, 'matched');
+  assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
+});
+
+test('matches comma and and soundtrack credits in local metadata', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'local', title: 'Sooraj Ki Baahon Mein', artist: 'Dominique Cerejo, Clinton Cerejo and Loy Mendonsa' },
+  ], {
+    enabled: true,
+    provider: provider(tracklist('musicbrainz', [[
+      'Sooraj Ki Baahon Mein', ['Dominique Cerejo', 'Clinton Cerejo', 'Loy Mendonsa'],
+    ]])),
+  });
+  assert.equal(result.status, 'matched');
+  assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
+});
+
+test('does not match a soundtrack credit that is only part of a local combined credit', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'local', title: 'Khaabon Ke Parinday', artist: 'Earth, Wind & Fire' },
+  ], {
+    enabled: true,
+    provider: provider(tracklist('musicbrainz', [[
+      'Khaabon Ke Parinday', 'Fire',
+    ]])),
+  });
+  assert.deepEqual(result, { status: 'no-match', reason: 'no-local-match' });
 });
 
 test('does not accept Last.fm-only evidence as a local identity', async () => {
@@ -101,4 +147,44 @@ test('a numeric sequel remains distinct from the unnumbered soundtrack', async (
   });
   assert.equal(result.status, 'matched');
   assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'old');
+});
+
+test('tries compact punctuation when a release group joins spoken title words', async t => {
+  clearSoundtrackResolutionCache();
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = new URL(String(input));
+    if (url.pathname === '/ws/2/release-group/') {
+      const query = url.searchParams.get('query') || '';
+      if (!query.toLocaleLowerCase().includes('ra.one')) return Response.json({ 'release-groups': [] });
+      return Response.json({
+        'release-groups': [{
+          id: 'group-ra-one', title: 'Ra.One', score: 100, 'secondary-types': ['Soundtrack'],
+        }],
+      });
+    }
+    if (url.pathname === '/ws/2/release-group/group-ra-one') {
+      return Response.json({ releases: [{ id: 'release-ra-one', title: 'Ra.One', status: 'Official', 'track-count': 1 }] });
+    }
+    if (url.pathname === '/ws/2/release/release-ra-one') {
+      return Response.json({
+        title: 'Ra.One',
+        media: [{ tracks: [{ position: 1, recording: {
+          title: 'Criminal',
+          'artist-credit': [
+            { name: 'Akon', artist: { name: 'Akon' } },
+            { name: 'Vishal Dadlani', artist: { name: 'Vishal Dadlani' } },
+            { name: 'Shruti Pathak', artist: { name: 'Shruti Pathak' } },
+          ],
+        } }] }],
+      });
+    }
+    throw new Error(`unexpected MusicBrainz URL: ${url}`);
+  });
+  const result = await resolveSoundtrackCandidates(
+    { name: 'Ra One', kind: 'movie', explicit: true },
+    [{ id: 'criminal', title: 'Criminal', artist: 'Akon, Vishal Dadlani, Shruti Pathak' }],
+    { enabled: true },
+  );
+  assert.equal(result.status, 'matched');
+  assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'criminal');
 });

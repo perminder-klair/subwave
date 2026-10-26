@@ -74,6 +74,26 @@ test('soundtrack resolution queues only the verified local candidate', async () 
   assert.equal(result.outcome, 'matched');
 });
 
+test('soundtrack resolution skips a verified candidate that is already queued', async () => {
+  const queued = { id: 'queued-shape', title: 'Shape of Woman', artist: 'Lady Gaga', soundtrackConfidence: 0.98,
+    soundtrackSource: 'musicbrainz' as const, soundtrackOrder: 1 };
+  const next = { id: 'next-shape', title: 'Shape of a Woman (Radio Edit)', artist: 'Lady Gaga', soundtrackConfidence: 0.91,
+    soundtrackSource: 'musicbrainz' as const, soundtrackOrder: 2 };
+  const f = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }) });
+  f.deps.queuedIds.add(queued.id);
+  const result = await resolveDirectRequest(modelFreeRequest('play a song from the movie The Devil Wears Prada 2'), {
+    ...f.deps,
+    text: 'play a song from the movie The Devil Wears Prada 2',
+    exactOnly: true,
+    soundtrackCandidates: async (): Promise<SoundtrackResolution> => ({
+      status: 'matched', source: 'musicbrainz', candidates: [queued, next],
+    }),
+  });
+  assert.equal(result.track?.id, next.id);
+  assert.equal(result.source, 'soundtrack:musicbrainz');
+  assert.equal(result.outcome, 'matched');
+});
+
 test('soundtrack no-match cannot fall through to genre or fallback music', async () => {
   const f = fixture();
   const result = await resolveDirectRequest(modelFreeRequest('play a song from the movie Missing Film'), {

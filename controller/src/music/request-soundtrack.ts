@@ -161,11 +161,29 @@ function artistVariants(value: unknown): string[] {
     .filter(Boolean);
 }
 
+// MusicBrainz exposes each credited artist separately, while Navidrome often
+// stores the same credit as one joined string. This is intentionally local to
+// soundtrack evidence. The general request artist matcher must not split on
+// commas or ampersands because a partial credit can be a false artist match.
+function soundtrackCreditParts(value: unknown): string[] {
+  const raw = String(value ?? '').trim();
+  if (!raw) return [];
+  return raw.split(/\s*(?:,|&|\/|\band\b|\bfeat(?:uring)?\.?|\bft\.?)\s*/iu)
+    .map(part => requestName(part).replace(/^the (?=\S)/u, '').trim())
+    .filter(Boolean);
+}
+
+function soundtrackCreditSet(values: readonly unknown[]): string[] {
+  return [...new Set(values.flatMap(soundtrackCreditParts))].sort();
+}
+
 function artistsMatch(wanted: readonly string[], local: SoundtrackLocalCandidate): boolean {
-  const localCredits = [local.artist, ...(local.artists || []).map(artist => typeof artist === 'string' ? artist : artist?.name)]
-    .flatMap(artistVariants);
-  const wantedKeys = wanted.flatMap(artistVariants);
-  return wantedKeys.some(want => localCredits.some(got => got === want));
+  const localCredits = [local.artist, ...(local.artists || []).map(artist => typeof artist === 'string' ? artist : artist?.name)];
+  const wantedKeys = soundtrackCreditSet(wanted);
+  const localKeys = soundtrackCreditSet(localCredits);
+  return wantedKeys.length > 0
+    && wantedKeys.length === localKeys.length
+    && wantedKeys.every(want => localKeys.includes(want));
 }
 
 function sourceKey(track: Pick<SoundtrackEvidenceTrack, 'title' | 'artists'>): string {
@@ -335,9 +353,15 @@ async function musicbrainzTracklists(context: SoundtrackRequestContext, signal?:
   // searches and misses soundtrack groups that have several editions.
   const names = [...new Set([
     context.name,
+    // MusicBrainz treats punctuation as significant in an exact phrase. A
+    // listener commonly says "Ra One" while the release group is stored as
+    // "Ra.One", so try the compact punctuation form before the existing
+    // sequel/roman-numeral variants. This is a bounded spelling variant, not
+    // a title-specific fallback.
+    context.name.replace(/[\s._-]+/gu, '.'),
     context.name.replace(/(?<=[\p{L}])(?=\d)/gu, ' '),
     context.name.replace(/\b(?:ii|iii|iv)\b/iu, value => ({ ii: '2', iii: '3', iv: '4' }[value.toLocaleLowerCase()] || value)),
-  ].map(value => value.trim()).filter(Boolean))].slice(0, 3);
+  ].map(value => value.trim()).filter(Boolean))].slice(0, 4);
   const groupsById = new Map<string, MbGroup>();
   for (const name of names) {
     const query = `releasegroup:${mbPhrase(name)} AND type:soundtrack`;
