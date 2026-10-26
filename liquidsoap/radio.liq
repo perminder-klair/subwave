@@ -653,6 +653,11 @@ end
 # No initial_metadata= here: on fade.in/fade.out it only feeds the per-track
 # liq_fade_* overrides, which nothing on this station stamps; the stream's own
 # metadata flows through a.source/b.source unchanged.
+# override=null is load-bearing: amplify's default override reads liq_amplify,
+# and the incoming source carries its track's liq_amplify from the first sample,
+# so without it the gain curve below is REPLACED by that track's loudness gain
+# (applied a second time, it already ran before the cross): no fade-in, then a
+# step of that gain when the transition hands over (heard on air: -9.2 dB).
 half_pi = acos(-1.) / 2.
 
 def equal_power_fade(~span, ~rising, s) =
@@ -662,7 +667,7 @@ def equal_power_fade(~span, ~rising, s) =
     x = if x < 0. then 0. elsif x > 1. then 1. else x end
     if rising then pow(sin(half_pi * x), 1.5) else cos(half_pi * x) end
   end
-  amplify(gain, s)
+  amplify(override=null, gain, s)
 end
 
 def dj_transition(a, b) =

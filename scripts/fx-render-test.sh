@@ -885,6 +885,12 @@ jingledry() {
 #      linear fade-in over the first quarter of the cross: a quiet ending into
 #      a loud start is a fade-in from silence, and a curve that brings the
 #      incoming up early made it abrupt (heard on air).
+#      The incoming carrying a per-track liq_amplify (as every analysed track
+#      does on air, applied before the cross like radio.liq) must take that
+#      gain ONCE and still follow the curve: within 0.5 dB of the unannotated
+#      incoming minus the gain, every half-second from 1 s into the cross to
+#      5 s after it. amplify's default override would replace the curve with
+#      the gain (no fade-in, then a step of that gain at the end of the cross).
 #   2. the seam rule: equal_power_seam must be true for a plain song-to-song
 #      seam only. A stem-blend clip seam, a jingle, a bed, a pause break or any
 #      gesture flag keeps the linear curve (a clip is rendered FROM the tracks
@@ -904,20 +910,23 @@ eqpower() {
   [ -f "$WORK/eqp-b.wav" ] || ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=97:amplitude=0.25" -t 16 -ar 44100 -ac 2 "$WORK/eqp-b.wav"
   [ -f "$WORK/eqp-s.wav" ] || ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 16 "$WORK/eqp-s.wav"
   local mode src
-  for mode in lin ep linin epin; do
-    src=a; case "$mode" in *in) src=s ;; esac
+  for mode in lin ep linin epin epgain; do
+    src=a; case "$mode" in *in|epgain) src=s ;; esac
+    bsrc='single("/work/eqp-b.wav")'
+    [ "$mode" = epgain ] && bsrc='single("annotate:liq_amplify=\"-6 dB\":/work/eqp-b.wav")'
     cat > "$WORK/eqp-$mode.liq" <<LIQ
 settings.frame.audio.samplerate := 44100
 $(cat "$WORK/eqp-fade.liq")
 d = 10.
 def trans(a, b) =
-  if "$mode" == "ep" or "$mode" == "epin" then
+  if "$mode" == "ep" or "$mode" == "epin" or "$mode" == "epgain" then
     add(normalize=false, [equal_power_fade(span=d, rising=false, a.source), equal_power_fade(span=d, rising=true, b.source)])
   else
     add(normalize=false, [fade.out(duration=d, a.source), fade.in(duration=d, b.source)])
   end
 end
-s = cross(duration=d, trans, sequence([once(single("/work/eqp-$src.wav")), once(single("/work/eqp-b.wav"))]))
+s = amplify(override="liq_amplify", 1., sequence([once(single("/work/eqp-$src.wav")), once($bsrc)]))
+s = cross(duration=d, trans, s)
 output.file(%wav, fallible=true, on_stop=shutdown, "/work/eqp-$mode.wav", s)
 LIQ
   done
@@ -925,6 +934,7 @@ LIQ
   liq eqp-ep.liq > "$WORK/eqp-ep.log" 2>&1 &
   liq eqp-linin.liq > "$WORK/eqp-linin.log" 2>&1 &
   liq eqp-epin.liq > "$WORK/eqp-epin.log" 2>&1 &
+  liq eqp-epgain.liq > "$WORK/eqp-epgain.log" 2>&1 &
   wait
   # Steady = A's body (1..5 s) and B's (17..21 s); the cross runs 6..16 s.
   local res
@@ -948,6 +958,16 @@ LIQ
   echo "$early" | awk '{printf "  incoming out of silence, first quarter: linear %.1f dB, equal-power %.1f dB\n", $1, $2}'
   echo "$early" | awk 'NF == 2 {ok = ($2 <= $1 + 0.5)} END {exit !ok}' \
     || { echo "EQPOWER FAIL — the equal-power incoming rises faster than the linear fade-in"; return 1; }
+  # The incoming with liq_amplify -6 dB vs without, 7..21 s in 0.5 s windows
+  # (the cross runs 6..16 s): the gain once, on the same curve, everywhere.
+  local gain
+  gain=$(for mode in epin epgain; do
+    ffmpeg -v error -i "$WORK/eqp-$mode.wav" -af "asetnsamples=n=22050,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=print:file=-" -f null - 2>/dev/null \
+      | awk -F= '/RMS_level/{v[n++]=$2} END{for(i=14;i<42;i++) printf "%s ", v[i]; print ""}'
+  done | awk 'NR==1{for(i=1;i<=NF;i++)a[i]=$i; n=NF} NR==2{w=0; for(i=1;i<=n;i++){d=a[i]-$i-6; if(d<0)d=-d; if(d>w)w=d}; printf "%.2f\n", w}')
+  echo "  incoming with liq_amplify -6 dB: worst half-second off (unannotated - 6 dB) by $gain dB"
+  awk -v w="$gain" 'BEGIN{exit !(w != "" && w <= 0.5)}' \
+    || { echo "EQPOWER FAIL — a per-track liq_amplify replaces the equal-power curve on the incoming"; return 1; }
 
   cat > "$WORK/eqp-rule-run.liq" <<LIQ
 equal_power_crossfade = ref(true)

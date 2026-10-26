@@ -49,7 +49,9 @@ test('the fader is cos out and sin^1.5 in over the elapsed fraction of its span,
   // power against the cos out.
   assert.match(fader, /if rising then pow\(sin\(half_pi \* x\), 1\.5\) else cos\(half_pi \* x\) end/);
   assert.match(fader, /x = if span <= 0\. then 1\. else e \/ span end/);
-  assert.match(fader, /amplify\(gain, s\)/);
+  // override=null: the default override would swap the curve for the
+  // incoming's liq_amplify (no fade-in, then a step of that gain).
+  assert.match(fader, /amplify\(override=null, gain, s\)/);
   assert.match(radio, /^half_pi = acos\(-1\.\) \/ 2\.$/m);
   assert.ok(!/type="sin"/.test(radio), 'Liquidsoap\'s sin fade is sin^2 — it dips like linear');
 });
