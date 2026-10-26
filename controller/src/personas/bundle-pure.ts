@@ -20,7 +20,7 @@
 //
 //   `JINGLE_FILENAME_RE` pins what an adopted filename may CONTAIN, not just
 //   what it ends in. A jingle filename is emitted as a line of `jingles.m3u`,
-//   which Liquidsoap watches, so a newline inside one is an extra rotation
+//   which Liquidsoap reloads after every write, so a newline inside one is an extra rotation
 //   entry the operator never added. The bundle is a file from another operator;
 //   an extension test is not a filename check.
 

@@ -10,7 +10,7 @@
 // and pins the /dj/segment button's link to the only form true of a track
 // already playing.
 //
-// Run: npx tsx scripts/link-style.test.ts (auto-discovered by npm test).
+// Run: `npm test -- link-style`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';

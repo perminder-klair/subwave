@@ -210,6 +210,28 @@ export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
 
+// The operator's station-wide lyric timing correction (library-db/lyrics.ts).
+export async function getLyricOffset(songId: string): Promise<number> {
+  await load();
+  return db.getLyricOffset(songId);
+}
+
+export async function setLyricOffset(songId: string, offsetMs: number): Promise<void> {
+  await load();
+  db.setLyricOffset(songId, offsetMs);
+}
+
+// LRCLIB's stored answer for a track (library-db/lyrics.ts, music/lyrics-sources.ts).
+export async function getExternalLyrics(songId: string): Promise<db.ExternalLyrics | null> {
+  await load();
+  return db.getExternalLyrics(songId);
+}
+
+export async function setExternalLyrics(songId: string, answer: Omit<db.ExternalLyrics, 'checkedAt'>): Promise<void> {
+  await load();
+  db.setExternalLyrics(songId, answer);
+}
+
 // When a track entered the library, null if not in the tagged index. Playlist
 // sync keys "new since last sync" off this, so a Subsonic-only track reads
 // null and is never blind-appended.
@@ -642,6 +664,7 @@ export interface FilterOpts {
   yearFrom?: number | null;
   yearTo?: number | null;
   q?: string | null;
+  query?: { sql: string; params: unknown[] } | null; // see library-db FilterOpts
   sort?: 'artist' | 'title' | 'taggedAt' | 'year' | 'bpm' | 'loudness' | 'pace';
   limit?: number;
   offset?: number;
@@ -676,11 +699,13 @@ export interface FilteredRow {
   instrumental?: boolean | null;
 }
 
-export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRow[] } {
+export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRow[]; reindexing?: boolean } {
   if (!loaded) return { total: 0, rows: [] };
   const res = db.filter(opts);
   return {
     total: res.total,
+    // A query search's keys are still being rebuilt (see library-db filter).
+    ...(res.reindexing !== undefined && { reindexing: res.reindexing }),
     rows: res.rows.map(r => ({
       id: r.id,
       title: r.title,

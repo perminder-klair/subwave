@@ -74,9 +74,10 @@ export const specs: KindSpec[] = [
         check: (out: any) => {
           const v = checkAck(out?.ack);
           const terms = (out?.search_terms || []).map((t: any) => String(t).toLowerCase());
-          if (!terms.some((t: string) => t.includes('hanju')) && !String(out?.artist || '').toLowerCase().includes('amrinder')) {
+          if (!String(out?.title || '').toLowerCase().includes('hanju') && !terms.some((t: string) => t.includes('hanju'))) {
             v.push('title-missed');
           }
+          if (!String(out?.artist || '').toLowerCase().includes('amrinder')) v.push('artist-missed');
           return v;
         },
       },

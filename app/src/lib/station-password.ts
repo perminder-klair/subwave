@@ -68,6 +68,19 @@ export function stationLockRequired(privacy: StationPrivacy | null | undefined):
   return privacy?.privatePlayer === true || privacy?.listenerAuth === true;
 }
 
+/** 'open' = no lock; 'checking' = verifying a saved password; 'prompt' = ask. */
+export type GatePhase = 'open' | 'checking' | 'prompt' | 'ok';
+
+/** Whether a station-gated read (lyrics) may go out: always on a public
+ *  station, and on a locked one only once its password is proven. Never on
+ *  'open' alone: the gate starts there before /state has said which locks
+ *  are on, and still shows it for the render in which a lock first appears,
+ *  before its check starts. Every refused read spends one of the household's
+ *  station-read attempts (20 per 15 minutes). */
+export function stationReadsOpen(privacy: StationPrivacy | null | undefined, phase: GatePhase): boolean {
+  return !stationLockRequired(privacy) || phase === 'ok';
+}
+
 /** `POST /station-auth` outcomes. That route fails CLOSED (401) whenever a lock
  *  is on and the password is wrong; 429 is its rate limit. Anything else —
  *  a network error, a 5xx, an older controller's 404 — says nothing about the

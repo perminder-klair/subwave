@@ -20,7 +20,7 @@
 //    go through personas/install.ts, so the roster cap and the duplicate-name
 //    refusal cannot disagree between them.
 //  - An adopted filename is pinned to a CHARACTER CLASS. A jingle filename
-//    becomes a LINE of jingles.m3u, which Liquidsoap reloads on watch, so a
+//    becomes a LINE of jingles.m3u, which Liquidsoap reloads after every write, so a
 //    newline inside one adds a rotation entry nobody chose. A bundle is a file
 //    from another operator; an extension test is not a filename check.
 //  - A REFUSED import writes NOTHING — and "nothing" has to be checked against
@@ -359,7 +359,7 @@ function bundleOf(
 
 test('a NEWLINE in a jingle member name is refused and writes nothing', async () => {
   // rewritePlaylist joins DIR + filename with '\n', and Liquidsoap reloads
-  // jingles.m3u on watch — so a name carrying its own newline used to append a
+  // jingles.m3u after every write — so a name carrying its own newline used to append a
   // second, attacker-chosen line to the station's rotation. The bundle is a
   // file the operator was handed by someone else; this is untrusted input.
   const before = stateSnapshot();

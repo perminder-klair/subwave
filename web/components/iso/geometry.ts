@@ -1,5 +1,5 @@
-// The 30° isometric drawing kit, shared by the AXO skin and the broadsheet's
-// figures. A world point (x, y, z) lands on screen at ((x − y)·cos30,
+// The 30° isometric drawing kit, shared by the AXO and Platter skins, the
+// broadsheet's figures and the admin drawings. A world point (x, y, z) lands on screen at ((x − y)·cos30,
 // (x + y)·sin30 − z): world x runs down-right, world y down-left, z straight
 // up. Each box face is drawn flat inside a shear matrix so whatever sits on it
 // can be laid out in plain 2D, and silhouettes are traced separately at a

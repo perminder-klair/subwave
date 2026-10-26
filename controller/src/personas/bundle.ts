@@ -25,7 +25,7 @@
 // (which is the persona schema's, so a name it accepts saves) and the strict
 // validator settings.update() runs. An import that half-wrote was not a
 // cosmetic problem: jingles.adopt registers a stinger in jingles.m3u, which
-// Liquidsoap reloads on watch, so a 400 could still put audio on air.
+// Liquidsoap reloads after every write, so a 400 could still put audio on air.
 import AdmZip from 'adm-zip';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -161,7 +161,7 @@ let importChain: Promise<unknown> = Promise.resolve();
  * settings.update() are all owned elsewhere, and each of them used to fire
  * AFTER audio had landed. A jingle that lands behind a refusal is not merely
  * litter — jingles.adopt registers it in jingles.json and writes it into
- * jingles.m3u, which Liquidsoap reloads on watch, so a rejected import would
+ * jingles.m3u, which Liquidsoap reloads after every write, so a rejected import would
  * put a stinger for a DJ that was never created on air.
  *
  * So the order is: parse, validate the persona, check every member's NAME and

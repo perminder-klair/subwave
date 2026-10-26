@@ -574,18 +574,23 @@ test('a request timeout after the model DID answer fails this call over but does
 });
 
 test('the probe clears an unreachable window once the primary port answers again', async () => {
-  // Find a free port, then leave it closed so the primary is refused.
-  const finder = http.createServer();
-  await new Promise<void>((resolve) => finder.listen(0, '127.0.0.1', () => resolve()));
-  const port = (finder.address() as any).port;
-  await new Promise<void>((resolve) => finder.close(() => resolve()));
+  // The primary's port stays bound for the whole test, so another process can
+  // never take it between a release and a re-bind. Until it is told to answer
+  // it drops every connection unanswered, which the probe reads as down just as
+  // it does a refusal.
+  let answering = false;
+  const up = http.createServer((req, res) => {
+    if (!answering) { req.socket.destroy(); return; }
+    req.resume(); res.end('{}');
+  });
+  await new Promise<void>((resolve) => up.listen(0, '127.0.0.1', () => resolve()));
+  const port = (up.address() as any).port;
   resetFailoverStickyForTest(undefined, 40); // probe every 40 ms
   writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: {
     provider: 'openai-compatible', model: 'stub', baseUrl: `http://127.0.0.1:${port}/v1`, fallback,
   } }));
   store.setCache(null);
   await settings.load();
-  const up = http.createServer((req, res) => { req.resume(); res.end('{}'); });
   try {
     await withFailover('probe-test', failExtra, async (leg) => {
       if (leg.label === 'openai-compatible:stub') throw Object.assign(new Error(`connect ECONNREFUSED 127.0.0.1:${port}`), { code: 'ECONNREFUSED' });
@@ -593,13 +598,14 @@ test('the probe clears an unreachable window once the primary port answers again
     });
     assert.ok((windowLeftMs() ?? 0) > 290_000, 'an unreachable primary holds the long window');
     await new Promise((r) => setTimeout(r, 120));
-    assert.equal(windowLeftMs() !== null, true, 'still refused: the probe keeps the window');
-    await new Promise<void>((resolve) => up.listen(port, '127.0.0.1', () => resolve()));
+    assert.equal(windowLeftMs() !== null, true, 'still unanswered: the probe keeps the window');
+    answering = true;
     const deadline = Date.now() + 2000;
     while (windowLeftMs() !== null && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     assert.equal(windowLeftMs(), null, 'the probe saw the port answer and cleared the window');
   } finally {
-    await new Promise<void>((resolve) => (up.listening ? up.close(() => resolve()) : resolve()));
+    up.closeAllConnections();
+    await new Promise<void>((resolve) => up.close(() => resolve()));
     resetFailoverStickyForTest();
   }
 });

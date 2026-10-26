@@ -84,6 +84,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // Who counts the tracks between jingles (#1619) — the admin control that
         // hands the rotate to the controller and writes the mixer's ratio 0.
         jingleRotate: s.jingleRotate,
+        jinglePlacement: s.jinglePlacement,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
         // Repaired on the way out via the same function the air path uses: a
@@ -131,6 +132,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // The Listeners form hydrates the Lyrics switch from this, and saves it
+        // with likes; omit it and every likes save turns the panel off.
+        lyrics: s.lyrics,
         // The admin form hydrates the album-cooldown/min-length inputs from
         // this; omit it and the next save on that card zeroes them.
         picker: s.picker,

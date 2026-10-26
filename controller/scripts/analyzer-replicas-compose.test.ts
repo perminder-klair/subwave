@@ -29,7 +29,7 @@
 // Text-level assertions on purpose: this is about what the FILES say, and a
 // YAML parse would happily normalise away the `:-1` that property 2 is about.
 //
-// Run: `tsx scripts/analyzer-replicas-compose.test.ts` (or `npm test -- analyzer-replicas`).
+// Run: `npm test -- analyzer-replicas-compose`.
 
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';

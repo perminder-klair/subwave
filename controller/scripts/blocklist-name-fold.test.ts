@@ -45,6 +45,7 @@ test('schemas/blocklist normText restates nameKey exactly', () => {
     'AC/DC',
     'Sunn O)))',
     '’',
+    'Bjo\u0308rk',
   ];
   for (const raw of cases) {
     assert.equal(normText(raw), nameKey(raw), JSON.stringify(raw));
@@ -62,6 +63,8 @@ test('the fold folds apostrophe style and nothing else about the name', () => {
   // Other punctuation is not folded: `trip-hop` is its own tag.
   assert.notEqual(nameKey('trip-hop'), nameKey('trip hop'));
   assert.notEqual(nameKey('AC/DC'), nameKey('AC DC'));
+  // Unicode normalisation: a tagger's decomposed (NFD) name is the composed one.
+  assert.equal(nameKey('Bjo\u0308rk'), nameKey('Björk'));
   // A fold never empties or renames: "Sunn O)))" is a band, not brackets.
   assert.equal(nameKey('Sunn O)))'), 'sunn o)))');
 });

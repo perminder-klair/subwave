@@ -13,7 +13,7 @@
 //
 // Runs against a temp STATE_DIR, so STATE_DIR is set before stem-cache is
 // imported (dynamic import below), matching scripts/stem-backfill.test.ts.
-// Run: `tsx scripts/stem-cache-sweep.test.ts` (folded into `npm run test`).
+// Run: `npm test -- stem-cache-sweep`.
 
 import { createTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';

@@ -3,9 +3,10 @@
 //   cd controller && npm run gen:themes
 // CI fails if this drifts from the controller registry.
 
-export type TokenType = 'color' | 'font' | 'grain';
+export type TokenType = 'color' | 'font' | 'grain' | 'keyword';
 export type TokenGroup = 'surface' | 'text' | 'accent' | 'structure' | 'type' | 'texture';
 export type FontSet = 'display' | 'mono';
+export type KeywordSet = 'texture' | 'finish';
 
 export interface TokenDescriptor {
   key: string;
@@ -13,6 +14,7 @@ export interface TokenDescriptor {
   group: TokenGroup;
   type: TokenType;
   fontSet?: FontSet;
+  keywordSet?: KeywordSet;
 }
 
 export const THEME_TOKENS: readonly TokenDescriptor[] = [
@@ -113,15 +115,35 @@ export const THEME_TOKENS: readonly TokenDescriptor[] = [
     "label": "grain",
     "group": "texture",
     "type": "grain"
+  },
+  {
+    "key": "--texture",
+    "label": "texture",
+    "group": "texture",
+    "type": "keyword",
+    "keywordSet": "texture"
+  },
+  {
+    "key": "--finish",
+    "label": "finish",
+    "group": "texture",
+    "type": "keyword",
+    "keywordSet": "finish"
   }
 ];
 
-export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain"];
+export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surface-border","--field","--ink","--muted","--ink-faint","--accent","--accent-2","--accent-soft","--line","--soft-border","--overlay","--display-font","--mono-font","--grain","--texture","--finish"];
 
 export const SWATCH_KEYS = ["--bg","--ink","--accent","--overlay"] as const;
 
-export const DISPLAY_FONT_IDS = ["fraunces","doto","space-grotesk","instrument-serif","anton","chakra-petch","saira-stencil-one"] as const;
+export const DISPLAY_FONT_IDS = ["fraunces","doto","space-grotesk","instrument-serif","anton","chakra-petch","saira-stencil-one","vt323","bricolage-grotesque"] as const;
 export type DisplayFontId = (typeof DISPLAY_FONT_IDS)[number];
 
-export const MONO_FONT_IDS = ["jetbrains","ibm-plex-mono","space-mono","fira-code","courier-prime","overpass-mono"] as const;
+export const MONO_FONT_IDS = ["jetbrains","ibm-plex-mono","space-mono","fira-code","courier-prime","overpass-mono","dm-mono"] as const;
 export type MonoFontId = (typeof MONO_FONT_IDS)[number];
+
+export const TEXTURE_IDS = ["scanline","halftone"] as const;
+export type TextureId = (typeof TEXTURE_IDS)[number];
+
+export const FINISH_IDS = ["bloom","misregister"] as const;
+export type FinishId = (typeof FINISH_IDS)[number];

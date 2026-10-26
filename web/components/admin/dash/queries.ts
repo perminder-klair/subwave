@@ -8,6 +8,7 @@ import {
   type ConnectionsState,
   type DashStatus,
   type HealthStats,
+  type NowPlayingFile,
   type QueueState,
   type RequestEntry,
 } from './types';
@@ -27,6 +28,9 @@ export const dashKeys = {
   takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
+  // Keyed by the track the request names (?id=): the format of one file never
+  // changes, so a known one is fetched once per track.
+  nowPlayingFile: (id: string) => ['dash', 'now-playing-file', id] as const,
 };
 
 async function degradedJson<T>(request: Promise<T>): Promise<T | null> {
@@ -48,6 +52,27 @@ export async function fetchDashStatus(fetcher: AdminFetch, signal: AbortSignal):
     degradedJson(adminJson<{ messages?: SessionTurn[] }>(fetcher, '/session', undefined, signal)),
   ]);
   return { ...nowPlaying, queue: state ?? {}, sessionMessages: session?.messages ?? [] };
+}
+
+/**
+ * Drop a queued row from the cached status ahead of its DELETE; the poll
+ * confirms. An in-flight status read is cancelled first so it cannot land over
+ * the patch with the row still in it. The write is stamped like a fresh read
+ * but carries everything else the cache held, now-playing included, so never
+ * judge what is on air from this cache after a refetch: never-play's skip
+ * reads the fetch's own answer instead (`refetchOnAirId`, #2018).
+ */
+export async function removeQueuedRow(client: QueryClient, id: string): Promise<void> {
+  await client.cancelQueries({ queryKey: dashKeys.status(), exact: true }, { silent: true });
+  client.setQueryData<DashStatus>(dashKeys.status(), current => current
+    ? {
+        ...current,
+        queue: {
+          ...(current.queue || {}),
+          upcoming: (current.queue?.upcoming || []).filter(item => item.subsonic_id !== id),
+        },
+      }
+    : current);
 }
 
 export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal): Promise<ConnectionsState> {
@@ -86,7 +111,9 @@ export async function runDashAction(
     body: JSON.stringify(body || {}),
   });
   const result = await response.json().catch(() => ({})) as ActResponse;
-  if (!response.ok) throw new Error(result.error || `failed (${response.status})`);
+  // Same message as ever; the status rides along so a caller can tell an
+  // answer (the targeted skip's 409) from a failure.
+  if (!response.ok) throw new AdminResponseError(result.error || `failed (${response.status})`, response.status, result);
   return result;
 }
 
@@ -173,4 +200,8 @@ export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): 
 export async function fetchMusicStarved(fetcher: AdminFetch, signal: AbortSignal): Promise<boolean> {
   const body = await adminJson<{ musicStarved?: boolean }>(fetcher, '/state', undefined, signal);
   return body.musicStarved === true;
+}
+
+export function fetchNowPlayingFile(fetcher: AdminFetch, id: string, signal: AbortSignal): Promise<NowPlayingFile> {
+  return adminJson(fetcher, `/now-playing/file?id=${encodeURIComponent(id)}`, undefined, signal);
 }

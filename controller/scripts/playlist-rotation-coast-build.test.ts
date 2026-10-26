@@ -11,10 +11,11 @@
 
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-rotation-coast-build-'));
 process.env.STATE_DIR = root;
@@ -57,7 +58,7 @@ after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
   await new Promise<void>(resolve => mixer.close(() => resolve()));
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 const q = queue as any;

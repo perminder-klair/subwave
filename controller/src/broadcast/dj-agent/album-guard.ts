@@ -22,6 +22,14 @@ export interface AlbumAlternativePool<T> {
   anchorSkipped: number;
 }
 
+// Is this candidate's album outside the cooldown window? An empty key (a
+// compilation, an untitled record) is never inside it. The one test every
+// reader of the cooldown applies, the genre guard's alternatives included.
+export function onFreshAlbum<T>(song: T, recentAlbums: ReadonlySet<string>, albumKeyOf: AlbumKeyOf<T>): boolean {
+  const key = albumKeyOf(song);
+  return !key || !recentAlbums.has(key);
+}
+
 // Album re-picks preserve unknown/exempt album keys. Narrow by the artist guard's window,
 // restoring fresh-album alternatives on starvation without undoing an avoided anchor.
 export function alternativeAlbumCandidates<T extends CandidateLike>(
@@ -31,10 +39,7 @@ export function alternativeAlbumCandidates<T extends CandidateLike>(
   avoidArtistRoots: Set<string> = new Set(),
   avoidAnchorRoot = '',
 ): AlbumAlternativePool<T> {
-  const otherAlbum = [...seen].filter(([, s]) => {
-    const key = albumKeyOf(s);
-    return !key || !recentAlbums.has(key);
-  });
+  const otherAlbum = [...seen].filter(([, s]) => onFreshAlbum(s, recentAlbums, albumKeyOf));
   const base = otherAlbum.filter(([, s]) => !artistCreditsOverlap(artistRootKey(s), avoidAnchorRoot));
   const anchorSkipped = otherAlbum.length - base.length;
   if (!base.length || !avoidArtistRoots.size) {
@@ -117,10 +122,9 @@ export async function runAlbumGuard<T extends CandidateLike>(
 ): Promise<AlbumGuardOutcome<T>> {
   const { song, seen, recentAlbums, avoidArtistRoots, avoidAnchorRoot = '', albumKeyOf, hours, repick, log, logEvent } = deps;
 
-  const key = albumKeyOf(song);
   // '' covers exemptions and the untagged: a compilation keys as nothing on
   // BOTH sides, so it neither blocks nor is blocked.
-  if (!key || !recentAlbums.has(key)) return { kind: 'none' };
+  if (onFreshAlbum(song, recentAlbums, albumKeyOf)) return { kind: 'none' };
 
   const { alt, dropped, starved, anchorSkipped } = alternativeAlbumCandidates<T>(
     seen, recentAlbums, albumKeyOf, avoidArtistRoots, avoidAnchorRoot,

@@ -20,4 +20,11 @@ export async function PlaybackService(): Promise<void> {
   });
   TrackPlayer.addEventListener(Event.RemotePause, () => TrackPlayer.pause());
   TrackPlayer.addEventListener(Event.RemoteStop, () => TrackPlayer.stop());
+
+  // Never settle. On Android this is a headless JS task, and RN fires JS timers
+  // behind a paused activity only while one is running — the feed poll that
+  // keeps lock-screen and Bluetooth metadata current among them. RN 0.85 never
+  // delivered the finish signal; 0.86 does, so returning here stopped every
+  // timer the moment the screen locked.
+  await new Promise<never>(() => {});
 }

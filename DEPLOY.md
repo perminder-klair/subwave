@@ -118,7 +118,7 @@ After the stack is up:
 ```
 
 Edit the `JINGLES` array at the top of the script to taste, then re-run.
-Liquidsoap's jingles playlist uses `reload_mode="watch"`, so new renders are
+The script tells the mixer to reload its jingles playlist, so new renders are
 picked up live — no restart.
 
 ## 6. Cloudflare

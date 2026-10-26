@@ -9,16 +9,19 @@ import type { PlayerStatus } from '@/hooks/usePlayer';
 import type { StationApi } from '@/lib/api';
 import {
   stationLockRequired,
+  stationReadsOpen,
   verifyStoredPasswords,
+  type GatePhase,
   type StationAuthResult,
   type StationPrivacy,
 } from '@/lib/station-password';
 
-/** 'open' = no lock; 'checking' = verifying a saved password; 'prompt' = ask. */
-export type GatePhase = 'open' | 'checking' | 'prompt' | 'ok';
+export type { GatePhase };
 
 export interface StationGate {
   phase: GatePhase;
+  /** A station-gated read (lyrics) may be sent: see stationReadsOpen. */
+  readsOpen: boolean;
   /** privatePlayer is on: the gate stands in for the whole player rather than
    *  sitting over it, and the face stays hidden until the password is in. */
   solid: boolean;
@@ -142,5 +145,5 @@ export function useStationGate({
     [api],
   );
 
-  return { phase, solid, unlock };
+  return { phase, readsOpen: stationReadsOpen(privacy, phase), solid, unlock };
 }

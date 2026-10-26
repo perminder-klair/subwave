@@ -4,10 +4,11 @@
 
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-pool-picker-prompt-'));
 process.env.STATE_DIR = stateRoot;
@@ -61,9 +62,9 @@ globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) =
     usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }) as typeof fetch;
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 test('rendered pool prompt distinguishes the expected predecessor from aired history', async () => {

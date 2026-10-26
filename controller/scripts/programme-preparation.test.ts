@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = await mkdtemp(join(tmpdir(), 'subwave-programme-preparation-'));
 process.env.STATE_DIR = root;
@@ -12,7 +13,7 @@ const programme = await import('../src/broadcast/programme.js');
 const { runPersonaHandoff } = await import('../src/broadcast/dj-agent.js');
 const registry = await import('../src/skills/registry.js');
 const { getFullContext } = await import('../src/context.js');
-after(() => rm(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 
 test('late preparation replaces a generic plan while preserving aired programme beats', async (t) => {
   await settings.load();

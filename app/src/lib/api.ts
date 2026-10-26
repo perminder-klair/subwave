@@ -1,6 +1,7 @@
 // The runtime station base is the site root, with /api and stream mounts
 // on the same origin (docker/Caddyfile).
 
+import { lyricsResultFor, type LyricsResult } from './lyrics';
 import { mountFor, type StreamFormat } from './streamFormat';
 import { stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
 import {
@@ -62,6 +63,10 @@ export interface StationApi {
   likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon; all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
+  /** Lyrics for the track this listener is hearing (now-playing's
+   *  `subsonic_id`). A private station gates it on the station password,
+   *  sent as `x-station-auth`. Never throws. */
+  currentLyrics(songId: string): Promise<LyricsResult>;
   /** Check a private-station password against `POST /station-auth` (#478),
    *  which fails closed and is rate-limited. Never throws. */
   checkStationAuth(password: string): Promise<StationAuthResult>;
@@ -203,6 +208,19 @@ export function createApi(
         return (await res.json()) as LikeStatus;
       } catch {
         return null;
+      }
+    },
+    currentLyrics: async (songId) => {
+      try {
+        const password = stationPassword();
+        const res = await fetchWithTimeout(api(`/lyrics/current?songId=${encodeURIComponent(songId)}`), {
+          cache: 'no-store',
+          headers: password ? { 'x-station-auth': password } : undefined,
+        });
+        const body: unknown = res.ok ? await res.json().catch(() => undefined) : undefined;
+        return lyricsResultFor(res.status, res.headers.get('Retry-After'), body);
+      } catch {
+        return { kind: 'unavailable', retryAfterSec: null };
       }
     },
     cover: (subsonicId) => api(`/cover/${encodeURIComponent(subsonicId)}`),

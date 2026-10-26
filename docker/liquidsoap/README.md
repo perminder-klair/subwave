@@ -61,6 +61,7 @@ docker build -f docker/Dockerfile.aio --target liquidsoap \
   -t subwave-test/aio-liquidsoap:smoke .
 python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:smoke
 python3 scripts/liquidsoap-image-smoke.test.py -v
+python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke   # resume into another show airs the new fallback
 ```
 
 The smoke test uses a unique container, an ephemeral loopback port, disposable

@@ -11,6 +11,7 @@ import { isInstrumental } from '../../music/lyric-vocal.js';
 import { soundKnnWidth } from '../../util/similar-tracks.js';
 import { genreSuggest } from '../../music/genre-suggest.js';
 import { parseList, parseIntSafe } from './params.js';
+import { compileSearch } from '../../music/search-query.js';
 
 export const router = express.Router();
 
@@ -26,6 +27,10 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     const offset = parseIntSafe(q.offset, 0);
     const yearFrom = parseIntSafe(q.yearFrom, null);
     const yearTo = parseIntSafe(q.yearTo, null);
+    // The search box speaks the query language (music/search-query). Text that
+    // is not a valid query is searched as plain text, and the reason rides along
+    // for the box to show.
+    const search = typeof q.q === 'string' && q.q.trim() ? compileSearch(q.q) : null;
 
     const result = library.filter({
       moods,
@@ -34,7 +39,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
       vocal,
       yearFrom,
       yearTo,
-      q: typeof q.q === 'string' ? q.q : null,
+      query: search?.query ?? null,
       sort,
       limit,
       offset,
@@ -48,6 +53,15 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     const stats = library.stats();
     res.json({
       ...result,
+      // Set when the search text was not a valid query and ran as plain text.
+      queryError: search?.error ? { message: search.error.message, offset: search.error.offset, kind: search.error.kind } : null,
+      // The query read back in plain words, for the box to confirm, and the text
+      // it was read from, so the box never shows feedback for older keystrokes.
+      readsAs: search?.readsAs ?? '',
+      searched: typeof q.q === 'string' ? q.q.trim() : '',
+      // True while a bulk change is still being re-keyed: the search's answer
+      // may be missing tracks, so the box says so and asks again until it is whole.
+      reindexing: result.reindexing ?? false,
       moodVocab: settings.moodVocab(),
       stats: {
         total: stats.total,

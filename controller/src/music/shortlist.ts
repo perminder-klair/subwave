@@ -12,7 +12,7 @@ import { artistCreditsOverlap, artistRootKey, creditInRoots, filterPickerCandida
 import { type YearRange, hasEraBound } from './show-filter.js';
 import { shortlistOffers, type CandidateOffers } from './shortlist-offers.js';
 import { shortlistSearchCalls, type ShortlistSearch } from './shortlist-search.js';
-import { allowsMoodWildcardDiscovery } from './discovery-policy.js';
+import { allowsMoodWildcardDiscovery, ownsPickDirection } from './discovery-policy.js';
 
 export type ShortlistSourceCall = {
   source: string;
@@ -102,7 +102,7 @@ export function planShortlistSources(
   if (!moods.length && context.dominantMood) moods.push(context.dominantMood);
   const energies = strings(context.energies).filter(value => ENERGY_VALUES.has(value));
   const genres = strings(context.genres?.length ? context.genres : context.scope.genreLock);
-  const ownsDirection = !!(context.scope.episodeSource || context.scope.playlistLock || context.scope.audioWaypoint?.length);
+  const ownsDirection = ownsPickDirection(context.scope);
 
   if (context.scope.episodeSource) add('context', 'episodeArtistTracks');
   if (context.scope.audioWaypoint?.length) add('context', 'tracksTowardJourney');

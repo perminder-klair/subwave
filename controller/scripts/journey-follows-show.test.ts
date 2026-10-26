@@ -18,10 +18,11 @@
 // Real better-sqlite3 library in a temp STATE_DIR. Run: `npm test -- journey-follows-show`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = mkdtempSync(join(tmpdir(), 'subwave-journey-show-'));
 process.env.STATE_DIR = stateDir;
@@ -32,7 +33,7 @@ const runs = await import('../src/broadcast/dj-agent/runs.js');
 const { showDestinationPool, destinationOrder, journeyDestinationIds } = await import('../src/music/journey-destination.js');
 const { energyForDaypart } = await import('../src/context.js');
 
-after(() => rmSync(stateDir, { recursive: true, force: true }));
+after(() => removeTempDir(stateDir));
 
 await db.open({ embeddingDim: 8, adoptStoredDim: true });
 

@@ -63,6 +63,19 @@ export function introRenderBudgetSec(remaining: number | null): number | null {
   return budget >= MIN_PRERENDER_BUDGET_SEC ? budget : 0;
 }
 
+// The cue-landing probe's own ceiling (#2003): one ffprobe read of Y around its cue.
+export const CUE_PROBE_TIMEOUT_MS = 2000;
+
+// Cue-landing probe budget, in ms. The probe sits after the intro render and right
+// before Y's next.txt write, so it gets only what the commit reserve leaves, capped
+// at its own ceiling; an unknown clock gets the ceiling. Zero skips the probe: no
+// stamp, and the clip -> Y seam aligns on the cue as it did before the probe existed.
+export function cueProbeBudgetMs(remaining: number | null): number {
+  if (remaining == null) return CUE_PROBE_TIMEOUT_MS;
+  const budgetMs = Math.floor((remaining - DRAIN_COMMIT_RESERVE_SEC) * 1000);
+  return budgetMs > 0 ? Math.min(CUE_PROBE_TIMEOUT_MS, budgetMs) : 0;
+}
+
 type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
 
 // A successor releases the held item with pair stamps, including a listener request; preserve

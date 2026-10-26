@@ -4,15 +4,16 @@
 // the done-tool retry re-sends the same messages, so the whole pick was lost to
 // the pool (seen live: a co-host ident aired inside that gap).
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-pick-window-'));
 process.env.STATE_DIR = root;
 const session = await import('../src/broadcast/session.js');
-after(() => rmSync(root, { recursive: true, force: true }));
+after(() => removeTempDir(root));
 
 function context() {
   return {

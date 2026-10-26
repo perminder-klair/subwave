@@ -1,26 +1,10 @@
 # CLAUDE.md — `app/` (native)
 
-Loaded when working under `app/`. Station-wide architecture lives in the root `CLAUDE.md`.
+The Expo / React Native player for iOS and Android, with its own `package.json`, `node_modules` and `eas.json`. Read [`docs/TESTING.md`](docs/TESTING.md) before touching native config, a dependency or the RNTP patch: its architecture-critical section holds the reasoning behind the native rules below, and the files named in the other rules explain those.
 
-### Native app (`app/`)
-
-A separate **Expo SDK 57 / React Native** project (own `package.json`, `node_modules`, `eas.json`) — the native iOS + Android player. It ports the web player's hooks/UI to RN + NativeWind, with the same listener experience (now-playing, booth, timeline, requests, schedule, themes, a Skia visualiser). Background audio + lock-screen / CarPlay controls come from **`react-native-track-player`** (wrapped in `src/audio/player.ts` so it's swappable). Like the web player, it's a player for *any* station: the base URL is fully runtime (`StationContext` → `createApi(baseUrl)`), defaulting to the public station, and listeners can add stations by address. Saved station URLs are always credential-free; optional HTTP Basic Auth credentials live in Expo SecureStore and are reconstructed only in the live API client, with an explicit stream header for AVPlayer. Stream defaults to the MP3 floor (`/stream.mp3`); listeners can pick the optional Opus/FLAC/AAC mounts per station via the back panel's SIGNAL row (`lib/streamFormat.ts` gates the choice on the `/now-playing` `stream` flags AND platform decodability — iOS AVPlayer can't demux Ogg, so Opus/FLAC are Android-only; Cast stays MP3). `service.ts` wires remote Play/Pause/Stop but **not skip** (shared live stream).
-
-Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/docs/TESTING.md) before touching native config:
-
-- **New Architecture is mandatory** (RN 0.86 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix; without it Android crashes on the first playback event. The patch also fixes live media-session progress (#857). When changing the patch or upgrading RNTP/KotlinAudio, read the adapter and device-check rules in [`app/docs/TESTING.md`](docs/TESTING.md).
-- **The Live Activity is native, so OTA can't reach it.** The on-air card (Lock
-  Screen, Dynamic Island, and — the point — the **Apple Watch Smart Stack**, which
-  iOS 18+ mirrors it into for free) is a widget extension in `targets/live-activity/`
-  plus a local Expo module in `modules/live-activity/`, driven by
-  `src/hooks/useLiveActivity.ts`. React Native does not run on watchOS, so this is
-  the wrist without a second codebase (a real watch app is #1488). Its SwiftUI ships in the binary: an
-  `expo-updates` OTA changes the hook, never the card. `SubwaveLiveAttributes.swift`
-  is compiled into both targets and `npm test` fails if the copies drift — a
-  mismatch silently stops the card rendering rather than failing the build. Full
-  rules in [`app/docs/TESTING.md`](docs/TESTING.md).
-- **`ios/` and `android/` are gitignored** (Continuous Native Generation) — regenerated from `app.json` + `assets/` by `expo prebuild` / EAS. The source of truth for icons/splash is `assets/` (disc-mark branding) + `app.json`.
-- **A private station has its own password, apart from the Station login** (#478). `/state`'s `privacy` flags drive `useStationGate`: the private player hides the whole face until the password is in (`checking` counts as hidden), stream-only auth prompts over it. Every check is the fail-CLOSED `POST /station-auth`, never `/listener-auth`. The password lives in `lib/station-password.ts`'s own secure-storage key and rides the stream as `?auth=` (so Cast works), while a proxy login keeps its `Authorization` header — Icecast admits on either. `createApi` reads the password through a getter at stream-URL time, so unlocking never changes the client's identity: several hooks (the feed reset, the Live Activity lifecycle) key on it.
-- **No payment call-to-action in the app.** The back panel's About sheet links to the project site, the setup guide, the source and Discord (`src/lib/links.ts`). The Ko-fi link lives on the site footer instead. A donate or tip link to the developer inside the binary fails App Store 3.1.1 and Play's Payments policy outside the US, and the app is live on both stores.
-
-Distribution is **EAS cloud builds** → iOS TestFlight + Android internal-distribution link (project `@pinku1/subwave`, bundle `com.getsubwave.app`). The repeat-release workflow lives in the `subwave-app-ios-release` and `subwave-app-android-release` skills; getting it onto a physical Android phone over USB is `subwave-app-android`. See `app/README.md`.
+- **New Architecture is mandatory**, and `patches/react-native-track-player+4.1.2.patch` is what makes RNTP run under it (Android crashes on the first playback event without it). Editing the patch or upgrading RNTP/KotlinAudio follows TESTING.md's adapter and device-check rules.
+- **`ios/` and `android/` are generated** (Continuous Native Generation, gitignored). Change `app.json`, `plugins/` or `assets/`, never the native folders.
+- **OTA cannot reach native code.** The Live Activity card (Lock Screen, Dynamic Island, the Apple Watch Smart Stack) is SwiftUI under `targets/live-activity/` and `modules/live-activity/ios/`, so a change there ships only in a new binary, like a dependency, `patches/`, plugin or native `app.json` change; the JS that drives it (`src/hooks/useLiveActivity.ts`) is OTA-able. `SubwaveLiveAttributes.swift` is compiled into both and must stay byte-identical (`npm test` checks): a mismatch stops the card rendering instead of failing the build.
+- **The station password is not the station login** (#478). Every check is the fail-closed `POST /station-auth`; the password rides the stream as `?auth=` so Cast works; `createApi` reads it through a getter because the feed reset and the Live Activity lifecycle key on the `api` object's identity, so rebuilding the client on unlock would reset both.
+- **Remote controls have no skip**, because every listener shares one live stream: `src/audio/player.ts`'s capability lists leave it out, and `service.ts` registers no handler.
+- **No donate or tip link anywhere in the app.** Store payment policy forbids it (App Store 3.1.1, Play Payments); `src/lib/links.ts` explains.

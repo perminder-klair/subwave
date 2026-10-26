@@ -12,10 +12,11 @@
 
 import assert from 'node:assert/strict';
 import { deferred } from './test-utils/async.js';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-pair-drain-interleaving-'));
 process.env.STATE_DIR = stateRoot;
@@ -26,12 +27,12 @@ const { queue } = await import('../src/broadcast/queue.js');
 const { pickerAgent, runTrackEvent } = await import('../src/broadcast/dj-agent.js');
 const session = await import('../src/broadcast/session.js');
 
-after(() => {
+after(async () => {
   const q = queue as any;
   if (q._persistTimer) clearTimeout(q._persistTimer);
   if (q._recentPlaysTimer) clearTimeout(q._recentPlaysTimer);
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 

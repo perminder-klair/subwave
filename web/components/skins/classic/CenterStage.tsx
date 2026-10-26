@@ -1,8 +1,8 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { Coins, Heart } from 'lucide-react';
+import { Captions, CaptionsOff, Coins, Heart } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useTrackLike } from '@/components/skins/sharedHooks';
 import { fmtTime } from '@/lib/format';
@@ -13,6 +13,8 @@ import CountUp from './CountUp';
 import { Ripple } from '@/components/ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
+import type { TrackLyrics } from '@/components/skins/lyrics';
+import LyricsSettings, { usePopoverDismiss } from '@/components/skins/LyricsSettings';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
 
 /** Seconds before the end of the track that the "up next" tease fades in. The
@@ -70,6 +72,43 @@ function LikeHeart() {
   );
 }
 
+/** This listener's lyrics, as the stage offers them: their switch, and the
+ *  track's answer for the settings the button beside the heart opens. */
+export interface StageLyrics {
+  shown: boolean;
+  onToggle: () => void;
+  track: TrackLyrics;
+}
+
+/** The lyrics button beside the heart: shown whenever the station offers
+ *  lyrics, so they can be turned back on from where they were. It opens the
+ *  lyrics settings; L still shows and hides them at once. */
+function LyricsButton({ shown, open, onOpen, buttonRef }: {
+  shown: boolean;
+  open: boolean;
+  onOpen: () => void;
+  buttonRef: RefObject<HTMLButtonElement | null>;
+}) {
+  const Icon = shown ? Captions : CaptionsOff;
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      onClick={onOpen}
+      aria-expanded={open}
+      aria-haspopup="dialog"
+      aria-label="Lyrics settings"
+      title="Lyrics (L shows or hides them)"
+      className={cn(
+        'v3-focus ml-[10px] inline-flex cursor-pointer items-center border-0 bg-transparent p-0 align-middle transition-colors',
+        shown || open ? 'text-ink' : 'text-muted hover:text-ink',
+      )}
+    >
+      <Icon size={15} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  );
+}
+
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   /** Epoch ms when the current track started (from useStationFeed). */
@@ -86,11 +125,17 @@ export interface CenterStageProps {
   offline: boolean;
   /** Head of the controller's upcoming queue. Null when the queue is empty. */
   upNext: QueueEntry | null;
+  /** Lyrics are showing (AmbientLyrics), synced or not: the stage gives them
+   *  the right half on wide screens, everything under a one-row header on a
+   *  phone, and a band above the waveform in between. */
+  lyricsShown?: boolean;
+  /** This listener's lyrics; absent while the station has lyrics off. */
+  lyrics?: StageLyrics | null;
   onOpenBooth: () => void;
   onOpenTimeline: () => void;
 }
 
-export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, onOpenBooth, onOpenTimeline }: CenterStageProps) {
+export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, lyricsShown = false, lyrics = null, onOpenBooth, onOpenTimeline }: CenterStageProps) {
   const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
@@ -158,6 +203,15 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
 
   const rippleActive = trackBurst || djBurst;
 
+  // The lyrics settings hang under the track info, outside the title's swap,
+  // so a new track leaves them open rather than remounting them.
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const lyricsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const closeLyrics = useCallback(() => setLyricsOpen(false), []);
+  const toggleLyricsOpen = useCallback(() => setLyricsOpen((open) => !open), []);
+  usePopoverDismiss(lyricsOpen, closeLyrics, lyricsPopoverRef, lyricsButtonRef);
+
   // The hover-glitch ghosts (globals.css `.v3-cover-*`) paint from `--cover`.
   // useDynamicStyle keeps this off the lint-forbidden `style` prop.
   const coverRef = useRef<HTMLButtonElement>(null);
@@ -170,8 +224,37 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
     // waveform shape that breakpoint renders. Short/wide windows bottom-align
     // so long DJ lines grow upward, never over the band. The right reserve
     // tracks the DotRail width (slimmed on phones, see DotRail's <sm sizing).
-    <div className="absolute top-[72px] right-[80px] bottom-[220px] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[212px] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[300px]">
-      <div className="isolate flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6">
+    // While lyrics show (AmbientLyrics), lg and up splits the stage: the
+    // track info stacks in a 360px column on the left, ruled off from the
+    // lyrics beside it, and keeps only the cover, the title and the artist
+    // line. Narrower screens add --lyrics-band to the bottom reserve for the
+    // band above the waveform. That band is left out on a short screen below
+    // lg, so the reserve is too.
+    // A phone (below sm, tall enough for the lyrics) had no room for the band:
+    // the cover stacked over a two-line title, the tags and the DJ line ran
+    // out of the stage, up under the top bar and down into the lyrics. There
+    // the stage shrinks to one row under the top bar, a 64px cover beside a
+    // one-line title and the artist, and drops what lg drops. AmbientLyrics
+    // starts the lyrics at a fixed 152px below it, so the row stays ~65px.
+    <div
+      className={cn(
+        'absolute top-[72px] right-[80px] bottom-[calc(220px+var(--lyrics-band,0px))] left-4 flex flex-col items-start justify-center sm:right-24 sm:left-8 [@media(min-width:640px)_and_(max-height:759px)]:bottom-[calc(212px+var(--lyrics-band,0px))] [@media(min-width:640px)_and_(max-height:759px)]:justify-end [@media(min-width:640px)_and_(min-height:760px)]:bottom-[calc(300px+var(--lyrics-band,0px))]',
+        lyricsShown && '[--lyrics-band:132px] lg:[--lyrics-band:0px] [@media(max-width:1023px)_and_(max-height:699px)]:[--lyrics-band:0px]',
+        // The column's rule runs up to the top bar's (49px at lg).
+        lyricsShown && 'lg:top-[49px] lg:right-auto lg:left-0 lg:w-[360px] lg:border-r lg:border-separator-strong lg:px-8',
+        lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:bottom-auto',
+      )}
+    >
+      {/* Above the stage's lyrics (z-[1]), which the lyrics settings can
+          overlap on a narrow screen. */}
+      <div
+        className={cn(
+          'relative isolate z-[2] flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-6',
+          lyricsShown && 'lg:flex-col lg:items-start lg:gap-5',
+          // Full width, so the one-line title truncates rather than widening the row.
+          lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:w-full [@media(max-width:639px)_and_(min-height:700px)]:flex-row [@media(max-width:639px)_and_(min-height:700px)]:items-center',
+        )}
+      >
         {/* Reserve the artwork slot even without a cover to prevent layout shifts. */}
         <button
           ref={coverRef}
@@ -184,6 +267,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             // cover. The 96px floor is what phones get: 14vw is only ~55px on a
             // 390px screen, too small a target for the tap-to-timeline.
             'v3-cover-frame v3-focus relative h-[clamp(96px,min(14vw,20vh),240px)] w-[clamp(96px,min(14vw,20vh),240px)] shrink-0 appearance-none border-0 bg-transparent p-0',
+            lyricsShown && 'lg:h-[min(200px,24vh)] lg:w-[min(200px,24vh)] [@media(max-width:639px)_and_(min-height:700px)]:size-16',
             rippleActive && 'v3-cover-live',
           )}
         >
@@ -218,31 +302,34 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
           <span className="v3-cover-tick v3-cover-tick--bl" aria-hidden="true" />
           <span className="v3-cover-tick v3-cover-tick--br" aria-hidden="true" />
         </button>
-        <div className="min-w-0">
-          <div className="v3-caption mb-[14px] text-muted">
+        {/* Static in the phone view, so the lyrics settings hang from the
+            whole row rather than from beside the cover. */}
+        <div className={cn('relative min-w-0', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:static')}>
+          <div className={cn('v3-caption mb-[14px] text-muted', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:mb-1 [@media(max-width:639px)_and_(min-height:700px)]:truncate')}>
             {offline ? (
               'Off air'
             ) : (
               <>
-                Now playing
+                {/* The phone view's row is plainly the track on air, and the
+                    label would push the clock off a narrow phone. */}
+                <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
+                  Now playing{live ? ' — ' : ''}
+                </span>
                 {live && duration > 0 ? (
-                  <>
-                    {' — '}
-                    <button
-                      type="button"
-                      onClick={toggleClock}
-                      title={showRemaining ? 'Show elapsed time' : 'Show time remaining'}
-                      aria-label={showRemaining ? 'Time remaining — switch to elapsed' : 'Elapsed time — switch to remaining'}
-                      className="v3-focus v3-tab-num cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-inherit uppercase"
-                    >
-                      {showRemaining
-                        ? `-${fmtTime(remaining)} / ${fmtTime(duration)}`
-                        : `${fmtTime(elapsed)} / ${fmtTime(duration)}`}
-                    </button>
-                  </>
-                ) : live ? ` — ${fmtTime(elapsed)}` : ''}
+                  <button
+                    type="button"
+                    onClick={toggleClock}
+                    title={showRemaining ? 'Show elapsed time' : 'Show time remaining'}
+                    aria-label={showRemaining ? 'Time remaining — switch to elapsed' : 'Elapsed time — switch to remaining'}
+                    className="v3-focus v3-tab-num cursor-pointer border-0 bg-transparent p-0 font-[inherit] text-inherit uppercase"
+                  >
+                    {showRemaining
+                      ? `-${fmtTime(remaining)} / ${fmtTime(duration)}`
+                      : `${fmtTime(elapsed)} / ${fmtTime(duration)}`}
+                  </button>
+                ) : live ? fmtTime(elapsed) : ''}
                 {llmTokens != null && (
-                  <>
+                  <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
                     {' · '}
                     <span
                       className="inline-flex items-center gap-1 align-middle text-ink-faint"
@@ -252,7 +339,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                       <Coins size={12} strokeWidth={1.75} aria-hidden="true" />
                       <CountUp value={llmTokens} className="v3-tab-num" />
                     </span>
-                  </>
+                  </span>
                 )}
               </>
             )}
@@ -267,17 +354,43 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             >
               {live ? (
                 <>
-                  <h1 className="v3-title m-0 line-clamp-2 text-ink" title={nowPlaying?.title}>
+                  <h1
+                    className={cn(
+                      'v3-title m-0 line-clamp-2 text-ink',
+                      // .v3-title is unlayered, so its size yields only to !,
+                      // and its text-wrap to a nowrap that is !, too.
+                      lyricsShown && 'lg:text-[clamp(30px,3vw,46px)]!',
+                      lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:block [@media(max-width:639px)_and_(min-height:700px)]:truncate! [@media(max-width:639px)_and_(min-height:700px)]:text-[20px]! [@media(max-width:639px)_and_(min-height:700px)]:leading-[1.2]!',
+                    )}
+                    title={nowPlaying?.title}
+                  >
                     {nowPlaying?.title}
                   </h1>
-                  <div className="mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted">
-                    <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
-                    {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
-                    {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
+                  {/* One line in the phone view: the artist truncates so the
+                      heart and the lyrics button stay on it. */}
+                  <div
+                    className={cn(
+                      'mt-[4px] text-[clamp(13px,1.4vw,18px)] leading-snug font-medium text-muted',
+                      lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:flex [@media(max-width:639px)_and_(min-height:700px)]:items-center',
+                    )}
+                  >
+                    <span className={cn('text-ink', lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:min-w-0 [@media(max-width:639px)_and_(min-height:700px)]:truncate')}>
+                      {nowPlaying?.artist || 'Unknown artist'}
+                    </span>
+                    {nowPlaying?.album && <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}> · {nowPlaying.album}</span>}
+                    {nowPlaying?.year && <span className={cn(lyricsShown && '[@media(max-width:639px)_and_(min-height:700px)]:hidden')}> · {nowPlaying.year}</span>}
                     <LikeHeart />
+                    {lyrics && (
+                      <LyricsButton
+                        shown={lyrics.shown}
+                        open={lyricsOpen}
+                        onOpen={toggleLyricsOpen}
+                        buttonRef={lyricsButtonRef}
+                      />
+                    )}
                   </div>
                   {hasMeta && (
-                    <div className="v3-caption mt-[10px] text-muted">
+                    <div className={cn('v3-caption mt-[10px] text-muted', lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden')}>
                       {metaTokens.join(SEP)}
                       {moodPhrase && (
                         <span className="text-accent-2">
@@ -295,11 +408,29 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
               )}
             </m.div>
           </AnimatePresence>
+          {lyrics && lyricsOpen && live && (
+            <div
+              ref={lyricsPopoverRef}
+              role="dialog"
+              aria-label="Lyrics settings"
+              // Short of the DotRail (80px on a phone), which draws above it.
+              className="absolute top-full left-0 z-10 mt-3 w-[min(340px,calc(100vw-6rem))] border border-line bg-bg p-3 shadow-lg"
+            >
+              <LyricsSettings shown={lyrics.shown} onToggle={lyrics.onToggle} track={lyrics.track} />
+            </div>
+          )}
         </div>
       </div>
 
       {live && (
-        <DjThinkingLine feed={feed} enabled={djLineOn} currentTrackId={subsonicId} buddyOn={boothBuddyOn} onOpenBooth={onOpenBooth} />
+        <DjThinkingLine
+          feed={feed}
+          enabled={djLineOn}
+          currentTrackId={subsonicId}
+          buddyOn={boothBuddyOn}
+          onOpenBooth={onOpenBooth}
+          className={cn(lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden')}
+        />
       )}
 
       <AnimatePresence>
@@ -312,7 +443,10 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
-            className="v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted"
+            className={cn(
+              'v3-caption v3-focus mt-[10px] max-w-full cursor-pointer truncate border-0 bg-transparent p-0 text-left text-muted',
+              lyricsShown && 'lg:hidden [@media(max-width:639px)_and_(min-height:700px)]:hidden',
+            )}
           >
             <span className="text-accent-2">↦ up next</span>
             {' · '}

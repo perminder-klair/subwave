@@ -137,6 +137,47 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'GET',
+        path: '/lyrics/current',
+        summary: 'Lyrics for the track a listener is hearing',
+        description:
+          'Lyrics for a library track, normalized from the music server\'s ' +
+          'structured lyrics, or from LRCLIB for a track the music server has no ' +
+          'timed lyrics for when the operator has that fallback on (`source` says ' +
+          'which; `pending: true` means a lookup is running, so ask again shortly). ' +
+          'A listener hears the stream a buffer behind the live ' +
+          'edge, so pass the `songId` the player is showing; the station answers ' +
+          'for the on-air track or one of the three before it, and 409s anything ' +
+          'older. Omit it for the on-air track. Timed lines carry `startMs` on the ' +
+          'PLAYED timeline (a trimmed silent head already taken off), so compare ' +
+          'them with elapsed time since the track started; untimed lines carry ' +
+          'null. `offsetMs` is the station\'s correction for this track: add it to ' +
+          'elapsed time before choosing the active line. Empty `lines` means the ' +
+          'track has no lyrics (or is not a library track). A 503 means the music ' +
+          'server did not answer — retry after `Retry-After`, never read it as "no ' +
+          'lyrics". 403 when the operator has the Lyrics panel switched off. ' +
+          'Station-gated like `/similar-tracks`: open on a public station.',
+        auth: 'station',
+        queryParams: [
+          {
+            name: 'songId',
+            description: 'The track the player is showing (now-playing\'s `subsonic_id`). Omit for the on-air track.',
+            example: 'a1b2c3',
+          },
+        ],
+        responseExample: {
+          songId: 'a1b2c3',
+          synced: true,
+          offsetMs: 0,
+          lines: [
+            { startMs: 12500, text: 'First lyric line' },
+            { startMs: 15300, text: 'Second lyric line' },
+          ],
+          source: 'music-server',
+          pending: false,
+        },
+      },
+      {
+        method: 'GET',
         path: '/state',
         summary: 'Queue & history',
         description:
@@ -408,9 +449,15 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         method: 'POST',
         path: '/dj/skip',
         summary: 'Skip the current track',
+        // No bodyExample on purpose: the playground pre-fills it, and a sample
+        // id would turn its default press into a refused targeted skip.
         description:
           'Force-end the current track (operator override). There is no ' +
-          'listener-facing skip by design — this is admin-only.',
+          'listener-facing skip by design — this is admin-only. Optional body ' +
+          '`{ "expectId": "<subsonic_id>" }` (the id from /now-playing) makes it a ' +
+          'targeted skip: 409 with a `reason` (track-changed, jingle-on-air, ' +
+          'bed-on-air, break-on-air) and nothing skipped unless that track is ' +
+          'still the one on air. No body: ends whatever is on air.',
         auth: 'admin',
         mutatesAir: true,
         responseExample: { ok: true },
@@ -662,7 +709,7 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_similar_tracks', title: 'Tracks that sound like this', description: 'CLAP sound-alike neighbours for a seed track.', endpoint: 'GET /similar-tracks', auth: 'station' },
   { name: 'subwave_queue_track', title: 'Queue an exact track', description: 'Push a specific track to the queue.', endpoint: 'POST /dj/queue-track', auth: 'admin', mutatesAir: true },
   { name: 'subwave_queue_block', title: 'Queue an album or artist block', description: 'Queue a whole album, or a run of tracks by one artist, in one action.', endpoint: 'POST /dj/queue-block', auth: 'admin', mutatesAir: true },
-  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track. Optional expectId skips only that track, refusing if it has ended or a jingle, bed or break is on air instead.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_announce', title: 'DJ announce', description: 'Make the DJ speak text on air.', endpoint: 'POST /dj/say', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_segment', title: 'DJ segment', description: 'Fire a canned voice segment.', endpoint: 'POST /dj/segment', auth: 'admin', mutatesAir: true },
   { name: 'subwave_list_skills', title: 'List skills', description: 'The DJ\'s skill-segment catalogue.', endpoint: 'GET /dj/skills', auth: 'admin' },

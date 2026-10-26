@@ -22,9 +22,11 @@ export interface NowPlayingTrack {
 }
 
 export interface WeatherContext {
+  /** Simplified WMO: clear | cloudy | foggy | rainy | snowy | stormy | unknown. */
   condition?: string;
   temp?: number;
   location?: string;
+  isDay?: boolean;
 }
 
 export interface FestivalContext {
@@ -33,6 +35,10 @@ export interface FestivalContext {
 }
 
 export interface TimeContext {
+  /** The controller's day period (context.ts PERIOD_TABLE): early-morning,
+   *  morning, midday, afternoon, drive-time, evening, late-evening,
+   *  after-hours. */
+  period?: string;
   show?: string;
   vibe?: string;
 }
@@ -182,6 +188,7 @@ export interface RequestTrack {
 export interface RequestResult {
   success: boolean;
   pending?: boolean;
+  outcome?: 'matched' | 'substituted' | 'cooldown' | 'already-queued' | 'chat' | 'no-match' | 'unsupported' | 'error';
   ack?: string;
   track?: RequestTrack;
   queuePosition?: number;
@@ -201,6 +208,8 @@ export interface StationState {
   /** Operator player defaults. `skin` indexes components/skins;
    *  `tuneInOverlay` gates the tap-to-tune gate (default on). */
   ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+  /** Whether the operator has the Lyrics panel on. Absent on an older controller. */
+  lyrics?: { enabled?: boolean };
   /** Private-station flags (#478) — booleans only, never credentials.
    *  `privatePlayer` swaps the player pages for a "private station" screen;
    *  `listenerAuth` means the mounts demand the shared listener password
