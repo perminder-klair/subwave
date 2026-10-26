@@ -1,0 +1,50 @@
+name: Unit tests
+
+# Keep the controller and web unit suites as required PR checks. Lint and
+# audio-tests intentionally cover different seams; neither runs the complete
+# node:test suites.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unit:
+    name: unit tests (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [controller, web]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      # Controller tests import web helpers for the shared dashboard shapes.
+      - name: Install web dependencies for controller tests
+        if: matrix.package == 'controller'
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      - run: npm test

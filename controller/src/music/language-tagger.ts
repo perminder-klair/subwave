@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { djObject } from '../llm/sdk.js';
+import { optionalSegmentsAllowed } from '../broadcast/dj-budget.js';
 import { canonicalLanguage } from './request-normalize.js';
 import type { LanguageMode, LanguageSource, TrackLanguageTag } from './library-db/types.js';
 
@@ -166,6 +167,12 @@ function sanitize(result: z.infer<typeof LanguageResult>): LanguageDecision {
 
 export async function detectWithAi(samples: string[]): Promise<LanguageDecision[]> {
   if (!samples.length) return [];
+  if (!optionalSegmentsAllowed()) {
+    throw Object.assign(
+      new Error('Language AI fallback paused by the daily LLM budget'),
+      { code: 'LLM_BUDGET_EXHAUSTED' },
+    );
+  }
   const numbered = samples.map((sample, i) => `${i + 1}. ${sample}`).join('\n');
   const parsed = await djObject({
     system: `You identify the language of song lyrics. Return one result per numbered excerpt. Use any valid ISO 639-3 code in primaryLanguage and languages, including less common and regional languages not listed in this prompt. Keep regional languages distinct rather than collapsing them into a larger related language. Examples include Hindi hin, Punjabi pan, Haryanvi bgc, Bhojpuri bho, Marathi mar, Urdu urd, Bengali ben, Tamil tam, Telugu tel, Gujarati guj, Nepali nep, and English eng. Use mode mixed only when a secondary language is substantial and repeated, not for a borrowed word. Use instrumental when there is no linguistic vocal content. Use unknown when the excerpt is insufficient. Do not infer from an artist, title, genre, nationality, or script alone.`,
