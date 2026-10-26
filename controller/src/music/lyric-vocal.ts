@@ -82,6 +82,13 @@ export function instrumentalFromJson(json: string | null): number | null {
 // merely sings the word isn't caught.
 const INSTRUMENTAL_RE = /^\s*[[(]?\s*(?:au\s*:\s*)?instrumental\s*[)\]]?\s*$/i;
 
+// Exported so the public lyrics payload (`music/lyrics-public.ts`) screens the
+// same markers off the same `getStructuredLyrics()` shape. One owner for the
+// pattern — a second copy would drift the moment a new marker spelling shows up.
+export function isInstrumentalMarker(text: string): boolean {
+  return INSTRUMENTAL_RE.test(text);
+}
+
 // Consecutive sung lines closer than this merge into one range; a wider gap
 // splits them so the ranges expose real vocal-free stretches.
 const MERGE_GAP_MS = 8_000;
@@ -96,7 +103,7 @@ export function deriveVocalFromLyrics(lyrics: StructuredLyrics | null): LyricVoc
   if (!lyrics) return null;
   const lines = lyrics.lines.filter((l) => l.text.trim().length > 0);
 
-  if (lines.length > 0 && lines.every((l) => INSTRUMENTAL_RE.test(l.text))) {
+  if (lines.length > 0 && lines.every((l) => isInstrumentalMarker(l.text))) {
     return { instrumental: true, vocalRanges: [], introMs: null };
   }
 

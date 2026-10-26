@@ -8,6 +8,7 @@ import {
   createStationPasswordStore,
   stationAuthResult,
   stationLockRequired,
+  stationReadsOpen,
   verifyStoredPasswords,
   withStreamAuth,
   type StationAuthResult,
@@ -65,6 +66,18 @@ test('either lock requires the password; absent flags are a public station', () 
   assert.equal(stationLockRequired({}), false);
   assert.equal(stationLockRequired(undefined), false);
   assert.equal(stationLockRequired(null), false);
+});
+
+test('a gated read waits for a locked station’s proven password, never for open alone', () => {
+  const phases = ['open', 'checking', 'prompt', 'ok'] as const;
+  for (const privacy of [undefined, null, {}, { privatePlayer: false, listenerAuth: false }]) {
+    for (const phase of phases) assert.equal(stationReadsOpen(privacy, phase), true);
+  }
+  for (const privacy of [{ privatePlayer: true }, { listenerAuth: true }]) {
+    // 'open' is what the gate shows before /state lands, and for the render
+    // in which a lock first appears.
+    for (const phase of phases) assert.equal(stationReadsOpen(privacy, phase), phase === 'ok', `${phase}`);
+  }
 });
 
 test('only 401 means wrong; 429 is the rate limit; anything else says nothing', () => {

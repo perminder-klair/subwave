@@ -19,14 +19,14 @@
 // Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- genre-inputs`.
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
 import Database from 'better-sqlite3';
 import ts from 'typescript';
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = createTempDir(join(tmpdir(), 'subwave-genre-inputs-'));
 process.env.STATE_DIR = stateDir;
@@ -37,10 +37,10 @@ await db.open({ embeddingDim: 4 });
 await library.load();
 // What the tagger and analyzer children are: another connection to the file.
 const other = new Database(db.DB_PATH);
-after(() => {
+after(async () => {
   other.close();
   library.shutdown();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
 const d = () => db.requireDb();
 

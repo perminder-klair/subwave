@@ -15,15 +15,14 @@
 //   - the browse page is paged by id and returns the same rows, in the same
 //     order, as the original `SELECT *` sort.
 //
-// Real better-sqlite3 DB in a temp STATE_DIR. Run: `tsx scripts/admin-library-reads.test.ts`.
+// Real better-sqlite3 DB in a temp STATE_DIR. Run: `npm test -- admin-library-reads`.
 
 import assert from 'node:assert/strict';
-import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import Database from 'better-sqlite3';
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const stateDir = createTempDir(join(tmpdir(), 'subwave-admin-reads-'));
 process.env.STATE_DIR = stateDir;
@@ -304,7 +303,7 @@ function paramsFor(o: { moods?: string[]; energy?: string; genre?: string; q?: s
   return p;
 }
 
-test.after(() => {
+test.after(async () => {
   db.close();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });

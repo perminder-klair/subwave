@@ -4,8 +4,9 @@
 //
 // Pins the invariants that keep the registry safe and the mirror honest: every
 // token has a known type, colour values reject CSS-breakout payloads, the font
-// token only accepts curated ids, grain stays in [0,1], and the swatch keys are
-// a subset of the token keys.
+// token only accepts curated ids, grain stays in [0,1], the texture/finish
+// tokens only accept their closed sets, and the swatch keys are a subset of the
+// token keys.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,6 +16,8 @@ import {
   SWATCH_KEYS,
   DISPLAY_FONT_IDS,
   MONO_FONT_IDS,
+  TEXTURE_IDS,
+  FINISH_IDS,
   tokenType,
   isValidTokenValue,
 } from '../src/theme-tokens.js';
@@ -23,7 +26,8 @@ test('every descriptor has a valid type + non-empty label/key', () => {
   for (const t of THEME_TOKENS) {
     assert.ok(t.key.startsWith('--'), `key ${t.key} must start with --`);
     assert.ok(t.label.length > 0, `${t.key} needs a label`);
-    assert.ok(['color', 'font', 'grain'].includes(t.type), `${t.key} bad type`);
+    assert.ok(['color', 'font', 'grain', 'keyword'].includes(t.type), `${t.key} bad type`);
+    if (t.type === 'keyword') assert.ok(t.keywordSet, `${t.key} keyword token needs a keywordSet`);
   }
 });
 
@@ -46,6 +50,8 @@ test('tokenType resolves known keys and rejects unknown', () => {
   assert.equal(tokenType('--bg'), 'color');
   assert.equal(tokenType('--display-font'), 'font');
   assert.equal(tokenType('--grain'), 'grain');
+  assert.equal(tokenType('--texture'), 'keyword');
+  assert.equal(tokenType('--finish'), 'keyword');
   assert.equal(tokenType('--nope'), undefined);
 });
 
@@ -79,6 +85,19 @@ test('display + mono font sets validate disjointly', () => {
 test('grain token accepts [0,1] numbers only', () => {
   for (const v of ['0', '0.5', '1']) assert.ok(isValidTokenValue('--grain', v), `grain ${v}`);
   for (const v of ['-0.1', '1.1', 'abc', '']) assert.ok(!isValidTokenValue('--grain', v), `grain ${v} rejected`);
+});
+
+test('texture + finish tokens accept only their own closed sets', () => {
+  for (const id of TEXTURE_IDS) assert.ok(isValidTokenValue('--texture', id), `texture ${id}`);
+  for (const id of FINISH_IDS) assert.ok(isValidTokenValue('--finish', id), `finish ${id}`);
+  assert.ok(!isValidTokenValue('--texture', 'bloom'), 'finish id rejected for texture token');
+  assert.ok(!isValidTokenValue('--finish', 'scanline'), 'texture id rejected for finish token');
+  // The web layer copies the value into a data attribute, so nothing outside
+  // the set may pass — not even a near miss.
+  for (const v of ['', 'none', 'Scanline', 'scanline ', 'url(#x)']) {
+    assert.ok(!isValidTokenValue('--texture', v), `texture ${JSON.stringify(v)} rejected`);
+    assert.ok(!isValidTokenValue('--finish', v), `finish ${JSON.stringify(v)} rejected`);
+  }
 });
 
 test('unknown keys never validate', () => {

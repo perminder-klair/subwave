@@ -5,10 +5,11 @@
 // - when that pool is small, the agent is handed it through showPoolTracks
 //   instead of probing searches that mostly return nothing.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = mkdtempSync(join(tmpdir(), 'subwave-show-pool-'));
 process.env.STATE_DIR = stateRoot;
@@ -18,7 +19,7 @@ const { buildPickerTools, pickerScope } = await import('../src/llm/internal/tool
 const { SMALL_SHOW_POOL_MAX } = await import('../src/llm/internal/tools/picker/tools/show-pool-tracks.js');
 const library = await import('../src/music/library.js');
 await library.load();
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const row = (i: number, genre: string, extra: Record<string, unknown> = {}) => ({
   id: `t-${i}`, title: `Track ${i}`, artist: `Artist ${i % 17}`, genres: [genre], genre, durationSec: 200, ...extra,

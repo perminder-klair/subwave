@@ -15,6 +15,8 @@ export interface TopBarProps {
   /** Optional — when provided, the show + host line becomes a button that
    *  opens the Schedule drawer. Omitted on Landing where there's no player. */
   onOpenSchedule?: () => void;
+  /** The stage is split for lyrics (AmbientLyrics); the bar says so from lg. */
+  lyricsLive?: boolean;
 }
 
 export default memo(function TopBar({
@@ -24,6 +26,7 @@ export default memo(function TopBar({
   djName,
   activeShow,
   onOpenSchedule,
+  lyricsLive = false,
 }: TopBarProps) {
   const tagline = buildTagline(context);
   const showName = activeShow?.name || null;
@@ -47,6 +50,8 @@ export default memo(function TopBar({
             aria-hidden="true"
           />
           <span className="v3-eyebrow shrink-0">{stationName?.trim() || 'SUB/WAVE'}</span>
+          {/* The ▶ is lifted so its middle sits half a cap height up, level with
+              the capitals; the default `middle` hangs it off the x-height. */}
           {showName && (
             onOpenSchedule ? (
               <button
@@ -55,11 +60,11 @@ export default memo(function TopBar({
                 className="v3-caption v3-focus min-w-0 cursor-pointer truncate border-0 bg-transparent p-0 text-left text-ink hover:underline"
                 title={`${showName} — open schedule`}
               >
-                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
+                <Play className="inline size-2.5 fill-current align-[calc(0.5cap-5px)]" strokeWidth={0} /> {showName}
               </button>
             ) : (
               <span className="v3-caption min-w-0 truncate text-ink" title={showName}>
-                <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {showName}
+                <Play className="inline size-2.5 fill-current align-[calc(0.5cap-5px)]" strokeWidth={0} /> {showName}
               </span>
             )
           )}
@@ -89,6 +94,12 @@ export default memo(function TopBar({
           )}
         </div>
         <div className="flex shrink-0 items-center">
+          {lyricsLive && (
+            <span className="v3-caption mr-5 hidden items-center gap-1.5 font-bold text-vermilion lg:inline-flex">
+              <span aria-hidden="true" className="size-1.5 bg-vermilion" />
+              Lyrics
+            </span>
+          )}
           <ThemeSwitcher variant="player" />
         </div>
       </div>

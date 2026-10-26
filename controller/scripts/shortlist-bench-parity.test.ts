@@ -3,10 +3,11 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import express from 'express';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
+import { removeTempDir } from './test-utils/temp-dir.js';
 const root = mkdtempSync(join(tmpdir(), 'subwave-shortlist-bench-'));
 process.env.STATE_DIR = root;
 process.env.NAVIDROME_URL = 'http://bench-library.invalid';
@@ -24,7 +25,7 @@ let server: Server | undefined;
 after(async () => {
   globalThis.fetch = realFetch; Math.random = realRandom;
   await new Promise<void>(resolve => server ? server.close(() => resolve()) : resolve());
-  library.shutdown(); rmSync(root, { recursive: true, force: true });
+  library.shutdown(); await removeTempDir(root);
 });
 
 test('Discovery Bench includes live targeted searches, operator recap and exploration without queueing', async () => {

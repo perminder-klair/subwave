@@ -68,7 +68,7 @@ export const SECTIONS = [
   {
     id: 'selection', group: 'the station', label: 'Music selection',
     hint: 'agentic · shortlist · requests', icon: ListMusic,
-    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.shortlistSearchPreparation', 'llm.guestMusicalLeanings', 'llm.requestMatching', 'llm.requestWebResolve', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
+    formKeys: ['llm.trackSelection', 'llm.shortlistPasses', 'llm.shortlistSearchPreparation', 'llm.guestMusicalLeanings', 'llm.requestMatching', 'llm.requestWebResolve', 'llm.noRepeatWindow', 'llm.artistVarietyWindow', 'llm.genreVarietyWindow', 'llm.discoverySteps', 'llm.agentTimeoutMs', 'picker'],
   },
   {
     id: 'theme', group: 'the station', label: 'Skin & Themes',
@@ -79,8 +79,8 @@ export const SECTIONS = [
     // Likes and scrobbling were two small tabs under a "listeners" group of
     // their own; both are about what listeners leave behind, so one tab.
     id: 'listeners', group: 'the station', label: 'Listeners',
-    hint: 'likes · scrobbling', icon: Heart,
-    formKeys: ['likes', 'scrobble'],
+    hint: 'likes · lyrics · scrobbling', icon: Heart,
+    formKeys: ['likes', 'lyrics', 'scrobble'],
   },
   {
     id: 'behaviour', group: 'the dj', label: 'DJ behaviour',
@@ -315,6 +315,10 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Use likes to influence picks', section: 'listeners', card: 'AI DJ influence', keywords: 'taste preference signal picker' },
   { label: 'Tracks included', section: 'listeners', card: 'AI DJ influence', keywords: 'top liked count' },
   { label: 'Time window (days)', section: 'listeners', card: 'AI DJ influence', keywords: 'window days all time' },
+
+  // ── lyrics ─────────────────────────────────────────────────────────────────
+  { label: 'Enabled', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics words synced karaoke lrc timing' },
+  { label: 'LRCLIB fallback', section: 'listeners', card: 'Lyrics panel', keywords: 'lyrics synced timed lrc lrclib fallback missing' },
 
   // ── scrobbling ─────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'listeners', card: 'Last.fm', keywords: 'lastfm scrobble spins' },

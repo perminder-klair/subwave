@@ -4,7 +4,7 @@
 // Piper, then Kokoro — dropping the failed primary, duplicates, and anything
 // the availability gate rejects. configuredSlot decides what counts as a
 // configured fallback in the first place.
-// Run: `tsx scripts/tts-fallback.test.ts`.
+// Run: `npm test -- tts-fallback`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 

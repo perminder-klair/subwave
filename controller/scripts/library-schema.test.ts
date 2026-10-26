@@ -10,7 +10,7 @@
 // 'label: rule.label is required'. scripts/blocklist-rules.test.ts keeps the
 // MATCHING half; this file covers validation only.
 //
-// Run: npx tsx scripts/library-schema.test.ts (auto-discovered by npm test).
+// Run: `npm test -- library-schema`.
 import assert from 'node:assert/strict';
 import { runMiddleware as captureMiddleware } from './test-utils/middleware.js';
 import { createTempDir } from './test-utils/temp-dir.js';

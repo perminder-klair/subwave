@@ -14,15 +14,19 @@ import {
   Platform,
   type ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Sheet } from '@/components/ui/Sheet';
 import { useStation } from '@/config/StationContext';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
+import { useLingeringPresence } from '@/hooks/useLingeringPresence';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
+import { useLyricsPreference } from '@/hooks/useLyricsPreference';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
@@ -31,8 +35,15 @@ import { useStationFeed } from '@/hooks/useStationFeed';
 import { useStationGate } from '@/hooks/useStationGate';
 import { useStreamFormat } from '@/hooks/useStreamFormat';
 import { useTrackLike } from '@/hooks/useTrackLike';
+import { useTrackLyrics } from '@/hooks/useTrackLyrics';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
+import {
+  LYRICS_LAYOUT_HOLD_MS,
+  LYRICS_MIN_SCREEN_HEIGHT,
+  plainLyricsReady,
+  syncedLyricsReady,
+} from '@/lib/lyrics';
 import { formatLabel } from '@/lib/streamFormat';
 import type {
   ActiveShow,
@@ -45,6 +56,7 @@ import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
 import PagePanel from './PagePanel';
+import StageLyrics from './StageLyrics';
 import StationGate from './StationGate';
 import TopBar from './TopBar';
 import TransportBar from './TransportBar';
@@ -53,6 +65,7 @@ import AboutDrawer from './drawers/AboutDrawer';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import FormatDrawer from './drawers/FormatDrawer';
+import LyricsDrawer from './drawers/LyricsDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
 import SleepDrawer from './drawers/SleepDrawer';
@@ -72,6 +85,16 @@ const PAGES: readonly BandStop[] = [
 const HOME_INDEX = PAGES.findIndex((p) => p.id === 'now');
 const BOOTH_INDEX = PAGES.findIndex((p) => p.id === 'booth');
 const TIMELINE_INDEX = PAGES.findIndex((p) => p.id === 'timeline');
+
+type SheetId = 'panel' | 'sleep' | 'themes' | 'format' | 'about' | 'lyrics';
+const SHEET_TITLES: Record<SheetId, string> = {
+  panel: 'Back panel',
+  sleep: 'Sleep timer',
+  themes: 'Theme',
+  format: 'Stream format',
+  about: 'About SUB/WAVE',
+  lyrics: 'Lyrics',
+};
 
 const SchedulePage = memo(function SchedulePage({
   api,
@@ -175,6 +198,7 @@ export default function PlayerScreen() {
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
+  const appActive = useAppActive();
 
   // bgPoll bridges the feed/player cycle: streamInfo validates the player
   // format, while tunedIn enables background feed polling.
@@ -237,6 +261,26 @@ export default function PlayerScreen() {
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
+
+  // Lyrics take the Live page while the track has them, synced or not, and
+  // the track info shrinks to one row above them. Never asked for until a
+  // locked station's password is proven (gate.readsOpen): a refusal spends the
+  // household's station-read attempts, and the lyrics ask again once unlocked.
+  const lyricsOn = state.lyrics?.enabled === true;
+  const lyricsPref = useLyricsPreference();
+  const showLyrics = lyricsOn && lyricsPref.shown && !offline && gate.readsOpen;
+  const lyricsTrack = useTrackLyrics(api, showLyrics ? nowPlaying?.subsonic_id : null, appActive);
+  // The hold bridges two tracks that both have lyrics; hiding them (the
+  // switch, going offline, a lock) cuts at once, as on the web.
+  const lyricsLinger = useLingeringPresence(
+    syncedLyricsReady(lyricsTrack) || plainLyricsReady(lyricsTrack),
+    LYRICS_LAYOUT_HOLD_MS,
+  );
+  // A screen too short for the lyrics keeps the full track info, as the web
+  // does; the lyrics settings say why nothing shows.
+  const { height: windowHeight } = useWindowDimensions();
+  const lyricsFit = windowHeight >= LYRICS_MIN_SCREEN_HEIGHT;
+  const lyricsPresent = showLyrics && lyricsFit && lyricsLinger;
 
   // Disarm on tune-out so the next listening session cannot inherit this timer.
   const sleep = useSleepTimer(stop);
@@ -347,9 +391,16 @@ export default function PlayerScreen() {
   const goHome = useCallback(() => goToPage(HOME_INDEX), [goToPage]);
 
   // Share one sheet to avoid competing dismissal callbacks.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | 'about' | null>(
-    null,
+  const [activeSheet, setActiveSheet] = useState<SheetId | null>(null);
+  const openLyrics = useCallback(() => setActiveSheet('lyrics'), []);
+  const stageLyrics = useMemo(
+    () => (lyricsOn ? { shown: lyricsPref.shown, onOpen: openLyrics } : null),
+    [lyricsOn, lyricsPref.shown, openLyrics],
   );
+  // The operator switching lyrics off takes their settings with them.
+  useEffect(() => {
+    if (!lyricsOn) setActiveSheet((open) => (open === 'lyrics' ? null : open));
+  }, [lyricsOn]);
   const themeName = useMemo(
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
@@ -458,7 +509,16 @@ export default function PlayerScreen() {
                     live={tunedIn}
                     onOpenBooth={openBooth}
                     onOpenTimeline={openTimeline}
+                    lyrics={stageLyrics}
+                    compact={lyricsPresent}
                   />
+                  {lyricsPresent ? (
+                    <StageLyrics
+                      track={lyricsTrack}
+                      trackStartedAt={trackStartedAt}
+                      running={appActive && active === HOME_INDEX}
+                    />
+                  ) : null}
                   <Waveform tunedIn={tunedIn} progress={progress} visible={active === HOME_INDEX} />
                 </View>
               </View>
@@ -535,17 +595,7 @@ export default function PlayerScreen() {
       <Sheet
         open={activeSheet !== null}
         onClose={() => setActiveSheet(null)}
-        title={
-          activeSheet === 'panel'
-            ? 'Back panel'
-            : activeSheet === 'sleep'
-              ? 'Sleep timer'
-              : activeSheet === 'format'
-                ? 'Stream format'
-                : activeSheet === 'about'
-                  ? 'About SUB/WAVE'
-                  : 'Theme'
-        }
+        title={SHEET_TITLES[activeSheet ?? 'themes']}
       >
         {activeSheet === 'panel' ? (
           <BackPanelDrawer
@@ -578,6 +628,14 @@ export default function PlayerScreen() {
           />
         ) : null}
         {activeSheet === 'themes' ? <ThemesDrawer /> : null}
+        {activeSheet === 'lyrics' ? (
+          <LyricsDrawer
+            shown={lyricsPref.shown}
+            onToggle={lyricsPref.toggle}
+            track={lyricsTrack}
+            fits={lyricsFit}
+          />
+        ) : null}
         {activeSheet === 'about' ? (
           <AboutDrawer
             onAddStation={() => {

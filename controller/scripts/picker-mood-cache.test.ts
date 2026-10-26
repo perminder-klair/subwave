@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
 import { z } from 'zod';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'subwave-picker-mood-cache-'));
 process.env.STATE_DIR = dir;
@@ -11,7 +12,7 @@ const library = await import('../src/music/library.js');
 const db = await import('../src/music/library-db.js');
 const { buildPickerTools } = await import('../src/llm/tools.js');
 await library.load();
-after(() => { db.close(); rmSync(dir, { recursive: true, force: true }); });
+after(async () => { db.close(); await removeTempDir(dir); });
 
 for (let index = 0; index < 36; index++) {
   const id = `mood-${index}`;

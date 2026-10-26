@@ -1,6 +1,10 @@
 // Offline render fixture using the same annotation writers as the queue drain.
+// `controller` mode also runs the drain's cue-landing probe on Y (#2003), so
+// the render carries the real `liq_clip_cue_late` stamp (ffprobe on PATH);
+// `verbatim` mode stamps the worker's cues as-is and probes nothing.
 import { getAnnotatedUri, getClipUri } from '../src/music/subsonic.js';
 import { CLIP_SEAM_CROSS_SEC, clipSeamCues } from '../src/broadcast/stem-seam.js';
+import { probeCueLanding } from '../src/music/cue-landing.js';
 
 const [mode, station, blend, incoming] = process.argv.slice(2);
 const stationSec = Number(station);
@@ -13,15 +17,26 @@ const cues = mode === 'controller' ? clipSeamCues(render)
   : { outCueSec: render.blendStartSec, inCueSec: render.inCueSec };
 const track = (title: string, path: string, crossSec: number) =>
   ({ id: title, title, artist: 'Seam fixture', path, crossSec });
-const y = track('Y', 'y.flac', stationSec);
+// STEM_SEAM_Y_FILE: Y re-encoded (another FLAC block size, MP3, ...) so the
+// cue lands at a different distance from a codec-frame boundary.
+const yFile = process.env.STEM_SEAM_Y_FILE || 'y.flac';
+const y = track('Y', yFile, stationSec);
+const landing = mode === 'controller'
+  ? await probeCueLanding(`${process.env.MUSIC_LIBRARY_PATH}/${yFile}`, cues.inCueSec, { timeoutMs: 10000 })
+  : null;
+const cueLateSec = landing?.ok ? landing.lateSec : null;
 console.log(JSON.stringify({
   ...cues,
+  workerInCueSec: render.inCueSec,
   crossSec: CLIP_SEAM_CROSS_SEC,
+  cueLateSec,
+  cueLanding: landing ? (landing.ok ? `${landing.codec} ok` : `${landing.codec}: ${landing.reason}`) : 'not probed',
+  yFile,
   libraryPath: process.env.MUSIC_LIBRARY_PATH,
   uris: [
     getAnnotatedUri(track('P', 'p.flac', stationSec)),
     getAnnotatedUri(track('X', 'x.flac', CLIP_SEAM_CROSS_SEC), { cueOutSec: cues.outCueSec, clipLeadSec: CLIP_SEAM_CROSS_SEC }),
     getClipUri(y, `${process.env.MUSIC_LIBRARY_PATH}/clip.wav`, CLIP_SEAM_CROSS_SEC),
-    getAnnotatedUri(y, { cueInSec: cues.inCueSec }),
+    getAnnotatedUri(y, { cueInSec: cues.inCueSec, clipCueLateSec: cueLateSec }),
   ],
 }));

@@ -15,7 +15,7 @@ import {
 const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
 const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
-export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
+export function sendCommand(cmd: string, timeoutMs = 3000, { requireComplete = false }: { requireComplete?: boolean } = {}): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const sock = net.createConnection({ host: HOST, port: PORT });
     let buf = '';
@@ -47,9 +47,10 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
     sock.on('data', (chunk: Buffer) => {
       buf += chunk.toString();
       // Liquidsoap terminates responses with END\r\n
-      if (/END\r?\n/.test(buf)) finish(null, buf.replace(/END\r?\n.*$/s, '').trim());
+      const end = /(?:^|\r?\n)END\r?\n/.exec(buf);
+      if (end) finish(null, buf.slice(0, end.index).trim());
     });
-    sock.on('close', () => finish(null, buf.trim()));
+    sock.on('close', () => finish(requireComplete ? new Error('incomplete liquidsoap telnet response') : null, buf.trim()));
   });
 }
 
@@ -131,20 +132,40 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
-// Force auto.m3u to re-read from disk. The playlist's reload_mode="watch"
-// inotify watch orphans itself because the controller rewrites the file by
-// atomic rename (new inode), and a missed watch loops the last snapshot forever
-// (#874). Liquidsoap 2.4.6 fixed the orphaned watch upstream (#3343), so on
-// that image the watch and this reload BOTH fire; keep both (the extra watch
-// reload is one harmless reshuffle, and older mixers still need this one).
-// Best-effort: errors are swallowed so a refresh never fails here.
-export async function reloadAutoPlaylist(): Promise<boolean> {
+// `<id>.reload`, confirmed only by a complete OK. Best-effort: errors are
+// swallowed so a playlist write never fails on its reload.
+async function reloadPlaylist(id: 'auto' | 'jingles'): Promise<boolean> {
   try {
-    await sendCommand('auto.reload', 2000);
-    return true;
+    return await sendCommand(`${id}.reload`, 2000, { requireComplete: true }) === 'OK';
   } catch {
     return false;
   }
+}
+
+// Re-read auto.m3u. radio.liq's file watch is only the backup for a write this
+// never followed, and its reload only empties the queue: off air, this command
+// makes radio.liq replace the playlist, dropping a track the old one had already
+// prepared, so OK means the old fallback is gone.
+export async function reloadAutoPlaylist(): Promise<boolean> {
+  return reloadPlaylist('auto');
+}
+
+// Re-read jingles.m3u, the mixer's own rotate (radio.liq `id="jingles"`). Its
+// reload_mode="watch" follows the file's inode on Liquidsoap 2.4.5, so it goes
+// deaf after the first atomic rewrite (#2008). 2.4.6 watches the directory, and
+// there the watch and this both reload, which only reshuffles the rotate. A
+// mixer without the rotate (jingleRatio 0, or the controller drawing jingles)
+// answers "unknown command": false, with nothing to reload.
+export async function reloadJinglesPlaylist(): Promise<boolean> {
+  return reloadPlaylist('jingles');
+}
+
+// Whether the fallback has a track ready to air: after auto.reload the mixer's
+// fresh playlist fetches its first track first (radio.liq `auto.ready`). A mixer
+// older than that command has no ready signal to wait for: carry on at once.
+export async function autoPlaylistReady(): Promise<boolean> {
+  const reply = await sendCommand('auto.ready', 2000);
+  return reply === 'ready' || /unknown command/i.test(String(reply));
 }
 
 // stream_off disconnects the Icecast mounts (station off air); stream_on

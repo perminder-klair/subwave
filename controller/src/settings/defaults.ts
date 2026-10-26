@@ -21,6 +21,7 @@ import {
   LOUDNESS_TARGET_LUFS_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
+  type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -39,6 +40,7 @@ import {
 } from './vocab.js';
 
 export const DEFAULTS = {
+  jinglePlacement: 'between' as JinglePlacement,
   jingleRatio: 30, // 1 jingle per N music tracks
   // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
   // radio.liq's own rotate draws the stinger and the controller finds out
@@ -498,6 +500,11 @@ export const DEFAULTS = {
     // never costs the station a slot. 0 leaves only the back-to-back guard,
     // which is always on. See broadcast/dj-agent/artist-guard.ts.
     artistVarietyWindow: ARTIST_VARIETY_WINDOW,
+    // Maximum consecutive same-genre airings (a shared label, or labels in the
+    // same small built-in family) before an agent re-pick. 0 is off and makes
+    // no extra reads or calls; unknown tags and unavailable alternatives never
+    // cost a slot.
+    genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an
     // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
     // and matches it locally. Off by default: needs a search provider and costs a
@@ -676,7 +683,7 @@ export const DEFAULTS = {
     stemBlends: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
-    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // and lose all six. Resolved through settings/transition-effects.ts, which
     // reads an absent or malformed block as "all on" — so this default and a
     // station that has never written the block are the same station.
     effects: {
@@ -722,8 +729,8 @@ export const DEFAULTS = {
   },
   // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
   // rip's leading blank or a long mastering gap doesn't air as silence
-  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
-  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; Liquidsoap cuts
+  // at request resolution). OFF by default: it acts on a MEASUREMENT, and
   // an upgrade must sound byte-identical until the operator asks for this.
   // Controller-side only — no mixer restart.
   silenceTrim: {
@@ -802,6 +809,19 @@ export const DEFAULTS = {
     influenceDj: false,
     maxTracks: 10,
     windowDays: 30, // 0 = all time
+  },
+
+  // The listener Lyrics panel (`GET /lyrics/current`). On out of the box, and
+  // an upgrade turns it on too: it republishes lyric text publicly and costs a
+  // music-server call per track, which an operator can switch off. Per-track
+  // timing fixes live in library.db, not here.
+  lyrics: {
+    enabled: true,
+    // Look up synced lyrics on LRCLIB for a queued or on-air track the music
+    // server has no timed lyrics for (music/lyrics-sources.ts). On by default
+    // with the panel: it sends each such track's artist, title, album and
+    // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
+    lrclib: true,
   },
 };
 

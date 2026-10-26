@@ -1,10 +1,11 @@
 // Exercise the real fallback writer against a synthetic library and mixer.
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-coast-stale-pin-'));
 process.env.STATE_DIR = root;
@@ -37,7 +38,7 @@ after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
   await new Promise<void>(resolve => mixer.close(() => resolve()));
-  rmSync(root, { recursive: true, force: true });
+  await removeTempDir(root);
 });
 
 test('a stale show pin prevents borrowed mood playlists while ordinary sources keep the coast playable', async () => {

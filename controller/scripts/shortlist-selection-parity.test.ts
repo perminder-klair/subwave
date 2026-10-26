@@ -6,10 +6,9 @@
 // - The selection signals the Agentic route reads from its session (the set's
 //   arc, listener favourites, a DJ-mode run's target) reach the Shortlist call.
 // - Listener favourites are one gate for every reader.
-import { createTempDir } from './test-utils/temp-dir.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 import assert from 'node:assert/strict';
 import { chatCompletionResponse } from './test-utils/llm.js';
-import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -64,10 +63,10 @@ before(async () => {
   };
 });
 
-after(() => {
+after(async () => {
   globalThis.fetch = realFetch;
   library.shutdown();
-  rmSync(stateRoot, { recursive: true, force: true });
+  await removeTempDir(stateRoot);
 });
 
 const candidates = [

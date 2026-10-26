@@ -3,10 +3,11 @@
 // fact with a second model call. Never-starve: a list that is nothing but the
 // anchor artist is offered whole, and the guard's pool rescue answers it.
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after } from 'node:test';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // The shortlist module reaches config at import, so it needs a state dir of
 // its own rather than whatever STATE_DIR the shell carries.
@@ -16,7 +17,7 @@ process.env.NAVIDROME_URL = 'http://shortlist-anchor.invalid';
 const { executeShortlistPlan, shortlistAvoidArtist, withoutArtist } = await import('../src/music/shortlist.js');
 const { pickerScope } = await import('../src/llm/tools.js');
 const { artistRootKey, setKnownActsProvider } = await import('../src/music/recency.js');
-after(() => rmSync(stateRoot, { recursive: true, force: true }));
+after(() => removeTempDir(stateRoot));
 
 const pass = { inputSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) } };
 

@@ -26,6 +26,7 @@ import { router as sfxRouter } from '../src/routes/sfx.js';
 import { router as jinglesRouter } from '../src/routes/jingles.js';
 import { router as statsRouter } from '../src/routes/stats.js';
 import { router as listenersRouter } from '../src/routes/listeners.js';
+import { router as lyricsRouter } from '../src/routes/lyrics.js';
 
 // Collect "GET /now-playing"-style keys from a router's stack.
 function routeKeys(router: any): Set<string> {
@@ -41,7 +42,7 @@ function routeKeys(router: any): Set<string> {
 }
 
 const real = new Set<string>();
-for (const r of [publicRouter, requestRouter, djRouter, sfxRouter, jinglesRouter, statsRouter, listenersRouter]) {
+for (const r of [publicRouter, requestRouter, djRouter, sfxRouter, jinglesRouter, statsRouter, listenersRouter, lyricsRouter]) {
   for (const k of routeKeys(r)) real.add(k);
 }
 
@@ -106,4 +107,21 @@ test('MCP_TOOLS mirrors registerSubwaveTools exactly', () => {
     [...documented].sort(),
     'catalog MCP_TOOLS and registerSubwaveTools disagree',
   );
+});
+
+// POST /dj/skip takes an optional `expectId` (#2017) and both entries say so.
+// The endpoint carries no bodyExample on purpose: the playground pre-fills its
+// body from it, and a sample id would turn the default press into a refused
+// targeted skip instead of the bare skip it has always sent.
+test('the /dj/skip entries document expectId, and the playground default stays a bare skip', () => {
+  const skip = ENDPOINTS.find(ep => ep.method === 'POST' && ep.path === '/dj/skip');
+  assert.ok(skip, '/dj/skip is documented');
+  assert.match(skip.description, /expectId/);
+  assert.match(skip.description, /409/);
+  assert.equal(skip.bodyExample, undefined);
+  const tool = MCP_TOOLS.find(t => t.name === 'subwave_skip_track');
+  assert.ok(tool);
+  assert.match(tool.description, /expectId/);
+  const op = toOpenApi('https://radio.example.com').paths['/dj/skip']?.post as any;
+  assert.equal(op?.requestBody, undefined, 'no example body for a generated client to send by default');
 });

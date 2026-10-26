@@ -34,6 +34,12 @@ export type AgenticLeaningsReviewRejection =
 // selection routes so a field added for one cannot silently go missing from
 // the other. It rides the LLM call records by reference and is filled in only
 // after the guards and enqueue.
+// Which final guards re-picked, each named beside the ones before it.
+export type GuardOutcome =
+  | 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick'
+  | 'genre-repick' | 'artist-and-genre-repick' | 'album-and-genre-repick' | 'artist-album-and-genre-repick'
+  | 'pool-rescue';
+
 export type PickResolution = {
   preliminary?: AgenticTrackRef;
   leaningsReview?: {
@@ -52,7 +58,7 @@ export type PickResolution = {
     evidenceKind?: 'metadata-match' | 'editorial-comparison';
     editorialEvidence?: EditorialLeaningsEvidence;
   };
-  guardOutcome?: 'none' | 'artist-repick' | 'album-repick' | 'artist-and-album-repick' | 'pool-rescue';
+  guardOutcome?: GuardOutcome;
   final?: AgenticTrackRef;
   reason?: string | null;
   queued?: boolean;
@@ -150,9 +156,48 @@ function usableAgenticReason(reason: unknown, song: { artist?: unknown; title?: 
   return `${artist} — ${title}: selected for its fit with the current musical flow.`;
 }
 
-export function agenticDiscoverySelectionReason(track: any, reason: unknown): string {
+// A capitalised run of two or more words in a note may be a track or an act —
+// the one shape groundPickNote cannot check, since it only knows the names the
+// model was shown, not one it recalled. But most runs in a real note are the
+// queued track's own credit or album, the context the pick was handed, or a
+// genre ("Amrinder Gill", "Coke Studio", "Taylor Swift", "Regional Indian"),
+// and treating those as foreign threw away 7 of 13 accurate notes. A run is
+// foreign only when no known name contains it; a sentence's opening word is
+// capitalised anyway, so a run starting a sentence is also known when the
+// rest of it is ("Fresh Punjabi voices").
+const NAMED_RUN = /\b[\p{Lu}][\p{L}’'-]+(?:\s+[\p{Lu}][\p{L}’'-]+)+\b/gu;
+const CREDIT_SPLIT = /\s*(?:,|&|\+|\band\b|\bx\b|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*/i;
+
+function trackKnownNames(track: any): string[] {
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const title = str(track?.title);
+  const artist = str(track?.artist);
+  const genres = Array.isArray(track?.genres) ? track.genres.map(str) : str(track?.genre).split(',');
+  return [title, coreName(title), artist, ...artist.split(CREDIT_SPLIT), str(track?.album), ...genres];
+}
+
+function namesForeignRun(raw: string, known: string[]): boolean {
+  const names = known.map(identityComparable).filter(Boolean).map((k) => ` ${k} `);
+  const isKnown = (run: string) => {
+    const c = identityComparable(run.replace(/['’]s\b/g, ''));
+    return !!c && names.some((k) => k.includes(` ${c} `));
+  };
+  for (const m of raw.matchAll(NAMED_RUN)) {
+    if (isKnown(m[0])) continue;
+    const opensSentence = /(?:^|[.!?]\s+)$/.test(raw.slice(0, m.index));
+    if (opensSentence && isKnown(m[0].replace(/^\S+\s+/, ''))) continue;
+    return true;
+  }
+  return false;
+}
+
+// `references` are the names a pick was handed as context (pick-note.ts
+// pickNoteReferences): the track it follows, what is on air, queued and
+// recently played, and the show's name, topic and genres.
+export function agenticDiscoverySelectionReason(track: any, reason: unknown, references: Array<string | null | undefined> = []): string {
   const raw = typeof reason === 'string' ? reason.replace(/\s+/g, ' ').trim() : '';
-  const looksLikeNamedIdentity = /[“”"]|\b[\p{Lu}][\p{L}’'-]+(?:\s+[\p{Lu}][\p{L}’'-]+)+\b/u.test(raw);
+  const known = [...trackKnownNames(track), ...references.map((r) => (typeof r === 'string' ? r : ''))];
+  const looksLikeNamedIdentity = /[“”"]/.test(raw) || namesForeignRun(raw, known);
   if (raw.length >= 24 && !QUEUE_LANGUAGE.test(raw) && !looksLikeNamedIdentity) {
     const title = typeof track?.title === 'string' ? track.title.trim() : '';
     const artist = typeof track?.artist === 'string' ? track.artist.trim() : '';

@@ -20,7 +20,7 @@
 //   3. web-search's filter — the reporter's exact result set yields
 //      `available: false` rather than three off-topic sources.
 //
-// Run: `tsx scripts/skill-abstain.test.ts` (or `npm test -- abstain`).
+// Run: `npm test -- skill-abstain`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

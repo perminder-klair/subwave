@@ -22,27 +22,38 @@
 //                 Default: the live settings value (keeps old reports comparable).
 //   --out         JSON report path (default scripts/llm-bench/reports/<ts>.json)
 //
-// API keys resolve exactly as live (state/secrets.env / settings / env);
+// API keys resolve exactly as live (state/secrets.env / settings / env), but
+// from copies. The run works in a temp STATE_DIR seeded with the station's
+// settings.json, schedule.json and secrets.env (the active station's on a
+// multi-station install; an exported STATE_DIR names the root to copy from),
+// so its telemetry never reaches the station's logs. The dir is printed at
+// startup and removed on exit. The JSON report is the run's record.
 // OLLAMA_URL overrides the persisted ollamaUrl for off-container runs.
 
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
-import * as settings from '../../src/settings.js';
-import { loadSecretsIntoEnv } from '../../src/setup/secrets.js';
-import { isUnreachable } from '../../src/llm/sdk.js';
-import { recentCalls } from '../../src/llm/log.js';
+import { isolateStationState } from '../test-utils/isolated-state.js';
 import { Reporter, bucketError, type RunRecord } from './report.js';
 import type { KindSpec } from './kinds/types.js';
-import { specs as pickSpecs } from './kinds/pick.js';
-import { specs as segmentSpecs } from './kinds/segment.js';
-import { specs as requestSpecs } from './kinds/request.js';
-import { specs as scriptSpecs } from './kinds/scripts.js';
-import { specs as banterSpecs } from './kinds/banter.js';
-import { specs as programmeSpecs } from './kinds/programme.js';
+
+// Every src/ import is dynamic and comes after this call: config.ts fixes its
+// state root at import, and a static import would be evaluated first.
+const { dir: isolatedStateDir } = isolateStationState('subwave-llm-bench-');
+const settings = await import('../../src/settings.js');
+const { loadSecretsIntoEnv } = await import('../../src/setup/secrets.js');
+const { isUnreachable } = await import('../../src/llm/sdk.js');
+const { recentCalls } = await import('../../src/llm/log.js');
+const { specs: pickSpecs } = await import('./kinds/pick.js');
+const { specs: segmentSpecs } = await import('./kinds/segment.js');
+const { specs: requestSpecs } = await import('./kinds/request.js');
+const { directRequestSpec } = await import('./direct-request.js');
+const { specs: scriptSpecs } = await import('./kinds/scripts.js');
+const { specs: banterSpecs } = await import('./kinds/banter.js');
+const { specs: programmeSpecs } = await import('./kinds/programme.js');
 
 const ALL_SPECS: KindSpec[] = [
-  ...pickSpecs, ...segmentSpecs, ...requestSpecs, ...scriptSpecs, ...banterSpecs, ...programmeSpecs,
+  ...pickSpecs, ...segmentSpecs, ...requestSpecs, directRequestSpec, ...scriptSpecs, ...banterSpecs, ...programmeSpecs,
 ];
 
 function parseArgs(argv: string[]) {
@@ -88,9 +99,10 @@ async function main() {
     ? resolve(args.out)
     : join(here, 'reports', `${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
 
-  // Provider keys, resolved like the live controller: state/secrets.env via
-  // the boot loader, plus controller/.env (the dev compose env_file — on the
-  // host nothing sources it for us). Existing process env always wins.
+  // Provider keys, resolved like the live controller: secrets.env (the
+  // isolated copy) via the boot loader, plus controller/.env (the dev compose
+  // env_file — on the host nothing sources it for us). Existing process env
+  // always wins.
   await loadSecretsIntoEnv().catch(() => {});
   loadDotEnv(join(dirname(fileURLToPath(import.meta.url)), '../../.env'));
 
@@ -127,7 +139,9 @@ async function main() {
   });
 
   const totalCells = specs.reduce((n, k) => n + k.scenarios.length, 0);
-  console.log(`\nllm-bench: ${models.length} model(s) × ${specs.length} kind(s) (${totalCells} scenario cells) × ${iterations} iteration(s)\n`);
+  console.log(`\nllm-bench: ${models.length} model(s) × ${specs.length} kind(s) (${totalCells} scenario cells) × ${iterations} iteration(s)`);
+  console.log(`Isolated STATE_DIR: ${isolatedStateDir}\n`);
+  if (specs.includes(directRequestSpec)) console.log('directRequestResolution scores first-attempt interpretation and catalogue selection separately; excludes route recovery, queue admission and intros.\n');
 
   for (const m of models) {
     for (const reasoning of reasoningVariants) {

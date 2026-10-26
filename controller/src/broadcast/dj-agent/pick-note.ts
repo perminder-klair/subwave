@@ -38,6 +38,13 @@ function pickReferences(queue: any, pickAnchor: Named, show: any): Array<string 
   return [...tracks.flatMap((t) => [t?.title, t?.artist]), show?.name, show?.topic];
 }
 
+// The same context names plus the show's genres, for the Agentic route's
+// capitalised-name read (leanings-review.ts agenticDiscoverySelectionReason):
+// a note calling the pick "Regional Indian" is naming the lane, not a record.
+export function pickNoteReferences(queue: any, pickAnchor: Named, show: any): Array<string | null | undefined> {
+  return [...pickReferences(queue, pickAnchor, show), ...(Array.isArray(show?.genres) ? show.genres : [])];
+}
+
 // The note as the route may show it: unchanged, or '' — the route's own
 // plain-copy signal — when it names another candidate or a quoted title over
 // the queued track.

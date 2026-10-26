@@ -114,7 +114,7 @@ for (const s of SUPERVISORS) {
       const mode = statSync(join(dir, d)).mode & 0o777;
       assert.equal(mode & 0o002, 0o002, `${d} is not world-writable (mode ${mode.toString(8)})`);
     }
-    // reload_mode="watch" needs these to exist before liquidsoap starts.
+    // Liquidsoap's file watches need these to exist before liquidsoap starts.
     assert.ok(existsSync(join(dir, 'auto.m3u')), 'auto.m3u not created');
     assert.ok(existsSync(join(dir, 'jingles.m3u')), 'jingles.m3u not created');
     assert.ok(existsSync(join(dir, 'archive', '.ndignore')), '.ndignore not created');

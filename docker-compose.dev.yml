@@ -1,4 +1,4 @@
-# SUB/WAVE — dev compose (local smoke test): Broadcast + Controller only.
+# SUB/WAVE — dev compose (local smoke test): Broadcast, Controller, analyzer and docker-socket-proxy.
 # The Next.js UI runs separately via `cd web && npm run dev` for hot reload.
 # State + sounds + radio.liq are bind-mounted so dev cycles need no rebuilds.
 
@@ -269,6 +269,7 @@ services:
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=${DEMUCS_MODEL:-}
+      - DEMUCS_OVERLAP=${DEMUCS_OVERLAP:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
       - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}

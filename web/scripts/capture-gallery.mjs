@@ -122,12 +122,15 @@ for (const plate of PRESS_RUN_PLATES) {
   // so a slow stream can't make a second press tune back out.
   const tuned = () => page.evaluate(() => !!document.querySelector('audio')?.getAttribute('src'));
   for (let attempt = 0; attempt < 5 && !(await tuned()); attempt++) {
-    const tuneBtn = page.getByRole('button', { name: /tune in/i }).first();
-    if (await tuneBtn.isVisible().catch(() => false)) {
-      await tuneBtn.click().catch(() => {});
-    } else {
-      await page.keyboard.press('Space').catch(() => {});
+    // A face can name its own key "Tune in" under the gate (Unit's PLAY key),
+    // so a covered match times out and the next one is tried.
+    let clicked = false;
+    for (const tuneBtn of await page.getByRole('button', { name: /tune in/i }).all()) {
+      if (!(await tuneBtn.isVisible().catch(() => false))) continue;
+      clicked = await tuneBtn.click({ timeout: 1500 }).then(() => true, () => false);
+      if (clicked) break;
     }
+    if (!clicked) await page.keyboard.press('Space').catch(() => {});
     await page.waitForFunction(
       () => !!document.querySelector('audio')?.getAttribute('src'),
       null, { timeout: 2500 },

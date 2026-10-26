@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const root = mkdtempSync(join(tmpdir(), 'subwave-remaining-discovery-'));
 process.env.STATE_DIR = root;
@@ -41,7 +42,7 @@ globalThis.fetch = async input => {
               : endpoint === 'getTopSongs' ? { topSongs: { song: songs } } : {};
   return Response.json({ 'subsonic-response': { status: 'ok', version: '1.16.1', ...data } });
 };
-after(() => { globalThis.fetch = realFetch; library.shutdown(); rmSync(root, { recursive: true, force: true }); });
+after(async () => { globalThis.fetch = realFetch; library.shutdown(); await removeTempDir(root); });
 async function run(tools: ReturnType<typeof buildPickerTools>['tools'], name: string, args = {}): Promise<any[]> {
   assert.ok(tools[name]?.execute, `${name} registered`);
   const result = await tools[name].execute!(args, { toolCallId: name, messages: [], context: undefined });

@@ -3,7 +3,7 @@
 // Skin precedence: listener override, station default, built-in fallback. Contained showcases
 // follow the remote station.
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useThemeSwitcher } from '@/components/ThemeProvider';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -30,8 +30,8 @@ export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
   skin?: SkinComponent;
   /** Rendered inside a showcase frame (landing page) rather than full-page:
-   *  absolute instead of fixed positioning, dialogs portal into the frame,
-   *  no toaster. */
+   *  absolute instead of fixed positioning, and dialogs portal into the
+   *  frame. */
   contained?: boolean;
 }
 
@@ -41,6 +41,19 @@ export default function PlayerShell({ skin, contained = false }: PlayerShellProp
       <ShellChrome skin={skin} contained={contained} />
     </PlayerCoreProvider>
   );
+}
+
+/** Drop SKIN_INIT_SCRIPT's pre-paint hide. */
+function revealShell(): void {
+  if (typeof document !== 'undefined') document.documentElement.removeAttribute('data-skin-pending');
+}
+
+/** Rendered beside the skin inside its Suspense boundary, so its effect runs
+ *  only once the resolved skin has committed. Revealing on hydration instead
+ *  uncovered an empty stage while a non-default skin's chunk was still loading. */
+function RevealWhenMounted({ ready }: { ready: boolean }) {
+  useEffect(() => { if (ready) revealShell(); }, [ready]);
+  return null;
 }
 
 /** True when the keypress landed inside an open modal. */
@@ -65,10 +78,6 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     setHydrated(true);
   }, [contained]);
   useEffect(() => {
-    if (!hydrated || typeof document === 'undefined') return;
-    document.documentElement.removeAttribute('data-skin-pending');
-  }, [hydrated]);
-  useEffect(() => {
     if (contained || !stationSkinRaw) return;
     // Cache the RESOLVED id: a skin this build doesn't ship falls back to the
     // default, and caching the raw id would pre-paint-hide the shell forever.
@@ -78,9 +87,13 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   const stationSkinId = stationSkinRaw ?? cachedStation ?? DEFAULT_SKIN_ID;
   const effectiveId = resolveSkinId(stationSkinId, contained ? null : overrideId);
 
+  // A transition, so the outgoing skin stays painted while the incoming one's
+  // chunk loads and its lazy wrapper suspends (it does so once even when the
+  // chunk is warm). An urgent update swapped in the empty Suspense fallback,
+  // and the stage sat blank through React's ~300 ms reveal throttle.
   const setOverride = useCallback((id: string | null) => {
     saveSkinOverride(id);
-    setOverrideId(id);
+    startTransition(() => setOverrideId(id));
   }, []);
 
   const selection = useMemo<SkinSelection>(
@@ -129,6 +142,9 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   // still being validated can't flash the face at a locked-out visitor.
   const auth = useStationAuth();
   const hideFace = state.privacy?.privatePlayer === true && auth.phase !== 'ok';
+  // The password gate renders no skin, so nothing inside the boundary would
+  // ever reveal the shell around it.
+  useEffect(() => { if (hydrated && hideFace) revealShell(); }, [hydrated, hideFace]);
 
   return (
     <SkinSelectionProvider value={selection}>
@@ -138,7 +154,9 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           // sw-player-shell is the pre-paint hide hook (SKIN_INIT_SCRIPT) —
           // full-page shells only; showcase embeds never set/clear the attr.
           contained ? 'absolute' : 'sw-player-shell fixed',
-          'inset-0 overflow-hidden bg-bg text-ink',
+          // sw-theme-stage carries the theme's --texture overlay and --finish
+          // filter (globals.css), in a showcase embed too.
+          'sw-theme-stage inset-0 overflow-hidden bg-bg text-ink',
         )}
       >
         {hideFace ? (
@@ -150,6 +168,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
             {/* Contain skin suspension here so the landing page does not replay its reveal and remain at opacity 0. */}
             <Suspense fallback={null}>
               <Skin contained={contained} portalNode={portalNode} />
+              <RevealWhenMounted ready={hydrated} />
             </Suspense>
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
           </>
