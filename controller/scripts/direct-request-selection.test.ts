@@ -6,6 +6,7 @@ import {
   asksForKindOfMusic, resolveExactName,
 } from '../src/music/request-match.js';
 import { requestName, transliterationBridges } from '../src/music/request-normalize.js';
+import type { SoundtrackResolution } from '../src/music/request-soundtrack.js';
 
 test('listener requests are classified into deterministic resolver lanes', () => {
   assert.equal(classifyListenerRequest('Bohemian Rhapsody by Queen'), 'named-song-or-artist');
@@ -29,6 +30,62 @@ test('film evidence keeps the in form without capturing language requests', () =
   assert.equal(isLyricOrFilmDescription('play some music in Punjabi'), false);
 });
 
+test('greeting matching handles normalized apostrophes', () => {
+  assert.equal(isGreetingLikeRequest("what's up"), true);
+});
+
+test('generic request phrases are centralized with greeting matching', () => {
+  assert.equal(isGenericRequestPhrase('surprise me'), true);
+  assert.equal(isGenericRequestPhrase('play something for the evening'), false);
+});
+
+test('movie and soundtrack context is parsed as its own deterministic lane', () => {
+  const parsed = modelFreeRequest('play a song from the movie The Devil Wears Prada 2');
+  assert.equal(parsed.title, null);
+  assert.equal(parsed.artist, null);
+  assert.equal(parsed.soundtrackContext?.name, 'The Devil Wears Prada 2');
+  assert.equal(parsed.soundtrackContext?.kind, 'movie');
+  assert.equal(classifyListenerRequest('play a song from the movie The Devil Wears Prada 2', parsed), 'soundtrack-context');
+
+  const language = modelFreeRequest('play a song in Punjabi');
+  assert.equal(language.soundtrackContext, undefined);
+  assert.equal(language.language, 'Punjabi');
+});
+
+test('a named recording retains its movie context for external verification', () => {
+  const parsed = modelFreeRequest('play Shape of Woman from the movie The Devil Wears Prada 2');
+  assert.equal(parsed.soundtrackContext?.title, 'Shape of Woman');
+  assert.equal(parsed.soundtrackContext?.name, 'The Devil Wears Prada 2');
+  assert.equal(parsed.releaseContext?.kind, 'movie');
+});
+
+test('soundtrack resolution queues only the verified local candidate', async () => {
+  const local = { id: 'shape', title: 'Shape of Woman', artist: 'Lady Gaga', soundtrackConfidence: 0.98,
+    soundtrackSource: 'musicbrainz' as const, soundtrackOrder: 1 };
+  const f = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }) });
+  const result = await resolveDirectRequest(modelFreeRequest('play a song from the movie The Devil Wears Prada 2'), {
+    ...f.deps,
+    text: 'play a song from the movie The Devil Wears Prada 2',
+    exactOnly: true,
+    soundtrackCandidates: async (): Promise<SoundtrackResolution> => ({ status: 'matched', source: 'musicbrainz', candidates: [local] }),
+  });
+  assert.equal(result.track?.id, 'shape');
+  assert.equal(result.source, 'soundtrack:musicbrainz');
+  assert.equal(result.outcome, 'matched');
+});
+
+test('soundtrack no-match cannot fall through to genre or fallback music', async () => {
+  const f = fixture();
+  const result = await resolveDirectRequest(modelFreeRequest('play a song from the movie Missing Film'), {
+    ...f.deps,
+    text: 'play a song from the movie Missing Film',
+    exactOnly: true,
+    soundtrackCandidates: async (): Promise<SoundtrackResolution> => ({ status: 'no-match', reason: 'no-local-match' }),
+  });
+  assert.equal(result.track, null);
+  assert.equal(result.outcome, 'no-match');
+  assert.equal(f.fallbackCalls(), 0);
+});
 const exact: RequestSong = { id: 'exact', title: 'Bohemian Rhapsody', artist: 'Queen', album: 'A Night at the Opera', genre: 'Rock' };
 const other: RequestSong = { id: 'other', title: 'Another Song', artist: 'Queen', album: 'Other Album', genre: 'Jazz' };
 const filler: RequestSong = { id: 'filler', title: 'Fatigue', artist: 'The Gathering', genre: 'Rock' };

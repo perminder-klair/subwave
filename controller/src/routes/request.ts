@@ -36,6 +36,7 @@ import { ARTIST_VARIETY_WINDOW, drawRankedRequestCandidate, drawRequestCandidate
 import { agentDeadline, RequestIdentificationMiss } from '../broadcast/dj-agent/breaker.js';
 import { isWebSearchProviderError } from '../skills/web-search.js';
 import { heldBackFromShow } from '../music/explicit-policy.js';
+import { resolveSoundtrackCandidates } from '../music/request-soundtrack.js';
 
 export const router = express.Router();
 
@@ -543,8 +544,8 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // stateless cascade below, so a request is never dropped. Agentic mode is
   // intentionally agent-first for the shipped request-matching contract;
   // deterministic-first routing belongs to a separate follow-up policy.
-  const needsEvidenceIdentification = isLyricOrFilmDescription(text) && !framedTitleOnly;
-  if (djAgent.requestMatchingEnabled()) {
+  const needsEvidenceIdentification = isLyricOrFilmDescription(text) && !framedTitleOnly && !literal.soundtrackContext;
+  if (!literal.soundtrackContext && djAgent.requestMatchingEnabled()) {
     // A miss ends the request only when identifyRequestedTrack actually looked.
     // With requestWebResolve off the tool is never offered, and without this a
     // null answer on any four free-form words lost "Smells Like Teen Spirit".
@@ -633,7 +634,9 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // Search terms and nothing else: no title, artist, album or attribute.
   let modelReadTermsOnly = false;
   let readingBehind: typeof matched | null = null;
-  if (budget.requestsAllowed()) {
+  // Album and structured soundtrack contexts are already complete local
+  // resolution plans; do not let the interpreter rewrite them.
+  if (!literal.album && !literal.soundtrackContext && budget.requestsAllowed()) {
     try {
       // The race is what keeps the catalogue its reserve, since a provider can
       // ignore its signal, and withDeadline's error never reads as a reason to
@@ -830,6 +833,28 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
           }));
       },
     },
+    soundtrackCandidates: async context => {
+      await library.load();
+      throwIfRequestResolutionAborted(signal);
+      const local = library.candidateFilterTracks()
+        .filter(row => row.title && !library.isBlockedId(row.id))
+        .map(row => {
+          const metadata = library.get(row.id);
+          return {
+            id: row.id,
+            title: row.title,
+            artist: row.artist,
+            album: metadata?.album,
+            genres: row.genres,
+            genre: row.genre,
+            year: row.year,
+          };
+        });
+      return resolveSoundtrackCandidates(context, local, {
+        enabled: settings.get().llm?.requestWebResolve === true,
+        signal,
+      });
+    },
     choose: (pool, { ranked = false } = {}) => {
       const isStandIn = matchedRequestStandIn(named(), {
         requestText: text, lookups: matchedRequestLookups(searches, text), onAir: currentTrack,
@@ -980,7 +1005,16 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     entry.pickSource = pickSource;
     if (selection.outcome === 'unsupported') {
       entry.unsupported = selection.unsupported || [];
+      if (selection.unsupported?.includes('soundtrack identification')) {
+        return failed('I need online soundtrack lookup enabled to identify a song from that movie or soundtrack.');
+      }
       return failed(UNSUPPORTED_REFUSAL);
+    }
+    if (selection.outcome === 'provider-error') {
+      return failed('The soundtrack lookup provider could not resolve that request. Please try again shortly.');
+    }
+    if (selection.outcome === 'timeout') {
+      return failed('The soundtrack lookup took too long. Please try again shortly.');
     }
     if (selection.required?.length) {
       return failed('Could not verify a track meeting the requested language or genre requirements. Try simplifying the request.');

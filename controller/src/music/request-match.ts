@@ -20,6 +20,7 @@ import {
   hasUnspacedNativeScript,
 } from './request-normalize.js';
 import { bpmCompat, keyCompat } from './mix.js';
+import type { SoundtrackRequestContext, SoundtrackResolution } from './request-soundtrack.js';
 
 // Keep the long-standing request-match exports stable for scripts and route
 // consumers while the shared normalization helpers live in their own module.
@@ -64,6 +65,11 @@ export interface RequestMatch {
   // be one, so with no interpreter resolveExactName offers them to the
   // catalogue, and the agent's searchLibrary looks for them.
   bareName?: string;
+  // A named movie/soundtrack context is resolved through structured external
+  // tracklists, then verified against this library. `explicit: false` is the
+  // safe fallback hypothesis for "a song from X": local artist resolution
+  // gets first refusal before the context is used.
+  soundtrackContext?: SoundtrackRequestContext;
   // A named similarity request is resolved through the same recording
   // identity verifier before its neighbours are considered.
   similarTo?: {
@@ -79,6 +85,7 @@ export type ListenerRequestClass =
   | 'named-song-or-artist'
   | 'lyrics-or-description'
   | 'attributes'
+  | 'soundtrack-context'
   | 'ambiguous-music'
   | 'non-music-chat';
 
@@ -174,7 +181,7 @@ function titleSearchVariants(value: string): string[] {
 export interface RequestSelection {
   track: RequestSong | null;
   source: string;
-  outcome: 'matched' | 'substituted' | 'cooldown' | 'already-queued' | 'no-match' | 'unsupported';
+  outcome: 'matched' | 'substituted' | 'cooldown' | 'already-queued' | 'no-match' | 'unsupported' | 'provider-error' | 'timeout';
   errors: string[];
   unmetPreferences?: string[];
   unsupported?: string[];
@@ -254,7 +261,9 @@ export function directRequestUnsupported(text: string, match: RequestMatch = {})
   // has lost its apostrophes, so '80s and 80's arrive as 80s.
   if (/(?<!\b(?:my|his|her|their|your|our)\s+(?:(?:early|mid|late)[\s-]+)?)(?<!\b(?:over|under)[\s-]+)(?<![\p{L}\p{N}])(?:[2-9]0s|(?:twen|thir|for|fif|six|seven|eigh|nine)ties)(?![\p{L}\p{N}])/iu.test(prose)) reasons.add('era');
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
-  if (/\b(?:song|track|one)\s+(?:from|in)\s+(?:that|the|a)\s+(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
+  if (!match.soundtrackContext
+    && /\b(?:song|track|one|music)\s+(?:from|in)\s+(?:(?:that|the|a)\s+)?(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
+    && /\b(?:song|track|one|music)\s+(?:from|in)\s+(?:(?:that|the|a)\s+)?(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');
   return [...reasons];
 }
@@ -918,7 +927,7 @@ export function modelFreeRequest(text: string): RequestMatch {
     const title = titleValue ? unquote(titleValue) : null;
     return {
       kind: 'track', title, album, artist, genre: null, language: null,
-      mood: null, energy: null, sort: null, scope: title ? 'song' : 'album',
+      mood: null, sort: null, scope: title ? 'song' : 'album',
       search_terms: [album, artist, title].filter((value): value is string => !!value),
       intent: album ? `Wants a track from the album ${album}${artist ? ` by ${artist}` : ''}.` : 'Wants a track from an album.', ack: '',
     };
@@ -972,6 +981,52 @@ export function modelFreeRequest(text: string): RequestMatch {
     // album was omitted. For a named title, the same shape remains a release
     // context and is verified by the normal title/context resolver below.
     if (by && genericFrame && release) return makeAlbumMatch(release, releaseSpec.artist);
+  }
+  // A generic soundtrack request is a pool request, not a request for one
+  // model-identified song. Keep bare `from X` as an artist-first hypothesis,
+  // with a soundtrack context retained for the resolver if that artist is
+  // absent locally. Explicit movie/film/soundtrack wording is unambiguous.
+  const genericSoundtrack = cleaned.match(/^(?:(?:a|an|any|some|one|the)\s+)?(?:song|track|tune|music|something|anything)\s+(from|in)\s+(.+?)[.!?]*$/iu);
+  if (genericSoundtrack) {
+    const connector = genericSoundtrack[1].toLocaleLowerCase();
+    let contextName = genericSoundtrack[2].trim();
+    let kind: SoundtrackRequestContext['kind'] = 'unknown';
+    let explicit = false;
+    const leading = contextName.match(/^(?:the\s+)?(?:movie|film|soundtrack|ost)(?:\s+(?:of|from))?\s+(.+)$/iu);
+    const trailing = contextName.match(/^(.+?)\s+(movie|film|soundtrack|ost)$/iu);
+    if (leading) {
+      contextName = leading[1].trim();
+      kind = /soundtrack|ost/iu.test(genericSoundtrack[2]) ? 'soundtrack' : 'movie';
+      explicit = true;
+    } else if (trailing) {
+      contextName = trailing[1].trim();
+      kind = /soundtrack|ost/iu.test(trailing[2]) ? 'soundtrack' : 'unknown';
+      explicit = /soundtrack|ost/iu.test(trailing[2]);
+    }
+    // Keep vague remembered phrasing such as "the song from the new Dune
+    // movie" on the existing evidence lane. A request for any song from a
+    // named context uses this deterministic lane; a definite remembered song
+    // remains a description unless the context is explicitly marked.
+    if (!explicit && /^the\s+(?:song|track)\s+from\b/iu.test(cleaned)) contextName = '';
+    if (!explicit && /\b(?:19|20)\d0s\b|\b(?:the\s+)?(?:eighties|nineties|seventies|sixties|fifties)\b/iu.test(contextName)) contextName = '';
+    // `song in Punjabi` is a language request, not a soundtrack lookup. The
+    // `in` connector enters this lane only when the listener also names a
+    // movie, film, soundtrack, or OST explicitly.
+    if (!(connector === 'in' && !explicit)) {
+      if (/^(?:the\s+)?(?:album|record|lp)\s+/iu.test(contextName)
+        || /\s+(?:album|record|lp)$/iu.test(contextName)) {
+        return makeAlbumMatch(stripAlbumMarker(contextName), null);
+      }
+      if (contextName) {
+        const soundtrackContext: SoundtrackRequestContext = { name: contextName, kind, explicit };
+        return {
+          kind: 'track', title: null, album: null, artist: explicit ? null : contextName,
+          genre: null, language: null, mood: null, sort: null, scope: 'song',
+          search_terms: [contextName], soundtrackContext,
+          intent: explicit ? `Wants a song from ${contextName}.` : `Wants a song by or from ${contextName}.`, ack: '',
+        };
+      }
+    }
   }
   const attributeBody = cleaned
     .replace(/^(?:(?:some|something|music|songs?|tracks?|a\s+song|a\s+track)\s+)+/iu, '')
@@ -1092,7 +1147,7 @@ export function modelFreeRequest(text: string): RequestMatch {
   const genericPair = by && !byIsTitleConnector && /^(?:(?:the|a|some|my)\s+)?(?:song|track|tune|music)$/iu.test(unquote(by[1]));
   if (byIsTitleConnector) {
     return { kind: 'track', title: unquote(query), album: null, artist: null, genre: null, language: language?.[1] || null,
-      mood: null, energy: null, sort: null, scope: 'song', search_terms: [unquote(query)], ack: '' };
+      mood: null, sort: null, scope: 'song', search_terms: [unquote(query)], ack: '' };
   }
   if (artistOnly || knownMood || genericPair) return { kind: 'track', artist: unquote(artistOnly?.[1] || describedArtist?.[2] || by![2]), title: null,
     unverifiedConditions, language: language?.[1] || null, mood: knownMood ? resolveRequestMood(describedArtist?.[1]) : null,
@@ -1102,7 +1157,11 @@ export function modelFreeRequest(text: string): RequestMatch {
   // soundtrack/album context. The resolver only accepts the split form when
   // the local candidate proves that relationship.
   const explicitContext = !by && query.match(/^(.+?)\s+from\s+(?:the\s+)?(movie|film|soundtrack|album)\s+(.+?)[.!?]*$/iu);
-  const genericContext = !by && !explicitContext && query.match(/^(.+?)\s+from\s+(.+?)[.!?]*$/iu);
+  const genericContextCandidate = !by && !explicitContext && query.match(/^(.+?)\s+from\s+(.+?)[.!?]*$/iu);
+  const genericContext = genericContextCandidate
+    && !/\b(?:19|20)\d0s\b|\b(?:the\s+)?(?:eighties|nineties|seventies|sixties|fifties)\b/iu.test(genericContextCandidate[2])
+    ? genericContextCandidate
+    : null;
   const context = explicitContext || genericContext;
   if (context) {
     const titleBefore = unquote(context[1]).trim();
@@ -1110,15 +1169,48 @@ export function modelFreeRequest(text: string): RequestMatch {
       ? String(explicitContext[2]).toLowerCase() as 'movie' | 'film' | 'soundtrack' | 'album'
       : 'unknown';
     const contextName = unquote(explicitContext ? explicitContext[3] : context[2]).trim();
-    const wholeTitle = unquote(query).trim();
+    const wholeTitle = leadingQuotedName(query) || unquote(query).trim();
     if (titleBefore && contextName) {
-      // "the song from the new Dune movie" names no recording, so there is no
-      // title for the context to qualify.
+      if (contextKind === 'unknown' && /^the\s+(?:song|track|music|one)\b/iu.test(titleBefore)) {
+        return {
+          kind: 'track', title: null, album: null, artist: null,
+          genre: null, language: null, mood: null, sort: null,
+          scope: 'song', search_terms: [], unsupported: ['film identification'],
+          intent: 'Identify a song from a film or show.', ack: '',
+        };
+      }
+      if (/^(?:a\s+)?(?:song|track|music|one)$/iu.test(titleBefore)) {
+        return {
+          kind: 'track', title: null, album: null, artist: null,
+          genre: null, language: null, mood: null, sort: null,
+          scope: 'song', search_terms: [],
+          soundtrackContext: contextKind === 'album' ? undefined : {
+            name: contextName,
+            kind: contextKind,
+            explicit: contextKind !== 'unknown',
+          },
+          intent: 'Identify a song from a film or show.', ack: '',
+        };
+      }
+      // A named title with an explicit release context remains a normal
+      // identity hypothesis; the structured soundtrack lane is reserved for
+      // generic "a song from ..." requests.
       if (!asksForKindOfMusic(titleBefore)) return {
         kind: 'track', title: wholeTitle, album: null, artist: null,
         genre: null, language: language?.[1] || null, mood: null, sort: null,
         reversible: false, search_terms: [wholeTitle], scope: 'song',
         releaseContext: { name: contextName, kind: contextKind, title: titleBefore, wholeTitle },
+        // An unqualified `from X` after a named title is still the ordinary
+        // artist/title relationship (`Bohemian Rhapsody from Queen`). Keep it
+        // on the normal interpreter and release-context lanes. The structured
+        // soundtrack resolver is reserved for an explicit movie/film/
+        // soundtrack context; generic pool requests are handled above.
+        soundtrackContext: contextKind === 'unknown' || contextKind === 'album' ? undefined : {
+          name: contextName,
+          kind: contextKind,
+          explicit: true,
+          title: titleBefore,
+        },
         intent: 'Wants a named recording with soundtrack or album context.', ack: '',
       };
     }
@@ -1154,6 +1246,7 @@ export function classifyListenerRequest(text: string, literal = modelFreeRequest
   if (!musicFraming && /^(?:hello|hi|hey|how|what|who|where|when|why|are|is|do|does|can|could|would)\b/iu.test(normalized)) {
     return 'non-music-chat';
   }
+  if (literal.soundtrackContext) return 'soundtrack-context';
   if (isLyricOrFilmDescription(normalized)
     || /\b(?:lyrics?|words|line)\s+(?:are|goes?|containing|that has)\b/iu.test(normalized)) {
     return 'lyrics-or-description';
@@ -1267,6 +1360,15 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   // omit soundtrack context or turn it into an artist, but it cannot rewrite
   // that relationship.
   if (literal.releaseContext && !match.releaseContext) match = { ...match, releaseContext: literal.releaseContext };
+  if (literal.soundtrackContext) {
+    match = {
+      ...match,
+      soundtrackContext: literal.soundtrackContext,
+      artist: literal.soundtrackContext.explicit ? (literal.artist || null) : (literal.artist || match.artist || null),
+      ...(literal.title ? { title: literal.title } : {}),
+      unsupported: (match.unsupported || []).filter(reason => reason !== 'film identification'),
+    };
+  }
   if (literal.album) {
     match = { ...match, album: literal.album, scope: literal.scope || match.scope };
   }
@@ -1418,6 +1520,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   fallbackSongs(): Promise<RequestSong[]>;
   similarSongs?(): Promise<RequestSong[]>;
   similarSeedSongs?(seedId: string): Promise<RequestSong[]>;
+  // Structured soundtrack evidence is an identity lane. The provider adapter
+  // returns only local-library rows, so this resolver never turns web text into
+  // a queue id and never falls through to a recommendation pool.
+  soundtrackCandidates?(context: SoundtrackRequestContext): Promise<SoundtrackResolution>;
   // Named title+artist requests use this to prevent a miss from becoming an
   // unrelated artist, search, mood, or starred-track fallback.
   exactOnly?: boolean;
@@ -1677,6 +1783,75 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   const refusal = (): RequestSelection | null => held ? {
     ...held, outcome: queuedIds.has(held.track.id) || held.track.id === currentId ? 'already-queued' : 'cooldown', errors,
   } : heldByShow ? { ...heldByShow, outcome: 'matched', errors, unmetPreferences: [] } : null;
+
+  const resolveSoundtrack = async (): Promise<RequestSelection> => {
+    if (!match.soundtrackContext) {
+      return { track: null, source: 'soundtrack', outcome: 'no-match', errors, required, alternatives };
+    }
+    if (!deps.soundtrackCandidates) {
+      return {
+        track: null,
+        source: 'soundtrack:no-match',
+        outcome: 'no-match',
+        errors,
+        required,
+        alternatives,
+      };
+    }
+    let resolution: SoundtrackResolution;
+    try {
+      resolution = await deps.soundtrackCandidates(match.soundtrackContext);
+    } catch (error) {
+      if (deps.signal?.aborted) throw error;
+      errors.push(`soundtrack lookup: ${error instanceof Error ? error.message : String(error)}`);
+      return { track: null, source: 'soundtrack:provider-error', outcome: 'provider-error', errors, required, alternatives };
+    }
+    if (resolution.status === 'disabled') {
+      return {
+        track: null,
+        source: 'soundtrack:disabled',
+        outcome: 'unsupported',
+        errors,
+        unsupported: ['soundtrack identification'],
+        required,
+        alternatives,
+      };
+    }
+    if (resolution.status === 'provider-error') {
+      errors.push(`soundtrack ${resolution.provider}: ${resolution.reason}`);
+      return { track: null, source: `soundtrack:${resolution.provider}-error`, outcome: 'provider-error', errors, required, alternatives };
+    }
+    if (resolution.status === 'timeout') {
+      errors.push(`soundtrack ${resolution.provider || 'provider'} timeout`);
+      return { track: null, source: 'soundtrack:timeout', outcome: 'timeout', errors, required, alternatives };
+    }
+    if (resolution.status === 'no-match') {
+      return { track: null, source: `soundtrack:${resolution.reason}`, outcome: 'no-match', errors, required, alternatives };
+    }
+    const candidates = resolution.candidates;
+    const pick = candidates.find(eligible) || candidates[0];
+    if (!pick) return { track: null, source: 'soundtrack:no-local-match', outcome: 'no-match', errors, required, alternatives };
+    if (!eligible(pick)) {
+      return {
+        track: pick,
+        source: `soundtrack:${resolution.source}`,
+        outcome: queuedIds.has(pick.id) || pick.id === currentId ? 'already-queued' : 'cooldown',
+        errors,
+        confidence: pick.soundtrackConfidence,
+        required,
+        alternatives,
+      };
+    }
+    return {
+      track: pick,
+      source: `soundtrack:${resolution.source}`,
+      outcome: 'matched',
+      errors,
+      confidence: pick.soundtrackConfidence,
+      required,
+      alternatives,
+    };
+  };
 
   if (match.similarTo) {
     const seedRequest: RequestMatch = {
@@ -1994,6 +2169,13 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     searched = await search(match.album);
     const result = select(searched, 'search');
     if (result) return result;
+  }
+  // A soundtrack context is a bounded identity request. Resolve it after the
+  // ordinary local title/artist lanes have had first refusal, but before any
+  // genre, mood, language, similarity, or starred fallback can substitute an
+  // unrelated recording.
+  if (match.soundtrackContext && (!match.soundtrackContext.title || match.soundtrackContext.explicit)) {
+    return resolveSoundtrack();
   }
   const identityRefusal = refusal();
   if (identityRefusal) return identityRefusal;

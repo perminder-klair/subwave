@@ -1760,7 +1760,6 @@ export function requestMatchingEnabled(): boolean {
   return settings.get().llm?.requestMatching === 'agentic';
 }
 
-<<<<<<< HEAD
 type RequestRunOptions = {
   requester: string;
   text: string;
