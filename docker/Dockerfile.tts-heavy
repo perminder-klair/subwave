@@ -82,8 +82,9 @@ RUN python3 -m venv /opt/chatterbox/venv && \
     rm -rf "$SP/torch/include" "$SP/torch/test"
 
 # --- PocketTTS venv --------------------------------------------------------
-# Separate venv so its resolution doesn't fight chatterbox's. pocket-tts 2.1.0
-# needs torch>=2.5 / numpy>=2; torch held at the same 2.6.0 CPU wheel.
+# Separate venv so its resolution doesn't fight chatterbox's. pocket-tts 4.0.1
+# needs torch>=2.5 / numpy>=2; torch held at the same 2.6.0 CPU wheel. Its
+# default "english" model is english_2026-10 (2.1.0's was english_2026-04).
 #
 # Voice cloning (#238) is a pure RUNTIME concern: the gated kyutai/pocket-tts
 # weights download lazily on first /speak once HF_TOKEN is set in the compose
@@ -94,7 +95,7 @@ RUN python3 -m venv /opt/pocket-tts/venv && \
     /opt/pocket-tts/venv/bin/pip install --no-cache-dir \
       --index-url https://download.pytorch.org/whl/cpu \
       --extra-index-url https://pypi.org/simple \
-      torch==2.6.0 scipy==1.17.1 pocket-tts==2.1.0 && \
+      torch==2.6.0 scipy==1.17.1 pocket-tts==4.0.1 && \
     /opt/pocket-tts/venv/bin/python -c \
       "from pocket_tts import TTSModel" && \
     find /opt/pocket-tts/venv -depth -type d -name __pycache__ -exec rm -rf {} + && \

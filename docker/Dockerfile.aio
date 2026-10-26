@@ -140,10 +140,15 @@ ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 /opt/kokoro/venv && \
     uv pip install --python /opt/kokoro/venv/bin/python --no-cache \
       kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 \
-      pyopenjtalk-plus==0.4.1.post8 \
+      pyopenjtalk-plus==0.4.1.post10 \
       cn2an==0.5.24 jieba==0.42.1 ordered-set==4.1.0 pypinyin==0.55.0 pypinyin-dict==0.9.0 && \
     /opt/kokoro/venv/bin/python -c \
       "import kokoro_onnx, misaki; from misaki import espeak; from misaki.ja import JAG2P; from misaki.zh import ZHG2P; assert JAG2P(version='pyopenjtalk')('生ビール')[0]; assert ZHG2P()('中文')[0]"
+# The model-files-v1.0 export, on purpose: model-files-v1.1 re-exports the same
+# weights but renders ~3.7 dB quieter. kokoro-onnx stays on 0.5.0 above for the
+# same kind of reason: 0.6.x depends on upstream phonemizer instead of
+# phonemizer-fork, and under it misaki's espeak G2P drops everything after a
+# decimal point ("sold 2.5 million copies" phonemizes as "sold two.").
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
