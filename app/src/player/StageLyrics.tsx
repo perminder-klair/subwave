@@ -41,7 +41,7 @@ const TICK_MS = 250;
 const GROW = 1.2;
 const LINE_WIDTH = `${Math.floor(100 / GROW)}%` as const;
 
-// The display face by name: className is not wired through Animated.Text.
+// The display face by name, for the inline styles both columns share.
 const FONT_FAMILY = 'Fraunces_600SemiBold';
 const FONT_SIZE = 19;
 // A little looser than the web's 1.05, to leave the display face's ascenders
@@ -147,23 +147,34 @@ const Line = memo(function Line({
     onMeasure(index, y + height / 2);
   };
 
+  // The animation drives the wrapper, never the Text. A Text whose children
+  // turn from a string into elements (the line becoming the sung one) remounts
+  // its native view, since RN wraps only element children in a text-ancestor
+  // context, and Android's native driver throws when the props node, still
+  // attached to the old view, is connected to the new one. The padding is
+  // even, so scaling the wrapper from its left centre is scaling the text.
   return (
-    <View onLayout={onLayout} style={{ paddingVertical: SYNCED_GAP }}>
-      <Animated.Text
+    <Animated.View
+      onLayout={onLayout}
+      style={{
+        paddingVertical: SYNCED_GAP,
+        opacity,
+        transform: [{ scale }],
+        transformOrigin: 'left center',
+      }}
+    >
+      <Text
         style={{
           width: LINE_WIDTH,
           fontFamily: FONT_FAMILY,
           fontSize: FONT_SIZE,
           lineHeight: LINE_HEIGHT,
           color: colors.ink,
-          opacity,
-          transform: [{ scale }],
-          transformOrigin: 'left center',
         }}
       >
         {tone === 'sung' ? <Words text={text} lit={lit} accentNewest={accentNewest} /> : text}
-      </Animated.Text>
-    </View>
+      </Text>
+    </Animated.View>
   );
 });
 
