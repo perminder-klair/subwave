@@ -1,5 +1,6 @@
 import { transliterate } from 'transliteration';
 import { iso6393 } from 'iso-639-3';
+import ianaRegistry from 'language-subtag-registry/data/json/registry.json' with { type: 'json' };
 
 export type RequestEnergy = 'low' | 'medium' | 'high';
 
@@ -192,15 +193,15 @@ for (const language of iso6393) {
   }
 }
 
-export function resolveLanguageCode(value: unknown): string | undefined {
+export function resolveLanguageCode(value: unknown, options: { allowFuzzy?: boolean } = {}): string | undefined {
   const names = requestNameVariants(value);
   for (const name of names) {
     const explicit = LANGUAGE_ALIASES[name];
     if (explicit) return explicit;
     const registryMatch = ISO6393_BY_NAME.get(name);
     if (registryMatch) return registryMatch;
-    const match = LANGUAGE_CODES.find(code => requestName(displayNames.of(code)) === name);
-    if (match) return match;
+    const fuzzy = options.allowFuzzy === false ? undefined : fuzzyLanguageCode(name);
+    if (fuzzy) return fuzzy;
     // ISO codes are accepted when the whole value is the code. A two-letter
     // alias must not be found inside prose: French "de", Spanish "en", and
     // similar words are ordinary prepositions, not language evidence.
@@ -212,17 +213,22 @@ export function resolveLanguageCode(value: unknown): string | undefined {
 
 export function languageTerms(value: unknown): string[] {
   const code = resolveLanguageCode(value);
-  if (!code) return requestNameVariants(value);
-  const terms = new Set<string>([...requestNameVariants(value), code]);
+  const canonical = canonicalLanguage(value);
+  if (!code && !canonical) return requestNameVariants(value);
+  const terms = new Set<string>([...requestNameVariants(value), code, canonical].filter(Boolean) as string[]);
   // Include every explicit alias for the resolved code. This covers common
   // spellings that Intl.DisplayNames does not emit, such as francais,
   // espanol, deutsch, and transliterated regional names.
-  for (const [alias, aliasCode] of Object.entries(LANGUAGE_ALIASES)) {
-    if (aliasCode === code) for (const variant of requestNameVariants(alias)) terms.add(variant);
+  for (const [alias] of Object.entries(LANGUAGE_ALIASES)) {
+    if (canonicalLanguage(alias) === canonical) for (const variant of requestNameVariants(alias)) terms.add(variant);
+  }
+  const registryName = iso6393.find(language => language.iso6393 === canonical)?.name;
+  if (registryName) {
+    for (const variant of requestNameVariants(registryName)) terms.add(variant);
   }
   for (const locale of ['en', 'hi', 'pa', 'bn', 'ta', 'te', 'mr', 'ur']) {
     try {
-      const label = new Intl.DisplayNames([locale], { type: 'language' }).of(code);
+      const label = new Intl.DisplayNames([locale], { type: 'language' }).of((code || canonical)!);
       if (label) for (const variant of requestNameVariants(label)) terms.add(variant);
     } catch {
       // A missing ICU locale must not make local matching fail.
@@ -272,7 +278,8 @@ export function resolveRequestGenre(value: unknown): string | null {
 export function languageDisplayName(value: unknown): string | null {
   const code = resolveLanguageCode(value);
   if (!code) return null;
-  return displayNames.of(code) || null;
+  const canonical = canonicalLanguage(value);
+  return displayNames.of(code) || displayNames.of(canonical || code) || iso6393.find(language => language.iso6393 === canonical)?.name || null;
 }
 
 export function hasRequestLanguage(text: string): boolean {
@@ -303,17 +310,113 @@ const ISO6393: Record<string, string> = {
 };
 const ISO6393_CODES = new Set(Object.values(ISO6393));
 
-export function canonicalLanguage(value: unknown): string | undefined {
+// The complete registry makes language matching extensible without a hand-
+// maintained list of every language name. IANA macrolanguage membership is
+// used only for an explicitly requested macrolanguage; named members remain
+// exact and do not broaden to the parent language.
+const ISO6393_BY_ALIAS = new Map<string, string>();
+for (const language of iso6393) {
+  for (const value of [language.iso6391, language.iso6392B, language.iso6392T]) {
+    if (value) ISO6393_BY_ALIAS.set(requestName(value), language.iso6393);
+  }
+}
+type IanaLanguageRecord = { Type?: string; Subtag?: string; Macrolanguage?: string };
+const ianaToIso6393 = new Map<string, string>();
+for (const language of iso6393) {
+  for (const value of [language.iso6391, language.iso6392B, language.iso6392T, language.iso6393]) {
+    if (value) ianaToIso6393.set(value.toLowerCase(), language.iso6393);
+  }
+}
+const languageFamilies = new Map<string, Set<string>>();
+for (const record of (ianaRegistry as IanaLanguageRecord[])) {
+  if (record.Type !== 'language' || !record.Subtag || !record.Macrolanguage) continue;
+  const member = ianaToIso6393.get(record.Subtag.toLowerCase());
+  const macro = ianaToIso6393.get(record.Macrolanguage.toLowerCase());
+  if (!member || !macro) continue;
+  const family = languageFamilies.get(macro) || new Set<string>([macro]);
+  family.add(member);
+  languageFamilies.set(macro, family);
+}
+
+function fuzzyLanguageCode(value: string): string | undefined {
+  if (value.length < 4 || value.length > 32) return undefined;
+  const candidates = [...ISO6393_BY_NAME.entries()]
+    .filter(([name]) => name.length >= 4)
+    .map(([name, code]) => ({ name, code, distance: levenshtein(value, name) }))
+    .filter(candidate => candidate.distance <= Math.max(1, Math.floor(candidate.name.length * 0.2)))
+    .sort((a, b) => a.distance - b.distance || a.name.length - b.name.length || a.code.localeCompare(b.code));
+  if (!candidates.length) return undefined;
+  const best = candidates[0]!;
+  const tied = candidates.filter(candidate => candidate.distance === best.distance
+    && candidate.name.length === best.name.length && candidate.code !== best.code);
+  return tied.length ? undefined : best.code;
+}
+
+export function canonicalLanguage(value: unknown, options: { allowFuzzy?: boolean } = {}): string | undefined {
   const raw = requestName(value);
   if (!raw) return undefined;
   if (raw === 'und' || raw === 'xxx' || raw === 'zxx') return raw;
   if (ISO6393[raw]) return ISO6393[raw];
   if (ISO6393_CODES.has(raw)) return raw;
+  const registryCode = ISO6393_BY_NAME.get(raw) || ISO6393_BY_ALIAS.get(raw)
+    || (options.allowFuzzy === false ? undefined : fuzzyLanguageCode(raw));
+  if (registryCode) return registryCode;
   if (/^[a-z]{3}$/u.test(raw) && ISO6393_CODES.has(raw)) return raw;
-  const two = resolveLanguageCode(raw);
+  const two = resolveLanguageCode(raw, options);
   return two ? ISO6393[two] ?? two : undefined;
 }
 
+/**
+ * Return the ISO 639-3 codes accepted by a request. A macrolanguage request
+ * includes its official IANA member languages; a named member or dialect
+ * remains exact so "Egyptian Arabic" cannot silently broaden to all Arabic.
+ */
+export function requestLanguageCodes(value: unknown): string[] {
+  const canonical = canonicalLanguage(value);
+  if (!canonical) return [];
+  return [...(languageFamilies.get(canonical) || new Set([canonical]))].sort();
+}
+
+export interface RequestLanguageSpan {
+  value: string;
+  code: string;
+  codes: string[];
+  start: number;
+  end: number;
+}
+
+const LANGUAGE_REQUEST_STOP_WORDS = new Set([
+  'music', 'música', 'musique', 'musica', 'song', 'songs', 'track', 'tracks', 'genre', 'genres', 'style', 'styles',
+  'language', 'languages', 'mood', 'energy', 'era', 'year', 'years', 'from', 'the',
+  'in', 'en', 'de', 'and', 'or', 'some', 'something', 'anything', 'please',
+]);
+
+/** Find the longest recognised language phrase in normalized request prose. */
+export function findRequestLanguageSpan(value: string, options: { allowBareCode?: boolean; allowFuzzy?: boolean } = {}): RequestLanguageSpan | null {
+  const normalized = requestName(value);
+  const tokens = normalized.split(' ').filter(Boolean);
+  // Fuzzy language names are useful for speech typos such as "Hindii music",
+  // but a bare one-word title such as "Daaku" must remain a title candidate.
+  // Exact registry names and aliases stay available in either context.
+  const fuzzyContext = options.allowFuzzy ?? (tokens.some(token => LANGUAGE_REQUEST_STOP_WORDS.has(token))
+    || /\b(?:in|en|de|sung|spoken|vocals?)\b/iu.test(normalized));
+  let best: RequestLanguageSpan | null = null;
+  for (let start = 0; start < tokens.length; start++) {
+    for (let length = Math.min(5, tokens.length - start); length >= 1; length--) {
+      const candidate = tokens.slice(start, start + length).join(' ');
+      if (length === 1 && LANGUAGE_REQUEST_STOP_WORDS.has(candidate)) continue;
+      if (!options.allowBareCode && candidate.length <= 3 && /^[a-z]{2,3}$/u.test(candidate)) continue;
+      const code = canonicalLanguage(candidate, { allowFuzzy: fuzzyContext });
+      if (!code) continue;
+      const prefix = tokens.slice(0, start).join(' ');
+      const offset = prefix ? prefix.length + 1 : 0;
+      const span = { value: candidate, code, codes: requestLanguageCodes(code), start: offset, end: offset + candidate.length };
+      if (!best || span.value.length > best.value.length) best = span;
+      break;
+    }
+  }
+  return best;
+}
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
   if (!a) return b.length;

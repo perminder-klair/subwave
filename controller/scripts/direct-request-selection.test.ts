@@ -828,6 +828,14 @@ test('model-free language and genre attributes are order-independent and owned o
   const languageOnly = modelFreeRequest('play Punjabi song');
   assert.equal(languageOnly.language, 'Punjabi');
   assert.equal(languageOnly.genre, null);
+
+  const localized = modelFreeRequest('play música en español');
+  assert.equal(localized.language, 'Spanish');
+  assert.equal(localized.title, null);
+
+  const unresolved = modelFreeRequest('play music in Pungabix');
+  assert.equal(unresolved.language, null);
+  assert.equal(unresolved.unresolvedLanguage, 'Pungabix');
 });
 
 test('language aliases, endonyms, and bounded typos resolve without genre evidence', () => {

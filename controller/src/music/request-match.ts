@@ -12,6 +12,8 @@ import {
   languageDisplayName,
   resolveLanguageCode,
   canonicalLanguage,
+  requestLanguageCodes,
+  findRequestLanguageSpan,
   resolveRequestGenre as resolveRequestGenreAlias,
   resolveRequestMood,
   looksLikeLyricRequest,
@@ -33,7 +35,10 @@ export interface RequestMatch {
   artist?: string | null;
   genre?: string | null;
   language?: string | null;
+  languageCodes?: string[];
+  unresolvedLanguage?: string | null;
   mood?: string | null;
+  era?: { from: number; to: number; label: string } | null;
   sort?: string | null;
   scope?: string;
   search_terms?: string[];
@@ -811,6 +816,9 @@ const ATTRIBUTE_CONNECTORS = new Set([
   'कुछ', 'संगीत', 'गाना', 'गाने', 'गीत', 'बजाओ', 'चलाओ', 'सुनाओ', 'लगाओ',
   'ਕੁਝ', 'ਸੰਗੀਤ', 'ਗਾਣਾ', 'ਗਾਣੇ', 'ਗੀਤ', 'ਚਲਾਓ', 'ਸੁਣਾਓ', 'ਲਗਾਓ',
 ].map(requestName));
+for (const connector of ['music', 'música', 'musique', 'musica', 'song', 'songs', 'track', 'tracks', 'from', 'during', 'the', 'era', 'year', 'released']) {
+  ATTRIBUTE_CONNECTORS.add(requestName(connector));
+}
 
 function knownAttributeToken(token: string): boolean {
   return !!(resolveRequestMood(token)
@@ -866,12 +874,28 @@ export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): b
     && literal.kind === 'track'
     && Boolean(literal.title?.trim())
     && !literal.artist && !literal.album
-    && !literal.genre && !literal.language && !literal.mood
+    && !literal.genre && !literal.language && !literal.mood && !literal.era
     && /^(?:please\s+)?(?:play|queue|request|put\s+on)\b/iu.test(text)
     && !hasUnspacedNativeScript(text)
     && !LYRIC_CUE.test(text)
-    && !/\b(?:album|artist|genre|language|mood)\b/iu.test(text)
+    && !/\b(?:album|artist|genre|language|mood|era|year)\b/iu.test(text)
+    && !/^(?:please\s+)?(?:play|queue|request|put\s+on)\s+(?:some|something|anything|music|a\s+song|a\s+track)\b/iu.test(text)
     && !asksForKindOfMusic(text);
+}
+
+export function parseRequestEra(value: string): { from: number; to: number; label: string } | null {
+  const text = requestName(value);
+  const decade = text.match(/\b((?:19|20)\d)0s\b/u);
+  if (decade) {
+    const from = Number(`${decade[1]}0`);
+    return { from, to: from + 9, label: `${from}s` };
+  }
+  const year = text.match(/\b((?:19|20)\d{2})\b/u);
+  if (year && /\b(?:from|during|in|year|released)\b/u.test(text)) {
+    const numeric = Number(year[1]);
+    return { from: numeric, to: numeric, label: String(numeric) };
+  }
+  return null;
 }
 
 export function modelFreeRequest(text: string): RequestMatch {
@@ -926,10 +950,42 @@ export function modelFreeRequest(text: string): RequestMatch {
       intent: `Wants something similar to ${namedSimilarity[1].trim()}.`, ack: '', bareName: wholeWording,
     };
   }
-  // Parse a trailing language condition before resolving the other attributes,
-  // so "energetic in Punjabi" and "rock in Punjabi" retain both constraints.
+  // Claim a language span before resolving the other attributes. The span is
+  // removed from the residual descriptor, so an overlapping word such as
+  // "Punjabi" cannot become both the language and a genre. The longest
+  // registry-backed span wins, which also handles endonyms and multi-word
+  // language names without a per-language special case.
   const languagePhrase = attributeBody.match(/(?:^|\s+)(?:in|en|de|में|ਵਿੱਚ)\s+([\p{L}][\p{L} -]*?)[.!?]*$/iu);
-  const attributeCore = languagePhrase ? attributeBody.slice(0, languagePhrase.index).trim() : attributeBody;
+  // When a request uses an explicit language preposition, resolve only the
+  // phrase after it. Scanning the whole request first lets a genre such as
+  // "pop" win as the ISO code `pop` before the actual unresolved language
+  // after "in" is considered.
+  const languageSpan = findRequestLanguageSpan(languagePhrase?.[1] || attributeBody, {
+    allowBareCode: Boolean(languagePhrase),
+    allowFuzzy: Boolean(languagePhrase) || /\b(?:music|songs?|tracks?|language|sung|spoken|vocals?)\b/iu.test(cleaned),
+  });
+  const unresolvedLanguage = languagePhrase && !languageSpan
+    ? languagePhrase[1].trim()
+    : null;
+  const languageCode = languageSpan?.code || null;
+  const languageValue = languageSpan
+    ? (languageDisplayName(languageSpan.code) || languageSpan.value)
+    : null;
+  // Generic "something from Artist" is an artist frame. Its year-like artist
+  // name (for example, The 1975) must not become an era constraint.
+  const genericFromFrame = /^(?:some|something|anything|music|a\s+song|a\s+track)\s+(?:by|from)\s+/iu.test(cleaned);
+  // A decade after "from" is an era request; a four-digit proper name such
+  // as "The 1975" remains an artist frame.
+  const genericEraFrame = /^(?:some|something|anything|music|a\s+song|a\s+track)\s+from\s+(?:(?:the\s+)?(?:19|20)\d0s\b|(?:19|20)\d{2}\b)/iu.test(cleaned);
+  const genericArtistFrame = genericFromFrame && !genericEraFrame;
+  const inferredEra = !lyricLike && !genericArtistFrame ? parseRequestEra(attributeBody) : null;
+  const normalizedAttributeBody = requestName(attributeBody);
+  const withoutLanguage = languageSpan
+    ? normalizedAttributeBody.replace(new RegExp(`(?<![\\p{L}\\p{N}\\p{M}])${languageSpan.value.replace(/ /g, '[^\\p{L}\\p{N}\\p{M}]+')}(?![\\p{L}\\p{N}\\p{M}])`, 'iu'), ' ').replace(/\\s+/gu, ' ').trim()
+    : normalizedAttributeBody;
+  const attributeCore = inferredEra
+    ? withoutLanguage.replace(/\b(?:from|during|in|the|era|year|released)?\s*(?:19|20)\d0s\b|\b(?:from|during|in|the|era|year|released)?\s*(?:19|20)\d{2}\b/iu, ' ').replace(/\s+/gu, ' ').trim()
+    : withoutLanguage;
   const inferredMood = !lyricLike ? resolveRequestMood(attributeCore) : null;
   const inferredGenre = !lyricLike ? resolveRequestGenreAlias(attributeCore) : null;
   // A recognised genre name is not automatically a language. If the same
@@ -942,22 +998,24 @@ export function modelFreeRequest(text: string): RequestMatch {
   const genreLanguage = inferredGenre && requestLanguageCode(inferredGenre)
     ? languageDisplayName(inferredGenre)
     : null;
-  const inferredLanguage = !lyricLike && (explicitLanguageCue || nativeScriptCue || !inferredGenre)
-    ? (requestLanguageCode(languagePhrase?.[1] || attributeBody) ? languageDisplayName(languagePhrase?.[1] || attributeBody) : null) || genreLanguage
-    : !lyricLike && genreLanguage
-      ? genreLanguage
-    : null;
-  if ((inferredMood || inferredGenre || inferredLanguage)
+  const inferredLanguage = !lyricLike && languageValue
+    ? languageValue
+    : !lyricLike && (explicitLanguageCue || nativeScriptCue || !inferredGenre)
+      ? (requestLanguageCode(languagePhrase?.[1] || attributeBody) ? languageDisplayName(languagePhrase?.[1] || attributeBody) : null) || genreLanguage
+      : !lyricLike && genreLanguage
+        ? genreLanguage
+        : null;
+  if ((inferredMood || inferredGenre || inferredLanguage || inferredEra || unresolvedLanguage)
     && isAttributeOnlyRequest(attributeBody, languagePhrase, [
-      inferredMood, inferredGenre, inferredLanguage,
+      inferredMood, inferredGenre, inferredLanguage, inferredEra?.label,
     ])
-    && !/\s+(?:by|from)\s+/iu.test(cleaned)
+    && !/\s+by\s+/iu.test(cleaned)
+    && (!/\s+from\s+/iu.test(cleaned) || !!inferredEra)
     && !/[\u0000,]|\s[-–—]\s/u.test(cleaned)
     // A quoted word is a name, whatever else it could mean.
     && !/^["'“‘]/u.test(cleaned)
     && cleaned.split(/\s+/u).length <= 12) {
-    const languageRequested = !!inferredLanguage && (explicitLanguageCue || nativeScriptCue || !!genreLanguage || !inferredGenre)
-      && !/\b(?:genre|style)\b/iu.test(cleaned);
+    const languageRequested = !!inferredLanguage && !/\b(?:genre|style)\b/iu.test(cleaned);
     const conditions = [
       inferredMood ? `Wants ${inferredMood} music.` : '',
       inferredGenre ? `Wants ${inferredGenre} music.` : '',
@@ -967,6 +1025,9 @@ export function modelFreeRequest(text: string): RequestMatch {
       kind: 'track', title: null, album: null, artist: null,
       genre: inferredGenre,
       language: languageRequested ? inferredLanguage : null,
+      languageCodes: languageRequested && languageCode ? requestLanguageCodes(languageCode) : [],
+      unresolvedLanguage,
+      era: inferredEra,
       mood: inferredMood, sort: null, scope: 'song', search_terms: [],
       unsupported: [], intent: conditions.join(' '), ack: '', bareName: wholeWording,
     };
