@@ -21,6 +21,9 @@ export const SHOW_TOPIC_MAX = 2000;
 export const GUESTS_PER_SHOW = 3;
 export const PLAYLISTS_PER_SHOW = 10;
 export const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
+// Per-show jingle filenames / bed names the automatic draws may use (#1875, #1188).
+export const SHOW_IMAGING_ALLOWLIST_MAX = 64;
+const SHOW_IMAGING_ITEM_MAX = 128;
 // Per-attribute ceiling on the multi-value music filters (#929).
 export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
@@ -116,6 +119,13 @@ function showStringList(opts: {
       }),
   );
 }
+
+// Per-show jingle filenames / bed names: same shape on save and on load.
+const IMAGING_ALLOWLIST_REPAIR = { max: SHOW_IMAGING_ALLOWLIST_MAX, itemMax: SHOW_IMAGING_ITEM_MAX };
+const imagingAllowlist = () => showStringList({
+  ...IMAGING_ALLOWLIST_REPAIR,
+  overflowError: `must have at most ${SHOW_IMAGING_ALLOWLIST_MAX} entries`,
+});
 
 // One era-window year bound, shared by showYear and the load path's
 // repairEraWindow. null / '' means "open end"; a numeric string is accepted
@@ -409,6 +419,11 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       // a tag is typed by hand and must not vanish on save. The load twin
       // (repairShowTags) drops instead.
       tags: showTags,
+      // Imaging allowlists: jingle filenames and bed names the automatic draws
+      // may use while this show is on air. Empty = every one. Shape-checked
+      // only, like playlistIds: a deleted entry matches nothing at pick time.
+      allowedJingles: imagingAllowlist(),
+      allowedBeds: imagingAllowlist(),
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
@@ -564,5 +579,7 @@ export function repairShowForLoad(
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,
     }),
+    allowedJingles: repairShowStringList(raw.allowedJingles, IMAGING_ALLOWLIST_REPAIR),
+    allowedBeds: repairShowStringList(raw.allowedBeds, IMAGING_ALLOWLIST_REPAIR),
   };
 }
