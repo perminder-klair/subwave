@@ -42,6 +42,7 @@ import { jinglePlacement, pickRotateJingle, onJingleRotateOwnerChange } from './
 import { overlayDue, overlayEnabled, overlayOffer, overlayOpening, overlayFits, overlayMixerStatus } from './jingle-overlay.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import { allowedForShow } from './show-allowlist.js';
 import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { HostSpeechStamp, TurnMeta } from './session.js';
@@ -1366,9 +1367,13 @@ class Queue {
       const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
 
       const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
-      const pick = bedPolicy.pickBed(await this._bedCatalog(), bedSec, this._lastBed, Math.random());
+      const show = session.onAirShow();
+      const allowed = allowedForShow(await this._bedCatalog(), show?.allowedBeds, b => b.name);
+      const pick = bedPolicy.pickBed(allowed, bedSec, this._lastBed, Math.random());
       if (!pick) {
-        this.log('beds', `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
+        this.log('beds', show?.allowedBeds?.length
+          ? `show "${show.name}" allows no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`
+          : `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
         return;
       }
       const path = await this._bedGetPath(pick.name);
@@ -3629,12 +3634,16 @@ class Queue {
   // away.
   async playRotateJingle(): Promise<boolean> {
     this._tracksSinceJingle = 0;
+    const library = (await jingles.list()).map(j => j.filename);
+    const show = session.onAirShow();
     const filename = pickRotateJingle(
-      (await jingles.list()).map(j => j.filename),
+      allowedForShow(library, show?.allowedJingles, f => f),
       lastAiredJingleFilename() ?? this._lastRotateJingle,
     );
     if (!filename) {
-      this.log('scheduler', '[jingle] rotate skipped — the jingle library is empty');
+      this.log('scheduler', library.length
+        ? `[jingle] rotate skipped — show "${show?.name}" allows none of the jingles in the library`
+        : '[jingle] rotate skipped — the jingle library is empty');
       return false;
     }
     const res = await this.playJingle(filename, { rotate: true });
@@ -3690,9 +3699,17 @@ class Queue {
     this.persist();
     if (decision !== 'draw') return;
     try {
-      const catalog = await jingles.list();
-      const filename = pickRotateJingle(catalog.map(j => j.filename), lastAiredJingleFilename() ?? this._lastRotateJingle);
-      if (!filename) return;
+      const library = await jingles.list();
+      const show = session.onAirShow();
+      const catalog = allowedForShow(library, show?.allowedJingles, j => j.filename);
+      const filename = pickRotateJingle(
+        catalog.map(j => j.filename),
+        lastAiredJingleFilename() ?? this._lastRotateJingle,
+      );
+      if (!filename) {
+        if (library.length) this.log('scheduler', `[jingle] over-music ID skipped — show "${show?.name}" allows none of the jingles in the library`);
+        return;
+      }
       const path = await jingles.getPath(filename);
       if (!path) return;
       const clipMs = measuredClipDurationMs(path);

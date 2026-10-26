@@ -338,6 +338,13 @@ export function onAirPersona() {
   return (id && settings.resolvePersonaById(id)) || settings.getEffectivePersona();
 }
 
+// The show currently ON AIR, by the same rule as onAirPersona: a look-ahead
+// session already belongs to the incoming show. Falls back to the grid.
+export function onAirShow() {
+  const id = _session?.show?.id;
+  return (id && settings.resolveShowById(id)) || settings.resolveActiveShow();
+}
+
 export interface AutomaticHostSpeech {
   persona: Persona | null;
   hostSpeech: HostSpeechStamp | null;
