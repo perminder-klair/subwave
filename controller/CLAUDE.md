@@ -19,6 +19,7 @@ Express on Node: TypeScript run by `tsx`, with `.js` import specifiers. `src/ser
 
 - Read env through `util/env.ts` (`envInt`, `envFloat`, `envUrl`, `envEnum`, `envStr`), never `parseInt(process.env.X || …)`, whose NaN travels. A malformed value warns and falls back, never throws, and the warnings reach the booth log. A few legacy `parseInt` reads remain; don't add more.
 - `state/secrets.env` has one parse (`setup/secrets.ts` `readSecretsFile`), shared by boot and `saveSecrets`' read-then-rewrite merge, and `envEscape` is its designed writer. A second parse that misreads a value destroys that secret on the next save.
+- `util/google-key-pool.ts` manages the opt-in `GOOGLE_GENERATIVE_AI_API_KEYS` pool (`key` or `key:name`): check `poolConfigured()` (the singular key is not a one-key pool), track tried keys per request (`currentKey(exclude)`), address mutations by opaque `entryId` under `withPoolLock` serialising `poolEntries()`, call `reportKeySuccess(key)` on 2xx, and rotate only on `429`/`401` (park durations in `llm/internal/provider/gemini-cooldown.ts`). Keep the multi-key ToS caveat gated on >1 key; see `docs/google-key-pool.md` and `scripts/google-key-pool.test.ts`.
 
 ## LLM layer (`llm/`)
 
