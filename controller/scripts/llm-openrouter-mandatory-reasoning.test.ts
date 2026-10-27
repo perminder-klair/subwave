@@ -124,15 +124,20 @@ const RESULTS = { results: [{ moods: ['calm'], energy: 'low' }, { moods: ['energ
 
 // Runs fn with globalThis.fetch (debugFetch, the openrouter transport's inner
 // fetch, delegates to it) answering every chat completion. `mandatory` makes the
-// stub behave like a model that cannot switch reasoning off.
-async function onTheWire(mandatory: boolean, fn: () => Promise<unknown>): Promise<{ bodies: any[]; out: unknown }> {
+// stub behave like a model that cannot switch reasoning off; `content` picks the
+// reply text per request body.
+async function onTheWire(
+  mandatory: boolean,
+  fn: () => Promise<unknown>,
+  content: (body: any) => string = () => JSON.stringify(RESULTS),
+): Promise<{ bodies: any[]; out: unknown }> {
   const real = globalThis.fetch;
   const bodies: any[] = [];
   globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body));
     bodies.push(body);
     if (mandatory && body.reasoning?.enabled === false) return mandatoryRejection();
-    return okReply(JSON.stringify(RESULTS));
+    return okReply(content(body));
   }) as typeof fetch;
   try {
     return { bodies, out: await fn() };
@@ -170,4 +175,20 @@ test('reasoning on sends no reasoning block, so the rejection cannot happen', as
   assert.deepEqual(out, RESULTS.results);
   assert.equal(bodies.length, 1);
   assert.equal(bodies[0].reasoning, undefined);
+});
+
+// Forced-tool and recovery legs run on a separate reasoning-disabled instance
+// (languageModel forceNoThink), so they send `enabled:false` even with reasoning
+// on. That instance must carry the retry too.
+test('with reasoning on, the reasoning-disabled recovery instance is retried at the floor too', async () => {
+  await openRouterStation('openrouter/free', true);
+  // The native attempt (no reasoning block) answers prose, so djObject falls to
+  // its text recovery on the no-think instance, which the model rejects.
+  const { bodies, out } = await onTheWire(true, () => tagBatch(SONGS),
+    (body) => (body.reasoning === undefined ? 'not json' : JSON.stringify(RESULTS)));
+  assert.deepEqual(out, RESULTS.results);
+  assert.equal(bodies.length, 3);
+  assert.equal(bodies[0].reasoning, undefined);
+  assert.deepEqual(bodies[1].reasoning, { enabled: false });
+  assert.deepEqual(bodies[2].reasoning, { effort: 'minimal' });
 });
