@@ -117,7 +117,22 @@ export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
 // wake probe sees a listener, POST /request's refresh()). Without the
 // single-flight guard a slow doomed poll can commit
 // after a younger successful one and overwrite its fresh state.
-const fetchCount = singleFlight(() => pollCount(true));
+//
+// The wake probe never reads Icecast beside a committed poll either: two
+// overlapping status reads are what blew the deadline in #1256. A poll waits
+// out a probe already in flight (bounded by PEEK_TIMEOUT_MS), and a probe
+// stands aside while a poll runs.
+let polling = false;
+let peeking: Promise<unknown> | null = null;
+const fetchCount = singleFlight(async () => {
+  polling = true;
+  try {
+    if (peeking) await peeking;
+    return await pollCount(true);
+  } finally {
+    polling = false;
+  }
+});
 
 async function pollCount(persistHistory: boolean) {
   let online = false;
@@ -219,16 +234,26 @@ const PEEK_TIMEOUT_MS = 1000;
 // The idle monitor's wake probe (#2072): the raw broadcast-mount sum off one
 // status read, null on any failure. It commits nothing, so it can bring a wake
 // forward but never moves the failure count, the cached status or the gated
-// count the fail-open gates read (#1256).
+// count the fail-open gates read (#1256). Null too while a committed poll or
+// another probe is reading.
 export async function peekListeners(): Promise<number | null> {
+  if (polling || peeking) return null;
+  const read = (async () => {
+    try {
+      const r = await fetchWithTimeout(config.icecast.statusUrl, {
+        timeoutMs: PEEK_TIMEOUT_MS,
+        bodyDeadline: true,
+      });
+      return rawListenerSum(broadcastMountSources(((await r.json()) as any)?.icestats));
+    } catch {
+      return null;
+    }
+  })();
+  peeking = read;
   try {
-    const r = await fetchWithTimeout(config.icecast.statusUrl, {
-      timeoutMs: PEEK_TIMEOUT_MS,
-      bodyDeadline: true,
-    });
-    return rawListenerSum(broadcastMountSources(((await r.json()) as any)?.icestats));
-  } catch {
-    return null;
+    return await read;
+  } finally {
+    peeking = null;
   }
 }
 

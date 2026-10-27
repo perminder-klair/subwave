@@ -12,9 +12,10 @@ import { showKeyAt } from './show-boundary.js';
 import { programmeShowKey } from './resume-show.js';
 
 // One tick every 5s. Live: read the 15s monitor's cached count. Idle: force a
-// fresh poll. The tick's own polls are the only ones that count toward the
-// fail-open budget, so it keeps this cadence: polling faster would shorten the
-// ~20s an outage needs to release the pause (#1256).
+// fresh poll. Only committed polls (this tick's, the 15s monitor's, a
+// request's) count toward the fail-open budget, so it keeps this cadence:
+// polling faster would shorten the ~20s an outage needs to release the pause
+// (#1256).
 const TICK_MS = 5000;
 
 // While idle, a wake probe reads Icecast every second and runs the tick as soon
@@ -179,7 +180,9 @@ export function createStreamIdleMonitor(overrides: Partial<{
 }
 
 // Drive both cadences. The probe keeps its own guard so a slow one never costs
-// the tick its slot, and it stands aside while a tick is already polling.
+// the tick its slot (listeners.ts holds the tick's poll until a probe in flight
+// is done, at most its 1s deadline), and it stands aside while a tick is
+// already polling.
 export function scheduleStreamIdleMonitor(
   m: Pick<ReturnType<typeof createStreamIdleMonitor>, 'tick' | 'wakeProbe'>,
   every: (run: () => void, ms: number) => unknown = setInterval,

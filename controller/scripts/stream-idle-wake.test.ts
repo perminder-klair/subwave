@@ -7,12 +7,33 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 // A stand-in Icecast status endpoint. Bound before config is imported, because
-// config reads ICECAST_STATUS_URL once at import.
+// config reads ICECAST_STATUS_URL once at import. `held` parks each request
+// until release(); `maxInFlight` is the most it ever served at once.
 let reply = { status: 200, body: '{}' };
+let held: (() => void)[] | null = null;
+let inFlight = 0;
+let maxInFlight = 0;
 const icecast = createServer((_req, res) => {
-  res.writeHead(reply.status, { 'content-type': 'application/json' });
-  res.end(reply.body);
+  inFlight++;
+  maxInFlight = Math.max(maxInFlight, inFlight);
+  res.on('close', () => { inFlight--; });
+  const answer = () => {
+    res.writeHead(reply.status, { 'content-type': 'application/json' });
+    res.end(reply.body);
+  };
+  if (held) held.push(answer);
+  else answer();
 });
+function release() {
+  const parked = held ?? [];
+  held = null;
+  for (const answer of parked) answer();
+}
+async function until(cond: () => boolean, ms = 2000) {
+  for (const end = Date.now() + ms; !cond() && Date.now() < end;) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
 await new Promise<void>(resolve => icecast.listen(0, '127.0.0.1', resolve));
 process.env.ICECAST_STATUS_URL =
   `http://127.0.0.1:${(icecast.address() as AddressInfo).port}/status-json.xsl`;
@@ -57,6 +78,56 @@ test('a failed probe reads null and never moves the failure budget', async () =>
   // assertions above are measuring something.
   for (let i = 0; i < 4; i++) await listeners.refresh();
   assert.equal(listeners.gatedListenerCount(), null);
+});
+
+// Two overlapping status reads are what blew the deadline in #1256, so the
+// probe must never sit beside a committed poll: not the tick's, the 15s
+// monitor's or a request's.
+test('the probe and a committed poll never read Icecast at the same time', async () => {
+  reply = { status: 200, body: status({ '/stream.mp3': 0 }) };
+  maxInFlight = 0;
+
+  // A probe in flight when a poll starts: the poll waits it out.
+  held = [];
+  const peek = listeners.peekListeners();
+  await until(() => held!.length === 1);
+  const poll = listeners.refresh();
+  await until(() => held!.length === 2, 200);
+  release();
+  await peek;
+  await poll;
+  assert.equal(maxInFlight, 1, 'a poll started beside a probe in flight');
+
+  // A poll in flight: the probe stands aside without a request of its own.
+  held = [];
+  const poll2 = listeners.refresh();
+  await until(() => held!.length === 1);
+  assert.equal(await listeners.peekListeners(), null);
+  release();
+  await poll2;
+  assert.equal(maxInFlight, 1, 'a probe read beside a committed poll');
+});
+
+test('the probe deadline covers a body that never finishes', async () => {
+  const stall = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"icestats":');
+  });
+  await new Promise<void>(resolve => stall.listen(0, '127.0.0.1', resolve));
+  const { config } = await import('../src/config.js');
+  const statusUrl = config.icecast.statusUrl;
+  config.icecast.statusUrl = `http://127.0.0.1:${(stall.address() as AddressInfo).port}/status-json.xsl`;
+  try {
+    const verdict = await Promise.race([
+      listeners.peekListeners(),
+      new Promise(resolve => setTimeout(() => resolve('hung'), 3000).unref()),
+    ]);
+    assert.equal(verdict, null);
+  } finally {
+    config.icecast.statusUrl = statusUrl;
+    stall.closeAllConnections();
+    stall.close();
+  }
 });
 
 // setInterval stand-in: fires due timers in order, draining the async work
