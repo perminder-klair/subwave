@@ -52,8 +52,10 @@ function recorder(reply: (body: any, n: number) => Response) {
   return { sent, base };
 }
 
-function request(body: Record<string, unknown>) {
-  return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) };
+// Carries a real signal, as the SDK's postToApi does, so the retry can be held
+// to the caller's deadline.
+function request(body: Record<string, unknown>, signal: AbortSignal = new AbortController().signal) {
+  return { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal };
 }
 
 const OFF = { model: 'openrouter/free', messages: [{ role: 'user', content: 'hi' }], max_tokens: 50, reasoning: { enabled: false } };
@@ -70,7 +72,23 @@ test('a mandatory-reasoning rejection is sent again once at the floor, nothing e
   // Same URL, same headers, same everything but the reasoning block.
   assert.equal(sent[1].url, URL);
   assert.equal(sent[1].init.headers, init.headers);
+  assert.equal(sent[1].init.signal, init.signal, 'the retry is held to the caller\'s abort signal');
   assert.deepEqual({ ...sent[1].body, reasoning: undefined }, { ...sent[0].body, reasoning: undefined });
+});
+
+// Without the signal, a deadline would stop waiting for the retry but leave it
+// generating on OpenRouter, billed and unread.
+test('an abort that lands after the rejection stops the retry', async () => {
+  const ac = new AbortController();
+  let calls = 0;
+  const base = async (_url: unknown, init: RequestInit) => {
+    calls++;
+    if (init.signal?.aborted) throw new DOMException('This operation was aborted', 'AbortError');
+    ac.abort();
+    return mandatoryRejection();
+  };
+  await assert.rejects(openRouterFetch(base)(URL, request(OFF, ac.signal)), { name: 'AbortError' });
+  assert.equal(calls, 2);
 });
 
 test('a model that accepts reasoning off sees exactly one untouched request', async () => {
