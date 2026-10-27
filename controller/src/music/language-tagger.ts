@@ -151,7 +151,7 @@ const LanguageBatchResult = z.object({ results: z.array(LanguageResult) });
 function sanitize(result: z.infer<typeof LanguageResult>): LanguageDecision {
   const primary = canonicalLanguage(result.primaryLanguage);
   const codes = [...new Set([
-    ...result.languages.map(canonicalLanguage),
+    ...result.languages.map(code => canonicalLanguage(code)),
     primary,
   ].filter((x): x is string => !!x && x !== 'und' && x !== 'xxx' && x !== 'zxx'))];
   const mode = result.mode === 'instrumental' ? 'instrumental' : result.mode === 'unknown' ? 'unknown' : codes.length > 1 ? 'mixed' : codes.length ? 'single' : 'unknown';

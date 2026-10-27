@@ -807,8 +807,8 @@ test('model-free artist requests do not invent a song title', () => {
   assert.equal(modelFreeRequest('play the song by Taylor Swift').artist, 'Taylor Swift');
 });
 
-test('model-free requests recognise multilingual genre, language, and mood forms', () => {
-  assert.equal(modelFreeRequest('play some Punjabi music').genre, 'punjabi');
+test('model-free requests recognise multilingual language, genre, and mood forms', () => {
+  assert.equal(modelFreeRequest('play some Punjabi music').genre, null);
   assert.equal(modelFreeRequest('play some Punjabi music').language, 'Punjabi');
   assert.equal(modelFreeRequest('play some rock music').genre, 'rock');
   assert.equal(modelFreeRequest('play something chill').mood, 'calm');

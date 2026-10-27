@@ -4,17 +4,6 @@ import ianaRegistry from 'language-subtag-registry/data/json/registry.json' with
 
 export type RequestEnergy = 'low' | 'medium' | 'high';
 
-const LANGUAGE_CODES = [
-  'aa', 'ab', 'af', 'am', 'ar', 'as', 'az', 'ba', 'be', 'bg', 'bn', 'bo', 'br', 'bs',
-  'ca', 'cs', 'cy', 'da', 'de', 'el', 'en', 'es', 'et', 'eu', 'fa', 'fi', 'fil', 'fj',
-  'fo', 'fr', 'fy', 'ga', 'gd', 'gl', 'gu', 'ha', 'he', 'hi', 'hr', 'hu', 'hy', 'id',
-  'is', 'it', 'ja', 'jv', 'ka', 'kk', 'km', 'kn', 'ko', 'ku', 'ky', 'la', 'lb', 'lo',
-  'lt', 'lv', 'mg', 'mi', 'mk', 'ml', 'mn', 'mr', 'ms', 'mt', 'my', 'ne', 'nl', 'no',
-  'oc', 'om', 'or', 'pa', 'pl', 'ps', 'pt', 'ro', 'ru', 'rw', 'sa', 'sd', 'si', 'sk',
-  'sl', 'so', 'sq', 'sr', 'su', 'sv', 'sw', 'ta', 'te', 'tg', 'th', 'tk', 'tl', 'tr',
-  'tt', 'ug', 'uk', 'ur', 'uz', 'vi', 'wo', 'xh', 'yi', 'yo', 'zh', 'zu', 'yue',
-] as const;
-
 const displayNames = new Intl.DisplayNames(['en'], { type: 'language' });
 
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -193,7 +182,7 @@ for (const language of iso6393) {
   }
 }
 
-export function resolveLanguageCode(value: unknown, options: { allowFuzzy?: boolean } = {}): string | undefined {
+export function resolveLanguageCode(value: unknown, options: { allowFuzzy?: boolean; allowEmbedded?: boolean } = {}): string | undefined {
   const names = requestNameVariants(value);
   for (const name of names) {
     const explicit = LANGUAGE_ALIASES[name];
@@ -205,8 +194,10 @@ export function resolveLanguageCode(value: unknown, options: { allowFuzzy?: bool
     // ISO codes are accepted when the whole value is the code. A two-letter
     // alias must not be found inside prose: French "de", Spanish "en", and
     // similar words are ordinary prepositions, not language evidence.
-    const token = name.split(' ').find(word => word.length > 2 && LANGUAGE_ALIASES[word]);
-    if (token) return LANGUAGE_ALIASES[token];
+    if (options.allowEmbedded !== false) {
+      const token = name.split(' ').find(word => word.length > 2 && LANGUAGE_ALIASES[word]);
+      if (token) return LANGUAGE_ALIASES[token];
+    }
   }
   return undefined;
 }
@@ -352,7 +343,7 @@ function fuzzyLanguageCode(value: string): string | undefined {
   return tied.length ? undefined : best.code;
 }
 
-export function canonicalLanguage(value: unknown, options: { allowFuzzy?: boolean } = {}): string | undefined {
+export function canonicalLanguage(value: unknown, options: { allowFuzzy?: boolean; allowEmbedded?: boolean } = {}): string | undefined {
   const raw = requestName(value);
   if (!raw) return undefined;
   if (raw === 'und' || raw === 'xxx' || raw === 'zxx') return raw;
@@ -406,7 +397,11 @@ export function findRequestLanguageSpan(value: string, options: { allowBareCode?
       const candidate = tokens.slice(start, start + length).join(' ');
       if (length === 1 && LANGUAGE_REQUEST_STOP_WORDS.has(candidate)) continue;
       if (!options.allowBareCode && candidate.length <= 3 && /^[a-z]{2,3}$/u.test(candidate)) continue;
-      const code = canonicalLanguage(candidate, { allowFuzzy: fuzzyContext });
+      // A request span must be a language name or alias in its entirety. The
+      // metadata matcher may accept a language-bearing style tag such as
+      // "Punjabi Pop", but request parsing must not consume the adjacent
+      // genre and let it disappear from the listener's intent.
+      const code = canonicalLanguage(candidate, { allowFuzzy: fuzzyContext, allowEmbedded: false });
       if (!code) continue;
       const prefix = tokens.slice(0, start).join(' ');
       const offset = prefix ? prefix.length + 1 : 0;
@@ -513,9 +508,10 @@ export function looksLikeLyricRequest(text: string): boolean {
 }
 
 export function isLyricOrFilmDescription(text: string): boolean {
+  const eraRequest = /\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d0s\b/iu.test(text);
   return looksLikeLyricRequest(text)
-    || /\b(?:song|track|music)\s+from\s+\S/iu.test(text)
-    || (/\b(?:song|track|music)\s+in\s+\S/iu.test(text) && !hasRequestLanguage(text));
+    || (!eraRequest && /\b(?:song|track|music)\s+(?:from|in)\s+\S/iu.test(text)
+      && !hasRequestLanguage(text));
 }
 
 // Native-script lyrics are often transcribed without spaces. They should use

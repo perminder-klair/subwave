@@ -988,23 +988,12 @@ export function modelFreeRequest(text: string): RequestMatch {
     : withoutLanguage;
   const inferredMood = !lyricLike ? resolveRequestMood(attributeCore) : null;
   const inferredGenre = !lyricLike ? resolveRequestGenreAlias(attributeCore) : null;
-  // A recognised genre name is not automatically a language. If the same
-  // value is also an unambiguous language name ("Punjabi music"), preserve
-  // both interpretations so a language-aware library can enforce it while a
-  // genre-only library can still satisfy it through its Punjabi tag.
-  const explicitLanguageCue = Boolean(languagePhrase)
-    || /\b(?:language|language[s]?|sung|spoken|vocals?)\b/iu.test(attributeBody);
-  const nativeScriptCue = /[^\u0000-\u007f]/u.test(attributeBody);
-  const genreLanguage = inferredGenre && requestLanguageCode(inferredGenre)
-    ? languageDisplayName(inferredGenre)
-    : null;
-  const inferredLanguage = !lyricLike && languageValue
-    ? languageValue
-    : !lyricLike && (explicitLanguageCue || nativeScriptCue || !inferredGenre)
-      ? (requestLanguageCode(languagePhrase?.[1] || attributeBody) ? languageDisplayName(languagePhrase?.[1] || attributeBody) : null) || genreLanguage
-      : !lyricLike && genreLanguage
-        ? genreLanguage
-        : null;
+  // A language span is authoritative. Do not infer a language from the
+  // residual genre: common genre names can also be ISO language codes (for
+  // example, "pop"), but that does not make a genre-only request language
+  // constrained. The explicit span is still allowed to coexist with a
+  // separate residual genre such as "Punjabi pop".
+  const inferredLanguage = !lyricLike ? languageValue : null;
   if ((inferredMood || inferredGenre || inferredLanguage || inferredEra || unresolvedLanguage)
     && isAttributeOnlyRequest(attributeBody, languagePhrase, [
       inferredMood, inferredGenre, inferredLanguage, inferredEra?.label,
