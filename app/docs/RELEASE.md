@@ -71,6 +71,13 @@ a branch at update time.
 (`production` auto-increments). Don't hand-edit `ios.buildNumber` /
 `android.versionCode`.
 
+Every iOS profile pins `ios.image` to an **Xcode 27** image. EAS builds SDK 57
+with Xcode 26.6 by default, and the iOS 27 Siri support
+(`targets/live-activity/_shared/AudioSchemaIntents.swift`) compiles only under
+Xcode 27, so a default build would ship without it. Building with the iOS 27
+SDK in turn needs the UIScene life cycle (`ios.enableSceneSupport` in
+`app.json`; TESTING.md). Move the pin forward with an Expo SDK upgrade.
+
 ---
 
 ## OTA workflow

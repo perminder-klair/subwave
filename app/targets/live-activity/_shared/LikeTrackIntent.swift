@@ -31,6 +31,11 @@ struct LikeTrackIntent: AppIntent, LiveActivityIntent {
   /// does not have to open anything.
   static var openAppWhenRun: Bool = false
 
+  /// The card's button only. Siri and Shortcuts have LikeSongIntent
+  /// (OnAirIntents.swift), which works with no screen mounted; this one goes
+  /// through the in-app heart.
+  static var isDiscoverable: Bool = false
+
   func perform() async throws -> some IntentResult {
     NotificationCenter.default.post(
       name: Notification.Name("SubwaveLiveActivityLikePressed"),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { StationApi } from '@/lib/api';
+import { onExternalLike } from '@/lib/like-events';
 
 export interface TrackLike {
   /** Likes are enabled on this station AND a likeable track is on air (jingles
@@ -40,6 +41,20 @@ export function useTrackLike(api: StationApi | null, songId: string | null): Tra
       cancelled = true;
     };
   }, [api, songId]);
+
+  // A like from Siri for this same song.
+  useEffect(
+    () =>
+      onExternalLike((ext) => {
+        if (!songId || ext.songId !== songId) return;
+        setState((prev) => ({
+          songId,
+          liked: true,
+          count: ext.count ?? (prev.songId === songId ? prev.count : 0),
+        }));
+      }),
+    [songId],
+  );
 
   const like = useCallback(async () => {
     if (!api || !songId || pending || (state.liked && state.songId === songId)) return;

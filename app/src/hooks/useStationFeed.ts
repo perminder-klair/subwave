@@ -7,7 +7,8 @@ import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
 import { pollAsync } from '@/lib/poll';
 import { DEFAULT_STATION_LOCALE, type StationLocale } from '@/lib/format';
-import { MAX_LEAD_SECONDS, splitAudibleTurns } from '@/lib/sessionFeed';
+import { audibleAt as audibleAtLiveEdge, leadMsFrom } from '@/lib/heard-track';
+import { splitAudibleTurns } from '@/lib/sessionFeed';
 import { trackElapsedSeconds } from '@/lib/track-progress';
 import type {
   ActiveShow,
@@ -177,11 +178,10 @@ export function useStationFeed(
     // skips /state) and on a failed /state leg.
     const applyNowPlaying = (npRes: NowPlayingResponse, current?: StationState['current']) => {
       const np = npRes.nowPlaying;
-      // Buffer depth first; everything below is measured against it. Clamped to
-      // 0-60s so a bad value can't park the clock in the far future.
-      const bufSec = npRes.stream?.bufferSeconds;
-      if (typeof bufSec === 'number' && Number.isFinite(bufSec)) {
-        leadMsRef.current = Math.min(Math.max(bufSec, 0), MAX_LEAD_SECONDS) * 1000;
+      // Buffer depth first; everything below is measured against it.
+      const lead = leadMsFrom(npRes.stream?.bufferSeconds);
+      if (lead != null) {
+        leadMsRef.current = lead;
         setLeadMs(leadMsRef.current);
       }
       const trackKey = np ? `${np.title}\0${np.artist}` : null;
@@ -196,7 +196,9 @@ export function useStationFeed(
       // Shift into listener-time: the audio arrives leadMs after the live edge.
       // With no server stamp, fall back to first-seen (no offset); the next
       // foreground tick carries /state and repairs it in the converge branch.
-      const audibleAt = Number.isFinite(serverStart) ? serverStart + leadMsRef.current : Date.now();
+      const audibleAt = Number.isFinite(serverStart)
+        ? audibleAtLiveEdge(serverStart, leadMsRef.current)
+        : Date.now();
 
       if (trackKey !== lastTrackKeyRef.current) {
         const commit = () => {

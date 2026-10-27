@@ -8,8 +8,16 @@ import {
   addAudioRouteChangeListener,
   ROUTE_REASON_OLD_DEVICE_UNAVAILABLE,
 } from '../../modules/airplay-route-picker';
-import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
+import { setOnAir } from '../../modules/app-intents';
+import {
+  getLastLiveMeta,
+  loadAndPlay,
+  onExternalTuneOut,
+  setupPlayer,
+  teardown,
+} from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import { streamBelongsTo } from '@/lib/station-store';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
@@ -219,6 +227,51 @@ export function usePlayer(
     },
   );
 
+  // A tune-in that started before this hook mounted: an App Intent can launch
+  // the app into the background and start the stream (src/intents/tune.ts)
+  // while the screens are still loading, so the Playing event that would
+  // adopt it has already fired.
+  useEffect(() => {
+    let alive = true;
+    TrackPlayer.getPlaybackState()
+      .then(({ state }) => {
+        if (!alive || tunedInRef.current || !getLastLiveMeta()) return;
+        if (state !== State.Playing && state !== State.Buffering && state !== State.Loading) {
+          return;
+        }
+        tunedInRef.current = true;
+        setTunedIn(true);
+        setStatus(state === State.Playing ? 'playing' : 'connecting');
+        if (state !== State.Playing) armWatchdogRef.current(WATCHDOG_MS);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // The tune control (targets/live-activity/TuneControl.swift) cannot ask the
+  // player, so it shows this. Written on mount too, which clears a flag an
+  // app killed mid-song left on.
+  useEffect(() => {
+    setOnAir(tunedIn);
+  }, [tunedIn]);
+
+  // An App Intent tune-out (src/intents/tune.ts): the same synchronous ref
+  // flip as the RemotePause handler above, ahead of the Stopped event.
+  useEffect(
+    () =>
+      onExternalTuneOut(() => {
+        clearWatchdog();
+        retryCount.current = 0;
+        bufferFlapsRef.current = [];
+        tunedInRef.current = false;
+        setTunedIn(false);
+        setStatus('idle');
+      }),
+    [clearWatchdog],
+  );
+
   // iOS: an oldDeviceUnavailable route change (Bluetooth speaker off, CarPlay
   // disconnected, headphones unplugged) is a tune-out (#992) — the
   // longFormAudio session policy keeps AVPlayer "playing" to the vanished
@@ -268,12 +321,17 @@ export function usePlayer(
   // RNTP level; drop local tuned-in state so the UI doesn't claim "on air"
   // over dead audio. (The event handler ignores State.None because reset()
   // also fires it mid tune-in and mid reconnect.)
+  // One exception: a switch from Siri, Shortcuts or Spotlight
+  // (src/intents/tune.ts) starts the new station's stream before the base
+  // changes here. A stream that already belongs to the new base is kept.
   const prevBaseRef = useRef(api?.base ?? null);
   useEffect(() => {
     const nextBase = api?.base ?? null;
     if (prevBaseRef.current === nextBase) return;
     prevBaseRef.current = nextBase;
-    if (tunedInRef.current) stop();
+    const meta = getLastLiveMeta();
+    const adopted = !!(nextBase && meta && streamBelongsTo(meta.url, nextBase));
+    if (tunedInRef.current && !adopted) stop();
   }, [api, stop]);
 
   // Retune onto a new mount in place. Keyed on the transition so a steady

@@ -74,16 +74,32 @@ export function isLiveActivitySupported(): boolean {
   }
 }
 
+// Start outcomes, for a caller that has to wait for the card: an App Intent
+// tune-in (src/intents/tune.ts). ActivityKit refuses a background app, so the
+// intent's own run is the only window a card can start in, and it closes when
+// the intent returns.
+const startListeners = new Set<(ok: boolean) => void>();
+
+export function onLiveActivityStart(fn: (ok: boolean) => void): () => void {
+  startListeners.add(fn);
+  return () => {
+    startListeners.delete(fn);
+  };
+}
+
 /** Put the card up. Resolves false when the system refused it; never throws. */
 export async function startLiveActivity(
   config: LiveActivityConfig,
   state: LiveActivityState,
 ): Promise<boolean> {
+  let ok = false;
   try {
-    return (await native?.start(config, state)) ?? false;
+    ok = (await native?.start(config, state)) ?? false;
   } catch {
-    return false;
+    ok = false;
   }
+  startListeners.forEach((fn) => fn(ok));
+  return ok;
 }
 
 /** Push a new snapshot to whatever card is up. No-op when none is. */

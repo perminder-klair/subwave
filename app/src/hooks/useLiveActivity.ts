@@ -10,6 +10,7 @@ import {
   updateLiveActivity,
   type LiveActivityState,
 } from '../../modules/live-activity';
+import { useAppActive } from '@/hooks/useAppActive';
 import { useTalking } from '@/hooks/useTalking';
 import type { TrackLike } from '@/hooks/useTrackLike';
 import { resolveAirCard } from '@/lib/air-card';
@@ -97,20 +98,58 @@ export function useLiveActivity({
     void updateLiveActivity(state);
   }, [state]);
 
+  // Two starts in flight at once can each clear the old card before either
+  // requests a new one, which stacks two.
+  const startingRef = useRef(false);
+  // Bumped on every teardown, so a start that resolves after one can tell.
+  const lifecycleRef = useRef(0);
+  const tunedInRef = useRef(tunedIn);
+  useEffect(() => {
+    tunedInRef.current = tunedIn;
+  }, [tunedIn]);
+
   // Accent is immutable in ActivityKit attributes; a theme change restarts the card.
   useEffect(() => {
     if (!supported || !api || !tunedIn) return;
     let cancelled = false;
     void (async () => {
+      startingRef.current = true;
       const ok = await startLiveActivity({ station, accent }, stateRef.current);
+      startingRef.current = false;
       if (!cancelled) startedRef.current = ok;
     })();
     return () => {
       cancelled = true;
+      lifecycleRef.current += 1;
       startedRef.current = false;
       void stopLiveActivity();
     };
   }, [supported, api, tunedIn, station, accent]);
+
+  // ActivityKit refuses a background app outside a LiveActivityIntent's run,
+  // so a tune-in from Siri or a Shortcut can miss its card (src/intents/tune.ts
+  // waits for it, up to a cap). Put it up the next time the app comes forward.
+  // Keyed on the transition, so an in-app tune-in is left to the effect above.
+  const active = useAppActive();
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    const cameForward = active && !wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (!cameForward || !supported || !api || !tunedIn) return;
+    if (startedRef.current || startingRef.current) return;
+    const lifecycle = lifecycleRef.current;
+    void (async () => {
+      startingRef.current = true;
+      const ok = await startLiveActivity({ station, accent }, stateRef.current);
+      startingRef.current = false;
+      if (lifecycleRef.current === lifecycle) {
+        startedRef.current = ok;
+      } else if (ok && !tunedInRef.current) {
+        // Tuned out while this was in flight: the teardown's stop ran first.
+        void stopLiveActivity();
+      }
+    })();
+  }, [active, supported, api, tunedIn, station, accent]);
 
   // The persistent listener must call the current track's like closure.
   const likeRef = useRef(like);

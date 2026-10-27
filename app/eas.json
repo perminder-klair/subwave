@@ -8,22 +8,32 @@
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
-        "simulator": true
+        "simulator": true,
+        "image": "macos-tahoe-26.6-xcode-27.1"
       }
     },
     "development-device": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "ios": { "simulator": false },
+      "ios": {
+        "simulator": false,
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      },
       "android": { "buildType": "apk" }
     },
     "production": {
       "autoIncrement": true,
-      "channel": "production"
+      "channel": "production",
+      "ios": {
+        "image": "macos-tahoe-26.6-xcode-27.1"
+      }
     }
   },
   "submit": {

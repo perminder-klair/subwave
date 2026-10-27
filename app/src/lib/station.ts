@@ -145,3 +145,25 @@ export async function clearActiveStation(): Promise<StationStore> {
   await persist(next);
   return next;
 }
+
+// A change to the stored active station made outside StationContext: a
+// station switch from Siri, Shortcuts or Spotlight (src/intents/tune.ts).
+// StationContext reloads the store on it, so the screens follow.
+const storeListeners = new Set<() => void>();
+
+export function onStationStoreChanged(fn: () => void): () => void {
+  storeListeners.add(fn);
+  return () => {
+    storeListeners.delete(fn);
+  };
+}
+
+export function announceStationStoreChanged(): void {
+  storeListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      /* a broken subscriber must not stop the switch */
+    }
+  });
+}

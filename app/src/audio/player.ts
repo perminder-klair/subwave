@@ -89,6 +89,32 @@ export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
   await TrackPlayer.play();
 }
 
+// A tune-out that reaches the player from outside the React tree without an
+// RNTP remote event: an App Intent (src/intents/tune.ts). usePlayer must hear
+// it before the Stopped event lands, or it reads Stopped as a dead stream and
+// reconnects, the same trap RemotePause is handled for.
+const tuneOutListeners = new Set<() => void>();
+
+export function onExternalTuneOut(fn: () => void): () => void {
+  tuneOutListeners.add(fn);
+  return () => {
+    tuneOutListeners.delete(fn);
+  };
+}
+
+/** stop(), not teardown(): the Icecast connection drops, and lastLiveMeta
+ *  survives so the next tune-in resumes at the live edge. */
+export async function externalTuneOut(): Promise<void> {
+  tuneOutListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      /* a broken subscriber must not keep the stream running */
+    }
+  });
+  await TrackPlayer.stop();
+}
+
 export async function teardown(): Promise<void> {
   lastLiveMeta = null;
   try {

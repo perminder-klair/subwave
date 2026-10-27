@@ -5,8 +5,11 @@ import UIKit
 import WidgetKit
 
 // The on-air Live Activity: Lock Screen, Dynamic Island, and — the reason this
-// target exists — the Apple Watch Smart Stack, which iOS 18+ mirrors this same
-// lock-screen presentation into with no watchOS target of its own.
+// target exists — the Apple Watch Smart Stack, which iOS 18+ mirrors this
+// activity into with no watchOS target of its own. iOS 26 adds the CarPlay
+// Dashboard, with no CarPlay entitlement. Both of those render the `.small`
+// activity family (SmallView), and fall back to the Dynamic Island's compact
+// views unless the configuration opts into it (SubwaveLiveActivityWithSmall).
 //
 // Everything here renders from the content state alone. A widget extension gets
 // no network turn, so nothing in this file fetches: the cover art is read off
@@ -220,11 +223,10 @@ private struct TrackLines: View {
   }
 }
 
-// MARK: - Lock Screen / Smart Stack
+// MARK: - Lock Screen
 
-/// Also the Apple Watch presentation: watchOS renders the Smart Stack card from
-/// this same view, at a narrower width. Keep it a single row that degrades — no
-/// fixed widths, everything `lineLimit(1)`.
+/// The `.medium` family: the Lock Screen banner and StandBy. Keep it a single
+/// row that degrades — no fixed widths, everything `lineLimit(1)`.
 private struct LockScreenView: View {
   let context: ActivityViewContext<SubwaveLiveAttributes>
 
@@ -256,12 +258,77 @@ private struct LockScreenView: View {
   }
 }
 
+// MARK: - Smart Stack / CarPlay
+
+/// The `.small` family: the Apple Watch Smart Stack and the CarPlay Dashboard.
+/// No heart: CarPlay renders Live Activities non-interactive, and the two
+/// surfaces share this one view, so a button here would be a dead one in the
+/// car.
+private struct SmallView: View {
+  let context: ActivityViewContext<SubwaveLiveAttributes>
+
+  private var accent: Color { Color(subwaveHex: context.attributes.accent) }
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(alignment: .center, spacing: 8) {
+        Cover(state: context.state, accent: accent, side: 36)
+        VStack(alignment: .leading, spacing: 2) {
+          OnAirLine(station: context.attributes.station, accent: accent)
+          Text(context.state.title)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(subwaveInk)
+            .lineLimit(1)
+          Text(context.state.artist)
+            .font(.system(size: 11, weight: .regular))
+            .foregroundStyle(subwaveMuted)
+            .lineLimit(1)
+        }
+      }
+      AirClock(state: context.state, accent: accent)
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 8)
+  }
+}
+
+/// Picks the view for the family being drawn. The family is only readable on
+/// iOS 18, and is only ever `.small` when the configuration opted into it.
+private struct ActivityContentView: View {
+  let context: ActivityViewContext<SubwaveLiveAttributes>
+
+  var body: some View {
+    if #available(iOS 18.0, *) {
+      FamilySwitch(context: context)
+    } else {
+      LockScreenView(context: context)
+    }
+  }
+}
+
+@available(iOS 18.0, *)
+private struct FamilySwitch: View {
+  let context: ActivityViewContext<SubwaveLiveAttributes>
+  @Environment(\.activityFamily) private var family
+
+  var body: some View {
+    switch family {
+    case .small:
+      SmallView(context: context)
+    default:
+      LockScreenView(context: context)
+    }
+  }
+}
+
 // MARK: - Widget
 
+/// The iOS 17 configuration, and the base the iOS 18 one adds a family to.
+/// Only one of the two is ever registered (SubwaveWidgets in index.swift).
 struct SubwaveLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: SubwaveLiveAttributes.self) { context in
-      LockScreenView(context: context)
+      ActivityContentView(context: context)
         .widgetURL(URL(string: "subwave://"))
         .activityBackgroundTint(Color.black.opacity(0.55))
         .activitySystemActionForegroundColor(subwaveInk)
@@ -297,6 +364,16 @@ struct SubwaveLiveActivity: Widget {
       .widgetURL(URL(string: "subwave://"))
       .keylineTint(accent)
     }
+  }
+}
+
+/// `supplementalActivityFamilies` is iOS 18 API and the target's floor is 17,
+/// so the opt-in lives on its own widget rather than behind a branch inside
+/// one `body`: the two branches would be different opaque types.
+@available(iOS 18.0, *)
+struct SubwaveLiveActivityWithSmall: Widget {
+  var body: some WidgetConfiguration {
+    SubwaveLiveActivity().body.supplementalActivityFamilies([.small])
   }
 }
 
