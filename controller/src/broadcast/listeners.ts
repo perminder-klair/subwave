@@ -118,10 +118,12 @@ export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
 // single-flight guard a slow doomed poll can commit
 // after a younger successful one and overwrite its fresh state.
 //
-// The wake probe never reads Icecast beside a committed poll either: two
-// overlapping status reads are what blew the deadline in #1256. A poll waits
-// out a probe already in flight (bounded by PEEK_TIMEOUT_MS), and a probe
-// stands aside while a poll runs.
+// The wake probe never sends a status request while a committed poll's is in
+// flight either: two overlapping status reads are what blew the deadline in
+// #1256. A poll waits out a probe already in flight (bounded by
+// PEEK_TIMEOUT_MS), and a probe stands aside while a poll runs. That holds
+// client-side only, since Icecast may still be serving a probe that timed out,
+// so a timed-out probe also stops probing for a tick (PEEK_BACKOFF_MS).
 let polling = false;
 let peeking: Promise<unknown> | null = null;
 const fetchCount = singleFlight(async () => {
@@ -231,13 +233,20 @@ export async function refresh() {
 // a slow Icecast costs a probe, never a stuck one.
 const PEEK_TIMEOUT_MS = 1000;
 
+// No probe for one idle tick (stream-idle.ts TICK_MS) after one blows that
+// deadline. Icecast may still be serving the abandoned read, and a slow Icecast
+// gets back the single committed reader it had before the probe. A fast failure
+// (refused, non-OK) says nothing about load, so it doesn't back off.
+const PEEK_BACKOFF_MS = 5000;
+let peekBackoffUntil = 0;
+
 // The idle monitor's wake probe (#2072): the raw broadcast-mount sum off one
 // status read, null on any failure. It commits nothing, so it can bring a wake
 // forward but never moves the failure count, the cached status or the gated
-// count the fail-open gates read (#1256). Null too while a committed poll or
-// another probe is reading.
+// count the fail-open gates read (#1256). Null without a request while a
+// committed poll or another probe is in flight, or during the backoff.
 export async function peekListeners(): Promise<number | null> {
-  if (polling || peeking) return null;
+  if (polling || peeking || Date.now() < peekBackoffUntil) return null;
   const read = (async () => {
     try {
       const r = await fetchWithTimeout(config.icecast.statusUrl, {
@@ -245,7 +254,9 @@ export async function peekListeners(): Promise<number | null> {
         bodyDeadline: true,
       });
       return rawListenerSum(broadcastMountSources(((await r.json()) as any)?.icestats));
-    } catch {
+    } catch (err) {
+      // The deadline rejects as AbortError, on the headers or the body.
+      if ((err as Error)?.name === 'AbortError') peekBackoffUntil = Date.now() + PEEK_BACKOFF_MS;
       return null;
     }
   })();

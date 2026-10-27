@@ -23,7 +23,8 @@ const TICK_MS = 5000;
 // nothing (listeners.peekListeners), so a failed or empty probe changes
 // nothing, and the tick still decides from its own committed poll. A new
 // listener waits ~1s instead of ~5s, on top of the burst-on-connect, which
-// while idle is bufferSeconds of silence (docs/internals/broadcast.md).
+// while idle is bufferSeconds of silence (docs/internals/broadcast.md). A probe
+// that times out stops probing for one tick, leaving a slow Icecast to the tick.
 const WAKE_PROBE_MS = 1000;
 
 // Inject external controls for transition tests; production shares this same

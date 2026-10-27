@@ -8,12 +8,15 @@ import type { AddressInfo } from 'node:net';
 
 // A stand-in Icecast status endpoint. Bound before config is imported, because
 // config reads ICECAST_STATUS_URL once at import. `held` parks each request
-// until release(); `maxInFlight` is the most it ever served at once.
+// until release(); `maxInFlight` is the most it ever served at once, and
+// `requests` counts every request that reached it.
 let reply = { status: 200, body: '{}' };
 let held: (() => void)[] | null = null;
 let inFlight = 0;
 let maxInFlight = 0;
+let requests = 0;
 const icecast = createServer((_req, res) => {
+  requests++;
   inFlight++;
   maxInFlight = Math.max(maxInFlight, inFlight);
   res.on('close', () => { inFlight--; });
@@ -81,8 +84,8 @@ test('a failed probe reads null and never moves the failure budget', async () =>
 });
 
 // Two overlapping status reads are what blew the deadline in #1256, so the
-// probe must never sit beside a committed poll: not the tick's, the 15s
-// monitor's or a request's.
+// probe must never send a request beside a committed poll's: not the tick's,
+// the 15s monitor's or a request's.
 test('the probe and a committed poll never read Icecast at the same time', async () => {
   reply = { status: 200, body: status({ '/stream.mp3': 0 }) };
   maxInFlight = 0;
@@ -128,6 +131,64 @@ test('the probe deadline covers a body that never finishes', async () => {
     stall.closeAllConnections();
     stall.close();
   }
+  // A body that blew the deadline backs off like headers that never came.
+  const sent = requests;
+  assert.equal(await listeners.peekListeners(), null);
+  assert.equal(requests, sent, 'a probe went out during the backoff');
+});
+
+// Icecast may still be serving a probe whose deadline fired, so the probe goes
+// quiet for one 5s tick and leaves a slow Icecast to the tick's own poll.
+test('a timed-out probe backs off for one tick, and the tick still catches a listener', async t => {
+  const realNow = Date.now;
+  let skew = 60_000; // well past the backoff the stalled body above left behind
+  t.mock.method(Date, 'now', () => realNow.call(Date) + skew);
+  const calls = { off: 0 };
+  const monitor = createStreamIdleMonitor({
+    idleStatus: async () => true,
+    idleOn: async () => {},
+    idleOff: async () => { calls.off++; },
+    streamSettings: () => ({ idleWhenEmpty: true, idleAfterMinutes: 10 }),
+    setStreamIdle: () => {}, warmHeavy: async () => {}, log: () => {},
+  });
+  await monitor.initialize();
+
+  reply = { status: 200, body: status({ '/stream.mp3': 1 }) };
+  held = [];
+  assert.equal(await listeners.peekListeners(), null, 'the headers never came');
+  held = null; // drop the abandoned request
+  const sent = requests;
+
+  skew += 4_500;
+  assert.equal(await monitor.wakeProbe(), false);
+  assert.equal(requests, sent, 'a probe went out inside the tick interval');
+  await monitor.tick();
+  assert.equal(calls.off, 1, "the tick's committed poll still wakes the station");
+  assert.equal(requests, sent + 1);
+
+  skew += 600;
+  assert.equal(await listeners.peekListeners(), 1, 'probing resumes after one tick');
+  assert.equal(await listeners.peekListeners(), 1, 'a count read does not back off');
+
+  reply = { status: 500, body: '<html>busy</html>' };
+  assert.equal(await listeners.peekListeners(), null);
+  reply = { status: 200, body: status({ '/stream.mp3': 1 }) };
+  assert.equal(await listeners.peekListeners(), 1, 'a non-OK answer does not back off');
+
+  const refused = createServer();
+  await new Promise<void>(resolve => refused.listen(0, '127.0.0.1', resolve));
+  const { port } = refused.address() as AddressInfo;
+  await new Promise(resolve => refused.close(resolve));
+  const { config } = await import('../src/config.js');
+  const statusUrl = config.icecast.statusUrl;
+  config.icecast.statusUrl = `http://127.0.0.1:${port}/status-json.xsl`;
+  try {
+    assert.equal(await listeners.peekListeners(), null);
+  } finally {
+    config.icecast.statusUrl = statusUrl;
+  }
+  assert.equal(await listeners.peekListeners(), 1, 'a refused connection does not back off');
+  assert.equal(requests, sent + 6);
 });
 
 // setInterval stand-in: fires due timers in order, draining the async work
