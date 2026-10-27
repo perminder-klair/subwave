@@ -130,6 +130,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - `requestedBy` says which exemptions a track gets, not who is waiting. Count waiting listeners as `queue.pendingListenerRequests()` plus the requests still resolving in `routes/request.ts`, which hold no queue slot yet.
 - Gate before generation, never at `speak()`.
 - Public reads are explicit allowlists: never widen one to TTS config, skills or behaviour dials. A persona's `soul` is a system prompt, published only behind `publishPersonaSouls`, and absent (not empty) when off.
+- A DJ template without `{location}` withholds the place from every model: prompts and skill tools see the live context only through `settings.spokenContext()` (`buildContextLines`, `segment-tools.ts`); display and operator surfaces keep it (#2099).
 - Absent or malformed settings coerce to the pre-existing behaviour, so an upgrade is byte-identical. The exceptions, each announced, are legacy `llm.pickerAgent: false` → Track Shortlist, and the Lyrics panel with its LRCLIB fallback (`settings.lyrics`), which an upgrade turns on.
 - A multi-station switch is a pointer write + mixer restart + controller `process.exit`; never hot-swap state paths in-process.
 - A scheduled job deletes only files it wrote itself, matched on an anchored name (`backup/pure.ts`).

@@ -91,7 +91,7 @@ function assertLocationWithheld(prompt: string) {
   assert.match(prompt, /Never name or claim a station, DJ or listener location, including in local weather, local time, "here", "our city" or local events/);
   // The weather tool returns the station's place as data; the tool-data
   // clause must not read as leave to speak it.
-  assert.match(prompt, /A weather reading, including one from a tool, is for the station's own location, so never name the place it gives/);
+  assert.match(prompt, /The current weather, including from a weather tool, is for the station's own location, so never name the place it gives/);
   assert.doesNotMatch(prompt, /configured on-air location/);
 }
 
