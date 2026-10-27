@@ -25,10 +25,14 @@ FROM python:3.11-slim-bookworm
 # build-essential: chatterbox-tts pulls pkuseg, which has no py≥3.9 wheel and
 # source-builds a Cython extension. Purged after both venvs are built.
 # libsndfile1: soundfile/torchaudio WAV write. curl: operator healthchecks.
-# libgomp1: the OpenMP runtime the arm64 torch wheel links against (the amd64
-# wheel bundles its own). It arrives with build-essential, so the purge's
-# --auto-remove took it too and Chatterbox failed to import on an arm64 build;
-# naming it here marks it manually installed, which the purge leaves alone.
+# libgomp1: torchaudio's native library links the OpenMP runtime by soname,
+# libgomp.so.1. torch bundles its own copy on both arches, and on amd64 that
+# copy keeps the soname libgomp.so.1, so once torch is loaded it satisfies
+# torchaudio too. The arm64 wheel renames its copy (libgomp-<hash>.so.1.0.0),
+# so there only this package does; PocketTTS has no torchaudio and never needed
+# it. It arrives with build-essential, so the purge's --auto-remove took it too
+# and Chatterbox failed to import on an arm64 build; naming it here marks it
+# manually installed, which the purge leaves alone.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates \
     libsndfile1 \
