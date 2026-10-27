@@ -6,8 +6,11 @@ import * as db from '../library-db.js';
 import * as subsonic from '../subsonic.js';
 import * as musicbrainz from '../musicbrainz.js';
 import * as settings from '../../settings.js';
+import * as budget from '../../broadcast/dj-budget.js';
+import { searchReady } from '../../skills/web-search.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
+import { resolveWebLanguageEvidence } from '../language-evidence.js';
 import {
   detectLocalLanguage,
   detectWithAi,
@@ -46,6 +49,7 @@ export async function phaseLanguage(ids: string[], retry: boolean): Promise<void
   let automatic = 0;
   let aiTagged = 0;
   let unknown = 0;
+  let deferred = 0;
 
   logEvent(
     'info',
@@ -98,8 +102,37 @@ export async function phaseLanguage(ids: string[], retry: boolean): Promise<void
           continue;
         }
       }
-      if (aiEnabled && sample.length >= 80) {
-        pending.push({ id, sample });
+      let aiSample = sample;
+      // The configured web provider is a discovery fallback only. It is used
+      // when the local lyric excerpt is too short, and its result must first
+      // prove the exact title and artist before any text reaches the AI.
+      if (aiSample.length < 80 && searchReady()) {
+        const webEvidence = await resolveWebLanguageEvidence(track);
+        if (webEvidence.instrumental || webEvidence.languages.length) {
+          write(id, webEvidence.instrumental
+            ? {
+                primaryLanguage: null,
+                languages: [],
+                mode: 'instrumental',
+                source: 'consensus',
+                confidence: 'medium',
+              }
+            : {
+                primaryLanguage: webEvidence.languages[0] ?? null,
+                languages: webEvidence.languages,
+                mode: webEvidence.languages.length > 1 ? 'mixed' : 'single',
+                source: 'consensus',
+                confidence: 'medium',
+              });
+          automatic += 1;
+          completed += 1;
+          if (completed % 25 === 0) reportLanguageProgress();
+          continue;
+        }
+        aiSample = sampleLyrics(webEvidence.text);
+      }
+      if (aiEnabled && aiSample.length >= 80) {
+        pending.push({ id, sample: aiSample });
         continue;
       } else {
         // A review-level local guess is not reliable enough to expose as a
@@ -115,6 +148,14 @@ export async function phaseLanguage(ids: string[], retry: boolean): Promise<void
 
   for (let i = 0; i < pending.length; i += LANGUAGE_BATCH_MAX) {
     const batch = pending.slice(i, i + LANGUAGE_BATCH_MAX);
+    if (!budget.requestsAllowed()) {
+      logEvent('warning', `Language AI fallback skipped for ${batch.length} track(s): daily LLM budget exhausted`);
+      batch.forEach(item => db.deferAutomaticTrackLanguage(item.id));
+      deferred += batch.length;
+      completed += batch.length;
+      reportLanguageProgress();
+      continue;
+    }
     try {
       const decisions = await detectWithAi(batch.map(x => x.sample));
       decisions.forEach((decision, index) => {
@@ -129,6 +170,7 @@ export async function phaseLanguage(ids: string[], retry: boolean): Promise<void
       // unknown language and must remain retryable on the next normal run
       // rather than hiding a whole batch permanently.
       batch.forEach(item => db.deferAutomaticTrackLanguage(item.id));
+      deferred += batch.length;
     }
     completed += batch.length;
     reportLanguageProgress();
@@ -137,5 +179,9 @@ export async function phaseLanguage(ids: string[], retry: boolean): Promise<void
     completed = ids.length;
     reportLanguageProgress();
   }
-  logEvent('info', `Language tags checked for ${ids.length.toLocaleString('en-GB')} tracks (${automatic} automatic, ${aiTagged} AI, ${unknown} unknown)`);
+  logEvent(
+    'info',
+    `Language tags checked for ${ids.length.toLocaleString('en-GB')} tracks ` +
+      `(${automatic} automatic, ${aiTagged} AI, ${unknown} unavailable, ${deferred} deferred for retry)`,
+  );
 }

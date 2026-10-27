@@ -477,9 +477,10 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
       );
     `);
 
-    // Independent language evidence. The checked timestamp means an unknown
-    // result is still a completed answer and is not retried on every normal
-    // tagger run. Manual language tags are protected at the write boundary.
+    // Independent language evidence. Unknown results retain their checked
+    // timestamp for provenance and the unresolved UI state, but remain in the
+    // normal pending scope so later runs can retry them. Manual language tags
+    // are protected at the write boundary.
     // musicbrainz_id is walked from Navidrome and is only used for exact
     // MusicBrainz lookups, never fuzzy language guesses.
     const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));

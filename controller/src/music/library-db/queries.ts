@@ -216,13 +216,13 @@ export function enrichedIds(): string[] {
   ).map(r => r.id);
 }
 
-// Language coverage is independent of mood coverage. Unknown and instrumental
-// decisions carry language_checked_at, so normal runs do not keep re-querying
-// tracks that genuinely lack usable evidence.
+// Language coverage is independent of mood coverage. Unknown decisions keep
+// language_checked_at for provenance and the "Language unavailable" UI state,
+// but remain in the normal pending scope so a later run can retry new evidence.
 export function languagePendingIds(retry = false): string[] {
   const where = retry
     ? "language_checked_at IS NOT NULL AND COALESCE(language_source, '') != 'manual'"
-    : 'language_checked_at IS NULL';
+    : "language_checked_at IS NULL OR (language_mode = 'unknown' AND COALESCE(language_source, '') != 'manual')";
   return (requireDb().prepare(`SELECT id FROM tracks WHERE ${where} ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
 }
 

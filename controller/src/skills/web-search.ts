@@ -17,8 +17,8 @@ const BRAVE_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 const KEENABLE_ENDPOINT = 'https://api.keenable.ai/v1/search';
 const FIRECRAWL_ENDPOINT = 'https://api.firecrawl.dev/v2/search';
 
-type SearchResult = { title: string; content: string; url?: string };
-type SearchResponse = { answer: string; results: SearchResult[] };
+export type SearchResult = { title: string; content: string; url?: string };
+export type SearchResponse = { answer: string; results: SearchResult[] };
 
 export type WebSearchFailureReason = 'timeout' | 'rate-limit' | 'captcha' | 'malformed' | 'unavailable';
 
