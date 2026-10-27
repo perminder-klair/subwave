@@ -206,7 +206,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, location |
+| `weather` | current condition, temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
