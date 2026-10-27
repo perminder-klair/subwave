@@ -53,8 +53,8 @@ CHUNK_GAP_MS = int(os.environ.get("CHATTERBOX_CHUNK_GAP_MS", "160"))
 # PocketTTS's ~12, and at that target its peaks would land ~8 dB into the
 # limiter. 0.135 linear (≈ -17.4 dBFS RMS, about -16 LUFS for its speech) puts
 # it beside Piper and Kokoro. CHATTERBOX_TARGET_RMS tunes it without a code
-# change.
-TARGET_RMS = float(os.environ.get("CHATTERBOX_TARGET_RMS", "0.135"))
+# change; main() reads it through voice_level.target_from_env().
+TARGET_RMS = 0.135
 
 # Sentence boundary: a .!? followed by whitespace. Clause boundary (fallback for
 # a single sentence longer than the cap): comma / semicolon / colon / dash
@@ -151,10 +151,11 @@ def main():
         import torch
         import soundfile as sf
         from chatterbox.tts_turbo import ChatterboxTurboTTS
-        from voice_level import level
+        from voice_level import level, target_from_env
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
+    target_rms = target_from_env("CHATTERBOX_TARGET_RMS", TARGET_RMS, log)
 
     # --- torch >= 2.9 float64 guard (RTX 50-series / Blackwell) ----------------
     # The CUDA build for newer cards (sm_120) runs chatterbox-tts — which is
@@ -279,7 +280,7 @@ def main():
             samples = np.concatenate(pieces, axis=0) if len(pieces) > 1 else pieces[0]
             # Levelled as one clip, after the stitch, so every chunk of a line
             # takes the same gain.
-            samples = level(samples, TARGET_RMS)
+            samples = level(samples, target_rms)
             sf.write(out, samples, sample_rate)
 
             duration = float(samples.shape[0]) / float(sample_rate)

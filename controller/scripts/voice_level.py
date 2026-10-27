@@ -9,8 +9,12 @@ pocket_tts_worker.py and chatterbox_worker.py each run in their own venv and
 import this from the directory they live in (controller/scripts in the
 controller image, /app/workers in the tts-heavy sidecar), so it needs nothing
 but numpy. Each worker owns its target and the env var that tunes it, because
-the right level depends on the engine's crest factor (see each worker).
+the right level depends on the engine's crest factor (see each worker); both
+read that var through target_from_env().
 """
+
+import math
+import os
 
 import numpy as np
 
@@ -30,3 +34,24 @@ def level(audio, target_rms):
         KNEE + (CEILING - KNEE) * np.tanh((mag[over] - KNEE) / (CEILING - KNEE))
     )
     return audio
+
+
+def target_from_env(name, default, log):
+    """The RMS target env var `name` sets, else `default`.
+
+    Empty reads as unset: the tts-heavy compose files forward the var as
+    `${NAME:-}`, so a sidecar whose operator never set it sees "". Anything
+    that is not a positive number is logged through `log` and reads the
+    default, so a typo costs the tuning rather than stopping the worker.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = None
+    if value is not None and math.isfinite(value) and value > 0:
+        return value
+    log(f"{name}={raw!r} is not a positive number; using {default}")
+    return default

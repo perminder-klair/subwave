@@ -134,6 +134,11 @@ _IDLE_ENV_BY_ENGINE = {
 # LOCAL (AIO) chatterbox path has always honoured (controller audio/chatterbox
 # .ts passes it into the worker env). So the two paths disagreed, and the
 # sidecar was the one that dropped it. It is a knob (#1591).
+#
+# The two on-air level targets are read by the workers, not here: each worker
+# inherits this process's env (`{**os.environ, **env_extra}` in start()), so
+# forwarding them into the container is all the sidecar does for them, and
+# compose's empty default reads as unset there (voice_level.target_from_env).
 OPERATOR_ENV_KNOBS = (
     "TTS_HEAVY_DEVICE",
     "TTS_HEAVY_ENGINES",
@@ -143,6 +148,8 @@ OPERATOR_ENV_KNOBS = (
     "POCKET_TTS_IDLE_UNLOAD_S",
     "TTS_HEAVY_LOAD_TIMEOUT_S",
     "CHATTERBOX_REFERENCE_WAV",
+    "CHATTERBOX_TARGET_RMS",
+    "POCKET_TTS_TARGET_RMS",
 )
 
 

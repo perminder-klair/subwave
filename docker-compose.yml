@@ -288,6 +288,11 @@ services:
       # The local (AIO) chatterbox path already honoured this; forwarding it
       # here is what makes the sidecar agree (#1591).
       - CHATTERBOX_REFERENCE_WAV=${CHATTERBOX_REFERENCE_WAV:-}
+      # On-air level of each engine's clips: the linear RMS a clip is
+      # normalised to before the soft limiter. Read by the workers, which
+      # inherit this env; empty keeps each worker's own default.
+      - CHATTERBOX_TARGET_RMS=${CHATTERBOX_TARGET_RMS:-}
+      - POCKET_TTS_TARGET_RMS=${POCKET_TTS_TARGET_RMS:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.

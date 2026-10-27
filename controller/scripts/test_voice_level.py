@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for voice_level.level, the on-air leveller both heavy-engine workers use.
+"""Tests for voice_level, the on-air leveller both heavy-engine workers use.
 
 Needs numpy and nothing else (no torch, no model), so any python3 with numpy
 runs it:
@@ -10,6 +10,7 @@ CI runs eslint + tsc only (no Python runner), so this is a manual/regression
 harness, like test_chatterbox_chunk.py. Exits non-zero on the first failure.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from voice_level import CEILING, KNEE, level  # noqa: E402
+from voice_level import CEILING, KNEE, level, target_from_env  # noqa: E402
 
 FAILS = []
 
@@ -64,6 +65,29 @@ stereo = np.stack([quiet, quiet * 0.5], axis=1)
 out2 = level(stereo, 0.1)
 check("multichannel keeps its shape", out2.shape == stereo.shape)
 check("multichannel keeps the channel balance", np.allclose(out2[:, 1], out2[:, 0] * 0.5, atol=1e-6))
+
+
+# The target's env var. The tts-heavy compose files forward it as `${NAME:-}`,
+# so "" is what a sidecar sees when the operator never set it, and a raise here
+# would stop Chatterbox's worker before it loads.
+def target_with(raw):
+    logged = []
+    if raw is None:
+        os.environ.pop("TEST_TARGET_RMS", None)
+    else:
+        os.environ["TEST_TARGET_RMS"] = raw
+    return target_from_env("TEST_TARGET_RMS", 0.135, logged.append), logged
+
+
+check("unset reads the default", target_with(None) == (0.135, []))
+check("empty reads the default, silently", target_with("") == (0.135, []))
+check("whitespace reads the default, silently", target_with("  ") == (0.135, []))
+check("a positive number is used", target_with("0.2") == (0.2, []))
+check("surrounding whitespace is tolerated", target_with(" 0.2 ") == (0.2, []))
+for junk in ("loud", "0", "-0.1", "nan", "inf"):
+    value, logged = target_with(junk)
+    check(f"{junk!r} reads the default and says so", value == 0.135 and len(logged) == 1 and "TEST_TARGET_RMS" in logged[0])
+os.environ.pop("TEST_TARGET_RMS", None)
 
 if FAILS:
     print(f"\n{len(FAILS)} failure(s)")
