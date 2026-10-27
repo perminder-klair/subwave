@@ -8,10 +8,11 @@ export function onAirLocationGrounding(): string {
   return locationGroundingRule(settings.spokenOnAirLocation(settings.get()));
 }
 
-// With no location to name, the weather reading still carries the station's
-// place (the context line, the weather skill's tool result), so the rule names
-// that reading explicitly; the tool-data clause below would otherwise let the
-// model speak it as data.
+// With no location to name, the rule still covers weather explicitly.
+// settings.spokenContext strips the place from the station's own reading (the
+// context line, every skill tool's ctx), but weather from an operator's own
+// skill, a feed or a web search can still name it, and the tool-data clause
+// below would otherwise let the model speak it as data.
 export function locationGroundingRule(resolvedLocation: string): string {
   const location = resolvedLocation.trim();
   const permitted = location

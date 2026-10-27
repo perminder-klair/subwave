@@ -419,6 +419,20 @@ export function spokenOnAirLocation(s: unknown = peek()): string {
   return djPromptTemplate(s).includes('{location}') ? resolveOnAirLocation(s) : '';
 }
 
+// The live context as a prompt or a skill tool sees it. The weather block's
+// `location` is the station's place (context.ts attributedLocation), so when
+// spokenOnAirLocation() withholds it the place leaves the reading too, while
+// the condition and temperature stay. A station that may name its place gets
+// the same object back, unchanged. Never mutates: the block is the weather
+// cache's own, and the display surfaces (GET /now-playing, the schedule
+// drawer) keep reading the place from it.
+export function spokenContext<T>(context: T, s: unknown = peek()): T {
+  const weather = (context as { weather?: unknown } | null | undefined)?.weather;
+  if (!weather || typeof weather !== 'object' || !('location' in weather) || spokenOnAirLocation(s)) return context;
+  const { location: _withheld, ...reading } = weather as Record<string, unknown>;
+  return { ...context, weather: reading };
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).

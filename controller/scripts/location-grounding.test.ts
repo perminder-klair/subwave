@@ -15,20 +15,24 @@ process.env.STATE_DIR = stateRoot;
 const settings = await import('../src/settings.js');
 const { DEFAULTS } = await import('../src/settings/defaults.js');
 const { setCache } = await import('../src/settings/store.js');
-const { djSystem, onAirLocationGrounding } = await import('../src/llm/dj.js');
+const { buildContextLines, djSystem, onAirLocationGrounding } = await import('../src/llm/dj.js');
 const { locationGroundingRule } = await import('../src/llm/internal/prompts/grounding.js');
 const { banterSystem } = await import('../src/llm/internal/prompts/banter.js');
 const { cohostedSkillSystem } = await import('../src/llm/internal/prompts/cohosted-skill.js');
 const { exchangeSystem, programmePlanSystem } = await import('../src/llm/internal/prompts/programme.js');
 const { requestMatcherSystem } = await import('../src/llm/internal/prompts/request.js');
 const { directorSystem, simpleSystem, forcedSystem } = await import('../src/skills/_agent.js');
-const { dataBlock } = await import('../src/llm/segment-tools.js');
+const { buildSegmentTools, dataBlock, fetchSegmentData } = await import('../src/llm/segment-tools.js');
+const weatherTool = await import('../src/skills/builtins/weather/tool.mjs');
 const { pickSystem, requestSystem } = await import('../src/broadcast/dj-agent/schemas.js');
 
 const host = { id: 'p_host', name: 'Nova', soul: 'warm and dry' };
 const guests = [{ id: 'p_guest', name: 'Rex', soul: 'quick and curious' }];
 const show = { name: 'Night Shift', topic: 'music and the moment' };
 const capability = { kind: 'weather', desc: 'Report the supplied weather.' };
+// The built-in weather skill as the loader wires it. A station keeps the
+// tool.mjs it was seeded with, so this is also every existing station's copy.
+const weatherCap = { kind: 'weather', toolName: 'weather_tool', toolDesc: weatherTool.description, toolFn: weatherTool.default, config: {} };
 
 async function loadBlankLocation(value: string) {
   // The PATCH API ignores a blank weather label; a hand-edited settings file
@@ -39,6 +43,20 @@ async function loadBlankLocation(value: string) {
   }));
   setCache(null);
   await settings.load();
+}
+
+// The live context's weather block as context.ts builds it for York.
+function weatherContext() {
+  return { weather: { condition: 'rainy', mood: 'melancholy', temp: 12, tempUnit: 'C', isDay: false, location: 'York' } };
+}
+
+// What the weather tool hands the model on the direct (pool) path and through
+// the agent's tool loop.
+async function weatherToolResults(ctx: object) {
+  const direct = await fetchSegmentData(weatherCap, ctx, {});
+  const tools = buildSegmentTools(ctx, {}, [weatherCap]);
+  const looped = await tools.weather_tool.execute({}, { toolCallId: 'call_weather', messages: [] });
+  return [direct, looped];
 }
 
 function spokenPrompts(): Record<string, string> {
@@ -217,6 +235,37 @@ test('the prompt library decides through its active entry, a restart and a delet
   assert.equal(settings.get().activeDjPromptId, '');
   assert.equal(onAirLocationGrounding(), LEEDS_RULE);
   assert.match(djSystem(host), /broadcasting from Leeds\./);
+});
+
+test('a withheld place leaves the weather context line and tool result (#2099)', async () => {
+  await settings.update({
+    djPrompt: 'You are {name}, the station host. Keep every link short and warm.',
+    weather: { onAirLocation: 'York', locationName: 'Private weather label' },
+  });
+  const ctx = weatherContext();
+  assert.deepEqual(buildContextLines(ctx, { contextFields: ['weather'] }), ['Weather: rainy, 12 degrees Celsius']);
+  assert.ok(!buildContextLines(ctx).join('\n').includes('York'));
+  for (const data of await weatherToolResults(ctx)) {
+    const seen = JSON.stringify(data) + dataBlock(data);
+    assert.ok(!seen.includes('York'), `the tool result names no place: ${seen}`);
+    assert.doesNotMatch(seen, /"location"/);
+    assert.equal(data.available, true);
+    assert.equal(data.condition, 'rainy');
+    assert.equal(data.temp, 12);
+    assert.equal(data.tempUnit, 'C');
+  }
+  // The display surfaces read this same block, so it keeps its place.
+  assert.equal(ctx.weather.location, 'York');
+});
+
+test('a station that names its place gets the weather line and tool result unchanged', async () => {
+  await settings.update({ djPrompt: '', weather: { onAirLocation: 'York', locationName: 'Private weather label' } });
+  const ctx = weatherContext();
+  assert.equal(settings.spokenContext(ctx), ctx);
+  assert.deepEqual(buildContextLines(ctx, { contextFields: ['weather'] }), ['Weather in York: rainy, 12 degrees Celsius']);
+  for (const data of await weatherToolResults(ctx)) {
+    assert.deepEqual(data, { available: true, location: 'York', condition: 'rainy', temp: 12, tempUnit: 'C', changedSinceLastMention: true });
+  }
 });
 
 test('missing legacy settings retain the existing default location', () => {

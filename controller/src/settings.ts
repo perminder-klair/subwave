@@ -268,6 +268,7 @@ export {
   resolveOnAirLocation,
   resolvePersonaById,
   resolveShowById,
+  spokenContext,
   spokenOnAirLocation,
   spokenProperNounDirective,
 } from './settings/persona.js';
