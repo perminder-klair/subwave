@@ -428,12 +428,18 @@ function upstreamErrorCode(err: ErrorLike): string {
 // Detected by the machine-readable code first and by MESSAGE second, the same
 // way QUOTA_RE is, because providers word this very differently. Deliberately
 // NOT by a bare 404: it may be a wrong URL or an unrelated missing resource.
-// A bare HTTP 404 is not host-unreachable either.
+// A bare HTTP 404 is not host-unreachable either. Google's `status: NOT_FOUND`
+// is that bare 404 by another name (files, cached content and wrong paths use
+// it too), so for Gemini the wording decides.
 const MODEL_GONE_CODES = new Set(['model_not_found', 'model_not_available', 'model_terminated']);
 // Require a model subject and a permanent verdict, not arbitrary intervening
 // prose about another resource. Dots/colons/slashes are valid model-ID bytes.
 // Plain "unavailable" is ambiguous (e.g. overload), so it is code-only.
-const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:\s+[`'"]?[\w.:/-]{1,60}[`'"]?)?\s+(?:(?:was|is|has been) (?:retired|removed|decommissioned|deprecated)|not found|does not exist|(?:is )?no longer available|(?:is )?not available(?=$|[.,;]))\b/i;
+// Gemini names the model as a resource and answers a mistyped or retired id
+// with "models/<id> is not found for API version v1beta, or is not supported
+// for generateContent" (#2101). The tail covers a model that exists but cannot
+// generate (an embedding id), which this leg cannot serve either.
+const MODEL_GONE_RE = /\b(?:unknown|no such|unsupported) model\b|\bmodel(?:s\/[\w.:/-]{1,60}|\s+[`'"]?[\w.:/-]{1,60}[`'"]?)?\s+(?:(?:was|is|has been) (?:retired|removed|decommissioned|deprecated)|(?:is )?not found|does not exist|(?:is )?no longer available|(?:is )?not available(?=$|[.,;]))\b/i;
 // Ollama's incident wording omits "model". Bound it to a single model-ID token
 // containing a digit, dot or colon, followed by the dated retirement sentence.
 const MODEL_ID_RETIRED_RE = /^\s*(?=[\w.:/-]*[\d.:])[\w.:/-]{1,60} was retired at \d{4}-\d{2}-\d{2}\b/i;
