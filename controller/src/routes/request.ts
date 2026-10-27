@@ -28,7 +28,7 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { asksForKindOfMusic, carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
+import { asksForKindOfMusic, carriesListenerCredit, classifyListenerRequest, classifyUnsupportedLabels, directRequestUnsupported, isFramedTitleOnlyRequest, isRefusedOutcome, isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase, leadingQuotedName, modelFreeRequest, nameSearchTerms, normalizeRequestMatch, pinExplicitRequestMatch, repairRequestMatch, requestArtistMatches, requestName, requestTextSimilarity, requestTitleSimilarity, resolveDirectRequest, resolveExactName } from '../music/request-match.js';
 import { canonicalLanguage } from '../music/request-normalize.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
 import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
@@ -913,7 +913,15 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
           .filter(row => row.title)
           .map(row => ({
             row,
-            score: requestTitleSimilarity(term, row.title),
+            // Album-context recovery uses the same bounded local index as
+            // title recovery. The resolver still verifies the album name and
+            // artist before selecting anything, so this broadens discovery
+            // without broadening identity acceptance.
+            score: Math.max(
+              requestTitleSimilarity(term, row.title),
+              requestTextSimilarity(term, row.album),
+              requestTextSimilarity(term, row.artist),
+            ),
           }))
           .filter(candidate => candidate.score >= 0.60)
           .sort((a, b) => b.score - a.score || a.row.id.localeCompare(b.row.id))
@@ -924,6 +932,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
             id: row.id,
             title: row.title ?? undefined,
             artist: row.artist ?? undefined,
+            album: row.album ?? undefined,
             genres: row.genres,
             genre: row.genre ?? undefined,
             moods: row.moods,

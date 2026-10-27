@@ -980,6 +980,7 @@ test('model-free requests recognise album framing', () => {
 test('album context keeps the album and artist separate across natural request forms', () => {
   const cases: Array<[string, string | null, string | null, string | null, string]> = [
     ['Play a song from Pyaas album by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
+    ['Play a song from the Pyaas album by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
     ['Play any track from the album Pyaas by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
     ['Can you play a track from Babbu Maan’s Pyaas album', null, 'Pyaas', 'Babbu Maan', 'album'],
     ['Play the album Pyaas by Babbu Maan', null, 'Pyaas', 'Babbu Maan', 'album'],
@@ -1020,6 +1021,59 @@ test('an explicitly named artist resolves a one-edit album typo, but only unique
   });
   assert.equal(result.track?.id, wanted.id);
   assert.equal(result.outcome, 'matched');
+});
+
+test('album context removes a framing article and verifies the stored album spelling', async () => {
+  const wanted = { id: 'pyass-track', title: 'Mittran Di Chhatri', artist: 'Babbu Maan', album: 'Pyass' };
+  const text = 'play a song from the Pyaas album by Babbu Maan';
+  const parsed = modelFreeRequest(text);
+  assert.equal(parsed.album, 'Pyaas');
+  const f = fixture({
+    searchPage: async () => ({ songs: [], rawCount: 0 }),
+    resolveArtist: async () => ({ id: 'babbu', name: 'Babbu Maan' }),
+    getArtist: async () => ({ album: [{ id: 'pyass', name: 'Pyass' }] }),
+    getAlbum: async () => [wanted],
+  });
+  const result = await resolveDirectRequest(parsed, { ...f.deps, text, exactOnly: true });
+  assert.equal(result.track?.id, wanted.id);
+  assert.equal(result.outcome, 'matched');
+});
+
+test('an album-only one-edit typo resolves only a unique local album', async () => {
+  const wanted = { id: 'pyass-track', title: 'Mittran Di Chhatri', artist: 'Babbu Maan', album: 'Pyass' };
+  const text = 'play a song from album Pyaas';
+  const f = fixture({
+    searchPage: async () => ({ songs: [], rawCount: 0 }),
+    fuzzySearch: async () => [wanted],
+  });
+  const result = await resolveDirectRequest(modelFreeRequest(text), { ...f.deps, text, exactOnly: true });
+  assert.equal(result.track?.id, wanted.id);
+  assert.equal(result.source, 'local-fuzzy-album:fuzzy');
+  assert.equal(result.outcome, 'matched');
+});
+
+test('a unique exact title can verify a lead-artist short alias without splitting collaborations', async () => {
+  const jassiTrack = { id: 'laung', title: 'Laung Da Lashkara', artist: 'Jasbir Jassi, Mahalakshmi Iyer & Hard Kaur' };
+  const jassiFixture = fixture({
+    searchPage: async query => query === jassiTrack.title ? { songs: [jassiTrack], rawCount: 1 } : { songs: [], rawCount: 0 },
+  });
+  const jassi = await resolveDirectRequest(
+    { title: jassiTrack.title, artist: 'Jassi', scope: 'song' },
+    { ...jassiFixture.deps, text: 'Laung Da Lashkara by Jassi', exactOnly: true },
+  );
+  assert.equal(jassi.track?.id, jassiTrack.id);
+  assert.equal(jassi.outcome, 'matched');
+
+  const fireTrack = { id: 'fire', title: 'September', artist: 'Earth, Wind & Fire' };
+  const fireFixture = fixture({
+    searchPage: async query => query === fireTrack.title ? { songs: [fireTrack], rawCount: 1 } : { songs: [], rawCount: 0 },
+  });
+  const fire = await resolveDirectRequest(
+    { title: fireTrack.title, artist: 'Fire', scope: 'song' },
+    { ...fireFixture.deps, text: 'September by Fire', exactOnly: true },
+  );
+  assert.equal(fire.track, null);
+  assert.equal(fire.outcome, 'no-match');
 });
 
 test('an album miss never falls back to another album by the same artist', async () => {

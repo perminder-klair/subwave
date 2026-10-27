@@ -27,7 +27,8 @@ import type { SoundtrackRequestContext, SoundtrackResolution } from './request-s
 // Keep the long-standing request-match exports stable for scripts and route
 // consumers while the shared normalization helpers live in their own module.
 export { requestName, looksLikeLyricRequest } from './request-normalize.js';
-export { isLyricOrFilmDescription } from './request-normalize.js';
+export { requestName, requestTextSimilarity, looksLikeLyricRequest } from './request-normalize.js';
+export { isLyricOrFilmDescription, isGreetingLikeRequest, isGenericRequestPhrase } from './request-normalize.js';
 
 export interface RequestMatch {
   kind?: string;
@@ -349,12 +350,6 @@ function requestConditionProse(text: string, match: RequestMatch): string {
 const REQUEST_FRAME = new Set(['play', 'please', 'pls', 'can', 'could', 'would', 'will', 'you', 'i', 'id', 'im', 'like',
   'love', 'want', 'wanna', 'to', 'hear', 'listen', 'put', 'on', 'queue', 'request', 'me', 'us', 'some', 'a', 'an', 'the',
   'song', 'track', 'tune', 'by', 'from', 'of', 'next', 'now', 'up', 'hey', 'hi', 'dj', 'thanks', 'thank', 'cheers', 'just']);
-
-// Does the listener's text hold `term` as whole words? Only an occurrence of
-// this term is proof, never an unrelated quoted span.
-function inRequest(text: string, term: string): boolean {
-  return maskNames(text, [term], ' \u0000 ', false).includes('\u0000');
-}
 
 // Voice clients often append a dedication or a polite closing after the
 // recording name. These words are request framing, not part of the title or
@@ -680,6 +675,21 @@ function bridgedActNames(want: unknown, song: RequestSong): string[] {
   return candidateArtistCredits(song).flatMap(candidateArtistValues)
     .filter(credit => wanted.some(value => sameActName(value, credit) && !sameActName(value, credit, 'same')))
     .map(credit => artistIdentityKey(credit));
+}
+
+// A listener may use the short name of the lead credited artist when naming a
+// specific recording (for example, "Laung Da Lashkara by Jassi" for a row led
+// by "Jasbir Jassi"). This is deliberately narrower than normal artist
+// matching: one token of at least five letters, the token must occur in the
+// lead credit before collaboration separators, and the caller must have one
+// unique exact-title candidate. We never split commas or ampersands for the
+// ordinary artist matcher, so a short word such as "Fire" cannot select
+// "Earth, Wind & Fire".
+function requestPrimaryArtistAliasMatches(want: unknown, song: RequestSong): boolean {
+  const tokens = requestName(want).split(' ').filter(Boolean);
+  if (tokens.length !== 1 || tokens[0]!.length < 5) return false;
+  const lead = String(song.artist ?? '').split(/\s*(?:,|&|\+)\s*/u, 1)[0] || '';
+  return requestName(lead).split(' ').includes(tokens[0]!);
 }
 
 function requestCandidateArtistSimilarity(want: unknown, song: RequestSong): number {
@@ -1063,10 +1073,17 @@ export function modelFreeRequest(text: string): RequestMatch {
       intent: album ? `Wants a track from the album ${album}${artist ? ` by ${artist}` : ''}.` : 'Wants a track from an album.', ack: '',
     };
   };
-  const stripAlbumMarker = (value: string): string => value
-    .replace(/^(?:the\s+)?(?:album|record|lp)\s+/iu, '')
-    .replace(/\s+(?:album|record|lp)$/iu, '')
-    .trim();
+  const stripAlbumMarker = (value: string): string => {
+    const original = value.trim();
+    // A leading article belongs to the request frame in "from the album X",
+    // while an article before a trailing marker belongs to the same frame in
+    // "from the X album". Remove only that framing article; preserve a real
+    // title such as "The Wall" in "play the album The Wall".
+    const leadingMarker = original.replace(/^(?:the\s+)?(?:album|record|lp)\s+/iu, '');
+    if (leadingMarker !== original) return leadingMarker.trim();
+    const trailingMarker = original.replace(/\s+(?:album|record|lp)$/iu, '').trim();
+    return trailingMarker.replace(/^the\s+/iu, '').trim();
+  };
   const albumPhrase = cleaned.match(/^(?:the\s+)?album\s+(.+?)[.!?]*$/iu);
   if (albumPhrase) {
     const masked = cleaned.replace(QUOTED_NAMES, name => '\u0000'.repeat(name.length));
@@ -1827,6 +1844,9 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     && (!hardArtistIdentity() || requestCandidateArtistMatches(resolvedArtistName, song, scripts))
     && (!resolvedAlbumName || requestName(song.album) === requestName(resolvedAlbumName))
     && contextProven(song);
+  const identityWithoutArtist = (song: RequestSong) => (!title || requestTitleMatches(title, song.title))
+    && (!resolvedAlbumName || requestName(song.album) === requestName(resolvedAlbumName))
+    && contextProven(song);
   const tags = (song: RequestSong) => [song.genre, ...(song.genres || []).map(g => typeof g === 'string' ? g : g.name)].map(requestName).filter(Boolean);
   let genre: string | null = null;
   // Small models may guess attributes despite the prompt. Only terms present
@@ -1962,7 +1982,14 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     const tie = exact ? ambiguousBridges(judged, scripts) : { titles: false, acts: false };
     const isName = (s: RequestSong) => identity(s, scripts)
       && !(tie.titles && bridgedTitle(s)) && !(tie.acts && bridgedActs(s).length);
-    const found = unique(songs).filter(s => constraints(s, source) && (!identityRequired || isName(s)));
+    const candidates = unique(songs).filter(s => constraints(s, source));
+    const exactPool = candidates.filter(s => !identityRequired || isName(s));
+    const aliasPool = !exactPool.length && identityRequired && title && resolvedArtistName
+      ? candidates.filter(s => identityWithoutArtist(s) && requestPrimaryArtistAliasMatches(resolvedArtistName, s))
+      : [];
+    // A title-anchored alias is accepted only when it identifies one local
+    // recording. Multiple rows remain an honest no-match rather than a guess.
+    const found = aliasPool.length === 1 ? aliasPool : exactPool;
     const pool = deps.heldBack ? found.filter(s => !deps.heldBack!(s)) : found;
     const track = choose(pool.filter(eligible));
     const named = exact && !standingIn;
@@ -1975,6 +2002,24 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     // exact recording merely because it is queued or on cooldown.
     if (named && pool.length && !held) held = { track: pool[0], source };
     if (named && found.length && !pool.length && !heldByShow) heldByShow = { track: found[0], source };
+    return null;
+  };
+  const selectAlbumFuzzy = (songs: RequestSong[], source: string): RequestSelection | null => {
+    if (!match.album) return null;
+    const candidates = unique(songs).filter(song => constraints(song, source)
+      && albumNameFuzzyMatches(match.album!, song.album)
+      && (!resolvedArtistName || requestCandidateArtistMatches(resolvedArtistName, song)));
+    // One typo may identify one album, but it must never choose between two
+    // similarly named releases. Multiple tracks from the same verified album
+    // are fine and are selected through the normal recency-aware chooser.
+    const albumNames = new Set(candidates.map(song => requestName(song.album)).filter(Boolean));
+    if (albumNames.size !== 1) return null;
+    const track = choose(candidates.filter(eligible));
+    if (track) {
+      const unmetPreferences = [!moodMatches(track) && 'mood', !genreMatches(track) && 'genre', !languageMatches(track) && 'language', !energyMatches(track) && 'energy'].filter((value): value is string => !!value);
+      return { track, source: `${source}:fuzzy`, outcome: unmetPreferences.length ? 'partial' : 'matched', errors, unmetPreferences };
+    }
+    if (candidates.length && !held) held = { track: candidates[0]!, source };
     return null;
   };
   const selectFuzzyReleaseContext = (songs: RequestSong[], source: string): RequestSelection | null => {
@@ -2402,6 +2447,15 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     searched = await search(match.album);
     const result = select(searched, 'search');
     if (result) return result;
+    const heldExact = refusal();
+    if (heldExact) return heldExact;
+    const fuzzy = selectAlbumFuzzy(searched, 'search');
+    if (fuzzy) return fuzzy;
+    if (catalog.fuzzySearch) {
+      const local = await safe('local fuzzy album search', () => catalog.fuzzySearch!(match.album!, { signal: deps.signal }), []);
+      const localFuzzy = selectAlbumFuzzy(local, 'local-fuzzy-album');
+      if (localFuzzy) return localFuzzy;
+    }
   }
   // A soundtrack context is a bounded identity request. Resolve it after the
   // ordinary local title/artist lanes have had first refusal, but before any
