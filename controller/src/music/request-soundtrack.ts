@@ -16,7 +16,12 @@ const MUSICBRAINZ_USER_AGENT = 'subwave/1.0 ( https://github.com/perminder-klair
 const MUSICBRAINZ_GAP_MS = 1100;
 const MUSICBRAINZ_TIMEOUT_MS = 8000;
 const LASTFM_TIMEOUT_MS = 5000;
-const LOOKUP_TIMEOUT_MS = 12_000;
+// The MusicBrainz gate is shared by all listeners. The old 12-second wall
+// clock started before a request reached that gate, so a short burst of movie
+// requests timed out while merely waiting for the provider's rate limit. Keep
+// the provider budget below the route's 60-second request deadline and let
+// the gate wait be cancellable.
+const LOOKUP_TIMEOUT_MS = 45_000;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const MISS_TTL_MS = 5 * 60 * 1000;
 const CACHE_MAX_KEYS = 128;
@@ -58,12 +63,12 @@ export interface SoundtrackLocalCandidate {
 
 export interface SoundtrackCandidate extends RequestSong {
   soundtrackConfidence: number;
-  soundtrackSource: 'musicbrainz' | 'musicbrainz+lastfm';
+  soundtrackSource: 'musicbrainz' | 'musicbrainz+lastfm' | 'lastfm';
   soundtrackOrder: number;
 }
 
 export type SoundtrackResolution =
-  | { status: 'matched'; candidates: SoundtrackCandidate[]; source: 'musicbrainz' | 'musicbrainz+lastfm' }
+  | { status: 'matched'; candidates: SoundtrackCandidate[]; source: 'musicbrainz' | 'musicbrainz+lastfm' | 'lastfm' }
   | { status: 'disabled'; reason: 'network-disabled' }
   | { status: 'no-match'; reason: 'no-soundtrack' | 'no-local-match' | 'ambiguous' }
   | { status: 'provider-error'; provider: 'musicbrainz' | 'lastfm'; reason: string }
@@ -80,10 +85,12 @@ const inflight = new Map<string, Promise<SoundtrackResolution>>();
 let musicbrainzGate: Promise<void> = Promise.resolve();
 let lastMusicbrainzStart = 0;
 
-function musicbrainzThrottled<T>(fn: () => Promise<T>): Promise<T> {
+function musicbrainzThrottled<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   const run = musicbrainzGate.then(async () => {
+    throwIfAborted(signal);
     const wait = lastMusicbrainzStart + MUSICBRAINZ_GAP_MS - Date.now();
     if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    throwIfAborted(signal);
     lastMusicbrainzStart = Date.now();
     return fn();
   });
@@ -221,6 +228,7 @@ function sourceKey(track: Pick<SoundtrackEvidenceTrack, 'title' | 'artists'>): s
 function mergeTracklists(
   primary: SoundtrackProviderTracklist[],
   secondary: SoundtrackProviderTracklist[],
+  allowStandaloneSecondary = false,
 ): SoundtrackEvidenceTrack[] {
   const out = new Map<string, SoundtrackEvidenceTrack>();
   for (const tracklist of primary) {
@@ -239,8 +247,10 @@ function mergeTracklists(
         existing.source = 'both';
         continue;
       }
-      // Last.fm is corroboration, never a standalone authority.
-      continue;
+      // Last.fm is normally corroboration. It may be the recovery authority
+      // only when the primary provider was unavailable and the local row also
+      // proves that it belongs to the named release.
+      if (allowStandaloneSecondary) out.set(key, { ...track, source: 'lastfm' });
     }
   }
   return [...out.values()];
@@ -250,6 +260,7 @@ function matchLocal(
   context: SoundtrackRequestContext,
   evidence: SoundtrackEvidenceTrack[],
   local: SoundtrackLocalCandidate[],
+  allowStandaloneSecondary = false,
 ): SoundtrackCandidate[] {
   const rows: Array<SoundtrackCandidate & { confidence: number }> = [];
   for (const external of evidence) {
@@ -257,6 +268,8 @@ function matchLocal(
     const artistList = external.artists;
     const matches = local
       .filter(row => row.id && row.title && titleSimilarity(external.title, row.title) >= 0.88)
+      .filter(row => !allowStandaloneSecondary || external.source !== 'lastfm'
+        || (row['album'] && titleSimilarity(context.name, String(row['album'])) >= 0.92))
       .filter(row => artistsMatch(artistList, row))
       .map(row => {
         const titleScore = titleSimilarity(external.title, row.title || '');
@@ -266,7 +279,8 @@ function matchLocal(
           title: row.title ?? undefined,
           artist: row.artist ?? undefined,
           soundtrackConfidence: Math.min(1, titleScore * 0.92 + sourceScore),
-          soundtrackSource: external.source === 'both' ? 'musicbrainz+lastfm' as const : 'musicbrainz' as const,
+          soundtrackSource: external.source === 'both' ? 'musicbrainz+lastfm' as const
+            : external.source === 'lastfm' ? 'lastfm' as const : 'musicbrainz' as const,
           soundtrackOrder: external.order,
           confidence: titleScore * 0.92 + sourceScore,
         };
@@ -372,7 +386,7 @@ async function mbFetch<T>(path: string, signal?: AbortSignal): Promise<T> {
       }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
-  });
+  }, signal);
 }
 
 async function musicbrainzTracklists(context: SoundtrackRequestContext, signal?: AbortSignal): Promise<SoundtrackProviderTracklist[]> {
@@ -479,22 +493,43 @@ async function lookupUncached(
 ): Promise<SoundtrackResolution> {
   const deadline = AbortSignal.timeout(LOOKUP_TIMEOUT_MS);
   const bounded = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  let primary: SoundtrackProviderTracklist[];
+  let primary: SoundtrackProviderTracklist[] = [];
+  let primaryFailure: SoundtrackResolution | null = null;
   try {
     primary = await provider.musicbrainz(context, bounded);
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (bounded.aborted) return { status: 'timeout', provider: 'musicbrainz' };
-    return { status: 'provider-error', provider: 'musicbrainz', reason: error instanceof Error ? error.message : String(error) };
+    primaryFailure = bounded.aborted
+      ? { status: 'timeout', provider: 'musicbrainz' }
+      : { status: 'provider-error', provider: 'musicbrainz', reason: error instanceof Error ? error.message : String(error) };
   }
-  if (!primary.length) return { status: 'no-match', reason: 'no-soundtrack' };
+  const canUseLastfm = provider.lastfm && (provider !== productionProvider || resolveLastfmApiKey());
+  if (!primary.length && canUseLastfm) {
+    // Recovery gets its own short budget. A MusicBrainz failure must not
+    // consume the entire remaining route deadline before Last.fm is tried.
+    const fallbackDeadline = AbortSignal.timeout(LASTFM_TIMEOUT_MS + 3000);
+    const fallbackSignal = signal ? AbortSignal.any([signal, fallbackDeadline]) : fallbackDeadline;
+    try {
+      const secondary = await provider.lastfm!(context, [context.name], fallbackSignal);
+      const fallbackEvidence = mergeTracklists([], secondary, true);
+      const fallbackCandidates = matchLocal(context, fallbackEvidence, local, true);
+      if (fallbackCandidates.length) return { status: 'matched', candidates: fallbackCandidates, source: 'lastfm' };
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // Preserve the primary failure below. A Last.fm failure is not a reason
+      // to invent a local match or hide the provider diagnostic.
+    }
+  }
+  if (!primary.length) return primaryFailure || { status: 'no-match', reason: 'no-soundtrack' };
   let secondary: SoundtrackProviderTracklist[] = [];
   // Production Last.fm calls require the configured key. Injected providers
   // may still exercise corroboration in unit tests without mutating process
   // credentials or the operator's settings.
   if (provider.lastfm && (provider !== productionProvider || resolveLastfmApiKey())) {
     try {
-      secondary = await provider.lastfm(context, primary.map(list => list.releaseName), bounded);
+      const secondaryDeadline = AbortSignal.timeout(LASTFM_TIMEOUT_MS + 1000);
+      const secondarySignal = signal ? AbortSignal.any([signal, secondaryDeadline]) : secondaryDeadline;
+      secondary = await provider.lastfm(context, primary.map(list => list.releaseName), secondarySignal);
     } catch (error) {
       if (signal?.aborted) throw error;
       // Last.fm is optional corroboration. If its bounded call expires after

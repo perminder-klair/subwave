@@ -145,6 +145,22 @@ test('does not accept Last.fm-only evidence as a local identity', async () => {
   assert.deepEqual(result, { status: 'no-match', reason: 'no-soundtrack' });
 });
 
+test('uses Last.fm as a bounded provider recovery only with matching local album evidence', async () => {
+  clearSoundtrackResolutionCache();
+  const result = await resolveSoundtrackCandidates(context, [
+    { id: 'local', title: 'Shape of Woman', artist: 'Lady Gaga', album: 'The Devil Wears Prada 2' },
+  ], {
+    enabled: true,
+    provider: {
+      musicbrainz: async () => { throw Error('MusicBrainz unavailable'); },
+      lastfm: async () => tracklist('lastfm', [['Shape of Woman', 'Lady Gaga']]),
+    },
+  });
+  assert.equal(result.status, 'matched');
+  assert.equal(result.status === 'matched' && result.source, 'lastfm');
+  assert.equal(result.status === 'matched' && result.candidates[0]?.id, 'local');
+});
+
 test('marks agreeing MusicBrainz and Last.fm evidence as corroborated', async () => {
   clearSoundtrackResolutionCache();
   const result = await resolveSoundtrackCandidates(context, [

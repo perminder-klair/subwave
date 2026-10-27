@@ -473,8 +473,36 @@ test('a one-word artist remains artist-capable after a title miss', async () => 
   assert.equal(queue.upcoming[0].track.id, exact.id);
 });
 
-test('a stalled interpreter gives way to the literal parse instead of timing the request out', async () => {
-  // 5000 ms is the settings floor for one generation.
+test('generic artist frames bypass the slow interpreter and keep artist identity', async () => {
+  const queenTrack = { ...exact, id: 'queen-artist-track', title: 'Killer Queen', artist: 'Queen' };
+  catalogueSongs = [filler];
+  artistSongs = [queenTrack];
+  const result = await submit('play some Queen');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.track.artist, 'Queen');
+  assert.equal(result.track.title, queenTrack.title);
+  assert.equal(bodies.length, 0);
+});
+
+test('title-only requests keep the literal title when the interpreter invents a relation', async () => {
+  catalogueSongs = [{ ...exact, id: 'ra-one', title: 'Ra One', artist: 'Fixture Artist' }];
+  modelOutput = { kind: 'track', title: null, artist: null, soundtrackContext: { name: 'unrelated film' } };
+  const result = await submit('play Ra One');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(result.track.title, 'Ra One');
+  assert.equal(result.track.artist, 'Fixture Artist');
+});
+
+test('generic attribute frames do not spend an interpretation call', async () => {
+  genreSongs = [{ ...filler, id: 'rock-track', title: 'Rock Track', genre: 'Rock' }];
+  catalogueSongs = [filler];
+  const result = await submit('play some rock music');
+  assert.equal(result.outcome, 'matched');
+  assert.equal(queue.upcoming[0].track.id, 'rock-track');
+  assert.equal(bodies.length, 0);
+});
+
+test('a stalled interpreter settles the accepted request instead of leaving it pending', async () => {
   await settings.update({ llm: { requestTimeoutMs: 5000 } } as never);
   modelStalls = true;
   const result = await submit('Please play Bohemian Rhapsody by Queen', 650);
@@ -972,8 +1000,9 @@ for (const [text, genre] of [['Play some hiphop', 'Hip Hop'], ['Play some hip ho
   test(`canonical genre spelling cannot relax an explicit requirement: ${text}`, async () => {
     modelOutput = { genre, title: null, artist: null, search_terms: [] };
     const result = await submit(text);
-    assert.equal(result.outcome, 'no-match');
-    assert.equal(queue.upcoming.length, 0);
+    assert.equal(result.outcome, 'partial');
+    assert.equal(queue.upcoming.length, 1);
+    assert.deepEqual(requestLog.snapshot(1)[0].unmetPreferences, ['genre']);
   });
 }
 

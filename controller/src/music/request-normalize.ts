@@ -28,7 +28,7 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   malayalam: 'ml', 'മലയാളം': 'ml', ml: 'ml',
   urdu: 'ur', 'اردو': 'ur', ur: 'ur',
   english: 'en', en: 'en',
-  french: 'fr', français: 'fr', francais: 'fr', frances: 'fr', fr: 'fr',
+  french: 'fr', français: 'fr', francais: 'fr', frances: 'fr', francés: 'fr', fr: 'fr',
   german: 'de', deutsch: 'de', de: 'de',
   spanish: 'es', español: 'es', espanol: 'es', es: 'es',
   italian: 'it', italiano: 'it', it: 'it',
@@ -39,6 +39,9 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   korean: 'ko', 한국어: 'ko', ko: 'ko',
   chinese: 'zh', mandarin: 'zh', 中文: 'zh', zh: 'zh', cantonese: 'yue', yue: 'yue',
   turkish: 'tr', türkçe: 'tr', turkce: 'tr', tr: 'tr',
+  haryanvi: 'bgc', hariyanvi: 'bgc', haryanavi: 'bgc', bgc: 'bgc',
+  bhojpuri: 'bho', bhojpuriya: 'bho', bho: 'bho',
+  maithili: 'mai', mai: 'mai', konkani: 'kok', kok: 'kok',
 };
 
 const MOOD_ALIASES: Record<string, string> = {
@@ -350,7 +353,7 @@ export function requestTextSimilarity(want: unknown, got: unknown): number {
 export function looksLikeLyricRequest(text: string): boolean {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
   const content = text
-    .replace(/^\s*(?:please\s+)?(?:play|request|queue|find|search\s+for|listen\s+to)\s+/iu, '')
+    .replace(/^\s*(?:(?:please\s+)?(?:play|request|queue|find|search\s+for|listen\s+to)\s+|(?:please\s+)?(?:i(?:['’]d|\s+would)?\s+(?:like|love|want|wanna|need)(?:\s+to)?|let\s+me)\s+(?:hear|listen\s+to)\s+)/iu, '')
     .trim();
   const normalized = requestName(content);
   const words = normalized.split(' ').filter(Boolean);
