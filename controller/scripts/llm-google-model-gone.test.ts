@@ -8,6 +8,7 @@ import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test, { after } from 'node:test';
+import { tool } from 'ai';
 import { z } from 'zod';
 import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
@@ -17,7 +18,7 @@ after(() => removeTempDir(stateRoot));
 
 const settings = await import('../src/settings.js');
 const { setCache } = await import('../src/settings/store.js');
-const { djText, djObject } = await import('../src/llm/sdk.js');
+const { djText, djObject, djAgent } = await import('../src/llm/sdk.js');
 const { recentCalls } = await import('../src/llm/log.js');
 const { resetFailoverStickyForTest } = await import('../src/llm/internal/core/failover.js');
 
@@ -25,8 +26,10 @@ const GONE = 'models/gemini-test-bad is not found for API version v1beta, or is 
 
 // Which leg each intercepted request went to, in order.
 type Leg = 'google' | 'ollama';
+// The backup's reply: its text, or fields built from the tools the request offers.
+type BackupReply = string | ((tools: string[]) => Record<string, unknown>);
 
-async function withStation(googleMessage: string, backupText: string, run: (legs: Leg[]) => Promise<void>) {
+async function withStation(googleMessage: string, backup: BackupReply, run: (legs: Leg[]) => Promise<void>) {
   resetFailoverStickyForTest();
   writeFileSync(path.join(stateRoot, 'settings.json'), JSON.stringify({ llm: {
     provider: 'google', model: 'gemini-test-bad', keys: { google: 'test-key' },
@@ -39,7 +42,7 @@ async function withStation(googleMessage: string, backupText: string, run: (legs
   const realFetch = globalThis.fetch;
   const realLog = console.log;
   console.log = () => {};
-  globalThis.fetch = (async (url) => {
+  globalThis.fetch = (async (url, init) => {
     const target = new URL(String(url));
     if (target.hostname === 'generativelanguage.googleapis.com') {
       legs.push('google');
@@ -48,9 +51,10 @@ async function withStation(googleMessage: string, backupText: string, run: (legs
     }
     assert.equal(target.pathname, '/api/chat');
     legs.push('ollama');
+    const offered = (JSON.parse(String(init?.body)).tools ?? []).map((t: { function: { name: string } }) => t.function.name);
     return new Response(JSON.stringify({
       model: 'gemma4:e2b', created_at: new Date().toISOString(),
-      message: { role: 'assistant', content: backupText },
+      message: { role: 'assistant', ...(typeof backup === 'string' ? { content: backup } : { content: '', ...backup(offered) }) },
       done: true, done_reason: 'stop', prompt_eval_count: 1, eval_count: 1,
     }), { headers: { 'content-type': 'application/json' } });
   }) as typeof fetch;
@@ -81,6 +85,26 @@ test('a structured pick skips schema recovery on the gone Gemini model and fails
     assert.equal(legs.filter((leg) => leg === 'google').length, 1);
     assert.equal(legs[0], 'google');
     assert.ok(legs.length > 1 && legs.slice(1).every((leg) => leg === 'ollama'), legs.join());
+  });
+});
+
+test('a tool-loop pick fails over at the native pass instead of retrying the gone model on the done-tool path', async () => {
+  const tools = { weather: tool({ description: 'current weather', inputSchema: z.object({}), execute: async () => ({ summary: 'rain' }) }) };
+  // The backup explores while it may, then answers through `done`.
+  const reply = (offered: string[]) => ({ tool_calls: [{ function: offered.includes('done')
+    ? { name: 'done', arguments: { ok: true } }
+    : { name: 'weather', arguments: {} } }] });
+  await withStation(GONE, reply, async (legs) => {
+    const out = await djAgent({
+      system: 'pick', messages: [{ role: 'user', content: 'pick' }],
+      schema: z.object({ ok: z.boolean() }), tools, maxSteps: 3,
+    } as never);
+    assert.deepEqual(out.object, { ok: true });
+    // One Gemini request: the native pass hands the error to failover rather
+    // than to the done-tool run, which would only ask the missing model again.
+    assert.equal(legs.filter((leg) => leg === 'google').length, 1);
+    assert.equal(legs[0], 'google');
+    assert.ok(legs.slice(1).every((leg) => leg === 'ollama'), legs.join());
   });
 });
 
