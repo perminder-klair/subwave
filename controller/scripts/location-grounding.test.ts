@@ -194,6 +194,31 @@ test('switching back to the default template names the location again, live', as
   assert.ok(djSystem(host).includes(LEEDS_RULE));
 });
 
+test('the prompt library decides through its active entry, a restart and a deleted entry', async () => {
+  // The admin editor switches templates by activeDjPromptId, not djPrompt.
+  const quiet = { id: 'dp_quiet', name: 'Quiet', text: 'You are {name}, the station host. Keep every link short and warm.' };
+  const placed = { id: 'dp_placed', name: 'Placed', text: 'You are {name} on {station}, live from {location}. {soul}.' };
+  await settings.update({
+    djPrompts: [quiet, placed],
+    activeDjPromptId: quiet.id,
+    weather: { onAirLocation: 'Leeds', locationName: 'Private weather label' },
+  });
+  assertLocationWithheld(onAirLocationGrounding());
+  writeFileSync(join(stateRoot, 'settings.json'), JSON.stringify(settings.get()));
+  setCache(null);
+  await settings.load();
+  assertLocationWithheld(onAirLocationGrounding());
+  assert.ok(!djSystem(host).includes('Leeds'));
+  await settings.update({ activeDjPromptId: placed.id });
+  assert.equal(onAirLocationGrounding(), LEEDS_RULE);
+  await settings.update({ activeDjPromptId: quiet.id });
+  // Deleting the active entry falls back to the built-in default, which names it.
+  await settings.update({ djPrompts: [placed] });
+  assert.equal(settings.get().activeDjPromptId, '');
+  assert.equal(onAirLocationGrounding(), LEEDS_RULE);
+  assert.match(djSystem(host), /broadcasting from Leeds\./);
+});
+
 test('missing legacy settings retain the existing default location', () => {
   assert.equal(settings.resolveOnAirLocation({}), DEFAULTS.weather.locationName);
 });
