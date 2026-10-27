@@ -129,9 +129,18 @@ COPY docker/tts-heavy/server.py /app/server.py
 COPY controller/scripts/chatterbox_worker.py /app/workers/chatterbox_worker.py
 COPY controller/scripts/pocket_tts_worker.py /app/workers/pocket_tts_worker.py
 COPY controller/scripts/voice_level.py /app/workers/voice_level.py
-RUN for py in /opt/chatterbox/venv/bin/python /opt/pocket-tts/venv/bin/python; do \
-      "$py" -c "import sys; sys.path.insert(0, '/app/workers'); import voice_level" || exit 1; \
-    done
+# Import check against the FINAL system libraries: each venv's own smoke test
+# runs before the toolchain purge, so a runtime library the purge's
+# --auto-remove takes (libgomp1 on arm64) passed it and failed only at boot.
+# torchaudio is named because its native library is the one that needed
+# libgomp1. -B and a throwaway NUMBA_CACHE_DIR keep it from writing bytecode
+# or librosa's JIT cache back into the venvs stripped above.
+RUN export NUMBA_CACHE_DIR=/tmp/import-check && \
+    /opt/chatterbox/venv/bin/python -B -c "import sys; sys.path.insert(0, '/app/workers'); \
+      import voice_level, torchaudio; from chatterbox.tts_turbo import ChatterboxTurboTTS" && \
+    /opt/pocket-tts/venv/bin/python -B -c "import sys; sys.path.insert(0, '/app/workers'); \
+      import voice_level; from pocket_tts import TTSModel" && \
+    rm -rf /tmp/import-check
 
 # Shared state mount — WAVs land in /var/sub-wave/voice/* and the controller
 # hands the paths to Liquidsoap. mkdir'd here so the image runs standalone too.
