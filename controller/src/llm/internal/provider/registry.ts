@@ -130,7 +130,7 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
           }
           if (body.reasoning === undefined) {
             body.reasoning = reasoningMandatoryModel(String(body.model || ''))
-              ? { effort: 'minimal' }
+              ? mandatoryReasoningFloor()
               : { enabled: false };
           }
         }
@@ -151,6 +151,51 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
 // harmless on non-reasoning openai models.
 export function reasoningMandatoryModel(id: string): boolean {
   return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id) || thinkingMandatoryModel(id);
+}
+
+// What a model that cannot stop thinking is asked for in place of
+// `enabled:false`: the lowest effort. A fresh object per call, because it is
+// spliced into request bodies.
+export function mandatoryReasoningFloor(): { effort: 'minimal' } {
+  return { effort: 'minimal' };
+}
+
+// OpenRouter's answer to `reasoning:{enabled:false}` when the model or endpoint
+// it routed the request to cannot stop thinking (#2092): a 400 whose message is
+// "Reasoning is mandatory for this endpoint and cannot be disabled."
+const REASONING_MANDATORY_RE = /\breasoning is mandatory\b[^"]{0,80}\bcannot be disabled\b/i;
+
+// Model ids already logged as needing the retry below, so a station on a model
+// that always needs it gets one line, not one per call.
+const reasoningMandatoryLogged = new Set<string>();
+
+// Fetch wrapper for the openrouter provider. reasoningMandatoryModel covers the
+// families known by id, but no id list can cover a router id (`openrouter/free`
+// picks a model at random on every request, `openrouter/auto` by prompt) or a
+// mandatory model it has not met yet, so OpenRouter's rejection is answered
+// here: the same request is sent once more with mandatoryReasoningFloor() in
+// place of `enabled:false`. Only that rejection of a body that asked for
+// reasoning off triggers it; every other request and response passes through
+// untouched, and a successful response is never read. Nothing is remembered,
+// because the next request may land on a model that can switch reasoning off,
+// and the operator's "reasoning off" should still reach it.
+export function openRouterFetch(baseFetch: any = fetch) {
+  return async (url: any, init: any) => {
+    const res = await baseFetch(url, init);
+    if (res?.ok !== false || typeof init?.body !== 'string') return res;
+    let body: any;
+    try { body = JSON.parse(init.body); } catch { return res; }
+    if (body?.reasoning?.enabled !== false) return res;
+    let text = '';
+    try { text = await res.clone().text(); } catch { return res; }
+    if (!REASONING_MANDATORY_RE.test(text)) return res;
+    const model = String(body.model || '');
+    if (!reasoningMandatoryLogged.has(model)) {
+      reasoningMandatoryLogged.add(model);
+      console.log(`[llm] openrouter: ${model} cannot switch reasoning off — retrying such requests at minimal effort`);
+    }
+    return baseFetch(url, { ...init, body: JSON.stringify({ ...body, reasoning: mandatoryReasoningFloor() }) });
+  };
 }
 
 // Ollama server URL: settings field, else the config default.
@@ -307,7 +352,8 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openrouter': {
-      const provider = createOpenRouter({ fetch: debugFetch, headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      // debugFetch is the inner transport, so a retried request is captured too.
+      const provider = createOpenRouter({ fetch: openRouterFetch(debugFetch), headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       // OpenRouter reads `reasoning` from construction settings, not per-call
       // providerOptions, so the toggle has to be wired here. Suppressed on
       // forced-tool legs and when the operator turns reasoning off; otherwise
@@ -317,9 +363,11 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // `enabled:false` is the off-switch. effort:'minimal' is NOT one for most
       // families (a no-op for Qwen/GLM; OpenRouter maps any effort onto an
       // Anthropic thinking BUDGET, so it turns thinking on) and survives only
-      // for the reasoning-mandatory families — see reasoningMandatoryModel.
+      // for the reasoning-mandatory families — see reasoningMandatoryModel. A
+      // model outside that list that rejects `enabled:false` is retried at the
+      // floor by openRouterFetch.
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? { effort: 'minimal' } : { enabled: false } } })
+        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? mandatoryReasoningFloor() : { enabled: false } } })
         : provider(id);
       break;
     }

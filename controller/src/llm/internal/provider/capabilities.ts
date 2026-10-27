@@ -182,7 +182,10 @@ const CAPS: Record<string, ProviderCapabilities> = {
   },
   // OpenRouter reads `reasoning` only from model-construction settings (verified
   // on @openrouter/ai-sdk-provider v3.0.0), so the knob is wired in registry.ts
-  // and forced-tool legs get a separate reasoning-disabled instance.
+  // and forced-tool legs get a separate reasoning-disabled instance. A request
+  // the routed model refuses to run with reasoning off ("Reasoning is mandatory
+  // for this endpoint") is retried once at minimal effort by registry.ts
+  // openRouterFetch (#2092).
   openrouter: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
