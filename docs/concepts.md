@@ -56,7 +56,10 @@ Three things it does **not** do:
   context regardless; the dial only decides whether the DJ leans on them.
 - It doesn't invent a second location. Exactly one place name reaches any
   prompt (the on-air location you set under Settings → Station). If the DJ names
-  a different city, that's the model improvising, not the dial.
+  a different city, that's the model improvising, not the dial. Drop
+  `{location}` from the DJ prompt template and every prompt tells the DJ not
+  to name that place either, so a high dial leans on the weather and the hour
+  without saying where you are.
 - A persona left at the defaults renders a **byte-identical** prompt to a
   station that never had the dials, which is why upgrading changes nothing.
 

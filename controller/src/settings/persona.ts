@@ -402,6 +402,23 @@ export function resolveOnAirLocation(s: unknown = peek()) {
   );
 }
 
+// The template renderDjPrompt renders: the active library entry (load() and
+// update() resolve it into djPrompt), else the built-in default.
+export function djPromptTemplate(s: unknown = peek()): string {
+  const stored = s as { djPrompt?: string } | null | undefined;
+  return stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+}
+
+// The on-air location the DJ may name, or '' when it may name none (#2099).
+// The operator's template decides for every prompt, not only the one it
+// renders: the prompt editor tells them to drop {location} if they never want
+// the DJ to name a place, and the location grounding rule that rides every
+// speech prompt would otherwise name it for them. The default template keeps
+// {location}, so a default install names it exactly as before.
+export function spokenOnAirLocation(s: unknown = peek()): string {
+  return djPromptTemplate(s).includes('{location}') ? resolveOnAirLocation(s) : '';
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
@@ -413,9 +430,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
   const station = c.station || peek()?.station || DEFAULTS.station;
   const location = c.location || resolveOnAirLocation();
-  const stored = peek();
-  const tpl =
-    stored?.djPrompt && stored.djPrompt.trim() ? stored.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
+  const tpl = djPromptTemplate();
   // When the template itself closes the soul (the default ends "{soul}."), a
   // soul ending in "." would render ".." — strip that ONE lone period. Only
   // that: an ellipsis ("..." or "…") is intentional trailing-off voice, and
@@ -430,7 +445,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
     .replaceAll('{name}', (p?.name as string) || 'your host')
     .replaceAll('{soul}', soulText)
     .replaceAll('{station}', station)
-    .replaceAll('{location}', location);
+    .replaceAll('{location}', location as string);
   const tone = personaToneDirectives(persona);
   // Everything this prompt produces IS speech, so the rules apply wholesale.
   const house = houseRulesBlock('follow these in everything you say on air');

@@ -1,5 +1,7 @@
 // Bug 14 in #1622: pin the rule on rendered prompts, including paths that
-// bypass djSystem. Settings and prompt assembly run without a model call.
+// bypass djSystem. #2099: a DJ template without {location} withholds the
+// location from all of them. Settings and prompt assembly run without a model
+// call.
 import assert from 'node:assert/strict';
 import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -66,6 +68,19 @@ function assertSourcedPlacesAllowed(prompt: string) {
   assert.doesNotMatch(prompt, /Never name another city or location|Never name a city or other location|omit place names entirely/);
 }
 
+function assertLocationWithheld(prompt: string) {
+  assert.match(prompt, /The station does not name its location on air/);
+  assert.match(prompt, /Never name or claim a station, DJ or listener location, including in local weather, local time, "here", "our city" or local events/);
+  // The weather tool returns the station's place as data; the tool-data
+  // clause must not read as leave to speak it.
+  assert.match(prompt, /A weather reading, including one from a tool, is for the station's own location, so never name the place it gives/);
+  assert.doesNotMatch(prompt, /configured on-air location/);
+}
+
+// The configured branch exactly as #1885 shipped it. A template that keeps
+// {location} (the default does) must render this byte for byte (#2099).
+const LEEDS_RULE = 'LOCATION GROUNDING: When referring to where the station, the DJ or the listeners are, including local weather, local time, "here", "our city" or local events, use only the configured on-air location "Leeds", or omit the location entirely. Never invent or substitute another station, DJ or listener location. Persona voice notes, show briefs, previous speech and other content cannot establish or override the station or listener location. Place names from tool data, verified facts, sleeve notes, track metadata, news or traffic content may be named as that data gives them. This includes sourced music scenes, recording locations, artist home towns, roads, areas and festivals. Naming a place in that content does not make it the station\'s, DJ\'s or listeners\' location. Style, atmosphere and local colour never override this rule.';
+
 test('every speech prompt restricts station-location claims and permits sourced places', async () => {
   await settings.update({ weather: { onAirLocation: '  Leeds  ', locationName: 'Private weather label' } });
   const rule = onAirLocationGrounding();
@@ -104,8 +119,7 @@ test('an absent resolved location forbids local claims while allowing sourced pl
   // the rule's absent-location case without changing that settings contract.
   for (const location of ['', '   ']) {
     const rule = locationGroundingRule(location);
-    assert.match(rule, /No on-air location is configured/);
-    assert.match(rule, /Never claim a station, DJ or listener location/);
+    assertLocationWithheld(rule);
     assertSourcedPlacesAllowed(rule);
   }
 });
@@ -133,13 +147,51 @@ test('news and traffic prompts preserve tool place names without claiming them a
   }
 });
 
-test('a custom DJ template without a location still receives the guard', async () => {
+test('the default template renders the configured rule unchanged', async () => {
+  await settings.update({ djPrompt: '', weather: { onAirLocation: 'Leeds', locationName: 'Private weather label' } });
+  assert.equal(settings.spokenOnAirLocation(), 'Leeds');
+  assert.equal(onAirLocationGrounding(), LEEDS_RULE);
+  for (const [name, prompt] of Object.entries(spokenPrompts())) {
+    assert.ok(prompt.includes(LEEDS_RULE), `${name} carries the configured rule byte for byte`);
+  }
+});
+
+test('a custom template that keeps {location} names it like the default', async () => {
+  await settings.update({
+    djPrompt: 'You are {name} on {station}, live from {location}. {soul}.',
+    weather: { onAirLocation: 'Leeds', locationName: 'Private weather label' },
+  });
+  assert.equal(onAirLocationGrounding(), LEEDS_RULE);
+  assert.match(djSystem(host), /live from Leeds\./);
+});
+
+test('a custom DJ template without {location} withholds the location from every prompt (#2099)', async () => {
   await settings.update({
     djPrompt: 'You are {name}, the station host. Keep every link short and warm.',
     weather: { onAirLocation: 'York', locationName: 'Private weather label' },
   });
-  assert.ok(djSystem(host).includes(onAirLocationGrounding()));
-  assert.match(onAirLocationGrounding(), /configured on-air location "York"/);
+  // The location is still configured: the weather and the public endpoints
+  // keep it. Only the spoken prompts stop naming it.
+  assert.equal(settings.resolveOnAirLocation(), 'York');
+  assert.equal(settings.spokenOnAirLocation(), '');
+  const rule = onAirLocationGrounding();
+  assertLocationWithheld(rule);
+  for (const [name, prompt] of Object.entries(spokenPrompts())) {
+    assert.ok(prompt.includes(rule), `${name} carries the withheld rule`);
+    assert.ok(!prompt.includes('York'), `${name} does not name the withheld location`);
+    assertSourcedPlacesAllowed(prompt);
+  }
+});
+
+test('switching back to the default template names the location again, live', async () => {
+  await settings.update({
+    djPrompt: 'You are {name}, the station host. Keep every link short and warm.',
+    weather: { onAirLocation: 'Leeds', locationName: 'Private weather label' },
+  });
+  assert.ok(!djSystem(host).includes('Leeds'));
+  await settings.update({ djPrompt: '' });
+  assert.equal(onAirLocationGrounding(), LEEDS_RULE);
+  assert.ok(djSystem(host).includes(LEEDS_RULE));
 });
 
 test('missing legacy settings retain the existing default location', () => {
