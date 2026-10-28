@@ -893,7 +893,7 @@ function latestReleaseMatch(artist: string | null, scope: LatestReleaseScope): R
   const cleanArtist = artist?.replace(/[.!?]+$/u, '').trim() || null;
   return {
     kind: 'track', title: null, album: null, artist: cleanArtist,
-    genre: null, language: null, mood: null, energy: null,
+    genre: null, language: null, mood: null,
     sort: 'latest', scope, search_terms: cleanArtist ? [cleanArtist] : [],
     intent: scope === 'album' ? 'Wants a track from the newest official album.' : 'Wants the newest official single.',
     ack: '',
