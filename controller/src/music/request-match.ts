@@ -1973,7 +1973,11 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
     return null;
   };
   const selectAlbumFuzzy = (songs: RequestSong[], source: string): RequestSelection | null => {
-    if (!match.album) return null;
+    // A misspelled bare album is not enough identity evidence: the global
+    // search can return a same-looking track title from an unrelated release.
+    // Album typo tolerance is deliberately limited to the artist catalogue,
+    // where the artist and the unique album name prove the recording context.
+    if (!match.album || !resolvedArtistName) return null;
     const candidates = unique(songs).filter(song => constraints(song, source)
       && albumNameFuzzyMatches(match.album!, song.album)
       && (!resolvedArtistName || requestCandidateArtistMatches(resolvedArtistName, song)));
