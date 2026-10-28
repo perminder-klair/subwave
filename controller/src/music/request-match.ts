@@ -369,12 +369,10 @@ function requestLanguageTerms(name: string): string[] {
   return languageTerms(name);
 }
 
-// Navidrome installations do not agree on where language metadata lives. A
-// tag may be an ISO-639 code (`pa`), a language name (`Punjabi`), or a style
-// tag that carries the language (`Punjabi Pop`). Treat those as equivalent
-// only when the requested language is a recognised language name or code. This
-// keeps unknown words strict while allowing real-world library metadata to
-// satisfy an explicit language request.
+// Navidrome installations do not agree on whether language metadata is stored
+// as an ISO code (`pan`) or a language name (`Punjabi`). Both are accepted,
+// but genre/title/artist text is never language evidence. Language requests
+// must use the dedicated stored language fields only.
 function requestLanguageTagMatches(want: string, got: string): boolean {
   const code = resolveLanguageCode(want);
   const canonicalWant = canonicalLanguage(want);
@@ -384,13 +382,7 @@ function requestLanguageTagMatches(want: string, got: string): boolean {
   const tag = requestName(got);
   const exact = terms.some(term => tag === requestName(term));
   if (exact) return true;
-  // Only recognised languages may use a language-bearing genre tag as
-  // evidence. Unknown words stay exact-only, so an arbitrary genre such as
-  // "Klingon Rock" cannot silently satisfy a language requirement.
-  return !!code && terms.some(term => {
-    const normalized = requestName(term);
-    return !!normalized && requestGenreMatches(normalized, tag);
-  });
+  return false;
 }
 
 export function explicitRequestAttribute(text: string, match: RequestMatch, value: string | null | undefined): boolean {
@@ -854,20 +846,6 @@ export function asksForKindOfMusic(text: string): boolean {
   return KIND_OF_MUSIC.test(text) && !leadingQuotedName(text);
 }
 
-export function isLyricOrFilmDescription(text: string): boolean {
-  const eraRequest = /\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d0s\b/iu.test(text);
-  return looksLikeLyricRequest(text)
-    // A listener may name the film without saying "movie" or "film":
-    // "a song from The Devil Wears Prada 2". Keep that relation on the
-    // evidence path so the configured identification tool can resolve it
-    // against the local library instead of letting the interpreter mark it
-    // unsupported and short-circuiting before web evidence is available.
-    // Do not include the generic "in" form here: "play pop music in Punjabi"
-    // is a structured language-plus-genre request and must stay on the
-    // deterministic language resolver. Explicit movie wording still remains
-    // evidence-oriented through the lyric/film cues above.
-    || (!eraRequest && /\b(?:song|track|music)\s+from\s+\S/iu.test(text));
-}
 export function isFramedTitleOnlyRequest(text: string, literal: RequestMatch): boolean {
   const lyricLike = looksLikeLyricRequest(text);
   return lyricLike
@@ -1022,13 +1000,24 @@ export function modelFreeRequest(text: string): RequestMatch {
     };
   }
   // A trailing language condition stays explicit even without interpretation.
-  const languageHint = cleaned.match(/\s+in\s+([\p{L}][\p{L} -]*?)[.!?]*$/iu);
+  const languageHintCandidate = cleaned.match(/\s+in\s+([\p{L}][\p{L} -]*?)[.!?]*$/iu);
+  // The final `in ...` span can begin inside a legitimate title such as
+  // "A Day in the Life by The Beatles". A relationship word inside the
+  // candidate proves that the regex consumed the title's artist tail, not a
+  // language condition.
+  const languageHint = languageHintCandidate && !/\b(?:by|from|for)\b/iu.test(languageHintCandidate[1])
+    ? languageHintCandidate
+    : null;
   // Only split an unambiguous, familiar language after a name-pair delimiter.
   // Other "in" phrases stay in the literal name and need catalogue proof;
   // e.g. A Day in the Life and Explosions in the Sky are names, not languages.
   const language = languageHint && /\sby\s|,\s|\s[-–—]\s/i.test(cleaned.slice(0, languageHint.index))
     && requestLanguageCode(languageHint[1]) ? languageHint : null;
-  const unverifiedConditions = languageHint && !language ? ['unparsed language condition'] : [];
+  const hasNamePairBeforeLanguage = !!languageHint
+    && /\sby\s|,\s|\s[-–—]\s/i.test(cleaned.slice(0, languageHint.index));
+  const unverifiedConditions = hasNamePairBeforeLanguage && !language
+    ? ['unparsed language condition']
+    : [];
   const query = language ? cleaned.slice(0, language.index) : cleaned;
   // Keep offsets into the original text, but never split a quoted name on its
   // own "by", comma or spaced dash.
@@ -1400,6 +1389,12 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // otherwise refuse before any stand-in pool is tried.
   const unverifiedConditions = [...new Set([...(match.unverifiedConditions || []),
     ...(deps.text === undefined || match.kind === 'chat' ? [] : directRequestUnsupported(deps.text))])];
+  // An explicit but unresolved language is a hard identity constraint. It is
+  // not an unsupported request shape, so settle it as an honest no-match
+  // before any title, genre, or fallback lookup can widen the request.
+  if (unverifiedConditions.includes('unparsed language condition')) {
+    return { track: null, source: 'language-unresolved', outcome: 'no-match', errors, required: ['language'] };
+  }
   const safe = async <T>(source: string, run: () => Promise<T>, fallback: T): Promise<T> => {
     try { return await run(); } catch (err) {
       if (deps.signal?.aborted) throw err;
@@ -1460,11 +1455,10 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
   // outside recognised names are hard requirements; guesses stay preferences.
   if (match.genre) genre = await safe('genre resolution', () => resolveRequestGenre(catalog, match.genre!, deps.signal), null);
   const languageMatches = (song: RequestSong) => !match.language
-    || [song.language, ...(song.languages || []), ...tags(song)].some(value => requestLanguageTagMatches(match.language!, String(value ?? '')));
-  // Some language names are also commonly emitted as broad style tags (for
-  // example, "Punjabi music"). When the parser records both interpretations,
-  // first-class language metadata is the stronger evidence and must satisfy
-  // the overlapping genre condition even if the library has no genre column.
+    || [song.language, ...(song.languages || [])].some(value => requestLanguageTagMatches(match.language!, String(value ?? '')));
+  // An overlapping language-style genre remains a soft preference. It never
+  // supplies the hard language evidence, which comes only from the dedicated
+  // language metadata fields above.
   const overlappingLanguageGenre = Boolean(match.genre && match.language
     && canonicalLanguage(match.genre) && canonicalLanguage(match.genre) === canonicalLanguage(match.language));
   const genreMatches = (song: RequestSong) => !match.genre
