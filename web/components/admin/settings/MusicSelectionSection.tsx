@@ -194,32 +194,33 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
                     &ldquo;something calm&rdquo;.
                   </p>
                   <p>
-                    It cannot reliably identify songs from remembered lyrics, films or current trends,
+                    It cannot reliably identify songs from remembered lyrics, loose film descriptions or current trends,
                     refer back to earlier conversations, or follow exclusions and complex conditions
                     such as &ldquo;anything except Queen&rdquo; or &ldquo;instrumental tracks from the
-                    1990s&rdquo;. Language requests depend on your library&apos;s tags or metadata.
+                    1990s&rdquo;. A named movie or soundtrack request can use structured soundtrack
+                    metadata when the lookup switch below is on. Language requests depend on your library&apos;s tags or metadata.
                     Recognised unsupported conditions are declined. Mood is a preference; an exact
                     recording stays a match even when its mood cannot be verified. Explicit genre and language requirements are never
                     relaxed to queue an alternative.
                   </p>
                   <p>
                     <strong>Agent-assisted</strong> can explore more detailed requests, but needs a
-                    tool-capable model and may take longer. Identifying described songs via the web also
-                    needs &ldquo;Resolve described requests via web&rdquo; enabled and a configured
-                    web-search provider.
+                    tool-capable model and may take longer. Loose lyric and film descriptions use the
+                    configured web-search provider; named soundtrack requests use MusicBrainz and may
+                    use Last.fm as corroboration.
                   </p>
                 </div>
               </details>
             </div>
           </div>
-          {form.llm.requestMatching === 'agentic' && (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] sm:items-center sm:gap-4">
               <div>
-                <div className="text-[13px] font-bold">Resolve described requests via web</div>
+                <div className="text-[13px] font-bold">Resolve described and soundtrack requests online</div>
                 <div className="field-hint mt-1 max-w-[440px]">
-                  A listener who <em>describes</em> a track (&ldquo;the song from the new Dune
-                  movie&rdquo;) gets it looked up on the web, then matched to your library. Needs a
-                  web-search provider under Web search; otherwise it does nothing.
+                  Named movie and soundtrack requests are checked against MusicBrainz, with Last.fm
+                  corroboration when its API key is configured. Lyric and loose description requests
+                  use the web-search provider under Web search. Every result must still match a track
+                  in your library; otherwise the request ends safely without a substitute.
                 </div>
               </div>
               <Seg
@@ -229,7 +230,6 @@ export function MusicSelectionSection({ data, form, setForm, busy, saveSettings,
                 onChange={v => setForm(f => ({ ...f, llm: { ...f.llm, requestWebResolve: v === 'on' } }))}
               />
             </div>
-          )}
         </div>
       </Card>
 

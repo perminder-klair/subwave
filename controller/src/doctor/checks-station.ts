@@ -222,7 +222,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'request web-resolve',
         status: 'warn',
         detail: 'on, but web search isn’t ready',
-        hint: 'Resolving described track requests ("that song from the film") needs a working web search. Configure it in Settings → Web search, or turn Settings → LLM provider → Resolve described requests via web off.',
+        hint: 'Lyric and loose description requests need a working web search. Named movie and soundtrack requests use MusicBrainz and local-library verification; Last.fm is optional corroboration. Configure search for descriptions, or turn Settings → LLM provider → Resolve described and soundtrack requests online off.',
       });
     }
   }
@@ -383,5 +383,4 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
 
   return out;
 }
-
 

@@ -40,6 +40,104 @@ export function ruleMatchRows(): Array<{
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
   t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
 
+export interface LanguagePoolRecord {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  albumId: string | null;
+  artistId: string | null;
+  year: number | null;
+  genres: string[];
+  genre: string | null;
+  moods: string[];
+  energy: EnergyValue;
+  language: string | null;
+  languages: string[];
+}
+
+type LanguagePoolRow = {
+  id: string;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  album_id: string | null;
+  artist_id: string | null;
+  year: number | null;
+  genres: string | null;
+  genre: string | null;
+  moods: string | null;
+  energy: EnergyValue;
+  language_primary: string | null;
+  languages: string | null;
+};
+
+function rowToLanguagePool(row: LanguagePoolRow): LanguagePoolRecord {
+  return {
+    id: row.id,
+    title: row.title,
+    artist: row.artist,
+    album: row.album,
+    albumId: row.album_id ?? null,
+    artistId: row.artist_id ?? null,
+    year: row.year,
+    genres: row.genres ? safeParseArray(row.genres) : [],
+    genre: row.genre,
+    moods: row.moods ? safeParseArray(row.moods) : [],
+    energy: row.energy ?? null,
+    language: row.language_primary ?? null,
+    languages: row.languages ? safeParseArray(row.languages) : [],
+  };
+}
+
+// Language tagging is optional on older library databases. Keep this read
+// seam defensive so a request resolver deployed before the language migration
+// continues to behave exactly as before instead of failing the whole request.
+export function songsByLanguage(language: string): LanguagePoolRecord[] {
+  if (!language.trim()) return [];
+  try {
+    const rows = requireDb().prepare(`SELECT t.id, t.title, t.artist, t.album,
+      t.album_id, t.artist_id, t.year, t.genres, t.genre, t.moods, t.energy,
+      t.language_primary, t.languages
+      FROM tracks t
+      WHERE t.language_primary = ?
+         OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.languages) THEN t.languages ELSE '[]' END) WHERE value = ?)
+      ORDER BY t.rowid`).all(language, language) as LanguagePoolRow[];
+    return rows.map(rowToLanguagePool);
+  } catch {
+    return [];
+  }
+}
+
+export interface LanguageTagProjection {
+  language: string | null;
+  languages: string[];
+}
+
+// Decorate remote Navidrome search results with the local first-class language
+// tag. This is batched because named requests commonly inspect more than one
+// search page, and it remains an empty map when the optional columns are not
+// present.
+export function languagesByIds(ids: readonly string[]): Map<string, LanguageTagProjection> {
+  const wanted = [...new Set(ids.filter(Boolean))];
+  if (!wanted.length) return new Map();
+  try {
+    const placeholders = wanted.map(() => '?').join(', ');
+    const rows = requireDb().prepare(`SELECT id, language_primary, languages
+      FROM tracks WHERE id IN (${placeholders})`).all(...wanted) as Array<{
+        id: string;
+        language_primary: string | null;
+        languages: string | null;
+      }>;
+    return new Map(rows.map(row => [row.id, {
+      language: row.language_primary ?? null,
+      languages: row.languages ? safeParseArray(row.languages) : [],
+    }]));
+  } catch {
+    return new Map();
+  }
+}
+
 export function songsByMood(mood: string): MoodPoolRecord[] {
   // Start at the covering membership index, never scan tracks/json_each.
   // Sorting by rowid preserves the former full-scan bucket order.
@@ -251,6 +349,7 @@ export function candidateFilterTracks(): Array<{
   id: string;
   title: string | null;
   artist: string | null;
+  album: string | null;
   year: number | null;
   originalYear: number | null;
   isCompilation: boolean | null;
@@ -270,6 +369,7 @@ export function candidateFilterTracks(): Array<{
     id: string;
     title: string | null;
     artist: string | null;
+    album: string | null;
     year: number | null;
     original_year: number | null;
     is_compilation: number | null;
@@ -282,7 +382,7 @@ export function candidateFilterTracks(): Array<{
     vocal_ranges_json: string | null;
     duration_sec: number | null;
   };
-  const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
+  const rows = requireDb().prepare(`SELECT id, title, artist, album, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
     vocal_ranges_json
     FROM tracks`).all() as CandidateFilterRow[];
@@ -290,6 +390,7 @@ export function candidateFilterTracks(): Array<{
     id: row.id,
     title: row.title ?? null,
     artist: row.artist ?? null,
+    album: row.album ?? null,
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,

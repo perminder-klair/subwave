@@ -16,7 +16,7 @@ import { onAirLocationGrounding } from './grounding.js';
 // generic, so a copied line never names the wrong artist.
 const REQUEST_SYSTEM = `You are the music librarian for a personal Navidrome library that runs an AI radio station. A listener sends a request; you turn it into structured search parameters.
 
-Extract only what the listener asked for. Set title for a named song and album for a named album; keep their original spelling and script. Do not put an album name in title. A named recording takes priority over incidental mood/genre clues. Set genre, language and sort only when explicitly requested, never by guessing from the artist or title. Set mood only for an explicitly requested feeling or vibe. Mood is a preference, not permission to replace a named song. Explicit genre and language requirements still apply to named songs. Never infer them from your knowledge of a recording. Keep kind="track" even when a music request is unsupported; chat is only non-music conversation. Set unsupported to a short list of any conditions this format cannot express: exclusions/negation, era or year ranges, instrumental-only filters, lyric/film/trending-song identification, or references to earlier conversations. Do not drop these conditions or guess a title from them; an empty list means the request is expressible. Named live/remix/acoustic versions can be kept as part of the title. A national origin is not evidence of a recording language. Do not infer latest/oldest from words inside a song title. The controller searches the library itself. The listener sees your ack only when the library matches their request (an alternative gets the controller's own wording), so write it as the DJ's line for a found request, in the persona’s language, and never name a song or artist the listener did not name.
+    Extract only what the listener asked for. Set title for a named song and album for a named album; keep their original spelling and script. Do not put an album name in title. Requests such as "a song from the Pyaas album by Babbu Maan", "a track from Babbu Maan's Pyaas album", and "something from Pyaas by Babbu Maan" mean album=Pyaas and artist=Babbu Maan, with no invented title. A named recording takes priority over incidental mood/genre clues. Set genre, language and sort only when explicitly requested, never by guessing from the artist or title. Set mood only for an explicitly requested feeling or vibe. Mood is a preference, not permission to replace a named song. Explicit genre and language requirements still apply to named songs. Never infer them from your knowledge of a recording. Keep kind="track" even when a music request is unsupported; chat is only non-music conversation. Set unsupported to a short list of any conditions this format cannot express: exclusions/negation, era or year ranges, instrumental-only filters, loose lyric/film descriptions, or references to earlier conversations. A concrete request for any song from a named movie, film, or soundtrack is a supported soundtrack-context request handled by the controller's structured metadata resolver; do not invent a title, artist, or track id. Do not drop unsupported conditions or guess a title from them; an empty list means the request is expressible. Named live/remix/acoustic versions can be kept as part of the title. A national origin is not evidence of a recording language. Do not infer latest/oldest from words inside a song title. The controller searches the library itself. The listener sees your ack only when the library matches the request (an alternative gets the controller's own wording), so write it as the DJ's line for a found request, in the persona’s language, and never name a song or artist the listener did not name.
 
 Keep an allowed mood name exactly as requested: "calm" stays "calm", never "reflective". For music requests search_terms contains only named titles/artists, never mood descriptions.
 
@@ -170,6 +170,7 @@ export function requestMatcherSystem(persona: unknown): string {
 export async function matchRequest(
   userQuery: string,
   { listenerName = null, nowPlaying = null }: { listenerName?: string | null; nowPlaying?: any } = {},
+  signal?: AbortSignal,
 ) {
   const ctxLines: string[] = [];
   if (nowPlaying?.title) {
@@ -189,6 +190,7 @@ export async function matchRequest(
     schema: REQUEST_SCHEMA_TOLERANT,
     temperature: 0.4,
     kind: 'matchRequest',
+    signal,
   });
 }
 
@@ -212,6 +214,7 @@ const IDENTIFY_KEYWORD_MAX = 40;
 export async function identifyTrackFromText(
   reference: string,
   webText: string,
+  signal?: AbortSignal,
 ): Promise<{ title: string; artist: string | null; keyword: string | null } | null> {
   // Both inputs are untrusted (a listener's words, third-party web text), so
   // they are fenced as JSON data under a data-not-direction rule, and the guess
@@ -222,6 +225,7 @@ export async function identifyTrackFromText(
     schema: IDENTIFY_SCHEMA,
     temperature: 0.2,
     kind: 'identifyRequest',
+    signal,
   });
   const clip = (v: unknown, max: number) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
   const title = clip(out?.title, IDENTIFY_TITLE_MAX);

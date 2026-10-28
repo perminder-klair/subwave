@@ -11,7 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart, getClockContext, getDateContext, getTimeContext } from '../context.js';
 import { linkClockAt, linkClockStampFor } from './queue/pure.js';
-import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
+import { djObject, nearestId, modelTolerant, withDeadline } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent, timePhase } from '../observability/events.js';
 import { artistRootKey, recencyWindowsForLibrary, type CandidateLike } from '../music/recency.js';
@@ -38,6 +38,10 @@ import {
   breakerFailure,
   breakerOpen,
   breakerSuccess,
+  requestBreakerFailure,
+  requestBreakerOpen,
+  requestBreakerSuccess,
+  RequestIdentificationMiss,
 } from './dj-agent/breaker.js';
 import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, notePickShow, runActive } from './dj-agent/runs.js';
@@ -190,8 +194,8 @@ async function repickFromSeen({ seen, badId, predecessor, showAt = null, playlis
 // a result whose id is in `seen`, or null. Never throws.
 // `reason`, when given, replaces the bad-id framing — the claim guard (#1918)
 // reuses this call for a VALID id whose lines named another track.
-async function repickRequestFromSeen({ seen, badId, requester, text, persona, reason = null }:
-  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null; reason?: string | null }) {
+async function repickRequestFromSeen({ seen, badId, requester, text, persona, reason = null, signal }:
+  { seen: Map<string, any>; badId: string | null; requester: string; text: string; persona?: Persona | null; reason?: string | null; signal?: AbortSignal }) {
   if (seen.size === 0) return null;
   const wantIntro = autoVoiceAllowed();
   const schema = modelTolerant(z.object({
@@ -209,11 +213,24 @@ async function repickRequestFromSeen({ seen, badId, requester, text, persona, re
       schema,
       temperature: 0.3,
       kind: 'djAgentRequestRepick',
+      signal,
     });
     return resolveRepickId(outcome, seen, 'request-repick');
   } catch {
     return null;
   }
+}
+
+async function repickRequestWithinDeadline(args: Omit<Parameters<typeof repickRequestFromSeen>[0], 'signal'>, deadlineMs?: () => number, parentSignal?: AbortSignal) {
+  const remaining = deadlineMs?.();
+  if (remaining !== undefined && remaining <= 0) return null;
+  if (remaining === undefined) {
+    return repickRequestFromSeen({ ...args, ...(parentSignal ? { signal: parentSignal } : {}) });
+  }
+  return withDeadline(remaining, 'request corrective re-pick', signal => repickRequestFromSeen({
+    ...args,
+    signal: parentSignal ? AbortSignal.any([parentSignal, signal!]) : signal,
+  }));
 }
 
 // The claim guard's corrective framing (#1918). Names the chosen track from
@@ -1734,25 +1751,33 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, pickA
 // so its failures are the same symptom.
 // The caller (routes/request.js) owns the request `event` turn — it posts one
 // for every request path, so the agent only appends its own `dj` reply here.
-export async function runRequest(queue: any, { requester, text }: { requester: string; text: string }) {
-  if (settings.get().llm?.requestMatching !== 'agentic' || breakerOpen()) return null;
+export function requestMatchingEnabled(): boolean {
+  return settings.get().llm?.requestMatching === 'agentic';
+}
+
+export async function runRequest(queue: any, { requester, text, signal, introBudgetMs, evidenceOnly }: { requester: string; text: string; signal?: AbortSignal; introBudgetMs?: () => number; evidenceOnly?: boolean }) {
+  if (!requestMatchingEnabled() || requestBreakerOpen()) return null;
   // Over the hard token cap the request agent only runs when requests are
   // exempt (llm.exemptRequests, on by default); otherwise return null and let
   // the caller's stateless matcher cascade handle it without a model call.
   if (!budget.requestsAllowed()) return null;
 
   try {
-    const out = await runRequestViaAgent(queue, { requester, text });
-    breakerSuccess();
+    const out = await runRequestViaAgent(queue, { requester, text, signal, introBudgetMs, evidenceOnly });
+    requestBreakerSuccess();
     return out;
   } catch (err) {
-    breakerFailure(queue);
+    requestBreakerFailure(queue, err);
     throw err;
   }
 }
 
-async function runRequestViaAgent(queue: any, { requester, text }: { requester: string; text: string }) {
+async function runRequestViaAgent(queue: any, { requester, text, signal, introBudgetMs, evidenceOnly }: { requester: string; text: string; signal?: AbortSignal; introBudgetMs?: () => number; evidenceOnly?: boolean }) {
   return withTrace({ kind: 'request', requester }, async () => {
+    const throwIfAborted = () => {
+      if (!signal?.aborted) return;
+      throw signal.reason instanceof Error ? signal.reason : new Error('request resolution aborted');
+    };
     const requestSpeech = session.captureAutomaticHostSpeech(session.onAirPersona());
     // Requests stay near-unfiltered — listeners must be able to re-request a
     // song from earlier in the day. 2h covers the "don't repeat the song still
@@ -1796,8 +1821,23 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       messages,
       scope,
       persona: requestSpeech.persona,
+      ...(evidenceOnly ? { evidenceOnly: true } : {}),
+      ...(signal ? { abortSignal: signal } : {}),
     });
+    throwIfAborted();
     const { toolCalls, extras } = run;
+    const evidenceToolCalls = toolCalls.filter((call: any) => call?.name === 'identifyRequestedTrack');
+    const verifiedEvidenceIds = new Set<string>(evidenceToolCalls.flatMap((call: any) => {
+      const result = typeof call?.result === 'string'
+        ? (() => { try { return JSON.parse(call.result); } catch { return null; } })()
+        : call?.result;
+      return Array.isArray(result?.candidates)
+        ? result.candidates.map((candidate: any) => candidate?.id).filter((id: any): id is string => typeof id === 'string')
+        : [];
+    }));
+    const verifiedPool = (pool: Map<string, any>) => evidenceToolCalls.length
+      ? new Map([...pool].filter(([id]) => verifiedEvidenceIds.has(id)))
+      : pool;
     // Reassigned when the unknown-id salvage below (repickRequestFromSeen)
     // lands a corrective re-pick — same let-after-destructure shape
     // pickViaSelectionRoute uses for the identical reason.
@@ -1807,9 +1847,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // wasn't a music request — answer in persona, queue nothing, skip the
     // cascade. The `kind` half is load-bearing: a null id ALONE is also what an
     // omitted id looks like once coerceModelPayload is done with it, so a weak
-    // model forgetting the field would otherwise turn a real music request into
-    // "nothing plays". Without kind:"chat" this falls through to the repick
-    // salvage and the stateless cascade, so the listener still gets music.
+    // model forgetting the field would otherwise answer a real music request
+    // as chat. Without kind:"chat" a null id is the agent's no-match, reported
+    // to the listener as one (RequestIdentificationMiss below).
     //
     // Echo guard (A2): the ack is the model's own free text, generated from a
     // message that may carry an injected script, so it is guarded like the
@@ -1820,7 +1860,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       const screened = screenAck(object.ack, echoTexts, 'Heard you loud and clear.');
       if (screened.guard) queue.log('request-guard', `agent chat ack echoed request text — replaced`);
       session.appendTurn({ role: 'dj', kind: 'request', text: screened.ack, meta: { requester, toolCalls } });
-      return { ack: screened.ack, track: null, introScript: null, guard: screened.guard };
+      return { ack: screened.ack, track: null, introScript: null, guard: screened.guard, candidateCount: extras.seen.size, confidence: null };
     }
 
     // Whoever voices this answer, the host and guests on the roster, and the
@@ -1850,13 +1890,17 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // artist, unless nothing fresh is left. Spacing rides the call the request
     // was already spending, so it never costs one of its own here.
     const spacedOffer = (pool: Map<string, any>) => {
-      const { alt, dropped } = requestRepickCandidates(pool, neighbourRoots, (c) => standIn(c, pool));
+      const authoritativePool = verifiedPool(pool);
+      const { alt, dropped } = requestRepickCandidates(authoritativePool, neighbourRoots, (c) => standIn(c, authoritativePool));
       if (dropped) queue.log('request-guard', `${dropped} stand-in(s) by recently-played artists withheld from the corrective call (spacing window ${varietyWindow} slots)`);
       return alt;
     };
     // The request's ONE corrective model call: the unknown-id salvage, the
     // claim re-pick, or the stand-in spacing re-pick — whichever comes first.
     let corrected = false;
+
+    const providerFailure = extras.failures?.find((failure: any) => failure?.providerFailure === true);
+    if (providerFailure) throw providerFailure;
 
     let song = object?.id ? extras.seen.get(object.id) : null;
     // Near-miss repair, same as the pick path: an unambiguous prefix /
@@ -1874,13 +1918,16 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // One djObject call constrained to that set (repickRequestFromSeen,
     // above) salvages the run instead of discarding it wholesale — the
     // caller's stateless matcher cascade is still the fallback when this
-    // misses too (empty seen, or the re-pick call itself fails).
-    if (!song && extras.seen.size) {
+    // misses too (the re-pick call itself fails). A null id is the agent
+    // saying none of its candidates is the song, so it is never salvaged
+    // into a stand-in that the route would record as a match.
+    if (!song && object?.id && extras.seen.size) {
+      throwIfAborted();
       corrected = true;
-      const repicked = await repickRequestFromSeen({
+      const repicked = await repickRequestWithinDeadline({
         seen: spacedOffer(extras.seen), badId: object?.id ?? null, requester, text,
         persona: requestSpeech.persona,
-      });
+      }, introBudgetMs, signal);
       if (repicked) {
         logEvent('pick.repicked', { agent: 'request', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
         queue.log('request', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -1904,7 +1951,19 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
         agent: 'request', id: object?.id ?? null, candidates: extras.seen.size, toolCalls,
         idInSessionWindow: !!(object?.id && windowText.includes(object.id)),
       });
+      if (extras.seen.size === 0 || !object?.id) {
+        throw new RequestIdentificationMiss(`request agent found no matching track for id ${object?.id ?? 'none'}`);
+      }
       throw new Error(`request agent returned unknown id ${object?.id}`);
+    }
+
+    // An evidence lookup is authoritative for description/lyrics requests: a
+    // real id surfaced by another tool is still only a stand-in unless the
+    // identity tool verified that exact library candidate. Keep this an
+    // expected miss so the request breaker remains healthy and the route does
+    // not record or queue an unacknowledged substitution as "matched".
+    if (evidenceToolCalls.length > 0 && !verifiedEvidenceIds.has(song.id)) {
+      throw new RequestIdentificationMiss(`request agent selected an unverified evidence candidate ${song.id}`);
     }
 
     // Claim guard (#1918): a REAL candidate id under lines that name another
@@ -1931,16 +1990,18 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       const pool = new Map(extras.seen);
       const lookup = canRepick ? claimLookupQuery(firstMiss, toolCalls) : null;
       if (lookup) {
+        throwIfAborted();
         for (const [id, hit] of await lookupRequestClaim(lookup, scope)) if (!pool.has(id)) pool.set(id, hit);
       }
       const claimed = [...new Set(firstMiss.flatMap((m) => m.claims.map((c) => `"${c.text}"`)))].join(', ');
       queue.log('request-guard', `agent ${firstMiss.map((m) => m.field).join('+')} named ${claimed} over "${song.title}" by ${song.artist}${lookup ? ` — looked up "${lookup}"` : ''}`);
       if (canRepick) corrected = true;
+      throwIfAborted();
       const repicked = canRepick
-        ? await repickRequestFromSeen({
+        ? await repickRequestWithinDeadline({
           seen: spacedOffer(pool), badId: object?.id ?? null, requester, text,
           persona: requestSpeech.persona, reason: misnamedRepickReason(song, firstMiss),
-        })
+        }, introBudgetMs, signal)
         : null;
       const from = song.id;
       let stillMisnamed = firstMiss;
@@ -1973,7 +2034,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       if (!corrected) {
         const spaced = await runArtistGuard<any>({
           song, object, pickAnchor: null,
-          seen: extras.seen,
+          seen: verifiedPool(extras.seen),
           recentRoots: neighbourRoots,
           // No recentDistances, deliberately: the least-recent swap carries no
           // ack or intro, and this answer is the listener's.
@@ -1981,10 +2042,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
           exempt: (c) => !standIn(c, extras.seen),
           repick: (alt, reason) => {
             corrected = true;
-            return repickRequestFromSeen({
+            return repickRequestWithinDeadline({
               seen: alt, badId: null, requester, text, persona: requestSpeech.persona,
               reason: `${reason} If no candidate is what they asked for, own the substitution — never present a stand-in as their ask.`,
-            });
+            }, introBudgetMs, signal);
           },
           // Unreachable: with no anchor the only cause is spacing.
           poolRescue: async () => 'empty',
@@ -2018,7 +2079,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(song.id)) {
       const cdAck = queue.cooldownAck(song.id, song.title);
       session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: song.id, requester, toolCalls } });
-      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown' };
+      return { ack: cdAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: [claimGuard, spacingGuard].filter(Boolean).join('+') || null, refused: 'cooldown', candidateCount: extras.seen.size, confidence: 1 };
     }
 
     // Station voice off (settings.tts.enabled) → no intro. requestSchema()
@@ -2033,17 +2094,28 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // track. It is composed English, so where that cannot air — a persona that
     // speaks another language, a name in a script the frame can't carry — the
     // metadata-only intro the echo guard regenerates with stands in instead.
-    const regenerateIntro = () => dj.generateIntro({
-      track: trackFields(song), context: null, requestedBy: requester,
-      persona: requestSpeech.persona,
-    });
+    // The track is chosen, so a regeneration that would outrun the route's
+    // deadline costs the intro, never the track: the direct path's rule, with
+    // the budget the route leaves before its queue reserve.
+    const regenerateIntro = () => {
+      const generate = () => dj.generateIntro({
+        track: trackFields(song), context: null, requestedBy: requester,
+        persona: requestSpeech.persona,
+      });
+      const budgetMs = introBudgetMs?.();
+      if (budgetMs === undefined) return generate();
+      if (budgetMs <= 0) return Promise.reject(new Error('request intro deadline'));
+      return withDeadline(budgetMs, 'request intro', generate);
+    };
     const modelIntro = typeof object.intro === 'string' ? object.intro.trim() : '';
     let rawIntro = '';
     if (autoVoiceAllowed()) {
+      throwIfAborted();
       rawIntro = !plainLines.has('intro') ? modelIntro
         : plainRequestIntro(song, requester, requestSpeech.persona)
           || String((await regenerateIntro().catch(() => null)) ?? '').trim();
     }
+    throwIfAborted();
     const guarded = await guardIntro(rawIntro || null, echoTexts, regenerateIntro);
     if (guarded.guard) queue.log('request-guard', `agent intro echoed request text — ${guarded.guard}`);
     const currentSpeech = session.finalizeAutomaticHostSpeech(guarded.script, requestSpeech);
@@ -2062,6 +2134,9 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // in the intro, after misnaming the track) — join rather than let one
     // verdict hide another.
     const guardVerdict = [claimGuard, spacingGuard, guarded.guard, screened.guard].filter(Boolean).join('+') || null;
+    // A passed deadline has already told the listener it timed out, so queue
+    // nothing. Once push() has taken the track, the deadline never removes it.
+    throwIfAborted();
     const pos = await queue.push({
       track: trackFields(song),
       requestedBy: requester,
@@ -2090,7 +2165,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       // The echo guards already ran above even though this pick turned out to
       // be a duplicate — surface the verdict rather than losing it. `refused`
       // for the same reason as the cooldown branch: nothing was queued here.
-      return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued' };
+      return { ack: dupAck, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null, guard: guardVerdict, refused: 'already-queued', candidateCount: extras.seen.size, confidence: 1 };
     }
     session.appendTurn({
       role: 'dj', kind: 'request',
@@ -2106,6 +2181,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       track: { title: song.title, artist: song.artist, id: song.id },
       introScript: intro || null,
       guard: guardVerdict,
+      candidateCount: extras.seen.size,
+      confidence: 1,
     };
   });
 }

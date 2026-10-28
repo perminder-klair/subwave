@@ -253,7 +253,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Shortlist passes', section: 'selection', card: 'Track selection', keywords: 'controller discovery candidates' },
   { label: 'Discovery rounds per pick', section: 'selection', card: 'Track selection', keywords: 'steps tool loops agent' },
   { label: 'Request matching', section: 'selection', card: 'Request matching', keywords: 'direct agentic compound listener request' },
-  { label: 'Resolve described requests via web', section: 'selection', card: 'Request matching', keywords: 'web search describe song movie' },
+  { label: 'Resolve described and soundtrack requests online', section: 'selection', card: 'Request matching', keywords: 'web search describe song movie soundtrack musicbrainz lastfm' },
   { label: 'Agent deadline', section: 'selection', card: 'Agent deadline', keywords: 'timeout seconds give up fallback' },
   { label: 'Guest Musical Leanings', section: 'selection', card: 'Guest Musical Leanings', keywords: 'guest taste preference tie-break' },
   { label: 'Segments & Skills', section: 'behaviour', card: 'Segments & Skills', keywords: 'direct agentic runtime tools' },

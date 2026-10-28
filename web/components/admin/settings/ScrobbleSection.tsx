@@ -194,7 +194,8 @@ export function ScrobbleCards({ data, form, setForm, busy, saveSettings, adminFe
             />
             <div className="field-hint">
               Get one at <code>last.fm/api/account/create</code>. Falls back to
-              <code> LASTFM_API_KEY</code> in <code>.env</code> when blank.
+              <code> LASTFM_API_KEY</code> in <code>.env</code> when blank. The key also
+              improves soundtrack-request corroboration and library enrichment; scrobbling can stay off.
             </div>
           </div>
 

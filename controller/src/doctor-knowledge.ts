@@ -190,10 +190,11 @@ regular cadence — it's cheap insurance.
     whole station with just an analyzer.
   - Or turn the setting off (it's costing nothing but false expectations).
 
-## Resolve described requests via web (Settings → Music selection → Request matching)
-- Lets the request agent resolve *described* tracks ("that song from the advert")
-  via web search — so it depends on Settings → Web search being configured. If it's on
-  while search isn't ready, the feature is dead; either configure search or turn it off.
+## Resolve described and soundtrack requests online (Settings → Music selection → Request matching)
+- Lets listener requests use online evidence. Named movie or soundtrack requests use
+  MusicBrainz and can use Last.fm corroboration; lyric and loose description requests
+  use the configured web-search provider. Every result is still verified against the
+  local library, and an unresolved request is not replaced with a genre or random track.
 
 ## Stem transitions (Settings → Broadcast & mixer → Stem transitions)
 - **Stem cache budget** is the disk budget in GB. If it holds too few tracks,
