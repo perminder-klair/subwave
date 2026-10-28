@@ -5,8 +5,8 @@ import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
-import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow } from './types.js';
-import { rowToMoodPool, rowToEnergyPool, safeParseArray } from './rows.js';
+import type { EnergyValue, MoodPoolRecord, MoodPoolRow, EnergyPoolRecord, EnergyPoolRow, TrackRecord, TrackRow } from './types.js';
+import { rowToMoodPool, rowToEnergyPool, rowToTrack, safeParseArray } from './rows.js';
 
 // Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
 // rowToTrack: GET /library/blocklist runs this over the whole library per request.
@@ -38,7 +38,37 @@ export function ruleMatchRows(): Array<{
 }
 
 const MOOD_POOL_COLUMNS = `t.id, t.title, t.artist, t.album, t.album_id, t.artist_id,
-  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec`;
+  t.year, t.genres, t.genre, t.moods, t.energy, t.duration_sec,
+  t.language_primary, t.languages`;
+
+export interface LanguageTagProjection {
+  language: string | null;
+  languages: string[];
+}
+
+// Decorate remote Navidrome search results with the local first-class language
+// tag. This is batched because named requests commonly inspect more than one
+// search page, and it remains an empty map when the optional columns are not
+// present.
+export function languagesByIds(ids: readonly string[]): Map<string, LanguageTagProjection> {
+  const wanted = [...new Set(ids.filter(Boolean))];
+  if (!wanted.length) return new Map();
+  try {
+    const placeholders = wanted.map(() => '?').join(', ');
+    const rows = requireDb().prepare(`SELECT id, language_primary, languages
+      FROM tracks WHERE id IN (${placeholders})`).all(...wanted) as Array<{
+        id: string;
+        language_primary: string | null;
+        languages: string | null;
+      }>;
+    return new Map(rows.map(row => [row.id, {
+      language: row.language_primary ?? null,
+      languages: row.languages ? safeParseArray(row.languages) : [],
+    }]));
+  } catch {
+    return new Map();
+  }
+}
 
 export function songsByMood(mood: string): MoodPoolRecord[] {
   // Start at the covering membership index, never scan tracks/json_each.
@@ -57,6 +87,21 @@ export function songsByEnergy(energy: EnergyValue): EnergyPoolRecord[] {
     t.structure_json, t.vocal_ranges_json, t.pace_json
     FROM tracks t WHERE t.energy = ? AND ${SQL_HAS_MOODS} ORDER BY t.rowid`).all(energy) as EnergyPoolRow[];
   return rows.map(rowToEnergyPool);
+}
+
+export function songsByLanguage(language: string): TrackRecord[] {
+  return songsByLanguages([language]);
+}
+
+export function songsByLanguages(languages: readonly string[]): TrackRecord[] {
+  const wanted = [...new Set(languages.map(language => language.trim()).filter(Boolean))];
+  if (!wanted.length) return [];
+  const placeholders = wanted.map(() => '?').join(', ');
+  const rows = requireDb().prepare(`SELECT t.* FROM tracks t
+    WHERE t.language_primary IN (${placeholders})
+       OR EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(t.languages) THEN t.languages ELSE '[]' END) WHERE value IN (${placeholders}))
+    ORDER BY t.rowid`).all(...wanted, ...wanted) as TrackRow[];
+  return rows.map(rowToTrack);
 }
 
 export function allTaggedIds(): string[] {
@@ -114,6 +159,20 @@ export function enrichedIds(): string[] {
       .prepare('SELECT id FROM tracks WHERE enriched_at IS NOT NULL')
       .all() as Array<{ id: string }>
   ).map(r => r.id);
+}
+
+// Language coverage is independent of mood coverage. Unknown and instrumental
+// decisions carry language_checked_at, so normal runs do not keep re-querying
+// tracks that genuinely lack usable evidence.
+export function languagePendingIds(retry = false): string[] {
+  const where = retry
+    ? "language_checked_at IS NOT NULL AND COALESCE(language_source, '') != 'manual'"
+    : 'language_checked_at IS NULL';
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE ${where} ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
+}
+
+export function languageTaggedIds(): string[] {
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE language_checked_at IS NOT NULL ORDER BY id`).all() as Array<{ id: string }>).map(r => r.id);
 }
 
 export function untaggedIds(limit?: number): string[] {

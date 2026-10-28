@@ -4,11 +4,26 @@
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
 export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
 
+export type LanguageMode = 'single' | 'mixed' | 'instrumental' | 'unknown';
+export type LanguageSource = 'manual' | 'lyrics-tag' | 'local' | 'musicbrainz' | 'llm' | 'consensus';
+
+export interface TrackLanguageTag {
+  primaryLanguage: string | null;
+  languages: string[];
+  mode: LanguageMode;
+  source: LanguageSource;
+  confidence: 'high' | 'medium' | 'review';
+  contractVersion: number;
+  model: string | null;
+  checkedAt: string;
+}
+
 export interface TrackRecord {
   id: string;
   title: string | null;
   artist: string | null;
   album: string | null;
+  musicBrainzId: string | null;
   // Subsonic ids, so the blocklist matches an album/artist entry exactly instead
   // of by normalised name. null = not walked since migration 23.
   albumId: string | null;
@@ -32,7 +47,9 @@ export interface TrackRecord {
   durationSec: number | null;
   lastfmTags: string[] | null;
   lyricExcerpt: string | null;
+  lyricLanguage: string | null;
   enrichedAt: string | null;
+  language: TrackLanguageTag | null;
   moods: string[];
   energy: EnergyValue;
   source: TagSource | null;
@@ -119,6 +136,7 @@ export interface TrackRow {
   title: string | null;
   artist: string | null;
   album: string | null;
+  musicbrainz_id: string | null;
   // NULL on any row not walked since migration 23; consumers fall back to names.
   album_id: string | null;
   artist_id: string | null;
@@ -134,7 +152,16 @@ export interface TrackRow {
   duration_sec: number | null;
   lastfm_tags: string | null;
   lyric_excerpt: string | null;
+  lyrics_language: string | null;
   enriched_at: string | null;
+  language_primary: string | null;
+  languages: string | null;
+  language_mode: LanguageMode | null;
+  language_source: LanguageSource | null;
+  language_confidence: TrackLanguageTag['confidence'] | null;
+  language_checked_at: string | null;
+  language_model: string | null;
+  language_contract_version: number | null;
   moods: string | null;
   energy: EnergyValue;
   source: TagSource | null;
@@ -169,8 +196,9 @@ export interface TrackMeta {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
-  /** Omitted by the non-walk writers, which have no id to offer. upsertTrackMeta
-   *  COALESCEs, so an omitted id never clears a stored one. */
+  musicBrainzId?: string | null;
+  /** Omitted by non-walk writers, which have no id to offer. The Navidrome walk
+   *  passes null when its authoritative catalogue no longer has an MBID. */
   albumId?: string | null;
   artistId?: string | null;
   year?: number | string | null;
@@ -188,6 +216,17 @@ export interface TrackMeta {
 export interface TrackEnrichment {
   lastfmTags: string[] | null;
   lyricExcerpt: string | null;
+  lyricLanguage?: string | null;
+}
+
+export interface LanguageWrite {
+  primaryLanguage: string | null;
+  languages: string[];
+  mode: LanguageMode;
+  source: LanguageSource;
+  confidence: TrackLanguageTag['confidence'];
+  contractVersion: number;
+  model?: string | null;
 }
 
 export interface TagWrite {
@@ -203,6 +242,7 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
+  language?: string | null;
   // Shared lyric-vocal duration classification. NULL
   // matches neither, so the facet only covers analysed tracks.
   vocal?: 'instrumental' | 'vocal' | null;
@@ -226,6 +266,10 @@ export interface LibraryStats {
   byMood: Record<string, number>;
   byEnergy: Record<string, number>;
   byGenre: Record<string, number>;
+  byLanguage: Record<string, number>;
+  languageUnknown: number;
+  languageMixed: number;
+  languageInstrumental: number;
   bySource: Record<string, number>;
   withEmbedding: number;
   withAudioEmbedding: number;
@@ -236,13 +280,16 @@ export interface LibraryStats {
 // Discovery pools deliberately exclude analysis that their consumers never read.
 export type MoodPoolRecord = Pick<TrackRecord,
   'id' | 'title' | 'artist' | 'album' | 'albumId' | 'artistId' | 'year' |
-  'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'>;
+  'genres' | 'genre' | 'moods' | 'energy' | 'durationSec'> & {
+  language: string | null;
+  languages: string[];
+};
 export type EnergyPoolRecord = MoodPoolRecord & Pick<TrackRecord,
   'originalYear' | 'isCompilation' | 'yearUntrusted' | 'audioMoods' | 'bpm' |
   'musicalKey' | 'introMs' | 'loudnessLufs' | 'structure' | 'vocalRanges' | 'vocalRangesInvalid' | 'pace'>;
 export type MoodPoolRow = Pick<TrackRow,
   'id' | 'title' | 'artist' | 'album' | 'album_id' | 'artist_id' | 'year' |
-  'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec'>;
+  'genres' | 'genre' | 'moods' | 'energy' | 'duration_sec' | 'language_primary' | 'languages'>;
 export type EnergyPoolRow = MoodPoolRow & Pick<TrackRow,
   'original_year' | 'is_compilation' | 'era_untrusted' | 'audio_moods' | 'bpm' |
   'musical_key' | 'intro_ms' | 'loudness_lufs' | 'structure_json' | 'vocal_ranges_json' | 'pace_json'>;

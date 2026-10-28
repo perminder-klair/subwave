@@ -55,7 +55,7 @@ test('resetting to zero removes the row rather than storing a zero', () => {
 
 test('a v29 database gains the table on its next open, and an upgraded one is left alone', async () => {
   const raw = db.requireDb();
-  assert.equal(raw.pragma('user_version', { simple: true }), 31);
+  assert.equal(raw.pragma('user_version', { simple: true }), 32);
   db.setLyricOffset('kept', 700);
 
   // The predecessor shape: every earlier migration, no lyric_offsets.
@@ -63,7 +63,7 @@ test('a v29 database gains the table on its next open, and an upgraded one is le
   raw.pragma('user_version = 29');
   db.close();
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
-  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 31);
+  assert.equal(db.requireDb().pragma('user_version', { simple: true }), 32);
   assert.deepEqual(rows(), [], 'created empty');
   db.setLyricOffset('track-c', 1200);
 

@@ -8,10 +8,12 @@ export interface RunFlags {
   reEnrich: boolean;
   reAnalyze: boolean;
   upgrade: boolean;
+  reLanguage?: boolean;
   // Forward-run step deselections (only consulted when rescan === false).
   skipEnrich: boolean;
   skipTag: boolean;
   skipAnalyze: boolean;
+  skipLanguages?: boolean;
 }
 
 export interface PhasePlan {
@@ -26,6 +28,7 @@ export interface PhasePlan {
   reDecide: boolean;
   // Phase 5 — acoustic bpm/key (+ optional CLAP / Demucs).
   analyze: boolean;
+  language: boolean;
 }
 
 export function planRun(f: RunFlags): PhasePlan {
@@ -36,6 +39,7 @@ export function planRun(f: RunFlags): PhasePlan {
       reEmbed: f.reseed,
       reDecide: f.upgrade,
       analyze: f.reAnalyze,
+      language: f.reLanguage === true,
     };
   }
   return {
@@ -44,5 +48,6 @@ export function planRun(f: RunFlags): PhasePlan {
     reEmbed: false,
     reDecide: false,
     analyze: !f.skipAnalyze,
+    language: f.skipLanguages !== true,
   };
 }

@@ -37,7 +37,7 @@ function LibraryBody() {
   // hook owns the restore-on-mount and write-back effects.
   const {
     tab, setTab, trackMode, setTrackMode,
-    moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre,
+    moods, setMoods, energy, setEnergy, vocal, setVocal, genre, setGenre, language, setLanguage,
     yearFrom, setYearFrom, yearTo, setYearTo, q, setQ, sort, setSort,
     searchQuery, setSearchQuery, searchMode, setSearchMode,
     restored: urlRestored,
@@ -139,6 +139,7 @@ function LibraryBody() {
           energy={energy} setEnergy={setEnergy}
           vocal={vocal} setVocal={setVocal}
           genre={genre} setGenre={setGenre}
+          language={language} setLanguage={setLanguage}
           yearFrom={yearFrom} setYearFrom={setYearFrom}
           yearTo={yearTo} setYearTo={setYearTo}
           q={q} setQ={setQ}
@@ -173,7 +174,6 @@ function LibraryBody() {
         <TracksTab
           trackMode={trackMode}
           setTrackMode={setTrackMode}
-          remaining={tag.remaining}
           onTagAll={() => tag.startTagger()}
           taggerRunning={!!tag.tagger?.running}
           taggerBusy={tag.busy}

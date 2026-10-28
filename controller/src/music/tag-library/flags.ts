@@ -36,12 +36,14 @@ interface CliFlags {
   reEnrich: boolean;
   skipEnrich: boolean;
   upgrade: boolean;
+  reLanguage: boolean;
   skipAnalyze: boolean;
   reAnalyze: boolean;
   reconcileOnly: boolean;
   // Skip embed + mood tagging (phases 1-4); walk, enrich and analyze still run
   // per their own flags.
   skipTag: boolean;
+  skipLanguages: boolean;
   // Walk Navidrome but don't prune orphaned rows (a normal run prunes).
   noPrune: boolean;
   // Confirms a prune music/prune-policy.ts would hold as a mass removal.
@@ -74,12 +76,14 @@ export function parseFlags(): CliFlags {
     // db.staleTaggedIds excludes source='manual' — operator tags are ground
     // truth and never go stale.
     upgrade: args.includes('--upgrade'),
+    reLanguage: args.includes('--re-language'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
     // Walk Navidrome, prune rows for tracks it no longer contains, then exit —
     // no embeddings, no LLM.
     reconcileOnly: args.includes('--reconcile-only'),
     skipTag: args.includes('--skip-tag'),
+    skipLanguages: args.includes('--skip-language'),
     noPrune: args.includes('--no-prune'),
     confirmPrune: args.includes('--confirm-prune'),
     vocal: args.includes('--vocal'),
@@ -115,6 +119,7 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
       title: song.title,
       artist: song.artist,
       album: song.album,
+      musicBrainzId: song.musicBrainzId ?? null,
       // Subsonic ids. The walk is the only writer that has them, and they let
       // an ALBUM/ARTIST blocklist entry match by id rather than by name.
       albumId: song.albumId ?? null,

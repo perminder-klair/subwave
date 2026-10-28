@@ -86,7 +86,7 @@ export interface AnalysisFailure {
 
 // Mirrors controller/src/music/tagger-progress.ts.
 export interface TaggerProgress {
-  phase: 'walk' | 'enrich' | 'embed' | 'seed' | 'propagate' | 'learn' | 'analyze' | 'done';
+  phase: 'walk' | 'enrich' | 'language' | 'embed' | 'seed' | 'propagate' | 'learn' | 'analyze' | 'done';
   label: string;
   done?: number;
   total?: number; // absent → indeterminate (e.g. the Navidrome walk)
@@ -137,6 +137,10 @@ export interface LibraryStatsLite {
   byMood: Record<string, number>;
   byEnergy: Record<string, number>;
   byGenre: Record<string, number>;
+  byLanguage: Record<string, number>;
+  languageUnknown: number;
+  languageMixed: number;
+  languageInstrumental: number;
   withEmbedding: number;
   updatedAt: string | null;
 }
@@ -151,6 +155,7 @@ export type RescanOpts = {
   reEnrich?: boolean;
   reAnalyze?: boolean;
   upgrade?: boolean;
+  reLanguage?: boolean;
   // false → --no-vocal (redo bpm/key + sounds-like, keep existing vocal ranges).
   vocal?: boolean;
   // After rebuilding vectors, forward-tag the untagged remainder in the same run. Only honoured when reseed is the sole pass.
@@ -161,6 +166,7 @@ export type RescanOpts = {
 export type TagSteps = {
   reconcile: boolean;
   enrich: boolean;
+  tagLanguages: boolean;
   tagMoods: boolean;
   analyze: boolean;
   // Only honoured when analyze is on and vocal is enabled in settings.
@@ -219,6 +225,7 @@ interface TaggingPanelProps {
 const PHASE_HINT: Record<TaggerProgress['phase'], string> = {
   walk: 'Reading the track list from Navidrome.',
   enrich: 'Fetching Last.fm tags and lyrics that help the DJ understand each track.',
+  language: 'Detecting lyric languages with local evidence, exact metadata, and a bounded AI fallback.',
   embed: 'Computing similarity vectors so tags can spread between similar tracks.',
   seed: 'The DJ is deciding mood & energy for a representative set of tracks.',
   propagate: 'Spreading tags from tagged tracks to their closest sonic neighbours.',
@@ -232,6 +239,7 @@ const PHASE_LABEL: Record<string, string> = {
   setup: 'setup',
   walk: 'scan',
   enrich: 'enrich',
+  language: 'language',
   embed: 'embed',
   seed: 'seed-tag',
   propagate: 'spread',
@@ -241,7 +249,7 @@ const PHASE_LABEL: Record<string, string> = {
 
 // Execution order, used to decide which phases are behind/ahead of the live one. Excludes 'done'.
 const PIPELINE: TaggerProgress['phase'][] = [
-  'walk', 'enrich', 'embed', 'seed', 'propagate', 'learn', 'analyze',
+  'walk', 'enrich', 'language', 'embed', 'seed', 'propagate', 'learn', 'analyze',
 ];
 
 // Only the phases a given run mode can reach.
