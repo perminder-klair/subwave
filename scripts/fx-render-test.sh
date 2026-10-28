@@ -911,7 +911,9 @@ eqpower() {
   [ -f "$WORK/eqp-s.wav" ] || ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 16 "$WORK/eqp-s.wav"
   local mode src
   for mode in lin ep linin epin epgain; do
-    src=a; case "$mode" in *in|epgain) src=s ;; esac
+    # Name the silent-outgoing modes: a `*in` glob also matches `lin`, which
+    # turned the linear reference into a fade-in out of silence.
+    src=a; case "$mode" in linin|epin|epgain) src=s ;; esac
     bsrc='single("/work/eqp-b.wav")'
     [ "$mode" = epgain ] && bsrc='single("annotate:liq_amplify=\"-6 dB\":/work/eqp-b.wav")'
     cat > "$WORK/eqp-$mode.liq" <<LIQ
