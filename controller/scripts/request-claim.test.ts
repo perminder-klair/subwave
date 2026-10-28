@@ -739,6 +739,41 @@ test('#1918 end to end: the skipped lookup finds the artist, and the re-pick que
   assert.equal(result?.ack, 'Got you, Michael — Billie Jean it is.');
 });
 
+test('a late corrective re-pick keeps the found track when no request budget remains', async () => {
+  agentAnswers({ kind: 'track', id: ISLA.id, ack: INCIDENT_ACK, intro: INCIDENT_INTRO }, [ISLA, HOLIDAY, GIRLS]);
+  const result = await withNetwork({
+    search: [BILLIE],
+    llm: [],
+  }, async (calls) => {
+    const out = await runRequest(queue, {
+      requester: 'Michael',
+      text: 'Michael Jackson please',
+      introBudgetMs: () => 0,
+    });
+    assert.equal(calls.llm.length, 0, 'an exhausted request deadline must not attempt the corrective model call');
+    return out;
+  });
+  assert.equal(result?.track?.id, ISLA.id, 'the already-found track remains the honest stand-in');
+  assert.equal(result?.guard, 'claim-plain');
+});
+
+test('an evidence-authorized request cannot be replaced by an unverified corrective candidate', async () => {
+  const initialAck = 'Coming up for you.';
+  const initialIntro = "Here's Madonna with Holiday.";
+  const corrected = { id: HOLIDAY.id, ack: 'Here is Madonna with Holiday.', intro: "Here's Madonna with Holiday." };
+  agentAnswers(
+    { kind: 'track', id: BILLIE.id, ack: initialAck, intro: initialIntro },
+    [BILLIE, HOLIDAY],
+    [{ name: 'identifyRequestedTrack', result: { candidates: [BILLIE] }, round: 1 }],
+  );
+  const result = await withNetwork({ search: [], llm: [corrected] },
+    () => runRequest(queue, { requester: 'Michael', text: 'Michael Jackson please' }));
+  assert.equal(result?.track?.id, BILLIE.id);
+  assert.equal(queue.upcoming.length, 1);
+  assert.equal(queue.upcoming[0].track.id, BILLIE.id);
+  assert.notEqual(result?.track?.id, HOLIDAY.id);
+});
+
 // The same incident through the REAL request agent loop rather than a stubbed
 // run: what claimLookupQuery reads is the agent's own tool-call summary, and
 // what the guard reads is the slim projection the tools put in `seen`.

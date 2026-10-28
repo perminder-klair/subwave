@@ -502,6 +502,27 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 31');
   }
 
+  if (userVersion < 32) {
+    // Language tags are optional metadata, but the request resolver's local
+    // language queries need their storage columns on every fresh and upgraded
+    // library. Keep the additive, nullable shape compatible with PR #2080's
+    // language tagging writes.
+    //
+    // The earlier language branch used version 30 before the lyric migrations
+    // landed on develop. Such a database has the language columns but may not
+    // have lyric_offsets, so keep this repair idempotent for that history too.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS lyric_offsets (
+        track_id   TEXT PRIMARY KEY,
+        offset_ms  INTEGER NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+    const have = new Set((d.prepare('PRAGMA table_info(tracks)').all() as Array<{ name: string }>).map(c => c.name));
+    const add = ['language_primary', 'languages'].filter(column => !have.has(column));
+    if (add.length) runDdl(d, add.map(column => `ALTER TABLE tracks ADD COLUMN ${column} TEXT;`).join('\n'));
+    d.pragma('user_version = 32');
+  }
   // Before the vector reconcile below, which bumps it when it drops vectors.
   // Never throws. Its update trigger names tracks.genres and tracks.moods, and
   // SQLite refuses to DROP COLUMN either while it exists: a migration above
