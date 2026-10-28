@@ -32,6 +32,9 @@ export interface RequestRunArgs {
 // What buildTools hands back for the caller to resolve the chosen id against.
 export interface PickerExtras {
   seen: Map<string, any>;
+  // Optional keeps test and third-party agent adapters source-compatible;
+  // production picker tools always provide the collection.
+  failures?: unknown[];
 }
 
 export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
@@ -54,8 +57,8 @@ export const pickerAgent = defineAgent<PickerRunArgs, PickerExtras>({
     + (scope.episodeSource ? '\nLead with episodeArtistTracks; choose only the prepared artist catalogue.' : '')
     + (editorial ?? ''),
   buildTools: ({ scope }) => {
-    const { tools, seen } = buildPickerTools(scope);
-    return { tools, extras: { seen } };
+    const { tools, seen, failures } = buildPickerTools(scope);
+    return { tools, extras: { seen, failures } };
   },
   // Native-path acceptance: the picked id must be one a discovery tool
   // surfaced this run. A fabricated id falls through to the done-tool harness
@@ -76,11 +79,11 @@ export const requestAgent = defineAgent<RequestRunArgs, PickerExtras>({
   // no-op without a search provider) behind settings.llm.requestWebResolve.
   // Set here rather than at the call site: it is a property of THIS agent.
   buildTools: ({ scope }) => {
-    const { tools, seen } = buildPickerTools({
+    const { tools, seen, failures } = buildPickerTools({
       ...scope,
       resolveReferences: settings.get().llm?.requestWebResolve ?? false,
     });
-    return { tools, extras: { seen } };
+    return { tools, extras: { seen, failures } };
   },
   // Same native-path acceptance as pickerAgent.
   validateObject: (object, extras) => !!(object?.id && extras?.seen?.has(object.id)),

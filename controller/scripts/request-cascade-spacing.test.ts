@@ -124,16 +124,14 @@ beforeEach(async () => {
   } as never);
 });
 
-test('#1993: asked for an artist the library lacks, the cascade draws past the on-air artist', async (t) => {
+test('#1993: a named similarity seed missing from the library is refused', async (t) => {
   stubNetwork(t, { matcher: LIKE_MJ, similar: [HOLIDAY, GIRLS] });
   const { outcome, record } = await request('something like Michael Jackson');
-  assert.equal(outcome.status, 'resolved', outcome.message ?? '');
-  assert.equal(outcome.track?.artist, 'Cyndi Lauper', 'not Madonna straight after Madonna');
-  assert.equal(record.pickSource, 'similar-to-current');
-  assert.equal(record.artistMiss, 'Michael Jackson', 'still owned as a stand-in');
-  assert.equal(record.guard, 'artist-spaced');
-  assert.equal(queue.upcoming.at(-1)?.track?.id, GIRLS.id);
-  assert.ok(boothLines().some((l) => /stand-in by recently-played artist "Madonna" set aside/.test(l)), boothLines().join(' | '));
+  assert.equal(outcome.status, 'failed', outcome.message ?? '');
+  assert.equal(outcome.outcome, 'no-match');
+  assert.equal(record.pickSource, 'similar-seed');
+  assert.equal(queue.upcoming.length, 0);
+  assert.deepEqual(boothLines(), []);
 });
 
 test('#1993: what the listener asked for is drawn however recently its artist played', async (t) => {
@@ -159,13 +157,14 @@ test('#1993: an ask naming no music is never spaced', async (t) => {
   assert.deepEqual(boothLines(), []);
 });
 
-test('#1993: a pool of nothing but recent stand-ins still fills the request', async (t) => {
+test('#1993: a named similarity seed does not use a recent current-track stand-in', async (t) => {
   stubNetwork(t, { matcher: LIKE_MJ, similar: [HOLIDAY] });
   const { outcome, record } = await request('something like Michael Jackson');
-  assert.equal(outcome.status, 'resolved');
-  assert.equal(outcome.track?.title, 'Holiday', 'spacing is a preference, never a lost slot');
-  assert.equal(record.guard, null);
-  assert.ok(boothLines().some((l) => /stand-in by recently-played artist "Madonna" allowed/.test(l)), boothLines().join(' | '));
+  assert.equal(outcome.status, 'failed');
+  assert.equal(outcome.outcome, 'no-match');
+  assert.equal(record.pickSource, 'similar-seed');
+  assert.equal(queue.upcoming.length, 0);
+  assert.deepEqual(boothLines(), []);
 });
 
 test('#1993: past the token cap there is no matcher reading, so a dedication or "more of this" is never spaced', async (t) => {
@@ -223,11 +222,13 @@ test('#1993 review: "more like this" the matcher read as the on-air track is nev
   }
 });
 
-test('#1993: a spacing window of 0 turns stand-in spacing off, as it does for picks', async (t) => {
+test('#1993: a missing named similarity seed remains a no-match when spacing is disabled', async (t) => {
   await settings.update({ llm: { artistVarietyWindow: 0 } } as never);
   stubNetwork(t, { matcher: LIKE_MJ, similar: [HOLIDAY, GIRLS] });
   const { outcome, record } = await request('something like Michael Jackson');
-  assert.equal(outcome.track?.title, 'Holiday');
-  assert.equal(record.guard, null);
+  assert.equal(outcome.status, 'failed');
+  assert.equal(outcome.outcome, 'no-match');
+  assert.equal(record.pickSource, 'similar-seed');
+  assert.equal(queue.upcoming.length, 0);
   assert.deepEqual(boothLines(), []);
 });

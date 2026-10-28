@@ -51,7 +51,7 @@ const SPECIAL = ['original_year', 'original_year_source', 'text_vector_dirty'];
 // unlisted carried columns use the same behavior.
 const COALESCE_COLS = [
   'original_year_checked_at', 'vocal_ranges_json', 'outro_json', 'stems_at',
-  'tail_silence_ms', 'tail_start_ms',
+  'tail_silence_ms', 'tail_start_ms', 'language_primary', 'languages',
 ];
 
 type Row = Record<string, unknown>;

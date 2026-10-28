@@ -34,7 +34,7 @@ export const directRequestCases: DirectRequestCase[] = [
   { name: 'named-album', text: 'Play a track from Abbey Road by The Beatles', ids: ['something'], outcome: 'matched', fields: { album: 'Abbey Road', title: null } },
   { name: 'genre', text: 'Play some jazz', ids: ['jazz'], outcome: 'matched', fields: { genre: 'Jazz', title: null } },
   { name: 'artist-mood', text: 'Play something calm by Queen', ids: ['queen-calm'], outcome: 'matched', fields: { artist: 'Queen', mood: 'calm', title: null } },
-  { name: 'mood-compromise', text: 'Play something calm by Fixture Band', ids: ['energetic', 'named-live'], outcome: 'matched', fields: { artist: 'Fixture Band', mood: 'calm', title: null } },
+  { name: 'mood-compromise', text: 'Play something calm by Fixture Band', ids: ['energetic', 'named-live'], outcome: 'partial', fields: { artist: 'Fixture Band', mood: 'calm', title: null } },
   { name: 'named-song-language', text: 'Play Bohemian Rhapsody by Queen in French', ids: ['queen-french'], outcome: 'matched', fields: { title: 'Bohemian Rhapsody', language: 'French' } },
   { name: 'translated-language', text: 'Joue Bohemian Rhapsody de Queen en français', ids: ['queen-french'], outcome: 'matched', fields: { title: 'Bohemian Rhapsody', language: 'French' } },
   { name: 'canonical-genre', text: 'Play some hiphop', ids: ['hiphop'], outcome: 'matched', fields: { genre: 'Hip Hop', title: null } },
