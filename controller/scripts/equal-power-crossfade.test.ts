@@ -1,6 +1,6 @@
 // settings.transitions.equalPowerCrossfade — the boolean that selects the fade
 // curve PLAIN song-to-song crossfades use. false = linear (today's behaviour,
-// byte-identical on upgrade); true = equal-power (sin/cos gains), which removes
+// byte-identical on upgrade); true = equal-power (cos out, sin^1.5 in), which removes
 // the ~3 dB dip mid-crossfade. Effects, stem-blend clip seams, jingles, beds
 // and pause breaks always keep their own curves.
 //

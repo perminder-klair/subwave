@@ -7,8 +7,8 @@
 // What must stay true:
 //   - only an explicit "true" in the handoff file switches the curve, so an
 //     absent or garbage file stays linear (an upgrade is byte-identical);
-//   - the fader is sin/cos (in^2 + out^2 = 1), not Liquidsoap's own
-//     type="sin", which is sin^2 and dips like linear;
+//   - the fader is cos out and sin^1.5 in (in^2 + out^2 within 0.7 dB of 1),
+//     not Liquidsoap's own type="sin", which is sin^2 and dips like linear;
 //   - it spans the whole buffer: the outgoing over `d`, the incoming over
 //     `b_fade` (the fade-equals-cross-buffer rule);
 //   - only a plain song-to-song seam takes it — never a stem-blend clip seam
