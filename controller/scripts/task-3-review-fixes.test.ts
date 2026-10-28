@@ -49,6 +49,10 @@ test('upgrading a version-29 library adds language columns without losing rows',
   const Database = connection as any;
   const file = join(stateDir, 'library.db');
   const old = new Database(file);
+  // The current schema creates this index outside the user_version chain.
+  // Remove it with the language columns when simulating the pre-language
+  // schema; SQLite cannot drop a column that the index still references.
+  old.exec('DROP INDEX IF EXISTS idx_tracks_language_stats;');
   old.exec('ALTER TABLE tracks DROP COLUMN language_primary; ALTER TABLE tracks DROP COLUMN languages;');
   old.pragma('user_version = 29');
   old.close();
