@@ -42,7 +42,6 @@ export const router = express.Router();
 
 export type ListenerResolutionOutcome =
   | 'matched'
-  | 'partial'
   | 'no-match'
   | 'already-queued'
   | 'cooldown'
@@ -96,7 +95,6 @@ export interface ListenerRequestEntry {
   classification?: string;
   intent?: string | null;
   mood?: string | null;
-  energy?: string | null;
   scope?: string | null;
   sort?: string | null;
   artist?: string | null;
@@ -203,7 +201,7 @@ async function pickMoreByArtist(artistName: string, recentIds: Set<string>, seed
     },
     moodSongs: async () => [], fallbackSongs: async () => [],
   });
-  return result.outcome === 'matched' || result.outcome === 'partial' ? result.track : null;
+  return result.outcome === 'matched' ? result.track : null;
 }
 
 // "more like this" fallback when the playing artist has nothing else in the
@@ -536,14 +534,14 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // an unrelated mood, search, or starred-track substitute when the artist is
   // absent from the library.
   const artistPoolRequest = Boolean(literal.artist?.trim() && !literal.title?.trim() && !literal.album?.trim()
-    && !literal.soundtrackContext && !literal.genre && !literal.language && !literal.mood && !literal.energy);
+    && !literal.soundtrackContext && !literal.genre && !literal.language && !literal.mood);
   const explicitArtistOnlyRequest = artistPoolRequest && /\b(?:by|from)\b/iu.test(text);
   // A bare title+artist pair is already a complete identity plan. Keep it on
   // the local-first path instead of waiting on the optional interpreter; the
   // interpreter is still useful when the same named request carries an
-  // explicit language, genre, mood, or energy constraint that needs parsing.
+  // explicit language, genre, or mood constraint that needs parsing.
   const bareExplicitNamedRequest = explicitNamedRequest
-    && !literal.album && !literal.genre && !literal.language && !literal.mood && !literal.energy;
+    && !literal.album && !literal.genre && !literal.language && !literal.mood;
   // A short, attribute-free request is more likely to be a title than a
   // conversational instruction. Resolve it against the local catalogue first
   // so a provider stall cannot delay a straightforward named request. It is an
@@ -553,7 +551,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     && literal.kind === 'track'
     && Boolean(literal.title?.trim())
     && !literal.artist && !literal.album
-    && !literal.genre && !literal.language && !literal.mood && !literal.energy
+    && !literal.genre && !literal.language && !literal.mood
     && !(isGreetingLikeRequest(literal.title!) || isGenericRequestPhrase(literal.title!))
     // One-word asks are the high-confidence local-first case. Multi-word
     // text can be an unseparated artist+title ("Queen Bohemian Rhapsody") or
@@ -570,7 +568,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     && literal.kind === 'track'
     && Boolean(literal.title?.trim())
     && !literal.artist && !literal.album
-    && !literal.genre && !literal.language && !literal.mood && !literal.energy
+    && !literal.genre && !literal.language && !literal.mood
     && !broadUnresolvedFrame
     && !(isGreetingLikeRequest(literal.title!) || isGenericRequestPhrase(literal.title!));
   // These forms already carry all the identity/attribute information the
@@ -583,8 +581,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
       || Boolean(literal.genre?.trim())
       || Boolean(literal.language?.trim())
       || Boolean(literal.unresolvedLanguage?.trim())
-      || Boolean(literal.mood?.trim())
-      || Boolean(literal.energy?.trim()));
+      || Boolean(literal.mood?.trim()));
   const explicitNoMatchCue = /\b(?:no\s+such|doesn['’]?t\s+exist|does\s+not\s+exist|not\s+in\s+(?:the\s+)?(?:library|catalog(?:ue)?))\b/iu.test(literal.title || '');
   // The listener saying outright that the recording may not exist is a named
   // title, whatever an interpreter makes of it.
@@ -599,7 +596,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // Conversational DJ agent. On any failure fall through to the stateless
   // cascade below, so a request is never dropped.
   // The agent is reserved for evidence-heavy identification. Named, mood,
-  // energy, genre, and language requests must use the shared deterministic
+  // genre and language requests must use the shared deterministic
   // resolver so every listener request follows the same deterministic path. Lyric and film
   // descriptions still use the existing web-aware agent path.
   // A generic "song from ..." remains eligible for web-backed film/lyric
@@ -611,7 +608,7 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   const needsEvidenceIdentification = isLyricOrFilmDescription(text)
     && !framedTitleOnly
     && !explicitArtistOnlyRequest
-    && !literal.genre && !literal.language && !literal.unresolvedLanguage && !literal.mood && !literal.energy
+    && !literal.genre && !literal.language && !literal.unresolvedLanguage && !literal.mood
     && !literal.album
     // If structured soundtrack lookup is disabled, retain the existing
     // evidence-only agent fallback for agent-assisted stations. Direct mode
@@ -782,12 +779,12 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     // A quoted or conversational title is the listener's identity claim. A
     // model-invented relation is also unsafe for an unquoted title, so restore
     // the literal title while leaving soft model preferences available for an
-    // honest partial acknowledgement.
+    // honest preference acknowledgement.
     matched = {
       ...matched,
       kind: 'track', title: literal.title, artist: null, album: null,
       language: null,
-      ...(dedicationAfterQuote ? { genre: null, mood: null, energy: null } : {}),
+      ...(dedicationAfterQuote ? { genre: null, mood: null } : {}),
       scope: 'song', literal: false, titleOnly: true,
     };
   }
@@ -936,7 +933,6 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
             genres: row.genres,
             genre: row.genre ?? undefined,
             moods: row.moods,
-            energy: row.energy,
           }));
       },
     },
@@ -985,7 +981,6 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
     signal,
     heldBack,
     moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
-    energySongs: async energy => { await library.load(); return library.songsByEnergy(energy); },
     languageSongs: async language => {
       await library.load();
       return requestSongs(library.songsByLanguage(canonicalLanguage(language) || language));
@@ -1167,13 +1162,10 @@ async function resolveRequestCore(entry: ListenerRequestEntry, signal?: AbortSig
   // Substitutions need honest fixed copy. A real match keeps the screened
   // persona-language acknowledgement; optional preference misses stay private.
   let ack = `Couldn't match that request exactly — here's an alternative from the library.`;
-  if (selection.outcome === 'matched' || selection.outcome === 'partial') {
+  if (selection.outcome === 'matched') {
     const screened = screenAck(matched.ack, text, 'Found a match — your track is on the way.');
     if (screened.guard) flagGuard(entry, screened.guard);
     ack = screened.ack;
-    if (selection.outcome === 'partial' && selection.unmetPreferences?.length) {
-      ack += ` I matched the song, but not every preference was available.`;
-    }
   }
 
   // 3. DJ intro. On a miss, flag it (and pass the cleaned name, when one
@@ -1255,9 +1247,7 @@ function typedResolution(entry: ListenerRequestEntry): ListenerRequestResolution
   const legacyOutcome = String(entry.outcome || 'no-match');
   const outcome: ListenerResolutionOutcome = legacyOutcome === 'already-queued' || legacyOutcome === 'cooldown'
     ? legacyOutcome
-    : legacyOutcome === 'partial'
-      ? 'partial'
-      : legacyOutcome === 'unsupported' || legacyOutcome === 'chat'
+    : legacyOutcome === 'unsupported' || legacyOutcome === 'chat'
         ? 'unsupported'
         : legacyOutcome === 'timeout'
           ? 'timeout'

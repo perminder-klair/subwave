@@ -1000,7 +1000,7 @@ for (const [text, genre] of [['Play some hiphop', 'Hip Hop'], ['Play some hip ho
   test(`canonical genre spelling cannot relax an explicit requirement: ${text}`, async () => {
     modelOutput = { genre, title: null, artist: null, search_terms: [] };
     const result = await submit(text);
-    assert.equal(result.outcome, 'partial');
+    assert.equal(result.outcome, 'matched');
     assert.equal(queue.upcoming.length, 1);
     assert.deepEqual(requestLog.snapshot(1)[0].unmetPreferences, ['genre']);
   });
