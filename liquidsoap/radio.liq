@@ -633,7 +633,7 @@ end
 # EQUAL-POWER CROSSFADE (J4, settings.transitions.equalPowerCrossfade, default
 # off). Linear fades meet at 0.5 + 0.5: two different songs are uncorrelated,
 # so their POWERS add, 0.25 + 0.25 = -3 dB at the middle of every plain
-# crossfade (measured on air: -2.3 LU median over 23 seams; offline on real
+# crossfade (measured on air: -3.3 LU median over 23 seams; offline on real
 # song pairs -3.1 LU, equal-power -0.1). sin/cos gains keep in^2 + out^2 = 1 at
 # every instant. Liquidsoap's own fade type="sin" is NOT this: it is sin^2, an
 # S-curve whose AMPLITUDES sum to 1, so it dips exactly like linear.
