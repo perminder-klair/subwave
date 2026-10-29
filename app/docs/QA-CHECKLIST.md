@@ -56,6 +56,28 @@ Mark each box per platform. Note the device + OS version you tested on.
 - [ ] **iOS** / [ ] **Android** — **Google Cast, disconnect**: end the session from the cast dialog → playback **resumes locally** at the live edge. Sleep timer while casting stops the Cast audio when it lapses.
 - [ ] **iOS** / [ ] **Android** — **Google Cast, station switch**: switching stations while casting stops remote playback (matches local behaviour); re-tune casts the new station.
 
+## Station login _(validates #1873)_
+
+Needs a station behind a reverse proxy with HTTP Basic Auth, and one with SUB/WAVE's stream password on and no proxy login.
+
+- [ ] **iOS** / [ ] **Android** — **Add a station with a login**: + Add a station → open Station login → the username/password fields look and behave as before → health check passes → tunes in and plays. _(the fields moved into `LoginFields`)_
+- [ ] **iOS** / [ ] **Android** — **A proxy that guards everything**: a station whose proxy asks for the login on `/api` and covers too → add it with its login → the health check passes, now-playing fills in, and the cover, its colours and the schedule's persona avatars load. _(Android's fetch and image loaders never sent the login from URL userinfo, and iOS used to answer the proxy's challenge from it; both now send it as a header, so this is the iOS regression check too)_
+- [ ] **iOS** — **Lock-screen artwork behind that proxy**: tuned in to it → the lock screen and Control Center show the cover. _(RNTP fetches it with no headers, from the URL userinfo the cover keeps)_
+- [ ] **iOS** / [ ] **Android** — **Edit a saved login**: Stations → key button on the row → the saved username and password are filled in → change to a working login → Check and save → the screen closes and the station plays.
+- [ ] **iOS** / [ ] **Android** — **Single station, from the tuned-in card**: with only one station, Stations → **Station login** on the Tuned in card → edit → save. No need to switch station or remove it first.
+- [ ] **iOS** / [ ] **Android** — **Wrong login is not saved**: enter a wrong password → Check and save → "The station refused this login…" → close and reopen: the old login is still there.
+- [ ] **iOS** — **Wrong login after a right one in the same session**: tune in with the right login, then edit to a wrong password → still refused. _(NSURLSession must not answer the proxy with the cached login)_
+- [ ] **iOS** / [ ] **Android** — **Stream-password station, no proxy**: a Station login whose password is the stream password saves; a wrong one says "The station's password check refused this password…" and offers **Save anyway**. A wrong login on a proxy that guards `/api` offers no Save anyway.
+- [ ] **iOS** / [ ] **Android** — **Proxy on the stream only**: a stream-password station whose proxy guards only `/stream*` → enter the proxy's login → refused by the password check → **Save anyway** → the player asks for the station password → the station plays (the proxy takes the login header, the station password rides as `?auth=`).
+- [ ] **iOS** / [ ] **Android** — **Unreachable station**: airplane mode (or stop the station) → Check and save → "Couldn't check this login with the station…" and a **Save anyway** button → Save anyway saves it. Editing a field hides Save anyway again.
+- [ ] **iOS** / [ ] **Android** — **http:// station**: Check and save on an explicit `http://` station asks "Send station login over HTTP?" first; Cancel sends nothing.
+- [ ] **iOS** / [ ] **Android** — **Remove login**: Remove login → confirm → fields clear, the station opens without a login, and the Cast button comes back.
+- [ ] **iOS** / [ ] **Android** — **Login rejected while listening**: change the proxy password on the server while tuned in → within about 10–40 s the audio stops and **Station login rejected** covers the player; it does not keep reconnecting (proxy log). **Edit station login** → new login → save → the overlay clears and Tune in plays. **Try again** clears it only once the station accepts.
+- [ ] **iOS** / [ ] **Android** — **No false alarm**: airplane mode while tuned in on a station with a login → the usual connection banner, never Station login rejected.
+- [ ] **iOS** / [ ] **Android** — **A 403 is not a rejected login**: make the proxy answer `/api` with 403 (an IP allowlist, or `respond 403`) while tuned in → never Station login rejected; on the edit screen, Check and save says it couldn't check the login and offers Save anyway.
+- [ ] **iOS** / [ ] **Android** — **Station password**: Station login screen → **Forget station password** → back on the player, the password prompt appears. Rotate the password in Admin and reopen the station → the prompt says "The saved password was not accepted."
+- [ ] **iOS** / [ ] **Android** — **Upgrade keeps saved logins**: on the previous build save a station with a login, install this build over it → the station still plays, and the edit screen shows the login filled in.
+
 ## Accessibility
 
 - [ ] **iOS** — **VoiceOver** reads the transport controls (power/tune, mute, volume) and the connection banner (`accessibilityRole="alert"`) with sensible labels.

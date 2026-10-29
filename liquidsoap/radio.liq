@@ -92,6 +92,9 @@ jingle_now_on_air = ref(false)
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
+# Plain song-to-song crossfade curve (EQUAL-POWER CROSSFADE below): false =
+# linear, the curve every station had before the setting existed.
+equal_power_crossfade = ref(false)
 # smooth_add's `p` on the two ducking layers (see the DUCKING block below).
 duck_voice = ref(0.22)
 duck_intro = ref(0.30)
@@ -135,6 +138,14 @@ if file.exists("#{state_dir}/liquidsoap_crossfade.txt") then
   v = float_of_string(default=10.0, raw)
   if v >= 0.0 then crossfade_duration := v end
 end
+
+# Only an explicit "true" switches the curve: absent or garbage stays linear.
+if file.exists("#{state_dir}/liquidsoap_equal_power_crossfade.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_equal_power_crossfade.txt"))
+  equal_power_crossfade := (raw == "true")
+end
+crossfade_curve_name = if equal_power_crossfade() then "equal-power" else "linear" end
+log(label="crossfade", "plain crossfade curve: #{crossfade_curve_name}")
 
 # Duck depths. `p` is the fraction of the music LEFT UP under a voice channel:
 # range [0, 1], smaller is deeper, 1.0 no duck, 0.0 a full mute under the voice.
@@ -624,6 +635,46 @@ end
 # that can never disagree with the buffer. The stamp is only the fallback for a
 # source that cannot report its length. A mismatch is logged so a regression
 # shows up in radio.log, not on air.
+# EQUAL-POWER CROSSFADE (J4, settings.transitions.equalPowerCrossfade, default
+# off). Linear fades meet at 0.5 + 0.5: two different songs are uncorrelated,
+# so their POWERS add, 0.25 + 0.25 = -3 dB at the middle of every plain
+# crossfade (measured on air: -3.3 LU median over 23 seams; offline on real
+# song pairs -3.1 LU, equal-power -0.1). sin/cos gains keep in^2 + out^2 = 1 at
+# every instant. Liquidsoap's own fade type="sin" is NOT this: it is sin^2, an
+# S-curve whose AMPLITUDES sum to 1, so it dips exactly like linear.
+# The INCOMING side rises as sin^1.5, not sin. Heard on air: a quiet live
+# ending into a loud start (Peter Gabriel - D.I.Y. -> Iggy Pop - I Need More,
+# 6 s cross, the outgoing ~12 dB under the incoming) came in abruptly. Such a
+# seam is a fade-in out of near-silence, where the powers-add premise does not
+# hold, and a plain sin brought the incoming up 3-4 dB earlier than linear
+# (offline, that seam: -20.7 vs -23.8 dBFS 2.75 s in). sin^1.5 starts no
+# faster than linear (equal at 25% of the cross, quieter before) and still
+# holds in^2 + out^2 within 0.9 dB of 1 (lowest at sin = 2/3), against the
+# 3 dB linear dip. `fx-render-test.sh eqpower` checks both.
+# The fader still spans the WHOLE buffer d (the INVARIANT above holds), and
+# only song-to-song seams take it (equal_power_seam): two time-ALIGNED copies
+# of the same audio would sum +3 dB under it, and a stem-blend clip seam is
+# exactly that, the clip being rendered from the very tracks it joins.
+# No initial_metadata= here: on fade.in/fade.out it only feeds the per-track
+# liq_fade_* overrides, which nothing on this station stamps; the stream's own
+# metadata flows through a.source/b.source unchanged.
+# override=null is load-bearing: amplify's default override reads liq_amplify,
+# and the incoming source carries its track's liq_amplify from the first sample,
+# so without it the gain curve below is REPLACED by that track's loudness gain
+# (applied a second time, it already ran before the cross): no fade-in, then a
+# step of that gain when the transition hands over (heard on air: -9.2 dB).
+half_pi = acos(-1.) / 2.
+
+def equal_power_fade(~span, ~rising, s) =
+  def gain() =
+    e = source.elapsed(s)
+    x = if span <= 0. then 1. else e / span end
+    x = if x < 0. then 0. elsif x > 1. then 1. else x end
+    if rising then pow(sin(half_pi * x), 1.5) else cos(half_pi * x) end
+  end
+  amplify(override=null, gain, s)
+end
+
 def dj_transition(a, b) =
   stamp = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_end_duration"])
   buffered = min(source.remaining(a.source), source.remaining(b.source))
@@ -725,6 +776,19 @@ def dj_transition(a, b) =
   sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading and not jingle_out
   dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
   chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
+  # A plain song-to-song seam: no gesture flag on either side (a flag the queue
+  # stripped as a loser never reaches here, so any flag present means a gesture
+  # owns the fades), no jingle, no stem-blend clip, no bed or pause break
+  # (subwave_kind is set only on those items, never on a song).
+  def flagged(m, k) = m[k] == "true" end
+  equal_power_seam =
+    equal_power_crossfade()
+    and not jingle_in and not jingle_out
+    and a.metadata["subwave_clip"] != "1" and b.metadata["subwave_clip"] != "1"
+    and a.metadata["subwave_kind"] == "" and b.metadata["subwave_kind"] == ""
+    and not flagged(a.metadata, "liq_washout") and not flagged(a.metadata, "liq_loop")
+    and not flagged(b.metadata, "liq_sweep") and not flagged(b.metadata, "liq_dissolve")
+    and not flagged(b.metadata, "liq_chop") and not flagged(b.metadata, "liq_blend")
   # FADE SHAPE per effect. exp drops the dry EARLY so the washout's tail reads
   # as a dissolve (it dips below unity mid-cross, which is the effect; the +6 dB
   # hazard is only for fades that hold full level early). log does the opposite,
@@ -745,6 +809,8 @@ def dj_transition(a, b) =
       fade.out(duration=a_fade, type="log", initial_metadata=a.metadata, a.source)
     elsif looping then
       a.source
+    elsif equal_power_seam then
+      equal_power_fade(span=d, rising=false, a.source)
     else
       fade.out(duration=a_fade, initial_metadata=a.metadata, a.source)
     end
@@ -1214,9 +1280,16 @@ def dj_transition(a, b) =
   # d <= 10, chop_dd == d and the render is byte-identical.
   b_fade = if chopping then chop_dd else d end
   # A clip seam's incoming side waits b_delay (CLIP SEAM ALIGNMENT above) and
-  # fades over the lead, so both fades still end together.
+  # fades over the lead, so both fades still end together. b_delay > 0 only on
+  # a clip seam, which equal_power_seam never takes, so the equal-power branch
+  # always spans the full d.
   b_fade = if b_delay > 0. then d - b_delay else b_fade end
-  b_source = fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
+  b_source =
+    if equal_power_seam then
+      equal_power_fade(span=b_fade, rising=true, b.source)
+    else
+      fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
+    end
   # INCOMING SIDE. Every effect here releases by driving WETNESS to 0, never by
   # parking the cutoff open: an RC filter at its open cutoff is still not
   # transparent, and the branch operators vanish at the d boundary, so the track

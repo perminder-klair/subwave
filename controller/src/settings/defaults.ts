@@ -633,7 +633,7 @@ export const DEFAULTS = {
   },
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
-  // override here).
+  // override here); `keenable` needs no key but uses a `keen_` one if set.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -681,6 +681,12 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Fade curve for PLAIN song-to-song crossfades: false = linear (two
+    // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
+    // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles
+    // and beds keep their own curves. Read once by the mixer at startup, so a
+    // change needs a restart.
+    equalPowerCrossfade: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
     // and lose all six. Resolved through settings/transition-effects.ts, which

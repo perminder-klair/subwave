@@ -26,6 +26,7 @@ import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useLingeringPresence } from '@/hooks/useLingeringPresence';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
+import { useLoginCheck } from '@/hooks/useLoginCheck';
 import { useLyricsPreference } from '@/hooks/useLyricsPreference';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
@@ -55,6 +56,7 @@ import type {
 import { useTheme } from '@/theme/ThemeContext';
 import CenterStage from './CenterStage';
 import FreqBand, { type BandStop } from './FreqBand';
+import LoginRejected from './LoginRejected';
 import PagePanel from './PagePanel';
 import StageLyrics from './StageLyrics';
 import StationGate from './StationGate';
@@ -189,7 +191,9 @@ const RequestPage = memo(function RequestPage({
 export default function PlayerScreen() {
   const {
     api,
+    base,
     name: savedStationName,
+    hasLogin,
     stationPassword,
     loginPassword,
     rememberStationPassword,
@@ -233,6 +237,7 @@ export default function PlayerScreen() {
   const djName = typeof dj?.name === 'string' ? dj.name : undefined;
 
   const coverSrc = api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null;
+  const coverHeaders = api && coverSrc ? api.imageHeaders(coverSrc) : undefined;
 
   const trackLike = useTrackLike(api, nowPlaying?.subsonic_id ?? null);
 
@@ -258,6 +263,9 @@ export default function PlayerScreen() {
     stop,
   });
   const hideFace = gate.solid && gate.phase !== 'ok';
+  // A refused Station login (#1873) stops the player and covers it, over
+  // either gate: a proxy that refuses the login refuses /station-auth too.
+  const login = useLoginCheck({ api, hasLogin, tunedIn, status, stop });
 
   const offline = streamOnline === false;
   const signal = useSignal({ api, tunedIn, status, offline });
@@ -301,7 +309,7 @@ export default function PlayerScreen() {
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : listeners.current ?? null;
 
-  const coverColors = useCoverColors(coverSrc);
+  const coverColors = useCoverColors(coverSrc, coverHeaders);
 
   // Cast has no local RNTP media session; update OS metadata only for local playback.
   useNowPlayingInfo({
@@ -423,8 +431,8 @@ export default function PlayerScreen() {
 
   // A sheet is a Modal, so it would sit above the prompt and stay usable.
   useEffect(() => {
-    if (gate.phase === 'prompt') setActiveSheet(null);
-  }, [gate.phase]);
+    if (gate.phase === 'prompt' || login.rejected) setActiveSheet(null);
+  }, [gate.phase, login.rejected]);
 
   // The pager unmounts behind a solid gate; bring it back on the home page.
   useEffect(() => {
@@ -438,6 +446,10 @@ export default function PlayerScreen() {
 
   const tint = coverColors.vibrant;
   const gateStationName = stationName || savedStationName;
+  const loginRejected =
+    login.rejected && base ? (
+      <LoginRejected base={base} stationName={gateStationName} recheck={login.recheck} />
+    ) : null;
 
   if (hideFace) {
     return (
@@ -446,8 +458,10 @@ export default function PlayerScreen() {
           checking={gate.phase !== 'prompt'}
           solid
           stationName={gateStationName}
+          savedRejected={gate.savedRejected}
           unlock={gate.unlock}
         />
+        {loginRejected}
       </View>
     );
   }
@@ -501,6 +515,7 @@ export default function PlayerScreen() {
                   <CenterStage
                     nowPlaying={nowPlaying}
                     coverSrc={coverSrc}
+                    coverHeaders={coverHeaders}
                     elapsed={elapsed}
                     llmTokens={llmTokens}
                     trackLike={trackLike}
@@ -588,9 +603,16 @@ export default function PlayerScreen() {
         </View>
       </SafeAreaView>
 
-      {gate.phase === 'prompt' ? (
-        <StationGate checking={false} solid={false} stationName={gateStationName} unlock={gate.unlock} />
+      {gate.phase === 'prompt' && !loginRejected ? (
+        <StationGate
+          checking={false}
+          solid={false}
+          stationName={gateStationName}
+          savedRejected={gate.savedRejected}
+          unlock={gate.unlock}
+        />
       ) : null}
+      {loginRejected}
 
       <Sheet
         open={activeSheet !== null}

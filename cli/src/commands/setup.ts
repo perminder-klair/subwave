@@ -23,27 +23,23 @@ import {
   probeOpenAI,
   probeAnthropic,
   probeOpenRouter,
-  probeRequesty,
+  probeGatewayModels,
   type ProbeResult,
 } from '../probes.ts';
+import { LLM_PROVIDER_CATALOG, PROVIDER_GROUPS } from '../providers.generated.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
 
-// Keep in step with the controller's LLM_PROVIDERS (controller/src/settings.ts).
-// `locca` is keyless with a default base URL, so it groups with the local set.
-type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
-type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
+// The providers are the controller's catalogue (controller/src/schemas/providers.ts),
+// embedded at build time as providers.generated.ts.
+type CatalogEntry = (typeof LLM_PROVIDER_CATALOG)[number];
+type CloudProvider = Extract<CatalogEntry, { envVar: string }>['id'];
+type LlmProvider = CatalogEntry['id'];
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
 // openai-compatible is absent: no canonical env var, so its key goes to settings.
-const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
-  anthropic: 'ANTHROPIC_API_KEY',
-  openai: 'OPENAI_API_KEY',
-  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-  deepseek: 'DEEPSEEK_API_KEY',
-  openrouter: 'OPENROUTER_API_KEY',
-  requesty: 'REQUESTY_API_KEY',
-  gateway: 'AI_GATEWAY_API_KEY',
-};
+const CLOUD_ENV_VAR = Object.fromEntries(
+  LLM_PROVIDER_CATALOG.flatMap((p) => ('envVar' in p ? [[p.id, p.envVar]] : [])),
+) as Record<CloudProvider, string>;
 
 interface LlmChoice {
   provider: LlmProvider | null; // null = "configure later"
@@ -282,33 +278,26 @@ async function detectOllamaUrl(): Promise<string | null> {
 // 'dj-brain' is a preset, not a provider: it resolves to openai-compatible
 // pointed at the hosted DJ Brain, so the controller sees no new provider id.
 const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
-const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later' | 'dj-brain'; label: string; hint: string }> = [
-  { value: 'ollama',            label: 'Ollama — local homelab',          hint: 'no API key — point at your homelab box' },
-  { value: 'dj-brain',          label: 'SUB/WAVE DJ Brain — hosted',       hint: 'no model to run — one key from my.getsubwave.com/brain, from £5/mo' },
-  { value: 'openai-compatible', label: 'OpenAI-compatible — self-hosted',  hint: 'llama.cpp, vLLM, LM Studio — your own server URL' },
-  { value: 'locca',             label: 'locca — local llama.cpp',          hint: 'no API key — defaults to the host locca server' },
-  { value: 'anthropic',         label: 'Anthropic — Claude',               hint: 'needs ANTHROPIC_API_KEY' },
-  { value: 'openai',            label: 'OpenAI — GPT',                     hint: 'needs OPENAI_API_KEY' },
-  { value: 'google',            label: 'Google — Gemini',                  hint: 'needs GOOGLE_GENERATIVE_AI_API_KEY' },
-  { value: 'deepseek',          label: 'DeepSeek',                         hint: 'needs DEEPSEEK_API_KEY' },
-  { value: 'openrouter',        label: 'OpenRouter — multi-vendor',        hint: 'needs OPENROUTER_API_KEY' },
-  { value: 'requesty',          label: 'Requesty — multi-vendor',          hint: 'needs REQUESTY_API_KEY' },
-  { value: 'gateway',           label: 'Vercel AI Gateway — multi-vendor', hint: 'needs AI_GATEWAY_API_KEY' },
-  { value: 'later',             label: 'Other / configure later',          hint: 'set it up in the admin UI' },
+type LlmOption = { value: LlmProvider | 'later' | 'dj-brain'; label: string; hint: string };
+const DJ_BRAIN_OPTION: LlmOption = {
+  value: 'dj-brain', label: 'SUB/WAVE DJ Brain — hosted', hint: 'no model to run — one key from my.getsubwave.com/brain, from £5/mo',
+};
+// The catalogue by group (on your network, then vendors, then gateways), with
+// DJ Brain offered right after the Ollama default.
+const LLM_PROVIDER_OPTIONS: LlmOption[] = [
+  ...[...LLM_PROVIDER_CATALOG]
+    .sort((a, b) => PROVIDER_GROUPS.indexOf(a.group) - PROVIDER_GROUPS.indexOf(b.group))
+    .flatMap((p): LlmOption[] => {
+      const option = { value: p.id, label: p.cliLabel, hint: 'cliHint' in p ? p.cliHint : `needs ${p.envVar}` };
+      return p.id === 'ollama' ? [option, DJ_BRAIN_OPTION] : [option];
+    }),
+  { value: 'later', label: 'Other / configure later', hint: 'set it up in the admin UI' },
 ];
 
 // Example model ids — placeholder hints only, not defaults.
-const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
-  'openai-compatible': 'qwen3',
-  locca: 'qwen3',
-  anthropic: 'claude-sonnet-4-5',
-  openai: 'gpt-4o-mini',
-  google: 'gemini-2.5-flash',
-  deepseek: 'deepseek-chat',
-  openrouter: 'anthropic/claude-sonnet-4-5',
-  requesty: 'openai/gpt-4o-mini',
-  gateway: 'anthropic/claude-sonnet-4-5',
-};
+const EXAMPLE_MODEL = Object.fromEntries(
+  LLM_PROVIDER_CATALOG.flatMap((p) => ('exampleModel' in p ? [[p.id, p.exampleModel]] : [])),
+) as Record<Exclude<LlmProvider, 'ollama'>, string>;
 
 async function collectLlm(): Promise<LlmChoice> {
   header('LLM provider');
@@ -409,12 +398,16 @@ async function collectLlm(): Promise<LlmChoice> {
 }
 
 // google / deepseek / gateway have no probe; their key is first exercised on
-// the controller's first DJ call.
+// the controller's first DJ call. A fixed-endpoint gateway lists its models.
 async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: string): Promise<void> {
   if (provider === 'openai') return reportProbe(label, () => probeOpenAI({ apiKey }));
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
-  if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
+  const entry = LLM_PROVIDER_CATALOG.find((p) => p.id === provider);
+  if (entry && 'openaiCompatible' in entry) {
+    const { baseUrl } = entry.openaiCompatible;
+    return reportProbe(label, () => probeGatewayModels({ apiKey, baseUrl }));
+  }
 }
 
 // COMPOSE_PROFILES in .env is what brings the sidecar up on later `up -d`

@@ -14,6 +14,7 @@ import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx, thinkingMandatoryModel } from './capabilities.js';
+import { openaiCompatibleGateway } from '../../../schemas/providers.js';
 import { resolveCompatibleMode } from './compat-detect.js';
 
 // Built clients, keyed by a signature covering every field captured at
@@ -228,10 +229,6 @@ export function loccaEmbedBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
 }
 
-// Requesty is a fixed-endpoint OpenAI-compatible aggregator, so the base URL is
-// not operator-configurable. Keyed by REQUESTY_API_KEY.
-export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
-
 // OpenRouter app attribution (openrouter.ai/docs/app-attribution). Sent on every
 // OpenRouter request — chat, embeddings and the key-validation probes.
 export const OPENROUTER_APP_HEADERS = {
@@ -371,19 +368,6 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
         : provider(id);
       break;
     }
-    case 'requesty': {
-      // Same createOpenAI transport as openai-compatible on a fixed base URL.
-      // Hosted aggregator with no thinking knob, so no body injection — that
-      // only makes sense for self-hosted llama.cpp/vLLM. A real key is required.
-      const provider = createOpenAI({
-        baseURL: DEFAULT_REQUESTY_BASE_URL,
-        apiKey: apiKey || 'unused',
-        name: 'requesty',
-        fetch: debugFetch,
-      });
-      model = provider.chat(id);
-      break;
-    }
     case 'gateway': {
       // Always constructed so debugFetch can be wired in; with no apiKey it
       // resolves the same env / OIDC credentials the default instance would.
@@ -393,6 +377,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     }
     case 'ollama':
     default: {
+      // A fixed-endpoint OpenAI-compatible gateway (the catalogue's
+      // openaiCompatible): the createOpenAI transport on its own base URL.
+      // Hosted, with no thinking knob, so no body injection — that only makes
+      // sense for self-hosted llama.cpp/vLLM. A real key is required. Any other
+      // id is Ollama, as it always has been.
+      const gw = openaiCompatibleGateway(cfg.provider);
+      if (gw) {
+        const provider = createOpenAI({
+          baseURL: gw.openaiCompatible.baseUrl,
+          apiKey: apiKey || 'unused',
+          name: gw.id,
+          fetch: debugFetch,
+        });
+        model = provider.chat(id);
+        break;
+      }
       // `baseURL` is the bare Ollama host (no `/api` suffix); the package
       // appends the path. The default factory already translates tools /
       // toolChoice / activeTools, so no `.chat(id)` override.

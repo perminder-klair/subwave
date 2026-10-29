@@ -1241,6 +1241,7 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
       // field (or missing entirely) normalises to the whole kit on.
@@ -2456,6 +2457,13 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
     for (const k of ['pairDrain', 'stemBlends'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
+    }
+    // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
+    // so only an actual change costs a restart, as with crossfadeDuration: the
+    // admin form posts the whole block on every save.
+    if (tr.equalPowerCrossfade !== undefined && tr.equalPowerCrossfade !== cur.transitions.equalPowerCrossfade) {
+      next.transitions.equalPowerCrossfade = tr.equalPowerCrossfade as boolean;
+      restart = true;
     }
     // Nested block, so it needs its own per-field loop like scrobble.* does: the
     // flat copy above would replace the whole `effects` object, and a patch that

@@ -76,6 +76,7 @@ export default function RootLayout() {
                 <Stack.Screen name="index" />
                 <Stack.Screen name="onboarding" />
                 <Stack.Screen name="stations" options={{ presentation: 'modal' }} />
+                <Stack.Screen name="station-login" options={{ presentation: 'modal' }} />
               </Stack>
             </SplashGate>
           </ThemeProvider>

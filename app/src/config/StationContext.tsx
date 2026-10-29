@@ -17,12 +17,13 @@ import {
   loadStationPassword,
   loadStations,
   removeRecent,
+  saveStationCredentials,
   saveStationPassword,
   setActiveStation,
   type StationRef,
   type StationStore,
 } from '@/lib/station';
-import type { StationCredentials } from '@/lib/station-credentials';
+import { splitStationAddress, type StationCredentials } from '@/lib/station-credentials';
 
 interface StationContextValue {
   /** True until the persisted store has loaded. */
@@ -41,6 +42,11 @@ interface StationContextValue {
     credentials?: StationCredentials | null,
   ) => Promise<void>;
   credentialsFor: (url: string) => Promise<StationCredentials | null>;
+  /** The active station has a saved "Station login". */
+  hasLogin: boolean;
+  /** Replace or remove any saved station's login (#1873). Secure storage is
+   *  written first; the active station's client then picks it up. */
+  saveLogin: (url: string, credentials: StationCredentials | null) => Promise<void>;
   /** The active station's private-station password (#478), or null. */
   stationPassword: string | null;
   /** The active station's "Station login" password, or null. Only consulted
@@ -50,6 +56,11 @@ interface StationContextValue {
   rememberStationPassword: (password: string) => Promise<void>;
   /** Forget the active station's password (it was rejected). */
   forgetStationPassword: () => Promise<void>;
+  /** Whether any saved station has a station password on this device. */
+  stationPasswordSaved: (url: string) => Promise<boolean>;
+  /** Forget any saved station's password because the listener asked to.
+   *  Throws when secure storage cannot be written. */
+  forgetStationPasswordFor: (url: string) => Promise<void>;
   forgetStation: (url: string) => Promise<void>;
   /** Clear the active station — sends the app back to onboarding. */
   signOut: () => Promise<void>;
@@ -153,6 +164,20 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
     setStationPassword(null);
     await clearStationPassword(base).catch(() => {});
   }, [base, setStationPassword]);
+  // The active station answers from the ref, which holds a password the
+  // keychain failed to save too, and keeps this callback's identity stable.
+  const stationPasswordSaved = useCallback(async (url: string) => {
+    if (splitStationAddress(url).base === base) return stationPasswordRef.current !== null;
+    return (await loadStationPassword(url)) !== null;
+  }, [base]);
+  const forgetStationPasswordFor = useCallback(async (url: string) => {
+    await clearStationPassword(url);
+    if (splitStationAddress(url).base === base) setStationPassword(null);
+  }, [base, setStationPassword]);
+  const saveLogin = useCallback(async (url: string, next: StationCredentials | null) => {
+    await saveStationCredentials(url, next);
+    if (splitStationAddress(url).base === base) setCredentials(next);
+  }, [base]);
 
   const api = useMemo(
     // createApi stores the getter and calls it only when a stream URL is built
@@ -177,10 +202,14 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
       featured,
       selectStation,
       credentialsFor,
+      hasLogin: credentials !== null,
+      saveLogin,
       stationPassword,
       loginPassword: credentials?.password || null,
       rememberStationPassword,
       forgetStationPassword,
+      stationPasswordSaved,
+      forgetStationPasswordFor,
       forgetStation,
       signOut,
     }),
@@ -193,10 +222,13 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
       featured,
       selectStation,
       credentialsFor,
+      saveLogin,
       stationPassword,
       credentials,
       rememberStationPassword,
       forgetStationPassword,
+      stationPasswordSaved,
+      forgetStationPasswordFor,
       forgetStation,
       signOut,
     ],

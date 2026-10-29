@@ -87,6 +87,21 @@ test('only 401 means wrong; 429 is the rate limit; anything else says nothing', 
   for (const status of [null, 404, 500, 502, 403]) assert.equal(stationAuthResult(status), 'unavailable');
 });
 
+test("a proxy's login challenge never reads as a wrong station password (#1873)", async () => {
+  // The controller's own 401 carries no WWW-Authenticate; a proxy refusing the
+  // Station login always does, and the password never reached the controller.
+  assert.equal(stationAuthResult(401, true), 'unavailable');
+  assert.equal(stationAuthResult(401, false), 'denied');
+
+  // So a saved station password checked through that proxy is kept, not forgotten.
+  const verdict = await verifyStoredPasswords({
+    stored: 'station-pw',
+    login: 'proxy-pw',
+    check: async () => stationAuthResult(401, true),
+  });
+  assert.deepEqual(verdict, { phase: 'ok', save: null, clearStored: false });
+});
+
 function checker(answers: Record<string, StationAuthResult>) {
   const asked: string[] = [];
   return {

@@ -288,12 +288,21 @@ def render_script(work, name, station_sec, fixture_path):
         transition = f.read()
     with open(os.path.join(work, "cross.liq")) as f:
         cross = f.read()
+    # dj_transition reads the plain-crossfade curve switch (J4), a top-level
+    # ref outside the lifted region. Clip seams never take equal-power, so the
+    # harness keeps radio.liq's own default (linear); a mixer predating the
+    # switch gets nothing extra.
+    curve = ""
+    with open(os.path.join(work, "radio-source.liq")) as f:
+        m = re.search(r'^equal_power_crossfade = ref\((true|false)\)$', f.read(), re.M)
+    if m:
+        curve = f"equal_power_crossfade = ref({m.group(1)})\n"
     script = f'''settings.log.stdout := true
 settings.log.level := 3
 settings.init.allow_root := true
 w = environment.get(default="/work", "W")
 crossfade_duration = ref({station_sec})
-q = request.queue(id="q")
+{curve}q = request.queue(id="q")
 list.iter(fun (p) -> ignore(q.push(request.create(p))), [{', '.join(uris)}])
 music = q
 {transition}

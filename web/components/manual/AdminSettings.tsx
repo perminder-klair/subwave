@@ -183,7 +183,7 @@ export default function AdminSettings() {
           </li>
           <li>
             <strong>Web search</strong> — the live-facts backend the skills draw on
-            (DuckDuckGo, Tavily, or a self-hosted SearXNG).
+            (DuckDuckGo, Tavily, Brave Search, Keenable, or a self-hosted SearXNG).
           </li>
           <li>
             <strong>Archives &amp; Backup</strong> — record the broadcast to hourly files,

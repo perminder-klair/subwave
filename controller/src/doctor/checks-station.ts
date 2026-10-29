@@ -20,8 +20,8 @@ import {
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // Web search — backs the DJ's artist-news segments. DuckDuckGo is keyless;
-  // Tavily needs a key. Report config readiness, then do a short live probe so
+  // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
+  // are keyless; Tavily and Brave need a key. Report config readiness, then do a short live probe so
   // "is it actually working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
   let ready = true;
@@ -32,7 +32,7 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
       label: 'web search',
       status: 'warn',
       detail: `${provider} selected but no API key`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo (keyless).',
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
     return out;
   }

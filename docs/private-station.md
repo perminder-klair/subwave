@@ -74,7 +74,10 @@ every listener connect, so:
   rides the stream as `?auth=`, so Google Cast works too. A listener who had
   followed earlier advice and typed the stream password into **Station login**
   is recognised and not asked again. If the password is later rotated, the app
-  asks again the next time the station is opened, or once playback stalls.
+  asks again the next time the station is opened, or once playback stalls, and
+  says the saved password was not accepted. To clear a saved password yourself,
+  open **Stations**, then **Station login** on the station, and tap
+  **Forget station password**.
 
 While the password is on, `/listen.pls` and `/listen.m3u` return 403 — they
 would otherwise hand out credential-less URLs that no longer play.
@@ -94,21 +97,25 @@ controller.
 > below is about plain basic auth.
 
 Plain basic auth works in both mobile apps. Enter the public station address,
-open **Station login**, then fill in the username and password. The app takes
-two different routes with those credentials, which is worth knowing when
-something half-works:
+open **Station login**, then fill in the username and password. The app sends
+the login as an explicit `Authorization: Basic` header on everything it asks
+the station for, which is worth knowing when something half-works:
 
-- **API polls and cover artwork** receive an in-memory credentialed request URL.
-  RN's `fetch` and `<Image>` sit on NSURLSession / OkHttp, which answer the
-  server's basic-auth challenge from that userinfo.
-- **The audio stream** gets a credential-free URL plus an explicit
-  `Authorization: Basic` header, because **iOS's AVPlayer silently drops
-  `user:pass@` userinfo from a media URL** (and Android's player is no more
-  reliable about it). That is why a basic-auth station could report *Stream
-  Unreachable* / HTTP 401 in the app while the exact same URL played fine in a
-  browser, in VLC and via `curl` (#764).
+- **The audio stream** gets a credential-free URL plus the header, because
+  **iOS's AVPlayer silently drops `user:pass@` userinfo from a media URL** (and
+  Android's player is no more reliable about it). That is why a basic-auth
+  station could report *Stream Unreachable* / HTTP 401 in the app while the
+  exact same URL played fine in a browser, in VLC and via `curl` (#764).
+- **API polls** go the same way: a credential-free URL plus the header.
+  Android's `fetch` (OkHttp) never sends a login from URL userinfo, so before
+  #1873 an Android app never showed its login to a proxy guarding `/api`.
+- **Cover art and persona avatars** get the header too, and also keep the login
+  as `user:pass@` userinfo in their URL, because iOS loads the lock-screen
+  artwork with a request that cannot carry a header but does answer the
+  proxy's challenge from userinfo. Both carry the same login. An avatar on
+  another host never gets the login.
 
-Three things to know:
+Things to know:
 
 - **The station URL is stored without credentials.** The username and password
   live in this device's iOS Keychain or Android Keystore-backed secure storage.
@@ -123,6 +130,28 @@ Three things to know:
   entered at the app's private-station prompt, it rides the stream URL.
 - **Special characters need no percent-encoding in the fields.** Type the real
   username and password, including `@` or `:`.
+- **A saved login can be changed or removed.** In **Stations**, tap the key on
+  a saved station, or **Station login** on the station you're tuned in to. The
+  app checks a changed login with the station before saving it: a login the
+  proxy refuses is never saved, and one it couldn't check (the station is
+  unreachable, or its answer says nothing about the login) is saved only if
+  you tap **Save anyway**. On a station with the
+  stream password on and no proxy guarding `/api`, the login's password is
+  checked as the stream password. A refusal there offers **Save anyway** too:
+  a proxy that guards only the audio stream may still want that login, and the
+  app has no way to ask it.
+- **A login the station stops accepting stops the player.** When the proxy
+  answers the saved login with a 401 that carries a `WWW-Authenticate`
+  challenge (what an HTTP Basic Auth proxy sends for a wrong login), the player
+  stops reconnecting and says **Station login rejected**, with a button to the
+  same screen. Nothing else does this: not a network drop or a timeout, and not
+  a 403, which an IP allowlist, a WAF or a Cloudflare challenge page sends
+  whatever the login is. The edit screen reads `/api/health` by the same rule:
+  only a challenged 401 there is the proxy refusing a login, and any other
+  failure leaves it unchecked.
+  The app finds out by asking `/api/health`, never the stream (that would count
+  a listener), so a proxy that guards only the audio stream and not `/api`
+  goes unnoticed.
 
 Older app versions accepted `https://user:pass@host` addresses. On upgrade,
 the app removes that userinfo from the saved station URL and migrates the

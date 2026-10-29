@@ -30,6 +30,8 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
 export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   coverSrc: string | null;
+  /** The Station login for the cover (StationApi.imageHeaders). */
+  coverHeaders?: Record<string, string>;
   elapsed: number;
   /** Cumulative since-boot LLM token total (#449); null hides the ticker. */
   llmTokens: number | null;
@@ -53,6 +55,7 @@ export interface CenterStageProps {
 export default function CenterStage({
   nowPlaying,
   coverSrc,
+  coverHeaders,
   elapsed,
   llmTokens,
   trackLike,
@@ -179,7 +182,7 @@ export default function CenterStage({
     return (
       <View className="flex-row items-center px-5" style={{ gap: 14, paddingTop: 12 }}>
         {coverSrc ? (
-          <CoverArt uri={coverSrc} live={live} burst={burst} size={64} onPress={onOpenTimeline} />
+          <CoverArt uri={coverSrc} headers={coverHeaders} live={live} burst={burst} size={64} onPress={onOpenTimeline} />
         ) : null}
         <View style={{ flex: 1, minWidth: 0 }}>
           {metaRow}
@@ -202,7 +205,7 @@ export default function CenterStage({
     <View className="flex-1 justify-center px-5">
       {coverSrc ? (
         <View style={{ alignItems: 'flex-start', marginBottom: 14 }}>
-          <CoverArt uri={coverSrc} live={live} burst={burst} size={120} onPress={onOpenTimeline} />
+          <CoverArt uri={coverSrc} headers={coverHeaders} live={live} burst={burst} size={120} onPress={onOpenTimeline} />
         </View>
       ) : null}
 

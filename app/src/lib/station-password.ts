@@ -87,9 +87,13 @@ export function stationReadsOpen(privacy: StationPrivacy | null | undefined, pha
  *  password. */
 export type StationAuthResult = 'ok' | 'denied' | 'rate-limited' | 'unavailable';
 
-export function stationAuthResult(status: number | null): StationAuthResult {
+/** `challenged`: the 401 carried a `WWW-Authenticate` challenge. The
+ *  controller's own 401 never does; a reverse proxy refusing the Station login
+ *  always does (#1873). That 401 never reached the password check, and read as
+ *  'denied' it would make the gate forget a station password that is right. */
+export function stationAuthResult(status: number | null, challenged = false): StationAuthResult {
   if (status === 200) return 'ok';
-  if (status === 401) return 'denied';
+  if (status === 401) return challenged ? 'unavailable' : 'denied';
   if (status === 429) return 'rate-limited';
   return 'unavailable';
 }

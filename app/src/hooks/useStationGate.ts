@@ -25,6 +25,9 @@ export interface StationGate {
   /** privatePlayer is on: the gate stands in for the whole player rather than
    *  sitting over it, and the face stays hidden until the password is in. */
   solid: boolean;
+  /** The prompt is up because the saved password was refused, not because
+   *  there was none: the prompt says so. */
+  savedRejected: boolean;
   unlock: (password: string) => Promise<StationAuthResult>;
 }
 
@@ -60,6 +63,7 @@ export function useStationGate({
   const solid = privacy?.privatePlayer === true;
   const listenerAuth = privacy?.listenerAuth === true;
   const [phase, setPhase] = useState<GatePhase>(required ? 'checking' : 'open');
+  const [savedRejected, setSavedRejected] = useState(false);
 
   // Read through refs so saving or forgetting a password does not re-run the
   // verification that caused it.
@@ -87,6 +91,7 @@ export function useStationGate({
     }
     let alive = true;
     setPhase('checking');
+    setSavedRejected(false);
     lastCheckRef.current = Date.now();
     void verifyStoredPasswords({
       stored: passwordsRef.current.stationPassword,
@@ -96,12 +101,22 @@ export function useStationGate({
       if (!alive) return;
       if (verdict.save) await storeRef.current.rememberStationPassword(verdict.save);
       else if (verdict.clearStored) await storeRef.current.forgetStationPassword();
-      if (alive) setPhase(verdict.phase);
+      if (alive) {
+        setSavedRejected(verdict.clearStored);
+        setPhase(verdict.phase);
+      }
     });
     return () => {
       alive = false;
     };
   }, [required, api]);
+
+  // The listener forgot this station's password on the Station login screen
+  // (#1873): ask again. The updater leaves a phase a station switch set in the
+  // same commit alone; only a password that was in use goes back to the prompt.
+  useEffect(() => {
+    if (required && !stationPassword) setPhase((p) => (p === 'ok' ? 'prompt' : p));
+  }, [required, stationPassword]);
 
   // Locked out while tuned in (a lock switched on, or the password rotated):
   // the audio stops with the face, as the web player's does.
@@ -120,6 +135,13 @@ export function useStationGate({
       lastCheckRef.current = Date.now();
       void api.checkStationAuth(password).then(async (result) => {
         if (result !== 'denied' || apiRef.current !== api) return;
+        // Before forgetting it, which already brings the prompt up (above).
+        // Not held back by `alive`: a stop while the check was out re-runs
+        // this effect, and the prompt it leads to must still say why. The
+        // apiRef check keeps it to the station that was asked; after a
+        // switch, the next station's visit check clears it, and a station
+        // with no lock never shows the prompt that carries it.
+        setSavedRejected(true);
         await storeRef.current.forgetStationPassword();
         if (alive) setPhase('prompt');
       });
@@ -138,6 +160,7 @@ export function useStationGate({
       if (apiRef.current !== api) return 'unavailable';
       if (result === 'ok') {
         await storeRef.current.rememberStationPassword(password);
+        setSavedRejected(false);
         setPhase('ok');
       }
       return result;
@@ -145,5 +168,5 @@ export function useStationGate({
     [api],
   );
 
-  return { phase, readsOpen: stationReadsOpen(privacy, phase), solid, unlock };
+  return { phase, readsOpen: stationReadsOpen(privacy, phase), solid, savedRejected, unlock };
 }
