@@ -12,12 +12,12 @@ import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import { Card, Btn, Pill, Seg } from '../ui';
-import { ProviderSelector } from '../llm/ProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
-import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
 import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
 import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
@@ -473,9 +473,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <Label>Provider</Label>
               {llmDirty && <Pill tone="accent" dot>unsaved</Pill>}
             </div>
-            <ProviderSelector
+            <ProviderPicker
               value={form.llm.provider}
               providerIds={data.llm?.providers || ['ollama']}
+              label="LLM provider"
               env={data.env}
               onChange={changeLlmProvider}
             />
@@ -866,11 +867,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 >
                   <SelectTrigger className="max-w-[360px]" aria-label="Backup provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectGroup>
-                      {(data.llm?.providers || ['ollama']).map(p => (
-                        <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
-                      ))}
-                    </SelectGroup>
+                    {groupProviders(data.llm?.providers || ['ollama']).map(g => (
+                      <SelectGroup key={g.group}>
+                        <SelectLabel>{g.label}</SelectLabel>
+                        {g.ids.map(p => (
+                          <SelectItem key={p} value={p}>{llmProviderLabel(p)}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
                   </SelectContent>
                 </Select>
                 <div className="field-hint">

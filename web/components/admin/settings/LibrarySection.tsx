@@ -12,7 +12,7 @@ import {
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
 import { Advanced } from './section-chrome';
-import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { EMBED_MODEL_SUGGESTIONS, LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
 import { EMBEDDING_PROVIDER_IDS } from '../../../lib/schemas.generated';
@@ -330,11 +330,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           )}
           <div className="field">
             <Label>Provider</Label>
-            <EmbeddingProviderSelector
+            <ProviderPicker
               // A blank stored provider resolves to the DJ's provider, so the
               // grid always shows an explicit selection (no "Follow LLM" card).
               value={effectiveProvider}
+              // The embedding-capable ids, possibly with a stale explicit choice
+              // prepended.
               providerIds={providers}
+              label="Embedding provider"
               env={data.env}
               onChange={v =>
                 setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))

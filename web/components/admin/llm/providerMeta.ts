@@ -1,4 +1,6 @@
-import { LLM_PROVIDER_CATALOG, type LlmProviderEntry } from '../../../lib/schemas.generated';
+import {
+  LLM_PROVIDER_CATALOG, PROVIDER_GROUPS, type LlmProviderEntry, type ProviderGroup,
+} from '../../../lib/schemas.generated';
 
 // Every table here derives from the provider catalogue
 // (controller/src/schemas/providers.ts, mirrored by gen:schemas).
@@ -16,26 +18,50 @@ export interface ProviderMeta {
   kind: ProviderKind;
   // Controller env var the key is read from — cloud providers only.
   envVar?: string;
+  // The picker group it sits in: on your network, a model vendor, a gateway.
+  group: ProviderGroup;
 }
 
-// Onboarding's order: on-box servers, then your own server, then vendors, then
-// gateways. It is NOT the controller's settings.LLM_PROVIDERS (catalogue) order.
-// Settings renders data.llm.providers (server-authoritative, server order) and
-// looks each id up here, so a provider the server adds first still renders as a
-// bare card; only onboarding renders in this order, through PROVIDER_IDS.
-const onboardingRank = (p: LlmProviderEntry) =>
-  p.kind === 'local' ? 0 : p.kind === 'self-hosted' ? 1 : p.group === 'vendor' ? 2 : 3;
-
-export const PROVIDERS: ProviderMeta[] = [...LLM_PROVIDER_CATALOG]
-  .sort((a, b) => onboardingRank(a) - onboardingRank(b))
-  .map(({ id, label, blurb, kind, envVar }) => ({ id, label, blurb, kind, ...(envVar ? { envVar } : {}) }));
+// Catalogue order, which is the controller's settings.LLM_PROVIDERS order. Every
+// picker renders the server's list through groupProviders and looks each id up
+// here, so a provider the server adds first still renders as a bare card.
+export const PROVIDERS: ProviderMeta[] = LLM_PROVIDER_CATALOG.map(({ id, label, blurb, kind, group, envVar }) => ({
+  id, label, blurb, kind, group, ...(envVar ? { envVar } : {}),
+}));
 
 export const PROVIDER_META: Record<string, ProviderMeta> = Object.fromEntries(
   PROVIDERS.map(p => [p.id, p]),
 );
 
-// Default render order (local first). Settings passes the server's list instead.
+// Only for a picker rendered before the server's list arrives.
 export const PROVIDER_IDS: string[] = PROVIDERS.map(p => p.id);
+
+// The picker's group headings.
+export const PROVIDER_GROUP_LABELS: Record<ProviderGroup, string> = {
+  network: 'On your network',
+  vendor: 'Model vendors',
+  gateway: 'Gateways: one key, many vendors',
+};
+
+export interface ProviderGroupView {
+  group: ProviderGroup;
+  label: string;
+  ids: string[];
+}
+
+// The given ids under their picker groups, in PROVIDER_GROUPS order, each group
+// keeping the order it was given (the server's). Empty groups are dropped. An id
+// the catalogue doesn't know, a provider the server added first, is shown as a
+// model vendor.
+export function groupProviders(ids: readonly string[]): ProviderGroupView[] {
+  return PROVIDER_GROUPS
+    .map(group => ({
+      group,
+      label: PROVIDER_GROUP_LABELS[group],
+      ids: ids.filter(id => (PROVIDER_META[id]?.group ?? 'vendor') === group),
+    }))
+    .filter(view => view.ids.length > 0);
+}
 
 // Derived from PROVIDERS so the two never drift.
 export const LLM_ENV_VARS: Record<string, string> = Object.fromEntries(
