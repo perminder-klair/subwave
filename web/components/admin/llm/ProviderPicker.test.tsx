@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS, PROVIDER_GROUPS } from '../../../lib/schemas.generated';
 import { PROVIDER_GROUP_LABELS, groupProviders } from './providerMeta';
 import { ProviderPicker } from './ProviderPicker';
+import { groupSearchProviders } from '../settings/SearchSection';
 
 const shape = (ids: readonly string[]) =>
   groupProviders(ids).map(g => [g.group, g.ids] as const);
@@ -65,4 +66,13 @@ test('the picker renders one labelled radiogroup, gateways as rows', () => {
   assert.match(section('vendor'), /data-layout="cards"/);
   assert.match(section('gateway'), /data-layout="rows"/);
   assert.match(section('gateway'), /aria-checked="true"[^>]*>[\s\S]*?Requesty/);
+});
+
+test('the search Select groups keyless, keyed and self-hosted backends', () => {
+  assert.deepEqual(groupSearchProviders(['duckduckgo', 'tavily', 'brave', 'searxng', 'keenable']), [
+    { label: 'No key needed', ids: ['duckduckgo', 'keenable'] },
+    { label: 'Needs an API key', ids: ['tavily', 'brave'] },
+    { label: 'Self-hosted', ids: ['searxng'] },
+  ]);
+  assert.deepEqual(groupSearchProviders(['duckduckgo', 'brand-new']).map(g => g.label), ['No key needed', 'Other']);
 });

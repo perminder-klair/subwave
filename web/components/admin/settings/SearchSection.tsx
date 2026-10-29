@@ -7,10 +7,11 @@ import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import {
-  SEARCH_PROVIDER_CATALOG, SETTINGS_SEARCH_PROVIDERS, SETTINGS_SEARXNG_ENGINES_MAX, type SearchProviderEntry,
+  SEARCH_PROVIDER_CATALOG, SEARCH_PROVIDER_GROUPS, SETTINGS_SEARCH_PROVIDERS, SETTINGS_SEARXNG_ENGINES_MAX,
+  type SearchProviderEntry, type SearchProviderGroup,
 } from '@/lib/schemas.generated';
 import { Card, Btn, Pill } from '../ui';
 import {
@@ -25,6 +26,26 @@ const searchProvider = (id: string | undefined): SearchProviderEntry | undefined
 
 const searchProviderLabel = (id: string | undefined): string =>
   searchProvider(id)?.label || id || '—';
+
+const SEARCH_GROUP_LABELS: Record<SearchProviderGroup, string> = {
+  keyless: 'No key needed',
+  keyed: 'Needs an API key',
+  'self-hosted': 'Self-hosted',
+};
+
+// The server's providers under their Select groups, in SEARCH_PROVIDER_GROUPS
+// order, each keeping the server's order. An id the catalogue doesn't know
+// goes last, under "Other".
+export function groupSearchProviders(ids: readonly string[]): { label: string; ids: string[] }[] {
+  const known = new Set<string>(SEARCH_PROVIDER_CATALOG.map(p => p.id));
+  return [
+    ...SEARCH_PROVIDER_GROUPS.map(group => ({
+      label: SEARCH_GROUP_LABELS[group],
+      ids: ids.filter(id => searchProvider(id)?.group === group),
+    })),
+    { label: 'Other', ids: ids.filter(id => !known.has(id)) },
+  ].filter(g => g.ids.length > 0);
+}
 
 interface SearchSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
@@ -156,11 +177,14 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
             >
               <SelectTrigger className="max-w-[360px]" aria-label="Provider"><SelectValue /></SelectTrigger>
               <SelectContent>
-                <SelectGroup>
-                  {providers.map(p => (
-                    <SelectItem key={p} value={p}>{searchProviderLabel(p)}</SelectItem>
-                  ))}
-                </SelectGroup>
+                {groupSearchProviders(providers).map(g => (
+                  <SelectGroup key={g.label}>
+                    <SelectLabel>{g.label}</SelectLabel>
+                    {g.ids.map(p => (
+                      <SelectItem key={p} value={p}>{searchProviderLabel(p)}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                ))}
               </SelectContent>
             </Select>
             <div className="field-hint">{entry?.hint}</div>
