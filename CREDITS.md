@@ -175,7 +175,8 @@ when a skill or feature they enable needs them.
 **Language models.** [Ollama](https://ollama.com), [Anthropic](https://www.anthropic.com),
 [OpenAI](https://openai.com), [Google Gemini](https://ai.google.dev),
 [DeepSeek](https://www.deepseek.com), [OpenRouter](https://openrouter.ai),
-[Requesty](https://www.requesty.ai), [Vercel AI Gateway](https://vercel.com/ai-gateway),
+[Requesty](https://www.requesty.ai), [Cheaper Inference](https://cheaperinference.com),
+[Vercel AI Gateway](https://vercel.com/ai-gateway),
 and any OpenAI-compatible server.
 
 **Cloud speech.** [OpenAI](https://platform.openai.com/docs/guides/text-to-speech),

@@ -242,6 +242,7 @@ export const LLM_PROVIDERS = [
   'locca',
   'openrouter',
   'requesty',
+  'cheaperinference',
   'anthropic',
   'openai',
   'google',
@@ -263,6 +264,7 @@ export const EMBEDDING_PROVIDERS = [
   'openai',
   'google',
   'requesty',
+  'cheaperinference',
 ];
 
 // Ollama context window; 0 disables, else floored into [2048, 131072].

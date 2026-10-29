@@ -19,7 +19,7 @@ import {
   normalizeNavidromeCredentials,
   type LlmProbeInput,
 } from '../schemas/onboarding.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, DEFAULT_CHEAPER_INFERENCE_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
@@ -96,6 +96,11 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
         // OpenAI-compatible gateway at a fixed base URL; model ids are
         // provider/model (openai/gpt-4o-mini).
         m = createOpenAI({ baseURL: DEFAULT_REQUESTY_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
+        break;
+      case 'cheaperinference':
+        // OpenAI-compatible gateway at a fixed base URL; model ids are bare
+        // (gpt-5.4-mini).
+        m = createOpenAI({ baseURL: DEFAULT_CHEAPER_INFERENCE_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
         break;
       case 'ollama':
       default: {

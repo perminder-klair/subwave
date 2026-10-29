@@ -35,6 +35,7 @@ const SEAMS = [
       'DeepSeek',
       'OpenRouter',
       'Requesty',
+      'Cheaper Inference',
       'Vercel Gateway',
       'OpenAI-compatible',
     ],

@@ -208,6 +208,18 @@ const CAPS: Record<string, ProviderCapabilities> = {
     embeddingEndpoint: 'vendor',
     apiKeyEnv: 'REQUESTY_API_KEY',
   },
+  // Cheaper Inference mirrors requesty — built via createOpenAI, so the level
+  // resolves through the openai code path as reasoning_effort. Suppressed when
+  // reasoning is off or on a forced-tool leg. Bare model ids (gpt-5.4-mini).
+  cheaperinference: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'minimal'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+    embeddingEndpoint: 'vendor',
+    apiKeyEnv: 'CHEAPER_INFERENCE_API_KEY',
+  },
   // The gateway serializes the top-level level to whatever vendor the
   // `provider/model` id resolves to. Gemma downstreams are the exception, same
   // 400 as the google entry (#1044), so omit the param for them. A

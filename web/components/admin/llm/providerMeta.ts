@@ -27,6 +27,7 @@ export const PROVIDERS: ProviderMeta[] = [
   { id: 'deepseek',          label: 'DeepSeek',          blurb: 'Chat & reasoner · cloud',        kind: 'cloud', envVar: 'DEEPSEEK_API_KEY' },
   { id: 'openrouter',        label: 'OpenRouter',        blurb: 'Multi-vendor aggregator',        kind: 'cloud', envVar: 'OPENROUTER_API_KEY' },
   { id: 'requesty',          label: 'Requesty',          blurb: 'Multi-vendor aggregator',        kind: 'cloud', envVar: 'REQUESTY_API_KEY' },
+  { id: 'cheaperinference',  label: 'Cheaper Inference', blurb: 'Multi-vendor aggregator',        kind: 'cloud', envVar: 'CHEAPER_INFERENCE_API_KEY' },
   { id: 'gateway',           label: 'AI Gateway',        blurb: 'Vercel · multi-vendor',          kind: 'cloud', envVar: 'AI_GATEWAY_API_KEY' },
 ];
 
@@ -53,6 +54,7 @@ export const LLM_PROVIDER_LABELS: Record<string, string> = {
   deepseek: 'DeepSeek',
   openrouter: 'OpenRouter (multi-vendor aggregator)',
   requesty: 'Requesty (multi-vendor aggregator)',
+  cheaperinference: 'Cheaper Inference (multi-vendor aggregator)',
   gateway: 'Vercel AI Gateway (multi-vendor aggregator)',
 };
 

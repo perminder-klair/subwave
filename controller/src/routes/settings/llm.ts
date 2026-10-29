@@ -342,7 +342,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
 
 // Providers whose model API returns one mixed chat+embedding list with no type
 // flag, so scope=embedding has to trim them by the name heuristic below.
-const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty']);
+const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty', 'cheaperinference']);
 
 // Name heuristic: almost all embedding models carry "embed", the rest come from
 // a short list of families. An unmatched model can still be typed by hand.
@@ -521,6 +521,21 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
         if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
+        const data = (await r.json()) as { data?: unknown };
+        models = Array.isArray(data?.data)
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'cheaperinference': {
+        const apiKey = resolveKey('CHEAPER_INFERENCE_API_KEY');
+        if (!apiKey) throw new Error('CHEAPER_INFERENCE_API_KEY not set');
+        const r = await fetch(`${llmProvider.DEFAULT_CHEAPER_INFERENCE_BASE_URL}/models`, {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`Cheaper Inference HTTP ${r.status}`);
         const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
           ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()

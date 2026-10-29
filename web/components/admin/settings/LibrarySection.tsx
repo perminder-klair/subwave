@@ -46,6 +46,10 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
     { id: 'openai/text-embedding-3-small', dim: 1536 },
     { id: 'openai/text-embedding-3-large', dim: 3072 },
   ],
+  cheaperinference: [
+    { id: 'text-embedding-3-small', dim: 1536 },
+    { id: 'text-embedding-3-large', dim: 3072 },
+  ],
 };
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
@@ -135,7 +139,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // Embedding-capable subset, not the full LLM list: deepseek, gateway and
   // anthropic have no embeddings endpoint (#493, #522).
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty', 'cheaperinference'];
   // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]

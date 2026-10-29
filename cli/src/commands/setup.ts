@@ -24,13 +24,14 @@ import {
   probeAnthropic,
   probeOpenRouter,
   probeRequesty,
+  probeCheaperInference,
   type ProbeResult,
 } from '../probes.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
 
 // Keep in step with the controller's LLM_PROVIDERS (controller/src/settings.ts).
 // `locca` is keyless with a default base URL, so it groups with the local set.
-type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
+type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'cheaperinference' | 'gateway';
 type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
@@ -42,6 +43,7 @@ const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   requesty: 'REQUESTY_API_KEY',
+  cheaperinference: 'CHEAPER_INFERENCE_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
 };
 
@@ -293,6 +295,7 @@ const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later' | 'dj-brain'; l
   { value: 'deepseek',          label: 'DeepSeek',                         hint: 'needs DEEPSEEK_API_KEY' },
   { value: 'openrouter',        label: 'OpenRouter — multi-vendor',        hint: 'needs OPENROUTER_API_KEY' },
   { value: 'requesty',          label: 'Requesty — multi-vendor',          hint: 'needs REQUESTY_API_KEY' },
+  { value: 'cheaperinference',  label: 'Cheaper Inference — multi-vendor', hint: 'needs CHEAPER_INFERENCE_API_KEY' },
   { value: 'gateway',           label: 'Vercel AI Gateway — multi-vendor', hint: 'needs AI_GATEWAY_API_KEY' },
   { value: 'later',             label: 'Other / configure later',          hint: 'set it up in the admin UI' },
 ];
@@ -307,6 +310,7 @@ const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
   deepseek: 'deepseek-chat',
   openrouter: 'anthropic/claude-sonnet-4-5',
   requesty: 'openai/gpt-4o-mini',
+  cheaperinference: 'gpt-5.4-mini',
   gateway: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -415,6 +419,7 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
   if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
+  if (provider === 'cheaperinference') return reportProbe(label, () => probeCheaperInference({ apiKey }));
 }
 
 // COMPOSE_PROFILES in .env is what brings the sidecar up on later `up -d`

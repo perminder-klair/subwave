@@ -75,6 +75,10 @@ function defaultEmbeddingModelFor(provider: string): string {
       // Requesty is OpenAI-compatible and uses provider/model naming, so the
       // OpenAI embedding model is the safe default — same as openrouter.
       return 'openai/text-embedding-3-small';
+    case 'cheaperinference':
+      // Cheaper Inference is OpenAI-compatible with bare model ids, so the
+      // OpenAI embedding model id is the safe default.
+      return 'text-embedding-3-small';
     case 'anthropic':
       // No first-party Anthropic embedding API. We resolve via openai.
       return 'text-embedding-3-small';
@@ -249,6 +253,19 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       });
       return provider.textEmbeddingModel(id);
     }
+    case 'cheaperinference': {
+      // Cheaper Inference exposes an OpenAI-compatible embeddings endpoint
+      // (POST https://api.cheaperinference.com/v1/embeddings), so it routes
+      // through the same createOpenAI transport as requesty — just a fixed base
+      // URL. A real key is required — a missing one 401s with the
+      // 'unauthorized' message.
+      const provider = createOpenAI({
+        baseURL: 'https://api.cheaperinference.com/v1',
+        apiKey: pinnedApiKey(cfg) || 'unused',
+        name: 'cheaperinference',
+      });
+      return provider.textEmbeddingModel(id);
+    }
     case 'ollama': {
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
       return provider.textEmbeddingModel(id);
@@ -264,7 +281,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       throw new Error(
         `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
           `embedding-capable provider in Settings → Library tagger → Embedding ` +
-          `(ollama, openai, google, openrouter, requesty, locca, or openai-compatible).`,
+          `(ollama, openai, google, openrouter, requesty, cheaperinference, locca, or openai-compatible).`,
       );
   }
 }
@@ -274,7 +291,8 @@ export function embeddingModel() {
   const id = cfg.model || defaultEmbeddingModelFor(cfg.provider);
   const headerSig = Object.entries(cfg.headers || {}).sort(([a], [b]) => a.localeCompare(b));
   // Credentials key the cache by fingerprint only. pinnedApiKey covers the
-  // builders that read their env var at construction (openrouter, requesty), so
+  // builders that read their env var at construction (openrouter, requesty,
+  // cheaperinference), so
   // a key saved through the secrets form takes effect without a restart.
   const sig = `embed|${cfg.provider}|${id}|k${credentialSig(pinnedApiKey(cfg))}|${cfg.ollamaUrl}|${cfg.baseUrl}|h${credentialSig(headerSig.length ? JSON.stringify(headerSig) : '')}`;
 
