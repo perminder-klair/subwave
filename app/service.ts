@@ -7,7 +7,8 @@ import { remotePlay } from '@/lib/remote-play';
 export async function PlaybackService(): Promise<void> {
   // RemotePlay reloads with a cache-buster to discard the paused buffer,
   // through the app's player and its stream recovery while that is mounted
-  // (src/lib/remote-play.ts). If reloading fails, fall back to play.
+  // (src/lib/remote-play.ts), where a failed load goes to the error backoff.
+  // If a direct load fails, fall back to play.
   TrackPlayer.addEventListener(Event.RemotePlay, () =>
     remotePlay({
       hasStream: () => getLastLiveMeta() !== null,
