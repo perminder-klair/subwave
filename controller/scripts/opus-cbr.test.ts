@@ -37,8 +37,12 @@ function assertHardCbr(source: string) {
     assert.match(params, /\bvbr\s*=\s*["']none["']/, `%opus(${params}) must be CBR`);
     // The last vbr wins, so one saying "none" proves nothing beside another.
     assert.doesNotMatch(params, /\bvbr\s*=[\s\S]*\bvbr\s*=/, `%opus(${params}) must set vbr once`);
-    // DTX would shrink silence to a byte or two again, CBR or not.
-    assert.doesNotMatch(params, /\bdtx\s*=\s*true/, `%opus(${params}) must not use DTX`);
+    // A ( inside the call means the first ) need not close it, so a dtx or a
+    // second vbr can sit past where this stopped reading.
+    assert.doesNotMatch(params, /\(/, `%opus(${params}) must hold no parens`);
+    // DTX would shrink silence to a byte or two again, CBR or not, and only a
+    // literal false says it is off: dtx=(true) and dtx=d are as real.
+    assert.doesNotMatch(params, /\bdtx\s*=(?!\s*false(?:[,\s]|$))/, `%opus(${params}) must not use DTX`);
   }
   // An %ffmpeg libopus encoder would escape the checks above.
   assert.ok(!code(source).includes('libopus'), 'build the Opus encoder with %opus');

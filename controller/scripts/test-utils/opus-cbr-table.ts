@@ -42,6 +42,13 @@ export const NOT_CBR: Record<string, () => string> = {
   'a spaced %opus (…) that is VBR': () => radioWith(BRANCH_96, BRANCH_96.replace('%opus', '%opus ').replace('none', 'constrained')),
   'DTX': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ', dtx = true)')),
   'DTX across lines': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ',\n  dtx\n  =\n  true\n)')),
+  // These four boot on 2.4.6, and each encodes silence as DTX or VBR.
+  'DTX past a ) inside the call': () =>
+    radioWith(BRANCH_96, '%opus(vbr="none", bitrate=(96), samplerate=48000, channels=2, application="audio", dtx=true)'),
+  'a second vbr past a ) inside the call': () =>
+    radioWith(BRANCH_96, BRANCH_96.replace('vbr="none")', 'vbr="none", bitrate=(96), vbr="constrained")')),
+  'DTX in parens': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ', dtx=(true))')),
+  'DTX from an expression': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ', dtx=not false)')),
   'an %ffmpeg libopus encoder': () => radioWith(MP3_64, '%ffmpeg(format="ogg", %audio(codec="libopus"))'),
   'libopus named inside a %opus(': () => radioWith(BRANCH_96, BRANCH_96.replace('"audio"', '"libopus"')),
 };

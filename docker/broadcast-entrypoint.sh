@@ -187,15 +187,19 @@ code = ""
 # (#2138) and cannot outlive it. A client may treat the Opus burst as seconds
 # only on `cbr` (#2142); every doubt reads as not-CBR:
 # - no vbr at all, or a bare %opus: the 2.4.6 default is constrained VBR;
-# - dtx=true, which can stop sending silent frames whatever the vbr mode;
+# - any dtx but a literal false: true can stop sending silent frames whatever the
+#   vbr mode, and dtx=(true) or dtx=d is as real;
 # - vbr given twice: the last one wins, so one saying "none" proves nothing;
+# - a `(` inside the call: the first `)` then need not close it, so a dtx or a
+#   second vbr can sit past it, and `bitrate=(96), dtx=true` is DTX on 2.4.6;
 # - libopus, an %ffmpeg encoder this cannot read.
 opus_encoding() {
     local calls key='[^[:alnum:]_]' eq='[[:space:]]*=[[:space:]]*'
     calls=$(liq_code "$1" | grep -oE 'libopus|%opus([[:space:]]*\([^)]*\)|[^[:alnum:]_])' || true)
     [ -n "$calls" ] || return 0
     if printf '%s\n' "$calls" | grep -qvE "${key}vbr$eq[\"']none[\"']" \
-        || printf '%s\n' "$calls" | grep -qE "libopus|${key}dtx${eq}true|${key}vbr$eq.*${key}vbr$eq"; then
+        || printf '%s\n' "$calls" | grep -qE "libopus|\(.*\(|${key}vbr$eq.*${key}vbr$eq" \
+        || printf '%s\n' "$calls" | grep -oE "${key}dtx$eq[^,)[:space:]]*" | grep -qvE "^${key}dtx${eq}false$"; then
         echo vbr
     else
         echo cbr
