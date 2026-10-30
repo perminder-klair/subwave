@@ -179,6 +179,14 @@
     --booth-tile: color-mix(in oklab, var(--card-bg) 22%, transparent);
     --booth-edge: color-mix(in oklab, var(--ink) 28%, transparent);
     --booth-blur: blur(18px) saturate(1.5) brightness(0.97);
+    /* Drawer glass: the listener Sheet (components/ui/sheet.tsx) is a thin --bg
+       wash that only its backdrop blur makes readable. It turns opaque wherever
+       the booth fills do, and where backdrop-filter is unsupported, or the
+       now-playing text shows through it (#2132). */
+    --drawer-fill: color-mix(in oklab, var(--bg) 30%, transparent);
+    /* The classic skin's top bar (skins/classic/TopBar.tsx) is the same kind of
+       blurred wash, and goes opaque in the same places. */
+    --topbar-fill: color-mix(in oklab, var(--bg) 55%, transparent);
     /* Text on an accent fill. --bg is the fallback; where relative colour is
        supported it is near-white on a dark accent and near-black on a light
        one, so Phosphor's amber and Blueprint's sky blue stay legible. */
@@ -939,10 +947,12 @@ html[data-finish="misregister"]:not(.lite):not(.webkit) .sw-theme-stage {
            The build adds the -webkit- copy Safari needs. */
         backdrop-filter: none !important;
     }
-    /* With no blur, the booth glass panes go opaque. */
+    /* With no blur, the booth glass panes, the drawer and the top bar go opaque. */
     :root {
         --booth-fill: var(--sidebar);
         --booth-tile: var(--card-bg);
+        --drawer-fill: var(--bg);
+        --topbar-fill: var(--bg);
     }
     .v3-drawer-content,
     .v3-drawer-overlay,
@@ -1000,6 +1010,16 @@ html.lite *::after {
 html.lite {
     --booth-fill: var(--sidebar);
     --booth-tile: var(--card-bg);
+    --drawer-fill: var(--bg);
+    --topbar-fill: var(--bg);
+}
+/* An engine with no backdrop-filter at all never blurs the drawer or the top
+   bar either. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    :root {
+        --drawer-fill: var(--bg);
+        --topbar-fill: var(--bg);
+    }
 }
 /* The animation kill above would leave the ripple a static ring stack for its
    3s burst — hide the rings, matching reduced-motion. */

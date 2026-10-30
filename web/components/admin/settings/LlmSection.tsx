@@ -19,6 +19,7 @@ import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { LLM_ENV_VARS, groupProviders, llmProviderLabel } from '../llm/providerMeta';
 import { Advanced } from './section-chrome';
+import { ContextSizing } from './ContextSizing';
 import { COMPAT_MODE_OPTIONS, compatDetectedNote, effectiveCompatMode, type CompatMode } from './compat-mode';
 import { pinnedFieldNames, type SwapEmbeddingPreview } from './llm-swap-copy';
 import {
@@ -528,6 +529,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 raise it for reasoning models, lower it on tight VRAM. Set 0 to
                 use Ollama&apos;s default. Ignored for <code>:cloud</code> models.
               </div>
+              <ContextSizing
+                adminFetch={adminFetch}
+                numCtx={form.llm.numCtx}
+                onUse={tokens => setForm(f => ({ ...f, llm: { ...f.llm, numCtx: tokens } }))}
+              />
             </div>
           )}
 

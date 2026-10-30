@@ -229,6 +229,16 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                   and a key on file may be another provider's, which a prefix-gated
                   provider ignores, so "ready to use" would overclaim. */}
               {keyed.key !== 'optional' && <KeyStatus envVar="SEARCH_API_KEY" present={apiKeySet} />}
+              {/* The controller knows whether the key Keenable would send is a keen_
+                  one. A saved key already shows in the field's placeholder, so only
+                  an env key needs saying. */}
+              {provider === 'keenable' && data.search?.keenableKeySource === 'env' && (
+                <KeyStatus
+                  envVar="SEARCH_API_KEY"
+                  present
+                  detail={<><code>SEARCH_API_KEY</code> holds a Keenable key, so searches use it and get the higher rate limit.</>}
+                />
+              )}
               {keyTest && <KeyTestResult result={keyTest} />}
             </>
           )}

@@ -1,6 +1,8 @@
 // POST /settings/secrets/test: the admin "Test key" button. Each probe is
 // checked through the real route against a fetch stub, so the endpoint, the
-// credential header and the operator-facing message are pinned together.
+// credential header and the operator-facing message are pinned together. The
+// malformed-key refusal is pinned here for POST /settings/embedding/probe too,
+// which sits on the same router.
 //
 // requireAdmin is a no-op with ADMIN_USER/ADMIN_PASS unset, so the router mounts
 // bare over real HTTP against a temp state dir.
@@ -91,6 +93,62 @@ test('Keenable: a non-keen_ value is reported as unused, and never sent', async 
   assert.equal(r.ok, false);
   assert.equal(r.message, 'Not a Keenable key (they start with keen_) — searches run keyless without one');
   assert.doesNotMatch(r.message, /rejected/i);
+  assert.equal(outbound.length, 0);
+});
+
+// fetch rejects a header value with a line break, NUL or other control
+// character, and its error quotes the whole value. A key pasted across a line
+// wrap must be refused before any probe runs, never echoed back.
+const MALFORMED_KEY_MESSAGE = 'The key has a line break or other control character in it. Paste it again as one line.';
+
+test('a key with a control character is refused before any probe, without echoing it', async (t) => {
+  const cases: Record<string, string>[] = [
+    { key: 'REQUESTY_API_KEY' },
+    { key: 'SEARCH_API_KEY', provider: 'tavily' },
+    { key: 'SEARCH_API_KEY', provider: 'brave' },
+    { key: 'SEARCH_API_KEY', provider: 'keenable' },
+    { key: 'ELEVENLABS_API_KEY' },
+    { key: 'LISTENBRAINZ_USER_TOKEN' },
+    { key: 'EMBEDDING_API_KEY' },
+  ];
+  for (const c of cases) {
+    for (const value of ['keen_SECRET\npart2', 'keen_SECRET\rpart2', 'keen_SECRET\u0000part2', 'keen_SECRET\u007fpart2']) {
+      const outbound = stubProvider(t, 200);
+      const r = await testKey({ ...c, value });
+      const label = `${c.key}${c.provider ? `/${c.provider}` : ''} ${JSON.stringify(value)}`;
+      assert.equal(r.ok, false, label);
+      assert.equal(r.message, MALFORMED_KEY_MESSAGE, label);
+      assert.doesNotMatch(r.message, /SECRET/, label);
+      assert.equal(outbound.length, 0, `${label} reached a provider`);
+      t.mock.restoreAll();
+    }
+  }
+});
+
+// With no typed value the route probes the env key, which the admin never
+// displays otherwise.
+test('an env key with a control character is refused too', async (t) => {
+  const outbound = stubProvider(t, 200);
+  process.env.ELEVENLABS_API_KEY = 'el-SECRET\npart2';
+  t.after(() => { delete process.env.ELEVENLABS_API_KEY; });
+  const r = await testKey({ key: 'ELEVENLABS_API_KEY' });
+  assert.equal(r.ok, false);
+  assert.equal(r.message, MALFORMED_KEY_MESSAGE);
+  assert.equal(outbound.length, 0);
+});
+
+test('embedding probe: a typed key with a control character is refused, not echoed', async (t) => {
+  const outbound = stubProvider(t, 200);
+  const res = await fetch(`${base}/settings/embedding/probe`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: 'openai', model: 'text-embedding-3-small', apiKey: 'sk-SECRET\npart2' }),
+  });
+  assert.equal(res.status, 200);
+  const r = await res.json() as { ok: boolean; code: string; message: string };
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'invalid');
+  assert.equal(r.message, MALFORMED_KEY_MESSAGE);
   assert.equal(outbound.length, 0);
 });
 

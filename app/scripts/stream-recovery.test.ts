@@ -8,6 +8,7 @@ import {
   WATCHDOG_MS,
   keptPace,
   retryDelay,
+  watchdogDelay,
   type ReloadReason,
 } from '../src/lib/stream-recovery.ts';
 
@@ -48,6 +49,8 @@ function setup(
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1_000_000 });
   const clock = new MediaClock();
   const reloads: ReloadReason[] = [];
+  // When each reload started, on the mocked wall clock.
+  const reloadAt: number[] = [];
   const held: Deferred[] = [];
   const logs: string[] = [];
   const counts = { advancing: 0, inFlight: 0, maxInFlight: 0 };
@@ -55,6 +58,7 @@ function setup(
     position: opts.position ?? (async () => clock.read()),
     reload: async (reason) => {
       reloads.push(reason);
+      reloadAt.push(Date.now());
       counts.inFlight += 1;
       counts.maxInFlight = Math.max(counts.maxInFlight, counts.inFlight);
       try {
@@ -78,7 +82,7 @@ function setup(
       await settle();
     }
   };
-  return { recovery, clock, reloads, held, logs, counts, tick };
+  return { recovery, clock, reloads, reloadAt, held, logs, counts, tick };
 }
 
 type Harness = ReturnType<typeof setup>;
@@ -103,6 +107,7 @@ test('pace: a moving clock passes, a frozen, rewound or unknown one does not', (
   assert.equal(keptPace(null, { at: 6000, position: 106 }, WATCHDOG_MIN_PACE), false);
   assert.equal(keptPace(from, null, WATCHDOG_MIN_PACE), false);
   assert.deepEqual([0, 1, 2, 20].map(retryDelay), [500, 1000, 2000, 60_000]);
+  assert.deepEqual([0, 3, 4, 7, 20].map(watchdogDelay), [WATCHDOG_MS, WATCHDOG_MS, 8000, 60_000, 60_000]);
 });
 
 test('a stall the media clock plays through is not reloaded; the UI is reconciled (#2114, #1936)', async (t) => {
@@ -311,6 +316,138 @@ test('a station that keeps failing is backed off to the ceiling, past the watchd
   assert.ok(h.reloads.length <= 11, `${h.reloads.length} loads in 4 minutes`);
 });
 
+test('a reload made while the item is still Loading is checked again, on a growing backoff (#2143)', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  await settle();
+  // A connection that hangs before the response. On iOS the item stays in
+  // Loading, and a reload made from there reports nothing: SwiftAudioEx drops
+  // a write of the state it already holds.
+  h.recovery.onState('loading');
+  await h.tick(5 * 60_000);
+  const gaps = h.reloadAt.slice(1).map((ms, i) => ms - h.reloadAt[i]);
+  assert.deepEqual(
+    gaps,
+    [6000, 6000, 6000, 6000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000],
+    `gaps ${gaps.join(', ')}`,
+  );
+  assert.ok(h.reloads.slice(1).every((r) => r === 'watchdog'));
+});
+
+test('a hung station that reports every load is backed off the same way', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  // Android: each new item reports Loading, then Buffering while it waits.
+  let seen = 0;
+  for (let elapsed = 0; elapsed < 5 * 60_000; elapsed += 250) {
+    while (seen < h.reloads.length) {
+      seen += 1;
+      h.recovery.onState('loading');
+      h.recovery.onState('buffering');
+    }
+    await h.tick(250);
+  }
+  const gaps = h.reloadAt.slice(1).map((ms, i) => ms - h.reloadAt[i]);
+  assert.deepEqual(
+    gaps,
+    [6000, 6000, 6000, 6000, 8000, 16_000, 32_000, 60_000, 60_000, 60_000],
+    `gaps ${gaps.join(', ')}`,
+  );
+});
+
+test('an error after hung reloads continues their backoff', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  await settle();
+  h.recovery.onState('loading');
+  await h.tick(30_000); // reloads at 6, 12, 18 and 24s: four failures
+  assert.equal(h.reloads.length, 5);
+  // AVFoundation gives up on the hung load at last.
+  const failedAt = Date.now();
+  h.recovery.onError();
+  h.recovery.onState('error');
+  await h.tick(10_000);
+  assert.deepEqual(h.reloads.slice(5), ['error']);
+  assert.equal(h.reloadAt[5] - failedAt, retryDelay(4));
+});
+
+test('a hung station that comes back is watched at WATCHDOG_MS again', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  await settle();
+  h.recovery.onState('loading');
+  await h.tick(60_000);
+  assert.ok(h.reloads.length >= 6);
+  // The latest load connects.
+  const loads = h.reloads.length;
+  h.recovery.onState('playing');
+  h.clock.run();
+  await h.tick(90_000);
+  assert.equal(h.reloads.length, loads, 'a playing item is not reloaded');
+  h.recovery.onState('buffering');
+  h.clock.freeze();
+  await h.tick(WATCHDOG_MS - 250);
+  assert.equal(h.reloads.length, loads);
+  await h.tick(500);
+  assert.equal(h.reloads.length, loads + 1);
+});
+
+test('a hung station whose load plays with no Playing event starts its backoff over', async (t) => {
+  const h = setup(t);
+  h.recovery.tuneIn();
+  await settle();
+  h.recovery.onState('loading');
+  await h.tick(33_000); // reloads at 6, 12, 18, 24 and 32s: five failures
+  assert.equal(h.reloads.length, 6);
+  // The latest load plays, but JS never hears Playing: the check at 48s holds.
+  h.clock.run();
+  await h.tick(29_000);
+  assert.equal(h.reloads.length, 6);
+  assert.ok(h.logs.some((l) => l.startsWith('hold [watchdog] state=loading')));
+  // It hangs again. The hold was a sign of playback, so the reloads come
+  // WATCHDOG_MS apart, not 32s.
+  h.clock.freeze();
+  await h.tick(20_000);
+  const since = h.reloadAt.slice(6).map((ms) => ms - h.reloadAt[6]);
+  assert.deepEqual(since, [0, WATCHDOG_MS, 2 * WATCHDOG_MS], `reloads at +${since.join(', +')}`);
+});
+
+test('a remote Play reloads at once over a stream that plays, with no clock check (#2139)', async (t) => {
+  const h = setup(t);
+  await onAir(h);
+  h.recovery.tuneIn('remote');
+  await settle();
+  assert.deepEqual(h.reloads, ['tune', 'remote']);
+  assert.ok(h.logs.some((l) => l.startsWith('reload [remote] #2 state=playing')));
+});
+
+test('a remote Play during a reload waits for it, never overlapping (#2139)', async (t) => {
+  const h = setup(t, { holdReloads: true });
+  h.recovery.tuneIn();
+  await settle();
+  h.held[0].resolve();
+  await settle();
+  h.recovery.onState('loading');
+  h.recovery.onState('playing');
+  h.clock.run();
+  await h.tick(10_000);
+  h.recovery.onState('buffering');
+  h.clock.freeze();
+  await h.tick(WATCHDOG_MS + 250);
+  assert.deepEqual(h.reloads, ['tune', 'watchdog'], 'the watchdog reload is in flight');
+  // A car connecting sends Play, twice.
+  h.recovery.tuneIn('remote');
+  h.recovery.tuneIn('remote');
+  await settle();
+  assert.deepEqual(h.reloads, ['tune', 'watchdog']);
+  h.held[1].resolve();
+  await settle();
+  assert.deepEqual(h.reloads, ['tune', 'watchdog', 'remote'], 'one load, queued behind it');
+  h.held[2].resolve();
+  await settle();
+  assert.equal(h.counts.maxInFlight, 1);
+});
+
 test('a regained link reloads a stopped stall at once, but not a playing one', async (t) => {
   const h = setup(t);
   await onAir(h);
@@ -418,13 +555,13 @@ test('a tune-in ends an interruption whose end was missed', async (t) => {
   h.held[1].resolve();
 });
 
-test('a lock-screen Play after a missed interruption end is watched before it plays', async (t) => {
+test('a load made outside the module after a missed interruption end is watched before it plays', async (t) => {
   const h = setup(t);
   await onAir(h);
   h.recovery.onDuck(true); // another app's audio took over, and iOS never ends it
   h.clock.freeze();
   await h.tick(30_000);
-  // service.ts reloads the stream, but the new item never starts.
+  // A load made outside the module, and the new item never starts.
   h.recovery.onState('loading');
   h.clock.jumpTo(0);
   await h.tick(WATCHDOG_MS + 250);
@@ -479,8 +616,14 @@ test("a quick stop and re-tune leaves the old session's timer inert", async (t) 
   await h.tick(3000);
   h.recovery.tuneOut();
   h.recovery.tuneIn();
-  await h.tick(20_000);
+  // The old check was due 3s from here; the new load's own is due at 6s.
+  await h.tick(WATCHDOG_MS - 500);
   assert.deepEqual(h.reloads, ['tune', 'tune'], 'no watchdog from the first session');
+  h.recovery.onState('loading');
+  h.recovery.onState('playing');
+  h.clock.run();
+  await h.tick(20_000);
+  assert.deepEqual(h.reloads, ['tune', 'tune']);
 });
 
 test('a reload that fails after a tune-out schedules no retry', async (t) => {

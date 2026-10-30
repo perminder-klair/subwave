@@ -26,7 +26,7 @@ import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
-import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
+import { saveSecrets, SECRET_ENV_KEYS, secretValueIssue } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
 import { pingWith } from '../music/subsonic.js';
 
@@ -62,6 +62,8 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
   // The schema owns "provider and model required" and "openai-compatible needs a
   // baseUrl"; the wizard runs the same rule to hold the button shut.
   const { provider, model, apiKey, baseUrl, ollamaUrl } = req.body as LlmProbeInput;
+  const keyIssue = apiKey ? secretValueIssue(apiKey) : null;
+  if (keyIssue) return res.json({ ok: false, error: keyIssue });
 
   try {
     let m: any;
