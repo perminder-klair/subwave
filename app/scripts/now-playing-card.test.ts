@@ -132,6 +132,16 @@ test('a cover that changes before the first playing sends nothing, since no card
   });
 });
 
+test('a persona swap before the first playing sends the name, and the avatar waits', () => {
+  const persona = { artist: 'Nova', artwork: 'https://radio.example/api/personas/nova.png' };
+  assert.equal(sendsCard({ ...SONG, played: false }, { ...SONG, ...persona, played: false }), true);
+  assert.deepEqual(costs([
+    connecting(2),
+    { ...connecting(2), ...persona },
+    { ...playing(2), ...persona },
+  ]), { cards: 3, iosCovers: 1, androidCovers: 1 });
+});
+
 test('a song change after the first playing sends the whole card, stalled or not', () => {
   assert.deepEqual(costs([...TUNE_IN, { ...playing(1), ...NEXT_SONG }]), {
     cards: 3 + 1, iosCovers: 1 + 1, androidCovers: 1 + 1,
