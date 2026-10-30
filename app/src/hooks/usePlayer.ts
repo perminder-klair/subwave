@@ -10,14 +10,15 @@ import {
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
-import { playbackLog } from '@/lib/playback-log';
+import { playbackEventLine, playbackLog } from '@/lib/playback-log';
 import { claimRemotePlay } from '@/lib/remote-play';
 import { StreamRecovery } from '@/lib/stream-recovery';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 // Every build keeps the line, redacted, in the playback log a listener can
-// share from the About sheet (#2140); dev builds print it as well.
+// share from the About sheet (#2140); dev builds print it as well. add() never
+// throws, so a log line can't cost playback (#2160).
 function plog(msg: string) {
   playbackLog.add(msg);
   if (__DEV__) console.log(`[player ${new Date().toISOString().slice(11, 23)}] ${msg}`);
@@ -137,11 +138,7 @@ export function usePlayer(
   useTrackPlayerEvents(
     [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop, Event.RemoteDuck],
     (event) => {
-      plog(
-        `event ${event.type}${'state' in event ? ` state=${String(event.state)}` : ''}${
-          'message' in event ? ` msg=${String((event as { message?: string }).message)}` : ''
-        }`,
-      );
+      plog(playbackEventLine(event));
       if (event.type === Event.RemotePause || event.type === Event.RemoteStop) {
         // A tune-out, not a failure. Both flip synchronously so the trailing
         // Stopped event can't arm a reconnect before the re-render.

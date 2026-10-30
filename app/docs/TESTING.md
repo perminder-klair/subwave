@@ -355,7 +355,11 @@ The first line names the app version, the JS bundle (`OTA <id>` or
 `built-in <id>`, and the channel) and the OS. Times are the phone's clock in
 UTC. Each `reload [reason] #n` line should match one new stream request (its
 `t=` cache-buster) in the station's Icecast access log; a `skipped` line loads
-nothing. Lines are redacted before they are stored
+nothing. A playback error reads `event playback-error code=<code> msg=<text>`:
+Android sends both, and its code is the part that tells a refused stream
+(`android-io-bad-http-status`) from a dead link
+(`android-io-network-connection-failed`); iOS sends only the text, AVPlayer's
+own description. Lines are redacted before they are stored
 (`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
 password, Station login and `Authorization` values are gone, and a route lists
 port types without device names.
