@@ -13,8 +13,8 @@
 //   Proxy-Authorization header, and a Basic or Bearer credential with no header
 //   name, become [redacted], and so does the rest of a line after an
 //   x-station-auth header's name (only GET /lyrics/current sends one);
-// - an iOS route change's outputs keep each port's type and drop its name,
-//   which is often the owner's ("Sam's AirPods").
+// - an iOS route change's outputs keep each port's type, from a list of Apple's
+//   own, and drop its name, which is often the owner's ("Sam's AirPods").
 // The rules match patterns rather than trusting the call sites, because a
 // playback error's text isn't the app's own. Android's is ExoPlayer's fixed
 // wording and RNTP's code, neither of which quotes a URL, but iOS's is the
@@ -86,15 +86,52 @@ export function redactPlaybackLine(msg: string): string {
     .replace(ROUTE_OUTPUTS_RE, (_m, outputs: string) => `outputs=${portTypes(outputs)}`);
 }
 
-// "AirPlay:Kitchen,Speaker:iPhone Speaker" → "AirPlay,Speaker". A port type is
-// one AVAudioSession.Port word, right after the comma the native module joins
-// on; a name with a comma in it leaves a piece with no type, which is dropped
-// rather than kept.
+// Every AVAudioSession.Port raw value in the iOS 27.1 SDK. AVFAudio's
+// AVAudioSessionTypes.h names the 22 ports but not their strings, so a new
+// SDK's port goes here by hand, and reads as OTHER_PORT until it does. The
+// inputs can't be in a route's outputs. One of them, the Continuity microphone,
+// is listed under both spellings in use, since Apple doesn't publish its string.
+const PORT_TYPES = new Set([
+  'ContinuityMicrophone',
+  'MicrophoneContinuity',
+  'LineIn',
+  'MicrophoneBuiltIn',
+  'MicrophoneWired',
+  'LineOut',
+  'Headphones',
+  'BluetoothA2DPOutput',
+  'Receiver',
+  'Speaker',
+  'HDMIOutput',
+  'AirPlay',
+  'BluetoothLE',
+  'MediaDeviceExtension',
+  'BluetoothHFP',
+  'USBAudio',
+  'CarAudio',
+  'Virtual',
+  'PCI',
+  'FireWire',
+  'DisplayPort',
+  'AVB',
+  'Thunderbolt',
+]);
+const OTHER_PORT = 'Other';
+
+// "AirPlay:Kitchen,Speaker:iPhone Speaker" → "AirPlay,Speaker". The native
+// module joins `type:name` on commas, and a name can hold anything, so
+// "BluetoothA2DPOutput:Sam,Dave:x" can't be told from two outputs. Only a word
+// from PORT_TYPES is ever written. Any other word before a colon reads as
+// OTHER_PORT rather than going: it may be a port Apple has added, and a route
+// that lost it would read as having no output. A name in that shape counts as
+// one output too many and leaks nothing. A piece with no such word is the rest
+// of a name, and is dropped.
 function portTypes(outputs: string): string {
   return outputs
     .split(',')
     .map((o) => /^([A-Za-z0-9]+):/.exec(o)?.[1])
     .filter((t): t is string => !!t)
+    .map((t) => (PORT_TYPES.has(t) ? t : OTHER_PORT))
     .join(',');
 }
 

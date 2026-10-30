@@ -324,6 +324,104 @@ test('a line terminator in a device name never hides it from the route rule', ()
   }
 });
 
+// Typed out rather than imported, so dropping one from the rule fails here.
+const AV_AUDIO_SESSION_PORTS = [
+  'AirPlay', 'AVB', 'BluetoothA2DPOutput', 'BluetoothHFP', 'BluetoothLE', 'CarAudio',
+  'ContinuityMicrophone', 'DisplayPort', 'FireWire', 'HDMIOutput', 'Headphones', 'LineIn',
+  'LineOut', 'MediaDeviceExtension', 'MicrophoneBuiltIn', 'MicrophoneContinuity',
+  'MicrophoneWired', 'PCI', 'Receiver', 'Speaker', 'Thunderbolt', 'USBAudio', 'Virtual',
+];
+
+test('every AVAudioSession.Port keeps its own name in a route line', () => {
+  for (const port of AV_AUDIO_SESSION_PORTS) {
+    for (const [outputs, want] of [
+      [`${port}:Sam's Device`, port],
+      // The native module writes the colon even for a port with no name.
+      [`${port}:`, port],
+      [`${port}:Kitchen, upstairs`, port],
+      [`${port}:Sam: office`, port],
+      [`${port}:Sam,Speaker:iPhone Speaker`, `${port},Speaker`],
+      [`Speaker:iPhone Speaker,${port}:Sam's Device`, `Speaker,${port}`],
+    ]) {
+      assert.equal(redactPlaybackLine(`route change reason=1 outputs=${outputs}`), `route change reason=1 outputs=${want}`);
+    }
+  }
+});
+
+test('a word no port is called reads Other, and never reaches the line', () => {
+  for (const [outputs, want] of [
+    // A device called "Sam,Dave:x", and the words of a longer name.
+    ['BluetoothA2DPOutput:Sam,Dave:x', 'BluetoothA2DPOutput,Other'],
+    ['BluetoothA2DPOutput:Sam,Dave:x,Jo:y', 'BluetoothA2DPOutput,Other,Other'],
+    ['AirPlay:Kitchen,Sam:Office,Speaker:iPhone Speaker', 'AirPlay,Other,Speaker'],
+    // A port Apple adds holds its place in the route, so the count stays right.
+    ['SomePortAppleAdds:Sam', 'Other'],
+    ['SomePortAppleAdds:Sam,Speaker:iPhone Speaker', 'Other,Speaker'],
+    ['Speaker:iPhone Speaker,SomePortAppleAdds:Sam', 'Speaker,Other'],
+    // The match is whole and exact.
+    ['speaker:Sam', 'Other'],
+    ['SPEAKER:Sam', 'Other'],
+    ['Speakers:Sam', 'Other'],
+    ['Speaker2:Sam', 'Other'],
+    ['AirPlayDave:Sam', 'Other'],
+    // An inherited name isn't a port, as it could be in a plain object.
+    ['constructor:Sam', 'Other'],
+    ['toString:Sam', 'Other'],
+    ['hasOwnProperty:Sam', 'Other'],
+    // The fallback word is no way through either.
+    ['Other:Sam', 'Other'],
+  ]) {
+    assert.equal(redactPlaybackLine(`route change reason=2 outputs=${outputs}`), `route change reason=2 outputs=${want}`);
+  }
+});
+
+test('a piece with no port word before a colon still goes, and is not counted', () => {
+  for (const [outputs, want] of [
+    ['AirPlay:Kitchen, upstairs,Speaker:iPhone Speaker', 'AirPlay,Speaker'],
+    ['AirPlay:Kitchen, Dave:x,Speaker:iPhone Speaker', 'AirPlay,Speaker'],
+    ['AirPlay:Kitchen,Dave Smith:x', 'AirPlay'],
+    ['AirPlay:Kitchen,Zoë:x', 'AirPlay'],
+    ['AirPlay:Kitchen,:x', 'AirPlay'],
+    ['AirPlay:Kitchen,', 'AirPlay'],
+    ['AirPlay:Kitchen,Dave', 'AirPlay'],
+    ['Dave', ''],
+    ['', ''],
+  ]) {
+    assert.equal(redactPlaybackLine(`route change reason=2 outputs=${outputs}`), `route change reason=2 outputs=${want}`);
+  }
+});
+
+test('no character in a device name lets any of it through the route rule', () => {
+  const printable = Array.from({ length: 0x7f - 0x20 }, (_, i) => String.fromCharCode(0x20 + i));
+  const terminators = ['\n', '\r', ' ', ' '];
+  const beyondAscii = ['\t', ' ', '​', '’', '，', '：', 'é', '🎧'];
+  const type = `(?:${AV_AUDIO_SESSION_PORTS.join('|')}|Other)`;
+  const onlyTypes = new RegExp(`^route change reason=2 outputs=BluetoothA2DPOutput(?:,${type})*$`);
+  const placements = (c: string) => [
+    `Sam${c}Dave`,
+    `Sam${c}`,
+    `${c}Sam`,
+    `Sam,Dave${c}:x`,
+    `Sam,${c}Dave:x`,
+    `Sam${c},Dave:x`,
+    `Sam,Dave:${c}`,
+    `Sam,Dave:x${c}`,
+    `Sam,Dave:x${c}Jo:y`,
+    `Sam,Dave:x,Jo${c}:y`,
+    `${c},Sam:${c},Dave:${c}`,
+  ];
+  for (const c of [...printable, ...terminators, ...beyondAscii]) {
+    for (const name of placements(c)) {
+      for (const outputs of [`BluetoothA2DPOutput:${name}`, `BluetoothA2DPOutput:${name},Speaker:iPhone Speaker`]) {
+        const line = `route change reason=2 outputs=${outputs}`;
+        const out = redactPlaybackLine(line);
+        assert.match(out, onlyTypes, JSON.stringify(line));
+        assert.ok(!/Sam|Dave|Jo/.test(out), JSON.stringify(line));
+      }
+    }
+  }
+});
+
 test("the event line carries Android's code and message, and iOS's error text", () => {
   assert.equal(
     playbackEventLine({ type: 'playback-error', code: 'android-io-bad-http-status', message: 'Source error' }),
@@ -428,6 +526,12 @@ test('no rule slows down on a long line built to make it rescan', () => {
     fill('outputs=a\n'),
     `outputs=${fill('A:b,')}`,
     `outputs=${fill(' ,')}`,
+    `outputs=${fill('Dave:x,')}`,
+    `outputs=${fill('Speaker:x,')}`,
+    `outputs=${fill('a')}:b`,
+    `outputs=${fill('a')}`,
+    `outputs=${fill(':')}`,
+    `outputs=${fill(',')}`,
     fill('authorization '),
     `authorization${fill(' ')}`,
     `authorization${fill('\\')}`,

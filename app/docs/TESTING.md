@@ -362,7 +362,7 @@ Android sends both, and its code is the part that tells a refused stream
 own description. Lines are redacted before they are stored
 (`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
 password, Station login and `Authorization` values are gone, and a route lists
-port types without device names.
+port types without device names, with `Other` for a word that isn't a known port.
 
 ---
 
