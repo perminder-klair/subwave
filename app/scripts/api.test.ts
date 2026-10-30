@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { createApi, loginHeaders, type StationApi } from '../src/lib/api.ts';
 import { authorizationFor, type StationCredentials } from '../src/lib/station-credentials.ts';
+import { loginRefused } from '../src/lib/station-login.ts';
+import type { StationAuthResult } from '../src/lib/station-password.ts';
 
 const LOGIN: StationCredentials = { username: 'dj', password: 'p@ss:word' };
 const BASIC = authorizationFor(LOGIN);
@@ -106,17 +108,48 @@ test('a legacy userinfo address sends its login as the header, never in the URL'
   assert.equal(sent[0].headers.get('authorization'), authorizationFor({ username: 'dj', password: 'secret' }));
 });
 
-test("a health probe says whether a 401 carried a login challenge", async (t) => {
+test("a health probe carries a failure's login challenge as sent", async (t) => {
+  const twoHeaders = new Headers();
+  twoHeaders.append('WWW-Authenticate', 'Bearer realm="x"');
+  twoHeaders.append('WWW-Authenticate', 'Basic realm="y"');
   const replies = [
     new Response('', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="radio"' } }),
+    new Response('', { status: 401, headers: twoHeaders }),
+    new Response('', { status: 401, headers: { 'WWW-Authenticate': '' } }),
     new Response('', { status: 401 }),
     new Response('', { status: 403 }),
   ];
   stubFetch(t, () => replies.shift()!);
   const api = createApi('https://radio.example', LOGIN);
-  assert.deepEqual(await api.probeHealth(), { ok: false, kind: 'http', status: 401, challenged: true });
-  assert.deepEqual(await api.probeHealth(), { ok: false, kind: 'http', status: 401, challenged: false });
-  assert.deepEqual(await api.probeHealth(), { ok: false, kind: 'http', status: 403, challenged: false });
+  const failed = (status: number, challenge?: string) => ({ ok: false, kind: 'http', status, challenge });
+  assert.deepEqual(await api.probeHealth(), failed(401, 'Basic realm="radio"'));
+  assert.deepEqual(await api.probeHealth(), failed(401, 'Bearer realm="x", Basic realm="y"'));
+  assert.deepEqual(await api.probeHealth(), failed(401, ''));
+  assert.deepEqual(await api.probeHealth(), failed(401));
+  assert.deepEqual(await api.probeHealth(), failed(403));
+});
+
+test('only a Basic challenge refuses the login; /station-auth reads any challenge as unverified', async (t) => {
+  // The refusal stops the player, so it needs the scheme the login answers.
+  // /station-auth only tells a proxy from the controller, which never
+  // challenges, so a correct station password behind any proxy is kept.
+  const cases: [header: string | null, refused: boolean, stationAuth: StationAuthResult][] = [
+    ['Basic realm="radio"', true, 'unavailable'],
+    ['basic realm="radio"', true, 'unavailable'],
+    ['Bearer realm="x", Basic realm="y"', true, 'unavailable'],
+    ['Bearer realm="radio"', false, 'unavailable'],
+    ['Digest realm="radio", qop="auth", nonce="abc"', false, 'unavailable'],
+    ['', false, 'unavailable'],
+    [null, false, 'denied'],
+  ];
+  let header: string | null = null;
+  stubFetch(t, () => new Response('', { status: 401, headers: header === null ? {} : { 'WWW-Authenticate': header } }));
+  const api = createApi('https://radio.example', LOGIN);
+  for (const [h, refused, stationAuth] of cases) {
+    header = h;
+    assert.equal(loginRefused(await api.probeHealth()), refused, `health: ${h}`);
+    assert.equal(await api.checkStationAuth('station-pw'), stationAuth, `station-auth: ${h}`);
+  }
 });
 
 test("/station-auth reads a proxy's login challenge as unverified, never a wrong password", async (t) => {

@@ -9,7 +9,8 @@ import type { HealthResult } from '../src/lib/api.ts';
 import { RECHECK_MIN_GAP_MS, STUCK_RECHECK_MS, watchStuckLogin } from '../src/lib/stuck-login-check.ts';
 
 const START = 1_000_000;
-const REFUSED: HealthResult = { ok: false, kind: 'http', status: 401, challenged: true };
+const BASIC = 'Basic realm="radio"';
+const REFUSED: HealthResult = { ok: false, kind: 'http', status: 401, challenge: BASIC };
 const OFFLINE: HealthResult = { ok: false, kind: 'network', message: 'Network request failed' };
 const TIMEOUT: HealthResult = { ok: false, kind: 'timeout' };
 
@@ -70,8 +71,9 @@ test('every answer but a refusal asks again', async (t) => {
     // A tunnel or CDN in front of the proxy while the origin restarts.
     { ok: false, kind: 'http', status: 502 },
     { ok: false, kind: 'http', status: 530 },
-    { ok: false, kind: 'http', status: 403, challenged: true },
+    { ok: false, kind: 'http', status: 403, challenge: BASIC },
     { ok: false, kind: 'http', status: 401 },
+    { ok: false, kind: 'http', status: 401, challenge: 'Bearer realm="radio"' },
   ];
   for (const answer of silent) {
     await t.test(JSON.stringify(answer), async (st) => {

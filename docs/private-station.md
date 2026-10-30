@@ -141,14 +141,15 @@ Things to know:
   a proxy that guards only the audio stream may still want that login, and the
   app has no way to ask it.
 - **A login the station stops accepting stops the player.** When the proxy
-  answers the saved login with a 401 that carries a `WWW-Authenticate`
-  challenge (what an HTTP Basic Auth proxy sends for a wrong login), the player
+  answers the saved login with a 401 whose `WWW-Authenticate` challenge asks
+  for Basic (what an HTTP Basic Auth proxy sends for a wrong login), the player
   stops reconnecting and says **Station login rejected**, with a button to the
-  same screen. Nothing else does this: not a network drop or a timeout, and not
-  a 403, which an IP allowlist, a WAF or a Cloudflare challenge page sends
-  whatever the login is. The edit screen reads `/api/health` by the same rule:
-  only a challenged 401 there is the proxy refusing a login, and any other
-  failure leaves it unchecked.
+  same screen. Nothing else does this: not a network drop or a timeout, not a
+  challenge in another scheme (Bearer, Digest), which the login can't answer
+  whatever it is, and not a 403, which an IP allowlist, a WAF or a Cloudflare
+  challenge page sends whatever the login is. The edit screen reads
+  `/api/health` by the same rule: only a 401 asking for Basic there is the
+  proxy refusing a login, and any other failure leaves it unchecked.
   The app finds out by asking `/api/health`, never the stream (that would count
   a listener), so a proxy that guards only the audio stream and not `/api`
   goes unnoticed.

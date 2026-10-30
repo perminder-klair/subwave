@@ -2,10 +2,10 @@
 // cannot say why it will not start, so ask /api/health with the saved login,
 // which only a proxy in front of the station can refuse: once per station
 // visit, and while playback is stuck reconnecting (watchStuckLogin). Only a
-// challenged 401 counts (loginRefused); a 403, a timeout or a network error
-// never stops the player. Refused, the player stops, as it does for a rejected
-// station password, and stays stopped until the login is edited or a check
-// passes.
+// 401 with a Basic challenge counts (loginRefused); a 403, a timeout or a
+// network error never stops the player. Refused, the player stops, as it does
+// for a rejected station password, and stays stopped until the login is edited
+// or a check passes.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PlayerStatus } from '@/hooks/usePlayer';

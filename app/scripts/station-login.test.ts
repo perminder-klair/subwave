@@ -9,21 +9,43 @@ import type { StationCredentials } from '../src/lib/station-credentials.ts';
 import { checkStationLogin, loginRefused, saveAnywayOffered } from '../src/lib/station-login.ts';
 import type { StationAuthResult } from '../src/lib/station-password.ts';
 
-test('only a 401 with a login challenge is a refused login', () => {
-  assert.equal(loginRefused({ ok: false, kind: 'http', status: 401, challenged: true }), true);
+const BASIC = 'Basic realm="radio"';
+const challenged = (challenge: string): HealthResult => ({ ok: false, kind: 'http', status: 401, challenge });
+
+test('only a 401 with a Basic challenge is a refused login', () => {
+  const refused = [
+    BASIC,
+    'basic realm="radio"',
+    'BASIC',
+    // Several challenges in one header, or several headers that fetch joined.
+    'Bearer realm="x", Basic realm="y"',
+    'Digest realm="x", qop="auth", nonce="abc",Basic realm="y"',
+  ];
+  for (const header of refused) assert.equal(loginRefused(challenged(header)), true, header);
   const silent: HealthResult[] = [
     { ok: true },
     { ok: false, kind: 'timeout' },
     { ok: false, kind: 'network', message: 'Network request failed' },
     // No challenge: not a proxy asking for a login.
     { ok: false, kind: 'http', status: 401 },
-    { ok: false, kind: 'http', status: 401, challenged: false },
+    challenged(''),
+    // A scheme the app's Basic login can't answer, whatever the login is.
+    challenged('Bearer realm="radio"'),
+    challenged('Digest realm="radio", qop="auth", nonce="abc"'),
+    challenged('Negotiate'),
+    // Basic only inside a quoted string, as another scheme's parameter, or as
+    // the start of another token.
+    challenged('Bearer realm="Basic radio"'),
+    challenged('Digest realm="a, Basic b"'),
+    challenged('Bearer error="invalid_token", basic=1'),
+    challenged('Bearer error="invalid_token", basic = 1'),
+    challenged('Basicish realm="radio"'),
     // An IP allowlist, a WAF or a Cloudflare challenge page: no login fixes it.
     { ok: false, kind: 'http', status: 403 },
-    { ok: false, kind: 'http', status: 403, challenged: true },
+    { ok: false, kind: 'http', status: 403, challenge: BASIC },
     // A proxy on the listener's own network, not the station.
     { ok: false, kind: 'http', status: 407 },
-    { ok: false, kind: 'http', status: 407, challenged: true },
+    { ok: false, kind: 'http', status: 407, challenge: BASIC },
     { ok: false, kind: 'http', status: 404 },
     { ok: false, kind: 'http', status: 500 },
     { ok: false, kind: 'http', status: 502 },
@@ -50,7 +72,7 @@ function station(opts: {
       asked.push(login ? `health ${login.username}` : 'health anonymous');
       if (opts.health) return opts.health;
       if (opts.proxy && !sameLogin(login, opts.proxy)) {
-        return { ok: false, kind: 'http', status: 401, challenged: true };
+        return challenged(BASIC);
       }
       return { ok: true };
     },
@@ -77,10 +99,33 @@ test('a login the proxy refuses is rejected, and nothing else is asked', async (
   assert.deepEqual(s.asked, ['health dj'], 'a refused login never reaches /station-auth');
 });
 
-test('a 403 or an unchallenged 401 leaves the login unchecked, never refused', async () => {
+test('a Basic challenge in any case, or among others, is the proxy refusing the login', async () => {
+  for (const header of ['basic realm="radio"', 'Bearer realm="x", Basic realm="y"']) {
+    const s = station({ health: challenged(header), streamPassword: 'pw' });
+    assert.deepEqual(
+      await checkStationLogin({ login: login('dj', 'typo'), ...s }),
+      { verdict: 'rejected', by: 'proxy' },
+      header,
+    );
+    // And the anonymous check reads it the same way: a proxy took the login.
+    const anonymous = station({ streamPassword: 'station-pw' });
+    const health = async (l: StationCredentials | null): Promise<HealthResult> =>
+      l ? anonymous.health(l) : challenged(header);
+    assert.deepEqual(
+      await checkStationLogin({ login: login('dj', 'proxy-pw'), ...anonymous, health }),
+      { verdict: 'accepted' },
+      header,
+    );
+  }
+});
+
+test('a 403, or a 401 with no Basic challenge, leaves the login unchecked, never refused', async () => {
   const answers: HealthResult[] = [
     { ok: false, kind: 'http', status: 403 },
     { ok: false, kind: 'http', status: 401 },
+    challenged(''),
+    challenged('Bearer realm="radio"'),
+    challenged('Digest realm="radio", qop="auth", nonce="abc"'),
   ];
   for (const health of answers) {
     const s = station({ health, streamPassword: 'pw' });
@@ -176,9 +221,10 @@ test('a rate-limited or unavailable /station-auth leaves the login unchecked', a
 test('a denied password with no anonymous answer cannot tell a proxy from none', async () => {
   const anonymous: HealthResult[] = [
     { ok: false, kind: 'timeout' },
-    // Not a login challenge, so not a proxy that took the login.
+    // Not a Basic challenge, so not a proxy that took the login.
     { ok: false, kind: 'http', status: 403 },
     { ok: false, kind: 'http', status: 401 },
+    challenged('Bearer realm="radio"'),
   ];
   for (const answer of anonymous) {
     const s = station({ streamPassword: 'station-pw' });

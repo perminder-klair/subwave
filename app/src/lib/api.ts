@@ -37,17 +37,17 @@ export interface BeaconBody {
 /** Why a health probe failed. `network` is the catch-all for DNS, refused
  *  connections and TLS errors, which RN's fetch collapses into one rejection
  *  with no detail. `http` is a response with a non-2xx status (usually /api
- *  not routed to the controller); `challenged` says it carried a
- *  `WWW-Authenticate` challenge, which an HTTP auth layer in front of the
- *  station sends and the controller never does (#1873). `timeout` is our own
- *  abort firing. */
+ *  not routed to the controller); `challenge` is its `WWW-Authenticate`
+ *  header as sent, absent without one. An HTTP auth layer in front of the
+ *  station sends one and the controller never does (#1873); loginRefused
+ *  reads its scheme. `timeout` is our own abort firing. */
 export type HealthResult =
   | { ok: true }
   | {
       ok: false;
       kind: 'timeout' | 'http' | 'network';
       status?: number;
-      challenged?: boolean;
+      challenge?: string;
       message?: string;
     };
 
@@ -175,7 +175,8 @@ export function createApi(
     try {
       const res = await send('/health', { cache: 'no-store', signal });
       if (res.ok) return { ok: true };
-      return { ok: false, kind: 'http', status: res.status, challenged: res.headers.has('www-authenticate') };
+      const challenge = res.headers.get('www-authenticate') ?? undefined;
+      return { ok: false, kind: 'http', status: res.status, challenge };
     } catch (e) {
       const err = e as { name?: string; message?: string };
       const aborted = signal?.aborted || err?.name === 'AbortError';

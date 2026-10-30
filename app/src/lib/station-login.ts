@@ -4,26 +4,41 @@
 // own station password is a separate secret (station-password.ts, #478).
 //
 // Two things can read a login. A proxy that guards /api refuses a wrong one on
-// /api/health with a challenged 401. With no such proxy, the only reader is the
-// stream password: Icecast hands the login's password to the controller, the
-// same check POST /station-auth runs. The stream itself is never probed, since
-// every probe would count a phantom listener, so a proxy that guards only the
-// stream goes unseen.
+// /api/health with a 401 that asks for Basic. With no such proxy, the only
+// reader is the stream password: Icecast hands the login's password to the
+// controller, the same check POST /station-auth runs. The stream itself is
+// never probed, since every probe would count a phantom listener, so a proxy
+// that guards only the stream goes unseen.
 
 import type { HealthResult } from './api';
 import type { StationCredentials } from './station-credentials';
 import type { StationAuthResult } from './station-password';
 
-/** Whether a health answer is the station refusing the login: a 401 that
- *  carries a `WWW-Authenticate` challenge, which is how an HTTP Basic Auth
- *  proxy asks for a login. The controller's own 401s never carry one, the
- *  same rule stationAuthResult reads /station-auth by. A 403 is not a refusal:
- *  an IP allowlist, a WAF or a Cloudflare challenge page sends one whatever
- *  the login, and editing the login cannot fix it. A timeout, a network error
- *  or any other status says nothing about the login either, and a 407 comes
- *  from a proxy on the listener's own network. */
+/** Whether a health answer is the station refusing the login: a 401 whose
+ *  `WWW-Authenticate` asks for Basic, which is how an HTTP Basic Auth proxy
+ *  asks for a login. The app sends the login only as Basic, so a challenge in
+ *  any other scheme (Bearer, Digest, Negotiate) turns it away whatever it is,
+ *  and editing it cannot help. The controller's own 401s never carry one;
+ *  stationAuthResult counts any scheme on purpose, since there a challenge
+ *  only has to show that the controller never saw the password. A 403 is not
+ *  a refusal: an IP allowlist, a WAF or a Cloudflare challenge page sends
+ *  one whatever the login, and editing the login cannot fix it. A timeout, a
+ *  network error or any other status says nothing about the login either, and
+ *  a 407 comes from a proxy on the listener's own network. */
 export function loginRefused(result: HealthResult): boolean {
-  return !result.ok && result.kind === 'http' && result.status === 401 && result.challenged === true;
+  if (result.ok || result.kind !== 'http' || result.status !== 401) return false;
+  return basicChallenge(result.challenge);
+}
+
+/** Whether a `WWW-Authenticate` header offers Basic. A scheme is a
+ *  case-insensitive token that opens the header or follows a comma, since one
+ *  header may list several challenges (`Bearer realm="x", Basic realm="y"`).
+ *  Quoted strings go first, so a realm that mentions Basic is not one, and
+ *  neither is another scheme's `basic=` parameter. */
+function basicChallenge(header: string | undefined): boolean {
+  if (!header) return false;
+  const unquoted = header.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  return /(?:^|,)\s*basic(?=[\s,]|$)(?!\s*=)/i.test(unquoted);
 }
 
 export type LoginCheck =
@@ -50,7 +65,7 @@ const UNREACHABLE: LoginCheck = { verdict: 'unreachable', rateLimited: false };
 
 /** Check a Station login with the station before saving it.
  *
- *  1. /api/health with the login. A challenged 401 is a proxy refusing it;
+ *  1. /api/health with the login. A 401 asking for Basic is a proxy refusing it;
  *     any other failure means it cannot be checked.
  *  2. Health passed, so any proxy in front took the login. With the stream
  *     password off, nothing else reads it.
