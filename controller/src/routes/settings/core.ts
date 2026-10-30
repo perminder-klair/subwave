@@ -24,6 +24,7 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
@@ -333,7 +334,9 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     for (const [key, value] of Object.entries(body)) {
       if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) continue;
       if (typeof value !== 'string') continue;
-      const trimmed = value.trim();
+      // Stripped before the blank check, so a value of only control characters
+      // keeps the stored key rather than clearing it in saveSecrets.
+      const trimmed = stripSecretControlChars(value).trim();
       if (!trimmed) continue;
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;
