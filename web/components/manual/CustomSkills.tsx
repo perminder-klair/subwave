@@ -283,7 +283,8 @@ not a newsreader's. Skip anything dull or stale; silence is fine.`}</CodeBlock>
           is the station facade (<code className="bs-code-inline">searchWeb</code>,{' '}
           <code className="bs-code-inline">library</code>, <code className="bs-code-inline">nowPlaying</code>,{' '}
           <code className="bs-code-inline">recentPlays</code>, <code className="bs-code-inline">onThisDay</code>,{' '}
-          <code className="bs-code-inline">fetchHeadlines</code>, durable{' '}
+          <code className="bs-code-inline">fetchHeadlines</code>,{' '}
+          <code className="bs-code-inline">weatherOutlook</code>, durable{' '}
           <code className="bs-code-inline">recall</code>), so a custom skill can reach as far as a built-in.
         </p>
         <CodeBlock>{`export default async function (ctx, state, services, config, input) {

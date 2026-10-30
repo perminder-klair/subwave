@@ -188,7 +188,10 @@ export function buildContextLines(
     // is the backstop; this stops the most common case at the source.
     const unitWord = (weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
     const heading = 'location' in weather ? `Weather in ${weather.location}` : 'Weather';
-    lines.push(`${heading}: ${weather.condition}${weather.temp != null ? `, ${weather.temp} degrees ${unitWord}` : ''}`);
+    // The forecast's own wording when known ("mainly clear"), else the coarse
+    // condition word.
+    const sky = typeof weather.detail === 'string' && weather.detail ? weather.detail : weather.condition;
+    lines.push(`${heading}: ${sky}${weather.temp != null ? `, ${weather.temp} degrees ${unitWord}` : ''}`);
   }
   if (on('festival') && context?.festival) {
     const note = context.festival.description ? ` — ${context.festival.description}` : '';

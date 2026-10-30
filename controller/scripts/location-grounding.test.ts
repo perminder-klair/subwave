@@ -264,7 +264,7 @@ test('a station that names its place gets the weather line and tool result uncha
   assert.equal(settings.spokenContext(ctx), ctx);
   assert.deepEqual(buildContextLines(ctx, { contextFields: ['weather'] }), ['Weather in York: rainy, 12 degrees Celsius']);
   for (const data of await weatherToolResults(ctx)) {
-    assert.deepEqual(data, { available: true, location: 'York', condition: 'rainy', temp: 12, tempUnit: 'C', changedSinceLastMention: true });
+    assert.deepEqual(data, { available: true, location: 'York', condition: 'rainy', conditions: 'rainy', temp: 12, tempUnit: 'C', changedSinceLastMention: true, outlook: [], nextHours: [] });
   }
 });
 

@@ -4,6 +4,7 @@
 import { config } from './config.js';
 import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
+import { buildOutlook, conditionForCode, describeCode, outlookNotes, type OutlookHour } from './weather-codes.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
@@ -58,12 +59,15 @@ export function getFestivalContext(date = new Date()) {
 }
 
 // Weather via Open-Meteo (no API key required)
-let weatherCache: { data: any; fetchedAt: number; configKey: string } = {
+let weatherCache: { data: any; fetchedAt: number; configKey: string; outlook: OutlookHour[] } = {
   data: null,
   fetchedAt: 0,
   configKey: '',
+  outlook: [],
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
+// How far ahead the weather skill may look.
+const OUTLOOK_HOURS = 6;
 // After a failed fetch, wait this long before asking Open-Meteo again. The
 // public /now-playing poll reaches getWeather() through getFullContext() every
 // few seconds per listener, so an uncached failure turned a down or
@@ -96,7 +100,7 @@ function weatherConfigKey(weather: ReturnType<typeof weatherConfig>) {
 // Force the next getWeather() call to re-fetch — used when the user changes
 // their location in /settings.
 export function invalidateWeatherCache() {
-  weatherCache = { data: null, fetchedAt: 0, configKey: '' };
+  weatherCache = { data: null, fetchedAt: 0, configKey: '', outlook: [] };
   weatherFailure = null;
 }
 
@@ -139,6 +143,21 @@ export async function getWeather() {
   }
 }
 
+// The next few hours of the forecast, for the weather skill only (station
+// services). Kept off getWeather()'s result on purpose: that object is the
+// public /now-playing context, and every prompt's weather line. Reads the cache
+// the last getWeather() filled (the skill's ctx.weather came from it moments
+// earlier) and never fetches, so a cold cache or a moved location is simply no
+// outlook, at once.
+export function getWeatherOutlook(): { nextHours: OutlookHour[]; notes: string[] } {
+  const current = weatherCache.data;
+  if (!current || current.condition === 'unknown' || weatherCache.configKey !== weatherConfigKey(weatherConfig())) {
+    return { nextHours: [], notes: [] };
+  }
+  const nextHours = weatherCache.outlook;
+  return { nextHours, notes: outlookNotes({ condition: current.condition, temp: current.temp ?? null }, nextHours) };
+}
+
 function unknownWeather(weather: ReturnType<typeof weatherConfig>) {
   const tempUnit = weather.units === 'imperial' ? 'F' : 'C';
   return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation(weather) };
@@ -149,21 +168,28 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
   const tempUnit = imperial ? 'F' : 'C';
   try {
     const unitParam = imperial ? '&temperature_unit=fahrenheit' : '';
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day${unitParam}`;
+    // The next hours ride the same call, in the location's own time zone so the
+    // hourly rows and the current reading share one clock (buildOutlook).
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${weather.lat}&longitude=${weather.lng}&current=temperature_2m,weather_code,is_day`
+      + `&hourly=temperature_2m,weather_code,precipitation_probability&forecast_hours=${OUTLOOK_HOURS + 2}&timezone=auto${unitParam}`;
     const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
     if (!res.ok) throw new Error(`weather upstream ${res.status}`);
     const data = await res.json() as any;
     const code = data.current.weather_code;
-    const condition = mapWeatherCode(code);
+    const condition = conditionForCode(code);
     const result = {
       condition,
+      // The forecast's own wording ("mainly clear", "light rain showers"): what
+      // is spoken. `condition` is the coarse word the mood map keys on.
+      detail: describeCode(code),
       mood: weatherToMood(condition),
       temp: Math.round(data.current.temperature_2m),
       tempUnit,
       isDay: data.current.is_day === 1,
       location: attributedLocation(weather),
     };
-    weatherCache = { data: result, fetchedAt: Date.now(), configKey };
+    const outlook = buildOutlook(data.hourly, data.current.time, OUTLOOK_HOURS);
+    weatherCache = { data: result, fetchedAt: Date.now(), configKey, outlook };
     weatherFailure = null;
     return result;
   } catch {
@@ -171,17 +197,6 @@ async function fetchWeather(weather: ReturnType<typeof weatherConfig>, configKey
     // A slightly old forecast beats 'unknown' flapping in and out.
     return stale ?? unknownWeather(weather);
   }
-}
-
-function mapWeatherCode(code: number) {
-  // WMO weather codes simplified
-  if (code === 0) return 'clear';
-  if (code <= 3) return 'cloudy';
-  if (code >= 45 && code <= 48) return 'foggy';
-  if (code >= 51 && code <= 67) return 'rainy';
-  if (code >= 71 && code <= 77) return 'snowy';
-  if (code >= 80 && code <= 99) return 'stormy';
-  return 'cloudy';
 }
 
 // Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)

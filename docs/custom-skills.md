@@ -242,7 +242,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, and the on-air location unless the DJ prompt template drops `{location}` |
+| `weather` | current conditions in the forecast's own words ("mainly clear", "light rain showers"), temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -477,6 +477,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.fetchHeadlines({ feedUrl?, maxItems?, maxAgeDays?, deadlineMs?, requireFeed? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) into `{ title, description, published? }` items. `published` is an ISO time, or a bare `YYYY-MM-DD` when the feed gives a day and no clock. `deadlineMs` replaces the 15 s default with a limit that covers the body too, and `requireFeed` throws on a 200 that isn't a feed instead of returning no items |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
+| `services.weatherOutlook()` | the next few hours of the station's forecast — `{ nextHours, notes }`: one row per hour (`inHours`, `conditions`, `temp`, `rainChancePct`) and plain-English notes such as "rain likely in about 3 hours"; empty when no forecast is known. No extra fetch: it reads the forecast `ctx.weather` came from |
 
 Every skill's `tool.mjs` is **timeout-guarded (8 s)** and any throw degrades
 cleanly to "no data" — a slow or broken skill can never hang the between-track

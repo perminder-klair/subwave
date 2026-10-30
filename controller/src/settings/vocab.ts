@@ -113,7 +113,10 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
   },
   localColour: {
     low: 'Keep it universal; skip local references and place-specific colour.',
-    high: 'Lean on the local setting (the town, the weather, the hour) as texture.',
+    // No weather here: links, idents and handoffs are given none (#471), so a
+    // dial that invited it had the DJ invent it ("the sun is blazing" under
+    // full cloud). The weather skill brings its own.
+    high: 'Lean on the local setting (the town, the hour) as texture.',
   },
   warmth: {
     low: 'Keep a cool, dry distance; let the music carry the warmth.',

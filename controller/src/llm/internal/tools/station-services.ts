@@ -21,6 +21,7 @@ import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
 import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
+import { getWeatherOutlook } from '../../../context.js';
 
 export interface StationServices {
   // Web search via the operator's configured provider (DuckDuckGo / Tavily /
@@ -44,6 +45,10 @@ export interface StationServices {
   recall: { seen: (key: string) => boolean; remember: (key: string) => void };
   // Append a namespaced line to the station event log.
   log: (msg: string) => void;
+  // The next few hours of the station's forecast (the same cached Open-Meteo
+  // fetch as ctx.weather): one row per hour plus plain-English notes such as
+  // "rain likely in about 3 hours". Empty when no forecast is known.
+  weatherOutlook: typeof getWeatherOutlook;
 }
 
 let cached: StationServices | null = null;
@@ -64,6 +69,7 @@ export function buildStationServices(): StationServices {
     hashHeadline,
     recall: { seen: (key: string) => curiositySeen(key), remember: (key: string) => recordCuriosity(key) },
     log: (msg: string) => queue.log('scheduler', `[skill] ${msg}`),
+    weatherOutlook: getWeatherOutlook,
   };
   return cached;
 }
