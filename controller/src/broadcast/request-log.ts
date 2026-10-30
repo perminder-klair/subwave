@@ -3,7 +3,7 @@
 // file is tail-loaded back into it on boot. JSONL rather than subsonic.log's
 // tab-separated form because a record carries the multi-line introScript.
 
-import { appendFile } from 'node:fs/promises';
+import { appendFile, readFile } from 'node:fs/promises';
 import { statSync, renameSync, readFileSync } from 'node:fs';
 import { STATE_DIR } from '../config.js';
 
@@ -58,6 +58,27 @@ export function record(entry: any) {
     maybeRotateLog();
   }
   appendFile(REQUESTS_LOG, line).catch(() => {});
+}
+
+// Every outcome still in the current log file, oldest first: when each request
+// came in and who signed it. The weekly recap counts these over two weeks, so a
+// rotation shortens what it can compare (it reports that as unmeasured).
+export async function readLog(): Promise<{ t: string; requester: string | null }[]> {
+  let text = '';
+  try {
+    text = await readFile(REQUESTS_LOG, 'utf8');
+  } catch {
+    return [];
+  }
+  const out: { t: string; requester: string | null }[] = [];
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    try {
+      const r = JSON.parse(line);
+      if (typeof r?.t === 'string') out.push({ t: r.t, requester: typeof r.requester === 'string' ? r.requester : null });
+    } catch {}
+  }
+  return out;
 }
 
 // Most-recent N outcomes for the admin dashboard, newest first.

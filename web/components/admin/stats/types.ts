@@ -1,22 +1,16 @@
-// Response shapes for the Stats page's five reads. /stats reports activity
-// since the controller started (its `transitions` section excepted, which is
-// read from the play history); /listeners and /audience are persisted history.
+// Response shapes for the Stats page's reads: /stats (in-memory rollups since
+// boot, plus the durable transitions record), /stats/week (the weekly recap),
+// /listeners, /audience, /listeners/connections and /system.
 
+import type { MixDropReason, TransitionEffect } from '@/lib/schemas.generated';
 import type { ListenerConnection } from '../../../lib/clientLabel';
 import type { ListenerSample } from '../../../lib/audienceStats';
-import type { MixDropReason, TransitionEffect } from '@/lib/schemas.generated';
 
 export interface LatencyStats {
   avg?: number;
   p50?: number;
   p95?: number;
   max?: number;
-}
-
-export interface TokenStats {
-  total?: number;
-  input?: number;
-  output?: number;
 }
 
 export interface ByKindRow {
@@ -27,14 +21,6 @@ export interface ByKindRow {
   tokens?: number;
 }
 
-export interface ByModelRow {
-  model: string;
-  count: number;
-  tokens?: number;
-  costUsd?: number;
-  priced?: boolean;
-}
-
 export interface ContextWindowRow {
   kind: string;
   calls: number;
@@ -43,10 +29,8 @@ export interface ContextWindowRow {
   peakInputTokens: number | null;
 }
 
-export interface ShortlistContextWindow {
+export interface ContextWindow {
   samples: number;
-  // Largest prompt the window must hold: this route's picker plus every LLM
-  // function sharing the one num_ctx. pickerPeakInputTokens is the route's own.
   peakInputTokens: number | null;
   pickerPeakInputTokens?: number | null;
   peakKind?: string | null;
@@ -56,24 +40,6 @@ export interface ShortlistContextWindow {
   message: string;
 }
 
-export interface ByEngineRow {
-  engine: string;
-  count: number;
-  ok: number;
-  avgMs?: number;
-}
-
-export interface ByTtsKindRow {
-  kind: string;
-  count: number;
-  avgMs?: number;
-}
-
-export interface ByDjKindRow {
-  kind: string;
-  count: number;
-}
-
 export interface LlmStats {
   window: number;
   count: number;
@@ -81,18 +47,22 @@ export interface LlmStats {
   failed: number;
   successRate?: number;
   latency: LatencyStats;
-  tokens?: TokenStats;
+  tokens?: { total?: number; input?: number; output?: number };
   cost?: { usd: number; complete: boolean } | null;
+  // Failed calls that ran out the agent deadline; null without a deadline.
+  deadlineHits?: number | null;
+  agentTimeoutMs?: number;
   provider?: string;
+  activeModel?: string;
   agent: { calls: number; avgSteps?: number; avgTools?: number };
   byKind: ByKindRow[];
-  byModel: ByModelRow[];
+  // Which model answered: the primary, or a fallback leg that stepped in.
+  byModel: { model: string; count: number; tokens?: number; costUsd?: number; priced?: boolean }[];
   contextWindows?: {
-    shortlist: ShortlistContextWindow;
-    agenticPicker: ShortlistContextWindow;
+    shortlist: ContextWindow;
+    agenticPicker: ContextWindow;
     byKind: ContextWindowRow[];
   };
-  activeModel?: string;
   budget?: {
     enabled: boolean;
     cap: number;
@@ -110,31 +80,16 @@ export interface TtsStats {
   failed: number;
   latency: LatencyStats;
   fellBack: number;
-  fallbackRate?: number;
+  fallbackRate?: number | null;
   chars?: number;
-  byEngine: ByEngineRow[];
-  byKind: ByTtsKindRow[];
+  slowest?: { ms: number; kind: string | null } | null;
+  byEngine: { engine: string; count: number; ok: number; avgMs?: number }[];
+  byKind: { kind: string; count: number; avgMs?: number }[];
 }
 
 export interface DjLogStats {
   count: number;
-  byKind: ByDjKindRow[];
-}
-
-export interface ByPathRow {
-  path: string;
-  count: number;
-  ok: number;
-}
-
-export interface ByPickSourceRow {
-  source: string;
-  count: number;
-}
-
-export interface TopRequesterRow {
-  requester: string;
-  count: number;
+  byKind: { kind: string; count: number }[];
 }
 
 export interface RequestsStats {
@@ -145,21 +100,19 @@ export interface RequestsStats {
   successRate?: number | null;
   latency: LatencyStats;
   artistMiss: { count: number; rate?: number | null };
-  byPath: ByPathRow[];
-  byPickSource: ByPickSourceRow[];
-  topRequesters: TopRequesterRow[];
+  byPath: { path: string; count: number; ok: number }[];
+  byPickSource: { source: string; count: number }[];
+  topRequesters: { requester: string; count: number }[];
 }
 
-// The durable seam record, from library.db `plays` over the last `days` days —
-// unlike the in-memory rollups above, it survives a controller restart. Null
-// when the library DB is unavailable.
+// The durable seam record, from library.db plays over the last `days` days.
 export interface TransitionStats {
   days: number;
   since: string;
-  seams: number;                          // plays with a recorded seam label
-  bySeam: Record<string, number>;         // label of the seam INTO the track ('Normal', 'Washout + Sweep', …)
-  asked: number;                          // DJ picks with a recorded ask
-  byAsk: Record<string, number>;          // the DJ's ask before any strip ('normal' | effect id)
+  seams: number;
+  bySeam: Record<string, number>;
+  asked: number;
+  byAsk: Record<string, number>;
   dropped: number;
   byReason: Partial<Record<MixDropReason, number>>;
   byEffect: Partial<Record<TransitionEffect, Partial<Record<MixDropReason, number>>>>;
@@ -171,14 +124,40 @@ export interface StatsResponse {
   tts?: TtsStats;
   djLog?: DjLogStats;
   requests?: RequestsStats;
+  // Null when the play history is unavailable; absent from an older controller.
   transitions?: TransitionStats | null;
   error?: string;
+}
+
+export interface WeekTotals {
+  sessions: number | null;
+  countries: number | null;
+  listeningHours: number | null;
+  requests: number | null;
+  tracks: number | null;
+}
+
+// A null figure is unmeasured (its record does not cover the window), not zero.
+export interface WeekRecap {
+  station: string;
+  week: { from: string; to: string; number: number };
+  current: WeekTotals;
+  previous: WeekTotals;
+  busiestHour: { at: string; avg: number } | null;
+  topArtist: { name: string; plays: number; requested: number } | null;
+  topTrack: { title: string; artist: string | null; plays: number } | null;
+  topRequester: { name: string; requests: number } | null;
+  newSource: { source: string; sessions: number; firstSeen: string } | null;
+  mostPlayed: {
+    days: number;
+    artists: { name: string; plays: number }[];
+    tracks: { title: string; artist: string | null; plays: number }[];
+  };
 }
 
 export interface ListenersResponse {
   current?: number | null;
   sinceMinutes?: number;
-  bytes?: number;
   samples?: ListenerSample[];
   error?: string;
 }
@@ -188,12 +167,11 @@ export interface AudienceResponse {
   sessions?: number;
   referrers?: { source: string; count: number }[];
   countries?: { country: string; count: number }[];
-  paths?: { path: string; count: number }[];
   error?: string;
 }
 
-// Deduped one row per listener by the server. `error` is set on a 502 (Icecast
-// admin unreachable) so "nobody connected" stays distinct from "couldn't read".
+// `error` is set on a 502 (Icecast admin unreachable), so "nobody connected"
+// stays distinct from "couldn't read".
 export interface ConnectionsResponse {
   count?: number;
   connections?: ListenerConnection[];
@@ -218,7 +196,6 @@ export interface HostUsage {
 }
 
 export interface SystemResponse {
-  t?: string;
   dockerAvailable?: boolean;
   dockerError?: string;
   host?: HostUsage;

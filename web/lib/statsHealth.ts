@@ -1,21 +1,15 @@
-// Traffic-light judgments for the admin Stats page, in one place so the glance
-// strip and each card's cells agree on what "worth a look" means
-// (statsHealth.test.ts). Latency is reported but never judged: the default
-// model is a slow homelab Ollama, and a latency light would sit amber forever.
-// The music never stops for any of these, so "bad" means a listener can hear
-// the DJ struggling, not that the station is off air.
+// Traffic-light judgments for the numbers on the admin Stats page, in one place
+// so every card agrees on what "worth a look" means (statsHealth.test.ts).
+// Latency is reported but never judged: the default model is a slow homelab
+// Ollama, and a latency light would sit amber forever. The music never stops for
+// any of these, so "bad" means a listener can hear the DJ struggling, not that
+// the station is off air.
 
 export type Health = 'ok' | 'warn' | 'bad' | 'idle';
 
 export interface HealthSignal {
   health: Health;
   note: string; // one plain-English line naming what drove the judgment
-}
-
-const RANK: Record<Health, number> = { idle: 0, ok: 1, warn: 2, bad: 3 };
-
-export function worstHealth(list: Health[]): Health {
-  return list.reduce<Health>((w, h) => (RANK[h] > RANK[w] ? h : w), 'idle');
 }
 
 const share = (part: number, whole: number) => (whole > 0 ? part / whole : 0);
@@ -56,12 +50,6 @@ export function voiceFallbackHealth(t: { count: number; fellBack: number }): Hea
   };
 }
 
-export function voiceHealth(t: { count: number; failed: number; fellBack: number }): HealthSignal {
-  const failure = voiceFailureHealth(t);
-  const fallback = voiceFallbackHealth(t);
-  return RANK[fallback.health] > RANK[failure.health] ? fallback : failure;
-}
-
 export function requestsHealth(r: { count: number; failed: number; successRate?: number | null }): HealthSignal {
   if (!r.count) return { health: 'idle', note: 'no listener requests yet' };
   const rate = r.successRate ?? 1 - share(r.failed, r.count);
@@ -71,15 +59,6 @@ export function requestsHealth(r: { count: number; failed: number; successRate?:
   if (rate < 0.8) return { health: failing(r.count), note };
   if (rate < 0.9) return { health: 'warn', note };
   return { health: 'ok', note };
-}
-
-export function budgetHealth(
-  b: { enabled: boolean; mode: 'normal' | 'soft' | 'hard' } | null | undefined,
-): HealthSignal {
-  if (!b?.enabled) return { health: 'idle', note: 'no daily token cap' };
-  if (b.mode === 'hard') return { health: 'bad', note: 'daily token cap reached, the DJ is holding back' };
-  if (b.mode === 'soft') return { health: 'warn', note: 'past the soft token limit, the DJ talks less' };
-  return { health: 'ok', note: 'within the daily token cap' };
 }
 
 export function loadHealth(
@@ -94,28 +73,15 @@ export function loadHealth(
 }
 
 // memUsed is total − available (the controller's /system), so page cache does
-// not count against it and a busy-but-healthy host stays ok.
+// not count against it and a busy-but-healthy host stays ok. The warning starts
+// at the rack's 80% red zone.
 export function memoryHealth(
   host: { memUsed: number; memTotal: number } | null | undefined,
 ): HealthSignal {
   if (!host?.memTotal) return { health: 'idle', note: 'host memory unknown' };
   const frac = share(host.memUsed, host.memTotal);
-  const note = `${Math.round(frac * 100)}% of host memory in use`;
+  const note = `${Math.round(frac * 100)}% in use`;
   if (frac >= 0.95) return { health: 'bad', note };
-  if (frac >= 0.85) return { health: 'warn', note };
+  if (frac >= 0.8) return { health: 'warn', note };
   return { health: 'ok', note };
 }
-
-// Rolls several signals into one light. The notes are the ones at the worst
-// level, so the line under the light names what to look at.
-export function summarizeHealth(signals: HealthSignal[]): { health: Health; notes: string[] } {
-  const health = worstHealth(signals.map(s => s.health));
-  return { health, notes: signals.filter(s => s.health === health).map(s => s.note) };
-}
-
-export const HEALTH_LABEL: Record<Health, string> = {
-  ok: 'All good',
-  warn: 'Worth a look',
-  bad: 'Needs attention',
-  idle: 'Quiet so far',
-};

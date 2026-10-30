@@ -9,11 +9,8 @@
 import assert from 'node:assert/strict';
 import {
   bucketSamplesByHour,
-  fmtSampleTime,
   groupConnectionsByDevice,
   isLongSpan,
-  nearestIndex,
-  peakSample,
   splitAtGaps,
   timedSamples,
   timeTicks,
@@ -164,26 +161,6 @@ test('timedSamples drops unparseable timestamps and sorts by time', () => {
   assert.deepEqual(s.map(x => x.count), [1, 2]);
 });
 
-test('nearestIndex picks the closest sample in time, ties going earlier', () => {
-  const s = [ms(9), ms(10), ms(12)].map(t => ({ ms: t, count: 0 }));
-  assert.equal(nearestIndex(s, ms(8)), 0);
-  assert.equal(nearestIndex(s, ms(10, 20)), 1);
-  assert.equal(nearestIndex(s, ms(11)), 1); // equidistant from 10:00 and 12:00
-  assert.equal(nearestIndex(s, ms(11, 1)), 2);
-  assert.equal(nearestIndex(s, ms(23)), 2);
-  assert.equal(nearestIndex([], ms(9)), -1);
-});
-
-test('peakSample returns the most recent sample at the maximum', () => {
-  const p = peakSample([
-    { ms: ms(9), count: 4 },
-    { ms: ms(10), count: 2 },
-    { ms: ms(11), count: 4 },
-  ]);
-  assert.equal(p?.ms, ms(11));
-  assert.equal(peakSample([]), null);
-});
-
 test('a day-long span ticks every six local hours, clear of the edges', () => {
   const ticks = timeTicks(ms(1, 30), ms(1, 30, 6));
   assert.deepEqual(ticks.map(t => t.label), ['06:00', '12:00', '18:00', '00:00']);
@@ -210,9 +187,7 @@ test('splitAtGaps breaks the series where minutes are missing', () => {
   assert.equal(splitAtGaps([ms(9, 0), ms(9, 5)].map(t => ({ ms: t, count: 0 }))).length, 1);
 });
 
-test('fmtSampleTime adds the weekday only for long spans', () => {
-  assert.equal(fmtSampleTime(ms(14, 5), false), '14:05');
-  assert.match(fmtSampleTime(ms(14, 5), true), /^\S+ 14:05$/);
+test('a span reads as days past a day and a half', () => {
   assert.equal(isLongSpan(24 * 3_600_000), false);
   assert.equal(isLongSpan(7 * 24 * 3_600_000), true);
 });

@@ -1,19 +1,16 @@
-// Unit tests for the Stats page's traffic lights and readable kind names.
+// Unit tests for the Stats page's traffic lights.
 // Same lightweight harness as audienceStats.test.ts. Run from web/:
 // `npm test -- statsHealth`.
 
 import assert from 'node:assert/strict';
 import {
-  budgetHealth,
   llmHealth,
   loadHealth,
   memoryHealth,
   requestsHealth,
-  summarizeHealth,
-  voiceHealth,
-  worstHealth,
+  voiceFailureHealth,
+  voiceFallbackHealth,
 } from './statsHealth';
-import { humanKind } from './statsLabels';
 
 let failures = 0;
 function test(name: string, fn: () => void) {
@@ -28,13 +25,6 @@ function test(name: string, fn: () => void) {
 
 console.log('health signals:');
 
-test('worstHealth ranks bad > warn > ok > idle', () => {
-  assert.equal(worstHealth([]), 'idle');
-  assert.equal(worstHealth(['ok', 'idle']), 'ok');
-  assert.equal(worstHealth(['ok', 'warn', 'idle']), 'warn');
-  assert.equal(worstHealth(['warn', 'bad', 'ok']), 'bad');
-});
-
 test('LLM: idle with no calls, bad under 90% success, warn under 95%', () => {
   assert.equal(llmHealth({ count: 0, failed: 0 }).health, 'idle');
   assert.equal(llmHealth({ count: 100, failed: 11, successRate: 0.89 }).health, 'bad');
@@ -46,12 +36,13 @@ test('LLM: idle with no calls, bad under 90% success, warn under 95%', () => {
 });
 
 test('voice: a fallback is a warning, a 10% failure share is bad', () => {
-  assert.equal(voiceHealth({ count: 0, failed: 0, fellBack: 0 }).health, 'idle');
-  assert.equal(voiceHealth({ count: 50, failed: 0, fellBack: 0 }).health, 'ok');
-  assert.equal(voiceHealth({ count: 50, failed: 0, fellBack: 3 }).health, 'warn');
-  assert.equal(voiceHealth({ count: 50, failed: 0, fellBack: 3 }).note, '3 lines used the backup voice');
-  assert.equal(voiceHealth({ count: 50, failed: 1, fellBack: 0 }).health, 'warn');
-  assert.equal(voiceHealth({ count: 50, failed: 5, fellBack: 20 }).health, 'bad');
+  assert.equal(voiceFailureHealth({ count: 0, failed: 0 }).health, 'idle');
+  assert.equal(voiceFailureHealth({ count: 50, failed: 0 }).health, 'ok');
+  assert.equal(voiceFailureHealth({ count: 50, failed: 1 }).health, 'warn');
+  assert.equal(voiceFailureHealth({ count: 50, failed: 5 }).health, 'bad');
+  assert.equal(voiceFallbackHealth({ count: 50, fellBack: 0 }).health, 'ok');
+  assert.equal(voiceFallbackHealth({ count: 50, fellBack: 20 }).health, 'warn');
+  assert.equal(voiceFallbackHealth({ count: 50, fellBack: 3 }).note, '3 lines used the backup voice');
 });
 
 test('requests: bad under 80% found, warn under 90%', () => {
@@ -66,16 +57,8 @@ test('requests: bad under 80% found, warn under 90%', () => {
 test('a failure in a small sample is worth a look, never needs attention', () => {
   assert.equal(llmHealth({ count: 1, failed: 1, successRate: 0 }).health, 'warn');
   assert.equal(llmHealth({ count: 9, failed: 5 }).health, 'warn');
-  assert.equal(voiceHealth({ count: 3, failed: 2, fellBack: 0 }).health, 'warn');
+  assert.equal(voiceFailureHealth({ count: 3, failed: 2 }).health, 'warn');
   assert.equal(requestsHealth({ count: 4, failed: 4, successRate: 0 }).health, 'warn');
-});
-
-test('budget: idle without a cap, then follows the mode', () => {
-  assert.equal(budgetHealth(null).health, 'idle');
-  assert.equal(budgetHealth({ enabled: false, mode: 'normal' }).health, 'idle');
-  assert.equal(budgetHealth({ enabled: true, mode: 'normal' }).health, 'ok');
-  assert.equal(budgetHealth({ enabled: true, mode: 'soft' }).health, 'warn');
-  assert.equal(budgetHealth({ enabled: true, mode: 'hard' }).health, 'bad');
 });
 
 test('host load: bad past one per core, warn past 70%', () => {
@@ -85,38 +68,12 @@ test('host load: bad past one per core, warn past 70%', () => {
   assert.equal(loadHealth({ cpus: 4, loadavg: [1, 1, 1] }).health, 'ok');
 });
 
-test('host memory: warn at 85%, bad at 95%', () => {
+test('host memory: warn from the 80% red zone, bad at 95%', () => {
   assert.equal(memoryHealth({ memUsed: 0, memTotal: 0 }).health, 'idle');
   assert.equal(memoryHealth({ memUsed: 96, memTotal: 100 }).health, 'bad');
-  assert.equal(memoryHealth({ memUsed: 85, memTotal: 100 }).health, 'warn');
-  assert.equal(memoryHealth({ memUsed: 50, memTotal: 100 }).note, '50% of host memory in use');
-});
-
-test('summarizeHealth keeps only the notes at the worst level', () => {
-  const s = summarizeHealth([
-    { health: 'ok', note: 'a' },
-    { health: 'warn', note: 'b' },
-    { health: 'idle', note: 'c' },
-    { health: 'warn', note: 'd' },
-  ]);
-  assert.equal(s.health, 'warn');
-  assert.deepEqual(s.notes, ['b', 'd']);
-});
-
-console.log('\nhumanKind:');
-
-test('turns call kinds into words', () => {
-  assert.equal(humanKind('sdk.djAgentPick'), 'DJ agent pick');
-  assert.equal(humanKind('generateStationId'), 'Station ID');
-  assert.equal(humanKind('pickNextTrack'), 'Pick next track');
-  assert.equal(humanKind('artist_fallback'), 'Artist fallback');
-  assert.equal(humanKind('sfx'), 'SFX');
-  assert.equal(humanKind('banter'), 'Banter');
-});
-
-test('keeps a word that only looks like the generate prefix', () => {
-  assert.equal(humanKind('generated'), 'Generated');
-  assert.equal(humanKind(''), '');
+  assert.equal(memoryHealth({ memUsed: 80, memTotal: 100 }).health, 'warn');
+  assert.equal(memoryHealth({ memUsed: 79, memTotal: 100 }).health, 'ok');
+  assert.equal(memoryHealth({ memUsed: 50, memTotal: 100 }).note, '50% in use');
 });
 
 if (failures > 0) {

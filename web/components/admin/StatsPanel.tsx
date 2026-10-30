@@ -1,89 +1,55 @@
 'use client';
 
-// The Stats page: a glance strip that answers "is the station okay" above four
-// tabs (Audience, DJ & voice, Music, System). This file owns the reads and the
-// tab state; each tab renders from what it is handed (./stats/*).
+// The Stats page, after the "Stats Redesign" design: a front panel that says
+// whether anyone is listening and whether the station is healthy, then numbered
+// sections from the weekly recap down to diagnostics. This file owns the reads
+// and the page header; each section renders from what it is handed (./stats/*).
 //
 // /stats reports activity since boot, except `transitions`, which is read from
-// the play history; /listeners and /audience report persisted history.
+// the play history; /listeners, /audience and /stats/week read durable records.
 
-import { useCallback, useEffect, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { Cpu, Disc3, Mic, Users } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { AdminResponseError, adminJson, useAdminQuery } from '../../lib/admin-query';
 import { errorMessage } from '../../lib/notify';
 import { ErrorState } from '@/components/ui/error-state';
-import { Card, Btn, Eyebrow } from './ui';
-import { SectionTabs, type SectionTab } from './SectionTabs';
+import { Btn } from './ui';
 import { cn } from '../../lib/cn';
-import {
-  budgetHealth,
-  llmHealth,
-  requestsHealth,
-  summarizeHealth,
-  voiceHealth,
-} from '../../lib/statsHealth';
 import { statsKeys } from './stats-queries';
-import { GlanceStrip } from './stats/GlanceStrip';
-import { AudienceTab } from './stats/AudienceTab';
-import { DjTab } from './stats/DjTab';
-import { MusicTab } from './stats/MusicTab';
-import { SystemTab } from './stats/SystemTab';
-import { Hint } from './stats/kit';
+import { LABEL, NOTE } from './stats/parts';
+import { FrontPanel } from './stats/FrontPanel';
+import { WeekRecap } from './stats/WeekRecap';
+import { Listening } from './stats/Listening';
+import { OnAir } from './stats/OnAir';
+import { EngineRoom } from './stats/EngineRoom';
+import { Rack } from './stats/Rack';
+import { Diagnostics, type DiagnosticKey } from './stats/Diagnostics';
 import type {
   AudienceResponse,
   ConnectionsResponse,
   ListenersResponse,
   StatsResponse,
   SystemResponse,
+  WeekRecap as WeekRecapResponse,
 } from './stats/types';
 
 class StatsShapeError extends Error {}
 
-type TabId = 'audience' | 'dj' | 'music' | 'system';
-
-const TAB_IDS = ['audience', 'dj', 'music', 'system'] as const;
-
-const TABS: SectionTab[] = [
-  { id: 'audience', label: 'Audience', icon: Users },
-  { id: 'dj', label: 'DJ & voice', icon: Mic },
-  { id: 'music', label: 'Music', icon: Disc3 },
-  { id: 'system', label: 'System', icon: Cpu },
-];
+const CLOSED: Record<DiagnosticKey, boolean> = { requests: false, transitions: false };
 
 export default function StatsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [paused, setPaused] = useState(false);
   const [range, setRange] = useState('1440'); // minutes — 24h default
+  const [open, setOpen] = useState(CLOSED);
   const enabled = hydrated && !needsAuth && !paused;
 
-  // The active tab lives in the URL (?tab=…), read every render rather than
-  // mirrored into state, because the sidebar carries these tabs as sub-items
-  // and a soft nav to the same pathname does not remount (ConnectPanel has the
-  // full reasoning). Unknown values fall back to Audience.
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const rawTab = searchParams.get('tab');
-  const tab: TabId = (TAB_IDS as readonly string[]).includes(rawTab ?? '')
-    ? (rawTab as TabId)
-    : 'audience';
-  const selectTab = useCallback(
-    (id: string) => {
-      const params = new URLSearchParams(Array.from(searchParams.entries()));
-      params.set('tab', id);
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-    },
-    [router, pathname, searchParams],
-  );
-
-  // /stats — usage rollups, 5s. Feeds the glance strip, so it polls on every tab.
-  const statsQuery = useAdminQuery<StatsResponse>({
+  // /stats — usage rollups, 5s.
+  const statsQuery = useAdminQuery<StatsResponse & { t?: string }>({
     key: statsKeys.rollups(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 5_000,
     request: async (fetcher, signal) => {
-      const body = await adminJson<StatsResponse>(fetcher, '/stats', undefined, signal);
+      const body = await adminJson<StatsResponse & { t?: string }>(fetcher, '/stats', undefined, signal);
       if (!body || typeof body !== 'object' || !body.llm) {
         throw new StatsShapeError(body?.error || 'unexpected response shape from /stats');
       }
@@ -91,7 +57,15 @@ export default function StatsPanel() {
     },
   });
 
-  // /listeners — durable time-series for the Audience chart, 30s. Soft-fails:
+  // /stats/week — the weekly recap and most-played lists. Cached server-side
+  // for five minutes (it reads listeners.jsonl whole), so poll at that pace.
+  const weekQuery = useAdminQuery<WeekRecapResponse>({
+    key: statsKeys.week(), adminFetch, enabled, staleTime: 0,
+    refetchInterval: () => 5 * 60_000,
+    request: (fetcher, signal) => adminJson(fetcher, '/stats/week', undefined, signal),
+  });
+
+  // /listeners — durable time-series for the listener chart, 30s. Soft-fails:
   // a miss leaves the last reading in place rather than erroring the page.
   const listenersQuery = useAdminQuery<ListenersResponse>({
     key: statsKeys.listeners(range), adminFetch, enabled, staleTime: 0,
@@ -118,11 +92,10 @@ export default function StatsPanel() {
     if (audienceQuery.data) setLastAudience(audienceQuery.data);
   }, [audienceQuery.data]);
 
-  // /listeners/connections — 30s, range-independent, Audience tab only. A 502
-  // is stored as an error, not dropped, so the card can say "live detail
-  // unavailable".
+  // /listeners/connections — 30s, range-independent. A 502 is stored as an
+  // error, not dropped, so the card can say "live detail unavailable".
   const connectionsQuery = useAdminQuery<ConnectionsResponse>({
-    key: statsKeys.connections(), adminFetch, enabled: enabled && tab === 'audience', staleTime: 0,
+    key: statsKeys.connections(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
     request: async (fetcher, signal) => {
       try {
@@ -139,10 +112,10 @@ export default function StatsPanel() {
     },
   });
 
-  // /system — per-container CPU/memory, 30s (~1s per container to sample), so
-  // it polls only while the System tab is open. Soft-fails; range-independent.
+  // /system — host and per-container CPU/memory, 30s (~1s per container to
+  // sample). Feeds the front panel's Host row as well as the rack. Soft-fails.
   const systemQuery = useAdminQuery<SystemResponse>({
-    key: statsKeys.system(), adminFetch, enabled: enabled && tab === 'system', staleTime: 0,
+    key: statsKeys.system(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
     request: (fetcher, signal) => adminJson(fetcher, '/system', undefined, signal),
   });
@@ -151,75 +124,86 @@ export default function StatsPanel() {
   const err = statsQuery.error ? errorMessage(statsQuery.error) : null;
   const listeners = listenersQuery.data ?? lastListeners;
   const audience = audienceQuery.data ?? lastAudience;
+  const recap = weekQuery.data ?? null;
+  const system = systemQuery.data ?? null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
 
-  const llm = data?.llm;
-  const tts = data?.tts;
-  const djLog = data?.djLog;
-  const requests = data?.requests;
-  const statsReady = !!(llm && tts && djLog && requests);
-
-  const counts = (listeners?.samples ?? []).map(s => s.count);
-  const dj = llm && tts && requests
-    ? summarizeHealth([llmHealth(llm), voiceHealth(tts), requestsHealth(requests), budgetHealth(llm.budget)])
-    : null;
-
-  const connecting = !err && (
-    <Card title="Stats">
-      <Hint>connecting…</Hint>
-    </Card>
-  );
+  const samples = listeners?.samples ?? [];
+  const counts = samples.map(s => s.count);
+  // The controller's own clock, so the masthead moves with each poll.
+  const asOf = data?.t ? new Date(data.t) : null;
 
   return (
-    <div className="grid gap-4">
-      <section className="card">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink p-3.5">
-          <Eyebrow className={cn(err ? 'text-[var(--danger)]' : !paused && 'text-vermilion')}>
-            ● {err ? 'down' : paused ? 'paused' : 'live'}
-          </Eyebrow>
-          <span className="text-[11px] text-muted">
-            {paused ? 'figures frozen until you resume' : 'updates every few seconds'}
+    <div className="grid grid-cols-1 gap-11">
+      <header className="flex flex-wrap items-end gap-5">
+        <div className="grid gap-2">
+          <span className={NOTE}>
+            {[
+              recap?.station,
+              asOf && `${asOf.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · ${asOf.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
+            ].filter(Boolean).join(' · ') || ' '}
           </span>
-          <span className="ml-auto">
-            <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
-          </span>
+          <h1 className="m-0 font-display text-[52px] leading-none font-normal tracking-[-0.02em]">Stats</h1>
         </div>
-        <GlanceStrip
-          listenersNow={listeners?.current ?? null}
-          peak={counts.length ? Math.max(...counts) : null}
-          samples={listeners?.samples ?? []}
-          rangeLabel={rangeLabel}
-          listenersLoaded={listeners != null}
-          visits={audience ? (audience.sessions ?? 0) : null}
-          countries={audience?.countries?.length ?? 0}
-          dj={dj}
-          budget={llm?.budget ?? null}
-          statsDown={!!err}
-        />
-        <SectionTabs tabs={TABS} value={tab} onChange={selectTab} label="Stats sections" />
-      </section>
+        <div className="ml-auto flex flex-wrap items-center gap-4">
+          <span className={cn(LABEL, err ? 'text-[var(--danger)]' : paused ? 'text-muted' : 'text-vermilion')}>
+            ● {err ? 'down' : paused ? 'paused' : 'live'}
+          </span>
+          <span className="font-mono text-[10px] tracking-[0.2em] uppercase">refresh · 5s</span>
+          <span className={NOTE}>rollups since boot · listeners durable</span>
+          <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
+        </div>
+      </header>
 
       {err && <ErrorState error={err} />}
 
-      {tab === 'audience' && (
-        <AudienceTab
-          range={range}
-          onRange={setRange}
-          rangeLabel={rangeLabel}
-          listeners={listeners}
-          audience={audience}
-          connections={connectionsQuery.data ?? null}
-        />
-      )}
-      {tab === 'dj' && (statsReady && llm && tts && djLog
-        ? <DjTab llm={llm} tts={tts} djLog={djLog} />
-        : connecting)}
-      {tab === 'music' && (statsReady && requests
-        ? <MusicTab requests={requests} transitions={data?.transitions} />
-        : connecting)}
-      {tab === 'system' && (
-        <SystemTab system={systemQuery.data ?? null} llm={llm} trackSelection={data?.trackSelection} />
-      )}
+      <FrontPanel
+        listeners={{
+          now: listeners?.current ?? null,
+          peak: counts.length ? Math.max(...counts) : null,
+          avg: counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null,
+          low: counts.length ? Math.min(...counts) : null,
+          rangeLabel,
+          loaded: listeners != null,
+        }}
+        llm={data?.llm ?? null}
+        tts={data?.tts ?? null}
+        requests={data?.requests ?? null}
+        host={system?.host ?? null}
+        statsDown={!!err}
+      />
+
+      <WeekRecap recap={recap} />
+
+      <Listening
+        range={range}
+        onRange={setRange}
+        rangeLabel={rangeLabel}
+        samples={samples}
+        listenersLoaded={listeners != null}
+        audience={audience}
+        connections={connectionsQuery.data ?? null}
+      />
+
+      <OnAir
+        recap={recap}
+        djLog={data?.djLog ?? null}
+        transitions={data?.transitions}
+        onTransitions={() => setOpen(o => ({ ...o, transitions: true }))}
+      />
+
+      <EngineRoom llm={data?.llm ?? null} tts={data?.tts ?? null} />
+
+      <Rack system={system} />
+
+      <Diagnostics
+        requests={data?.requests ?? null}
+        llm={data?.llm ?? null}
+        trackSelection={data?.trackSelection}
+        transitions={data ? data.transitions : undefined}
+        open={open}
+        onToggle={key => setOpen(o => ({ ...o, [key]: !o[key] }))}
+      />
     </div>
   );
 }

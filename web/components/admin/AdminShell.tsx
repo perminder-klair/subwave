@@ -42,7 +42,6 @@ import {
   Boxes,
   Webhook,
   Telescope,
-  Cpu,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -149,18 +148,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'Monitor',
     items: [
       { href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' },
-      {
-        href: '/admin/stats',
-        id: 'stats',
-        label: 'Stats',
-        icon: BarChart3,
-        children: [
-          { href: '/admin/stats?tab=audience', id: 'stats-audience', label: 'Audience', icon: Users, tab: 'audience', defaultTab: true },
-          { href: '/admin/stats?tab=dj', id: 'stats-dj', label: 'DJ & voice', icon: Mic, tab: 'dj' },
-          { href: '/admin/stats?tab=music', id: 'stats-music', label: 'Music', icon: Disc3, tab: 'music' },
-          { href: '/admin/stats?tab=system', id: 'stats-system', label: 'System', icon: Cpu, tab: 'system' },
-        ],
-      },
+      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
     ],
   },
   {

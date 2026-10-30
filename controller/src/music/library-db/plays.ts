@@ -194,6 +194,23 @@ export function listPlays(opts: { limit?: number; offset?: number } = {}): { tot
   return { total, rows };
 }
 
+// The plays since `sinceIso`, oldest first, carrying only what the Stats page's
+// weekly recap and most-played lists count. Two weeks is a few thousand rows.
+export interface PlayTally {
+  playedAt: string;
+  title: string | null;
+  artist: string | null;
+  requestedBy: string | null;
+}
+
+export function playsSince(sinceIso: string): PlayTally[] {
+  return (requireDb().prepare(`
+    SELECT played_at, title, artist, requested_by FROM plays
+    WHERE played_at >= ? ORDER BY played_at
+  `).all(sinceIso) as Array<{ played_at: string; title: string | null; artist: string | null; requested_by: string | null }>)
+    .map(r => ({ playedAt: r.played_at, title: r.title, artist: r.artist, requestedBy: r.requested_by }));
+}
+
 // Durable rollup of the seam record over the last `days` (the Stats panel's
 // Transitions card). Counted in JS over the window's rows rather than in SQL:
 // the drops column is a JSON list, and a week of plays is a few thousand rows.

@@ -95,47 +95,11 @@ export function timedSamples(samples: ListenerSample[]): TimedCount[] {
   return out.sort((a, b) => a.ms - b.ms);
 }
 
-// Index of the sample closest in time to `ms`; -1 for an empty series. The
-// series must be sorted (timedSamples sorts it).
-export function nearestIndex(series: TimedCount[], ms: number): number {
-  if (!series.length) return -1;
-  let lo = 0;
-  let hi = series.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if ((series[mid]?.ms ?? 0) < ms) lo = mid + 1;
-    else hi = mid;
-  }
-  const prev = series[lo - 1];
-  const here = series[lo];
-  if (prev && here && ms - prev.ms <= here.ms - ms) return lo - 1;
-  return lo;
-}
-
-// The most recent sample at the series maximum, so "peak at …" names the latest
-// time the station was that busy rather than the first.
-export function peakSample(series: TimedCount[]): TimedCount | null {
-  let best: TimedCount | null = null;
-  for (const s of series) {
-    if (!best || s.count >= best.count) best = s;
-  }
-  return best;
-}
-
-// Spans past this read as days: axis ticks fall on local midnights and
-// readings carry the weekday.
+// Spans past this read as days: axis ticks fall on local midnights.
 const DAY_AXIS_MS = 36 * 3_600_000;
 
 export function isLongSpan(spanMs: number): boolean {
   return spanMs > DAY_AXIS_MS;
-}
-
-// "14:20", or "Tue 14:20" when the chart spans days. Local time, like the
-// hour-of-day chart.
-export function fmtSampleTime(ms: number, long: boolean): string {
-  const d = new Date(ms);
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return long ? `${d.toLocaleDateString('en-GB', { weekday: 'short' })} ${time}` : time;
 }
 
 export interface AxisTick {

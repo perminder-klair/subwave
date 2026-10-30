@@ -1,12 +1,13 @@
-// Number formatting shared by the Stats tabs. Every formatter renders an absent
-// value as an em dash, so a cell never shows "0" for "not measured".
+// Number formatting shared by the Stats page's sections.
 
 export const fmtInt = (n: number | null | undefined): string =>
   n == null ? '—' : Number(n).toLocaleString('en-GB');
 
-export const fmtMs = (n: number | null | undefined): string => {
-  if (n == null) return '—';
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}s` : `${Math.round(n)}ms`;
+// Latencies read in seconds on this page: the default model is a slow homelab
+// Ollama, so milliseconds would be four digits of noise.
+export const fmtSec = (ms: number | null | undefined): string => {
+  if (ms == null) return '—';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 };
 
 export const fmtPct = (n: number | null | undefined): string =>
@@ -19,7 +20,7 @@ export const fmtTokens = (n: number | null | undefined): string => {
   return String(n);
 };
 
-// One-decimal mean; counts are small integers.
+// One-decimal mean; listener counts are small integers.
 export const fmtAvg = (n: number | null | undefined): string =>
   n == null ? '—' : (Math.round(n * 10) / 10).toLocaleString('en-GB');
 
@@ -31,5 +32,12 @@ export const fmtBytes = (n: number | null | undefined): string => {
   return `${n} B`;
 };
 
-// The window line every in-memory card carries, so each card says what it covers.
-export const SINCE_START = 'since the controller started';
+export const fmtUsd = (n: number): string => (n >= 10 ? `$${n.toFixed(1)}` : `$${n.toFixed(2)}`);
+
+// A share of a whole, as a whole percent; empty when there is no whole.
+export const fmtShare = (part: number, whole: number | null | undefined): string =>
+  whole ? `${Math.round((part / whole) * 100)}%` : '';
+
+// "sdk.djAgentPick" → "djAgentPick": the SDK prefix is plumbing, the rest is
+// the name the logs use.
+export const kindName = (kind: string): string => kind.replace(/^sdk\./, '');
