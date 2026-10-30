@@ -3,7 +3,7 @@
 
 import { lyricsResultFor, type LyricsResult } from './lyrics';
 import type { StreamFormat } from './streamFormat';
-import { stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
+import { rateLimitedUntil, stationAuthResult, withStreamAuth, type StationAuthResult } from './station-password';
 import {
   normalizeStationBase,
   resolveStationConnection,
@@ -79,6 +79,10 @@ export interface StationApi {
   /** Check a private-station password against `POST /station-auth` (#478),
    *  which fails closed and is rate-limited. Never throws. */
   checkStationAuth(password: string): Promise<StationAuthResult>;
+  /** When the latest `/station-auth` answer said to ask again: a 429's
+   *  `Retry-After`, or 0 for none. The limit covers the whole address, so this
+   *  holds whichever check saw it. */
+  stationAuthHeldUntil(): number;
   /** Absolute URL for an album cover. It still carries the login as URL
    *  userinfo for RNTP's iOS lock-screen artwork, which loads it with a bare
    *  URLSession request that takes no headers; every loader that does take
@@ -186,6 +190,7 @@ export function createApi(
   // no headers (see cover()). It is the same login as the header, so the two
   // never disagree.
   const asset = (p: string) => `${requestBase}/api${p}`;
+  let stationAuthHold = 0;
   const onStation = (url: string) => url.startsWith(`${requestBase}/`) || url.startsWith(`${cleanBase}/`);
   const probeHealth = async (signal?: AbortSignal): Promise<HealthResult> => {
     try {
@@ -239,15 +244,17 @@ export function createApi(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
+        stationAuthHold = res.status === 429 ? rateLimitedUntil(res.headers.get('Retry-After'), Date.now()) : 0;
         return stationAuthResult(res.status, {
           challenged: res.headers.has('www-authenticate'),
-          // Only a refusal's body is read: it says who refused (stationAuthResult).
-          body: res.status === 401 ? await refusalBody(res) : undefined,
+          // Only these bodies are read: they say who answered (stationAuthResult).
+          body: res.status === 200 || res.status === 401 ? await refusalBody(res) : undefined,
         });
       } catch {
         return stationAuthResult(null);
       }
     },
+    stationAuthHeldUntil: () => stationAuthHold,
     pollRequest: async (id) => {
       const res = await send(`/request/${encodeURIComponent(id)}`);
       if (res.status === 404) return { success: false, status: 'unknown' };
