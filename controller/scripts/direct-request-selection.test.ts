@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  directRequestUnsupported, explicitRequestAttribute, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
+  classifyUnsupportedLabels, directRequestUnsupported, explicitRequestAttribute, modelFreeRequest, requestedTitle, repairRequestMatch, requestArtistMatches, requestReleaseRank, requestTitleMatches,
   resolveDirectRequest, type RequestCatalog, type RequestMatch, type RequestSong,
 } from '../src/music/request-match.js';
 
@@ -70,6 +70,26 @@ test('common exclusion and era wording survives a model omission', () => {
     assert.ok(directRequestUnsupported(text).length, text);
   }
   assert.deepEqual(directRequestUnsupported('play something by Queen', { unsupported: ['previous conversation'] }), ['previous conversation']);
+});
+
+test('a model label refuses only when it names one of the five conditions (#2133)', async () => {
+  // The prompt's wording, the backstop's own labels and variants models wrote.
+  const kept = ['exclusions', 'exclusions/negation', 'negation', 'era', 'era or year ranges', 'year ranges', '1990s',
+    'instrumental-only filters', 'recording condition', 'live only', 'lyric/film/trending-song identification',
+    'lyric identification', 'film identification', 'external identification', 'earlier conversation',
+    'references to earlier conversations', 'previous conversation'];
+  // Labels models filed dedications under, invented categories included.
+  const invented = ['dedication', 'dedication request', 'dedication/tribute', 'tribute', 'shout-out',
+    'journey identification', 'journey/destination identification', 'for a person'];
+  assert.deepEqual(classifyUnsupportedLabels([...kept, ...invented, ' ']), { conditions: kept, ignored: invented });
+  assert.deepEqual(directRequestUnsupported('Dedicate a song to my late aunt, I will miss you', { unsupported: ['dedication'] }), []);
+  assert.deepEqual(directRequestUnsupported('play anything except Queen for my mum', { unsupported: ['dedication', 'exclusions'] }), ['exclusions']);
+  // An ignored label leaves a valid empty plan, so the literal name pair is kept.
+  assert.equal(repairRequestMatch({ unsupported: ['dedication'] }, 'Play Bohemian Rhapsody by Queen').title, exact.title);
+  const f = fixture();
+  const r = await resolveDirectRequest({ ...songRequest, unsupported: ['dedication'] }, f.deps);
+  assert.equal(r.outcome, 'matched');
+  assert.equal(r.track?.id, exact.id);
 });
 
 test('names and quoted titles are not mistaken for unsupported conditions', () => {
