@@ -45,8 +45,10 @@ The router (`router/`) speaks exactly the Subsonic dialect `controller/src/music
 | `host/composite.ts` | merged sets |
 | `host/loader.ts`, `host/manifest.ts` | plugin discovery and validation |
 | `host/registry.ts` | the active source; construct-before-swap |
+| `host/activity.ts` | the bounded request feed behind the admin Signal path monitor |
 | `subsonic/` | auth, envelope, one handler per endpoint |
-| `internal/routes.ts` | `/internal/status`, `/internal/reload`, `/internal/test` for the controller |
+| `subsonic/coverage.ts` | which optional op each endpoint leans on, and what it does without it |
+| `internal/routes.ts` | `/internal/status`, `/internal/reload`, `/internal/test`, `/internal/activity` for the controller |
 
 ### Rules that are easy to break
 
@@ -58,6 +60,8 @@ The router (`router/`) speaks exactly the Subsonic dialect `controller/src/music
 - **A bad selection is refused whole.** `registry.apply()` builds every source before swapping; on any failure the running one keeps serving and the reason is reported as `configError`. The controller's save writes the router's `config.json` FIRST and reads that `configError` back from the reload: a refusal restores the previous `config.json` and returns before `setup-config.json`, the live connection or the switch marker are touched, so a refused save changes nothing (`setup/music-source-save.ts applySelection`).
 - **A merged enumeration is all-or-nothing.** Merged reads leave a failing source out (one dead backend shrinks the answer), except the alphabetical album list a library walk pages to the end: the controller prunes whatever its walk did not see, so that list fails outright when any source does (`host/composite.ts` `ENUMERATIONS`).
 - **The op timeout (25s) sits under the controller's per-request cap (30s)**, so a slow backend surfaces as a router error the controller logs, not as the controller giving up first.
+- **The activity feed records shape, never content.** `host/activity.ts` keeps the last 60 `/rest` requests in memory: endpoint, caller (from the user agent — curl is Liquidsoap, Node the controller, Python the analyzer), timing, state, and each source call. Never a query string, id, credential or payload; an error message is kept, but any URL in it loses its query string first, since a backend's key can ride there. Calls are observed per CHILD source (`observeSource`, applied in `registry.buildSource` before a merge composes them), so a routed request lights only its owner. A Subsonic error rides inside a 200, so `respondError` marks the request failed itself; status codes alone would call it ok.
+- **Coverage is a claim about the handlers, and is tested as one.** `subsonic/coverage.ts` names the optional op each endpoint leans on and whether it degrades (answers ok, with less) or is unsupported (answers an error). `scripts/coverage.test.ts` pins one row per handler and drives every claim against a source that lacks the op, so the admin matrix cannot drift from what the router does.
 - **Merged album lists come from a snapshot.** A library walk pages `getAlbumList2` with an offset 500 at a time; served naively that costs `offset + size` per child per page. `composite.ts` builds the merged ordering once per type (10 min TTL) and slices it.
 
 ### Plugins and trust
@@ -71,7 +75,8 @@ A plugin is code with the same trust as a skill's `tool.mjs`. The compose servic
 - `schemas/music-source.ts` — the selection, the save/test bodies and the router-status shapes (lenient: the router may be another version). Mirrored to the web.
 - `setup/music-source.ts` — the selection, `config.json`, the router client, secret masking, selection identity, the switch marker.
 - `setup/music-source-save.ts` — validate-then-apply, shared by `POST /settings/music-source` and `/onboarding/save` so both refuse the same drafts. A draft is checked against the router's manifests (required fields, plugin load errors) before anything is written.
-- `routes/settings/music-source.ts` — `GET`/`POST /settings/music-source`, `/test`, `/rescan`.
+- `routes/settings/music-source.ts` — `GET`/`POST /settings/music-source`, `/test`, `/rescan`, `/activity`.
+- `web/components/admin/router/` — Admin → Music router (`/admin/router`): one channel strip per plugin (health, counts, latency, capabilities, settings), the Signal path monitor over `/activity` (polled every 1.5s only while open), and the service matrix (`/internal/status`'s `endpoints` crossed with each plugin's capabilities). Read-only: choosing what serves stays in Settings → Music source, whose save validates, writes `config.json` and re-links the library. A standby plugin's capabilities are the ones it had when last built (selected or Tested) since the router started, and `unknown` until then — never guessed.
 - `setup/firstRun.ts` — router mode needs a source, not Navidrome credentials.
 - `routes/settings/core.ts` — the direct-Navidrome section reads and writes the *stored* connection; in router mode its save does not touch the live one.
 - `doctor/checks-services.ts` — router mode reports the router, each source's health and any plugin load errors.
@@ -94,5 +99,7 @@ That walk's `adoptAndPrune` runs adoption with `matchByMetadata`: orphaned rows 
 | `controller/scripts/router-contract.test.ts` | every `subsonic.ts` export against a live router |
 | `controller/scripts/music-source*.test.ts`, `source-switch.test.ts` | selection, routes, secrets, first-run, adoption |
 | `web/components/admin/music/sourceDraft.test.ts` | the form's dirty/identity/payload rules |
+| `router/scripts/activity.test.ts`, `coverage.test.ts` | the feed's attribution and privacy; the coverage table against the handlers |
+| `web/components/admin/router/model.test.ts` | the Music router page's channels, matrix and monitor readouts |
 
 The controller's router tests spawn the real router, so they need `npm --prefix router install`.

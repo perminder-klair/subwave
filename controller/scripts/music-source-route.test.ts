@@ -117,6 +117,23 @@ test('switching to the router makes it the live Subsonic connection', async () =
   assert.match(songs[0].id, /^mock-/);
 });
 
+test('the activity feed shows the station\'s own Subsonic calls and which source answered', async () => {
+  assert.equal((await fetch(`${base}/settings/music-source/activity`)).status, 401, 'admin-only');
+  const subsonic = await import('../src/music/subsonic.js');
+  await subsonic.getRandomSongs({ size: 1 });
+  const { status, body } = await call('GET', '/settings/music-source/activity');
+  assert.equal(status, 200);
+  const latest = body.requests.find((r: any) => r.endpoint === 'getRandomSongs');
+  assert.ok(latest, 'the request reached the feed');
+  assert.equal(latest.client, 'controller');
+  assert.equal(latest.state, 'ok');
+  assert.ok(latest.calls.some((c: any) => c.source === 'mock' && c.op === 'randomSongs'));
+  assert.ok(!JSON.stringify(body).includes(ms.readRouterAuth()!.pass), 'no credential rides the feed');
+  // The status the page also reads says what the active plugin supports.
+  const mock = (await call('GET', '/settings/music-source')).body.router.plugins.find((p: any) => p.name === 'mock');
+  assert.equal(mock.capabilities.similarSongs, true);
+});
+
 // #1827 review: the router is the one step that can still refuse a selection
 // (a plugin that throws on start-up). The save used to persist setup-config,
 // repoint the live connection and write a switch marker first, then answer

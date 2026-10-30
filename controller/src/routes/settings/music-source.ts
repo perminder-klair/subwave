@@ -15,6 +15,7 @@ import {
   keepStoredSecrets,
   maskSelection,
   readSelection,
+  routerActivity,
   routerReload,
   routerStatus,
   routerTest,
@@ -91,5 +92,16 @@ router.post('/settings/music-source/rescan', requireAdmin, async (_req, res) => 
     res.json({ ok: true, router: status });
   } catch (err: any) {
     res.status(503).json({ ok: false, error: err?.message || 'the music router is not reachable' });
+  }
+});
+
+// Admin → Music router's Signal path monitor: the router's recent Subsonic
+// requests and which source answered each. Polled only while that page is open.
+router.get('/settings/music-source/activity', requireAdmin, async (_req, res) => {
+  try {
+    res.set('cache-control', 'no-store').json(await routerActivity());
+  } catch (err) {
+    const code = err instanceof RouterUnavailableError ? 503 : 500;
+    res.status(code).json({ error: (err instanceof Error && err.message) || 'the music router is not reachable' });
   }
 });
