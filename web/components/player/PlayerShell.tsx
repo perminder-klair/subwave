@@ -62,8 +62,8 @@ function targetInsideDialog(e?: KeyboardEvent): boolean {
   return e?.target instanceof HTMLElement && e.target.closest('[role="dialog"]') != null;
 }
 
-/** True when the keypress landed in the shell or on nothing in particular, the two a skin's window
- *  listener takes. A drawer portaled to <body> and a showcase's host page keep their own keys. */
+/** True when the keypress landed in the shell or on nothing in particular. A drawer portaled to
+ *  <body> and a showcase's host page keep their own keys. */
 function targetInsideShell(e: KeyboardEvent, root: HTMLElement | null): boolean {
   return e.target === document.body || (e.target instanceof Node && root?.contains(e.target) === true);
 }
@@ -163,8 +163,17 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     const swallow = (e: KeyboardEvent) => {
       if (lockedRef.current && targetInsideShell(e, rootRef.current)) e.stopImmediatePropagation();
     };
+    // A key left to a drawer or a host page ends at the document: all that lies past it is the
+    // window, and a skin's listener there would tune in on it.
+    const stopShortOfWindow = (e: KeyboardEvent) => {
+      if (lockedRef.current) e.stopPropagation();
+    };
     window.addEventListener('keydown', swallow, true);
-    return () => window.removeEventListener('keydown', swallow, true);
+    document.addEventListener('keydown', stopShortOfWindow);
+    return () => {
+      window.removeEventListener('keydown', swallow, true);
+      document.removeEventListener('keydown', stopShortOfWindow);
+    };
   }, []);
 
   return (
