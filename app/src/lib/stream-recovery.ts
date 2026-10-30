@@ -225,7 +225,7 @@ export class StreamRecovery {
   }
 
   /** A PlaybackError event, or a failed state. One reported mid-reload belongs
-   *  to the item being replaced; the new item's own Loading arms the watchdog. */
+   *  to the item being replaced; the new load arms a check of its own. */
   onError(): void {
     if (this.active && !this.reloading) this.armRetry();
   }
