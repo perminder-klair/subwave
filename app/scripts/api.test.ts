@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import test, { type TestContext } from 'node:test';
 import { createApi, FETCH_TIMEOUT_MS, loginHeaders, type StationApi } from '../src/lib/api.ts';
+import { readDirectory } from '../src/lib/directory-read.ts';
 import { authorizationFor, type StationCredentials } from '../src/lib/station-credentials.ts';
 import { loginRefused } from '../src/lib/station-login.ts';
 import type { StationAuthResult } from '../src/lib/station-password.ts';
@@ -20,6 +21,7 @@ interface Sent {
   method: string;
   headers: Headers;
   signal: AbortSignal;
+  cache?: RequestCache;
 }
 
 /** Stub the global fetch for one test: record each request, answer `reply`. */
@@ -31,7 +33,13 @@ function stubFetch(
   const real = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const signal = init!.signal!;
-    sent.push({ url: String(input), method: init?.method ?? 'GET', headers: new Headers(init?.headers), signal });
+    sent.push({
+      url: String(input),
+      method: init?.method ?? 'GET',
+      headers: new Headers(init?.headers),
+      signal,
+      cache: init?.cache,
+    });
     return reply(signal);
   }) as typeof fetch;
   t.after(() => {
@@ -69,17 +77,68 @@ const SIGNALLED: [string, (api: StationApi, signal: AbortSignal) => Promise<unkn
   ['themes', (a, s) => a.themes(s)],
 ];
 
-/** The two reads that bound a body, what each makes of `{"ok":false}`, and how
- *  each ends when it gives up: getJson rejects, /station-auth stays unverified. */
+const LYRICS = { songId: 'song-1', synced: false, offsetMs: 0, lines: [{ startMs: null, text: 'la' }] };
+const NO_LYRICS_ANSWER = { kind: 'unavailable', retryAfterSec: null };
+const RECEIPT = { success: true, requestId: 'abc', status: 'pending' };
+const REQUEST_REFUSED = { success: false, message: 'Easy there — try again in 30s.', retryAfter: 30 };
+const REQUEST_STATUS = { status: 'pending', success: false, ack: null, track: null };
+const REQUEST_LOST = { error: 'internal error' };
+const LIKED = { ok: true, songId: 'song-1', liked: true, alreadyLiked: false, count: 3 };
+const LIKE_REFUSED = { error: 'Too many likes — slow down', retryAfter: 30 };
+const LIKE_STATUS = { enabled: true, songId: 'song-1', liked: false, count: 2 };
+
+const postRequest = (a: StationApi) => a.postRequest({ text: 'a song' });
+const pollRequest = (a: StationApi) => a.pollRequest('abc');
+const likeCurrent = (a: StationApi) => a.likeCurrent('song-1');
+const likeStatus = (a: StationApi) => a.likeStatus();
+const currentLyrics = (a: StationApi) => a.currentLyrics('song-1');
+
+/** Every read that bounds a body: the answer it is sent, what it makes of that,
+ *  and how it ends when it gives up. A rejection reaches the caller, and the
+ *  rest stay inside their own failure answer. */
 const BODY_READS: [
   name: string,
   status: number,
   read: (api: StationApi) => Promise<unknown>,
+  json: unknown,
   arrived: unknown,
   gaveUp: Outcome,
 ][] = [
-  ['getJson', 200, (a) => a.state(), { ok: false }, { failed: true }],
-  ['/station-auth', 401, (a) => a.checkStationAuth('station-pw'), 'denied', { value: 'unavailable' }],
+  ['getJson', 200, (a) => a.state(), { ok: false }, { ok: false }, { failed: true }],
+  ['/station-auth', 401, (a) => a.checkStationAuth('station-pw'), { ok: false }, 'denied', { value: 'unavailable' }],
+  ['postRequest', 202, postRequest, RECEIPT, RECEIPT, { failed: true }],
+  ['a refused postRequest', 429, postRequest, REQUEST_REFUSED, REQUEST_REFUSED, { failed: true }],
+  ['pollRequest', 200, pollRequest, REQUEST_STATUS, REQUEST_STATUS, { failed: true }],
+  ['a failed pollRequest', 500, pollRequest, REQUEST_LOST, REQUEST_LOST, { failed: true }],
+  ['likeCurrent', 200, likeCurrent, LIKED, LIKED, { value: null }],
+  ['a refused likeCurrent', 429, likeCurrent, LIKE_REFUSED, LIKE_REFUSED, { value: null }],
+  ['likeStatus', 200, likeStatus, LIKE_STATUS, LIKE_STATUS, { value: null }],
+  ['currentLyrics', 200, currentLyrics, LYRICS, { kind: 'ok', payload: LYRICS }, { value: NO_LYRICS_ANSWER }],
+];
+
+/** What each read answered before it had a deadline, which the deadline must
+ *  not change: for a request that fails, a body that is not JSON, and a body a
+ *  station sent with a failure status. */
+const ANSWERS: [
+  name: string,
+  read: (api: StationApi) => Promise<unknown>,
+  down: Outcome,
+  notJson: Outcome,
+  json: unknown,
+  failed: Outcome,
+][] = [
+  ['postRequest', postRequest, { failed: true }, { failed: true }, REQUEST_REFUSED, { value: REQUEST_REFUSED }],
+  ['pollRequest', pollRequest, { failed: true }, { failed: true }, REQUEST_LOST, { value: REQUEST_LOST }],
+  ['likeCurrent', likeCurrent, { value: null }, { value: null }, LIKE_REFUSED, { value: LIKE_REFUSED }],
+  ['likeStatus', likeStatus, { value: null }, { value: null }, LIKE_REFUSED, { value: LIKE_REFUSED }],
+  [
+    'currentLyrics',
+    currentLyrics,
+    { value: NO_LYRICS_ANSWER },
+    { value: NO_LYRICS_ANSWER },
+    LYRICS,
+    { value: NO_LYRICS_ANSWER },
+  ],
 ];
 
 /** What a read of a stalled body does once its request is aborted. expo/fetch's
@@ -459,13 +518,16 @@ test('/station-auth leaves no timer running once a 401 is read', async (t) => {
   assert.equal(cleared.mock.callCount(), armed.mock.callCount());
 });
 
-for (const [name, status, read, , gaveUp] of BODY_READS) {
+for (const [name, status, read, json, , gaveUp] of BODY_READS) {
   for (const aborted of ABORTED_READS) {
     test(`${name} aborts a stalled body's request at the deadline, not before (a read that ${aborted})`, async (t) => {
       // Every byte of the answer has come but the body never ends, so a read
       // that stops at the abort must not hand that answer on as the real one.
       t.mock.timers.enable({ apis: ['setTimeout'] });
-      const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, aborted, '{"ok":false}'), { status }));
+      const sent = stubFetch(
+        t,
+        (signal) => new Response(stalledBody(signal, aborted, JSON.stringify(json)), { status }),
+      );
       const watched = watch(read(createApi('https://radio.example', LOGIN)));
       await settle();
       t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
@@ -480,7 +542,7 @@ for (const [name, status, read, , gaveUp] of BODY_READS) {
   }
 }
 
-for (const [name, status, read, arrived] of BODY_READS) {
+for (const [name, status, read, json, arrived] of BODY_READS) {
   test(`${name} never aborts a body that lands inside the deadline`, async (t) => {
     t.mock.timers.enable({ apis: ['setTimeout'] });
     let body!: ReadableStreamDefaultController<Uint8Array>;
@@ -493,7 +555,7 @@ for (const [name, status, read, arrived] of BODY_READS) {
     const reading = read(createApi('https://radio.example', LOGIN));
     await settle();
     t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
-    body.enqueue(new TextEncoder().encode('{"ok":false}'));
+    body.enqueue(new TextEncoder().encode(JSON.stringify(json)));
     body.close();
     assert.deepEqual(await reading, arrived);
     t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
@@ -519,7 +581,7 @@ for (const [name, status, read, arrived] of BODY_READS) {
     await settle();
     t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
     assert.equal(sent[0].signal.aborted, false);
-    body.enqueue(new TextEncoder().encode('{"ok":false}'));
+    body.enqueue(new TextEncoder().encode(JSON.stringify(json)));
     body.close();
     assert.deepEqual(await reading, arrived);
   });
@@ -539,7 +601,76 @@ for (const [name, status, read, arrived] of BODY_READS) {
     t.mock.timers.tick(1);
     assert.equal(sent[0].signal.aborted, true);
   });
+
+  test(`${name} leaves no timer running, whether its body lands or stalls`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const timers = liveTimers(t);
+    let reply: (signal: AbortSignal) => Response = () => Response.json(json, { status });
+    stubFetch(t, (signal) => reply(signal));
+    const api = createApi('https://radio.example', LOGIN);
+    await read(api);
+    assert.equal(timers.size, 0, 'after a healthy body');
+    reply = (signal) => new Response(stalledBody(signal, 'never settles'), { status });
+    const stalled = watch(read(api));
+    await settle();
+    assert.equal(timers.size, 1, 'the body deadline');
+    t.mock.timers.tick(FETCH_TIMEOUT_MS);
+    await settle();
+    assert.notEqual(stalled.outcome, undefined);
+    assert.equal(timers.size, 0, 'after a stalled body');
+  });
 }
+
+for (const [name, read, down, notJson, json, failed] of ANSWERS) {
+  test(`${name} keeps its answer for a failed request, a non-JSON body and a failure status`, async (t) => {
+    let reply: () => Response = () => {
+      throw new TypeError('Network request failed');
+    };
+    stubFetch(t, () => reply());
+    const api = createApi('https://radio.example', LOGIN);
+    const landed = async () => {
+      const reading = watch(read(api));
+      await settle();
+      await settle();
+      return reading.outcome;
+    };
+    assert.deepEqual(await landed(), down, 'a failed request');
+    reply = () => new Response('<html>Sign in</html>');
+    assert.deepEqual(await landed(), notJson, 'a body that is not JSON');
+    reply = () => Response.json(json, { status: 503 });
+    assert.deepEqual(await landed(), failed, 'a failure status');
+  });
+}
+
+test('pollRequest answers a 404 from its status, and currentLyrics a refusal, without reading a body', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timers = liveTimers(t);
+  let status = 404;
+  let headers: Record<string, string> = {};
+  const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, 'never settles'), { status, headers }));
+  const api = createApi('https://radio.example', LOGIN);
+  const answered = async (read: Promise<unknown>) => {
+    const reading = watch(read);
+    await settle();
+    return reading.outcome;
+  };
+  assert.deepEqual(await answered(api.pollRequest('abc')), { value: { success: false, status: 'unknown' } });
+  const refusals: [status: number, kind: string][] = [
+    [401, 'locked'],
+    [403, 'disabled'],
+    [409, 'gone'],
+  ];
+  for (const [s, kind] of refusals) {
+    status = s;
+    assert.deepEqual(await answered(api.currentLyrics('song-1')), { value: { kind } });
+  }
+  status = 503;
+  headers = { 'Retry-After': '10' };
+  assert.deepEqual(await answered(api.currentLyrics('song-1')), { value: { kind: 'unavailable', retryAfterSec: 10 } });
+  assert.equal(timers.size, 0);
+  t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
+  assert.ok(sent.every((s) => !s.signal.aborted));
+});
 
 for (const [name, call] of SIGNALLED) {
   for (const aborted of ABORTED_READS) {
@@ -675,6 +806,150 @@ test('only a body that is read has a deadline: one nobody reads keeps its reques
     sent.map((s) => s.signal.aborted),
     [false, false],
   );
+});
+
+const DIRECTORY = () => 'https://directory.example/stations.json';
+const LISTED = [{ slug: 'nova', name: 'Nova', url: 'https://nova.example' }];
+
+for (const aborted of ABORTED_READS) {
+  test(`the directory gives a stalled body what is left of one timeout, then lists nothing (a read that ${aborted})`, async (t) => {
+    // Headers and body share the one timeout, unlike a station call, so a late
+    // header leaves the body less: the Stations screen never waits twice.
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    let headers!: (res: Response) => void;
+    const sent = stubFetch(t, () => new Promise<Response>((resolve) => (headers = resolve)));
+    const listing = watch(readDirectory(DIRECTORY));
+    await settle();
+    t.mock.timers.tick(5000);
+    headers(new Response(stalledBody(sent[0].signal, aborted, JSON.stringify(LISTED))));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 5000 - 1);
+    await settle();
+    assert.equal(sent[0].signal.aborted, false, 'still inside the timeout');
+    assert.equal(listing.outcome, undefined);
+    t.mock.timers.tick(1);
+    assert.equal(sent[0].signal.aborted, true);
+    await settle();
+    assert.deepEqual(listing.outcome, { value: [] });
+  });
+
+  test(`a caller's abort mid-body ends the directory read and reaches the request (a read that ${aborted})`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+    const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, aborted, JSON.stringify(LISTED))));
+    const caller = new AbortController();
+    const listing = watch(readDirectory(DIRECTORY, caller.signal));
+    await settle();
+    assert.equal(sent[0].signal.aborted, false);
+    caller.abort();
+    assert.equal(sent[0].signal.aborted, true);
+    await settle();
+    assert.deepEqual(listing.outcome, { value: [] });
+  });
+}
+
+test('the directory lists what lands just inside its one timeout, and never aborts it', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let headers!: (res: Response) => void;
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const stream = new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      body = controller;
+    },
+  });
+  const sent = stubFetch(t, () => new Promise<Response>((resolve) => (headers = resolve)));
+  const listing = readDirectory(DIRECTORY);
+  await settle();
+  t.mock.timers.tick(5000);
+  headers(new Response(stream));
+  await settle();
+  t.mock.timers.tick(FETCH_TIMEOUT_MS - 5000 - 1);
+  body.enqueue(new TextEncoder().encode(JSON.stringify(LISTED)));
+  body.close();
+  assert.deepEqual(await listing, LISTED);
+  t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
+  assert.equal(sent[0].signal.aborted, false);
+});
+
+test('headers that never come still end the directory read at the one timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const sent = stubFetch(
+    t,
+    (signal) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted')))),
+  );
+  const listing = watch(readDirectory(DIRECTORY));
+  await settle();
+  t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+  assert.equal(sent[0].signal.aborted, false);
+  t.mock.timers.tick(1);
+  await settle();
+  assert.equal(sent[0].signal.aborted, true);
+  assert.deepEqual(listing.outcome, { value: [] });
+});
+
+test('the directory read asks uncached, with no login, and lists nothing for a signal already aborted', async (t) => {
+  const sent = stubFetch(t, (signal) => {
+    if (signal.aborted) throw new Error('aborted');
+    return Response.json(LISTED);
+  });
+  assert.deepEqual(await readDirectory(DIRECTORY), LISTED);
+  assert.equal(sent[0].url, DIRECTORY());
+  assert.equal(sent[0].cache, 'no-store');
+  assert.equal(sent[0].headers.has('authorization'), false);
+  const caller = new AbortController();
+  caller.abort();
+  assert.deepEqual(await readDirectory(DIRECTORY, caller.signal), []);
+  assert.equal(sent[1].signal.aborted, true);
+});
+
+test('the directory lists nothing for a failed status, a bad body, a failed request or a bad address', async (t) => {
+  let reply: () => Response = () => Response.json(LISTED, { status: 500 });
+  stubFetch(t, () => reply());
+  assert.deepEqual(await readDirectory(DIRECTORY), []);
+  reply = () => new Response('<html>');
+  assert.deepEqual(await readDirectory(DIRECTORY), []);
+  reply = () => Response.json({ stations: LISTED });
+  assert.deepEqual(await readDirectory(DIRECTORY), []);
+  reply = () => {
+    throw new TypeError('Network request failed');
+  };
+  assert.deepEqual(await readDirectory(DIRECTORY), []);
+  const noAddress = () => {
+    throw new Error('no address');
+  };
+  assert.deepEqual(await readDirectory(noAddress), []);
+});
+
+test('no timer or listener outlives a directory read, and a failed status keeps its unread body', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const timers = liveTimers(t);
+  let reply: (signal: AbortSignal) => Response = () => Response.json(LISTED);
+  const sent = stubFetch(t, (signal) => reply(signal));
+  const caller = new AbortController();
+  const listeners = () => getEventListeners(caller.signal, 'abort').length;
+
+  await readDirectory(DIRECTORY, caller.signal);
+  assert.equal(timers.size, 0, 'timers after a healthy list');
+  assert.equal(listeners(), 0, 'listeners after a healthy list');
+
+  reply = (signal) => new Response(stalledBody(signal, 'never settles'), { status: 500 });
+  const refused = watch(readDirectory(DIRECTORY, caller.signal));
+  await settle();
+  assert.deepEqual(refused.outcome, { value: [] });
+  assert.equal(timers.size, 0, 'timers after a failed status');
+  assert.equal(listeners(), 0, 'listeners after a failed status');
+  t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
+  assert.equal(sent[1].signal.aborted, false);
+
+  reply = (signal) => new Response(stalledBody(signal, 'never settles'));
+  const stalled = watch(readDirectory(DIRECTORY, caller.signal));
+  await settle();
+  assert.equal(timers.size, 1, 'the body deadline');
+  assert.equal(listeners(), 1, "the caller's abort");
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.deepEqual(stalled.outcome, { value: [] });
+  assert.equal(timers.size, 0, 'timers after a stalled body');
+  assert.equal(listeners(), 0, 'listeners after a stalled body');
 });
 
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {
