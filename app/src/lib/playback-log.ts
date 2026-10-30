@@ -9,10 +9,10 @@
 // - a URL keeps its scheme, host and path. Its userinfo (a Station login,
 //   #1873) goes, and so do its query, where the station password rides as
 //   ?auth= (#478), and its fragment;
-// - an `auth=` outside a URL, the value of an Authorization,
-//   Proxy-Authorization or x-station-auth header (which only GET
-//   /lyrics/current sends), and a Basic or Bearer credential with no header
-//   name, become [redacted];
+// - an `auth=` outside a URL, the value of an Authorization or
+//   Proxy-Authorization header, and a Basic or Bearer credential with no header
+//   name, become [redacted], and so does the rest of a line after an
+//   x-station-auth header's name (only GET /lyrics/current sends one);
 // - an iOS route change's outputs keep each port's type and drop its name,
 //   which is often the owner's ("Sam's AirPods").
 // The rules match patterns rather than trusting the call sites, because a
@@ -47,7 +47,11 @@ const URL_QUERY_RE = /(:\/\/[^\s?#"'<>]*)(?:[?#][^\s"<>]*)?/g;
 // any other wrapper too (<Basic …>, Some(Basic …)): taken for the value, it
 // would leave the credential after it with no word to be found by.
 const HEADER_RE =
-  /\b((?:proxy-)?authorization|x-station-auth)(\\*["']?\s*[:=](?:\s*(?:optional)?[\\"'[(]+)*\s*)(?:[^\s"',;)}\]]*?\b(basic|bearer|digest)\s+)?[^\s"',;)}\]]*/gi;
+  /\b((?:proxy-)?authorization)(\\*["']?\s*[:=](?:\s*(?:optional)?[\\"'[(]+)*\s*)(?:[^\s"',;)}\]]*?\b(basic|bearer|digest)\s+)?[^\s"',;)}\]]*/gi;
+// x-station-auth carries the password itself, unencoded, and a password has no
+// character it can't contain: "it's" or "a, b" would leave the rest behind. So
+// nothing after the name is kept.
+const STATION_AUTH_RE = /\b(x-station-auth\\*["']?\s*[:=]\s*)[\s\S]*$/i;
 // A credential with no header name to find it by, which only its shape gives
 // away. That shape is also a sentence's, so it costs some readability and a
 // little coverage: CREDENTIAL_MIN keeps "Basic realm" and "bearer token" but
@@ -68,6 +72,7 @@ const ROUTE_OUTPUTS_RE = /\boutputs=([\s\S]*)$/;
  *  leave its value with nothing to find it by. */
 export function redactPlaybackLine(msg: string): string {
   return msg
+    .replace(STATION_AUTH_RE, `$1${REDACTED}`)
     .replace(HEADER_RE, (_m, name: string, sep: string, scheme?: string) =>
       `${name}${sep}${scheme ? `${scheme} ` : ''}${REDACTED}`,
     )

@@ -103,7 +103,7 @@ test('an auth= outside a URL, and an x-station-auth header, are redacted', () =>
     'msg=bad request (stream.mp3?auth=[redacted]&t=1)',
   );
   assert.equal(redactPlaybackLine('headers x-station-auth: hunter2'), 'headers x-station-auth: [redacted]');
-  assert.equal(redactPlaybackLine('{x-station-auth=hunter2}'), '{x-station-auth=[redacted]}');
+  assert.equal(redactPlaybackLine('{x-station-auth=hunter2}'), '{x-station-auth=[redacted]');
 });
 
 test('the Station login never reaches the log: URL userinfo goes', () => {
@@ -184,6 +184,24 @@ test('the station password never reaches the log: what wraps an x-station-auth v
     const out = redactPlaybackLine(line);
     assert.ok(!out.includes('hunter2'), out);
     assert.ok(out.includes('[redacted]'), out);
+  }
+});
+
+test('the station password never reaches the log: no character in it ends an x-station-auth value', () => {
+  for (const stop of [' ', "'", '"', ',', ';', ')', '}', ']', '\n', '\r', '\u2028', '\u2029']) {
+    const password = `hunter${stop}second`;
+    for (const line of [
+      `x-station-auth: ${password}`,
+      `{x-station-auth=${password}, accept=json}`,
+      `{x-station-auth=[${password}]}`,
+      `x-station-auth: Optional("${password}")`,
+      JSON.stringify({ 'x-station-auth': password, accept: 'json' }),
+      JSON.stringify({ h: JSON.stringify({ 'x-station-auth': password }) }),
+    ]) {
+      const out = redactPlaybackLine(line);
+      assert.ok(!out.includes('hunter') && !out.includes('second'), out);
+      assert.ok(out.includes('[redacted]'), out);
+    }
   }
 });
 
@@ -385,6 +403,9 @@ test('no rule slows down on a long line built to make it rescan', () => {
     fill('x://a?'),
     fill('proxy-'),
     fill('x-station-'),
+    fill('x-station-auth '),
+    fill('x-station-auth\\'),
+    fill('x-station-auth: '),
     `x://${fill('a')}`,
     `${fill('outputs=a ')}\n`,
     fill('outputs=a\n'),
