@@ -5,9 +5,9 @@
 
 import assert from 'node:assert/strict';
 import {
-  remainingSec, drainAction, shouldDeadlinePick, introRenderBudgetSec,
+  remainingSec, drainAction, shouldDeadlinePick, introRenderBudgetSec, cueProbeBudgetMs,
   DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC, DEADLINE_PICK_COOLDOWN_SEC,
-  DRAIN_COMMIT_RESERVE_SEC, MIN_PRERENDER_BUDGET_SEC,
+  DRAIN_COMMIT_RESERVE_SEC, MIN_PRERENDER_BUDGET_SEC, CUE_PROBE_TIMEOUT_MS,
 } from '../src/broadcast/drain-policy.js';
 
 // ── remainingSec ─────────────────────────────────────────────────────────────
@@ -164,5 +164,31 @@ assert.ok(
 // The reserve must cover the commit tail it is named for: two writeHandoff
 // waits (5s each) plus slack. Shrinking it below that reintroduces #1409.
 assert.ok(DRAIN_COMMIT_RESERVE_SEC >= 10, 'reserve covers both 5s handoff waits');
+
+// ── cueProbeBudgetMs ─────────────────────────────────────────────────────────
+// The cue-landing probe (#2003) sits after the intro render, right before Y's
+// next.txt write. A render may spend everything down to the commit reserve, so
+// a flat probe timeout would come out of the reserve itself.
+
+// Unknown clock → the probe's own ceiling, never unbounded.
+assert.equal(cueProbeBudgetMs(null), CUE_PROBE_TIMEOUT_MS, 'unknown clock → the ceiling');
+
+// Plenty of runway (Y drains ~HARD_DEADLINE_SEC ahead) → the ceiling.
+assert.equal(cueProbeBudgetMs(HARD_DEADLINE_SEC), CUE_PROBE_TIMEOUT_MS, 'hard-deadline runway → the ceiling');
+
+// Just past the reserve → only what is left past it.
+assert.equal(cueProbeBudgetMs(DRAIN_COMMIT_RESERVE_SEC + 0.5), 500, 'half a second past the reserve → 500ms');
+
+// After a render that spent the runway down to the reserve, the probe is skipped.
+assert.equal(cueProbeBudgetMs(DRAIN_COMMIT_RESERVE_SEC), 0, 'at the reserve → skip');
+assert.equal(cueProbeBudgetMs(DRAIN_COMMIT_RESERVE_SEC - 1), 0, 'inside the reserve → skip');
+assert.equal(cueProbeBudgetMs(-30), 0, 'expired clock → skip, never a negative timeout');
+
+// Never negative, never past the ceiling, never past the runway beyond the reserve.
+for (const r of [-100, -1, 0, 1, 11, 12, 12.001, 12.5, 13, 14, 17, 45, 600]) {
+  const b = cueProbeBudgetMs(r);
+  assert.ok(b >= 0 && b <= CUE_PROBE_TIMEOUT_MS, `probe budget for remaining=${r} is within [0, ceiling]`);
+  assert.ok(b <= Math.max(0, (r - DRAIN_COMMIT_RESERVE_SEC) * 1000), `probe budget for remaining=${r} leaves the reserve`);
+}
 
 console.log('drain-policy: all assertions passed');

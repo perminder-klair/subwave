@@ -1,7 +1,7 @@
-// Pins the hand-off of strict show locks from pickViaAgent (broadcast/dj-agent.ts)
+// Pins the hand-off of strict show locks from pickViaSelectionRoute (broadcast/dj-agent.ts)
 // to the agent's discovery tools (broadcast/dj-agent/agents.ts → buildPickerTools).
 //
-// THE DEFECT THIS GUARDS. A lock that pickViaAgent resolves and passes but that
+// THE DEFECT THIS GUARDS. A lock that pickViaSelectionRoute resolves and passes but that
 // something downstream fails to carry is not a crash and produces no log line:
 // it falls through to a `null` default and that whole dimension silently stops
 // being enforced on the agent path, while the pool picker still honours it. The
@@ -17,25 +17,15 @@
 // scraping source text for matching identifier names as the pre-scope version
 // had to.
 //
-// Run: npm test -- picker-lock-forwarding
+// Run: `npm test -- picker-lock-forwarding`.
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { pickerScope, type PickerScope } from '../src/llm/internal/tools/picker/scope.js';
 import { buildPickerContext } from '../src/llm/internal/tools/picker/scope.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (p: string) => readFileSync(resolve(here, p), 'utf8');
@@ -51,8 +41,6 @@ const idsFor = (partial: Partial<PickerScope>) => {
   const ctx = buildPickerContext(pickerScope(partial));
   return ctx.collect(CANDIDATES, 50).map((s: any) => s.id).sort();
 };
-
-console.log('PickerScope defaults:');
 
 test('an empty scope constrains nothing', () => {
   assert.deepEqual(idsFor({}), ['a', 'b', 'c']);
@@ -71,8 +59,6 @@ test('every field has a no-constraint default, so a caller states only what it c
     assert.ok(s[k] instanceof Set && s[k].size === 0, `${k} must default to an empty Set`);
   }
 });
-
-console.log('\nevery lock in the scope actually filters:');
 
 // Each case proves the dimension is enforced in CODE, not just described in the
 // prompt. A lock that stopped being carried would return the unfiltered set here.
@@ -138,12 +124,10 @@ test('locks compose — all of them apply together, none overrides another', () 
   assert.deepEqual(idsFor({ genreLock: ['Jazz'], energyLock: ['low'], moodLock: ['night'] }), ['c']);
 });
 
-console.log('\nthe scope reaches the tools whole:');
-
-test('pickViaAgent builds ONE scope and hands it over unpacked', () => {
+test('pickViaSelectionRoute builds ONE scope and hands it over unpacked', () => {
   const src = read('../src/broadcast/dj-agent.ts');
   assert.match(src, /const scope = pickerScope\(\{/,
-    'pickViaAgent should assemble a single pickerScope(...) value');
+    'pickViaSelectionRoute should assemble a single pickerScope(...) value');
   assert.match(src, /pickerAgent\.run\(\{[^}]*\bscope,/s,
     'the picker run must receive the scope as one value');
 });
@@ -165,9 +149,3 @@ test('no *Lock identifier is named between the call site and the tools', () => {
   assert.deepEqual([...new Set(named)], [],
     `agents.ts names ${[...new Set(named)].join(', ')} — locks must travel inside the scope, not as keys here`);
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall tests passed');

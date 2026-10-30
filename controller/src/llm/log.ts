@@ -2,12 +2,12 @@
 // in internal/telemetry/log.ts. Barrel so call sites keep importing from
 // `llm/log.js` unchanged.
 
-export { recentCalls, record, recordPick, lifetimeTokenCount } from './internal/telemetry/log.js';
+export { recentCalls, recordPick, lifetimeTokenCount, contextMeasurements } from './internal/telemetry/log.js';
 
 // Done-tool retry churn (D2) — the strategy layer's two "stopped without
 // calling done" retry sites record here; /debug reports the since-boot count
 // so an operator can see the retry rate per model choice.
-export { recordAgentRetry, agentDoneRetryCount } from './internal/telemetry/log.js';
+export { agentDoneRetryCount } from './internal/telemetry/log.js';
 
 // Daily LLM token tally — the running count the budget cap is enforced against.
 // `seedDailyUsageFromLog` is called once at boot (server.ts) so a mid-day
@@ -26,7 +26,6 @@ export {
   llmCallExportFilename,
   serializeLlmCalls,
   LLM_CALL_EXPORT_CONTENT_TYPE,
-  type LlmCallExportFormat,
 } from './internal/telemetry/export.js';
 
 // Raw-request debug log status (the rolling ${STATE_DIR}/logs/llm-debug.log).
@@ -43,3 +42,8 @@ export {
 
 // Live process-local generation ages, separate from completed-call accounting.
 export { generationHealthSnapshot } from './internal/core/generation.js';
+
+// Whether LLM calls are currently going to the backup instead of the primary
+// (any failover, sticky or one-off), for /debug's "routed to backup" line.
+// Read-only; null = normal routing.
+export { failoverRoutingSnapshot } from './internal/core/failover.js';

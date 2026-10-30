@@ -26,8 +26,9 @@ import { useClock } from '@/lib/hooks';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
-import { fmtTime, normalizeStationLocale } from '@/lib/format';
+import { fmtTime, normalizeStationLocale, type StationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
+import type { StationContext } from '@/lib/types';
 import {
   boothLines,
   contextLine,
@@ -60,6 +61,25 @@ const ART_CUT = {
   exit: {},
   transition: { duration: 0 },
 };
+
+/* The clock and the elapsed time each tick once a second, on two unaligned
+   timers, so each lives in the leaf that shows it: at the skin root they
+   re-rendered the whole deck, both 24-row panes included, twice a second (see
+   useElapsed). */
+
+function Elapsed({ startedAt }: { startedAt: number | null }) {
+  return fmtTime(useElapsed(startedAt));
+}
+
+function ClockLine({ timezone, locale, context }: {
+  timezone: string | null;
+  locale: StationLocale;
+  context: StationContext | null;
+}) {
+  const clock = useClock();
+  return [clock ? turnClock(clock.getTime(), timezone, locale) : '', contextLine(context)]
+    .filter(Boolean).join(' · ');
+}
 
 function Grip() {
   return (
@@ -108,8 +128,6 @@ export default function SubampSkin(_props: SkinProps) {
   const { toggleMute, setVolume } = usePlayerActions();
   const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
 
-  const elapsed = useElapsed(trackStartedAt);
-  const clock = useClock();
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
   const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
@@ -157,7 +175,7 @@ export default function SubampSkin(_props: SkinProps) {
           showName ? `${showName} WITH ${djName}` : `WITH ${djName}`,
         ].filter(Boolean).join(' ▪ ').toUpperCase() + ' ▪▸ ';
 
-  const digits = showTuneIn || offline ? '--:--' : fmtTime(elapsed);
+  const digits = showTuneIn || offline ? '--:--' : <Elapsed startedAt={trackStartedAt} />;
 
   // The latch fires on every keyed-plate remount, including first paint;
   // suppress that one so tuning in doesn't blink.
@@ -187,12 +205,13 @@ export default function SubampSkin(_props: SkinProps) {
       <div className="absolute top-7 left-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
         {stationName} — {showName ? `${showName} with ${djName}` : `with ${djName}`}
       </div>
-      <div className="absolute top-3 right-3 z-10 flex items-center gap-3 lg:top-7 lg:right-9">
-        <span className="hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:inline">
-          {[clock ? turnClock(clock.getTime(), timezone, stationLocale) : '', contextLine(context)]
-            .filter(Boolean).join(' · ')}
+      {/* Baseline-aligned so the palette sits on the run's cap centre (see
+          CAP_CENTRE_16); the run only shows from lg, so the nudge starts there. */}
+      <div className="absolute top-3 right-3 z-10 flex items-baseline gap-3 text-[10px] lg:top-7 lg:right-9">
+        <span className="hidden tracking-[0.24em] text-muted uppercase lg:inline">
+          <ClockLine timezone={timezone} locale={stationLocale} context={context} />
         </span>
-        <ThemeSwitcher />
+        <ThemeSwitcher className="lg:-my-2 lg:translate-y-[calc(50%-0.5cap)]" />
       </div>
       <div className="relative mx-auto flex h-full w-full max-w-[580px] flex-col gap-2 px-3 pt-9 pb-3 lg:h-auto lg:min-h-full lg:justify-center lg:py-14">
         <Window title={<>SUBAMP ▪ LIVE BROADCAST DECK</>} className="flex-none">
@@ -386,7 +405,7 @@ export default function SubampSkin(_props: SkinProps) {
                   <Play className="inline size-2.5 fill-current" strokeWidth={0} /> {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}
                   {!offline && nowPlaying?.artist ? ` — ${nowPlaying.artist}` : ''}
                 </span>
-                <span>{fmtTime(elapsed)}</span>
+                <span><Elapsed startedAt={trackStartedAt} /></span>
               </div>
               {upNext?.title && (
                 <div className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">

@@ -177,9 +177,9 @@ skills, including ones with no `cohosts` field, keep the existing one-speaker
 path.
 
 If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
-way every other segment does: the skill's own tool loop when `llm.pickerAgent`
-is on, and a code-driven fetch plus one structured call when it is off (pool
-mode, for models that aren't trusted with tool loops). Data-backed skills must
+way every other segment does: the skill's own tool loop when `llm.segmentRuntime`
+is `agentic`, and a code-driven fetch plus one structured call when it is
+`direct` (for models that aren't trusted with tool loops). Data-backed skills must
 obtain usable source data before anyone speaks; `{ available: false }` or a tool
 error stands the whole exchange down instead of letting several personas amplify
 an invented fact.
@@ -206,7 +206,7 @@ weave into this segment. Valid fields:
 | `date` | day of week, date, season |
 | `clock` | local clock time, plus weekend / late-night / commute tags |
 | `time` | the daypart and its vibe (e.g. "morning, productive") |
-| `weather` | current condition, temperature, location |
+| `weather` | current condition, temperature, and the on-air location unless the DJ prompt template drops `{location}` |
 | `festival` | the named festival, if today is one |
 | `show` | the scheduled show on air, if any |
 | `listeners` | how many people are tuned in |
@@ -432,7 +432,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 
 | call | what it does |
 |---|---|
-| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG) |
+| `services.searchWeb(query, opts?)` | web search via the configured provider (DuckDuckGo / Tavily / Brave / SearXNG / Keenable) |
 | `services.searchReady()` | `true` when a search provider is usable |
 | `services.nowPlaying()` | the track on air — `{ artist, title, album, year, id }` or `null` |
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
@@ -619,8 +619,8 @@ The restore response lists what was skipped and which skills wait for review.
 
 A show's **Episode preparation skill** runs its `tool.mjs` before automatic music
 selection. The controller saves the result for that airing and supplies its
-research to the DJ. An artist result also restricts the agent picker, pool picker,
-and `auto.m3u` fallback to that artist's catalogue.
+research to the DJ. An artist result also restricts both selection routes (Agentic
+Tools and Track Shortlist), the pool fallback, and `auto.m3u` to that artist's catalogue.
 
 1. Copy [`random-artist-pick`](./examples/skills/random-artist-pick) into
    `state/skills/random-artist-pick/`.

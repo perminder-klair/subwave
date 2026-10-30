@@ -54,8 +54,13 @@ export function useLiveActivity({
   const talking = useTalking(boothFeed, leadMs);
   const card = api ? resolveAirCard({ api, nowPlaying, activeShow, talking }) : null;
 
-  // Native artwork fetch ignores URL userinfo; pass the Basic header.
-  const artworkHeaders = useMemo(() => api?.streamHeaders() ?? {}, [api]);
+  // Native artwork fetch ignores URL userinfo; pass the Basic header, and only
+  // to this station: a persona avatar can be on another host.
+  const artworkUrl = card?.artworkUrl;
+  const artworkHeaders = useMemo(
+    () => (api && artworkUrl ? api.imageHeaders(artworkUrl) : undefined) ?? {},
+    [api, artworkUrl],
+  );
 
   const state: LiveActivityState = useMemo(
     () => ({

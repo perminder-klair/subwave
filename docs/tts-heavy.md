@@ -470,8 +470,8 @@ CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
 ```
 
 Then `docker compose --profile tts-heavy up -d`. A persona's own voice always
-wins; this only fills the gap. The all-in-one image reads the same variable for
-its in-process Chatterbox — before #1591 the sidecar was the odd one out, and
+wins; this only fills the gap. An in-process Chatterbox (a controller image built
+with `WITH_CHATTERBOX=1`) reads the same variable — before #1591 the sidecar was the odd one out, and
 setting this with `--profile tts-heavy` did nothing.
 
 ### Let an idle engine go (memory back while the station is quiet)

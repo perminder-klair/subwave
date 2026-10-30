@@ -1,6 +1,10 @@
 // Pins the talk slot table and its arbitration (broadcast/talk-scheduler.ts).
 // One per-minute tick over a table of windowed rows: postpone-never-cancel,
 // one talker per minute (#310), and a row yields only to a row that is FIRING.
+// Banter's constants and frequency rung share this table (#1419, #1500).
+// A :15 ident deferred to :19:35 used to cancel the :20 banter chance, costing
+// moderate its whole hour. Idents still count toward the five-minute quiet gap;
+// the window postpones the exchange, and retries keep their opening slot's rung.
 // STATE_DIR is redirected before the first import, hence the dynamic imports.
 
 import test from 'node:test';
@@ -152,6 +156,17 @@ test('the table carries real windows and real gaps, banter widest', () => {
   // The ordering principle: fewer chances in the hour outranks more.
   assert.ok(talkSlot('hourly').priority < talkSlot('banter').priority);
   assert.ok(talkSlot('banter').priority < talkSlot('station-id').priority);
+});
+
+test('the quiet gap is 5 minutes, and the window is deliberately twice it', () => {
+  assert.equal(BANTER_MIN_GAP_MS, 5 * 60_000);
+  // A talk break landing anywhere in the 5 minutes before the slot opens clears
+  // by the halfway point, leaving the rest of the window to render a
+  // multi-voice exchange and still finish clear of the next slot.
+  assert.equal(BANTER_WINDOW_MINUTES, 2 * (BANTER_MIN_GAP_MS / 60_000));
+  // Both windows close before the hour does, which is what lets a slot be keyed
+  // by wall-clock hour rather than by a rolling timer.
+  for (const slot of BANTER_SLOTS) assert.ok(slot + BANTER_WINDOW_MINUTES <= 60);
 });
 
 test('per-row air mode and clock survive the merge', () => {
@@ -591,6 +606,31 @@ test('a row with no gap ignores in-flight talk, because it has opted out of the 
   assert.deepEqual(r.minutesOf('programme'), [55]);
 });
 
+test('the frequency ladder is unchanged, and reads the slot rather than the minute', async () => {
+  await station('quiet');
+  // Quiet never auto-banters anywhere in either window.
+  for (const m of [20, 24, 29, 50, 59]) assert.equal(shouldFire('banter', at(m)), false);
+
+  await station('moderate');
+  // One an hour: the :20 slot only, but now with its full retry tail.
+  for (let i = 0; i < BANTER_WINDOW_MINUTES; i++) {
+    assert.equal(shouldFire('banter', at(20 + i)), true, `moderate should retry at :${20 + i}`);
+  }
+  for (const m of [50, 55, 59]) assert.equal(shouldFire('banter', at(m)), false);
+
+  for (const f of ['chatty', 'aggressive']) {
+    await station(f);
+    for (const m of [20, 25, 29, 50, 55, 59]) {
+      assert.equal(shouldFire('banter', at(m)), true, `${f} should fire at :${m}`);
+    }
+    // Outside the windows nothing fires, whatever the rung. :00 stays the
+    // hourly check's and :15/:30/:45 stay the idents' opening minutes (#310).
+    for (const m of [0, 15, 19, 30, 45, 49]) {
+      assert.equal(shouldFire('banter', at(m)), false, `${f} must not fire at :${m}`);
+    }
+  }
+});
+
 test('the ident rung reads the slot, so every retry minute keeps its chance', async () => {
   // `[15,30,45].includes(m)` would answer false for :18 and cancel every retry.
   const window = (open: number) => Array.from({ length: talkSlot('station-id').windowMinutes }, (_, i) => open + i);
@@ -730,11 +770,7 @@ test('policy is asked only for a row that is open and unfired', () => {
   // slot window may reach. The segment director's stride skips :12.
   assert.deepEqual(asked, ['jingle'],
     'the only row a minute inside no slot window may reach is the one with no window');
-  // :15 opens the ident row, and a slot row wanting the minute stops the
-  // filler's gates being asked at all (see the fill-row tests).
-  asked.length = 0;
-  r.tick(at(15));
-  assert.deepEqual(asked, ['station-id']);
+  r.tick(at(15)); // Claim the ident slot before repeating its tick below.
   // The claim is per ROW, not per minute. node-cron fires a minute once, so a
   // repeat tick is only ever the shape of the claim.
   asked.length = 0;

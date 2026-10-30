@@ -393,14 +393,14 @@ path. For most people the single-upstream setup above is the easier win.
   Update**. Compose stack → stack menu → **Pull & Up**. To pin or roll back to
   a specific release, point the container's **Repository** field at a tag
   (`ghcr.io/perminder-klair/subwave-aio:1.4.2`) instead of `:latest`.
-- **Max concurrent listeners:** **admin → Settings → Danger zone → Max
+- **Max concurrent listeners:** **admin → Settings → Broadcast & mixer → Max
   listeners**, then restart the container so Icecast re-renders its config.
   This used to be reachable only through `ICECAST_MAX_CLIENTS`, which the
   one-click template does not expose and the AIO image has no `.env` for —
   so on Unraid it was unsettable. It is a station setting now. (Adding
   `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
   field; the broadcast log names which source it used on every boot.)
-- **Listener country in Stats:** **admin → Settings → Danger zone → Listener
+- **Listener country in Stats:** **admin → Settings → Broadcast & mixer → Listener
   country**. `CF-IPCountry` only exists behind Cloudflare, so a station reached
   over the LAN or a plain reverse proxy shows sessions with no geography. Name
   your proxy's own country header there, or point the same card at an offline

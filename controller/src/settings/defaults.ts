@@ -12,6 +12,7 @@ import {
   BACKUP_KEEP_BOUNDS,
   BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
+  SHORTLIST_PASSES_DEFAULT,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
   HANDOVER_OFFSET_BOUNDS,
@@ -20,6 +21,7 @@ import {
   LOUDNESS_TARGET_LUFS_BOUNDS,
   normalizeGeminiSafety,
   type JingleRotateOwner,
+  type JinglePlacement,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -38,6 +40,7 @@ import {
 } from './vocab.js';
 
 export const DEFAULTS = {
+  jinglePlacement: 'between' as JinglePlacement,
   jingleRatio: 30, // 1 jingle per N music tracks
   // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
   // radio.liq's own rotate draws the stinger and the controller finds out
@@ -293,6 +296,8 @@ export const DEFAULTS = {
     // jingleRatio: 0). Manual /dj/segment triggers stay exempt. Policy lives in
     // exactly one place: broadcast/voice-policy.ts.
     enabled: true,
+    // Opt-in so existing stations keep their calibrated voice mix on upgrade.
+    voiceLevelling: false,
     defaultEngine: 'piper',
     // Operator-chosen rescue voice — the TTS analogue of settings.llm.fallback.
     // Speaks when a persona's engine is known-unavailable up front or throws
@@ -375,9 +380,10 @@ export const DEFAULTS = {
     // Self-hosted TTS endpoint over HTTP (POST /speak → audio body, gated on a
     // /health probe) — the TTS equivalent of the LLM's custom base URL.
     remote: { url: '' },
-    // Per-engine trim (dB) applied via liq_amplify on every spoken segment, to
-    // level the loudness gap between engines. Stacks with each persona's own
-    // tts.gainDb. See TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
+    // Per-engine trim (dB) applied via liq_amplify on every spoken segment.
+    // With voiceLevelling on, stacks on each clip's automatic trim at the
+    // handoff (audio/clip-level.ts). Stacks with each persona's own tts.gainDb.
+    // See TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
     gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
     // Per-engine speech-rate multiplier (0.5–2.0x), composed with each
     // persona's tts.speed and, on air, programme pacing. Piper, Kokoro, Cloud
@@ -411,7 +417,12 @@ export const DEFAULTS = {
     // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
     // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
-    compatibleMode: 'local' as 'local' | 'hosted',
+    // How an openai-compatible connection is driven: 'local' for a self-hosted
+    // server (llama.cpp, LM Studio, vLLM, Ollama /v1), 'hosted' for a cloud API
+    // or proxy, 'auto' to detect it (llm/internal/provider/compat-detect.ts).
+    // 'auto' is the default for a NEW station only: load() keeps 'local' for a
+    // stored llm block written before 'auto' existed, so an upgrade is unchanged.
+    compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
     // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
@@ -454,14 +465,29 @@ export const DEFAULTS = {
     // block that category; unchecked/absent = allow (BLOCK_NONE). Only the
     // google leg reads them — every other provider ignores the field.
     geminiSafety: normalizeGeminiSafety(undefined),
-    // On: the session DJ agent drives picks, links and requests as a tool-loop
-    // over the session chat history. Off: the stateless pool picker runs instead,
-    // still inside a session and still logged.
+    // Compatibility flag for older clients, derived from trackSelection on
+    // load. A legacy-only update also moves request/segment runtimes; modern
+    // selection paths use their independent settings.
     pickerAgent: true,
+    // Agentic Tools remains the default route; shared discovery upgrades are
+    // declared in the operator manual. Track Shortlist performs
+    // controller-led discovery followed by one bounded structured selection.
+    trackSelection: 'agentic',
+    // Native discovery passes. Kept separate from agent discoverySteps: the
+    // latter is a tool-loop budget, while this is a controller source budget.
+    shortlistPasses: SHORTLIST_PASSES_DEFAULT,
+    // An extra bounded model call for explicit show search requests is opt-in.
+    shortlistSearchPreparation: false,
     // Guest preferences are a deliberately optional, secondary programming
     // input. Keep them off for upgrades and new stations: a blank host field
-    // must mean no Musical Leanings are sent to the picker.
+    // must mean no Musical Leanings are sent to either picker.
     guestMusicalLeanings: false,
+    // Kept independent from Track selection: requests are the one place an
+    // operator may deliberately retain tool use beside a tool-free shortlist.
+    requestMatching: 'agentic',
+    // Segment and Skill delivery is independently selectable for the same
+    // reason: a station may use a bounded picker yet retain agentic research.
+    segmentRuntime: 'agentic',
     // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
     // (survives the filterPickerCandidates starvation cascade), which closes the
     // hole where a thin mood cluster let the cascade re-serve a just-played song.
@@ -474,6 +500,11 @@ export const DEFAULTS = {
     // never costs the station a slot. 0 leaves only the back-to-back guard,
     // which is always on. See broadcast/dj-agent/artist-guard.ts.
     artistVarietyWindow: ARTIST_VARIETY_WINDOW,
+    // Maximum consecutive same-genre airings (a shared label, or labels in the
+    // same small built-in family) before an agent re-pick. 0 is off and makes
+    // no extra reads or calls; unknown tags and unavailable alternatives never
+    // cost a slot.
+    genreVarietyWindow: 0,
     // Gives the listener-request agent (never the per-track picker) an
     // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
     // and matches it locally. Off by default: needs a search provider and costs a
@@ -532,7 +563,7 @@ export const DEFAULTS = {
       // Per-leg like providerBaseUrls: the backup may be a different gateway
       // with its own routing header.
       headers: {} as Record<string, string>,
-      compatibleMode: 'local' as 'local' | 'hosted',
+      compatibleMode: 'auto' as 'local' | 'hosted' | 'auto',
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
@@ -602,7 +633,7 @@ export const DEFAULTS = {
   },
   // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
-  // override here).
+  // override here); `keenable` needs no key but uses a `keen_` one if set.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -650,9 +681,15 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Fade curve for PLAIN song-to-song crossfades: false = linear (two
+    // different songs dip ~3 dB mid-fade), true = equal-power (cos out, sin^1.5
+    // in, level held within 0.7 dB). Effects, stem-blend clip seams, jingles
+    // and beds keep their own curves. Read once by the mixer at startup, so a
+    // change needs a restart.
+    equalPowerCrossfade: false,
     // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
     // before this block the only way to drop one gesture was to turn djMode off
-    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // and lose all six. Resolved through settings/transition-effects.ts, which
     // reads an absent or malformed block as "all on" — so this default and a
     // station that has never written the block are the same station.
     effects: {
@@ -698,8 +735,8 @@ export const DEFAULTS = {
   },
   // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
   // rip's leading blank or a long mastering gap doesn't air as silence
-  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
-  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; Liquidsoap cuts
+  // at request resolution). OFF by default: it acts on a MEASUREMENT, and
   // an upgrade must sound byte-identical until the operator asks for this.
   // Controller-side only — no mixer restart.
   silenceTrim: {
@@ -778,6 +815,19 @@ export const DEFAULTS = {
     influenceDj: false,
     maxTracks: 10,
     windowDays: 30, // 0 = all time
+  },
+
+  // The listener Lyrics panel (`GET /lyrics/current`). On out of the box, and
+  // an upgrade turns it on too: it republishes lyric text publicly and costs a
+  // music-server call per track, which an operator can switch off. Per-track
+  // timing fixes live in library.db, not here.
+  lyrics: {
+    enabled: true,
+    // Look up synced lyrics on LRCLIB for a queued or on-air track the music
+    // server has no timed lyrics for (music/lyrics-sources.ts). On by default
+    // with the panel: it sends each such track's artist, title, album and
+    // length to lrclib.net (or LRCLIB_URL), and acts only while the panel is on.
+    lrclib: true,
   },
 };
 

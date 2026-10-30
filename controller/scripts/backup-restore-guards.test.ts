@@ -18,12 +18,11 @@
 // mounts bare. Run: `npm test -- backup-restore-guards`.
 
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
+import { listen as listenHttp } from './test-utils/http.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import type { AddressInfo } from 'node:net';
 import { createTempDir } from './test-utils/temp-dir.js';
 
 const stateRoot = path.join(createTempDir(path.join(tmpdir(), 'subwave-restore-guards-')), 'state');
@@ -47,10 +46,8 @@ await discoverSeededKinds();
 
 const app = express();
 app.use(router);
-const server = createServer(app);
-await new Promise<void>(r => { server.listen(0, '127.0.0.1', () => r()); });
+const { server, url: base } = await listenHttp(app);
 server.unref();
-const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
 function backupOf(members: [string, string | Buffer][]): Buffer {
   const zip = new AdmZip();

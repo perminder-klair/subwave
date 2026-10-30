@@ -1,4 +1,4 @@
-// Run from web/: ../controller/node_modules/.bin/tsx --test scripts/debug-icecast.test.tsx
+// Run from web/: `npm test -- debug-icecast`.
 // Server rendering exercises the real table without a controller or station.
 import assert from 'node:assert/strict';
 import test from 'node:test';

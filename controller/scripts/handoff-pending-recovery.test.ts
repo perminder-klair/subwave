@@ -5,13 +5,16 @@
 // Run: npm test -- handoff-pending-recovery
 
 import assert from 'node:assert/strict';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
+import { emptyWeek as emptyScheduleWeek } from '../src/schemas/schedule.js';
 import { after, test } from 'node:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionContext } from '../src/broadcast/session.js';
 
-const root = mkdtempSync(join(tmpdir(), 'subwave-handoff-recovery-'));
+const root = createTempDir(join(tmpdir(), 'subwave-handoff-recovery-'));
 process.env.STATE_DIR = root;
 
 const { config } = await import('../src/config.js');
@@ -30,11 +33,7 @@ const template = settings.get().personas[0];
 const WREN = { ...template, id: 'p_wren', name: 'Wren' };
 const GIGI = { ...template, id: 'p_gigi', name: 'Gigi' };
 
-function blankSchedule() {
-  const week: Record<number, null[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill(null);
-  return week;
-}
+function blankSchedule() { return emptyScheduleWeek(); }
 
 function context(show: { id: string; name: string }, atMs: number): SessionContext {
   return {
@@ -51,6 +50,36 @@ function context(show: { id: string; name: string }, atMs: number): SessionConte
   } as SessionContext;
 }
 
+async function armScheduledIncoming(finalTrack?: Parameters<typeof session.armBoundaryHandoff>[1]) {
+  await settings.update({
+    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
+  } as never);
+  const now = Date.now();
+  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
+  const week: Record<number, string[]> = fullScheduleWeek('s_incoming');
+  await settings.update({
+    activePersonaId: GIGI.id,
+    shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id }],
+    schedule: week,
+  } as never);
+  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
+  assert.equal(session.armBoundaryHandoff(incoming, finalTrack), true);
+  return { now, incoming };
+}
+
+function holdPair(boundaryAt: number) {
+  assert.equal(queue.holdForNextTrack('handoff', [
+    {
+      text: 'That was the hour.', wavPath: signoffWav, persona: WREN, meta: {},
+      settlesHandoff: false,
+    },
+    {
+      text: 'Cultural Currents starts now.', wavPath: greetingWav, persona: GIGI, meta: {},
+      settlesHandoff: true,
+    },
+  ], { exchange: true, notBefore: boundaryAt }), true);
+}
+
 async function waitFor(fn: () => boolean, timeoutMs = 4_000) {
   const until = Date.now() + timeoutMs;
   while (!fn() && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 10));
@@ -64,25 +93,10 @@ after(() => {
   if (queue._handoffGenerationTimer) {
     clearTimeout(queue._handoffGenerationTimer);
   }
-  rmSync(root, { recursive: true, force: true });
 });
 
 test('an unrendered final-track handoff falls back to immediate delivery after its deadline', async () => {
-  await settings.update({
-    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
-  } as never);
-  const now = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
-
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
-  await settings.update({
-    activePersonaId: GIGI.id,
-    shows: [{ id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id }],
-    schedule: week,
-  } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
-  assert.equal(session.armBoundaryHandoff(incoming, { id: 'long-final-track' }), true);
+  const { now, incoming } = await armScheduledIncoming({ id: 'long-final-track' });
   queue.current = {
     track: { id: 'long-final-track', title: 'Final song', artist: 'Artist' },
     startedAt: new Date(now).toISOString(), source: 'auto',
@@ -229,23 +243,7 @@ test('a fallback whose context load spans another track start yields to that tra
 });
 
 test('a queued handoff falls back when no post-boundary seam arrives in time', async () => {
-  await settings.update({
-    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
-  } as never);
-  const now = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
-
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
-  await settings.update({
-    activePersonaId: GIGI.id,
-    shows: [{
-      id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id,
-    }],
-    schedule: week,
-  } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  await armScheduledIncoming();
 
   // Put the absolute deadline just ahead of us so the test exercises the real
   // timer without spending two minutes waiting for it.
@@ -254,16 +252,7 @@ test('a queued handoff falls back when no post-boundary seam arrives in time', a
   assert.ok(boundary);
   boundary.boundaryAt = boundaryAt;
   rmSync(config.liquidsoap.introFile, { force: true });
-  assert.equal(queue.holdForNextTrack('handoff', [
-    {
-      text: 'That was the hour.', wavPath: signoffWav, persona: WREN, meta: {},
-      settlesHandoff: false,
-    },
-    {
-      text: 'Cultural Currents starts now.', wavPath: greetingWav, persona: GIGI, meta: {},
-      settlesHandoff: true,
-    },
-  ], { exchange: true, notBefore: boundaryAt }), true);
+  holdPair(boundaryAt);
   session.markHandoffQueued();
 
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -279,23 +268,7 @@ test('a queued handoff falls back when no post-boundary seam arrives in time', a
 });
 
 test('a queued handoff preserves its rendered pair and overdue fallback across restart', async () => {
-  await settings.update({
-    personas: [WREN, GIGI], activePersonaId: WREN.id, shows: [], schedule: blankSchedule(),
-  } as never);
-  const now = Date.now();
-  session.start(context({ id: 's_outgoing', name: 'The Soft Start Procedure' }, now));
-
-  const week: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_incoming');
-  await settings.update({
-    activePersonaId: GIGI.id,
-    shows: [{
-      id: 's_incoming', name: 'Cultural Currents', topic: 'culture', personaId: GIGI.id,
-    }],
-    schedule: week,
-  } as never);
-  const incoming = context({ id: 's_incoming', name: 'Cultural Currents' }, now + 60_000);
-  assert.equal(session.armBoundaryHandoff(incoming), true);
+  const { incoming } = await armScheduledIncoming();
 
   // Model the process going down while the pair is queued, then returning
   // after its two-minute post-boundary allowance has already elapsed.
@@ -303,16 +276,7 @@ test('a queued handoff preserves its rendered pair and overdue fallback across r
   const boundary = session.getSession()?.boundaryHandoff;
   assert.ok(boundary);
   boundary.boundaryAt = boundaryAt;
-  assert.equal(queue.holdForNextTrack('handoff', [
-    {
-      text: 'That was the hour.', wavPath: signoffWav, persona: WREN, meta: {},
-      settlesHandoff: false,
-    },
-    {
-      text: 'Cultural Currents starts now.', wavPath: greetingWav, persona: GIGI, meta: {},
-      settlesHandoff: true,
-    },
-  ], { exchange: true, notBefore: boundaryAt }), true);
+  holdPair(boundaryAt);
   assert.ok(queue._handoffBoundaryTimer);
   clearTimeout(queue._handoffBoundaryTimer);
   queue._handoffBoundaryTimer = null;

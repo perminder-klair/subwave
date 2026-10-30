@@ -4,6 +4,7 @@
 // Run: npm test -- announce-fallback
 
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,18 +34,9 @@ const realFetch = globalThis.fetch;
 const requests: WireRequest[] = [];
 globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
   requests.push(JSON.parse(String(init?.body || '{}')) as WireRequest);
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-fixture',
-    object: 'chat.completion',
-    created: 1,
-    model: 'fixture-model',
-    choices: [{
-      index: 0,
-      message: { role: 'assistant', content: 'A longer editorial link from the fixture model.' },
-      finish_reason: 'stop',
-    }],
-    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
-  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return chatCompletionResponse({ id: 'chatcmpl-fixture',
+    message: { role: 'assistant', content: 'A longer editorial link from the fixture model.' },
+    usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } });
 }) as typeof fetch;
 
 after(() => {

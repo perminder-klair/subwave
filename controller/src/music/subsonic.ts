@@ -10,6 +10,7 @@ import * as blocklist from './blocklist.js';
 import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
+import { CUE_EARLY_MAX_SEC, CUE_LATE_MAX_SEC } from './cue-landing.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -157,7 +158,11 @@ async function call(endpoint, params = {}, options: CallOptions = {}) {
       // First 200 chars of the body, so triage sees the real server message.
       let body = '';
       try { body = (await res.text()).slice(0, 200); } catch {}
-      throw new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`);
+      const err = new Error(`Subsonic ${endpoint} failed: ${res.status}${body ? ` — ${body}` : ''}`) as Error & {
+        httpStatus?: number;
+      };
+      err.httpStatus = res.status;
+      throw err;
     }
     const data = await res.json() as any;
     const sub = data['subsonic-response'];
@@ -577,27 +582,27 @@ export async function getScanStatus(): Promise<boolean | null> {
   }
 }
 
-export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size }, RETRY_FAST_TRANSPORT);
+export async function getRecentlyAddedAlbums({ size = 20, signal }: { size?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'newest', size }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
 // moves, so an offset-less read pins the same albums forever.
-export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, RETRY_FAST_TRANSPORT);
+export async function getFrequentAlbums({ size = 20, offset = 0, signal }: { size?: number; offset?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.albumList2?.album || [];
 }
 
-export async function getArtistInfo(id, { count = 10 } = {}) {
-  const r = await call('getArtistInfo2', { id, count }, RETRY_FAST_TRANSPORT);
+export async function getArtistInfo(id, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getArtistInfo2', { id, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return r.artistInfo2 || null;
 }
 
 // Last.fm "top songs" for an artist, intersected with the library. Keyed by
 // artist NAME, not id.
-export async function getTopSongs(artistName, { count = 10 } = {}) {
-  const r = await call('getTopSongs', { artist: artistName, count }, RETRY_FAST_TRANSPORT);
+export async function getTopSongs(artistName, { count = 10, signal }: { count?: number; signal?: AbortSignal } = {}) {
+  const r = await call('getTopSongs', { artist: artistName, count }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.topSongs?.song || []);
 }
 
@@ -639,8 +644,8 @@ export async function getRecentSongsByArtist(
   return songs.slice(0, count);
 }
 
-export async function getAlbum(id) {
-  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
+export async function getAlbum(id, { signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getAlbum', { id }, { ...RETRY_FAST_TRANSPORT, signal });
   return rejectArchive(r.album?.song || []);
 }
 
@@ -712,26 +717,49 @@ export async function getLyrics(songId) {
 // `startMs` is milliseconds from track start with the entry-level `offset`
 // folded in (positive offset means lyrics appear sooner: start − offset,
 // clamped at 0). synced=false means the line timings are absent.
+//
+// THROWS when the server could not answer (transport, HTTP or API failure),
+// so a caller can tell "this track has no lyrics" from "the server is down".
+// Three refusals are answers rather than failures: Subsonic's "data not found"
+// (70), and an HTTP 404 or 501 for the endpoint itself, which is a server
+// without the OpenSubsonic lyrics extension — it will never have lyrics, and
+// asking again would not change that. The listener lyrics route needs the
+// difference; the analyzer does not, and reads through getStructuredLyrics().
+export async function fetchStructuredLyrics(
+  songId,
+): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
+  let r;
+  try {
+    r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
+  } catch (err) {
+    const { subsonicCode, httpStatus } = (err ?? {}) as { subsonicCode?: number; httpStatus?: number };
+    if (subsonicCode === 70 || httpStatus === 404 || httpStatus === 501) return null;
+    throw err;
+  }
+  const structured = r.lyricsList?.structuredLyrics;
+  if (!Array.isArray(structured) || structured.length === 0) return null;
+  // Several versions may exist (languages, synced + unsynced); only a synced
+  // one carries timings.
+  const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
+  const synced = chosen?.synced === true;
+  const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
+  const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
+  const lines = lineArr.map((l) => {
+    const text = typeof l?.value === 'string' ? l.value : '';
+    const rawStart = Number(l?.start);
+    const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
+    return { startMs, text };
+  });
+  return { synced, lines };
+}
+
+// fetchStructuredLyrics with every failure read as "none indexed". The
+// analyzer's vocal-range pass treats both the same way.
 export async function getStructuredLyrics(
   songId,
 ): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
   try {
-    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
-    const structured = r.lyricsList?.structuredLyrics;
-    if (!Array.isArray(structured) || structured.length === 0) return null;
-    // Several versions may exist (languages, synced + unsynced); only a synced
-    // one carries timings.
-    const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
-    const synced = chosen?.synced === true;
-    const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
-    const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
-    const lines = lineArr.map((l) => {
-      const text = typeof l?.value === 'string' ? l.value : '';
-      const rawStart = Number(l?.start);
-      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
-      return { startMs, text };
-    });
-    return { synced, lines };
+    return await fetchStructuredLyrics(songId);
   } catch {
     return null;
   }
@@ -797,14 +825,19 @@ export async function* iterateAllSongs({ requireComplete = false } = {}) {
   }
 }
 
-export async function getPlaylists() {
-  const r = await call('getPlaylists', {}, RETRY_FAST_TRANSPORT);
+export async function getPlaylists({ signal }: { signal?: AbortSignal } = {}) {
+  const r = await call('getPlaylists', {}, { ...RETRY_FAST_TRANSPORT, signal });
   return r.playlists?.playlist || [];
 }
 
-export async function getPlaylist(id) {
-  const r = await call('getPlaylist', { id }, RETRY_FAST_TRANSPORT);
-  return rejectArchive(r.playlist?.entry || []);
+// `includeBlocked` is for the blocklist's OWN playlist-rule resolver: it builds
+// the member set that `rejectBlocked` consults, so reading through the filter
+// returned the playlist minus its own members on every refresh after the first
+// (0 tracks, rule inert, flipping back each TTL). Airing paths take the default.
+export async function getPlaylist(id, { signal, includeBlocked = false }: { signal?: AbortSignal; includeBlocked?: boolean } = {}) {
+  const r = await call('getPlaylist', { id }, { ...RETRY_FAST_TRANSPORT, signal });
+  const songs = (r.playlist?.entry || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 // Playlist mutations: song-id lists ride the query string, so they are chunked
@@ -918,7 +951,7 @@ export function getPlayableUri(song, resolveProbeId: string | null = null) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null; resolveProbeId?: string | null; clipLeadSec?: number | null; clipCueLateSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -938,6 +971,19 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // configured crossfade) or a washout's 12s canvas outlives its transition.
   const crossSec = song.crossSec ?? settings.get()?.crossfadeDuration ?? null;
   if (crossSec != null) fields.push(`liq_cross_duration="${escAnnotate(crossSec)}"`);
+  // The outgoing side of a stem-blend clip seam: how far its cue-out sits past
+  // the clip's start (broadcast/stem-seam.ts). radio.liq buffers past it and
+  // aligns the clip on it; an older mixer ignores the key.
+  if (opts.clipLeadSec != null) fields.push(`liq_clip_lead="${escAnnotate(opts.clipLeadSec)}"`);
+  // The incoming side of a stem-blend clip seam: how late Y's liq_cue_in will
+  // really land, negative when early (music/cue-landing.ts, #2003, #2077).
+  // radio.liq shifts Y by it at the clip -> Y seam only. Six decimals, NOT ms:
+  // rounding to ms would bring back up to 22 samples of the comb filter this
+  // removes. Bounded like the reader.
+  if (opts.clipCueLateSec != null && Number.isFinite(opts.clipCueLateSec) && opts.clipCueLateSec !== 0
+    && opts.clipCueLateSec > -CUE_EARLY_MAX_SEC && opts.clipCueLateSec < CUE_LATE_MAX_SEC) {
+    fields.push(`liq_clip_cue_late="${opts.clipCueLateSec.toFixed(6)}"`);
+  }
   // Per-track loudness gain offset, in the "<n> dB" form Liquidsoap's amplify
   // override parses. Applied before the ducking layers. Absent = unity.
   if (song.gainDb != null) fields.push(`liq_amplify="${escAnnotate(song.gainDb)} dB"`);
@@ -961,9 +1007,11 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   if (song.chop) fields.push('liq_chop="true"');
   if (song.chopPeriod != null) fields.push(`liq_chop_period="${escAnnotate(song.chopPeriod)}"`);
   // Hard track-length cap (#447): a positive cap stamps `liq_cue_out` and
-  // radio.liq's `cue_cut` stops the track there. Only the capped paths set it
-  // (autonomous picks + auto.m3u); listener requests pass null and play in
-  // full. A cue_out past the track's end is a no-op. An explicit cueOutSec (a
+  // Liquidsoap stops the track there (cues apply at request resolution). Only
+  // the capped paths set it (autonomous picks + auto.m3u); listener requests
+  // pass null and play in full. Callers pass the cap only for a track that runs past it
+  // (track-floor.capCueOutSec): a cue_out past the end is NOT a no-op when the
+  // decoder cannot measure the stream, it defeats the crossfade. An explicit cueOutSec (a
   // stem blend's start in the OUTGOING track) competes with the cap and the
   // earlier cut wins, so a blend can't resurrect audio past the cap. cueInSec
   // skips the INCOMING track past the head its rendered clip already played.
@@ -991,6 +1039,9 @@ export function getClipUri(song, clipPath: string, crossSec: number) {
     `subsonic_id="${escAnnotate(song.id)}"`,
     'subwave_clip="1"',
     `liq_cross_duration="${escAnnotate(crossSec)}"`,
+    // The cue lead both clip seams were cut with (broadcast/stem-seam.ts):
+    // radio.liq aligns the clip on it rather than on what `cross` buffered.
+    `liq_clip_lead="${escAnnotate(crossSec)}"`,
   ];
   // No liq_amplify: the render already gain-matched both sources, so a stamp
   // here would double-apply.

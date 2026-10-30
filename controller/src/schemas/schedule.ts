@@ -277,7 +277,6 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
  * window every reader already understands.
  */
 export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
-export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
 
 // One string for four constraints, naming both ends whichever one a value missed.
 const OVERRIDE_MINUTES_MESSAGE =

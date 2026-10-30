@@ -5,7 +5,7 @@
 // command that doesn't.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { homedir } from 'node:os';
 
 export const HOME_CONFIG_DIR = resolve(homedir(), '.config', 'subwave');

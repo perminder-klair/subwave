@@ -45,6 +45,17 @@ MAX_CHUNK_CHARS = int(os.environ.get("CHATTERBOX_MAX_CHUNK_CHARS", "280"))
 # a within-segment pause, not a between-segment one.
 CHUNK_GAP_MS = int(os.environ.get("CHATTERBOX_CHUNK_GAP_MS", "160"))
 
+# --- on-air level ------------------------------------------------------------
+# Chatterbox Turbo renders around -26 LUFS, about 10 dB under Piper and Kokoro,
+# so its lines sat under the ducked music. Every clip goes through the same
+# leveller as PocketTTS (voice_level.py). The target is not PocketTTS's
+# deliberately hot one: Chatterbox runs a ~20 dB crest factor against
+# PocketTTS's ~12, and at that target its peaks would land ~8 dB into the
+# limiter. 0.135 linear (≈ -17.4 dBFS RMS, about -16 LUFS for its speech) puts
+# it beside Piper and Kokoro. CHATTERBOX_TARGET_RMS tunes it without a code
+# change; main() reads it through voice_level.target_from_env().
+TARGET_RMS = 0.135
+
 # Sentence boundary: a .!? followed by whitespace. Clause boundary (fallback for
 # a single sentence longer than the cap): comma / semicolon / colon / dash
 # followed by whitespace — where a speaker would naturally pause.
@@ -140,9 +151,11 @@ def main():
         import torch
         import soundfile as sf
         from chatterbox.tts_turbo import ChatterboxTurboTTS
+        from voice_level import level, target_from_env
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
+    target_rms = target_from_env("CHATTERBOX_TARGET_RMS", TARGET_RMS, log)
 
     # --- torch >= 2.9 float64 guard (RTX 50-series / Blackwell) ----------------
     # The CUDA build for newer cards (sm_120) runs chatterbox-tts — which is
@@ -265,6 +278,9 @@ def main():
             # GPU build. soundfile is already present (librosa depends on it) and
             # writes the same WAV.
             samples = np.concatenate(pieces, axis=0) if len(pieces) > 1 else pieces[0]
+            # Levelled as one clip, after the stitch, so every chunk of a line
+            # takes the same gain.
+            samples = level(samples, target_rms)
             sf.write(out, samples, sample_rate)
 
             duration = float(samples.shape[0]) / float(sample_rate)

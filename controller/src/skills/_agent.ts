@@ -1,5 +1,5 @@
 import { preparationSkillAt, prepareEpisodeContext } from '../broadcast/show-preparation.js';
-// Segment-director agent. agenticTick() (the 5-minute scheduler.skillsTick)
+// Segment-director agent. agenticTick() (the talk table's 5-minute segment row)
 // hands a tool-loop agent a snapshot of the moment plus real-world data tools
 // (llm/segment-tools.js) and asks whether anything is worth saying between
 // tracks; it writes ONE spoken line or stays silent. It is deliberately NOT
@@ -269,6 +269,10 @@ export const directorAgent = defineAgent({
   // widening is opt-in precisely so it can't override this; the director does
   // not opt in.
   maxSteps: 2,
+  // Deciding to stay silent reads no data, so a native "air: false" with no
+  // tool call is a finished answer, not a miss. Only silence: a line that
+  // airs may need a data tool, and the forced agents never opt in.
+  settledWithoutTools: (object) => object?.air === false,
   // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
   // done-tool recovery into a multi-step stall (#555) and hang the tick; the
   // deadline turns that into a clean throw, handled as silence below.
@@ -321,10 +325,9 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
   return situation;
 }
 
-// Simple (non-agentic) director, the pool-mode counterpart of directorAgent.
-// `settings.llm.pickerAgent` off is the operator's signal that the model can't
-// be trusted with tool loops, so the segment path must not be the one place
-// still running one. Code picks the capability, calls its data tool directly,
+// Simple (non-agentic) director, the direct-mode counterpart of directorAgent.
+// The explicit `settings.llm.segmentRuntime` choice keeps the segment path
+// independent from the track picker. Code picks the capability, calls its data tool directly,
 // inlines the result and asks for the same {air, text, sfx} decision, so the
 // model still gets to choose silence. Everything downstream is shared with
 // agenticTick.
@@ -483,7 +486,7 @@ export async function agenticTick(ctx) {
     let exchange: { kind: string; lines: Array<{ persona: any; text: string }>; castNames: string[] } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
-    if (!settings.get().llm?.pickerAgent) {
+    if (settings.get().llm?.segmentRuntime === 'direct') {
       ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
       // Brief the agent with aired curiosity so a pool-exhausted fallback
@@ -763,7 +766,7 @@ export async function runCapability(
   };
 
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
-  if (!settings.get().llm?.pickerAgent) {
+  if (settings.get().llm?.segmentRuntime === 'direct') {
     // Pool mode: fetch the data directly, one structured call. A skill that
     // writes from the moment survives a failed fetch (it writes from the brief
     // and the moment alone); a GROUNDED skill does not, since its whole segment
@@ -867,7 +870,7 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing.
+    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo and Keenable need nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -882,6 +885,10 @@ export function skillCatalog() {
         requiresKey = null;
         keyUrl = null;
         hint = 'SearXNG self-hosted meta-search. Configure base URL in admin → Settings → Search.';
+      } else if (searchProvider === 'keenable') {
+        requiresKey = null;
+        keyUrl = null;
+        hint = 'Keenable web search, keyless. An optional Keenable key (SEARCH_API_KEY) raises the rate limit.';
       } else {
         requiresKey = null;
         keyUrl = null;

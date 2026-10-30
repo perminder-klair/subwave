@@ -5,6 +5,7 @@ import express from 'express';
 import { config } from './config.js';
 import { envIssues } from './util/env.js';
 import * as settings from './settings.js';
+import { logCompatDetection } from './routes/settings/core.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
@@ -17,8 +18,11 @@ import * as chatterbox from './audio/chatterbox.js';
 import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
-import { startScheduler, flushPendingAutoPlaylist } from './broadcast/scheduler.js';
+import { startScheduler, flushPendingAutoPlaylist, refreshAutoPlaylist } from './broadcast/scheduler.js';
 import { startFailoverMonitor } from './music/source-failover.js';
+import { showKeyAt } from './broadcast/show-boundary.js';
+import { resumeIntoAnotherShow } from './broadcast/resume-show.js';
+import { autoPlaylistReady, skipTrack } from './broadcast/liquidsoap-control.js';
 import * as geminiTts from './audio/gemini.js';
 import * as geminiLibrary from './audio/gemini-library.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
@@ -47,6 +51,7 @@ import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
 import { router as likesRoutes } from './routes/likes.js';
+import { router as lyricsRoutes } from './routes/lyrics.js';
 import { router as personasRoutes } from './routes/personas.js';
 import { router as showsRoutes } from './routes/shows.js';
 import { router as communityRoutes } from './routes/community.js';
@@ -58,6 +63,7 @@ import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
 import { router as connectRoutes } from './routes/connect.js';
 import { router as mcpRoutes } from './routes/mcp.js';
+import { router as nowPlayingFileRoutes } from './routes/now-playing-file.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadNavidromeConfig, syncRouterConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -129,6 +135,7 @@ app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
 app.use(likesRoutes);
+app.use(lyricsRoutes);
 app.use(personasRoutes);
 app.use(showsRoutes);
 app.use(communityRoutes);
@@ -140,6 +147,7 @@ app.use(generateRoutes);
 app.use(doctorRoutes);
 app.use(connectRoutes);
 app.use(mcpRoutes);
+app.use(nowPlayingFileRoutes);
 app.use((_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(httpErrorHandler);
 
@@ -202,6 +210,14 @@ app.listen(config.server.port, async (err?: Error) => {
     console.log(
       `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
+    // The one upgrade that changes behaviour without being asked (#1687), so it
+    // is said where the operator reads, every boot until a save records it.
+    // Detect what an `auto` openai-compatible connection is talking to before
+    // the first pick, and say what was found where the operator reads.
+    void logCompatDetection();
+    if (settings.migratedFromCandidatePool()) {
+      queue.log('picker', 'Candidate Pool is retired: this station now selects tracks with Track Shortlist, its replacement. Review Settings → Music selection; saving any setting records the choice and retires this note.');
+    }
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
@@ -319,7 +335,16 @@ app.listen(config.server.port, async (err?: Error) => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
-  await startStreamIdleMonitor(flushPendingAutoPlaylist);
+  await startStreamIdleMonitor(async ({ showChanged }) => {
+    if (!showChanged) return flushPendingAutoPlaylist();
+    await resumeIntoAnotherShow({
+      snapshot: () => queue.snapshotProgramme(showKeyAt(Date.now())),
+      rebuild: () => refreshAutoPlaylist({ automatic: true }),
+      ready: autoPlaylistReady,
+      drop: (stale, { skip }) => queue.dropProgrammeFromEarlierShow(stale, skip ? skipTrack : null),
+      log: line => queue.log('scheduler', line),
+    });
+  });
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.
   await likes.load().catch(err => console.error('[likes] init failed:', err.message));

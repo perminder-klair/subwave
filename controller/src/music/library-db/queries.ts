@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseVocalRangesJson } from '../lyric-vocal.js';
 import { preparationTrackSchema } from '../../schemas/show-preparation.js';
 import { getTrack } from './tracks.js';
 // Mood- and tag-keyed reads, plus the per-genre embedding centroids.
@@ -64,6 +65,15 @@ export function allTaggedIds(): string[] {
       .prepare(`SELECT id FROM tracks WHERE ${SQL_HAS_MOODS}`)
       .all() as Array<{ id: string }>
   ).map(r => r.id);
+}
+
+// Ids of one energy bucket, in table order (the same order songsByEnergy uses).
+export function idsByEnergy(energy: EnergyValue): string[] {
+  if (!energy) return [];
+  // Same population as songsByEnergy (tagged rows only, #1732): the ids-only
+  // read must not widen the bucket it replaces on the pick path.
+  return (requireDb().prepare(`SELECT id FROM tracks WHERE energy = ? AND ${SQL_HAS_MOODS} ORDER BY rowid`).all(energy) as Array<{ id: string }>)
+    .map((r) => r.id);
 }
 
 // Trusted sample for the propagation self-check: no 'propagated' rows (circular)
@@ -161,37 +171,79 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
 
 // Mean text vector per genre, for music/genre-suggest.ts. Streamed with running
 // sums so the library is never held at once.
-export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
-  // json_each: a track contributes to every genre it carries, not just the primary.
-  const stmt = requireDb().prepare(
-    `SELECT je.value AS genre, v.embedding AS embedding
+export interface GenreCentroid {
+  genre: string;
+  count: number;
+  centroid: Float32Array;
+}
+
+export interface GenreVectorSums {
+  dim: number;
+  sums: Map<string, { sum: Float64Array; count: number }>;
+}
+
+// Below every rowid SQLite assigns on its own.
+export const GENRE_WALK_START = Number.MIN_SAFE_INTEGER;
+
+// json_each: a track contributes to every genre it carries, not just the primary.
+// Rowid order is what lets a walk stop and resume. The rowid range must drive
+// the outer loop: if the planner sorted instead, the first step of every slice
+// would read the whole library (#1976).
+const GENRE_VECTORS_SQL = `SELECT t.rowid AS rid, je.value AS genre, v.embedding AS embedding
        FROM tracks t
        JOIN track_vectors v ON v.id = t.id, json_each(t.genres) je
-      WHERE je.value IS NOT NULL AND TRIM(je.value) != ''`,
-  );
-  const sums = new Map<string, { sum: Float64Array; count: number }>();
-  let dim = 0;
-  for (const row of stmt.iterate() as Iterable<{ genre: string; embedding: Buffer }>) {
+      WHERE t.rowid > ? AND je.value IS NOT NULL AND TRIM(je.value) != ''
+      ORDER BY t.rowid`;
+
+export function newGenreVectorSums(): GenreVectorSums {
+  return { dim: 0, sums: new Map() };
+}
+
+// One slice of the centroid walk: adds tracks after `afterRowid`, in rowid
+// order, until `budgetMs` has passed. It stops on a track boundary so no track
+// is half-counted, and closes its statement before returning, so the caller can
+// yield the event loop between slices. At 150k tracks the whole walk is
+// seconds, which in one call stalls every other request (#1976). Returns the
+// rowid to resume after, or null once the library is exhausted.
+export function addGenreVectors(acc: GenreVectorSums, afterRowid: number, budgetMs = Infinity): number | null {
+  const stmt = requireDb().prepare(GENRE_VECTORS_SQL);
+  const deadline = performance.now() + budgetMs;
+  let cut: number | null = null;
+  for (const row of stmt.iterate(afterRowid) as Iterable<{ rid: number; genre: string; embedding: Buffer }>) {
+    if (cut !== null && row.rid !== cut) return cut;
     const b = row.embedding;
     const vec = new Float32Array(b.buffer, b.byteOffset, Math.floor(b.byteLength / 4));
-    if (!dim) dim = vec.length;
-    if (vec.length !== dim) continue; // defensive: skip any stray off-dim rows
-    let acc = sums.get(row.genre);
-    if (!acc) {
-      acc = { sum: new Float64Array(dim), count: 0 };
-      sums.set(row.genre, acc);
+    if (!acc.dim) acc.dim = vec.length;
+    if (vec.length === acc.dim) { // defensive: skip any stray off-dim rows
+      let sum = acc.sums.get(row.genre);
+      if (!sum) {
+        sum = { sum: new Float64Array(acc.dim), count: 0 };
+        acc.sums.set(row.genre, sum);
+      }
+      for (let i = 0; i < acc.dim; i++) sum.sum[i] += vec[i];
+      sum.count++;
     }
-    for (let i = 0; i < dim; i++) acc.sum[i] += vec[i];
-    acc.count++;
+    if (cut === null && performance.now() >= deadline) cut = row.rid;
   }
-  const out: Array<{ genre: string; count: number; centroid: Float32Array }> = [];
-  for (const [genre, { sum, count }] of sums) {
+  return null;
+}
+
+export function centroidsOf(acc: GenreVectorSums): GenreCentroid[] {
+  const out: GenreCentroid[] = [];
+  for (const [genre, { sum, count }] of acc.sums) {
     if (!count) continue;
-    const centroid = new Float32Array(dim);
-    for (let i = 0; i < dim; i++) centroid[i] = sum[i] / count;
+    const centroid = new Float32Array(acc.dim);
+    for (let i = 0; i < acc.dim; i++) centroid[i] = sum[i] / count;
     out.push({ genre, count, centroid });
   }
   return out;
+}
+
+// The whole walk in one call. The request path uses genre-suggest.ts's sliced walk.
+export function genreCentroids(): GenreCentroid[] {
+  const acc = newGenreVectorSums();
+  addGenreVectors(acc, GENRE_WALK_START);
+  return centroidsOf(acc);
 }
 // Whole-library projection for the Show-editor candidate diagnostic: the fields
 // the strict show locks use, none of the heavy analysis JSON.
@@ -209,6 +261,7 @@ export function candidateFilterTracks(): Array<{
   audioMoods: string[];
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
+  vocalRangesInvalid: boolean;
   // For the minimum-track-length floor (#1573); without this column every row
   // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
@@ -226,17 +279,12 @@ export function candidateFilterTracks(): Array<{
     moods: string | null;
     audio_moods: string | null;
     energy: EnergyValue;
-    vocal_range_count: number | null;
+    vocal_ranges_json: string | null;
     duration_sec: number | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
     is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
-    CASE
-      WHEN vocal_ranges_json IS NULL THEN NULL
-      WHEN json_valid(vocal_ranges_json) AND json_type(vocal_ranges_json) = 'array'
-        THEN json_array_length(vocal_ranges_json)
-      ELSE NULL
-    END AS vocal_range_count
+    vocal_ranges_json
     FROM tracks`).all() as CandidateFilterRow[];
   return rows.map((row) => ({
     id: row.id,
@@ -253,11 +301,7 @@ export function candidateFilterTracks(): Array<{
     moods: row.moods ? safeParseArray(row.moods) : [],
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
-    // The show filter reads only the tri-state (null unmeasured / [] instrumental
-    // / non-empty vocal), so carry presence rather than the spans.
-    vocalRanges: row.vocal_range_count == null
-      ? null
-      : row.vocal_range_count === 0 ? [] : [{}],
+    ...parseVocalRangesJson(row.vocal_ranges_json),
     durationSec: row.duration_sec ?? null,
   }));
 }
@@ -278,4 +322,13 @@ export function artistIdentities(minTracks: number) {
     WHERE artist_id IS NOT NULL AND artist IS NOT NULL
     GROUP BY artist_id HAVING COUNT(DISTINCT LOWER(COALESCE(title, id)) || '|' || LOWER(artist)) >= ?
   `).all(minTracks));
+}
+
+// Every distinct artist credit in the library, for the spacing guards' act
+// index (library.knownActKeys). Credits only; no row data.
+export function distinctArtistCredits(): string[] {
+  const rows = requireDb().prepare(
+    `SELECT DISTINCT artist FROM tracks WHERE artist IS NOT NULL AND artist != ''`,
+  ).all() as Array<{ artist: string }>;
+  return rows.map(r => r.artist);
 }

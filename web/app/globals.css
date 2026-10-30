@@ -168,6 +168,21 @@
     --sidebar-accent-foreground: var(--ink);
     --sidebar-border: var(--line);
     --sidebar-ring: var(--accent);
+    /* Booth glass: the admin rail and top bar are smoked studio glass
+       (`.admin-booth` in the ADMIN block). Smoke darkens like
+       --sidebar does: toward --ink here, toward black in the dark overrides.
+       The fills turn opaque wherever backdrop-filter is stripped (html.lite,
+       reduced motion), or text would show through an unblurred pane. */
+    --booth-smoke: var(--ink);
+    --booth-sheen: rgba(255, 255, 255, 0.55);
+    --booth-fill: color-mix(in oklab, var(--sidebar) 52%, transparent);
+    --booth-tile: color-mix(in oklab, var(--card-bg) 22%, transparent);
+    --booth-edge: color-mix(in oklab, var(--ink) 28%, transparent);
+    --booth-blur: blur(18px) saturate(1.5) brightness(0.97);
+    /* Text on an accent fill. --bg is the fallback; where relative colour is
+       supported it is near-white on a dark accent and near-black on a light
+       one, so Phosphor's amber and Blueprint's sky blue stay legible. */
+    --on-accent: var(--bg);
     /* Default display + mono faces. A theme overrides --display-font/--mono-font
      with a curated id, resolved to a family stack in lib/theme. */
     --display-font: var(--font-fraunces);
@@ -194,6 +209,8 @@
         --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
         /* Sidebar darker than the page — toward black, since --ink is light here. */
         --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
+        --booth-smoke: #000;
+        --booth-sheen: rgba(255, 255, 255, 0.1);
         color-scheme: dark;
     }
 }
@@ -216,7 +233,17 @@
     --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
     /* Sidebar darker than the page — toward black, since --ink is light here. */
     --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
+    --booth-smoke: #000;
+    --booth-sheen: rgba(255, 255, 255, 0.1);
     color-scheme: dark;
+}
+
+/* Lightness 0.66 is the flip point: every built-in accent below it takes white
+   text, every one above it black. */
+@supports (color: oklch(from red l c h)) {
+    :root {
+        --on-accent: oklch(from var(--accent) clamp(0.16, (0.66 - l) * 1000, 0.99) 0 0);
+    }
 }
 
 html,
@@ -314,6 +341,52 @@ body::after {
 }
 :root[data-theme="dark"] body::after {
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.45  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* Theme texture + finish (--texture / --finish) dress the player stage only;
+   the admin console keeps plain surfaces. lib/theme mirrors each token onto
+   <html> as data-texture / data-finish, and an unset token leaves these inert.
+   Isolated so the overlay's z-index and blend stay inside the stage, which in
+   a showcase embed is an absolute box on someone else's page. */
+.sw-theme-stage {
+    isolation: isolate;
+}
+.sw-theme-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 90;
+    pointer-events: none;
+    display: none;
+}
+/* Scanlines every 3px under a tube vignette. */
+html[data-texture="scanline"] .sw-theme-stage::after {
+    display: block;
+    background-image:
+        repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.34) 0 1px, transparent 1px 3px),
+        radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.6) 100%);
+}
+/* An ink halftone screen over paper tooth, multiplied into the stock. It lies
+   over the type too, so it stays light enough not to speckle small text. */
+html[data-texture="halftone"] .sw-theme-stage::after {
+    display: block;
+    background-image:
+        radial-gradient(circle, color-mix(in oklab, var(--ink) 16%, transparent) 0.7px, transparent 1.25px),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .32  0 0 0 0 .26  0 0 0 0 .18  0 0 0 .6 0'/></filter><rect width='220' height='220' filter='url(%23n)'/></svg>");
+    background-size: 5px 5px, 220px 220px;
+    mix-blend-mode: multiply;
+    opacity: 0.5;
+}
+/* The finish re-filters every frame the skin paints, so lite mode drops it.
+   WebKit (html.webkit, lib/platform) drops it too: it runs url() filters in
+   software over the whole stage on every repaint, which held desktop Safari to
+   13-19 fps on AXO and janked iPads on every skin. Safari keeps the texture.
+   Filters live in components/ThemeFinishFilters.tsx. */
+html[data-finish="bloom"]:not(.lite):not(.webkit) .sw-theme-stage {
+    filter: url(#sw-finish-bloom);
+}
+html[data-finish="misregister"]:not(.lite):not(.webkit) .sw-theme-stage {
+    filter: url(#sw-finish-misregister);
 }
 
 /* Ink-tinted scrollbars used inside drawers and any internal scroll areas. */
@@ -458,17 +531,33 @@ body::after {
     animation: v3-blink 1s steps(1) infinite;
 }
 
-/* Tune-in gate — expanding ink ring on the play disc. */
+/* Tune-in gate — expanding ink ring on the play disc. A disc behind the 92px
+   button scales out to 144px and fades, the same ring the 26px box-shadow
+   spread drew, but on transform + opacity: an animated box-shadow repainted
+   the full-viewport, backdrop-blurred overlay every frame until the tap, which
+   WebKit does on the CPU. */
 @keyframes v3-tunein-pulse {
     0% {
-        box-shadow: 0 0 0 0 color-mix(in oklab, var(--ink) 35%, transparent);
+        transform: scale(1);
+        opacity: 1;
     }
     70%,
     100% {
-        box-shadow: 0 0 0 26px color-mix(in oklab, var(--ink) 0%, transparent);
+        transform: scale(1.5652);
+        opacity: 0;
     }
 }
 .v3-tunein-pulse {
+    position: relative;
+}
+.v3-tunein-pulse::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: color-mix(in oklab, var(--ink) 35%, transparent);
     animation: v3-tunein-pulse 2s ease-out infinite;
 }
 
@@ -514,19 +603,11 @@ body::after {
 }
 
 /* Art-derived ambient wash — two radial pools tinted from the current cover art
-   (hooks/useCoverColors.ts), above --bg and below all content. The tint vars are
-   registered as <color> @properties so they cross-fade on track change instead
-   of snapping. */
-@property --cover-tint {
-    syntax: "<color>";
-    inherits: false;
-    initial-value: transparent;
-}
-@property --cover-tint-2 {
-    syntax: "<color>";
-    inherits: false;
-    initial-value: transparent;
-}
+   (hooks/useCoverColors.ts), above --bg and below all content. A new tint
+   crossfades in on the hidden one of two stacked layers (classic/CoverAmbient
+   .tsx, skins/crossfade.ts), so each layer's pools paint once. Transitioning
+   the tint colours instead (registered <color> properties) repainted both
+   viewport-sized gradients every frame of the fade, on the CPU in WebKit. */
 /* TODO(skins-colocation): the .v3-cover-* block is classic-private and should
    eventually move to a co-located classic module (shared v3- primitives stay
    global). Deferred so the contrast retune below isn't tangled with a move. */
@@ -534,6 +615,15 @@ body::after {
     position: absolute;
     inset: 0;
     pointer-events: none;
+    opacity: 0;
+    transition: opacity 1.1s ease;
+}
+.v3-cover-ambient.v3-cover-ambient-on {
+    opacity: 1;
+}
+.v3-cover-ambient-layer {
+    position: absolute;
+    inset: 0;
     opacity: 0;
     background-image:
         radial-gradient(
@@ -546,18 +636,20 @@ body::after {
             color-mix(in oklab, var(--cover-tint-2) 32%, transparent) 0,
             transparent 72%
         );
-    transition:
-        --cover-tint 1.1s ease,
-        --cover-tint-2 1.1s ease,
-        opacity 1.1s ease;
+    /* Keep in step with FADE_MS in classic/CoverAmbient.tsx. */
+    transition: opacity 1.1s ease;
 }
-.v3-cover-ambient.v3-cover-ambient-on {
+.v3-cover-ambient-layer.v3-cover-ambient-front {
     opacity: 1;
 }
 /* Soft-light compresses on charcoal, so the dark pools run richer mixes to lift
-   the base. Explicit attribute + media query mirror the paper-grain pattern. */
+   the base. The blend sits on the wrapper: the two layers mix normally and the
+   pair soft-lights onto the page as one wash. Explicit attribute + media query
+   mirror the paper-grain pattern. */
 :root[data-theme="dark"] .v3-cover-ambient {
     mix-blend-mode: soft-light;
+}
+:root[data-theme="dark"] .v3-cover-ambient-layer {
     background-image:
         radial-gradient(
             64% 56% at 20% 36%,
@@ -570,12 +662,11 @@ body::after {
             transparent 72%
         );
 }
-:root[data-theme="dark"] .v3-cover-ambient.v3-cover-ambient-on {
-    opacity: 1;
-}
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) .v3-cover-ambient {
         mix-blend-mode: soft-light;
+    }
+    :root:not([data-theme="light"]) .v3-cover-ambient-layer {
         background-image:
             radial-gradient(
                 64% 56% at 20% 36%,
@@ -588,8 +679,12 @@ body::after {
                 transparent 72%
             );
     }
-    :root:not([data-theme="light"]) .v3-cover-ambient.v3-cover-ambient-on {
-        opacity: 1;
+}
+/* Reduced motion snaps the wrapper's fade (the block further down); snap the
+   tint's crossfade with it. */
+@media (prefers-reduced-motion: reduce) {
+    .v3-cover-ambient-layer {
+        transition: none;
     }
 }
 
@@ -600,18 +695,15 @@ body::after {
         transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1),
         filter 0.3s ease;
 }
-.v3-cover-frame:hover,
 .v3-cover-frame:focus-visible {
     transform: translateY(-1px) scale(1.012);
-}
-.v3-cover-frame:focus-visible {
     outline: none;
 }
 /* Frame wakes from muted to ink on engage. */
 .v3-cover-frame .v3-cover-glitch {
     transition: border-color 0.25s ease;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch {
     border-color: var(--ink);
 }
 
@@ -642,11 +734,11 @@ body::after {
     background-image: linear-gradient(#16d6cf, #16d6cf), var(--cover);
     background-blend-mode: multiply;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::before {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch::before {
     opacity: 0.55;
     animation: cover-glitch-r 0.55s steps(1) infinite;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-glitch::after {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-glitch::after {
     opacity: 0.55;
     animation: cover-glitch-c 0.55s steps(1) infinite;
 }
@@ -667,7 +759,7 @@ body::after {
     transition: opacity 0.18s ease;
     mix-blend-mode: overlay;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-scan {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-scan {
     opacity: 0.6;
     animation: cover-scan-sweep 2.4s linear infinite;
 }
@@ -711,7 +803,7 @@ body::after {
     border-bottom-width: 1px;
     border-right-width: 1px;
 }
-.v3-cover-frame:is(:hover, :focus-visible, .v3-cover-live) .v3-cover-tick {
+.v3-cover-frame:is(:focus-visible, .v3-cover-live) .v3-cover-tick {
     opacity: 1;
     transform: scale(1);
 }
@@ -748,6 +840,35 @@ body::after {
     border-radius: 50%;
     background: var(--accent);
     box-shadow: 0 0 0 1px var(--bg);
+}
+
+/* Hover engages only where there is real hover. A touch screen keeps :hover on
+   the cover after a tap (it opens the timeline) until the next tap elsewhere,
+   which left the ghosts and scan sweeping indefinitely: a repaint of blended
+   pixels every frame on an iPad. Same declarations as the engaged rules above. */
+@media (hover: hover) {
+    .v3-cover-frame:hover {
+        transform: translateY(-1px) scale(1.012);
+    }
+    .v3-cover-frame:hover .v3-cover-glitch {
+        border-color: var(--ink);
+    }
+    .v3-cover-frame:hover .v3-cover-glitch::before {
+        opacity: 0.55;
+        animation: cover-glitch-r 0.55s steps(1) infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-glitch::after {
+        opacity: 0.55;
+        animation: cover-glitch-c 0.55s steps(1) infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-scan {
+        opacity: 0.6;
+        animation: cover-scan-sweep 2.4s linear infinite;
+    }
+    .v3-cover-frame:hover .v3-cover-tick {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 @keyframes cover-glitch-r {
@@ -813,15 +934,22 @@ body::after {
     *,
     *::before,
     *::after {
+        /* Unprefixed only: Lightning CSS reads a later -webkit- line as an
+           override of this one and drops it, which left Chrome blurring.
+           The build adds the -webkit- copy Safari needs. */
         backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
+    }
+    /* With no blur, the booth glass panes go opaque. */
+    :root {
+        --booth-fill: var(--sidebar);
+        --booth-tile: var(--card-bg);
     }
     .v3-drawer-content,
     .v3-drawer-overlay,
     .v3-alert-overlay,
     .v3-alert-content,
     .v3-blink,
-    .v3-tunein-pulse,
+    .v3-tunein-pulse::after,
     .v3-connecting-pulse,
     /* The buddy (components/BoothBuddy.tsx) animates through its own module
        classes, so override with !important on the root + every descendant. */
@@ -866,9 +994,12 @@ body::after {
 html.lite *,
 html.lite *::before,
 html.lite *::after {
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important; /* unprefixed only, as above */
     animation: none !important;
+}
+html.lite {
+    --booth-fill: var(--sidebar);
+    --booth-tile: var(--card-bg);
 }
 /* The animation kill above would leave the ripple a static ring stack for its
    3s burst — hide the rings, matching reduced-motion. */
@@ -3199,6 +3330,59 @@ html:has(.admin-root.paper) {
     scrollbar-color: var(--scrollbar) transparent;
 }
 
+/* Booth glass: the signed-in shell's rail and top bar are smoked studio glass,
+   and so are the Library Observatory's filter rail and top bar, which sits
+   outside the shell. Glass needs something behind it, so the page carries a
+   sparse field of ASCII glyphs, speckled by their own noise so they read as
+   printed, in the theme's ink. It is a mask over an --ink fill, so every theme
+   and mode colours it. The layer is fixed, so nothing moves behind the rail
+   and its blur stays static; only the sticky top bar re-blurs as content
+   scrolls under it. The tokens live at :root (see --booth-fill) because the
+   mobile drawer portals outside .admin-root. */
+.admin-booth {
+    isolation: isolate;
+    --booth-ascii: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='160' font-family='monospace' font-size='11'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='1.3' numOctaves='1' seed='4'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  3.2 0 0 0 -0.9'/><feComposite in2='SourceGraphic' operator='in'/></filter><g filter='url(%23g)'><text x='15' y='34'>.</text><text x='15' y='94'>*</text><text x='15' y='134'>*</text><text x='15' y='154'>/</text><text x='27' y='34'>.</text><text x='27' y='54'>/</text><text x='27' y='134'>/</text><text x='27' y='154'>:</text><text x='39' y='14'>.</text><text x='39' y='154'>.</text><text x='51' y='134'>.</text><text x='75' y='134'>+</text><text x='87' y='114'>.</text><text x='123' y='54'>.</text><text x='135' y='114'>:</text><text x='147' y='114'>.</text><text x='159' y='74'>+</text><text x='159' y='94'>.</text><text x='159' y='154'>/</text><text x='195' y='34'>.</text><text x='207' y='34'>+</text><text x='219' y='114'>.</text></g></svg>");
+}
+.admin-booth::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-color: color-mix(in oklab, var(--ink) 22%, transparent);
+    -webkit-mask: var(--booth-ascii) 0 0 / 240px 160px repeat;
+    mask: var(--booth-ascii) 0 0 / 240px 160px repeat;
+}
+/* Inside the rail, cards and hairlines go translucent too. Overriding the
+   tokens rather than the properties leaves the Tailwind hover and active
+   states in ui/sidebar.tsx working. */
+.admin-booth-rail,
+html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"] {
+    --card-bg: var(--booth-tile);
+    --color-line: var(--booth-edge);
+    --color-sidebar-border: var(--booth-edge);
+}
+.admin-booth-rail > [data-sidebar="sidebar"],
+html:has(.admin-booth) [data-sidebar="sidebar"][data-mobile="true"],
+.observatory-root .obs-rail {
+    background:
+        linear-gradient(118deg, var(--booth-sheen) 0%, transparent 24%, transparent 58%, color-mix(in srgb, var(--booth-sheen) 60%, transparent) 66%, transparent 74%),
+        linear-gradient(180deg, color-mix(in oklab, var(--booth-smoke) 16%, transparent), color-mix(in oklab, var(--booth-smoke) 5%, transparent)),
+        var(--booth-fill);
+    box-shadow: inset -1px 0 0 var(--booth-sheen), inset 0 1px 0 var(--booth-sheen);
+    -webkit-backdrop-filter: var(--booth-blur);
+    backdrop-filter: var(--booth-blur);
+}
+.admin-booth-bar {
+    background:
+        linear-gradient(180deg, color-mix(in oklab, var(--booth-smoke) 12%, transparent), color-mix(in oklab, var(--booth-smoke) 4%, transparent)),
+        var(--booth-fill);
+    border-bottom: 1px solid var(--booth-edge);
+    box-shadow: inset 0 1px 0 var(--booth-sheen);
+    -webkit-backdrop-filter: var(--booth-blur);
+    backdrop-filter: var(--booth-blur);
+}
+
 /* Type */
 .admin-root .eyebrow {
     font-size: 11px;
@@ -4434,8 +4618,9 @@ html:has(.admin-root.paper) {
 .bs-prose p {
     margin: 0 0 1.2em;
 }
-/* Figures / screenshots: full column width, thin ink frame. */
-.bs-prose img {
+/* Figures / screenshots / video: full column width, thin ink frame. */
+.bs-prose img,
+.bs-prose video {
     display: block;
     width: 100%;
     height: auto;
@@ -5095,7 +5280,10 @@ html:has(.admin-root.paper) {
 
 /* LIBRARY OBSERVATORY — full-bleed data-art view (web/app/observatory). Scoped
    under .observatory-root and built entirely on the existing tokens, so it
-   auto-flips light/dark and inherits the global paper grain. */
+   auto-flips light/dark and inherits the global paper grain. The full page
+   wears the admin's booth glass (its root carries .admin-booth, its top bar
+   .admin-booth-bar, and the rail joins the glass rule there); the landing
+   embed stays plain. */
 .observatory-root {
     --obs-page: color-mix(in oklab, var(--bg) 96%, var(--ink));
     height: 100vh;
@@ -5165,7 +5353,7 @@ html:has(.admin-root.paper) {
 .observatory-root .t-eyebrow.accent { color: var(--accent); }
 
 /* top bar */
-.observatory-root .obs-top { display: flex; align-items: center; gap: 14px; padding: 13px 22px; border-bottom: 1px solid var(--ink); background: var(--bg); flex: none; z-index: 5; }
+.observatory-root .obs-top { display: flex; align-items: center; gap: 14px; padding: 13px 22px; flex: none; z-index: 5; }
 .observatory-root .obs-top-l { display: flex; align-items: center; gap: 13px; }
 .observatory-root .obs-back { border: 1px solid var(--ink); background: transparent; color: var(--ink); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 7px 10px; cursor: pointer; text-decoration: none; transition: background 0.12s, color 0.12s; }
 .observatory-root .obs-back:hover { background: var(--ink); color: var(--bg); }
@@ -5182,10 +5370,34 @@ html:has(.admin-root.paper) {
 .observatory-root .obs-stat { font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
 
 /* main grid */
-.observatory-root .obs-main { flex: 1; display: grid; grid-template-columns: 236px minmax(0, 1fr) 372px; grid-template-rows: minmax(0, 1fr); min-height: 0; }
+.observatory-root .obs-main { --obs-rail-w: 236px; --obs-side-w: 372px; flex: 1; display: grid; grid-template-columns: var(--obs-rail-w) minmax(0, 1fr) var(--obs-side-w); grid-template-rows: minmax(0, 1fr); min-height: 0; }
+
+/* Folding side panels (desktop only: below 900px they stack under the map).
+   A folded panel is a spine that names what it holds, and the top bar's two
+   toggles and [ / ] fold either side. The widths snap rather than animate:
+   every frame of a width transition would resize the WebGL stage and its
+   bloom targets. */
+.observatory-root .obs-fold { display: none; align-items: center; justify-content: center; flex: none; width: 30px; height: 30px; border: 1px solid var(--separator-strong); background: transparent; color: var(--ink); cursor: pointer; transition: background 0.12s, border-color 0.12s; }
+.observatory-root .obs-fold:hover { background: var(--ink-soft); border-color: var(--ink); }
+.observatory-root .obs-fold svg { width: 15px; height: 15px; }
+.observatory-root .obs-spine { display: none; flex-direction: column; align-items: center; gap: 12px; width: 100%; height: 100%; min-height: 0; padding: 14px 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; transition: background 0.12s, color 0.12s; }
+.observatory-root .obs-spine:hover { background: var(--ink-soft); color: var(--ink); }
+.observatory-root .obs-spine svg { width: 16px; height: 16px; flex: none; }
+.observatory-root .obs-spine-label { writing-mode: vertical-rl; font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 0; }
+@media (min-width: 901px) {
+    .observatory-root .obs-fold { display: inline-flex; }
+    .observatory-root .obs-main.rail-shut { --obs-rail-w: 40px; }
+    .observatory-root .obs-main.side-shut { --obs-side-w: 40px; }
+    .observatory-root .obs-main.rail-shut .obs-rail,
+    .observatory-root .obs-main.side-shut .obs-side { padding: 0; overflow: hidden; }
+    .observatory-root .obs-main.rail-shut .obs-rail > :not(.obs-spine),
+    .observatory-root .obs-main.side-shut .obs-side > :not(.obs-spine) { display: none; }
+    .observatory-root .obs-main.rail-shut .obs-rail > .obs-spine,
+    .observatory-root .obs-main.side-shut .obs-side > .obs-spine { display: flex; }
+}
 
 /* filter rail */
-.observatory-root .obs-rail { border-right: 1px solid var(--ink); background: var(--bg); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.observatory-root .obs-rail { border-right: 1px solid var(--booth-edge); padding: 18px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
 .observatory-root .rail-search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--ink); background: var(--field); padding: 0 10px; }
 .observatory-root .rail-search-ico { color: var(--accent); font-size: 13px; }
 .observatory-root .rail-search input { flex: 1; background: transparent; border: 0; outline: none; font-family: inherit; font-size: 12px; color: var(--ink); padding: 10px 0; }
@@ -5201,7 +5413,7 @@ html:has(.admin-root.paper) {
 .observatory-root .flt-chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .observatory-root .flt-chip { border: 1px solid var(--separator-strong); background: transparent; color: var(--ink); font-size: 10px; letter-spacing: 0.04em; text-transform: lowercase; font-weight: 500; padding: 5px 9px; cursor: pointer; transition: background 0.12s, border-color 0.12s, color 0.12s; }
 .observatory-root .flt-chip:hover { background: var(--ink-soft); border-color: var(--ink); }
-.observatory-root .flt-chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.observatory-root .flt-chip.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .observatory-root .rail-foot { margin-top: auto; padding-top: 14px; border-top: 1px solid var(--separator-strong); display: flex; flex-direction: column; gap: 10px; }
 .observatory-root .rail-count { font-size: 13px; font-weight: 700; letter-spacing: 0.02em; }
 .observatory-root .rail-count .ad-muted { font-size: 10px; letter-spacing: 0.16em; }
@@ -5225,19 +5437,19 @@ html:has(.admin-root.paper) {
 .observatory-root .cmap-ripple { animation: obs-rippleanim 1.8s ease-out infinite; }
 @keyframes obs-rippleanim { 0% { r: 10px; opacity: 0.7; } 100% { r: 46px; opacity: 0; } }
 .observatory-root .cmap-zoom { position: absolute; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; }
-.observatory-root .cmap-zoom button { width: 34px; height: 34px; border: 1px solid var(--ink); background: var(--bg); color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
+.observatory-root .cmap-zoom button { width: 34px; height: 34px; border: 1px solid var(--gx-edge); background: var(--gx-glass); box-shadow: inset 0 1px 0 var(--gx-sheen); -webkit-backdrop-filter: var(--booth-blur); backdrop-filter: var(--booth-blur); color: var(--ink); font-size: 17px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
 .observatory-root .cmap-zoom button:hover { background: var(--ink); color: var(--bg); }
 .observatory-root .cmap-zoom .cmap-reset { height: auto; width: 34px; font-size: 7px; letter-spacing: 0.1em; padding: 6px 0; writing-mode: vertical-rl; }
-.observatory-root .cmap-legend { position: absolute; left: 16px; bottom: 16px; border: 1px solid var(--ink); background: var(--bg); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; min-width: 208px; }
+.observatory-root .cmap-legend { position: absolute; left: 16px; bottom: 16px; border: 1px solid var(--gx-edge); background: var(--gx-glass); box-shadow: inset 0 1px 0 var(--gx-sheen); -webkit-backdrop-filter: var(--booth-blur); backdrop-filter: var(--booth-blur); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; min-width: 208px; }
 .observatory-root .legend-ramp { display: flex; align-items: center; gap: 8px; }
-.observatory-root .lr-bar { flex: 1; height: 8px; background: linear-gradient(90deg, #4a443d, #d94b2a); }
+.observatory-root .lr-bar { flex: 1; height: 8px; }
 .observatory-root .legend-keys { display: flex; flex-direction: column; gap: 5px; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
 .observatory-root .legend-keys span { display: flex; align-items: center; gap: 7px; }
 .observatory-root .lk { width: 9px; height: 9px; display: inline-block; }
 .observatory-root .lk.hollow { background: transparent !important; border: 1.4px solid; }
 
 /* side panel */
-.observatory-root .obs-side { border-left: 1px solid var(--ink); background: var(--obs-page); overflow-y: auto; min-width: 0; }
+.observatory-root .obs-side { border-left: 1px solid var(--ink); overflow-y: auto; min-width: 0; }
 .observatory-root .obs-stack { display: flex; flex-direction: column; gap: 14px; padding: 16px; }
 .observatory-root .obs-card { background: var(--bg); }
 .observatory-root .ad-card { border: 1px solid var(--ink); }
@@ -5359,29 +5571,41 @@ html:has(.admin-root.paper) {
 .observatory-root .obs-side::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); }
 
 @media (max-width: 1180px) {
-    .observatory-root .obs-main { grid-template-columns: 210px minmax(0, 1fr) 330px; }
+    .observatory-root .obs-main { --obs-rail-w: 210px; --obs-side-w: 330px; }
 }
 /* galaxy stage (WebGL renderer). The map is always night — bloom needs a dark
-   ground in both site themes — so the stage re-declares the theme vars locally
-   and everything inside inherits a coherent dark palette. */
+   ground in every theme — so the stage re-declares the theme vars locally and
+   everything inside inherits a coherent dark palette. ConstellationGalaxy sets
+   --bg/--ink/--muted and the label inks inline from the live theme
+   (observatory/palette.ts); the values here are Classic's night, for the
+   moment before it does. The overlays are smoked glass over the stars, with
+   a fixed sheen because the stage is dark whatever the site's mode. */
 .observatory-root .cmap-galaxy {
     --bg: #0d0b09;
     --ink: #ece6dc;
     --muted: #9b948a;
-    --separator-strong: rgba(236, 230, 220, 0.25);
-    --ink-soft: rgba(236, 230, 220, 0.08);
-    --field: rgba(236, 230, 220, 0.07);
-    background: #0d0b09;
+    --gx-scene: #8d867b;
+    --gx-track: #cfc8bb;
+    --separator-strong: color-mix(in oklab, var(--ink) 25%, transparent);
+    --ink-soft: color-mix(in oklab, var(--ink) 8%, transparent);
+    --field: color-mix(in oklab, var(--ink) 7%, transparent);
+    --gx-glass: color-mix(in oklab, var(--bg) 55%, transparent);
+    --gx-edge: color-mix(in oklab, var(--ink) 26%, transparent);
+    --gx-sheen: rgba(255, 255, 255, 0.1);
+    background: var(--bg);
 }
-/* heat-ramp legend: dark ink start is lifted, matching the stars' night lift */
-.observatory-root .cmap-galaxy .lr-bar { background: linear-gradient(90deg, #6a635a, #d94b2a); }
+/* With no blur (lite, reduced motion), the glass goes opaque. */
+html.lite .observatory-root .cmap-galaxy { --gx-glass: var(--bg); }
+@media (prefers-reduced-motion: reduce) {
+    .observatory-root .cmap-galaxy { --gx-glass: var(--bg); }
+}
 
 /* label layer — one transformed inner div; each label counter-scales via --inv
    so pan/zoom is a single style write, never a re-layout */
 .observatory-root .cmap-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .observatory-root .cmap-labels-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
-.observatory-root .cmap-glabel { position: absolute; left: 0; top: 0; transform-origin: 0 0; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 700; color: #8d867b; opacity: var(--gop, 0); white-space: nowrap; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9); transition: opacity 0.25s ease; animation: obs-glabel-in 1.2s ease 0.5s backwards; }
-.observatory-root .cmap-tlabel { position: absolute; left: 0; top: 0; transform-origin: 0 0; font-size: 10px; letter-spacing: 0.05em; font-weight: 500; color: #cfc8bb; white-space: nowrap; text-shadow: 0 1px 5px rgba(0, 0, 0, 0.95); animation: obs-tlabel-in 0.3s ease backwards; }
+.observatory-root .cmap-glabel { position: absolute; left: 0; top: 0; transform-origin: 0 0; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; font-weight: 700; color: var(--gx-scene); opacity: var(--gop, 0); white-space: nowrap; text-shadow: 0 1px 6px rgba(0, 0, 0, 0.9); transition: opacity 0.25s ease; animation: obs-glabel-in 1.2s ease 0.5s backwards; }
+.observatory-root .cmap-tlabel { position: absolute; left: 0; top: 0; transform-origin: 0 0; font-size: 10px; letter-spacing: 0.05em; font-weight: 500; color: var(--gx-track); white-space: nowrap; text-shadow: 0 1px 5px rgba(0, 0, 0, 0.95); animation: obs-tlabel-in 0.3s ease backwards; }
 .observatory-root .cmap-tlabel.acc { color: var(--accent); font-weight: 700; }
 @keyframes obs-glabel-in { from { opacity: 0; } }
 @keyframes obs-tlabel-in { from { opacity: 0; } }
@@ -5390,7 +5614,7 @@ html:has(.admin-root.paper) {
    failed load must never masquerade as a fresh install */
 .observatory-root .obs-error { display: flex; align-items: center; gap: 14px; padding: 8px 22px; border-bottom: 1px solid var(--accent); background: color-mix(in oklab, var(--accent) 9%, var(--bg)); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; flex: none; z-index: 4; }
 .observatory-root .obs-error button { margin-left: auto; flex: none; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 4px 10px; cursor: pointer; transition: background 0.12s, color 0.12s; }
-.observatory-root .obs-error button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .obs-error button:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .observatory-root .obs-error button:disabled { cursor: default; opacity: 0.6; }
 
 /* search jump-to dropdown */
@@ -5409,9 +5633,9 @@ html:has(.admin-root.paper) {
 
 /* dossier queue-on-air */
 .observatory-root .dossier-queue { margin-top: 12px; width: 100%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 9px 0; cursor: pointer; transition: background 0.12s, color 0.12s; }
-.observatory-root .dossier-queue:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .dossier-queue:hover:not(:disabled) { background: var(--accent); color: var(--on-accent); }
 .observatory-root .dossier-queue:disabled { cursor: default; }
-.observatory-root .dossier-queue.done { background: var(--accent); color: #fff; opacity: 0.85; }
+.observatory-root .dossier-queue.done { background: var(--accent); color: var(--on-accent); opacity: 0.85; }
 .observatory-root .dossier-queue-err { margin-top: 6px; color: var(--accent); text-transform: none; letter-spacing: 0.04em; }
 
 /* keyboard focus on the map (tabIndex=0 — arrows pan, +/- zoom) */

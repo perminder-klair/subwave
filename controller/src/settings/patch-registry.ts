@@ -45,8 +45,10 @@ import {
   fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
+  jinglePlacementSchema,
   jingleRotateSchema,
   likesPatchSchema,
+  lyricsPatchSchema,
   localeSchema,
   loudnessPatchSchema,
   moodScheduleSchema,
@@ -62,6 +64,7 @@ import {
   streamPatchSchema,
   timezoneSchema,
   transitionsPatchSchema,
+  ttsPatchSchema,
   uiPatchSchema,
   weatherMoodsSchema,
   weatherPatchSchema,
@@ -109,6 +112,7 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
   'jingleRotate',
+  'jinglePlacement',
   'crossfadeDuration',
   'ducking',
   'handover',
@@ -161,6 +165,7 @@ export const SETTINGS_PATCH_KEYS = [
   'webhooksPolicy',
   'scrobble',
   'likes',
+  'lyrics',
 ] as const;
 
 export type SettingsPatchKey = (typeof SETTINGS_PATCH_KEYS)[number];
@@ -207,6 +212,7 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
   jingleRotate: jingleRotateSchema,
+  jinglePlacement: jinglePlacementSchema,
   crossfadeDuration: crossfadeDurationSchema,
   ducking: duckingPatchSchema,
   handover: handoverPatchSchema,
@@ -235,6 +241,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   webhooksPolicy: webhooksPolicyPatchSchema,
   scrobble: scrobblePatchSchema,
   likes: likesPatchSchema,
+  lyrics: lyricsPatchSchema,
   moods: moodsSchema,
   moodSchedule: moodScheduleSchema,
   weatherMoods: weatherMoodsSchema,
@@ -242,6 +249,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   timezone: timezoneSchema,
   privacy: privacyPatchSchema,
   requests: requestsPatchSchema,
+  tts: ttsPatchSchema,
   // Both are validated by the SAME schema update() reaches through
   // validatePersonasStrict / validateDjPromptsStrict. Their branches are NOT
   // switched to parseSettingsPatchKey, because both need a server-only step the

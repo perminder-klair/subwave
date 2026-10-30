@@ -5,11 +5,12 @@ import { AnimatePresence, m } from 'motion/react';
 import { ArrowUpRight, Radio } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { NowPlayingTrack, RequestResult, StationContext } from '@/lib/types';
+import { isRefusedOutcome, requestResultLabel } from '@/lib/request-outcome';
 import { REQUEST_NAME_MAX } from '@/lib/schemas.generated';
 
 const SUCCESS_HOLD_MS = 2800;
 const POLL_INTERVAL_MS = 1500;
-const POLL_DEADLINE_MS = 60000;
+const POLL_DEADLINE_MS = 60_000;
 
 // Rules every 30px, as an arbitrary Tailwind `bg-[…]` utility because inline
 // styles are banned project-wide. The textarea's `leading-[30px]` must match
@@ -145,12 +146,13 @@ export default function RequestDrawer({
           ack: data.ack || prev?.ack,
           track: data.track,
           queuePosition: data.queuePosition,
+          outcome: data.outcome,
         }));
         scheduleClose();
         return;
       }
       if (data?.status === 'failed') {
-        setResult({ success: false, message: data.message || 'No match — try different words.' });
+        setResult({ success: false, outcome: data.outcome, message: data.message || 'No match — try different words.' });
         return;
       }
       if (data?.status === 'unknown') { scheduleClose(); return; }
@@ -316,7 +318,8 @@ interface SuccessCardProps {
 }
 
 function SuccessCard({ result }: SuccessCardProps) {
-  const { ack, track, queuePosition, pending, requestText } = result;
+  const { ack, track, queuePosition, pending, requestText, outcome } = result;
+  const refused = isRefusedOutcome(outcome);
   return (
     <div className="py-2">
       <div className="mb-[14px] flex items-center gap-2 text-[9px] tracking-[0.4em] text-vermilion uppercase">
@@ -326,7 +329,7 @@ function SuccessCard({ result }: SuccessCardProps) {
           )}
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-vermilion" />
         </span>
-        {pending ? 'On the wire' : track ? 'Queued' : 'Answered'}
+        {requestResultLabel(result)}
       </div>
 
       {ack && (
@@ -338,7 +341,7 @@ function SuccessCard({ result }: SuccessCardProps) {
       {(pending || track) && (
         <m.div layout className="border-y border-soft-border py-4">
           <div className="mb-1.5 text-[9px] tracking-[0.3em] text-muted uppercase">
-            {pending ? 'The DJ is digging' : 'Now in the booth'}
+            {pending ? 'The DJ is digging' : refused ? 'Your requested track' : 'Now in the booth'}
           </div>
           <AnimatePresence mode="wait" initial={false}>
             <m.div

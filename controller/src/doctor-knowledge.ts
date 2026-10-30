@@ -38,19 +38,21 @@ when a control is hidden.
 - **Recommend OFF for** small/local models, structured track-picks (they don't
   benefit), and anyone watching token cost or wanting snappy transitions. Default OFF.
 
-## Agentic picker (Settings → LLM provider → Next-track picker)
-- **Agentic picker (ON by default):** a small reasoning loop with session memory and
-  tools to search the library itself — choices stay coherent across a run. Wants a
-  ~12B-class model (e.g. Gemma-class 12B) or a good cloud model. It automatically
-  falls back to the candidate pool if it fails or runs slow.
-- **Candidate pool (the fallback / "simpler picker"):** gathers a shortlist (similar
-  songs & artists, mood matches, recently-added & frequent albums), caps it, asks the
-  model to pick one. Cheaper and more forgiving. **Recommend turning the agent OFF**
-  for small models (≤9B) or constrained hardware.
+## Track selection (Settings → Music selection → Track selection)
+- **Agentic Tools (default):** a model-led, multi-step library search. Recommend it
+  for a responsive, tool-capable model and investigate agent deadline findings if its
+  turns do not complete reliably.
+- **Track Shortlist:** the controller produces eligible, varied choices and the model
+  makes one structured selection. Recommend it for modest local hardware, unreliable
+  tool calling, or installations reducing hosted-model token use. It is an alternative
+  workflow, not a lower-quality or lower-variety mode.
+- Request matching and segments/skills have their own direct or agent-assisted runtime
+  choices. Do not imply that selecting Track Shortlist disables agent assistance for
+  requests, or that it can be used by the picker implicitly.
 
 ## Structured output & model class (the silent feature-breaker)
-- Several features ask the model for **strict JSON** (a fixed shape): the request
-  matcher, the candidate-pool picker, the library mood-tagger, and this very health
+- Several features ask the model for **strict JSON** (a fixed shape): direct request
+  matching, Track Shortlist, the library mood-tagger, and this very health
   report. A weak model "responds" but returns the wrong shape, the call fails schema
   validation, and the feature **silently degrades or falls back** — the station still
   plays, but requests mis-match, picks get worse, tagging stalls.
@@ -64,18 +66,18 @@ when a control is hidden.
   stiff intros and routinely fail the JSON shape. Steer the operator to a general
   model even if the code model is "bigger".
 - The report also exposes an **LLM → "model class"** finding when the chosen model
-  looks code-specialised, or is small (≤~9–11B) while the agentic picker is ON. Pair
-  this with the picker-agent and reasoning guidance below.
+  looks code-specialised, or is small (≤~9–11B) while Agentic Tools is selected. Pair
+  this with Track Shortlist and reasoning guidance below.
 - Important: a model broken enough to fail structured output **also breaks this AI
   review** (it's a structured call too). So when these deterministic findings fire,
   trust them over the absence of a review — they're the signal that survives.
 
-## Agent deadline (seconds) (Settings → LLM provider → Next-track picker, default 45s)
-- Wall-clock budget for the agentic picker before it gives up and falls back to the
-  pool. **Reasoning-heavy or cloud models routinely need 20–40s**, so keep the
-  deadline generous (40–60s) for them. **Fast local models** can use a tighter
-  deadline (15–25s) so a stall recovers quickly. If the picker keeps falling back,
-  the deadline is likely too low for the chosen model.
+## Agent deadline (Settings → Music selection → Agent deadline, default 45s)
+- Shared wall-clock budget for Agentic Tools picks, agent-assisted requests, and
+  agentic Segments & Skills before they use their safe fallback. **Reasoning-heavy or
+  cloud models routinely need 20–40s**, so keep the deadline generous (40–60s) for
+  them. **Fast local models** can use a tighter deadline (15–25s) so a stall recovers
+  quickly. If an agent-assisted route keeps falling back, the deadline may be too low.
 
 ## TTS engines — choose by system resources (Settings → TTS voice → Voice engine → Engine)
 - **piper** — CPU, ~30ms/word, always available, the universal fallback. Best default
@@ -105,8 +107,10 @@ aren't matched by feel. If coverage is zero/low, recommend running the tagger.
 Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavily'
 and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
 with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
-a self-hosted instance URL. If a keyed provider is selected without a key, news
-segments can't fetch — tell them to add the key or switch to DuckDuckGo/SearXNG.
+a self-hosted instance URL; 'keenable' is keyless web search, and a Keenable key in
+SEARCH_API_KEY only raises its rate limit. If a keyed provider is selected without a
+key, news segments can't fetch — tell them to add the key or switch to
+DuckDuckGo or Keenable (both keyless), or to a self-hosted SearXNG.
 
 ## Backups
 There is a Backup feature (Admin → Backup) that exports settings, personas, custom
@@ -116,7 +120,7 @@ regular cadence — it's cheap insurance.
 
 ## Daily token budget (Settings → LLM provider → Daily token budget)
 - **Daily token cap** (0 = off) is a per-UTC-day token ceiling. It degrades in two tiers:
-  at **Soft threshold (%)** of the cap ("soft") the DJ forces the cheap pool picker and
+  at **Soft threshold (%)** of the cap ("soft") the DJ reduces optional work and
   mutes optional segments (links, station IDs, hourly, weather/news); at the cap
   ("hard") it makes NO model call and coasts on the LLM-free auto playlist — music
   never stops. Listener requests stay exempt through the hard cap unless
@@ -124,15 +128,16 @@ regular cadence — it's cheap insurance.
 - The report's **Tuning → token budget** finding projects today's burn rate against
   the cap ("on track to hit the cap ~15:00 UTC"). If it will exhaust early, advise:
   raise the cap, turn on **Pause DJ when empty** so idle hours don't spend tokens, or
-  ease off reasoning / the agentic picker (both spend more per pick).
+  ease off reasoning / Agentic Tools (both spend more per pick).
 - A **soft tier of 0 or 100 disables graceful degrade** — the DJ goes from full to
   silent with no warning. Recommend ~80.
 
 ## Context window (num_ctx) (Settings → LLM provider → Provider, Ollama only)
-- The Ollama context size. The **agentic picker** sends a system prompt + tool
-  defs + candidates; too small a window truncates them, the agent can't call its
-  "done" tool, and it falls back to the pool. Keep ≥8192 (16384 default) when the
-  agentic picker is on, or turn the picker off. Not relevant for cloud providers.
+- The Ollama context size. Agentic routes (Agentic Tools picks, agent-assisted
+  requests, agentic Segments & Skills) send tool definitions; a small window can
+  truncate them before the agent completes its turn. Keep ≥8192 (16384 default) when
+  any of those routes are agentic. Track Shortlist avoids the tool loop for picks;
+  direct runtimes do so for requests and segments. Not relevant for cloud providers.
 
 ## Max response size (tokens) (Settings → LLM provider → Reasoning)
 - Per-call OUTPUT cap (distinct from the daily budget). 0 = strategy defaults
@@ -140,13 +145,13 @@ regular cadence — it's cheap insurance.
   forcing a fallback. Leave at 0 unless a small-context local model needs it.
 
 ## Agent deadline vs measured latency
-- Beyond the configured **Agent deadline (seconds)**, the report compares it to the model's
+- Beyond the configured **Agent deadline**, the report compares it to the model's
   **p90 latency** (Tuning → agent deadline vs latency). If p90 crowds or exceeds the
-  deadline, the agentic picker is timing out into the pool on most tracks — the
+  deadline, Agentic Tools is timing out on most tracks — the
   operator is paying for session-aware picks and not getting them. Fix: raise the
   deadline, or run a faster/smaller model (or reasoning OFF).
 
-## Broadcast stream encoders (Settings → Danger zone; Settings → Archives)
+## Broadcast stream encoders (Settings → Broadcast & mixer; Settings → Archives)
 - \`/stream.mp3\` is always on. Opus / FLAC / AAC mounts and the **hourly archive**
   are each a CONTINUOUS extra encoder = real, constant CPU. The hourly archive is
   the single biggest cost. On a small / loaded box, recommend disabling mounts the
@@ -187,12 +192,12 @@ regular cadence — it's cheap insurance.
     whole station with just an analyzer.
   - Or turn the setting off (it's costing nothing but false expectations).
 
-## Resolve described requests via web (Settings → LLM provider → Next-track picker)
+## Resolve described requests via web (Settings → Music selection → Request matching)
 - Lets the request agent resolve *described* tracks ("that song from the advert")
   via web search — so it depends on Settings → Web search being configured. If it's on
   while search isn't ready, the feature is dead; either configure search or turn it off.
 
-## Stem transitions (Settings → Danger zone → Stem transitions)
+## Stem transitions (Settings → Broadcast & mixer → Stem transitions)
 - **Stem cache budget** is the disk budget in GB. If it holds too few tracks,
   raise it to cover more of the library, then run the analysis pass to backfill.
 - **Stem cache** keeps the separated stems on disk. **Stem-blend seams** needs

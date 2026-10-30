@@ -1,64 +1,264 @@
-/* DJ Doc's paint and moves. Colour comes from the theme so the mascot follows
-   every palette; the side and top of the box are the same ink-on-paper shades
-   the isometric kit uses. Reduced motion and lite mode still the lot (the
-   global `.v3-buddy *` rule and the lite kill both reach these). */
+/* DJ Doc's paint and moves. Every colour derives from the theme: the casing is
+   --accent, lit from the top-left (a lighter top, a darker right side), and the
+   screen's lights are --accent-2, so the mascot follows every palette. The
+   screen is always dark and its lights always pale, which reads on light and
+   dark themes alike.
+
+   The resting CSS is the finished still frame. Motion layers on only under
+   prefers-reduced-motion: no-preference, and the global `.v3-buddy *` rule and
+   html.lite still kill it. */
 
 .root {
+  --bb-body: var(--accent);
+  --bb-top: color-mix(in oklab, var(--accent) 58%, white);
+  --bb-side: color-mix(in oklab, var(--accent) 66%, black);
+  --bb-edge: color-mix(in oklab, var(--accent) 34%, black);
+  --bb-screen: color-mix(in oklab, var(--accent) 12%, #0b0a0f);
+  --bb-glow: color-mix(in oklab, var(--accent-2) 38%, white);
+  --bb-spark: var(--accent-2);
+  --bb-cheek: color-mix(in oklab, var(--accent) 70%, white);
+  --bb-metal: color-mix(in oklab, var(--accent) 22%, #2a2730);
+  --bb-metal-dark: color-mix(in oklab, var(--accent) 16%, #141218);
+
   display: inline-block;
   flex: none;
   overflow: visible;
   vertical-align: middle;
-  transform-origin: center bottom;
-  animation: buddy-breathe 2.8s ease-in-out infinite;
 }
 
-.ink { fill: var(--ink); }
-.face { fill: var(--bg); }
-.accent { fill: var(--accent); }
-.top { fill: color-mix(in oklab, var(--ink) 14%, var(--bg)); }
-.side { fill: color-mix(in oklab, var(--ink) 30%, var(--bg)); }
+.body { fill: var(--bb-body); }
+.top { fill: var(--bb-top); }
+.side { fill: var(--bb-side); }
 .edge {
-  stroke: var(--ink);
-  stroke-linejoin: miter;
+  fill: none;
+  stroke: var(--bb-edge);
+  stroke-linejoin: round;
+}
+.crease {
+  fill: none;
+  stroke: var(--bb-edge);
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+.shadow { fill: color-mix(in oklab, var(--ink) 11%, transparent); }
+
+.screen { fill: var(--bb-screen); }
+.gloss { fill: white; opacity: 0.1; }
+.glow { fill: var(--bb-glow); }
+.line {
+  fill: none;
+  stroke: var(--bb-glow);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.cheek { fill: var(--bb-cheek); opacity: 0.85; }
+.meterOn { fill: var(--bb-glow); opacity: 0.9; }
+.meterOff { fill: var(--bb-glow); opacity: 0.22; }
+
+.vinyl { fill: var(--bb-screen); }
+.groove {
+  fill: none;
+  stroke: color-mix(in oklab, var(--bb-glow) 40%, transparent);
+}
+.label { fill: var(--bb-spark); }
+.slot { fill: var(--bb-edge); opacity: 0.6; }
+
+.stalk {
+  fill: none;
+  stroke: var(--bb-metal);
+  stroke-linecap: round;
+}
+.bulb { fill: var(--bb-spark); }
+.alarmBulb { fill: color-mix(in oklab, var(--accent) 80%, white); }
+.dimBulb { fill: color-mix(in oklab, var(--accent-2) 30%, var(--bb-screen)); }
+.shine { fill: white; opacity: 0.55; }
+.metal { fill: var(--bb-metal); }
+.metalDark { fill: var(--bb-metal-dark); }
+.band {
+  fill: none;
+  stroke: var(--bb-metal);
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
+.spark { fill: var(--bb-spark); }
 .zz {
-  fill: var(--ink);
+  fill: var(--bb-spark);
   font-family: var(--mono-font), ui-monospace, monospace;
 }
-
-.blink {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: buddy-blink 4.5s steps(1, end) infinite;
+.drop {
+  fill: color-mix(in oklab, var(--accent-2) 45%, white);
+  stroke: var(--bb-spark);
+}
+.wave {
+  fill: none;
+  stroke: var(--bb-spark);
+  stroke-linecap: round;
+}
+.ring {
+  fill: none;
+  stroke: var(--bb-spark);
+  stroke-dasharray: 2.5 2.5;
+  opacity: 0.6;
 }
 
-.pulse {
+/* Every animated element turns about its own box. */
+.breathe,
+.hop,
+.shake,
+.nod,
+.wobble,
+.doze,
+.blink,
+.scan,
+.talk,
+.spin,
+.halo,
+.bob,
+.orbit,
+.twinkle,
+.twinkle2,
+.drip {
   transform-box: fill-box;
   transform-origin: center;
-  animation: buddy-pulse 1.6s ease-out infinite;
+}
+.breathe,
+.hop,
+.nod,
+.doze { transform-origin: 50% 100%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .breathe { animation: bb-breathe 2.8s ease-in-out infinite; }
+  .doze { animation: bb-breathe 4.6s ease-in-out infinite; }
+  .hop { animation: bb-hop 2.4s cubic-bezier(0.3, 0.7, 0.4, 1) infinite; }
+  .shake { animation: bb-shake 0.42s linear infinite; }
+  .nod { animation: bb-nod 0.9s ease-in-out infinite; }
+  .wobble { animation: bb-wobble 2.6s ease-in-out infinite; }
+
+  .blink { animation: bb-blink 4.5s steps(1, end) infinite; }
+  .scan { animation: bb-scan 1.8s ease-in-out infinite; }
+  .talk { animation: bb-talk 0.3s ease-in-out infinite alternate; }
+  .spin { animation: bb-spin 1.8s linear infinite; }
+
+  .halo { animation: bb-halo 1.6s ease-out infinite; }
+  .flash { animation: bb-flash 1.3s steps(1, end) infinite; }
+  .alarm { animation: bb-flash 0.5s steps(1, end) infinite; }
+
+  .meter3 { animation: bb-meter 0.6s steps(1, end) infinite; }
+  .meter4 { animation: bb-meter 0.6s steps(1, end) 0.3s infinite; }
+
+  .z1 { animation: bb-z 2.4s ease-out infinite; }
+  .z2 { animation: bb-z 2.4s ease-out 1.2s infinite; }
+  .dot1 { animation: bb-dot 1.4s ease-in-out infinite; }
+  .dot2 { animation: bb-dot 1.4s ease-in-out 0.2s infinite; }
+  .dot3 { animation: bb-dot 1.4s ease-in-out 0.4s infinite; }
+  .twinkle { animation: bb-twinkle 1.6s ease-in-out infinite; }
+  .twinkle2 { animation: bb-twinkle 1.6s ease-in-out 0.8s infinite; }
+  .bob { animation: bb-bob 1.8s ease-in-out infinite; }
+  .wave1 { animation: bb-wave 0.9s ease-out infinite; }
+  .wave2 { animation: bb-wave 0.9s ease-out 0.3s infinite; }
+  .drip { animation: bb-drip 2.2s ease-in infinite; }
+  .orbit { animation: bb-orbit 1.6s ease-in-out infinite alternate; }
 }
 
-.z1 { animation: buddy-z 2.4s ease-out infinite; }
-.z2 { animation: buddy-z 2.4s ease-out 1.2s infinite; }
-
-@keyframes buddy-breathe {
+@keyframes bb-breathe {
   0%, 100% { transform: translateY(0); }
   50% { transform: translateY(-2px); }
 }
 
-@keyframes buddy-blink {
+@keyframes bb-hop {
+  0%, 55%, 100% { transform: translateY(0) scale(1, 1); }
+  62% { transform: translateY(0) scale(1.04, 0.95); }
+  74% { transform: translateY(-7px) scale(0.98, 1.03); }
+  86% { transform: translateY(0) scale(1.03, 0.97); }
+}
+
+@keyframes bb-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-1.5px) rotate(-1.5deg); }
+  75% { transform: translateX(1.5px) rotate(1.5deg); }
+}
+
+@keyframes bb-nod {
+  0%, 100% { transform: rotate(0) translateY(0); }
+  50% { transform: rotate(3deg) translateY(1px); }
+}
+
+@keyframes bb-wobble {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-4deg); }
+  75% { transform: rotate(4deg); }
+}
+
+@keyframes bb-blink {
   0%, 92%, 100% { transform: scaleY(1); }
   96% { transform: scaleY(0.12); }
 }
 
-@keyframes buddy-pulse {
-  0% { transform: scale(1); opacity: 0.55; }
-  100% { transform: scale(3.2); opacity: 0; }
+@keyframes bb-scan {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-2.5px); }
+  75% { transform: translateX(2.5px); }
 }
 
-@keyframes buddy-z {
+@keyframes bb-talk {
+  from { transform: scaleY(1); }
+  to { transform: scaleY(0.3); }
+}
+
+@keyframes bb-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bb-halo {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+
+@keyframes bb-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+@keyframes bb-meter {
+  0%, 100% { opacity: 0.22; }
+  50% { opacity: 0.9; }
+}
+
+@keyframes bb-z {
   0% { transform: translate(0, 0); opacity: 0; }
   20% { opacity: 1; }
   100% { transform: translate(5px, -14px); opacity: 0; }
+}
+
+@keyframes bb-dot {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes bb-twinkle {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.45); opacity: 0.4; }
+}
+
+@keyframes bb-bob {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-3px) rotate(8deg); }
+}
+
+@keyframes bb-wave {
+  0% { opacity: 0; transform: translateX(3px); }
+  40% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-3px); }
+}
+
+@keyframes bb-drip {
+  0%, 30% { transform: translateY(0); opacity: 1; }
+  90% { transform: translateY(9px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 0; }
+}
+
+@keyframes bb-orbit {
+  from { transform: translateX(-2px) rotate(-3deg); }
+  to { transform: translateX(2px) rotate(3deg); }
 }

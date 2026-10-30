@@ -479,17 +479,6 @@ export async function settlePassWrites(
   return { bytes, dirs, withinBudget: bytes <= budget };
 }
 
-export async function usageBytes(): Promise<number> {
-  return (await usage()).bytes;
-}
-
-// Hittable stem dirs on disk, the doctor's coverage number. Distinct from
-// library-db's stemsCachedCount(), which counts stems_at ATTEMPT stamps and so
-// overstates once the sweep has evicted or a separation failed.
-export async function cachedTrackCount(): Promise<number> {
-  return (await usage()).dirs;
-}
-
 // Track ids with a stem dir on disk: one readdir, no per-dir walk. The analysis
 // pass snapshots this to tell a rewrite from net-new growth (stemWriteDecision).
 export async function cachedTrackIdSet(): Promise<Set<string>> {

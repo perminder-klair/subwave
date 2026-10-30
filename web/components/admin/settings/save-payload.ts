@@ -49,6 +49,7 @@ export function dangerSavePayload(form: FormState) {
     transitions: {
       pairDrain: form.transitions.pairDrain,
       stemBlends: form.transitions.stemBlends,
+      equalPowerCrossfade: form.transitions.equalPowerCrossfade,
       effects: form.transitions.effects,
     },
     audio: {

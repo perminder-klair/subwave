@@ -7,8 +7,8 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
 import { ErrorState } from '@/components/ui/error-state';
-import BoothBuddy, { type BuddyMood } from '../BoothBuddy';
-import { ChevronDownIcon } from 'lucide-react';
+import BoothBuddy from '../BoothBuddy';
+import { ChevronDownIcon, Copy, RefreshCw, Send } from 'lucide-react';
 import { Task, TaskContent, TaskItem, TaskTrigger } from '../ai-elements/task';
 import { Shimmer } from '../ai-elements/shimmer';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
@@ -16,6 +16,7 @@ import { MessageResponse } from '../ai-elements/message';
 import { adminResponse } from '../../lib/admin-query';
 import DoctorRig from './DoctorRig';
 import { EXPECTED_SECTIONS, sectionAnchor } from './doctor-rig';
+import { doctorPageMood } from './doctor-mood';
 import {
   doctorKeys,
   finishReport,
@@ -40,12 +41,6 @@ const FIX_ENDPOINTS: Record<DoctorFixId, string> = {
   'generate-jingles': '/onboarding/generate-jingles',
   'tag-library': '/tag-library',
   'subsonic-reset': '/debug/subsonic/reset',
-};
-
-const MOOD_BY_OVERALL: Record<NonNullable<DoctorReview['overall']>, BuddyMood> = {
-  healthy: 'content',
-  attention: 'curious',
-  critical: 'spooked',
 };
 
 // Deliberately the upstream project repo, not a per-station setting: bug
@@ -267,19 +262,16 @@ export default function DoctorPanel() {
     window.open(full, '_blank', 'noopener,noreferrer');
   };
 
-  const buddyMood: BuddyMood = review?.available && review.overall ? MOOD_BY_OVERALL[review.overall] : 'content';
-  // The health card's DJ Doc: listening while the levels run or the review is
-  // written, then the review's verdict, or the report's own worst finding.
-  const healthMood: BuddyMood =
-    running || reviewing
-      ? 'onair'
-      : review?.available && review.overall
-        ? MOOD_BY_OVERALL[review.overall]
-        : report?.counts.fail
-          ? 'spooked'
-          : report?.counts.warn
-            ? 'curious'
-            : 'content';
+  // The page's one DJ Doc. The intro and the health card never render together,
+  // so whichever is up carries it through the run, the review and the verdict.
+  const mood = doctorPageMood({
+    running,
+    reviewing,
+    fixing: busyFix !== null,
+    failed: err !== null,
+    report,
+    review,
+  });
 
   return (
     <div className="mx-auto max-w-[1100px] px-0 py-8 sm:px-7">
@@ -287,7 +279,7 @@ export default function DoctorPanel() {
         <Card title="DJ Doc" sub="booth's open">
           <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
             <div className="flex items-start gap-4">
-              <BoothBuddy mood="curious" size={52} />
+              <BoothBuddy mood={mood} size={64} />
               <div className="min-w-0 flex-1">
                 <p className="text-[15px] leading-[1.65]">
                   Yo — DJ Doc here, resident engineer for this station. I sit in the booth and listen to
@@ -361,31 +353,35 @@ export default function DoctorPanel() {
           }
         >
           <div className="grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,28rem)]">
-            <div className="flex min-w-0 items-start gap-4">
-              <BoothBuddy mood={healthMood} size={52} />
-              <div className="min-w-0 flex-1">
-                <p className="text-[14px] leading-[1.6] text-muted">
-                  Full assessment of the station — the LLM, Navidrome &amp; library, the broadcast chain,
-                  voices, capabilities, content, resources and storage. Where a safe fix exists you can
-                  apply it in one click.
-                </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
-                    {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
-                  </Btn>
-                  <Btn onClick={copyMarkdown}>Copy report as Markdown</Btn>
-                  <Btn
-                    onClick={sendToHQ}
-                    title="Open a prefilled GitHub issue with this report (you submit it)"
-                  >
-                    Send report to Headquarters
-                  </Btn>
-                  <span className="font-mono text-[11px] text-muted">
-                    last run {new Date(report.t).toLocaleTimeString()}
-                  </span>
-                </div>
-                {err && <ErrorState error={err} onRetry={run} />}
+            <div className="min-w-0">
+              <BoothBuddy mood={mood} size={64} />
+              <p className="mt-3 text-[14px] leading-[1.6] text-muted">
+                DJ Doc checks the LLM, Navidrome and your library, the broadcast chain, the voices,
+                web search, CPU, memory and storage. Anything with a safe fix gets a one-click button.
+              </p>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Btn tone="accent" onClick={letsGo} disabled={running || reviewing}>
+                  <RefreshCw
+                    size={13}
+                    aria-hidden="true"
+                    className={running || reviewing ? 'motion-safe:animate-spin' : undefined}
+                  />
+                  {running ? 'Running…' : reviewing ? 'DJ Doc is listening…' : 'Re-run Doctor'}
+                </Btn>
+                <Btn onClick={copyMarkdown}>
+                  <Copy size={13} aria-hidden="true" /> Copy report as Markdown
+                </Btn>
+                <Btn
+                  onClick={sendToHQ}
+                  title="Open a prefilled GitHub issue with this report (you submit it)"
+                >
+                  <Send size={13} aria-hidden="true" /> Send report to Headquarters
+                </Btn>
+                <span className="font-mono text-[11px] text-muted">
+                  last run {new Date(report.t).toLocaleTimeString()}
+                </span>
               </div>
+              {err && <ErrorState error={err} onRetry={run} />}
             </div>
             <DoctorRig report={report} review={review} running={running} className="mx-auto w-full max-w-[28rem]" />
           </div>
@@ -395,27 +391,22 @@ export default function DoctorPanel() {
       {reviewing ? (
         <div role="status" aria-live="polite">
           <Card className="is-spotlight mt-6" title="DJ Doc says" sub="running the levels…">
-            <div className="flex items-start gap-4">
-              <BoothBuddy mood="onair" size={40} />
-              <div className="min-w-0 flex-1">
-                <p className="text-[15px] leading-[1.65] font-bold">DJ Doc is listening…</p>
-                <p className="mt-1 text-[13px] leading-[1.55] text-muted">
-                  Playing your whole health report past the LLM and writing up what&apos;s clean,
-                  what&apos;s muddy, and the one thing to fix first. On a local model this can take
-                  20–60s — hang tight.
-                </p>
-                <div className="mt-4 flex flex-col gap-1.5" aria-hidden="true">
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2}>
-                    Spinning the report back like a rough mix…
-                  </Shimmer>
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.4}>
-                    Listening for mud in the low end…
-                  </Shimmer>
-                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.8}>
-                    Writing the verdict up straight. No fluff.
-                  </Shimmer>
-                </div>
-              </div>
+            <p className="text-[15px] leading-[1.65] font-bold">DJ Doc is listening…</p>
+            <p className="mt-1 text-[13px] leading-[1.55] text-muted">
+              Playing your whole health report past the LLM and writing up what&apos;s clean,
+              what&apos;s muddy, and the one thing to fix first. On a local model this can take
+              20–60s — hang tight.
+            </p>
+            <div className="mt-4 flex flex-col gap-1.5" aria-hidden="true">
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2}>
+                Spinning the report back like a rough mix…
+              </Shimmer>
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2.4}>
+                Listening for mud in the low end…
+              </Shimmer>
+              <Shimmer className="text-[13px] leading-[1.55]" duration={2.8}>
+                Writing the verdict up straight. No fluff.
+              </Shimmer>
             </div>
           </Card>
         </div>
@@ -435,57 +426,54 @@ export default function DoctorPanel() {
           }
         >
           {review.available ? (
-            <div className="flex items-start gap-4">
-              <BoothBuddy mood={buddyMood} size={40} />
-              <div className="min-w-0 flex-1">
-                {review.summary && (
-                  <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
-                )}
-                {review.priorities && review.priorities.length > 0 && (
-                  <ul className="mt-4 flex flex-col gap-3">
-                    {review.priorities.map((p, i) => {
-                      // Only offer the button when the tagged fix exists here.
-                      const fix = p.fixId ? fixById.get(p.fixId) : undefined;
-                      return (
-                        <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Pill
-                              tone={p.severity === 'low' ? 'ink' : 'accent'}
-                              className={
-                                p.severity === 'high'
-                                  ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
-                                  : undefined
-                              }
-                            >
-                              {p.severity}
-                            </Pill>
-                            <span className="text-[14px] font-bold">{p.title}</span>
-                            {fix && (
-                              <span className="ml-auto">
-                                <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
-                                  {busyFix === fix.id ? '…' : fix.label}
-                                </Btn>
-                              </span>
-                            )}
-                          </div>
-                          <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
-                            <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
-                              <span>The why &amp; the fix</span>
-                              <ChevronDownIcon
-                                className="size-3.5 transition-transform group-data-[state=open]:rotate-180"
-                                aria-hidden="true"
-                              />
-                            </ReasoningTrigger>
-                            <ReasoningContent className="mt-2 text-[13px] leading-[1.55]">
-                              {`${p.why}\n\n**Fix:** ${p.suggestedFix}`}
-                            </ReasoningContent>
-                          </Reasoning>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
+            <div>
+              {review.summary && (
+                <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
+              )}
+              {review.priorities && review.priorities.length > 0 && (
+                <ul className="mt-4 flex flex-col gap-3">
+                  {review.priorities.map((p, i) => {
+                    // Only offer the button when the tagged fix exists here.
+                    const fix = p.fixId ? fixById.get(p.fixId) : undefined;
+                    return (
+                      <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Pill
+                            tone={p.severity === 'low' ? 'ink' : 'accent'}
+                            className={
+                              p.severity === 'high'
+                                ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+                                : undefined
+                            }
+                          >
+                            {p.severity}
+                          </Pill>
+                          <span className="text-[14px] font-bold">{p.title}</span>
+                          {fix && (
+                            <span className="ml-auto">
+                              <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
+                                {busyFix === fix.id ? '…' : fix.label}
+                              </Btn>
+                            </span>
+                          )}
+                        </div>
+                        <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
+                          <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
+                            <span>The why &amp; the fix</span>
+                            <ChevronDownIcon
+                              className="size-3.5 transition-transform group-data-[state=open]:rotate-180"
+                              aria-hidden="true"
+                            />
+                          </ReasoningTrigger>
+                          <ReasoningContent className="mt-2 text-[13px] leading-[1.55]">
+                            {`${p.why}\n\n**Fix:** ${p.suggestedFix}`}
+                          </ReasoningContent>
+                        </Reasoning>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           ) : (
             <p className="text-[13px] text-muted">

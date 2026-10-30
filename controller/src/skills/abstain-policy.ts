@@ -80,3 +80,44 @@ export function standDownReason(cap: GroundedCap | null | undefined, data: Skill
   if (!requiresGrounding(cap)) return null;
   return unusableDataReason(data);
 }
+
+// Whole-word, case-insensitive: a substring test lets an artist called "Low"
+// match "below". Twin of mentionsArtist in skills/builtins/now-playing-dig/
+// tool.mjs, which must stay self-contained because it is copied into
+// state/skills; the two must keep the same semantics.
+export function mentionsArtist(text: string, artist: string): boolean {
+  const escaped = artist.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try {
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}([^\\p{L}\\p{N}]|$)`, 'iu').test(text);
+  } catch {
+    return text.toLowerCase().includes(artist.toLowerCase());
+  }
+}
+
+// Legacy result repair (#1687). state/skills is seeded once, so a station keeps
+// the tool.mjs it first booted with, and two shipped tools used to report
+// "nothing usable" in shapes the checks above cannot read as unavailable: news
+// returned an empty `headlines` array, and now-playing-dig / web-search
+// returned snippets that never named the current artist (live: an empty answer
+// plus unrelated pages for "Missed the Boat", which the Direct runtime then
+// aired as "I'm not aware of any facts"). Repairing them HERE, keyed by kind
+// like the rest of this policy, means an upgrade never has to replace an
+// operator-owned file to get the stand-down. Only a result with no
+// `available` verdict of its own is touched, and a custom web-search query is
+// left alone because it is not about the artist at all.
+export function repairLegacySkillData(cap: { kind?: unknown } | null | undefined, data: any, input: { query?: unknown } = {}): any {
+  const kind = String(cap?.kind || '');
+  if (!data || typeof data !== 'object' || data.available !== undefined) return data;
+  if (kind === 'web-search' && typeof input.query === 'string' && input.query.trim()) return data;
+  if (kind === 'news' && Array.isArray(data.headlines) && data.headlines.length === 0) {
+    return { ...data, available: false };
+  }
+  if ((kind === 'now-playing-dig' || kind === 'web-search')
+      && !String(data.answer || '').trim()
+      && typeof data.artist === 'string'
+      && Array.isArray(data.sources)
+      && !data.sources.some((source: unknown) => mentionsArtist(String(source), data.artist))) {
+    return { ...data, available: false };
+  }
+  return data;
+}

@@ -15,7 +15,7 @@
 // forever would mean a controller that probed during its own boot never sees
 // the analyzer container come up behind it.
 //
-// Run: `tsx scripts/analyzer-backend-cache.test.ts` (folded into `npm test`).
+// Run: `npm test -- analyzer-backend-cache`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
