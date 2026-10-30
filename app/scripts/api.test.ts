@@ -5,6 +5,7 @@
 // RNTP's iOS lock-screen artwork, which takes no headers.
 
 import assert from 'node:assert/strict';
+import { getEventListeners } from 'node:events';
 import test, { type TestContext } from 'node:test';
 import { createApi, FETCH_TIMEOUT_MS, loginHeaders, type StationApi } from '../src/lib/api.ts';
 import { authorizationFor, type StationCredentials } from '../src/lib/station-credentials.ts';
@@ -18,15 +19,20 @@ interface Sent {
   url: string;
   method: string;
   headers: Headers;
+  signal: AbortSignal;
 }
 
 /** Stub the global fetch for one test: record each request, answer `reply`. */
-function stubFetch(t: TestContext, reply: () => Response = () => Response.json({})): Sent[] {
+function stubFetch(
+  t: TestContext,
+  reply: (signal: AbortSignal) => Response | Promise<Response> = () => Response.json({}),
+): Sent[] {
   const sent: Sent[] = [];
   const real = globalThis.fetch;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    sent.push({ url: String(input), method: init?.method ?? 'GET', headers: new Headers(init?.headers) });
-    return reply();
+    const signal = init!.signal!;
+    sent.push({ url: String(input), method: init?.method ?? 'GET', headers: new Headers(init?.headers), signal });
+    return reply(signal);
   }) as typeof fetch;
   t.after(() => {
     globalThis.fetch = real;
@@ -52,6 +58,91 @@ const CALLS: [string, (api: StationApi) => Promise<unknown>][] = [
   ['/api/lyrics/current?songId=song-1', (a) => a.currentLyrics('song-1')],
   ['/api/station-auth', (a) => a.checkStationAuth('station-pw')],
 ];
+
+/** The calls that hand their caller's signal to the request. */
+const SIGNALLED: [string, (api: StationApi, signal: AbortSignal) => Promise<unknown>][] = [
+  ['nowPlaying', (a, s) => a.nowPlaying(s)],
+  ['state', (a, s) => a.state(s)],
+  ['session', (a, s) => a.session(s)],
+  ['schedule', (a, s) => a.schedule(s)],
+  ['dj', (a, s) => a.dj(s)],
+  ['themes', (a, s) => a.themes(s)],
+];
+
+/** The two reads that bound a body, what each makes of `{"ok":false}`, and how
+ *  each ends when it gives up: getJson rejects, /station-auth stays unverified. */
+const BODY_READS: [
+  name: string,
+  status: number,
+  read: (api: StationApi) => Promise<unknown>,
+  arrived: unknown,
+  gaveUp: Outcome,
+][] = [
+  ['getJson', 200, (a) => a.state(), { ok: false }, { failed: true }],
+  ['/station-auth', 401, (a) => a.checkStationAuth('station-pw'), 'denied', { value: 'unavailable' }],
+];
+
+/** What a read of a stalled body does once its request is aborted. expo/fetch's
+ *  native text() waits for a complete body: after a cancel iOS never gets one
+ *  (NativeResponse.swift ends in errorReceived), and Android calls what it has
+ *  complete (NativeResponse.kt), so the read resolves with the bytes so far. */
+const ABORTED_READS = ['never settles', 'truncates', 'rejects'] as const;
+type AbortedRead = (typeof ABORTED_READS)[number];
+
+function stalledBody(signal: AbortSignal, aborted: AbortedRead, sentSoFar = ''): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (sentSoFar) controller.enqueue(new TextEncoder().encode(sentSoFar));
+      signal.addEventListener('abort', () => {
+        if (aborted === 'truncates') controller.close();
+        if (aborted === 'rejects') controller.error(new Error('aborted'));
+      });
+    },
+  });
+}
+
+interface Outcome {
+  value?: unknown;
+  failed?: boolean;
+}
+
+/** A read's outcome as it lands, undefined until then. A test here never awaits
+ *  a read that can stall: in the test runner's per-file process, a promise that
+ *  never settles hangs the run instead of failing it, and `npm test` with it. */
+function watch(read: Promise<unknown>): { outcome?: Outcome } {
+  const watched: { outcome?: Outcome } = {};
+  read.then(
+    (value) => {
+      watched.outcome = { value };
+    },
+    () => {
+      watched.outcome = { failed: true };
+    },
+  );
+  return watched;
+}
+
+/** Let promises and stream reads run. Mock timers leave setImmediate alone. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+/** The timers armed and neither fired nor cleared. Enable mock timers first. */
+function liveTimers(t: TestContext): Set<unknown> {
+  const live = new Set<unknown>();
+  const { setTimeout: arm, clearTimeout: clear } = globalThis;
+  t.mock.method(globalThis, 'setTimeout', (fn: () => void, ms: number) => {
+    const id = arm(() => {
+      live.delete(id);
+      fn();
+    }, ms);
+    live.add(id);
+    return id;
+  });
+  t.mock.method(globalThis, 'clearTimeout', (id: ReturnType<typeof setTimeout>) => {
+    live.delete(id);
+    clear(id);
+  });
+  return live;
+}
 
 test('loginHeaders adds the login to the headers it is given, and nothing without one', () => {
   assert.deepEqual(loginHeaders(BASIC), { Authorization: BASIC });
@@ -243,6 +334,212 @@ test('/station-auth leaves no timer running once a 401 is read', async (t) => {
   stubFetch(t, () => Response.json({ ok: false }, { status: 401 }));
   assert.equal(await createApi('https://radio.example', LOGIN).checkStationAuth('station-pw'), 'denied');
   assert.equal(cleared.mock.callCount(), armed.mock.callCount());
+});
+
+for (const [name, status, read, , gaveUp] of BODY_READS) {
+  for (const aborted of ABORTED_READS) {
+    test(`${name} aborts a stalled body's request at the deadline, not before (a read that ${aborted})`, async (t) => {
+      // Every byte of the answer has come but the body never ends, so a read
+      // that stops at the abort must not hand that answer on as the real one.
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, aborted, '{"ok":false}'), { status }));
+      const watched = watch(read(createApi('https://radio.example', LOGIN)));
+      await settle();
+      t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+      await settle();
+      assert.equal(sent[0].signal.aborted, false, 'still inside the deadline');
+      assert.equal(watched.outcome, undefined);
+      t.mock.timers.tick(1);
+      assert.equal(sent[0].signal.aborted, true);
+      await settle();
+      assert.deepEqual(watched.outcome, gaveUp);
+    });
+  }
+}
+
+for (const [name, status, read, arrived] of BODY_READS) {
+  test(`${name} never aborts a body that lands inside the deadline`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        body = controller;
+      },
+    });
+    const sent = stubFetch(t, () => new Response(stream, { status }));
+    const reading = read(createApi('https://radio.example', LOGIN));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+    body.enqueue(new TextEncoder().encode('{"ok":false}'));
+    body.close();
+    assert.deepEqual(await reading, arrived);
+    t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
+    assert.equal(sent[0].signal.aborted, false);
+  });
+
+  test(`${name} gets the whole timeout for its headers, then again for its body`, async (t) => {
+    // The bound on a call is twice the timeout: a healthy but slow station's
+    // body is not charged for the time its headers took.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let headers!: (res: Response) => void;
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        body = controller;
+      },
+    });
+    const sent = stubFetch(t, () => new Promise<Response>((resolve) => (headers = resolve)));
+    const reading = read(createApi('https://radio.example', LOGIN));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+    headers(new Response(stream, { status }));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+    assert.equal(sent[0].signal.aborted, false);
+    body.enqueue(new TextEncoder().encode('{"ok":false}'));
+    body.close();
+    assert.deepEqual(await reading, arrived);
+  });
+
+  test(`${name} ends at twice the timeout when slow headers meet a stalled body`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    let headers!: (res: Response) => void;
+    const sent = stubFetch(t, () => new Promise<Response>((resolve) => (headers = resolve)));
+    const reading = watch(read(createApi('https://radio.example', LOGIN)));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+    headers(new Response(new ReadableStream(), { status }));
+    await settle();
+    t.mock.timers.tick(FETCH_TIMEOUT_MS - 1);
+    await settle();
+    assert.equal(reading.outcome, undefined);
+    t.mock.timers.tick(1);
+    assert.equal(sent[0].signal.aborted, true);
+  });
+}
+
+for (const [name, call] of SIGNALLED) {
+  for (const aborted of ABORTED_READS) {
+    test(`a caller's abort mid-body rejects ${name} and reaches the request (a read that ${aborted})`, async (t) => {
+      // The feed's teardown and the onboarding probe's own timeout both land
+      // here. Neither may wait for the body, nor for the deadline.
+      t.mock.timers.enable({ apis: ['setTimeout'] });
+      const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, aborted, '{"ok":false}')));
+      const caller = new AbortController();
+      const reading = watch(call(createApi('https://radio.example', LOGIN), caller.signal));
+      await settle();
+      assert.equal(sent[0].signal.aborted, false);
+      caller.abort();
+      assert.equal(sent[0].signal.aborted, true);
+      await settle();
+      assert.deepEqual(reading.outcome, { failed: true });
+    });
+  }
+}
+
+test("a caller's abort that lands with the headers still ends the read", async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const caller = new AbortController();
+  stubFetch(t, (signal) => {
+    caller.abort();
+    return new Response(stalledBody(signal, 'never settles'));
+  });
+  const reading = watch(createApi('https://radio.example', LOGIN).state(caller.signal));
+  await settle();
+  assert.deepEqual(reading.outcome, { failed: true });
+});
+
+test("a caller's abort still ends a request waiting on its headers", async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const rejectOnAbort = (signal: AbortSignal) =>
+    new Promise<Response>((_, reject) => {
+      if (signal.aborted) reject(new Error('aborted'));
+      signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  const sent = stubFetch(t, rejectOnAbort);
+  const api = createApi('https://radio.example', LOGIN);
+  const caller = new AbortController();
+  const reading = watch(api.state(caller.signal));
+  await settle();
+  caller.abort();
+  await settle();
+  assert.deepEqual(reading.outcome, { failed: true });
+  assert.equal(sent[0].signal.aborted, true);
+  const late = watch(api.state(caller.signal));
+  await settle();
+  assert.deepEqual(late.outcome, { failed: true });
+  assert.equal(sent[1].signal.aborted, true, 'already aborted when it was asked');
+});
+
+test('no timer or listener outlives a request, however it ends', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timers = liveTimers(t);
+  let reply: (signal: AbortSignal) => Response | Promise<Response> = () => Response.json({});
+  stubFetch(t, (signal) => reply(signal));
+  const api = createApi('https://radio.example', LOGIN);
+  // One signal across every call, as StationLiveStatus's 30 s probe has it.
+  const caller = new AbortController();
+  const listeners = () => getEventListeners(caller.signal, 'abort').length;
+  const nothingLeft = (ending: string) => {
+    assert.equal(timers.size, 0, `timers after ${ending}`);
+    assert.equal(listeners(), 0, `listeners after ${ending}`);
+  };
+
+  await api.state(caller.signal);
+  nothingLeft('a healthy body');
+
+  reply = () => new Response('nope', { status: 500 });
+  await assert.rejects(api.state(caller.signal));
+  nothingLeft('a failure whose body is never read');
+
+  reply = () => new Response('<html>');
+  await assert.rejects(api.state(caller.signal));
+  nothingLeft('a body that is not JSON');
+
+  reply = (signal) => new Response(stalledBody(signal, 'never settles'));
+  const stalled = watch(api.state(caller.signal));
+  await settle();
+  assert.equal(timers.size, 1, 'the body deadline');
+  assert.equal(listeners(), 1, "the caller's abort");
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.deepEqual(stalled.outcome, { failed: true });
+  nothingLeft('a stalled body');
+
+  reply = (signal) =>
+    new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+  const noHeaders = watch(api.state(caller.signal));
+  await settle();
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.deepEqual(noHeaders.outcome, { failed: true });
+  nothingLeft('headers that never came');
+
+  reply = (signal) => new Response(stalledBody(signal, 'never settles'), { status: 401 });
+  const refusal = watch(api.checkStationAuth('station-pw'));
+  await settle();
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.deepEqual(refusal.outcome, { value: 'unavailable' });
+  assert.equal(timers.size, 0, 'timers after a stalled refusal');
+
+  reply = (signal) => new Response(stalledBody(signal, 'never settles'));
+  const abandoned = watch(api.state(caller.signal));
+  await settle();
+  caller.abort();
+  await settle();
+  assert.deepEqual(abandoned.outcome, { failed: true });
+  nothingLeft("a caller's abort");
+});
+
+test('only a body that is read has a deadline: one nobody reads keeps its request', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timers = liveTimers(t);
+  const sent = stubFetch(t, (signal) => new Response(stalledBody(signal, 'never settles')));
+  assert.deepEqual(await createApi('https://radio.example', LOGIN).probeHealth(), { ok: true });
+  assert.equal(timers.size, 0);
+  t.mock.timers.tick(FETCH_TIMEOUT_MS * 2);
+  assert.equal(sent[0].signal.aborted, false);
 });
 
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {
