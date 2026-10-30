@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.getsubwave'
+version = '1.0.0'
+
+android {
+  namespace "com.getsubwave.androidauto"
+  defaultConfig {
+    versionCode 1
+    versionName "1.0.0"
+  }
+}
+
+dependencies {
+  // The player's session and its play-from-id events: the RNTP patch's MediaBrowserBridge.
+  implementation project(':react-native-track-player')
+  implementation 'com.facebook.react:react-android'
+  implementation 'androidx.media:media:1.7.0'
+}

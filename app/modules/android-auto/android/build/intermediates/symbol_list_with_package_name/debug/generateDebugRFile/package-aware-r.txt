@@ -1,0 +1,2 @@
+com.getsubwave.androidauto
+xml subwave_automotive_app_desc

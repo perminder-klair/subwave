@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { setStations as setCarStations } from '../../modules/android-auto';
 import { setStations } from '../../modules/app-intents';
 import { teardown } from '@/audio/player';
 import { createApi, type StationApi } from '@/lib/api';
@@ -199,10 +200,13 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
     return store.recents.find((r) => r.url === base)?.name ?? null;
   }, [base, store.recents]);
 
-  // Siri, Shortcuts and Spotlight know the saved stations by name, and cannot
-  // read this store.
+  // Siri, Shortcuts, Spotlight and Android Auto know the saved stations by
+  // name, and cannot read this store.
   useEffect(() => {
-    if (ready) setStations(base, stationsForSiri(store.recents));
+    if (!ready) return;
+    const stations = stationsForSiri(store.recents);
+    setStations(base, stations);
+    setCarStations(base, stations);
   }, [ready, base, store.recents]);
 
   const value = useMemo<StationContextValue>(

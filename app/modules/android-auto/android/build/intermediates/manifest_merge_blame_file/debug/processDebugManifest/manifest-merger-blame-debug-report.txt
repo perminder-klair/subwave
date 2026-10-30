@@ -1,0 +1,33 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.getsubwave.androidauto" >
+4
+5    <uses-sdk android:minSdkVersion="24" />
+6
+7    <application>
+7-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:2:3-15:17
+8
+9        <!-- Lists SUB/WAVE in Android Auto as a media app. -->
+10        <meta-data
+10-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:4:5-6:61
+11            android:name="com.google.android.gms.car.application"
+11-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:5:7-60
+12            android:resource="@xml/subwave_automotive_app_desc" />
+12-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:6:7-58
+13
+14        <service
+14-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:8:5-14:15
+15            android:name="com.getsubwave.androidauto.SubwaveBrowseService"
+15-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:9:7-69
+16            android:exported="true" >
+16-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:10:7-30
+17            <intent-filter>
+17-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:11:7-13:23
+18                <action android:name="android.media.browse.MediaBrowserService" />
+18-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:12:9-75
+18-->/Users/klair/Projects/subwave/main/app/modules/android-auto/android/src/main/AndroidManifest.xml:12:17-72
+19            </intent-filter>
+20        </service>
+21    </application>
+22
+23</manifest>

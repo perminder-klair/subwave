@@ -243,14 +243,51 @@ stream in the phone app first, then connect the car. RNTP feeds the iOS surface
   Play/Pause work; no scrubber (the `isLiveStream` track hides it). On iOS 26+
   the Live Activity's `.small` card also appears on the CarPlay Dashboard.
 
-> **Android Auto is intentionally not declared.** The earlier
-> `plugins/withAndroidAuto.js` declaration (#444) was **rejected by Google Play**
-> (20 Jun 2026) under the Auto App Quality Guidelines: media apps that use a TTS
-> engine to read out content aren't permitted on Android Auto, which is exactly
-> what SUB/WAVE's AI DJ does. The declaration was removed so the Android build
-> stays Play-compliant. iOS CarPlay is unaffected (separate `MPNowPlayingInfoCenter`
-> path, no manifest declaration). Revisit only if Google's policy changes **and**
-> a compliant `MediaBrowserService` browse tree is added.
+### Android Auto — the station list in the car (Android only)
+
+SUB/WAVE lists in Android Auto as a media app: the saved stations, tap one to tune
+in, then Auto's own Now Playing screen with play and pause. "Hey Google, play
+Night Shift on SUB/WAVE" tunes in by name.
+
+> **Play history.** A manifest-only declaration (#444) was **enforced against by
+> Google Play** (20 Jun 2026): *media apps that use a TTS engine to read out
+> content aren't permitted*, which is what the AI DJ does, and #477 removed it.
+> This is a second attempt, now with a real browse tree. If Play enforces again,
+> remove `modules/android-auto` from the build rather than shipping around it.
+
+The pieces, all in a new binary (none of it reaches a phone over the air):
+
+- **`modules/android-auto`** declares the car app (`subwave_automotive_app_desc.xml`
+  and the `com.google.android.gms.car.application` meta-data, merged from the
+  module's manifest) and `SubwaveBrowseService`, a `MediaBrowserServiceCompat`.
+  It lists the stations JS mirrors into SharedPreferences (`setStations`, from
+  StationContext beside the Siri mirror), names and bases only.
+- **The browse session is the player's own.** The RNTP patch's
+  `MediaBrowserBridge` hands the service KotlinAudio's session token, and gives
+  the session a `PlaybackPreparer`: Auto's play-from-id and voice search become
+  RNTP's `remote-play-id` and `remote-play-search` events, which 4.1.2 declares
+  but never fires. `service.ts` answers them with `tuneIn` / `tuneInByName`
+  (`src/intents/tune.ts`), the tune-in Siri uses. Play on an idle player still
+  takes the connector's own path (`onPrepare` just prepares).
+- **The car can launch the app with no screen.** The session exists only once JS
+  has set the player up, so the first connection starts React Native and runs the
+  `SubwaveCarConnect` headless task (`src/intents/car.ts`), which calls
+  `setupPlayer()` and nothing else: Auto forbids autoplay on launch. RNTP refuses
+  `setupPlayer` with no activity in front; the patch lets it through while a
+  media browser is bound (Android allows the foreground service then), and turns
+  a refused start into a rejection instead of a crash.
+- **System UI's resumption query is refused** (`EXTRA_RECENT` → no root): it
+  would otherwise start the app in the background on every boot.
+
+Testing needs the Android Auto app on a phone and Google's **Desktop Head Unit**
+(SDK Manager → SDK Tools → Android Auto Desktop Head Unit Emulator). In Android
+Auto's settings tap the version 10 times for developer mode, then ⋮ → **Start head
+unit server**; `adb forward tcp:5277 tcp:5277` and run `desktop-head-unit`. Check:
+the list shows each saved station with its host; a tap plays and opens Now
+Playing, with the DJ's title and artwork; play and pause work; adding a station on
+the phone updates the list; "play <station name>" by voice switches station. Then
+cold: force-stop the app, connect, pick a station (it must play), then open the
+phone app (it must show the same playback).
 
 ### Live Activity — Lock Screen, Dynamic Island, Apple Watch (iOS only)
 

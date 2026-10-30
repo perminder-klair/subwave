@@ -1,0 +1,1 @@
+int xml subwave_automotive_app_desc 0x0

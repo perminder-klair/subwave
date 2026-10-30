@@ -67,3 +67,40 @@ export function stationsForSiri(recents: StoredStationRef[]): MirroredStation[] 
   }
   return out;
 }
+
+/** Stations a spoken term names ("Hey Google, play Night Shift on SUB/WAVE"),
+ *  compared folded because speech arrives as "chill wave radio": an exact name
+ *  first, else a name containing the term or contained in it. A generic word
+ *  names no station, so "play radio" stays on the one listened to last.
+ *  The same rule as Siri's, SavedStations.matching in
+ *  targets/live-activity/_shared/StationEntities.swift: change both. */
+export function matchStations(stations: MirroredStation[], term: string): MirroredStation[] {
+  const wanted = foldName(term);
+  if (wanted.length < 3 || GENERIC_TERMS.has(wanted)) return [];
+  const exact = stations.filter((s) => foldName(s.name) === wanted);
+  if (exact.length) return exact;
+  return stations.filter((s) => {
+    const name = foldName(s.name);
+    return !!name && (name.includes(wanted) || wanted.includes(name));
+  });
+}
+
+const GENERIC_TERMS = new Set([
+  'radio',
+  'theradio',
+  'station',
+  'mystation',
+  'music',
+  'somemusic',
+  'live',
+  'subwave',
+]);
+
+/** Lowercased, accents dropped, letters and digits only. */
+function foldName(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, '');
+}
