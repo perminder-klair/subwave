@@ -6,7 +6,7 @@
 
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
-import { createApi, loginHeaders, type StationApi } from '../src/lib/api.ts';
+import { createApi, FETCH_TIMEOUT_MS, loginHeaders, type StationApi } from '../src/lib/api.ts';
 import { authorizationFor, type StationCredentials } from '../src/lib/station-credentials.ts';
 import { loginRefused } from '../src/lib/station-login.ts';
 import type { StationAuthResult } from '../src/lib/station-password.ts';
@@ -196,6 +196,28 @@ test("/station-auth reads only the controller's own 401 as a wrong password (#21
     reply = r;
     assert.equal(await api.checkStationAuth('station-pw'), result, (await r().text()) || '(empty)');
   }
+});
+
+test('/station-auth gives up on a 401 whose body never arrives, and keeps the password', async (t) => {
+  // On a device fetch resolves on the headers, so the fetch's own timer has
+  // stopped by the time the body is read. A body that stalls there must not
+  // leave the visit check, the prompt or the stuck check waiting forever.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  stubFetch(t, () => new Response(new ReadableStream(), { status: 401 }));
+  const settle = async () => {
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+  };
+  let result: StationAuthResult | undefined;
+  void createApi('https://radio.example', LOGIN)
+    .checkStationAuth('station-pw')
+    .then((r) => {
+      result = r;
+    });
+  await settle();
+  assert.equal(result, undefined, 'still reading the body');
+  t.mock.timers.tick(FETCH_TIMEOUT_MS);
+  await settle();
+  assert.equal(result, 'unavailable');
 });
 
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {

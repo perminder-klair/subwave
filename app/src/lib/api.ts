@@ -128,7 +128,7 @@ function mountFor(format: StreamFormat): string {
 }
 
 // Compose timeouts manually: RN fetch lacks AbortSignal.timeout and any.
-const FETCH_TIMEOUT_MS = 8000;
+export const FETCH_TIMEOUT_MS = 8000;
 
 function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   const ctrl = new AbortController();
@@ -145,7 +145,23 @@ function fetchWithTimeout(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
-type StationRequestInit = Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
+/** A refusal's JSON body, or undefined when it is not JSON or has not arrived
+ *  within FETCH_TIMEOUT_MS. fetch resolves on the headers, so fetchWithTimeout's
+ *  timer has already stopped, and aborting would not help: expo/fetch's native
+ *  text() settles only on a complete body. */
+async function refusalBody(res: Response): Promise<unknown> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const giveUp = new Promise<undefined>((resolve) => {
+    timer = setTimeout(resolve, FETCH_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([res.json().catch(() => undefined), giveUp]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+type StationRequestInit =Omit<RequestInit, 'headers'> & { headers?: Record<string, string> };
 
 export function createApi(
   rawBase: string,
@@ -226,7 +242,7 @@ export function createApi(
         return stationAuthResult(res.status, {
           challenged: res.headers.has('www-authenticate'),
           // Only a refusal's body is read: it says who refused (stationAuthResult).
-          body: res.status === 401 ? await res.json().catch(() => undefined) : undefined,
+          body: res.status === 401 ? await refusalBody(res) : undefined,
         });
       } catch {
         return stationAuthResult(null);
