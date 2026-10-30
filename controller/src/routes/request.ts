@@ -27,8 +27,10 @@ import {
 } from '../middleware/ratelimit.js';
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
-import { shuffle } from '../util/shuffle.js';
+import { directRequestUnsupported, isRefusedOutcome, modelFreeRequest, nameSearchTerms, repairRequestMatch, requestArtistMatches, resolveDirectRequest } from '../music/request-match.js';
 import { requestWaitClause } from '../broadcast/queue/pure.js';
+import { matchedRequestLookups, matchedRequestStandIn } from '../util/request-claim.js';
+import { ARTIST_VARIETY_WINDOW, drawRequestCandidate } from '../broadcast/dj-agent/artist-guard.js';
 
 export const router = express.Router();
 
@@ -51,38 +53,19 @@ function pruneRequests() {
   }
 }
 
-// "latest album by X" style requests: resolve artist, sort albums, pick a song.
-async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds }: { artistName: string; sort: string | null; scope: string; recentIds: Set<string> }) {
-  try {
-    // Fuzzy so a transliteration variance or typo still lands on the artist.
-    const matchedArtist = await subsonic.resolveArtist(artistName);
-    if (!matchedArtist) return null;
-    const artist = await subsonic.getArtist(matchedArtist.id);
-    let albums = artist?.album || [];
-    if (albums.length === 0) return null;
-
-    if (sort === 'latest') {
-      albums = [...albums].sort((a, b) => (b.year || 0) - (a.year || 0));
-    } else if (sort === 'oldest') {
-      albums = [...albums].sort((a, b) => (a.year || 9999) - (b.year || 9999));
-    } else if (!sort) {
-      // Bare "play <artist>": shuffle so picks spread across the catalogue
-      // instead of always hitting the first album Subsonic returns.
-      albums = shuffle(albums);
-    }
-    // sort=popular leaves Subsonic's order. Walk down the list when the
-    // top album's tracks are all recently played.
-    for (const album of albums.slice(0, 5)) {
-      const songs = await subsonic.getAlbum(album.id);
-      if (songs.length === 0) continue;
-      const fresh = songs.filter(s => !recentIds.has(s.id));
-      const pool = fresh.length > 0 ? fresh : songs;
-      return pool[Math.floor(Math.random() * pool.length)];
-    }
-  } catch (err) {
-    queue.log('error', `pickByArtistAndSort failed: ${err.message}`);
-  }
-  return null;
+// The shortcut shares identity lookup. Seed/queued tracks are excluded; recent
+// plays retain the upstream soft two-hour preference.
+async function pickMoreByArtist(artistName: string, recentIds: Set<string>, seedId?: string | null) {
+  const result = await resolveDirectRequest({ artist: artistName }, {
+    catalog: subsonic, recentIds: new Set<string>(), queuedIds: queue.queuedIds(), currentId: seedId,
+    choose: songs => {
+      const fresh = songs.filter(song => !recentIds.has(song.id));
+      const pool = fresh.length ? fresh : songs;
+      return pool[Math.floor(Math.random() * pool.length)] || null;
+    },
+    moodSongs: async () => [], fallbackSongs: async () => [],
+  });
+  return result.outcome === 'matched' ? result.track : null;
 }
 
 // "more like this" fallback when the playing artist has nothing else in the
@@ -111,17 +94,6 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   return null;
 }
 
-// search3 can't query the genre tag, so genre requests need an exact genre name
-// for getSongsByGenre. Returns the matched name or null.
-async function resolveGenre(name) {
-  try {
-    return await subsonic.resolveGenreName(name);
-  } catch (err) {
-    queue.log('error', `resolveGenre failed: ${err.message}`);
-    return null;
-  }
-}
-
 // Append the durable debug record once, at a request's terminal state. Best
 // effort: a logging hiccup must never affect the listener's outcome. Called from
 // resolveRequest's terminal closures and the crash catch below.
@@ -147,6 +119,13 @@ function recordOutcome(entry) {
       language: entry.language ?? null,
       searchTerms: entry.searchTerms ?? null,
       artistMiss: entry.artistMiss ?? null,
+      outcome: entry.outcome ?? null,
+      title: entry.title ?? null,
+      album: entry.album ?? null,
+      lookupErrors: entry.lookupErrors ?? [],
+      interpretationFallback: entry.interpretationFallback ?? false,
+      unsupported: entry.unsupported ?? [],
+      unmetPreferences: entry.unmetPreferences ?? [],
       track: entry.pick
         ? { title: entry.pick.title, artist: entry.pick.artist, id: entry.pick.id }
         : (entry.track || null),
@@ -154,6 +133,7 @@ function recordOutcome(entry) {
       introScript: entry.introScript || null,
       message: entry.message || null,
       guard: entry.guard ?? null,
+      introFailure: entry.introFailure ?? null,
     });
   } catch (err) {
     queue.log('error', `request-log record failed: ${err.message}`);
@@ -201,16 +181,17 @@ function withWaitNotice(ack: string | null | undefined, trackId: string | null |
   return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
 }
 
-// The matcher's reading without the matcher: at the hard token cap with
-// requests not exempt (dj-budget.requestsAllowed()), the cleaned request text
-// goes to the library search as-is, and the cascade's mood, similar and
-// starred rungs below still fit the room — the request resolves, just without
-// a model call. No ack: screenAck supplies the fixed fallback line.
+// A comparison ("something like Michael Jackson", "anything like this",
+// "similar") opens the similar-to-current rung. Never a bare "like": "I'd
+// like X by Y" names X, and Y's catalogue answers a miss better.
+const ON_AIR_REFERENCE = /\bsimilar\b|\b(?:something|anything|more|songs?|tracks?|music|stuff|one)\s+like\b|\blike\s+(?:this|that|these|those)\b|\bmatch\s+this\b/i;
+
+const UNSUPPORTED_REFUSAL = `I couldn't reliably check all the conditions in that request. Try naming a song, artist, album, genre or simple mood.`;
+
+// A bounded literal parser for hard-budget or failed interpretation calls.
+// The resolver still verifies its title/artist against the actual catalogue.
 function modelFreeMatch(text: string): Awaited<ReturnType<typeof dj.matchRequest>> {
-  return {
-    kind: 'track', search_terms: [text], artist: null, genre: null, language: null,
-    sort: null, scope: 'song', mood: null, intent: 'library search (token budget reached)', ack: '',
-  } as Awaited<ReturnType<typeof dj.matchRequest>>;
+  return { ...modelFreeRequest(text), literal: true } as Awaited<ReturnType<typeof dj.matchRequest>>;
 }
 
 // Requests accepted but not yet resolved. Their track is not in the upcoming
@@ -227,6 +208,7 @@ async function resolveRequest(entry) {
   entry.startedAt = Date.now();
 
   const resolved = ({ ack, track, queuePosition }) => {
+    entry.outcome ||= entry.refused ? 'already-queued' : track ? 'matched' : 'chat';
     entry.status = 'resolved';
     entry.ack = ack || null;
     entry.track = track || null;
@@ -234,6 +216,7 @@ async function resolveRequest(entry) {
     recordOutcome(entry);
   };
   const failed = (message) => {
+    entry.outcome ||= 'no-match';
     entry.status = 'failed';
     entry.message = message;
     recordOutcome(entry);
@@ -277,15 +260,15 @@ async function resolveRequest(entry) {
     if (!refArtist) {
       return failed(`Nothing's playing yet — tell me what you're after instead.`);
     }
-    // Requests stay near-unfiltered: 2h skips the song still ringing in their
-    // ears without blocking a re-request from earlier today.
+    // A two-hour window, not the request cooldown: the artist pick only
+    // prefers tracks outside it, and the similarity fallback skips them. The
+    // seed and queued tracks are always excluded.
     const recentIds = queue.recentlyPlayedIds(2);
+    if (reference?.track?.id) recentIds.add(reference.track.id);
     for (const id of queue.queuedIds()) recentIds.add(id);
     // Same artist first, then real track similarity so a one-off collab credit
     // playing now doesn't dead-end the request.
-    let pick = await pickByArtistAndSort({
-      artistName: refArtist, sort: null, scope: 'song', recentIds,
-    });
+    let pick = await pickMoreByArtist(refArtist, recentIds, reference?.track?.id);
     if (!pick) {
       pick = await pickSimilarToTrack(reference, recentIds);
       if (pick) entry.pickSource = 'more-like-this:similar';
@@ -294,7 +277,7 @@ async function resolveRequest(entry) {
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
     // The fallback can land on a different artist; phrase the ack from the pick.
-    const sameArtist = !!pick.artist && pick.artist === refArtist;
+    const sameArtist = requestArtistMatches(refArtist, pick);
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
     // Station voice off: request still honoured and acked, no spoken intro and
     // no model call to write one.
@@ -306,6 +289,10 @@ async function resolveRequest(entry) {
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
     }, text);
+    if (generatedIntro.failure) {
+      entry.introFailure = generatedIntro.failure;
+      queue.log('error', 'more-like-this optional intro failed — queueing without speech');
+    }
     if (generatedIntro.guard) {
       flagGuard(entry, generatedIntro.guard);
       queue.log('request-guard', `more-like-this intro echoed request text — ${generatedIntro.guard}`);
@@ -373,6 +360,7 @@ async function resolveRequest(entry) {
         entry.pickSource = `agent:${agentRes.refused}`;
         entry.pick = agentRes.track;
         entry.refused = true;
+        entry.outcome = agentRes.refused;
         return resolved({ ack: agentRes.ack, track: agentRes.track, queuePosition: null });
       }
       queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
@@ -394,12 +382,23 @@ async function resolveRequest(entry) {
   // what is on air. Gated before generation: past the hard token cap with
   // requests not exempt, the model is not called at all.
   const currentTrack = queue.current?.track || null;
-  const matched = budget.requestsAllowed()
-    ? await dj.matchRequest(text, {
-      listenerName: requester,
-      nowPlaying: currentTrack,
-    })
-    : modelFreeMatch(text);
+  let matched = modelFreeMatch(text);
+  if (budget.requestsAllowed()) {
+    try {
+      matched = repairRequestMatch(await dj.matchRequest(text, { listenerName: requester, nowPlaying: currentTrack }), text) as typeof matched;
+    } catch (err) {
+      entry.interpretationFallback = true;
+      queue.log('error', `request interpretation failed: ${err.message} — trying library search`);
+    }
+  }
+  const unsupported = directRequestUnsupported(text, matched);
+  if (unsupported.length) {
+    entry.path = 'cascade';
+    entry.pickSource = 'unsupported';
+    entry.outcome = 'unsupported';
+    entry.unsupported = unsupported;
+    return failed(UNSUPPORTED_REFUSAL);
+  }
   queue.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
     mood: matched.mood,
     scope: matched.scope,
@@ -430,200 +429,102 @@ async function resolveRequest(entry) {
   entry.scope = matched.scope || null;
   entry.sort = matched.sort || null;
   entry.artist = matched.artist || null;
+  entry.title = matched.title || null;
+  entry.album = matched.album || null;
   entry.genre = matched.genre || null;
   entry.language = matched.language || null;
   entry.searchTerms = matched.search_terms || null;
 
-  // Requests stay near-unfiltered; see the more-like-this path above.
-  const recentIds = queue.recentlyPlayedIds(2);
-  for (const id of queue.queuedIds()) recentIds.add(id);
-  await library.load();
-
-  const randomFresh = (pool: any[]) => {
-    if (!pool || pool.length === 0) return null;
-    const fresh = pool.filter((s: any) => s?.id && !recentIds.has(s.id));
-    const choose = fresh.length > 0 ? fresh : pool;
-    return choose[Math.floor(Math.random() * choose.length)] || null;
-  };
-
-  let pick: any = null;
-  let pickSource: string | null = null;
-
-  // A search term differing from the artist name means a song title was named.
-  const artistLc = (matched.artist || '').toLowerCase().trim();
-  const namedSongTitle = (matched.search_terms || []).some((t: string) =>
-    t && typeof t === 'string' && t.toLowerCase().trim() && t.toLowerCase().trim() !== artistLc
-  );
-
-  // 2a. Artist path. Also takes bare "play <artist>": walking artist → albums →
-  // songs reaches the whole catalogue, where flat search3 sees only ~25 hits.
-  if (!pick && matched.artist && (matched.sort || matched.scope === 'album' || !namedSongTitle)) {
-    pick = await pickByArtistAndSort({
-      artistName: matched.artist,
-      sort: matched.sort,
-      scope: matched.scope,
-      recentIds,
-    });
-    if (pick) pickSource = 'artist-sort';
-  }
-
-  // 2b. Genre path via getSongsByGenre (search3 can't query genre).
-  if (!pick && matched.genre) {
-    const genre = await resolveGenre(matched.genre);
-    if (genre) {
-      try {
-        const songs = await subsonic.getSongsByGenreSampled(genre, { count: 100 });
-        pick = randomFresh(songs);
-        if (pick) pickSource = `genre:${genre}`;
-      } catch (err) {
-        queue.log('error', `genre pick failed: ${err.message}`);
-      }
-    }
-  }
-
-  // 2b-bis. Language path (#349). Not a Subsonic field, so try it as a genre tag
-  // first, then as a plain search term; misses fall through like every step.
-  if (!pick && matched.language) {
-    const genre = await resolveGenre(matched.language);
-    if (genre) {
-      try {
-        const songs = await subsonic.getSongsByGenreSampled(genre, { count: 100 });
-        pick = randomFresh(songs);
-        if (pick) pickSource = `language-genre:${genre}`;
-      } catch (err) {
-        queue.log('error', `language genre pick failed: ${err.message}`);
-      }
-    }
-    if (!pick) {
-      try {
-        const r = await subsonic.search(matched.language, { songCount: 25 });
-        // Strict-fresh: with a tiny text-match pool, falling back to recently
-        // played candidates just dedup-dies downstream, so treat it as a miss.
-        const fresh = (r || []).filter((s: any) => s?.id && !recentIds.has(s.id));
-        pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
-        if (pick) pickSource = `language-search:${matched.language}`;
-      } catch (err) {
-        queue.log('error', `language search pick failed: ${err.message}`);
-      }
-    }
-  }
-
-  // 2c. Search by terms: artist names / song titles only. A random page offset
-  // keeps repeat requests off the same top-25 search3 hits.
-  if (!pick) {
-    const terms = (matched.search_terms || []).filter((t: string) => {
-      if (!t || typeof t !== 'string') return false;
-      if (matched.mood && t.toLowerCase() === matched.mood.toLowerCase()) return false;
-      if (matched.genre && t.toLowerCase() === matched.genre.toLowerCase()) return false;
-      if (matched.language && t.toLowerCase() === matched.language.toLowerCase()) return false;
-      return true;
-    });
-    if (terms.length > 0) {
-      let candidates: any[] = [];
-      for (const term of terms) {
-        const songOffset = Math.floor(Math.random() * 3) * 25;
-        let r = await subsonic.search(term, { songCount: 25, songOffset });
-        // A deep offset can land past the end; fall back to the first page.
-        if (r.length === 0 && songOffset > 0) {
-          r = await subsonic.search(term, { songCount: 25 });
-        }
-        candidates = [...candidates, ...r];
-      }
-      const seen = new Set();
-      const unique = candidates.filter((s: any) => {
-        if (seen.has(s.id)) return false;
-        seen.add(s.id);
-        return true;
+  // Preserve upstream stand-in spacing after the resolver applies identity,
+  // hard constraints and cooldowns. Named matches remain exempt, and the
+  // resolver says which search terms are names.
+  const named = matched.literal ? [] : [matched.artist, matched.title, ...nameSearchTerms(matched)];
+  const searches: Array<{ term: string; hits: any[] }> = [];
+  const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  const cdMin = Number(settings.get().requests.repeatCooldownMin ?? 120);
+  const selection = await resolveDirectRequest(matched, {
+    text,
+    catalog: {
+      ...subsonic,
+      searchPage: async (term, options) => {
+        const page = await subsonic.searchPage(term, options);
+        searches.push({ term, hits: page.songs });
+        return page;
+      },
+    },
+    choose: pool => {
+      const isStandIn = matchedRequestStandIn(named, {
+        requestText: text, lookups: matchedRequestLookups(searches, text), onAir: currentTrack,
       });
-      pick = randomFresh(unique);
-      if (pick) pickSource = 'search';
-    }
-  }
-
-  // 2d. Mood-tagged library; matchRequest's "mood" shares the tagger vocabulary.
-  if (!pick && matched.mood) {
-    const moodPool = library.songsByMood(matched.mood);
-    pick = randomFresh(moodPool);
-    if (pick) pickSource = `library-mood:${matched.mood}`;
-  }
-
-  // 2e. Similar songs to the current track: Subsonic can surface adjacency the
-  // local mood tags missed.
-  if (!pick && currentTrack?.id && (matched.mood || /similar|like|match/i.test(text))) {
-    try {
-      const similar = await subsonic.getSimilarSongs(currentTrack.id, { count: 20 });
-      pick = randomFresh(similar);
-      if (pick) pickSource = 'similar-to-current';
-    } catch {}
-  }
-
-  // 2f. Dominant-mood fallback: fit the room rather than refuse.
-  if (!pick && ctx.dominantMood) {
-    const moodPool = library.songsByMood(ctx.dominantMood);
-    pick = randomFresh(moodPool);
-    if (pick) pickSource = `library-mood:${ctx.dominantMood}(context)`;
-  }
-
-  // 2g. Starred: the operator's favourites are always a safe pick — the
-  // operator's, not a star a listener like left behind (likes.operatorStarred).
+      const drawn = drawRequestCandidate(pool, queue.neighbourArtistRoots(varietyWindow), isStandIn);
+      if (drawn.withheld) {
+        flagGuard(entry, 'artist-spaced');
+        queue.log('request-guard', `stand-in by recently-played artist "${drawn.withheld.artist}" set aside — drew "${drawn.pick?.title}" by ${drawn.pick?.artist} instead (${drawn.skipped} recent stand-in(s) passed over, spacing window ${varietyWindow} slots)`);
+      } else if (drawn.starved) {
+        queue.log('request-guard', `stand-in by recently-played artist "${drawn.pick?.artist}" allowed — every candidate in its pool was one (spacing window ${varietyWindow} slots)`);
+      }
+      return drawn.pick;
+    },
+    recentIds: cdMin > 0 ? queue.recentlyPlayedIds(cdMin / 60) : new Set<string>(),
+    queuedIds: queue.queuedIds(),
+    currentId: queue.current?.track?.id,
+    moodSongs: async mood => { await library.load(); return library.songsByMood(mood); },
+    fallbackSongs: async () => {
+      let moodSongs: any[] = [];
+      if (ctx.dominantMood) {
+        try { await library.load(); moodSongs = library.songsByMood(ctx.dominantMood); }
+        catch (err) { queue.log('error', `request mood fallback failed: ${err.message}`); }
+      }
+      try {
+        const starred = await subsonic.getStarred();
+        await likes.load();
+        return [...moodSongs, ...likes.operatorStarred(starred, settings.get().likes)];
+      } catch (err) {
+        queue.log('error', `request starred fallback failed: ${err.message}`);
+        return moodSongs;
+      }
+    },
+    ...(currentTrack?.id && ON_AIR_REFERENCE.test(text)
+      ? { similarSongs: () => subsonic.getSimilarSongs(currentTrack.id, { count: 20 }) } : {}),
+  });
+  const pick = selection.track;
+  const pickSource = selection.source;
+  entry.outcome = selection.outcome;
+  entry.lookupErrors = selection.errors;
+  entry.unmetPreferences = selection.unmetPreferences || [];
+  for (const error of selection.errors) queue.log('error', `request lookup ${error}`);
   if (!pick) {
-    try {
-      const starred = await subsonic.getStarred();
-      await likes.load();
-      pick = randomFresh(likes.operatorStarred(starred, (settings.get() as any)?.likes));
-      if (pick) pickSource = 'starred';
-    } catch {}
-  }
-
-  if (!pick) {
-    queue.log('miss', `Nothing matched "${text}"`);
-    return failed(sorryNoMatch(requester));
-  }
-
-  // Near-miss flag: artist named but the airing track isn't by them. The filler
-  // is still queued; recording it keeps the degrade visible in the request log.
-  if (matched.artist) {
-    const want = matched.artist.toLowerCase().trim();
-    const got = String(pick.artist || '').toLowerCase();
-    const hit = got.includes(want) || want.includes(got)
-      || want.split(/\s+/).some(t => t.length >= 3 && got.includes(t));
-    if (!hit) {
-      // The raw reading stays on the operator's log; only the cleaned form, or
-      // nothing, may reach a prompt.
-      entry.artistMiss = matched.artist;
-      entry.missedArtist = cleanMissedArtist(matched.artist);
-      queue.log('miss', `Requested artist "${matched.artist}" not in library — airing ${pick.artist} instead`);
+    entry.pickSource = pickSource;
+    if (selection.outcome === 'unsupported') {
+      entry.unsupported = selection.unsupported || [];
+      return failed(UNSUPPORTED_REFUSAL);
     }
+    return failed(selection.required?.length
+      ? 'Could not verify a track meeting the requested language or genre requirements. Try simplifying the request.'
+      : sorryNoMatch(requester));
   }
-
-  // Repeat cooldown. Checked before intro generation so a hit spends no model
-  // call; the listener gets an honest ack (`resolved`, not `failed`).
-  const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
-  if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(pick.id)) {
+  // A search in the listener's own spelling answers in the library's ("Tupac"
+  // finds 2Pac). That may be the same act, so the intro is not told it is not.
+  if (selection.outcome === 'substituted' && matched.artist && !requestArtistMatches(matched.artist, pick)
+    && !matchedRequestLookups(searches, text).some(credit => requestArtistMatches(credit, pick))) {
+    entry.artistMiss = matched.artist;
+    entry.missedArtist = cleanMissedArtist(matched.artist);
+  }
+  if (isRefusedOutcome(selection.outcome)) {
     entry.pick = pick;
-    entry.pickSource = `${pickSource}:cooldown`;
-    // Refused, not queued; see the more-like-this dedup branch above.
+    entry.pickSource = `${pickSource}:${selection.outcome}`;
     entry.refused = true;
-    const cdAck = queue.cooldownAck(pick.id, pick.title);
-    session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: pick.id, requester } });
-    return resolved({ ack: cdAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
+    const ack = selection.outcome === 'cooldown' ? queue.cooldownAck(pick.id, pick.title || '') : queue.dedupAck(pick.id);
+    session.appendTurn({ role: 'dj', kind: 'request', text: ack, meta: { trackId: pick.id, requester } });
+    return resolved({ ack, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
-
-  queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
-
-  // On an artist miss the up-front ack (written before the cascade knew it would
-  // miss) is a lie; replace it with an honest stand-in line. Fixed copy that
-  // names nobody: this line is also the DJ's session turn when no intro airs,
-  // and the artist is the listener's own words read back by the matcher.
-  let ack: string;
-  if (entry.artistMiss) {
-    ack = `Couldn't find that artist in the crates — here's something that fits the moment instead.`;
-  } else {
-    const screened = screenAck(matched.ack, text, 'Coming right up.');
-    if (screened.guard) {
-      flagGuard(entry, screened.guard);
-      queue.log('request-guard', `cascade ack echoed request text — replaced`);
-    }
+  queue.log('request', `resolved via ${pickSource} (${selection.outcome}): ${pick.title} — ${pick.artist}`);
+  // Substitutions need honest fixed copy. A real match keeps the screened
+  // persona-language acknowledgement; optional preference misses stay private.
+  let ack = `Couldn't match that request exactly — here's an alternative from the library.`;
+  if (selection.outcome === 'matched') {
+    const screened = screenAck(matched.ack, text, 'Found a match — your track is on the way.');
+    if (screened.guard) flagGuard(entry, screened.guard);
     ack = screened.ack;
   }
 
@@ -636,10 +537,15 @@ async function resolveRequest(entry) {
     requestedBy: requester,
     artistMiss: !!entry.artistMiss,
     missedArtist: entry.missedArtist ?? null,
+    requestSubstitution: selection.outcome === 'substituted',
     recap: queue.getDjRecap(),
     recentTracks: queue.getRecentTracks(),
     recentOpeners: queue.getRecentOpeners(),
   }, text);
+  if (generatedIntro.failure) {
+    entry.introFailure = generatedIntro.failure;
+    queue.log('error', 'request optional intro failed — queueing without speech');
+  }
   if (generatedIntro.guard) {
     flagGuard(entry, generatedIntro.guard);
     queue.log('request-guard', `intro echoed request text — ${generatedIntro.guard}`);
@@ -659,11 +565,13 @@ async function resolveRequest(entry) {
   entry.pick = pick;
   if (pos === -2) {
     // Blocklist refused the pick; standard not-found copy so it doesn't leak.
+    entry.outcome = 'no-match';
     entry.pickSource = `${pickSource}:blocked`;
     return failed(sorryNoMatch(requester));
   }
   if (pos === -1) {
     const dupAck = queue.dedupAck(pick.id);
+    entry.outcome = 'already-queued';
     entry.pickSource = `${pickSource}:already-queued`;
     entry.refused = true;
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
@@ -801,6 +709,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
 
   resolveRequest(entry).catch(err => {
     queue.log('error', `Request resolution crashed: ${err.message}`);
+    entry.outcome = 'error';
     entry.status = 'failed';
     entry.message = 'Something went wrong in the booth — try again.';
     recordOutcome(entry);
@@ -820,6 +729,7 @@ router.get('/request/:id', (req, res) => {
     ack: entry.ack,
     track: entry.track,
     queuePosition: entry.queuePosition,
+    outcome: entry.outcome,
     message: entry.message,
   });
 });

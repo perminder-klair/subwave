@@ -8,6 +8,7 @@ import {
   createStationPasswordStore,
   stationAuthResult,
   stationLockRequired,
+  stationReadsOpen,
   verifyStoredPasswords,
   withStreamAuth,
   type StationAuthResult,
@@ -67,11 +68,38 @@ test('either lock requires the password; absent flags are a public station', () 
   assert.equal(stationLockRequired(null), false);
 });
 
+test('a gated read waits for a locked station’s proven password, never for open alone', () => {
+  const phases = ['open', 'checking', 'prompt', 'ok'] as const;
+  for (const privacy of [undefined, null, {}, { privatePlayer: false, listenerAuth: false }]) {
+    for (const phase of phases) assert.equal(stationReadsOpen(privacy, phase), true);
+  }
+  for (const privacy of [{ privatePlayer: true }, { listenerAuth: true }]) {
+    // 'open' is what the gate shows before /state lands, and for the render
+    // in which a lock first appears.
+    for (const phase of phases) assert.equal(stationReadsOpen(privacy, phase), phase === 'ok', `${phase}`);
+  }
+});
+
 test('only 401 means wrong; 429 is the rate limit; anything else says nothing', () => {
   assert.equal(stationAuthResult(200), 'ok');
   assert.equal(stationAuthResult(401), 'denied');
   assert.equal(stationAuthResult(429), 'rate-limited');
   for (const status of [null, 404, 500, 502, 403]) assert.equal(stationAuthResult(status), 'unavailable');
+});
+
+test("a proxy's login challenge never reads as a wrong station password (#1873)", async () => {
+  // The controller's own 401 carries no WWW-Authenticate; a proxy refusing the
+  // Station login always does, and the password never reached the controller.
+  assert.equal(stationAuthResult(401, true), 'unavailable');
+  assert.equal(stationAuthResult(401, false), 'denied');
+
+  // So a saved station password checked through that proxy is kept, not forgotten.
+  const verdict = await verifyStoredPasswords({
+    stored: 'station-pw',
+    login: 'proxy-pw',
+    check: async () => stationAuthResult(401, true),
+  });
+  assert.deepEqual(verdict, { phase: 'ok', save: null, clearStored: false });
 });
 
 function checker(answers: Record<string, StationAuthResult>) {

@@ -261,6 +261,3 @@ export async function startAudienceMonitor(): Promise<void> {
 export function resetAudience(): void {
   buckets.clear();
 }
-export function bucketCount(): number {
-  return buckets.size;
-}

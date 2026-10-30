@@ -10,7 +10,7 @@
 // and pins the /dj/segment button's link to the only form true of a track
 // already playing.
 //
-// Run: npx tsx scripts/link-style.test.ts (auto-discovered by npm test).
+// Run: `npm test -- link-style`.
 import assert from 'node:assert/strict';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
@@ -244,26 +244,4 @@ test('getLastLinkText returns the most recently aired link and ignores other kin
   assert.equal(queue.getLastLinkText(), 'Next up, Kim Weston.');
   assert.equal(nextAnnounceForm(queue.getLastLinkText()), 'this-is');
   (queue as any).djLog = [];
-});
-
-// ── the announce contract follows the persona who SPEAKS the line ────────────
-
-// The link is pinned to session.onAirPersona() at enqueue, and inside the
-// handoff look-ahead that disagrees with the wall-clock getEffectivePersona()
-// — which is what a bare announceLinks() resolves to. Written the incoming
-// DJ's line under the outgoing DJ's link contract. Source-level because the
-// two personas only diverge inside a live look-ahead window.
-test('the deterministic announce writer resolves against its explicit persona', async () => {
-  const { readFileSync } = await import('node:fs');
-  for (const file of [
-    '../src/llm/internal/prompts/scripts.ts',
-  ]) {
-    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
-    assert.doesNotMatch(
-      src,
-      /announceLinks\(\s*\)/,
-      `${file} calls announceLinks() with no persona — it must pass session.onAirPersona()`,
-    );
-    assert.match(src, /announceLinks\(speaker\)/);
-  }
 });

@@ -1,44 +1,51 @@
-# Liquidsoap 2.4.5 with upstream #5257
+# Liquidsoap 2.4.6
 
-Long-running stations can spend an increasing share of CPU walking unifier
-reference chains. Restarting clears the chains but does not fix their growth.
-Both broadcast and AIO images rebuild 2.4.5 with the path-compression change
-from [savonet/liquidsoap#5257](https://github.com/savonet/liquidsoap/pull/5257).
-The station script and its standard library stay on 2.4.5.
+Both the broadcast and AIO images run the stock upstream
+`savonet/liquidsoap:v2.4.6` release, pinned by its multi-platform manifest
+digest. Keep the `liquidsoap` stage identical in both Dockerfiles; CI compares
+the two executables.
 
-## Pinned inputs
+Two things travel with the base-image swap, both under the encoders:
 
-- Liquidsoap source: `d2bf3eb209391815e8d6a84b6cbf7ad4168d703d` (`v2.4.5`).
-- Vendored, unmodified patch: upstream commit
-  `de68528a87d0cd2137b6dd53abf0110d21974ad3`.
-- Upstream Debian trixie / OCaml 4.14.2 builder and 2.4.5 runtime: multi-platform
-  manifest digests in both Dockerfiles. No rolling tags or `opam update`.
-- FFmpeg bindings: `49c9545a964ea32429569e0803f7f2a0cc8e19db` (`v1.3.1`),
-  matching the upstream 2.4.5 release build. Other binding sources and compiler
-  packages come from the pinned builder. This is a source rebuild, not a
-  byte-for-byte recreation of the upstream release toolchain.
+- **Icecast-KH comes back through deb-multimedia.** The 2.4.5 base image
+  shipped with the deb-multimedia repository configured, so the runtime's
+  `apt-get install icecast2` resolved to Icecast-KH. Stock 2.4.6 does not, and
+  the same line installs Debian's plain Icecast 2.4.4, which parses the
+  `<x-forwarded-for>` trusted-proxy list but ignores it: behind the edge proxy
+  every listener is recorded with the proxy's container address and countries
+  disappear. Both Dockerfiles now add the DMO source explicitly (keyring
+  hash-checked) and pin it to `icecast2` alone, and the build fails if the
+  installed Icecast is not KH. The keyring pin needs a manual bump when DMO
+  rotates its keyring: their pool keeps only the current
+  `deb-multimedia-keyring` package, so a source build fails at the `ADD` until
+  the URL and both hashes are updated.
+- **Liquidsoap's codec stack changes shape.** The old image decoded and encoded
+  through DMO's dynamically linked FFmpeg 7.1.4, with DMO's libfdk-aac 2.0.3 and
+  DMO's lame. The stock 2.4.6 executable bundles a static FFmpeg 8 and fdk-aac,
+  but still links Debian's libmp3lame0, libopus0, libflac and libvorbis
+  dynamically, so the image's apt state is still part of the MP3, Opus and FLAC
+  encoders. DMO also ships libmp3lame0 (`1:3.100-dmo3`), and the DMO pin above
+  keeps it on Debian's build (`3.100-6`), as it does the AIO's CLI `ffmpeg`.
+  MP3 encoding therefore moves from DMO's lame to Debian's, both the same
+  upstream 3.100.
 
-The builder's FDK-AAC binding reports 0.3.3, whereas the published 2.4.5 binary
-reports 0.3.4. The native FDK library is retained from the runtime image; AAC
-encoding is exercised by the smoke test. All configured runtime paths and
-supported input/output features match the published image. Review these build
-records when replacing either pinned image, rather than assuming a compiler
-image's dependencies match a release just because both say OCaml 4.14.2.
+2.4.6 is the minimum, for two upstream fixes:
 
-The build fails if the patch does not apply or its resulting source hash
-changes. It compiles the actual unifier module into a regression executable:
-stock 2.4.5 must fail, and the patched module must compress a million-link chain
-and preserve shared reads/writes and self-unification. No timing threshold is
-used. Only the rebuilt executable and build records enter the runtime image;
-the compiler stays in the build stage. The stock stdlib cache is regenerated.
+- **Unifier growth** ([savonet/liquidsoap#5257](https://github.com/savonet/liquidsoap/pull/5257),
+  with #5336 and #5342). On 2.4.5 a long-running station spends an increasing
+  share of CPU walking unifier reference chains, and a restart clears the chains
+  without fixing their growth. Earlier SUB/WAVE images rebuilt 2.4.5 from source
+  with #5257 backported; 2.4.6 ships it, so the source build is gone.
+- **Lost partial frame after `cross`** (#5296). On 2.4.5, `sequence` drops the
+  first chunk of the incoming source when the source before it ends partway
+  through a 20 ms frame. Every `dj_transition` ends in a `sequence`, so the
+  track after a crossfade lost up to one frame, which put up to 20 ms of beat
+  error on a stem-blend clip seam (#1933). `scripts/stem-seam-test.sh` sweeps
+  the predecessor across a frame and measures 0.3 ms at every phase on 2.4.6.
 
-`liquidsoap --version` still reports 2.4.5. To distinguish the patched build,
-inspect `/usr/share/doc/liquidsoap-subwave/source.txt`; the same directory records
-`--build-config`, installed compiler packages and binding source revisions.
-
-Keep the `liquidsoap-build` and `liquidsoap-patched` stages identical in both
-Dockerfiles. The AIO heavy/CUDA variants inherit the same patched stage.
-Remove this backport once a tested stable upstream release includes #5257.
+Moving to a new release: run `scripts/fx-render-test.sh` and
+`scripts/stem-seam-test.sh` with `LIQ_IMAGE` set to it, check `radio.liq` with
+`liquidsoap --check`, then follow the validation below.
 
 ## Validation
 
@@ -49,11 +56,12 @@ the shortened endurance comparison. It also lists the checks still unverified.
 From the repository root:
 
 ```sh
-docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:unifier .
-docker build -f docker/Dockerfile.aio --target liquidsoap-patched \
-  -t subwave-test/aio-liquidsoap:unifier .
-python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier
+docker build -f docker/Dockerfile.broadcast -t subwave-test/broadcast:smoke .
+docker build -f docker/Dockerfile.aio --target liquidsoap \
+  -t subwave-test/aio-liquidsoap:smoke .
+python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:smoke
 python3 scripts/liquidsoap-image-smoke.test.py -v
+python3 scripts/liquidsoap-resume-fallback.py subwave-test/broadcast:smoke   # resume into another show airs the new fallback
 ```
 
 The smoke test uses a unique container, an ephemeral loopback port, disposable
@@ -75,13 +83,13 @@ Healthy emergency audio cannot satisfy these music-progress checks. The
 deterministic CLI tests include the old false-pass case, normal progress and
 delayed startup, without needing Docker or sleeping in real time.
 
-The AIO target above validates its patched Liquidsoap stage, not the complete
+The AIO target above validates its Liquidsoap stage, not the complete
 AIO application. Full AIO builds remain part of release validation.
 
 Before production rollout, run a 24–48-hour soak with frequent transitions:
 
 ```sh
-python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:unifier \
+python3 scripts/liquidsoap-image-smoke.py subwave-test/broadcast:smoke \
   --seconds 86400 --evidence-dir /real-disk/new-soak-directory \
   --test-source-sha "$(git rev-parse HEAD)" --image-source-sha BUILD_COMMIT
 ```
@@ -109,4 +117,4 @@ Review the retained CPU samples for growth and both logs for latency warnings.
 Passing the short smoke test or structural regression does not establish
 long-uptime production behaviour. Deploy the tested broadcast image during a
 quiet period, retain the previous image for rollback and monitor CPU over the
-following weeks. Rebuilding/restarting an unpatched 2.4.5 image is insufficient.
+following weeks.

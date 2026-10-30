@@ -2,14 +2,16 @@
 // of the handle in handle.ts.
 
 import Database from 'better-sqlite3';
+import { instrumentalFromJson } from '../lyric-vocal.js';
 import * as sqliteVec from 'sqlite-vec';
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { copyFile, rm } from 'node:fs/promises';
 import { DB_PATH, getDb, getEmbeddingDim, requireDb, setHandle } from './handle.js';
-import { invalidateStats } from './stats.js';
+import { ensureStatsIndexes, invalidateStats } from './stats.js';
 import { migrate } from './schema.js';
 import { maybeMigrateFromMoodsJson } from './legacy.js';
+import { registerSearchSql } from '../../util/search-pattern.js';
 
 // `reseed`: on an embedding-dim mismatch, drop the stale-dim vectors and rebuild
 // rather than throwing. `adoptStoredDim` (live controller only): the DB's dim
@@ -35,12 +37,14 @@ export async function open(opts: {
     embeddingDim: opts.embeddingDim,
     nonce: randomUUID().slice(0, 8),
   });
+  registerSearchSql(db);
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   // Cap the -wal sidecar so a checkpoint truncates it; uncapped it balloons on a
   // bulk write pass and every later query walks it (#786).
   db.pragma('journal_size_limit = 67108864'); // 64 MiB
   sqliteVec.load(db);
+  db.function('is_instrumental', { deterministic: true }, instrumentalFromJson);
 
   // migrate() may adopt the stored dim; trust its return as the live schema dim.
   setHandle({
@@ -51,6 +55,7 @@ export async function open(opts: {
     ),
   });
   await maybeMigrateFromMoodsJson();
+  ensureStatsIndexes();
 }
 
 export function close(): void {

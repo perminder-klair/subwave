@@ -170,7 +170,7 @@ async function main() {
       const started = Date.now();
       try {
         const result = await djAgent({
-          system: pickSystem(null, true, { host: null, guest: null, promptValue: null }),
+          system: pickSystem(null, true, false, { host: null, guest: null, promptValue: null }),
           messages: [{ role: 'user', content: `Now playing "${seed.title}" by ${seed.artist} [id: ${seed.id}]. Pick the next track from the real library. This is an offline evaluation: make no listener-facing link and select only a discovered candidate. The current track is a discovery seed, never a valid pick.` }],
           tools, schema: pickSchema(), maxSteps: 2, providerDiscoveryBudget: true, kind: 'soulLibraryEvalPick',
           validate: (object: any) => !!(object?.id && seen.has(object.id)),

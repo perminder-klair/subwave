@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import { StatsView, Dossier } from './panels';
 import Tooltip, { type TipState } from './Tooltip';
@@ -76,6 +77,26 @@ const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000
 // adopted from the response when nothing is stored (we then omit ?max=).
 const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
+// Folded side panels, remembered per browser like MAP SIZE. Unreadable
+// storage leaves both open.
+const RAIL_STORAGE_KEY = 'subwave_obs_rail';
+const SIDE_STORAGE_KEY = 'subwave_obs_side';
+
+function readPanelOpen(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function savePanelOpen(key: string, open: boolean): void {
+  try {
+    window.localStorage.setItem(key, open ? '1' : '0');
+  } catch {
+    /* ignore quota/availability */
+  }
+}
 
 const COLOR_MODES: [ColorBy, string][] = [
   ['energy', 'ENERGY'],
@@ -132,6 +153,12 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [railOpen, setRailOpen] = useState(() => typeof window === 'undefined' || readPanelOpen(RAIL_STORAGE_KEY));
+  const [sideOpen, setSideOpen] = useState(() => typeof window === 'undefined' || readPanelOpen(SIDE_STORAGE_KEY));
+  useEffect(() => savePanelOpen(RAIL_STORAGE_KEY, railOpen), [railOpen]);
+  useEffect(() => savePanelOpen(SIDE_STORAGE_KEY, sideOpen), [sideOpen]);
+  const toggleRail = useCallback(() => setRailOpen((o) => !o), []);
+  const toggleSide = useCallback(() => setSideOpen((o) => !o), []);
 
   // Bumped by search picks, MIX NEXT picks and deep links, never by plain map
   // clicks — the node is already under the cursor there.
@@ -282,6 +309,18 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, q]);
 
+  // [ and ] fold the rail and the side panel, except while typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as HTMLElement | null)?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (e.key === '[') toggleRail();
+      else if (e.key === ']') toggleSide();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleRail, toggleSide]);
+
   // Adopt the status from the bulk load, poll the light endpoint while a run is
   // live, and reload the map on finish for the new coords.
   const [proj, setProj] = useState<MapProjectionStatus | null>(null);
@@ -369,9 +408,19 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const projLastLine = proj?.lastLog?.length ? proj.lastLog[proj.lastLog.length - 1] : null;
 
   return (
-    <div className="observatory-root">
-      <header className="obs-top">
+    <div className="observatory-root admin-booth">
+      <header className="obs-top admin-booth-bar">
         <div className="obs-top-l">
+          <button
+            className="obs-fold"
+            onClick={toggleRail}
+            aria-expanded={railOpen}
+            aria-controls="obs-rail"
+            aria-label={railOpen ? 'hide filters' : 'show filters'}
+            title={(railOpen ? 'Hide filters' : 'Show filters') + ' ([)'}
+          >
+            {railOpen ? <PanelLeftClose aria-hidden="true" /> : <PanelLeftOpen aria-hidden="true" />}
+          </button>
           <Link href="/admin/library" className="obs-back">
             ← ADMIN
           </Link>
@@ -427,6 +476,16 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           <button className="obs-top-reset" onClick={onReset}>
             RESET DIAL
           </button>
+          <button
+            className="obs-fold"
+            onClick={toggleSide}
+            aria-expanded={sideOpen}
+            aria-controls="obs-side"
+            aria-label={sideOpen ? 'hide the side panel' : 'show the side panel'}
+            title={(sideOpen ? 'Hide' : 'Show') + ' the side panel (])'}
+          >
+            {sideOpen ? <PanelRightClose aria-hidden="true" /> : <PanelRightOpen aria-hidden="true" />}
+          </button>
         </div>
       </header>
 
@@ -442,8 +501,15 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         </div>
       )}
 
-      <div className="obs-main">
-        <aside className="obs-rail">
+      <div className={'obs-main' + (railOpen ? '' : ' rail-shut') + (sideOpen ? '' : ' side-shut')}>
+        <aside id="obs-rail" className="obs-rail">
+          {/* Folded, the panel is this spine; open, it is hidden (globals.css). */}
+          <button className="obs-spine" onClick={toggleRail} aria-label="show filters">
+            <PanelLeftOpen aria-hidden="true" />
+            <span className="obs-spine-label">
+              FILTERS{matched.length !== total ? ` · ${matched.length.toLocaleString()} / ${total.toLocaleString()}` : ''}
+            </span>
+          </button>
           <div className="rail-search-wrap">
             <div className="rail-search">
               <span className="rail-search-ico">♪</span>
@@ -622,7 +688,13 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
           )}
         </section>
 
-        <aside className="obs-side">
+        <aside id="obs-side" className="obs-side">
+          <button className="obs-spine" onClick={toggleSide} aria-label="show the side panel">
+            <PanelRightOpen aria-hidden="true" />
+            <span className="obs-spine-label">
+              {selected ? `DOSSIER · ${selected.title || 'Untitled'}` : 'LIBRARY STATS'}
+            </span>
+          </button>
           {lib &&
             (selected ? (
               <Dossier

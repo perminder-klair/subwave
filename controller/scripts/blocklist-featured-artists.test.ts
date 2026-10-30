@@ -21,7 +21,7 @@
 //      entries' name fallback and the `field: 'artist'` rules — because
 //      blocklist-rules documents its artist case AS the fallback's semantics.
 //
-// Run: `tsx scripts/blocklist-featured-artists.test.ts`.
+// Run: `npm test -- blocklist-featured-artists`.
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

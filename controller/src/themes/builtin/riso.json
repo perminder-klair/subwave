@@ -1,0 +1,26 @@
+{
+  "id": "riso",
+  "name": "Riso",
+  "description": "A two-drum duplicator print: blue and fluorescent pink on uncoated stock, a halftone screen over the paper, and the pink drum sitting a couple of pixels off.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#f3eee1",
+    "--surface": "#f8f4ea",
+    "--surface-border": "rgba(31, 69, 194, 0.22)",
+    "--field": "color-mix(in oklab, #f3eee1 90%, #1f45c2)",
+    "--ink": "#1f45c2",
+    "--muted": "#4f62a8",
+    "--ink-faint": "#6f7db8",
+    "--accent": "#f02d84",
+    "--accent-2": "#00838a",
+    "--accent-soft": "color-mix(in oklab, #f02d84 14%, #f3eee1)",
+    "--line": "rgba(31, 69, 194, 0.35)",
+    "--soft-border": "rgba(31, 69, 194, 0.20)",
+    "--overlay": "rgba(31, 69, 194, 0.07)",
+    "--display-font": "bricolage-grotesque",
+    "--mono-font": "dm-mono",
+    "--grain": "0.08",
+    "--texture": "halftone",
+    "--finish": "misregister"
+  }
+}

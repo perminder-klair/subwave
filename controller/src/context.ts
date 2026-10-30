@@ -106,7 +106,9 @@ export function invalidateWeatherCache() {
 // once: the spoken "Weather in X" line, the weather skill's tool result, GET
 // /now-playing's public context blob, and the listener-facing schedule drawer.
 // Keeping the precise locationName out of it is what stops a station's public
-// URL from naming its operator's town.
+// URL from naming its operator's town. The first two reach a model, so they
+// read it through settings.spokenContext, which drops it when the DJ template
+// withholds the place (#2099); the display surfaces keep it.
 //
 // Fed the same live weather block as the forecast query so its attributed
 // location and coordinates cannot drift across settings writers.
@@ -183,7 +185,7 @@ function mapWeatherCode(code: number) {
 }
 
 // Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)
-// normalises to null so the dominantMood chain (festival > weather > time)
+// normalises to null so the dominantMood chain (show > festival > weather > time)
 // falls through to the time mood, exactly as the old hardcoded default did.
 function weatherToMood(condition) {
   return weatherMoodFor(condition) || null;

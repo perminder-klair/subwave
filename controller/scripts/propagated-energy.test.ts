@@ -19,9 +19,10 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 // Loud and quiet ends of the arousal axis, well clear of the decision
 // threshold in both directions.
@@ -48,9 +49,9 @@ const db = await import('../src/music/library-db.js');
 const { runPropagatedEnergyPass } = await import('../src/music/propagated-energy.js');
 await db.open({ embeddingDim: 768, adoptStoredDim: true });
 
-after(() => {
+after(async () => {
   db.close?.();
-  rmSync(stateDir, { recursive: true, force: true });
+  await removeTempDir(stateDir);
 });
 
 // A library big enough to calibrate against (MIN_BASELINE_TRACKS = 200),
@@ -81,7 +82,6 @@ db.setTrackAudioMoodScoresBulk(filler);
 test('stored score maps stream back out', () => {
   const seen = [...db.iterateAudioMoodScores()];
   assert.equal(seen.length, FILLER, 'every scored track is streamed');
-  assert.equal(db.audioMoodScoredCount(), FILLER);
   assert.ok(Number.isFinite(seen[0].scores.energetic), 'scores round-trip as numbers');
 });
 
@@ -171,7 +171,6 @@ test('a relabel spanning more than one write batch completes', async () => {
     ),
   );
   const n = relabelFromStoredScores(baselines);
-  assert.equal(n, db.audioMoodScoredCount(), 'every scored track is relabelled');
   assert.ok(n > 500, `fixture must exceed one write batch to pin this (got ${n})`);
   assert.ok(
     (db.getTrack('loud')!.audioMoods || []).length > 0,

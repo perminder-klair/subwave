@@ -115,7 +115,7 @@ bootstrap_state_dirs() {
 	if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
 		state_prepare_dir "$SUBWAVE_STEMS_DIR"
 	fi
-	# Liquidsoap's reload_mode="watch" playlists need the files to exist.
+	# Liquidsoap's file watches on these need the files to exist.
 	state_prepare_file "$dir/auto.m3u" 666
 	state_prepare_file "$dir/jingles.m3u" 666
 	# Keep a co-located Navidrome from scanning the hourly archive mixdowns

@@ -12,21 +12,11 @@
 // Navidrome, and nothing observable distinguishes "the show source contributed
 // zero" from "the show has no matching tracks".
 
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err) {
-    failures++;
-    console.error(`  ✗ ${name}\n    ${(err as Error).message}`);
-  }
-}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const picker = readFileSync(resolve(here, '../src/music/picker.ts'), 'utf8');
@@ -44,8 +34,6 @@ const addLine = (src: string, label: string): string => {
   assert.ok(m, `no add/take call found for the "${label}" source`);
   return m![0];
 };
-
-console.log('dedicated show sources never-starve:');
 
 for (const label of ['show-genre', 'show-playlist']) {
   test(`picker.ts: "${label}" samples via sampleShowSource, not sampleFresh`, () => {
@@ -76,8 +64,6 @@ test('the DISCOVERY sources keep fresh-only sampling', () => {
   }
 });
 
-console.log('\nexploration slot is skipped for a strict-playlist show:');
-
 test('picker.ts gates the explore slot on !strictPlaylist', () => {
   const at = picker.indexOf(`add('explore'`);
   assert.ok(at > 0, 'no explore source found in picker.ts');
@@ -102,8 +88,6 @@ test('scheduler.ts still gates its twin the same way', () => {
     'scheduler.ts §2b must keep its !strictPlaylist gate — picker.ts mirrors it',
   );
 });
-
-console.log('\nthe artist cap is lifted for a strict-playlist show, in every pick path:');
 
 test('picker.ts uncaps MAX_PER_ARTIST for a strict playlist, after the inPl narrowing', () => {
   const m = picker.match(/^\s*const MAX_PER_ARTIST = .*$/m);
@@ -167,8 +151,6 @@ test('scope.ts uncaps the agent tools under a playlistLock', () => {
   );
 });
 
-console.log('\npool selection anchors on the expected predecessor at selection time:');
-
 const A = { id: 'a', title: 'On air', artist: 'Artist A' };
 const B = { id: 'b', title: 'Queued one', artist: 'Artist B' };
 const C = { id: 'c', title: 'Queued tail', artist: 'Artist C' };
@@ -213,9 +195,3 @@ test('explicit audio and rank targets still override predecessor-derived default
   assert.match(picker, /}\s*else if\s*\(currentTrack\?\.id\)[\s\S]*?tracksLikeThisAudio\(currentTrack\.id/);
   assert.match(picker, /const curAnalysis = rankTarget\s*\|\|\s*\(currentTrack\?\.id/);
 });
-
-if (failures) {
-  console.error(`\n${failures} test(s) failed`);
-  process.exit(1);
-}
-console.log('\nall tests passed');

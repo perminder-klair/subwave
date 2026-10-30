@@ -14,20 +14,16 @@ import { existsSync } from 'node:fs';
 import { chmod, readFile } from 'node:fs/promises';
 import { parse as parseDotenv } from 'dotenv';
 import { STATE_DIR } from '../config.js';
+import { LLM_KEY_ENV_VARS } from '../schemas/providers.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/secrets.env`;
 
 // Keys the wizard may write; anything else is ignored, so the form cannot be
-// abused as a generic env-var setter.
+// abused as a generic env-var setter. The LLM providers' keys come from the
+// catalogue (schemas/providers.ts), in its order.
 export const SECRET_ENV_KEYS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GOOGLE_GENERATIVE_AI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'REQUESTY_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'AI_GATEWAY_API_KEY',
+  ...LLM_KEY_ENV_VARS,
   'ELEVENLABS_API_KEY',
   'FISH_API_KEY',
   'SEARCH_API_KEY',

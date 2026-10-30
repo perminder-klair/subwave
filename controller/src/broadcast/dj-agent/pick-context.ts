@@ -2,9 +2,9 @@ import * as library from '../../music/library.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../util/pick-seed.js';
 
 type PickAnchor = {
-  id?: string;
-  title?: string;
-  artist?: string;
+  id?: string | null;
+  title?: string | null;
+  artist?: string | null;
   bpm?: number | null;
   musicalKey?: string | null;
   energy?: string | null;

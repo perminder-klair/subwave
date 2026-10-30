@@ -10,6 +10,7 @@ import test from 'node:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempDir } from './test-utils/temp-dir.js';
 
 const STATE = mkdtempSync(join(tmpdir(), 'subwave-jingle-guard-'));
 process.env.STATE_DIR = STATE;
@@ -119,4 +120,4 @@ test('no marker, or an unreadable one, means nothing to wait for', () => {
   assert.deepEqual(jingleWindow(), { clearAtMs: 0, windowMs: 0 });
 });
 
-test.after(() => rmSync(STATE, { recursive: true, force: true }));
+test.after(() => removeTempDir(STATE));

@@ -40,6 +40,7 @@ import contextlib
 import ctypes
 import importlib.util
 import json
+import math
 import os
 import re
 import shutil
@@ -132,18 +133,46 @@ DEMUCS_SR = 44100
 DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
 
 
-def _env_float(name, default):
+def _env_float(name, default, minimum=None, maximum=None):
+    """Decimal env var, warn-and-fall-back. With no bounds it reads exactly as it
+    always has (anything float() takes, nan and inf included). A bound makes it
+    the Python half of the controller's bounded `envFloat` (controller/src/util/
+    env.ts): NaN, inf or a value outside [minimum, maximum] warns and returns the
+    default. Never clamp instead — a clamp turned a percent-minded
+    DEMUCS_OVERLAP=25 into the slowest legal setting with nothing logged."""
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         # Runs at module load, before log() is defined — write stderr directly.
         sys.stderr.write(
             f"[analyze-worker] {name}={raw!r} is not a number; using default {default}\n"
         )
         return default
+    if minimum is None and maximum is None:
+        return value
+    if not math.isfinite(value):
+        problem = "is not a finite number"
+    elif minimum is not None and value < minimum:
+        problem = f"must be at least {minimum}"
+    elif maximum is not None and value > maximum:
+        problem = f"must be at most {maximum}"
+    else:
+        return value
+    sys.stderr.write(f"[analyze-worker] {name}={raw!r} {problem}; using default {default}\n")
+    return default
+
+
+def demucs_overlap():
+    """Share of each Demucs chunk that overlaps the next. The default is demucs'
+    own apply_model default, so an unset var changes nothing. 1.0 gives stride 0
+    and demucs raises, hence the 0.9 ceiling."""
+    return _env_float("DEMUCS_OVERLAP", 0.25, minimum=0.0, maximum=0.9)
+
+
+DEMUCS_OVERLAP = demucs_overlap()
 
 
 def _env_int(name, default, minimum=1):
@@ -1366,7 +1395,9 @@ class VocalActivityDetector:
         with torch.no_grad():
             # apply_model moves the model + chunks to the device itself (this
             # is how the demucs CLI's -d flag works), so no .to() here.
-            est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
+            est = apply_model(
+                self.model, wav.unsqueeze(0), device=resolve_device(), overlap=DEMUCS_OVERLAP
+            )[0]
         return {
             name: est[i].cpu().numpy()
             for i, name in enumerate(self.sources)
@@ -2437,7 +2468,7 @@ def _failed(e):
     return {"status": "failed", "reason": str(e)[:500]}
 
 
-def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker=False):
+def analyze_facets(librosa, source, facets, stems_dir=None, want_tail_vocals=False, stems_require_marker=False):
     """Compute exactly `facets` from an opened source. Each facet answers on
     its own: ok + data, unmeasurable + reason (this file can't give it at this
     version), unavailable + reason (this engine can't: no CLAP / no Demucs), or
@@ -2446,7 +2477,10 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
 
     Asking for a facet means asking for its model: clap force-loads CLAP and
     vocal/stems force-load Demucs, whatever the env defaults say; facets not
-    asked for never load a model.
+    asked for never load a model. `want_tail_vocals` asks a tail measured
+    without the vocal or stems facets to carry the outro's vocal ranges too
+    (one Demucs pass over the tail window only), as the flat response does
+    when Demucs is loaded; it loads Demucs only when the tail was measured.
 
     With `stems_require_marker` a stems root without the marker (a share not
     mounted here) gets no stem writes, and `stems` answers unavailable rather
@@ -2538,6 +2572,13 @@ def analyze_facets(librosa, source, facets, stems_dir=None, stems_require_marker
                 else:
                     out["stems"] = _ok({"stems_cached": stems_cached, "tail_stems": tail_vocals})
 
+    if "tail" in wanted and want_tail_vocals and outro is not None and "startMs" in outro \
+            and not (wanted & {"vocal", "stems"}):
+        detector = get_vocal_detector(force=True)
+        if detector is not None:
+            demucs_tail(detector, lambda **kw: source.load(librosa, **kw), librosa,
+                        source.duration_s, outro)
+
     if "tail" in wanted and "tail" not in out:
         if outro is None:
             out["tail"] = _unmeasurable(tail_reason or "tail-not-measured")
@@ -2592,6 +2633,7 @@ def analyze_facet_request(librosa, req):
         source.open(librosa)
         result = analyze_facets(
             librosa, source, facets, stems_dir=req.get("stems_dir"),
+            want_tail_vocals=req.get("tail_vocals") is True,
             stems_require_marker=req.get("stems_require_marker") is True,
         )
         return {"facets": result, "source": source.describe()}

@@ -342,7 +342,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/updating.md`](docs/updating.md):** updating on every install shape, and the half people need at 2am — how to roll back to a previous version, and how to recover a broken login, a silent stream or a restart-looping controller.
-- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, candidate pool vs the agent picker, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
+- **[`docs/concepts.md`](docs/concepts.md):** the seven things that get asked over and over — the persona tone dials, Track Shortlist vs Agentic Tools, playlists vs shows, the stem cache, private player vs stream password, dayparts at high latitude, and what a heart actually does to rotation.
 - **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes — including [public stream, LAN-only admin](docs/reverse-proxy.md#public-stream-lan-only-admin).
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
@@ -351,8 +351,9 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`docs/private-station.md`](docs/private-station.md):** locking the player and the stream behind a password — and how to tune in from apps, VLC and hardware once it's on, including a station behind reverse-proxy HTTP Basic Auth.
 - **[`docs/music-source-plugins.md`](docs/music-source-plugins.md):** playing from Jellyfin, Plex or anything else — and writing a music-source plugin for the router, with a worked example and a conformance kit.
 - **[`docs/navidrome-traffic.md`](docs/navidrome-traffic.md):** DNS counts versus HTTP requests, the two empty-room controls, and how to identify catalogue, analysis and playback traffic.
-- **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
-  non-obvious constraints behind each subsystem.
+- **[`CLAUDE.md`](CLAUDE.md):** the architecture map and one line per
+  non-obvious constraint, each pointing at its reasoning in
+  [`docs/internals/`](docs/internals/).
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`docs/community.md`](docs/community.md):** the community catalog — sharing and installing DJ skills, personas, and shows, plus the public station map. The content itself lives in [`getsubwave/community`](https://github.com/getsubwave/community).
 - **[`getsubwave/audiomuse-import`](https://github.com/getsubwave/audiomuse-import):** already analysed your library in AudioMuse-AI? Copy its moods, BPM, key, energy and genre into SUB/WAVE instead of tagging everything again.
@@ -386,6 +387,12 @@ public-domain recordings.
 
 This is general information, not legal advice. If you run a public station,
 talk to a media/IP lawyer in your jurisdiction.
+
+## Credits
+
+SUB/WAVE is built on Liquidsoap, Icecast, Navidrome, and many other open-source
+projects, models, and services. [CREDITS.md](CREDITS.md) lists them all, with
+their licences.
 
 ## License
 

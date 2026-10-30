@@ -20,7 +20,7 @@
 //    go through personas/install.ts, so the roster cap and the duplicate-name
 //    refusal cannot disagree between them.
 //  - An adopted filename is pinned to a CHARACTER CLASS. A jingle filename
-//    becomes a LINE of jingles.m3u, which Liquidsoap reloads on watch, so a
+//    becomes a LINE of jingles.m3u, which Liquidsoap reloads after every write, so a
 //    newline inside one adds a rotation entry nobody chose. A bundle is a file
 //    from another operator; an extension test is not a filename check.
 //  - A REFUSED import writes NOTHING — and "nothing" has to be checked against
@@ -232,15 +232,7 @@ test('a persona whose clone sample is GONE is refused, not shipped mute', async 
 
 // ── Import ───────────────────────────────────────────────────────────────────
 
-test('re-importing the same DJ is refused by the SHARED duplicate-name rule', async () => {
-  const outcome = await applyPersonaBundle(exported);
-  assert.equal(outcome.ok, false);
-  assert.equal((outcome as any).status, 409);
-  assert.match((outcome as any).error, /already in the roster/);
-  // Refused BEFORE any audio landed — a refused import must not litter the
-  // state dirs with files the operator cannot see.
-  assert.deepEqual(readdirSync(VOICES).sort(), ['nova.wav']);
-});
+
 
 test('a station backup is named as such rather than refused generically', async () => {
   const zip = new AdmZip();
@@ -367,7 +359,7 @@ function bundleOf(
 
 test('a NEWLINE in a jingle member name is refused and writes nothing', async () => {
   // rewritePlaylist joins DIR + filename with '\n', and Liquidsoap reloads
-  // jingles.m3u on watch — so a name carrying its own newline used to append a
+  // jingles.m3u after every write — so a name carrying its own newline used to append a
   // second, attacker-chosen line to the station's rotation. The bundle is a
   // file the operator was handed by someone else; this is untrusted input.
   const before = stateSnapshot();
@@ -434,6 +426,7 @@ test('a duplicate name refuses without writing the audio that came with it', asy
   ));
   assert.equal(outcome.ok, false);
   assert.equal((outcome as any).status, 409);
+  assert.match((outcome as any).error, /already in the roster/);
   assert.equal(stateSnapshot(), before);
 });
 

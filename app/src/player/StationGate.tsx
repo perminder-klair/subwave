@@ -24,25 +24,32 @@ const FAILURE_COPY: Record<Exclude<StationAuthResult, 'ok'>, string> = {
   'rate-limited': 'Too many attempts. Wait a few minutes, then try again.',
   unavailable: 'Could not reach the station. Check your connection and try again.',
 };
+const SAVED_REJECTED_COPY = 'The saved password was not accepted.';
 
 export interface StationGateProps {
   /** Checking a saved password: show a spinner, not the form. */
   checking: boolean;
   solid: boolean;
   stationName: string | null;
+  /** Asking again because the saved password was refused. */
+  savedRejected?: boolean;
   unlock: (password: string) => Promise<StationAuthResult>;
 }
 
-export default function StationGate({ checking, solid, stationName, unlock }: StationGateProps) {
+export default function StationGate({ checking, solid, stationName, savedRejected, unlock }: StationGateProps) {
   const { colors, mode } = useTheme();
   const [input, setInput] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  // Until the listener tries a password, say why they are being asked again.
+  const notice = error || (savedRejected && !submitted ? SAVED_REJECTED_COPY : '');
 
   const submit = async () => {
     const password = input.trim();
     if (!password || busy) return;
     setBusy(true);
+    setSubmitted(true);
     setError('');
     const result = await unlock(password);
     setBusy(false);
@@ -110,13 +117,13 @@ export default function StationGate({ checking, solid, stationName, unlock }: St
                 paddingHorizontal: 13,
               }}
             />
-            {error ? (
+            {notice ? (
               <Text
                 accessibilityRole="alert"
                 className="font-body"
                 style={{ color: colors.accent, fontSize: 13, lineHeight: 19, marginTop: 10 }}
               >
-                {error}
+                {notice}
               </Text>
             ) : null}
             <Pressable

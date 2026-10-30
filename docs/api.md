@@ -43,6 +43,8 @@ an admin credential:
   than `activePersonaId` behind the mic).
 - `GET /now-playing` — the current track, plus `context.activeShow` with the
   live show's host and guests already hydrated.
+- `GET /lyrics/current` — lyrics for the track a listener is hearing, when the
+  operator has the Lyrics panel on (see **Lyrics** below).
 
 **Persona souls are opt-in.** A persona's `soul` is its system prompt rather
 than a written bio, so the roster-wide reads above publish it only when the
@@ -88,6 +90,79 @@ them here would quietly widen the gate.
 Failed attempts on a station-gated read are rate-limited per IP (20 per 15
 minutes) in their **own** counter — spending them cannot lock a listener out of
 the player's password box, which has a separate one.
+
+## Lyrics
+
+`GET /lyrics/current` serves lyrics to listener-facing players and custom
+skins. It is on by default, and the operator can turn it off under **Settings →
+Listeners → Lyrics** (`settings.lyrics.enabled`); while off it answers `403` and
+`GET /state` carries `lyrics: { enabled: false }`, which is how a skin knows to
+hide its panel. It is
+a **station** read, gated like `/similar-tracks`: open on a public station, and
+on a private one it needs the station password (`x-station-auth` header).
+
+A listener hears the stream `stream.bufferSeconds` behind the live edge, so a
+player passes the track it is showing as `?songId=` (now-playing's
+`subsonic_id`). The station answers for the on-air track or one of the three
+before it, and refuses anything older with `409`. Without `songId` it answers
+for the on-air track.
+
+```json
+{
+  "songId": "abc123",
+  "synced": true,
+  "offsetMs": 0,
+  "lines": [
+    { "startMs": 12500, "text": "First lyric line" },
+    { "startMs": 15300, "text": "Second lyric line" }
+  ],
+  "source": "music-server",
+  "pending": false
+}
+```
+
+- `startMs` is on the **played** timeline: when the dead-air trim cut a silent
+  head off the track, the lines are already moved back by the same amount, so a
+  player compares them with elapsed time since the track started. Untimed
+  lines carry `null` and `synced` is `false`.
+- `offsetMs` is the station's correction for this track's lyric file, set by
+  the operator. It is not folded into the lines; a player adds it at render
+  time: `effectiveElapsedMs = elapsedSinceTrackStartMs + offsetMs`. Positive
+  advances the highlighting, negative delays it.
+- Empty `lines` means the track has no lyrics, or the item is not a library
+  track (`songId: null`). Instrumental placeholders (`[au: instrumental]`) count
+  as no lyrics, and so does a music server without the OpenSubsonic lyrics
+  endpoint (it answers that call with HTTP 404 or 501).
+- `503` means the music server did not answer. It is never "no lyrics": retry
+  after the `Retry-After` seconds.
+- `source` is where the lines came from: `music-server`, or `lrclib` (below).
+  It is `null` when there are no lines. A player can credit LRCLIB with it.
+- `pending: true` means the station is still looking the track up on LRCLIB and
+  the answer may improve, so ask again after a few seconds. Both fields are
+  optional: a station from before the fallback omits them.
+
+**The LRCLIB fallback.** With **Settings → Listeners → Lyrics panel → LRCLIB
+fallback** on (`settings.lyrics.lrclib`, on by default, and only while the
+panel itself is on), a track whose music-server lyrics are untimed or missing is
+looked up on [LRCLIB](https://lrclib.net) when it joins the queue, and again
+when it goes on air if that first try failed. That sends the
+track's artist, title, album and length to lrclib.net, or to `LRCLIB_URL` for a
+self-hosted instance. Only a file within 2 seconds of the track's length is
+used, so a different cut is not timed against this one. The music server's
+timed lyrics always win, and LRCLIB lyrics reach this panel only, never the
+DJ's vocal timing. The station remembers each answer, so a track is asked about
+once (a miss again after 30 days). The station offset and the trim shift apply
+to LRCLIB lines exactly as to the music server's.
+
+The operator sets the correction with `PUT /lyrics/offsets/:trackId` (admin),
+body `{ "offsetMs": 2900 }`, a whole number from `-30000` to `30000`; `0`
+clears it. It applies to every listener. The Classic and Drift players show
+synced lyrics on the stage (Classic beside the track info, Drift as the centre of
+the page), and their timing controls (beside **♪ Lyrics**) offer this control to
+a browser signed in to the admin console. A listener hides or shows lyrics with
+the lyrics button beside the track, or `L`. The native app shows them on its Live
+page under a one-row track header, applies this offset, and offers only the
+device's own timing nudge, since it has no admin sign-in.
 
 ## OpenAPI
 

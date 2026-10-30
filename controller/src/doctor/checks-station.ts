@@ -12,12 +12,16 @@ import * as db from '../music/library-db.js';
 import * as stemCache from '../music/stem-cache.js';
 import type { Finding, StationSettings } from './types.js';
 import { fmtTokens, isSchemaFailure } from './util.js';
+import { settingsAgentRoutes } from '../schemas/settings.js';
+import {
+  AGENT_DEADLINE_WARN_RATIO, AGENT_NUM_CTX_FLOOR, agentDeadlineRatio, contextWindowTooSmall, latencyP90,
+} from './agent-fit.js';
 
 export async function checkCapabilities(s: StationSettings | null): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // Web search — backs the DJ's artist-news segments. DuckDuckGo is keyless;
-  // Tavily needs a key. Report config readiness, then do a short live probe so
+  // Web search — backs the DJ's artist-news segments. DuckDuckGo and Keenable
+  // are keyless; Tavily and Brave need a key. Report config readiness, then do a short live probe so
   // "is it actually working?" is answered, not just "is it configured?".
   const provider = s?.search?.provider || 'duckduckgo';
   let ready = true;
@@ -28,7 +32,7 @@ export async function checkCapabilities(s: StationSettings | null): Promise<Find
       label: 'web search',
       status: 'warn',
       detail: `${provider} selected but no API key`,
-      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo (keyless).',
+      hint: 'Artist-news segments can\'t fetch. Configure the selected provider in Settings → Web search: Tavily and Brave need an API key; SearXNG needs its server URL. Or switch to DuckDuckGo or Keenable (both keyless).',
     });
     return out;
   }
@@ -148,37 +152,35 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
   // --- Agent deadline vs MEASURED latency ---
   // checkLlm only warns when the configured number looks low; here we compare it
   // to what the model is actually doing. If p90 latency crowds the deadline, the
-  // agentic picker is silently timing out into the pool on most tracks.
-  if (llm.pickerAgent !== false) {
-    const lat = recentCalls
-      .filter((c) => c && c.ok !== false && Number.isFinite(c.ms) && c.ms > 0)
-      .map((c) => c.ms as number)
-      .sort((a, b) => a - b);
-    const deadlineMs = Number(llm.agentTimeoutMs);
-    if (lat.length >= 5 && Number.isFinite(deadlineMs) && deadlineMs > 0) {
-      const p90 = lat[Math.min(lat.length - 1, Math.floor(lat.length * 0.9))];
-      const ratio = p90 / deadlineMs;
+  // agent runs (Agentic Tools picks, agent-assisted requests, agentic segments)
+  // are silently timing out into their fallbacks.
+  const routes = settingsAgentRoutes(llm);
+  if (routes.any) {
+    const p90 = latencyP90(recentCalls);
+    const ratio = p90 === null ? null : agentDeadlineRatio(p90, llm.agentTimeoutMs);
+    if (p90 !== null && ratio !== null) {
+      const deadlineMs = Number(llm.agentTimeoutMs);
       out.push({
         label: 'agent deadline vs latency',
-        status: ratio >= 1 ? 'fail' : ratio >= 0.8 ? 'warn' : 'ok',
+        status: ratio >= 1 ? 'fail' : ratio >= AGENT_DEADLINE_WARN_RATIO ? 'warn' : 'ok',
         detail: `p90 model latency ${(p90 / 1000).toFixed(1)}s vs ${Math.round(deadlineMs / 1000)}s deadline`,
         hint:
-          ratio >= 0.8
-            ? 'Recent calls are running close to (or past) the agent deadline, so the agentic picker is probably timing out into the pool fallback on many tracks — you lose the session-aware picks you’re paying for. Raise Settings → LLM provider → Agent deadline (seconds), or switch to a faster/smaller model (or turn reasoning OFF).'
+          ratio >= AGENT_DEADLINE_WARN_RATIO
+            ? 'Recent calls are running close to (or past) the agent deadline, so agent runs (Agentic Tools picks, agent-assisted requests or agentic segments) are probably timing out into their fallbacks — you lose the work you’re paying for. Raise Settings → Music selection → Agent deadline, or switch to a faster/smaller model (or turn reasoning OFF). Track Shortlist and direct runtimes avoid the tool loop entirely.'
             : undefined,
       });
     }
   }
 
-  // --- Context window too small for the agentic picker (Ollama only) ---
-  if (llm.provider === 'ollama' && llm.pickerAgent !== false) {
-    const nc = Number(llm.numCtx);
-    if (Number.isFinite(nc) && nc > 0 && nc < 8192) {
+  // --- Context window too small for an agent tool loop (Ollama only) ---
+  if (routes.any) {
+    const nc = contextWindowTooSmall(llm.provider, llm.numCtx);
+    if (nc !== null) {
       out.push({
         label: 'context window',
         status: 'warn',
-        detail: `Context window ${nc} — tight for the agentic picker`,
-        hint: 'The agentic picker sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back to the pool. Raise Settings → LLM provider → Context window (num_ctx) to ≥8192 (16384 is the default), or turn the agentic picker off.',
+        detail: `Context window ${nc} — tight for an agent tool loop`,
+        hint: `An agent run (Agentic Tools picks, agent-assisted requests, agentic segments) sends a system prompt + tool definitions + candidates; a small Ollama context window truncates them so the agent can’t call its “done” tool and falls back. Raise Settings → LLM provider → Provider → Context window (num_ctx) to ≥${AGENT_NUM_CTX_FLOOR} (16384 is the default; Stats shows the size your own calls need), or switch those routes to Track Shortlist / direct.`,
       });
     }
   }
@@ -198,15 +200,15 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
     }
   }
 
-  // --- Max response size too small for the agentic picker ---
+  // --- Max response size too small for an agent tool loop ---
   {
     const mo = Number(llm.maxOutputTokens);
-    if (Number.isFinite(mo) && mo > 0 && mo < 1000 && llm.pickerAgent !== false) {
+    if (Number.isFinite(mo) && mo > 0 && mo < 1000 && routes.any) {
       out.push({
         label: 'max response size',
         status: 'warn',
-        detail: `Max response size ${mo} tokens — low for the agentic picker`,
-        hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM provider → Max response size (tokens) at 0 (strategy default) unless a small-context local model specifically needs it.',
+        detail: `Max response size ${mo} tokens — low for an agent tool loop`,
+        hint: 'A small per-call output cap can truncate the agent’s tool calls mid-JSON, forcing a fallback. Leave Settings → LLM provider → Reasoning → Max response size (tokens) at 0 (strategy default) unless a small-context local model specifically needs it.',
       });
     }
   }
@@ -334,7 +336,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
           detail: `only ${cached.toLocaleString('en-GB')} of ${total.toLocaleString('en-GB')} tracks have stems on disk` +
             (attempted > cached ? ` (${attempted.toLocaleString('en-GB')} attempted)` : ''),
           hint: holds < total
-            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Transitions to cover more of the library, then let the analysis pass backfill the rest.`
+            ? `Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade. The ${budgetGb} GB budget only holds ~${holds.toLocaleString('en-GB')} tracks — raise Stem cache budget in Settings → Broadcast & mixer → Stem transitions to cover more of the library, then let the analysis pass backfill the rest.`
             : 'Blends need cached stems on BOTH tracks of a pair, so most seams will fall back to a plain crossfade until the backfill catches up. Run the analysis pass (it now targets tracks with no cached stems) and this fills in over a few runs.',
         });
       }
@@ -346,7 +348,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
         label: 'stem transitions',
         status: 'warn',
         detail: 'stem blends are on but pair-drain scheduling is off',
-        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Danger zone → Stem transitions.',
+        hint: 'Stem-blend seams requires Pair-aware transitions — a blend can only be inserted at a pair-aware drain. Re-enable Pair-aware transitions or turn Stem-blend seams off in Settings → Broadcast & mixer → Stem transitions.',
       });
     }
   } catch { /* analyzer unavailable — skip */ }
@@ -374,7 +376,7 @@ export async function checkTuning(s: StationSettings | null): Promise<Finding[]>
       detail: `${encoderCount} encoder${encoderCount === 1 ? '' : 's'} (mp3${extra.length ? ' + ' + extra.join(' + ') : ''}) · ${cores} cores, load ${load1.toFixed(2)}`,
       hint:
         heavy && pressured
-          ? 'Each extra stream mount and the hourly archive is a continuous encoder, and this host is already loaded for its core count. The hourly archive is the single biggest cost — disable mounts you don’t use (Settings → Danger zone; hourly recording is in Settings → Archives) to free CPU for the DJ and TTS.'
+          ? 'Each extra stream mount and the hourly archive is a continuous encoder, and this host is already loaded for its core count. The hourly archive is the single biggest cost — disable mounts you don’t use (Settings → Broadcast & mixer; hourly recording is in Settings → Archives) to free CPU for the DJ and TTS.'
           : undefined,
     });
   } catch { /* resources unavailable — skip encoder check */ }

@@ -2,10 +2,19 @@
 // wide-row projection.
 
 import { SQL_HAS_MOODS, requireDb } from './handle.js';
+import { instrumentalFromJson } from '../lyric-vocal.js';
 import type { FilterOpts, TrackRecord, TrackRow } from './types.js';
 import { parsePaceSpans, rowToTrack, safeParseArray } from './rows.js';
+import { refreshSearchKeys } from './search-keys.js';
 
-export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[] } {
+// SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
+// `yearUntrusted`'s composition and the two must move together.
+export const ERA_YEAR_SQL =
+  `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
+
+// `reindexing` (set only for a query search): the stored search keys are still
+// being rebuilt after a bulk change, so the answer may be missing tracks.
+export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecord[]; reindexing?: boolean } {
   const moods = (opts.moods || []).filter(Boolean);
   const energy = opts.energy || null;
   const genre = opts.genre || null;
@@ -34,14 +43,10 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(genre);
   }
   if (vocal === 'instrumental') {
-    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
+    where.push('is_instrumental(vocal_ranges_json) = 1');
   } else if (vocal === 'vocal') {
-    where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
+    where.push('is_instrumental(vocal_ranges_json) = 0');
   }
-  // SQL twin of show-filter's resolveEraYear (#842/#1418); the OR is
-  // `yearUntrusted`'s composition and the two must move together.
-  const ERA_YEAR_SQL =
-    `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {
@@ -50,6 +55,16 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     );
     const pat = `%${q}%`;
     params.push(pat, pat, pat);
+  }
+  let reindexing: boolean | undefined;
+  if (opts.query) {
+    // The compiled query reads the stored search keys; bring them up to date.
+    // Bounded and never throws: a bulk re-key finishes in the background.
+    reindexing = !refreshSearchKeys();
+    // Matched in a subquery that reads only the covering search index, never the
+    // wide rows (#1937, search-keys.ts); the queries below read just the matches.
+    where.push(`rowid IN (SELECT rowid FROM tracks WHERE ${opts.query.sql})`);
+    params.push(...opts.query.params);
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -76,10 +91,21 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   const total = (
     d.prepare(`SELECT COUNT(*) AS n FROM tracks ${whereSql}`).get(...params) as { n: number }
   ).n;
-  const rows = d
-    .prepare(`SELECT * FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
-    .all(...params, limit, offset) as TrackRow[];
-  return { total, rows: rows.map(rowToTrack) };
+  // Page the ids, then read only the page's wide rows (#1937). `SELECT *`
+  // straight into the ORDER BY puts every matching row's analysis JSON through
+  // the sorter, which on a 150k library read most of the file for one page.
+  // Same WHERE, ORDER BY and LIMIT/OFFSET, so the same ids in the same order.
+  const ids = (
+    d.prepare(`SELECT id FROM tracks ${whereSql} ${orderSql} LIMIT ? OFFSET ?`)
+      .all(...params, limit, offset) as Array<{ id: string }>
+  ).map(r => r.id);
+  if (ids.length === 0) return { total, rows: [], ...(reindexing !== undefined && { reindexing }) };
+  const byId = new Map(
+    (d.prepare(`SELECT * FROM tracks WHERE id IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as TrackRow[]).map(r => [r.id, r]),
+  );
+  const rows = ids.map(id => byId.get(id)).filter((r): r is TrackRow => r !== undefined);
+  return { total, rows: rows.map(rowToTrack), ...(reindexing !== undefined && { reindexing }) };
 }
 
 // Lean row shape for the Observatory bulk endpoint. rowToTrack would JSON-parse
@@ -112,6 +138,11 @@ const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duratio
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
   loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
 
+function vocalModeFromJson(json: string | null): ObservatoryTrackRow['vocal'] {
+  const instrumental = instrumentalFromJson(json);
+  return instrumental == null ? null : instrumental === 1 ? 'instrumental' : 'vocal';
+}
+
 export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
   // ~14 spans, so the mean is cheap; the fat blobs are never selected.
   let paceMean: number | null = null;
@@ -137,8 +168,7 @@ export function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     analysisConfidence: row.analysis_confidence ?? null,
     loudnessLufs: row.loudness_lufs ?? null,
     paceMean,
-    // NULL = not analysed, '[]' = instrumental, anything else = vocal.
-    vocal: row.vocal_ranges_json == null ? null : row.vocal_ranges_json === '[]' ? 'instrumental' : 'vocal',
+    vocal: vocalModeFromJson(row.vocal_ranges_json),
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };

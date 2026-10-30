@@ -488,9 +488,9 @@ only when the one before it came up empty:
    topology (Cloudflare in front of the bundled Caddy).
 2. **A header you name.** Most reverse proxies can add one — nginx with a GeoIP2
    module, Traefik behind a CDN, Cloudflare Tunnel with a transform rule. Put its
-   name in Admin → Settings → Danger zone → **Listener country → Country header**
+   name in Admin → Settings → Broadcast & mixer → **Listener country → Country header**
    (`stream.countryHeader`). Empty by default.
-3. **An offline GeoIP database.** Admin → Settings → Danger zone → **Listener
+3. **An offline GeoIP database.** Admin → Settings → Broadcast & mixer → **Listener
    country → GeoIP database** (`stream.geoipDbPath`), or `GEOIP_DB_PATH` in the
    environment, which wins. See below.
 

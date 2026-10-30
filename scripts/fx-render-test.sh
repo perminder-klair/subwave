@@ -27,12 +27,20 @@
 #       Regression check — on A -> jingle -> B, B's entry gesture must stand
 #       down on the jingle's seam yet still arm on a direct A -> B seam. Lifts
 #       the arming lines, the jingle mark and the cross stamps from radio.liq.
+#   scripts/fx-render-test.sh eqpower
+#       Regression check — the plain crossfade's equal-power curve (J4) holds the
+#       level mid-cross where linear dips ~3 dB, and only song-to-song seams take
+#       it. Lifts equal_power_fade and the equal_power_seam rule from radio.liq.
+#   scripts/fx-render-test.sh jingledry
+#       Regression check — a stinger shorter than the crossfade must air dry at
+#       full level, not as its own fade-in under the outgoing track. Lifts the
+#       seam block and the jingle mark from radio.liq.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
 set -euo pipefail
 
-IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.5}"
+IMAGE="${LIQ_IMAGE:-savonet/liquidsoap:v2.4.6}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="$HERE/.fx-render"
 mkdir -p "$WORK"
@@ -792,13 +800,228 @@ LIQ
   echo "JINGLESEAM PASS — the jingle's seam is a plain fade; the direct seam still arms B's sweep"
 }
 
+# jdry_render <stinger.wav> <cross seconds> <out name> — A, the stinger, B through
+# the seam block LIFTED from radio.liq, rendered to $WORK/<out>.wav.
+jdry_render() {
+  awk '/^  seam =$/{on=1} on{print} on&&/^    end$/{exit}' "$HERE/../liquidsoap/radio.liq" > "$WORK/jdry-seam.liq"
+  local mark
+  mark=$(grep -m1 -oE 'metadata\.map\(update=true, fun \(_\) -> \[\("subwave_jingle", "true"\)\]' "$HERE/../liquidsoap/radio.liq")
+  grep -q "jingle_in" "$WORK/jdry-seam.liq" && [ -n "$mark" ] \
+    || { echo "JINGLEDRY FAIL — could not lift the seam block / jingle mark from radio.liq"; return 1; }
+  {
+    cat <<'LIQ'
+settings.log.stdout := true
+settings.log.level := 2
+sa = once(single('annotate:title="A":/work/a.wav'))
+sb = once(single('annotate:title="B":/work/b.wav'))
+LIQ
+    echo "sj = once(single('annotate:title=\"J\":/work/$1'))"
+    echo "jingle = ${mark}, sj)"
+    cat <<'LIQ'
+music = sequence([sa, jingle, sb])
+def t(a, b) =
+  jingle_out = a.metadata["subwave_jingle"] == "true"
+  jingle_in = b.metadata["subwave_jingle"] == "true"
+  d = min(source.remaining(a.source), source.remaining(b.source))
+  a_source = fade.out(duration=d, initial_metadata=a.metadata, a.source)
+  b_source = fade.in(duration=d, initial_metadata=b.metadata, b.source)
+%include "/work/jdry-seam.liq"
+  seam
+end
+LIQ
+    echo "music = cross(duration=$2., persist_override=true, t, music)"
+    echo "output.file(%wav, fallible=true, on_stop=shutdown, \"/work/$3.wav\", music)"
+    echo 'clock.assign_new(sync="none", [music])'
+  } > "$WORK/$3.liq"
+  liq "$3.liq" > "$WORK/$3.log" || { cat "$WORK/$3.log"; return 1; }
+}
+
+# jdry_band <render> <freq> <start> — mean level of one tone over 400 ms, whole dB.
+jdry_band() {
+  local v
+  v=$(ffmpeg -v info -ss "$3" -t 0.4 -i "$WORK/$1.wav" -af "bandpass=f=$2:width_type=h:w=60,volumedetect" -f null - 2>&1 \
+    | sed -n 's/.*mean_volume: \(-\{0,1\}[0-9]*\).*/\1/p')
+  echo "${v:--99}"
+}
+
+jingledry() {
+  # Tones sit near -36 dB through the band filter; "at level" is -38 or above,
+  # "gone" is -55 or below.
+  gen_tones
+  [ -f "$WORK/j.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=2.8" -af volume=-12dB -ar 44100 -ac 2 "$WORK/j.wav"
+  [ -f "$WORK/jlong.wav" ] || ffmpeg -v error -y -f lavfi -i "sine=frequency=1000:duration=8" -af volume=-12dB -ar 44100 -ac 2 "$WORK/jlong.wav"
+
+  # A stinger shorter than the crossfade. A is 12 s; its tail fades over the
+  # stinger's 2.8 s (9.2 -> 12.0), then the stinger runs 12.0 -> 14.8. Blended,
+  # it was already at level by 11.4 and gone by 12.0.
+  jdry_render j.wav 10 jdry || return 1
+  local early head mid under
+  early=$(jdry_band jdry 1000 11.4); head=$(jdry_band jdry 1000 12.0)
+  mid=$(jdry_band jdry 1000 13.2); under=$(jdry_band jdry 440 12.0)
+  echo "short stinger: before its start ${early} dB, head ${head} dB, middle ${mid} dB, outgoing under it ${under} dB"
+  [ "$early" -le -55 ] && [ "$head" -ge -38 ] && [ "$mid" -ge -38 ] && [ "$under" -le -55 ] \
+    || { echo "JINGLEDRY FAIL — the stinger is blended into the outgoing track's fade instead of following it"; return 1; }
+
+  # A stinger longer than the crossfade (8 s under a 3 s cross): it runs
+  # 12.0 -> 20.0 and must keep its last second, with B starting dry after it.
+  jdry_render jlong.wav 3 jdrylong || return 1
+  local tail bhead bearly
+  tail=$(jdry_band jdrylong 1000 19.4); bhead=$(jdry_band jdrylong 880 20.2); bearly=$(jdry_band jdrylong 880 19.4)
+  echo "long stinger: its last second ${tail} dB, next track under it ${bearly} dB, next track's head ${bhead} dB"
+  # 880 Hz sits close to the stinger's 1000 Hz, so the filter leaks about -47 dB
+  # of the stinger into B's band; B itself mixed under would read near -36.
+  [ "$tail" -ge -38 ] && [ "$bearly" -le -44 ] && [ "$bhead" -ge -38 ] \
+    || { echo "JINGLEDRY FAIL — the end of a long stinger is faded, or the next track is mixed under it"; return 1; }
+  echo "JINGLEDRY PASS — a stinger airs dry after the outgoing track's fade and keeps its own ending"
+}
+
+# Equal-power crossfade (J4). Two halves, both LIFTED from radio.liq so the
+# harness cannot drift from the mixer:
+#   1. the curve: equal_power_fade over two independent pink noises against
+#      the linear fade.in/fade.out pair, measured at the middle of the cross.
+#      Linear powers add to 0.5 there (-3 dB); equal-power must hold within
+#      1 dB of the steady level and never rise more than 1.5 dB above it.
+#      The incoming alone (out of silence) must also arrive no faster than the
+#      linear fade-in over the first quarter of the cross: a quiet ending into
+#      a loud start is a fade-in from silence, and a curve that brings the
+#      incoming up early made it abrupt (heard on air).
+#      The incoming carrying a per-track liq_amplify (as every analysed track
+#      does on air, applied before the cross like radio.liq) must take that
+#      gain ONCE and still follow the curve: within 0.5 dB of the unannotated
+#      incoming minus the gain, every half-second from 1 s into the cross to
+#      5 s after it. amplify's default override would replace the curve with
+#      the gain (no fade-in, then a step of that gain at the end of the cross).
+#   2. the seam rule: equal_power_seam must be true for a plain song-to-song
+#      seam only. A stem-blend clip seam, a jingle, a bed, a pause break or any
+#      gesture flag keeps the linear curve (a clip is rendered FROM the tracks
+#      it joins, so equal-power over it would sum time-aligned copies, +3 dB).
+eqpower() {
+  mkdir -p "$WORK"
+  local radio="$HERE/../liquidsoap/radio.liq"
+  awk '/^half_pi = /{on=1} on{print} on&&/^end$/{exit}' "$radio" > "$WORK/eqp-fade.liq"
+  grep -q 'def equal_power_fade' "$WORK/eqp-fade.liq" \
+    || { echo "EQPOWER FAIL — could not lift equal_power_fade out of radio.liq"; return 1; }
+  { grep -E '^  jingle_(out|in) = ' "$radio"
+    awk '/^  def flagged\(m, k\)/{on=1} on{print} on&&/liq_blend"\)$/{exit}' "$radio"; } > "$WORK/eqp-rule.liq"
+  grep -q 'equal_power_seam =' "$WORK/eqp-rule.liq" \
+    || { echo "EQPOWER FAIL — could not lift the equal_power_seam rule out of radio.liq"; return 1; }
+
+  [ -f "$WORK/eqp-a.wav" ] || ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=11:amplitude=0.25" -t 16 -ar 44100 -ac 2 "$WORK/eqp-a.wav"
+  [ -f "$WORK/eqp-b.wav" ] || ffmpeg -v error -y -f lavfi -i "anoisesrc=color=pink:seed=97:amplitude=0.25" -t 16 -ar 44100 -ac 2 "$WORK/eqp-b.wav"
+  [ -f "$WORK/eqp-s.wav" ] || ffmpeg -v error -y -f lavfi -i "anullsrc=r=44100:cl=stereo" -t 16 "$WORK/eqp-s.wav"
+  local mode src
+  for mode in lin ep linin epin epgain; do
+    # Name the silent-outgoing modes: a `*in` glob also matches `lin`, which
+    # turned the linear reference into a fade-in out of silence.
+    src=a; case "$mode" in linin|epin|epgain) src=s ;; esac
+    bsrc='single("/work/eqp-b.wav")'
+    [ "$mode" = epgain ] && bsrc='single("annotate:liq_amplify=\"-6 dB\":/work/eqp-b.wav")'
+    cat > "$WORK/eqp-$mode.liq" <<LIQ
+settings.frame.audio.samplerate := 44100
+$(cat "$WORK/eqp-fade.liq")
+d = 10.
+def trans(a, b) =
+  if "$mode" == "ep" or "$mode" == "epin" or "$mode" == "epgain" then
+    add(normalize=false, [equal_power_fade(span=d, rising=false, a.source), equal_power_fade(span=d, rising=true, b.source)])
+  else
+    add(normalize=false, [fade.out(duration=d, a.source), fade.in(duration=d, b.source)])
+  end
+end
+s = amplify(override="liq_amplify", 1., sequence([once(single("/work/eqp-$src.wav")), once($bsrc)]))
+s = cross(duration=d, trans, s)
+output.file(%wav, fallible=true, on_stop=shutdown, "/work/eqp-$mode.wav", s)
+LIQ
+  done
+  liq eqp-lin.liq > "$WORK/eqp-lin.log" 2>&1 &
+  liq eqp-ep.liq > "$WORK/eqp-ep.log" 2>&1 &
+  liq eqp-linin.liq > "$WORK/eqp-linin.log" 2>&1 &
+  liq eqp-epin.liq > "$WORK/eqp-epin.log" 2>&1 &
+  liq eqp-epgain.liq > "$WORK/eqp-epgain.log" 2>&1 &
+  wait
+  # Steady = A's body (1..5 s) and B's (17..21 s); the cross runs 6..16 s.
+  local res
+  res=$(for mode in lin ep; do
+    ffmpeg -v error -i "$WORK/eqp-$mode.wav" -af "asetnsamples=n=4410,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=print:file=-" -f null - 2>/dev/null \
+      | awk -v m="$mode" -F= '/RMS_level/{v[n++]=$2} END{
+          s=0;c=0; for(i=10;i<50;i++){s+=10^(v[i]/10);c++} for(i=170;i<210;i++){s+=10^(v[i]/10);c++} st=10*log(s/c)/log(10);
+          s=0;c=0; for(i=105;i<115;i++){s+=10^(v[i]/10);c++} mid=10*log(s/c)/log(10)-st;
+          mx=-99; for(i=62;i<158;i+=10){s=0;for(j=i;j<i+10;j++)s+=10^(v[j]/10); x=10*log(s/10)/log(10)-st; if(x>mx)mx=x}
+          printf "%s %.2f %.2f\n", m, mid, mx }'
+  done)
+  echo "$res" | awk '{printf "  %-3s midpoint %+.1f dB, loudest second of the cross %+.1f dB (vs steady)\n", $1, $2, $3}'
+  echo "$res" | awk '$1=="lin"{ok=($2<=-2.0 && $2>=-4.5)} $1=="ep"{okp=($2>=-1.0 && $2<=1.0 && $3<=1.5)} END{exit !(ok && okp)}' \
+    || { echo "EQPOWER FAIL — the linear pair should dip ~3 dB mid-cross and equal-power hold within 1 dB"; return 1; }
+  # The incoming out of silence, first quarter of the cross (6.0 .. 8.5 s).
+  local early
+  early=$(for mode in linin epin; do
+    ffmpeg -hide_banner -nostats -ss 6.0 -t 2.5 -i "$WORK/eqp-$mode.wav" -af astats=metadata=0:reset=0 -f null - 2>&1 \
+      | awk '/Overall/{o=1} o && /RMS level dB/{print $NF; exit}'
+  done | paste -sd' ')
+  echo "$early" | awk '{printf "  incoming out of silence, first quarter: linear %.1f dB, equal-power %.1f dB\n", $1, $2}'
+  echo "$early" | awk 'NF == 2 {ok = ($2 <= $1 + 0.5)} END {exit !ok}' \
+    || { echo "EQPOWER FAIL — the equal-power incoming rises faster than the linear fade-in"; return 1; }
+  # The incoming with liq_amplify -6 dB vs without, 7..21 s in 0.5 s windows
+  # (the cross runs 6..16 s): the gain once, on the same curve, everywhere.
+  local gain
+  gain=$(for mode in epin epgain; do
+    ffmpeg -v error -i "$WORK/eqp-$mode.wav" -af "asetnsamples=n=22050,astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level,ametadata=print:file=-" -f null - 2>/dev/null \
+      | awk -F= '/RMS_level/{v[n++]=$2} END{for(i=14;i<42;i++) printf "%s ", v[i]; print ""}'
+  done | awk 'NR==1{for(i=1;i<=NF;i++)a[i]=$i; n=NF} NR==2{w=0; for(i=1;i<=n;i++){d=a[i]-$i-6; if(d<0)d=-d; if(d>w)w=d}; printf "%.2f\n", w}')
+  echo "  incoming with liq_amplify -6 dB: worst half-second off (unannotated - 6 dB) by $gain dB"
+  awk -v w="$gain" 'BEGIN{exit !(w != "" && w <= 0.5)}' \
+    || { echo "EQPOWER FAIL — a per-track liq_amplify replaces the equal-power curve on the incoming"; return 1; }
+
+  cat > "$WORK/eqp-rule-run.liq" <<LIQ
+equal_power_crossfade = ref(true)
+fails = ref(0)
+def check(name, am, bm, on, expect) =
+  equal_power_crossfade := on
+  a = {metadata=am}
+  b = {metadata=bm}
+$(sed 's/^/  /' "$WORK/eqp-rule.liq")
+  if equal_power_seam != expect then
+    fails := fails() + 1
+    print("EQRULE MISMATCH #{name}: got #{equal_power_seam}, expected #{expect}")
+  else
+    print("EQRULE ok #{name}: #{equal_power_seam}")
+  end
+end
+song = [("title", "A song")]
+check("song to song", song, song, true, true)
+check("setting off", song, song, false, false)
+check("into a stem-blend clip", song, [("subwave_clip", "1")], true, false)
+check("out of a stem-blend clip", [("subwave_clip", "1")], song, true, false)
+check("into a jingle", song, [("subwave_jingle", "true")], true, false)
+check("out of a jingle", [("subwave_jingle", "true")], song, true, false)
+check("into a bed", song, [("subwave_kind", "bed")], true, false)
+check("out of a pause break", [("subwave_kind", "pause-talk")], song, true, false)
+check("washout", [("liq_washout", "true")], song, true, false)
+check("loop", [("liq_loop", "true")], song, true, false)
+check("sweep", song, [("liq_sweep", "true")], true, false)
+check("dissolve", song, [("liq_dissolve", "true")], true, false)
+check("chop", song, [("liq_chop", "true")], true, false)
+check("blend", song, [("liq_blend", "true")], true, false)
+check("show-boundary fade", [("liq_show_fade", "true")], song, true, true)
+print("EQRULE fails=#{fails()}")
+shutdown()
+LIQ
+  local out
+  out=$(liq eqp-rule-run.liq 2>&1 | grep 'EQRULE')
+  echo "$out" | sed 's/^/  /'
+  echo "$out" | grep -q 'EQRULE fails=0' \
+    || { echo "EQPOWER FAIL — equal_power_seam arms on a seam that must stay linear (or misses a plain one)"; return 1; }
+  echo "EQPOWER PASS — equal-power holds the level through a plain crossfade, and only song-to-song seams take it"
+}
+
 case "${1:-}" in
   probe)  probe ;;
   render) shift; render "$@" ;;
   loopcheck) loopcheck ;;
   loopgaps) loopgaps ;;
   jingleseam) jingleseam ;;
+  jingledry) jingledry ;;
+  eqpower) eqpower ;;
   xdur)   xdur ;;
   xchain) xchain ;;
-  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | xdur | xchain"; exit 2 ;;
+  *) echo "usage: $0 probe | render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop|all] | loopcheck | loopgaps | jingleseam | jingledry | eqpower | xdur | xchain"; exit 2 ;;
 esac

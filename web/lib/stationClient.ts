@@ -17,6 +17,8 @@ import type {
   SessionPayload,
   StationState,
 } from '@/lib/types';
+import { getStationAuthToken } from '@/lib/stationAuth';
+import { publicLyricsPayloadSchema, type PublicLyricsPayload } from '@/lib/schemas.generated';
 
 export interface ThemesPayload {
   /** The effective theme — what a client should actually paint. */
@@ -56,6 +58,19 @@ export interface LikeStatus {
   count?: number;
 }
 
+/** How `GET /lyrics/current` answered. `unavailable` is the only kind worth
+ *  asking again: the music server (or the network) did not answer. */
+export type LyricsResult =
+  | { kind: 'ok'; payload: PublicLyricsPayload }
+  /** The operator has the Lyrics panel switched off. */
+  | { kind: 'disabled' }
+  /** The track has left the station's recent-play window. */
+  | { kind: 'gone' }
+  /** A private station refused the stored password (or there is none). Not
+   *  retried: every refusal spends the address's station-read attempts. */
+  | { kind: 'locked' }
+  | { kind: 'unavailable'; retryAfterSec: number | null };
+
 export interface StationClient {
   origin: StationOrigin;
   /** Prefix a controller-relative path with the station's API base.
@@ -77,7 +92,10 @@ export interface StationClient {
   likeCurrent(songId: string): Promise<LikeResult | null>;
   /** null on network error. */
   likeStatus(): Promise<LikeStatus | null>;
-  /** Best-effort: never throws, never blocks. */
+  /** Lyrics for the track this listener is hearing (now-playing's
+   *  `subsonic_id`). Never throws. */
+  currentLyrics(songId: string): Promise<LyricsResult>;
+  /** One-shot audience beacon. Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
   /** null on any failure; callers treat that as "configured" and stay put. */
   onboardingStatus(): Promise<{ needsSetup?: boolean } | null>;
@@ -140,6 +158,28 @@ export function createStationClient(origin: StationOrigin): StationClient {
         return await json<LikeStatus>(r);
       } catch {
         return null;
+      }
+    },
+    currentLyrics: async (songId) => {
+      try {
+        // A private station gates this read on the station password, which the
+        // gate stored when the listener unlocked the player.
+        const token = getStationAuthToken();
+        const r = await fetch(`${api}/lyrics/current?songId=${encodeURIComponent(songId)}`, {
+          cache: 'no-store',
+          headers: token ? { 'x-station-auth': token } : undefined,
+        });
+        if (r.status === 403) return { kind: 'disabled' };
+        if (r.status === 409) return { kind: 'gone' };
+        if (r.status === 401) return { kind: 'locked' };
+        if (!r.ok) {
+          const retryAfter = Number(r.headers.get('Retry-After'));
+          return { kind: 'unavailable', retryAfterSec: Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null };
+        }
+        const parsed = publicLyricsPayloadSchema.safeParse(await r.json());
+        return parsed.success ? { kind: 'ok', payload: parsed.data } : { kind: 'unavailable', retryAfterSec: null };
+      } catch {
+        return { kind: 'unavailable', retryAfterSec: null };
       }
     },
     beacon: payload => {

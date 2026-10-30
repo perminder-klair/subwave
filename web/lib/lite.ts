@@ -2,38 +2,44 @@
 // backdrop-filter and disables animations (globals.css), for weak GPUs.
 //
 // Precedence: `?lite=1`/`?lite=0` in the URL (written through to localStorage so
-// a later param-less visit sticks), then the theme-menu toggle, then off.
-// Applied pre-paint via LITE_INIT_SCRIPT so a kiosk never flashes the heavy build.
+// a later param-less visit sticks, which is how a kiosk pins it), then the
+// Appearance menu's toggle, then off. Applied pre-paint via LITE_INIT_SCRIPT so
+// a kiosk never flashes the heavy build.
 
 const STORAGE_KEY = 'subwave-lite';
 const LITE_CLASS = 'lite';
 
-/** No-op on the server. */
-export function applyLite(on: boolean): void {
+// Every mounted useLiteMode reader. CSS follows the class on its own, but a
+// skin's rAF loop or timeout chain only stops when its hook re-renders, so a
+// toggle has to reach all of them, not just the menu that flipped it.
+const listeners = new Set<() => void>();
+
+/** Whether lite mode is on: the `<html>` class, which LITE_INIT_SCRIPT set
+ *  before paint from `?lite=` or storage. The class, not storage, is the truth,
+ *  since `?lite=1` still applies where storage is blocked. False on the server. */
+export function isLite(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.documentElement.classList.contains(LITE_CLASS);
+}
+
+/** Calls `onChange` after every setLite; returns the unsubscribe. */
+export function subscribeLite(onChange: () => void): () => void {
+  listeners.add(onChange);
+  return () => {
+    listeners.delete(onChange);
+  };
+}
+
+/** The menu toggle: saves the choice for this browser, flips the class and
+ *  tells every reader. Storage failures are swallowed; the class still applies
+ *  for the session. No-op on the server. */
+export function setLite(on: boolean): void {
   if (typeof document === 'undefined') return;
-  document.documentElement.classList.toggle(LITE_CLASS, on);
-}
-
-/** Null when nothing is stored, so callers can tell "never chosen" from
- *  "explicitly off". */
-export function loadLitePref(): boolean | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === '1') return true;
-    if (raw === '0') return false;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-/** Storage failures are swallowed; the DOM class still applies for the session. */
-export function saveLitePref(on: boolean): void {
-  if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(STORAGE_KEY, on ? '1' : '0');
   } catch { /* private mode / quota — non-fatal */ }
+  document.documentElement.classList.toggle(LITE_CLASS, on);
+  for (const onChange of listeners) onChange();
 }
 
 // Pre-hydration <script> body: resolves lite mode from ?lite= then localStorage
