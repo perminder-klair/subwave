@@ -10,7 +10,7 @@ import { isLiveActivitySupported, onLiveActivityStart } from '../../modules/live
 import { externalTuneOut, getLastLiveMeta, loadAndPlay, teardown } from '@/audio/player';
 import { announceStationStoreChanged, loadStations, setActiveStation } from '@/lib/station';
 import { splitStationAddress, type StoredStationRef } from '@/lib/station-credentials';
-import { findSavedStation } from '@/lib/station-store';
+import { findSavedStation, matchStations, stationsForSiri } from '@/lib/station-store';
 import { activeStation, NO_STATION_MESSAGE } from './station';
 
 // How long a tune-in waits for audio before answering. Long enough that a
@@ -78,6 +78,15 @@ async function switchTo(ref: StoredStationRef): Promise<IntentReply> {
       announceStationStoreChanged();
     }
   }, station.name);
+}
+
+/** A station asked for by name ("Hey Google, play Night Shift on SUB/WAVE"),
+ *  matched as Siri matches one. No name, or none that matches, tunes in to
+ *  the station listened to last. */
+export async function tuneInByName(query: string): Promise<IntentReply> {
+  const store = await loadStations();
+  const [match] = matchStations(stationsForSiri(store.recents), query);
+  return tuneIn(match?.id);
 }
 
 export async function tuneOut(): Promise<IntentReply> {

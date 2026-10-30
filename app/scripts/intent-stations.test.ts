@@ -4,7 +4,12 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findSavedStation, stationsForSiri, streamBelongsTo } from '../src/lib/station-store.ts';
+import {
+  findSavedStation,
+  matchStations,
+  stationsForSiri,
+  streamBelongsTo,
+} from '../src/lib/station-store.ts';
 
 const recents = [
   { url: 'https://radio.example.com', name: 'Night Shift', lastUsed: 2 },
@@ -48,4 +53,36 @@ test('a stream belongs to the station whose base it is built on', () => {
   assert.ok(!streamBelongsTo('https://www.getsubwave.com/stream.mp3', base));
   // A host that merely starts the same is a different station.
   assert.ok(!streamBelongsTo('https://radio.example.com.evil.net/stream.mp3', base));
+});
+
+test('a spoken station name matches however speech spells it', () => {
+  const stations = [
+    { id: 'https://radio.example.com', name: 'ChillWave Radio' },
+    { id: 'https://night.example.com', name: 'Night Shift' },
+    { id: 'https://cafe.example.com', name: 'Café Ñandú' },
+  ];
+  const ids = (term: string) => matchStations(stations, term).map((s) => s.id);
+  assert.deepEqual(ids('chill wave radio'), ['https://radio.example.com']);
+  assert.deepEqual(ids('chillwave'), ['https://radio.example.com']);
+  assert.deepEqual(ids('the night shift station'), ['https://night.example.com']);
+  assert.deepEqual(ids('night shift'), ['https://night.example.com']);
+  assert.deepEqual(ids('cafe nandu'), ['https://cafe.example.com']);
+});
+
+test('a generic or too-short term names no station', () => {
+  const stations = [{ id: 'https://radio.example.com', name: 'ChillWave Radio' }];
+  for (const term of ['', 'radio', 'Radio!', 'some music', 'SUB/WAVE', 'ch']) {
+    assert.deepEqual(matchStations(stations, term), [], term);
+  }
+});
+
+test('an exact name wins over one that only contains the term', () => {
+  const stations = [
+    { id: 'https://a.example.com', name: 'Night Shift Radio' },
+    { id: 'https://b.example.com', name: 'Night Shift' },
+  ];
+  assert.deepEqual(
+    matchStations(stations, 'night shift').map((s) => s.id),
+    ['https://b.example.com'],
+  );
 });

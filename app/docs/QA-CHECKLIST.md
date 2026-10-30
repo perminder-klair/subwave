@@ -37,7 +37,7 @@ Mark each box per platform. Note the device + OS version you tested on.
 ## Platform controls
 
 - [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
-      _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
+- [ ] **Android** — **Android Auto** (Desktop Head Unit or a car): the saved stations are listed; a tap plays and opens Now Playing; play/pause work; "play <station name>" by voice switches station; force-stopped app → connect → pick a station still plays (TESTING.md, Android Auto).
 - [ ] **iOS 17+** — **Live Activity appears on tune-in**: lock the phone → the SUB/WAVE card is on the Lock Screen with station name, title, artist, cover and a running clock. Tune out → the card disappears.
 - [ ] **iOS 17+** — **Card tracks the broadcast while backgrounded**: leave it locked across a song change → title/artist/cover swap and the progress bar restarts. While the DJ talks, the artist line + artwork swap to the persona (same as the lock screen).
 - [ ] **iOS 17+** — **Cover art renders**, not the fallback disc mark. _(a disc mark on every track means the App Group entitlement is missing on one side — see TESTING.md)_
