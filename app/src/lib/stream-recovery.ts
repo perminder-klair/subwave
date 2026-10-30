@@ -2,14 +2,17 @@
 // new connection gets Icecast's burst-on-connect again, ~22s of audio the
 // listener may already have heard, and a reload that overlaps another counts
 // as a second listener at the station. So no automatic trigger reloads audio
-// the native player is still playing. The watchdog, the churn guard, the error
-// backoff and a regained link each read the native media clock first
-// (TrackPlayer.getProgress), as the web player's advancingSince() does (#1232).
-// A native state event cannot decide it alone: Buffering is an instant, not a
-// verdict, and the last state JS hears can be stale (SwiftAudioEx's `.ready` is
-// a check-then-set that can land after `.playing`). An iOS audio interruption
-// (a call, Siri) stops AVPlayer with no state event at all, so no check or
-// automatic reload runs while RemoteDuck says one lasts (onDuck).
+// the native player is still playing. The watchdog, the churn guard and the
+// error backoff each read the native media clock first (TrackPlayer.getProgress),
+// as the web player's advancingSince() does (#1232). A regained link brings a
+// pending check forward, so it reads the clock too; with none pending it
+// reloads at once, and usePlayer reports a regained link only while the UI
+// isn't showing playback. A native state event cannot decide a reload alone:
+// Buffering is an instant, not a verdict, and the last state JS hears can be
+// stale (SwiftAudioEx's `.ready` is a check-then-set that can land after
+// `.playing`). An iOS audio interruption (a call, Siri) stops AVPlayer with no
+// state event at all, so no check or automatic reload runs while RemoteDuck
+// says one lasts (onDuck).
 //
 // One reload runs at a time. Every timer and async continuation carries the
 // listening session and reload attempt it was armed in, and does nothing once
@@ -225,7 +228,8 @@ export class StreamRecovery {
   }
 
   /** The device regained a network link while the UI isn't showing playback:
-   *  check now rather than wait out the pending check. */
+   *  check now rather than wait out the pending check, or with none pending,
+   *  reload now. */
   linkRegained(): void {
     this.retries = 0;
     if (!this.active) return;
