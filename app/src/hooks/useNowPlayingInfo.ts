@@ -8,7 +8,7 @@ import { useTalking } from '@/hooks/useTalking';
 import type { PlayerStatus } from '@/hooks/usePlayer';
 import { resolveAirCard } from '@/lib/air-card';
 import type { StationApi } from '@/lib/api';
-import { hasPlayed, sendsCard, type SentCard } from '@/lib/now-playing-card';
+import { cardArtwork, hasPlayed, sendsCard, type SentCard } from '@/lib/now-playing-card';
 import type { ActiveShow, NowPlayingTrack, SessionTurn } from '@/lib/types';
 import { nowPlayingProgress } from '@/lib/track-progress';
 
@@ -63,7 +63,7 @@ export function useNowPlayingInfo({
     sentRef.current = next;
     const update = (includeCard: boolean) => {
       TrackPlayer.updateNowPlayingMetadata({
-        ...(includeCard ? { title, artist, album, artwork: artwork ?? '' } : {}),
+        ...(includeCard ? { title, artist, album, artwork: cardArtwork(next) } : {}),
         // Retain iOS's LIVE presentation and the absence of seek controls.
         isLiveStream: true,
         ...nowPlayingProgress({ track: { duration }, trackStartedAt, talking }),
