@@ -160,9 +160,11 @@ export function usePlayer({ initialVolume = 1, opusEnabled = null, bufferSeconds
   useEffect(() => { volumeRef.current = volume; }, [volume]);
 
   // Call right after setting a fresh src. Only the MP3 mount is sized: it is
-  // CBR, so its burst is bufferSeconds long. Opus is VBR, and idle silence costs
-  // it so few bytes that its burst reaches back past the pause into the music
-  // before it (measured), so an Opus listener plays it out as before.
+  // CBR, so its burst is bufferSeconds long. Opus is CBR too since #2138, but on
+  // an older broadcast image it is VBR, and idle silence costs it so few bytes
+  // that its burst reaches back past the pause into the music before it
+  // (measured). The player can't tell which it is tuned to, so an Opus listener
+  // plays it out as before.
   const startIdleSkip = useCallback((el: HTMLAudioElement) => {
     endIdleSkip();
     const buffer = bufferSecondsRef.current;

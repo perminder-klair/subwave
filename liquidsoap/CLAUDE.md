@@ -59,6 +59,9 @@ Each one records a measured failure.
 **Ducking**
 - Use `smooth_add` only: an RMS follower drove the music to silence (`f38a9af`). `p` is the fraction of the music left up, so smaller is deeper. Never convert it to dB at a call site, and keep the shipped `duck_intro` default above `duck_voice` (a link should duck less than a solo ident). An operator may set them either way, so don't enforce the order. Both depths are read once at startup and bounds-checked here too, because a hand-edited file reaches the mixer directly.
 
+**Outputs**
+- The Opus encoder is hard CBR (`vbr="none"`), never VBR or DTX (#2138). Icecast's `<burst-size>` is a byte count sized from the bitrate, and constrained VBR coded idle silence at 1.6 kbps, so after an idle pause a new listener's burst reached back past the pause into stale music: on the rig (Opus 96k, 22 s buffer), live music arrived 51.9 s after connecting following a 30 s pause, and 140.2 s after a 120 s one. CBR brought both to ~23 s, as MP3's. Ogg framing adds ~1%, so the burst runs a little under `bufferSeconds`. `controller/scripts/opus-cbr.test.ts` pins every branch.
+
 ## Testing
 
 `scripts/fx-render-test.sh` (`xchain`, `loopcheck`, `loopgaps`, `jingledry`, `jingleseam`) and `scripts/stem-seam-test.sh` render lifted copies of this file's blocks in Docker. A harness that has drifted from `radio.liq` proves nothing: `controller/scripts/dissolve-wash-shape.test.ts` and `transition-mixer-seams.test.ts` pin the mirrored harness copies to it, and `stem-seam-cues.test.ts` covers the stem-seam harness. `jingle-play.test.ts` pins radio.liq's jingle code directly. A harness that tests the dead-air guard must build the duck and bed `add`s; `output.dummy` on the bare rotate is how a false claim shipped once.
