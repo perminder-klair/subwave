@@ -69,9 +69,12 @@ That covers no `vbr` at all or a bare `%opus` (2.4.6 defaults to constrained VBR
 byte for byte), `vbr` given twice (the last one wins), a `(` inside the call (the
 first `)` then need not close it, and `bitrate=(96), dtx=true` is DTX on 2.4.6),
 a `#<` that never closes (2.4.6 refuses that file unless the `#<` sat in a string,
-and then what follows is real code), and an `%ffmpeg` libopus encoder. Neither
-reader is a lexer. A `#` or `#<` in a string reads as a comment,
-and a block comment's nesting is ignored, though 2.4.6 nests them.
+and then what follows is real code), an `%ffmpeg` libopus encoder, and a no-break
+or em space, which 2.4.6 takes as whitespace: both readers work in ASCII, and
+`opus_encoding` in the C locale, so no `LC_ALL` changes the answer. Neither reader
+is a lexer. A `#` or `#<` in a string reads as a comment, a block comment's nesting
+is ignored, though 2.4.6 nests them, and an `%ffmpeg` encoder that names its codec
+any way but `libopus` goes unseen.
 
 **The bitrate each burst is sized for is the bitrate liquidsoap encodes at
 (#2143).** The renderer used to read `liquidsoap_stream_bitrate.txt` to size the

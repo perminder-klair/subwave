@@ -628,7 +628,10 @@ END { if (block) print "%opus" }' "$1" 2>/dev/null | tr '\n' ' '
 # - a `(` inside the call: the first `)` then need not close it, so a dtx or a
 #   second vbr can sit past it, and `bitrate=(96), dtx=true` is DTX on 2.4.6;
 # - libopus, an %ffmpeg encoder this cannot read.
+# Read in the C locale, or a UTF-8 grep would take an em space for [[:space:]] and
+# the operator's LC_ALL would change the answer.
 opus_encoding() {
+	local -x LC_ALL=C
 	local calls key='[^[:alnum:]_]' eq='[[:space:]]*=[[:space:]]*'
 	calls=$(liq_code "$1" | grep -oE 'libopus|%opus([[:space:]]*\([^)]*\)|[^[:alnum:]_])' || true)
 	[ -n "$calls" ] || return 0

@@ -36,7 +36,7 @@ export const NOT_CBR: Record<string, () => string> = {
     radioWith(BRANCH_96, `# a line comment naming #<\n  ${BRANCH_96.replace('none', 'constrained')}\n  # and one naming >#`),
   'a VBR encoder after a closed block comment': () =>
     radioWith(BRANCH_96, `#< closed ># ${BRANCH_96.replace('none', 'constrained')}`),
-  // Boots on 2.4.6, as this VBR encoder: the #< sits in a string, so nothing closes it.
+  // Boots on 2.4.6: the #< sits in a string, so nothing closes it, and what follows is code.
   'a VBR encoder after a #< in a string': () =>
     `${RADIO.trimEnd()}\nignore("#<")\nignore(%opus(bitrate=96, vbr="constrained"))\n`,
   'a bare %opus': () => radioWith(BRANCH_96, '%opus'),
@@ -45,6 +45,9 @@ export const NOT_CBR: Record<string, () => string> = {
   'a spaced %opus (…) that is VBR': () => radioWith(BRANCH_96, BRANCH_96.replace('%opus', '%opus ').replace('none', 'constrained')),
   'DTX': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ', dtx = true)')),
   'DTX across lines': () => radioWith(BRANCH_96, BRANCH_96.replace(')', ',\n  dtx\n  =\n  true\n)')),
+  // Hard CBR on 2.4.6, which takes both as whitespace, but neither reader does.
+  'vbr = "none" spaced with no-break spaces': () => radioWith(BRANCH_96, BRANCH_96.replace('vbr="none"', 'vbr\u00a0=\u00a0"none"')),
+  'vbr = "none" spaced with em spaces': () => radioWith(BRANCH_96, BRANCH_96.replace('vbr="none"', 'vbr\u2003=\u2003"none"')),
   // These four boot on 2.4.6, and each encodes silence as DTX or VBR.
   'DTX past a ) inside the call': () =>
     radioWith(BRANCH_96, '%opus(vbr="none", bitrate=(96), samplerate=48000, channels=2, application="audio", dtx=true)'),
@@ -71,6 +74,8 @@ export const STILL_CBR: Record<string, () => string> = {
     radioWith(MP3_64, `#<\n  %opus(bitrate=128, vbr="constrained")\n  >#\n  ${MP3_64}`),
   'a block comment left in a %opus(': () =>
     radioWith(BRANCH_96, `%opus(${PARAMS_96} #< was vbr="constrained" ># vbr="none")`),
+  'a VBR encoder behind a bare CR in a line comment': () =>
+    radioWith(MP3_64, `${MP3_64} # was\r%opus(bitrate=128, vbr="constrained")`),
   'a line comment naming #< with no block to close': () => radioWith(MP3_64, `${MP3_64} # not a #< block`),
   'a name that only starts with %opus, in a string': () =>
     radioWith('opus_shutdown =', 'ignore("%opus_not_an_encoder")\n  opus_shutdown ='),

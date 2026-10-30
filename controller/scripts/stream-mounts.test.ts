@@ -190,13 +190,13 @@ function render(
 
 // What opus_encoding() in `script` says of a radio.liq holding `body`, under
 // `set -eu`: a non-zero exit here would abort the render.
-function opusEncoding(script: string, lib: string, body: string) {
+function opusEncoding(script: string, lib: string, body: string, LC_ALL = 'C') {
   const liq = join(shellTmp, `radio-${caseNo++}.liq`);
   writeFileSync(liq, body);
   return execFileSync(
     'bash',
     ['-c', `set -eu; ${lib}=1 source "$1"; opus_encoding "$2"`, 'bash', script, liq],
-    { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } },
+    { encoding: 'utf8', env: { PATH: process.env.PATH ?? '', LC_ALL } },
   ).trim();
 }
 
@@ -496,12 +496,14 @@ for (const s of SUPERVISORS) {
   for (const [name, source] of Object.entries(STILL_CBR)) {
     test(`${s.name}: the Opus encoding stays cbr with ${name}`, () => {
       assert.equal(opusEncoding(s.path, s.lib, source()), 'cbr');
+      assert.equal(opusEncoding(s.path, s.lib, source(), 'C.UTF-8'), 'cbr');
     });
   }
 
   for (const [name, source] of Object.entries(NOT_CBR)) {
     test(`${s.name}: the Opus encoding is not cbr on ${name}`, () => {
       assert.equal(opusEncoding(s.path, s.lib, source()), 'vbr');
+      assert.equal(opusEncoding(s.path, s.lib, source(), 'C.UTF-8'), 'vbr');
     });
   }
 

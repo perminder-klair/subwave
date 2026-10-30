@@ -20,9 +20,14 @@ import { NOT_CBR, RADIO, STILL_CBR } from './test-utils/opus-cbr-table.js';
 // lexer refuses such a file unless the #< sat in a string, and then what it cut
 // is real code. A string's `#{…}` is cut too, which costs nothing: a %opus that
 // shared its line would lose its bitrate and fail the branch check below.
-// docker's liq_code() cuts the same way.
+// docker's liq_code() cuts the same way. Non-ASCII goes first, so \s means what
+// the C-locale grep in opus_encoding() means: a no-break or em space is none, to
+// either reader, though Liquidsoap takes both. A # comment runs to \n alone, as
+// in the lexer, where . would stop at a bare \r.
 function code(source: string) {
-  return source.replace(/#<[\s\S]*?(>#|$)|#.*/g, (_, closer) => (closer === '' ? ' %opus ' : ' '));
+  return source
+    .replace(/[\u0080-\uffff]/g, '?')
+    .replace(/#<[\s\S]*?(>#|$)|#[^\n]*/g, (_, closer) => (closer === '' ? ' %opus ' : ' '));
 }
 
 // A bare %opus takes the encoder's defaults, which are constrained VBR (measured
