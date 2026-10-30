@@ -542,14 +542,16 @@ stream_buffer_seconds() {
 # whitespace is trimmed (its string.trim), so liquidsoap is handed the bitrate it
 # would have read itself, not the fallback. At most six digits (anything longer
 # is the fallback), and leading zeros as decimal, never as bash arithmetic's
-# octal. Only the first 64 bytes are read, because the trim below is quadratic
-# and a padded or corrupt file must not hold icecast and the dead-air guard back
-# at boot. Other hand-edits part from radio.liq, whose int_of_string also takes
-# 0x80, +128, 1_000 and 7+ digits: each of those is the fallback here, and so is
-# a value behind 64 bytes of padding.
+# octal. The trim below is quadratic, and a padded or corrupt file must not hold
+# icecast and the dead-air guard back at boot, so whitespace runs are squeezed
+# first and at most 64 bytes of that reach it. Squeezed, padding can neither push
+# a value out of those bytes nor cut one in half, which a plain `head -c` of the
+# file would: 62 spaces and 128 would read as 12. Other hand-edits part from
+# radio.liq, whose int_of_string also takes 0x80, +128, 1_000 and 7+ digits: each
+# of those is the fallback here.
 read_state_uint() {
 	local v
-	v=$(head -c 64 "$STATE_DIR/$1" 2>/dev/null || true)
+	v=$(tr -s '[:space:]' ' ' 2>/dev/null < "$STATE_DIR/$1" | head -c 64 || true)
 	v=${v#"${v%%[![:space:]]*}"}
 	v=${v%"${v##*[![:space:]]}"}
 	case "$v" in ''|*[!0-9]*) v=$2 ;; esac
@@ -639,8 +641,8 @@ emit_stream_mount() {
 
 # Replaces the state marker $1 with the line $2, non-zero if it could not.
 # Through a fresh mktemp file and a rename, like write_icecast_secrets, so a
-# symlink planted at a temp path is never written through and one planted at $1
-# is replaced, not followed. The fixed-name temp this used to write is dropped
+# symlink planted ahead of the write is not written through, and one planted at
+# $1 is replaced, not followed. The fixed-name temp this used to write is dropped
 # first. 644 before the rename, so the marker never shows at mktemp's 600; a
 # refused chmod is no failure, because a mount that refuses chmod is a working
 # config (see state_writable_by_others).

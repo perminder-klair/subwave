@@ -250,6 +250,10 @@ test('both scripts render from the radio.liq they launch, and launch it with the
       'render_stream_mounts "$MOUNTS_XML" "$MOUNT_AUTH_URL_XML" "$RADIO_LIQ"',
       'liquidsoap "$RADIO_LIQ" &',
     ], s.name);
+    assert.equal(
+      code.filter(l => /^MOUNT_AUTH_URL_XML=\$\(xml_escape "\$(LISTENER_)?AUTH_URL"\)$/.test(l)).length, 1,
+      `${s.name} never fills the auth URL it passes`,
+    );
   }
   for (const image of ['Dockerfile.broadcast', 'Dockerfile.aio']) {
     assert.match(
@@ -373,8 +377,14 @@ for (const s of SUPERVISORS) {
         { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' }, timeout: 10_000 },
       ).trim();
     };
-    assert.equal(read(`128${' '.repeat(1024 * 1024)}`), '128');
-    assert.equal(read(`${' '.repeat(1024 * 1024)}128`), '192', 'a value past the read is the fallback');
+    const pad = ' '.repeat(1024 * 1024);
+    assert.equal(read(`128${pad}`), '128');
+    assert.equal(read(`${pad}128`), '128', 'padding must not push a value out of the read');
+    // Either side of the byte where a read of the file itself would cut the value.
+    for (const n of [61, 62, 63, 64]) assert.equal(read(`${' '.repeat(n)}128`), '128', `${n} leading spaces`);
+    assert.equal(read(`128${pad}junk`), '192', 'padding must not hide junk from the read');
+    assert.equal(read(`1${pad}28`), '192', 'padding inside a value is junk');
+    assert.equal(read('1'.repeat(1024 * 1024)), '192');
   });
 
   test(`${s.name}: the buffer is clamped to 60 s and the marker says so`, () => {

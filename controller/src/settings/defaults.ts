@@ -96,8 +96,8 @@ export const DEFAULTS = {
     // entrypoint converts per mount (#993).
     //
     // This is also how far behind the live edge every listener sits for their
-    // whole connection, so /now-playing publishes the burst it last rendered
-    // (stream-mounts.json, #2142; this setting only until there is one) as
+    // whole connection, so /now-playing publishes the burst last rendered
+    // (stream-mounts.json, #2142; this setting when there is no usable one) as
     // stream.bufferSeconds, and players subtract that to line titles up with the
     // audio in someone's ears (#1114).
     bufferSeconds: 22,

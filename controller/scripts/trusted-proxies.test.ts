@@ -164,6 +164,22 @@ const SHAPES: [addr: string, valid: boolean, why: string][] = [
   ['', false, 'empty'],
 ];
 
+// The table below sees behaviour. A message or a marker field can still drift on
+// one side alone, so the code is compared too, as `declare -f` prints it.
+const SHARED = [
+  'trusted_proxy_token', 'trusted_proxy_valid', 'write_trusted_proxy_marker', 'render_trusted_proxies',
+];
+
+test('both renderers carry the same trusted-proxy functions', () => {
+  const dump = (s: (typeof SUPERVISORS)[number]) => execFileSync(
+    'bash', ['-c', `${s.lib}=1 source "$1"; declare -f ${SHARED.join(' ')}`, 'bash', s.path],
+    { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' } },
+  );
+  const [entrypoint, aio] = SUPERVISORS.map(dump);
+  for (const fn of SHARED) assert.match(entrypoint!, new RegExp(`^${fn} \\(\\)`, 'm'), `${fn} missing`);
+  assert.equal(aio, entrypoint, 'the AIO copy has drifted from the entrypoint\'s');
+});
+
 for (const s of SUPERVISORS) {
   assert.ok(existsSync(s.path), `${s.name} not found at ${s.path}`);
 

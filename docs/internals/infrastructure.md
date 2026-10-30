@@ -36,8 +36,8 @@ saves at once, so between a save and the next mixer restart the two disagree.
 `render_stream_mounts` (the same function in both renderers) therefore records
 each mount's burst in `state/stream-mounts.json` on every render:
 `{mounts: {"/stream.mp3": {kbps, burstSeconds, burstBytes}, …}, at}`, written
-through a fresh `mktemp` file and a rename, mode 644, so a symlink planted at a
-temp path or at the marker is never written through.
+through a fresh `mktemp` file and a rename, mode 644, so a symlink planted ahead
+of the write, at a temp path or at the marker, is not written through.
 `broadcast/stream-mounts.ts` reads it (2 s memo) and `/now-playing`'s
 `stream.bufferSeconds` and the voice webhooks' `streamBufferSeconds` advertise
 the MP3 mount's `burstSeconds`. An absent,
@@ -72,11 +72,12 @@ replaces radio.liq's own read, so everything the controller writes reads the
 same in both: surrounding whitespace is trimmed (radio.liq's `string.trim`, so a
 CRLF hand-edit keeps its bitrate rather than handing on the fallback), a bitrate
 radio.liq would refuse (0) falls back to the default, and leading zeros read as
-decimal, never as bash's octal. Some hand-edits still part ways:
-`read_state_uint` reads only a file's first 64 bytes, because its trim is
-quadratic and a padded file must not hold a boot back, and it takes plain
-digits only. So `0x80`, `+128`, `1_000`, 7+ digits and a value behind 64 bytes of
-padding are the fallback there, though radio.liq's `int_of_string` would read
+decimal, never as bash's octal. `read_state_uint`'s trim is quadratic and a
+padded file must not hold a boot back, so it squeezes whitespace runs and reads
+at most 64 bytes of the result. Padding cannot push a value out of those bytes
+or cut one in half, as a plain `head -c` of the file would. Some hand-edits still
+part ways, because it takes plain digits only: `0x80`, `+128`, `1_000` and 7+
+digits are the fallback there, though radio.liq's `int_of_string` would read
 them. `ICECAST_{STREAM,OPUS,AAC}_BITRATE` still re-size only the burst and are
 never handed on: the encoder has always taken the setting, and handing it the
 override would change a configured station's audio on upgrade. `burst_kbps`
