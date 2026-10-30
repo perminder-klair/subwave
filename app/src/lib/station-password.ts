@@ -83,21 +83,38 @@ export function stationReadsOpen(privacy: StationPrivacy | null | undefined, pha
 
 /** `POST /station-auth` outcomes. That route fails CLOSED (401) whenever a lock
  *  is on and the password is wrong; 429 is its rate limit. Anything else —
- *  a network error, a 5xx, an older controller's 404 — says nothing about the
- *  password. */
+ *  a network error, a 5xx, an older controller's 404, a 401 from something
+ *  in front of the controller — says nothing about the password. */
 export type StationAuthResult = 'ok' | 'denied' | 'rate-limited' | 'unavailable';
 
-/** `challenged`: the 401 carried a `WWW-Authenticate` challenge. The
- *  controller's own 401 never does; a reverse proxy refusing the Station login
- *  always does (#1873). That 401 never reached the password check, and read as
- *  'denied' it would make the gate forget a station password that is right.
- *  Any scheme counts here, where loginRefused counts only Basic: whatever the
- *  proxy asks for, the password never got past it. */
-export function stationAuthResult(status: number | null, challenged = false): StationAuthResult {
+/** What came with the status, which tells the controller's 401 from a proxy's. */
+export interface StationAuthReply {
+  /** The response carried a `WWW-Authenticate` challenge. */
+  challenged?: boolean;
+  /** The 401's body, parsed as JSON; absent when it was not JSON. */
+  body?: unknown;
+}
+
+/** A 401 is 'denied' only when the controller sent it: its body is the
+ *  controller's own `{ ok: false }`, which every controller with this route
+ *  has sent since #478, and it carries no challenge, which the controller
+ *  never sends here. Anything else in front of the controller can answer 401
+ *  first: a proxy refusing the Station login challenges (#1873), and a
+ *  forward-auth proxy (oauth2-proxy in API mode, some Authelia setups) may
+ *  not. Neither request reached the password check, and read as 'denied'
+ *  either would make the gate forget a station password that is right. Any
+ *  challenge scheme counts here, where loginRefused counts only Basic:
+ *  whatever the proxy asks for, the password never got past it. */
+export function stationAuthResult(status: number | null, reply: StationAuthReply = {}): StationAuthResult {
   if (status === 200) return 'ok';
-  if (status === 401) return challenged ? 'unavailable' : 'denied';
+  if (status === 401) return controllerDenied(reply) ? 'denied' : 'unavailable';
   if (status === 429) return 'rate-limited';
   return 'unavailable';
+}
+
+function controllerDenied({ challenged = false, body }: StationAuthReply): boolean {
+  if (challenged || !body || typeof body !== 'object') return false;
+  return (body as { ok?: unknown }).ok === false;
 }
 
 export interface StoredPasswordVerdict {

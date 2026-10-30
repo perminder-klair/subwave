@@ -223,7 +223,11 @@ export function createApi(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ password }),
         });
-        return stationAuthResult(res.status, res.headers.has('www-authenticate'));
+        return stationAuthResult(res.status, {
+          challenged: res.headers.has('www-authenticate'),
+          // Only a refusal's body is read: it says who refused (stationAuthResult).
+          body: res.status === 401 ? await res.json().catch(() => undefined) : undefined,
+        });
       } catch {
         return stationAuthResult(null);
       }

@@ -143,7 +143,9 @@ test('only a Basic challenge refuses the login; /station-auth reads any challeng
     [null, false, 'denied'],
   ];
   let header: string | null = null;
-  stubFetch(t, () => new Response('', { status: 401, headers: header === null ? {} : { 'WWW-Authenticate': header } }));
+  stubFetch(t, () =>
+    Response.json({ ok: false }, { status: 401, headers: header === null ? {} : { 'WWW-Authenticate': header } }),
+  );
   const api = createApi('https://radio.example', LOGIN);
   for (const [h, refused, stationAuth] of cases) {
     header = h;
@@ -155,9 +157,9 @@ test('only a Basic challenge refuses the login; /station-auth reads any challeng
 test("/station-auth reads a proxy's login challenge as unverified, never a wrong password", async (t) => {
   const replies = [
     new Response('', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="radio"' } }),
-    new Response('', { status: 401 }),
-    new Response('', { status: 200 }),
-    new Response('', { status: 429 }),
+    Response.json({ ok: false }, { status: 401 }),
+    Response.json({ ok: true }, { status: 200 }),
+    Response.json({ ok: false, error: 'too many attempts' }, { status: 429 }),
   ];
   stubFetch(t, () => replies.shift()!);
   const api = createApi('https://radio.example', LOGIN);
@@ -165,6 +167,35 @@ test("/station-auth reads a proxy's login challenge as unverified, never a wrong
   assert.equal(await api.checkStationAuth('station-pw'), 'denied');
   assert.equal(await api.checkStationAuth('station-pw'), 'ok');
   assert.equal(await api.checkStationAuth('station-pw'), 'rate-limited');
+});
+
+test("/station-auth reads only the controller's own 401 as a wrong password (#2143)", async (t) => {
+  // The controller's refusal is `401 {"ok":false}` on every version that has
+  // the route. A forward-auth proxy's 401 carries no challenge and never
+  // reached the password check, so the saved password must survive it.
+  const cases: [reply: () => Response, result: StationAuthResult][] = [
+    [() => Response.json({ ok: false }, { status: 401 }), 'denied'],
+    // oauth2-proxy's API routes: plain text.
+    [() => new Response('Unauthorized\n', { status: 401, headers: { 'Content-Type': 'text/plain' } }), 'unavailable'],
+    // nginx auth_request passes the 401 on with its own page.
+    [
+      () =>
+        new Response('<html><head><title>401 Authorization Required</title></head></html>', {
+          status: 401,
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      'unavailable',
+    ],
+    [() => new Response('', { status: 401 }), 'unavailable'],
+    [() => Response.json({ status: 'KO', message: 'Unauthorized' }, { status: 401 }), 'unavailable'],
+  ];
+  let reply = cases[0][0];
+  stubFetch(t, () => reply());
+  const api = createApi('https://radio.example', LOGIN);
+  for (const [r, result] of cases) {
+    reply = r;
+    assert.equal(await api.checkStationAuth('station-pw'), result, (await r().text()) || '(empty)');
+  }
 });
 
 test('the stream URL never carries the login; the station password rides as ?auth=', () => {

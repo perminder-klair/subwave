@@ -80,9 +80,12 @@ test('a gated read waits for a locked station’s proven password, never for ope
   }
 });
 
-test('only 401 means wrong; 429 is the rate limit; anything else says nothing', () => {
+// What POST /station-auth has answered a wrong password with since #478.
+const CONTROLLER_DENIAL = { body: { ok: false } };
+
+test("only the controller's 401 means wrong; 429 is the rate limit; anything else says nothing", () => {
   assert.equal(stationAuthResult(200), 'ok');
-  assert.equal(stationAuthResult(401), 'denied');
+  assert.equal(stationAuthResult(401, CONTROLLER_DENIAL), 'denied');
   assert.equal(stationAuthResult(429), 'rate-limited');
   for (const status of [null, 404, 500, 502, 403]) assert.equal(stationAuthResult(status), 'unavailable');
 });
@@ -90,14 +93,41 @@ test('only 401 means wrong; 429 is the rate limit; anything else says nothing', 
 test("a proxy's login challenge never reads as a wrong station password (#1873)", async () => {
   // The controller's own 401 carries no WWW-Authenticate; a proxy refusing the
   // Station login always does, and the password never reached the controller.
-  assert.equal(stationAuthResult(401, true), 'unavailable');
-  assert.equal(stationAuthResult(401, false), 'denied');
+  assert.equal(stationAuthResult(401, { ...CONTROLLER_DENIAL, challenged: true }), 'unavailable');
+  assert.equal(stationAuthResult(401, { ...CONTROLLER_DENIAL, challenged: false }), 'denied');
 
   // So a saved station password checked through that proxy is kept, not forgotten.
   const verdict = await verifyStoredPasswords({
     stored: 'station-pw',
     login: 'proxy-pw',
-    check: async () => stationAuthResult(401, true),
+    check: async () => stationAuthResult(401, { challenged: true }),
+  });
+  assert.deepEqual(verdict, { phase: 'ok', save: null, clearStored: false });
+});
+
+test("a forward-auth proxy's unchallenged 401 never reads as a wrong station password (#2143)", async () => {
+  // oauth2-proxy in API mode, nginx auth_request, some Authelia setups: a 401
+  // with no challenge, and a body that is not the controller's.
+  const proxied: unknown[] = [
+    undefined, // empty, or not JSON: plain-text "Unauthorized", an HTML page
+    null,
+    'Unauthorized',
+    { error: 'Unauthorized' },
+    { status: 'KO', message: 'Unauthorized' },
+    { ok: 'false' },
+    { ok: true },
+    [false],
+  ];
+  for (const body of proxied) {
+    assert.equal(stationAuthResult(401, { body }), 'unavailable', JSON.stringify(body));
+  }
+  // A later controller that says more keeps saying `ok: false`.
+  assert.equal(stationAuthResult(401, { body: { ok: false, error: 'wrong password' } }), 'denied');
+
+  const verdict = await verifyStoredPasswords({
+    stored: 'station-pw',
+    login: null,
+    check: async () => stationAuthResult(401, { body: 'Unauthorized' }),
   });
   assert.deepEqual(verdict, { phase: 'ok', save: null, clearStored: false });
 });

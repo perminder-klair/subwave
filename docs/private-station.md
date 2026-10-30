@@ -75,9 +75,13 @@ every listener connect, so:
   followed earlier advice and typed the stream password into **Station login**
   is recognised and not asked again. If the password is later rotated, the app
   asks again the next time the station is opened, or once playback stalls, and
-  says the saved password was not accepted. To clear a saved password yourself,
-  open **Stations**, then **Station login** on the station, and tap
-  **Forget station password**.
+  says the saved password was not accepted. While playback stays stalled it
+  checks every two minutes at most, because the station allows each address
+  20 password checks per 15 minutes. Only the station's own refusal counts: a
+  proxy in front of it that turns the check away with a 401 (oauth2-proxy,
+  Authelia) never makes the app forget the password. To clear a saved
+  password yourself, open **Stations**, then **Station login** on the station,
+  and tap **Forget station password**.
 
 While the password is on, `/listen.pls` and `/listen.m3u` return 403 — they
 would otherwise hand out credential-less URLs that no longer play.
