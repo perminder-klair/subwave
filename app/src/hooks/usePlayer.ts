@@ -10,12 +10,15 @@ import {
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import { playbackLog } from '@/lib/playback-log';
 import { StreamRecovery } from '@/lib/stream-recovery';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
-// Dev-build only; no-op in Release.
+// Every build keeps the line, redacted, in the playback log a listener can
+// share from the About sheet (#2140); dev builds print it as well.
 function plog(msg: string) {
+  playbackLog.add(msg);
   if (__DEV__) console.log(`[player ${new Date().toISOString().slice(11, 23)}] ${msg}`);
 }
 

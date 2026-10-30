@@ -341,6 +341,25 @@ eas submit --profile production --platform ios     # uploads to App Store Connec
 
 ---
 
+## A listener's playback log
+
+A store build prints nothing a listener can reach, so it keeps the last 300
+`plog` lines (`src/hooks/usePlayer.ts`) in memory instead: the playback state
+events and errors, iOS route changes, and every hold and reload
+`src/lib/stream-recovery.ts` decides, with its reason. Ask a listener with a
+playback problem for **About SUB/WAVE → Share playback log** (Copy is in the
+share sheet) before they kill the app, which empties it.
+
+The first line names the app version, the JS bundle (`OTA <id>` or
+`built-in <id>`, and the channel) and the OS. Times are the phone's clock in
+UTC. Each `reload [reason]` line should match one new `/stream.mp3?t=…` in the
+station's Icecast access log. Lines are redacted before they are stored
+(`src/lib/playback-log.ts`): URLs keep only scheme, host and path, the station
+password, Station login and `Authorization` values are gone, and a route lists
+port types without device names.
+
+---
+
 ## Known issues / gotchas
 
 - **`patches/react-native-track-player+4.1.2.patch`** contains the RNTP new-arch

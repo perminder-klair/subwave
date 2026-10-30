@@ -79,6 +79,13 @@ Needs a station behind a reverse proxy with HTTP Basic Auth, and one with SUB/WA
 - [ ] **iOS** / [ ] **Android** — **Station password**: Station login screen → **Forget station password** → back on the player, the password prompt appears. Rotate the password in Admin and reopen the station → the prompt says "The saved password was not accepted."
 - [ ] **iOS** / [ ] **Android** — **Upgrade keeps saved logins**: on the previous build save a station with a login, install this build over it → the station still plays, and the edit screen shows the login filled in.
 
+## Playback log _(validates #2140)_
+
+- [ ] **iOS** / [ ] **Android** — **The log is there in a store build**: tune in, stop, tune in again → About SUB/WAVE → **Share playback log** → Copy, and paste it into a note. The first line names the app version, the bundle (`OTA <id>` or `built-in <id>`) and the OS version; below it are UTC-stamped lines, including a `reload [tune]` for each tune-in.
+- [ ] **iOS** / [ ] **Android** — **Nothing secret in it**: on a private station with a Station login and a station password, tune in, toggle airplane mode to force a reload, then share the log → no password, no username, no `auth=` value and no `Authorization` value appear anywhere; any URL reads `https://<host>/<path>` with no `?…`.
+- [ ] **iOS** — **Route lines keep no device name**: connect and disconnect Bluetooth headphones while tuned in → the route lines read like `outputs=BluetoothA2DPOutput`, without the headphones' name.
+- [ ] **iOS** / [ ] **Android** — **Memory only**: kill the app from the switcher, relaunch, share the log → none of the lines from before the kill are in it.
+
 ## Accessibility
 
 - [ ] **iOS** — **VoiceOver** reads the transport controls (power/tune, mute, volume) and the connection banner (`accessibilityRole="alert"`) with sensible labels.
