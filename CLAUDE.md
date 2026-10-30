@@ -83,7 +83,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - **A gate's failure direction is deliberate; never unify two.** `POST /listener-auth` fails open while listener auth is off, while `POST /station-auth` and `middleware/station-auth.ts` fail closed. The listener-count gates fail open on an unknown count, while `presentListeners()` fails closed, and the idle wake probe (`peekListeners()`) commits nothing and acts only on a positive reading. `validate*Strict` throws and `normalize*` repairs or drops, and neither restates a rule.
 - **A validated shape is defined once**, in `controller/src/schemas/<feature>.ts`, and mirrored to `web/lib/schemas.generated.ts` by `npm run gen:schemas` (CI diffs it; never hand-edit it). Those files import only `zod`; impure rules go in a `*-server.ts` sibling.
 - **A behaviour-preserving refactor preserves behaviour, accidental leniency included.** Tightening it is a separate PR, stated as a behaviour change (`schemas.md`, on the patch registry).
-- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and five tests drive both copies), so fix one, fix both.
+- **Keep the broadcast entrypoint and the AIO supervisor in lockstep.** `docker/broadcast-entrypoint.sh` and the AIO duplicate six things (`infrastructure.md` lists them, and six tests drive both copies), so fix one, fix both.
 - **State bootstrap is never fatal.** Guard each step and warn; Icecast and the dead-air guard must still come up.
 - **The listener-country chain fails open link by link** (`broadcast/listener-country.ts`). A later link runs when an earlier one misses (`XX`/`T1`), not only when it is absent.
 

@@ -90,8 +90,9 @@ bootstrap_state_dirs() {
 }
 
 # Listener buffer depth comes only from the controller-written handoff. An env
-# override would change Icecast's real burst without changing /now-playing or
-# voice-event timing, putting every listener-facing clock on the wrong offset.
+# override would silently outrank the saved setting, and a controller older
+# than stream-mounts.json would keep advertising that setting, putting every
+# listener-facing clock on the wrong offset.
 read_state_num() {
     # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
     _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)

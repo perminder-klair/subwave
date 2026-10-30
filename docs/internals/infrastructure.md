@@ -22,8 +22,10 @@ real listener IPs, the non-fatal state bootstrap, and multi-station profiles.
 
 `settings.stream.bufferSeconds` is the single source of truth for listener
 delay. Both Icecast renderers read the controller-written handoff file; neither
-accepts an environment override, because the controller would keep advertising
-the stored value and every listener-facing timestamp would drift.
+accepts an environment override. One would silently outrank the operator's
+saved setting, and a controller older than the `stream-mounts.json` marker below
+would keep advertising the stored value, so every listener-facing timestamp
+would drift.
 
 **What listeners are told is what was rendered, not what was saved (#2142).**
 `<burst-size>` is rendered when the broadcast pair starts, while the setting
@@ -43,8 +45,9 @@ like `trusted-proxies.json`, and `duplicateAction` leaves it behind: a new
 station has not been rendered yet.
 
 The Opus mount's entry also carries `encoding`: `cbr` only when every `%opus`
-encoder in the `radio.liq` liquidsoap is about to load says `vbr="none"`, `vbr`
-when any does not, and absent when there is none to read (`opus_encoding`). It is
+encoder in the `radio.liq` liquidsoap is about to load says `vbr="none"` and none
+sets `dtx=true` (DTX can drop silent frames in any mode), `vbr` otherwise, and
+absent when there is no encoder to read (`opus_encoding`). It is
 read from the encoder line itself rather than declared beside it, so the edit
 that changes the encoder (#2138) changes the answer, and a later image cannot
 carry a stale claim. It exists for the web idle skip, which may treat a
@@ -57,9 +60,12 @@ sized the burst for the old encoder (320 → 64 kbps at 60 s is a ~300 s burst).
 `render_stream_mounts` now reads each setting once and exports the MP3, Opus and
 AAC bitrates as `SUBWAVE_{STREAM,OPUS,AAC}_BITRATE`, which `radio.liq`'s
 `burst_bitrate` takes before its own file read; run without them (by hand, or by
-an older supervisor) it reads the file as before. A bitrate radio.liq would
-refuse (0) falls back to the default on both sides, and leading zeros read as
-decimal on both sides, never as bash's octal. `ICECAST_{STREAM,OPUS,AAC}_BITRATE`
+an older supervisor) it reads the file as before. The renderer reads each file
+the way radio.liq does, because what it hands on replaces radio.liq's own read:
+surrounding whitespace is trimmed (radio.liq's `string.trim`, so a CRLF
+hand-edit keeps its bitrate rather than handing on the fallback), a bitrate
+radio.liq would refuse (0) falls back to the default, and leading zeros read as
+decimal, never as bash's octal. `ICECAST_{STREAM,OPUS,AAC}_BITRATE`
 still re-size only the burst and are never handed on: the encoder has always
 taken the setting, and handing it the override would change a configured
 station's audio on upgrade.

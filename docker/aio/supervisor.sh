@@ -530,8 +530,9 @@ read_state_num() {
 }
 
 # Keep the listener-time offset under controller ownership. Accepting an env
-# override here would make the Icecast burst disagree with /now-playing and
-# voice-event timing even though all four processes share this container.
+# override here would silently outrank the saved setting, and a controller
+# older than stream-mounts.json would keep advertising that setting to
+# /now-playing and voice-event timing.
 stream_buffer_seconds() {
 	read_state_uint liquidsoap_stream_buffer_seconds.txt 22
 }
