@@ -23,7 +23,9 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,6 +65,7 @@ test('the MP3 mount\'s rendered burst is the advertised one', () => {
   assert.equal(renderedBufferSeconds(mp3({ burstSeconds: 40, burstBytes: 40 * 192 * 125 })), 40);
   // 0 is a real value: the connect burst is off, and listeners sit at the edge.
   assert.equal(renderedBufferSeconds(mp3({ burstSeconds: 0, burstBytes: 0 })), 0);
+  assert.equal(listenerBufferSeconds(0, 22), 0, 'a rendered 0 is an answer, not "use the setting"');
   assert.equal(listenerBufferSeconds(40, 22), 40, 'the rendered burst beats the setting');
 });
 
@@ -117,8 +120,8 @@ const SUPERVISORS = [
 // The functions both copies must carry. Compared as `declare -f` prints them,
 // so indentation and comments may differ but the code may not.
 const SHARED = [
-  'read_state_uint', 'read_state_kbps', 'opus_encoding', 'emit_stream_mount',
-  'write_stream_mounts_marker', 'render_stream_mounts',
+  'read_state_uint', 'read_state_kbps', 'burst_kbps', 'opus_encoding', 'emit_stream_mount',
+  'write_state_marker', 'write_stream_mounts_marker', 'render_stream_mounts',
 ];
 
 let caseNo = 0;
@@ -144,15 +147,21 @@ type Render = {
 // Drive render_stream_mounts() against a scratch state dir. STATE_DIR is set
 // after the source, as in trusted-proxies.test.ts: the AIO supervisor assigns
 // it at module scope, so an env var would be clobbered by loading the script.
+// HANDED comes from printenv, a child process: it sees what liquidsoap inherits,
+// which an echo in this shell would not prove. `shim` is shell run after the
+// source, to make a command fail.
 function render(
   script: string, lib: string, dir: string,
-  opts: { files?: Record<string, string>; env?: Record<string, string>; authUrl?: string; radioLiq?: string } = {},
+  opts: {
+    files?: Record<string, string>; env?: Record<string, string>; authUrl?: string; radioLiq?: string; shim?: string;
+  } = {},
 ): Render {
   for (const [name, body] of Object.entries(opts.files ?? {})) writeFileSync(join(dir, name), body);
   const xmlPath = join(shellTmp, `xml-${caseNo++}.xml`);
-  const cmd = `set -eu; ${lib}=1 source "$1"; STATE_DIR="$2"; ` +
+  const cmd = `set -eu; ${lib}=1 source "$1"; STATE_DIR="$2"; ${opts.shim ?? ''}\n` +
     'render_stream_mounts "$3" "$4" "$5" 2>&1; ' +
-    'echo "HANDED mp3=$SUBWAVE_STREAM_BITRATE opus=$SUBWAVE_OPUS_BITRATE aac=$SUBWAVE_AAC_BITRATE"';
+    'echo "HANDED mp3=$(printenv SUBWAVE_STREAM_BITRATE) opus=$(printenv SUBWAVE_OPUS_BITRATE) ' +
+    'aac=$(printenv SUBWAVE_AAC_BITRATE)"';
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? '', ...opts.env };
   let status = 0;
   let out = '';
@@ -177,6 +186,9 @@ function render(
     handed: Object.fromEntries(handedLine.split(' ').filter(Boolean).map(kv => kv.split('=') as [string, string])),
   };
 }
+
+// What a marker's write left beside it.
+const tempsBeside = (dir: string, marker: string) => readdirSync(dir).filter(n => n.startsWith(`${marker}.`));
 
 // Each <mount> block's burst-size, keyed by mount name.
 function xmlBursts(xml: string): Record<string, number> {
@@ -226,6 +238,28 @@ test('radio.liq takes the handed bitrates under the names the renderers export',
   }
 });
 
+test('both scripts render from the radio.liq they launch, and launch it with the handoff intact', () => {
+  // These lines sit outside the shared functions, so the comparison above cannot
+  // see them. The test renderers take their arguments from this file, so they
+  // cannot either: a launch that drops a SUBWAVE_*_BITRATE, or an AIO that passes
+  // "" for the auth URL, would pass everything else here.
+  for (const s of SUPERVISORS) {
+    const code = readFileSync(s.path, 'utf8').split('\n').map(l => l.trim()).filter(l => !l.startsWith('#'));
+    assert.deepEqual(code.filter(l => l.includes('RADIO_LIQ')), [
+      'RADIO_LIQ=/etc/liquidsoap/radio.liq',
+      'render_stream_mounts "$MOUNTS_XML" "$MOUNT_AUTH_URL_XML" "$RADIO_LIQ"',
+      'liquidsoap "$RADIO_LIQ" &',
+    ], s.name);
+  }
+  for (const image of ['Dockerfile.broadcast', 'Dockerfile.aio']) {
+    assert.match(
+      readFileSync(join(repo, 'docker', image), 'utf8'),
+      /^COPY liquidsoap\/radio\.liq \/etc\/liquidsoap\/radio\.liq$/m,
+      `${image} installs radio.liq somewhere else`,
+    );
+  }
+});
+
 for (const s of SUPERVISORS) {
   assert.ok(existsSync(s.path), `${s.name} not found at ${s.path}`);
 
@@ -257,7 +291,7 @@ for (const s of SUPERVISORS) {
     const mode = statSync(join(dir, 'stream-mounts.json')).mode & 0o777;
     assert.equal(mode & 0o004, 0o004, `mode ${mode.toString(8)}`);
     assert.equal(mode & 0o022, 0, `mode ${mode.toString(8)}`);
-    assert.equal(existsSync(join(dir, 'stream-mounts.json.tmp')), false);
+    assert.deepEqual(tempsBeside(dir, 'stream-mounts.json'), []);
   });
 
   test(`${s.name}: liquidsoap is handed the bitrate each burst was sized for`, () => {
@@ -325,6 +359,24 @@ for (const s of SUPERVISORS) {
     assert.equal(renderedBufferSeconds(r.marker), 40);
   });
 
+  test(`${s.name}: a padded handoff costs one bounded read`, () => {
+    // Trimming all of this is quadratic, and ran for minutes at 80 KB with icecast
+    // and the dead-air guard waiting behind it. Called directly so the timeout
+    // kills the only process doing the work.
+    const read = (body: string) => {
+      const dir = newDir();
+      writeFileSync(join(dir, 'liquidsoap_stream_bitrate.txt'), body);
+      return execFileSync(
+        'bash',
+        ['-c', `set -eu; ${s.lib}=1 source "$1"; STATE_DIR="$2"; read_state_uint liquidsoap_stream_bitrate.txt 192`,
+          'bash', s.path, dir],
+        { encoding: 'utf8', env: { PATH: process.env.PATH ?? '' }, timeout: 10_000 },
+      ).trim();
+    };
+    assert.equal(read(`128${' '.repeat(1024 * 1024)}`), '128');
+    assert.equal(read(`${' '.repeat(1024 * 1024)}128`), '192', 'a value past the read is the fallback');
+  });
+
   test(`${s.name}: the buffer is clamped to 60 s and the marker says so`, () => {
     const r = render(s.path, s.lib, newDir(), { files: { 'liquidsoap_stream_buffer_seconds.txt': '90' } });
     assert.equal(r.status, 0, r.out);
@@ -344,6 +396,42 @@ for (const s of SUPERVISORS) {
     assert.equal(xmlBursts(r.xml)['/stream.mp3'], 22 * 320 * 125);
     assert.equal(r.marker!.mounts['/stream.mp3'].kbps, 320);
     assert.equal(r.handed.mp3, '128');
+  });
+
+  test(`${s.name}: ICECAST_*_BITRATE reach the marker as JSON numbers, sizing the burst they always did`, () => {
+    // A null is junk, which takes the mount's default.
+    const table: [value: string, kbps: number | null][] = [
+      ['320', 320],
+      ['0', 0],
+      ['00', 0],
+      // Octal, because bash arithmetic has always sized the burst from these:
+      // reading 0100 as decimal would change icecast.xml. render() throws on the
+      // `"kbps":0100` this used to write.
+      ['0100', 64],
+      ['0177', 127],
+      // Not octal: these were an arithmetic error that aborted the render.
+      ['0128', 128],
+      ['08', 8],
+      ['abc', null],
+      ['0x80', null],
+      ['+128', null],
+      ['12.5', null],
+    ];
+    const defaults = { '/stream.mp3': 192, '/stream.opus': 96, '/stream.aac': 192 };
+    for (const [value, kbps] of table) {
+      const r = render(s.path, s.lib, newDir(), {
+        env: { ICECAST_STREAM_BITRATE: value, ICECAST_OPUS_BITRATE: value, ICECAST_AAC_BITRATE: value },
+      });
+      assert.equal(r.status, 0, `${value}: ${r.out}`);
+      const bursts = xmlBursts(r.xml);
+      for (const [mount, fallback] of Object.entries(defaults)) {
+        const expected = kbps ?? fallback;
+        assert.equal(r.marker!.mounts[mount].kbps, expected, `${value} on ${mount}`);
+        assert.equal(bursts[mount], 22 * expected * 125, `${value} on ${mount}`);
+        assert.equal(r.marker!.mounts[mount].burstBytes, bursts[mount], `${value} on ${mount}`);
+      }
+      assert.deepEqual(r.handed, { mp3: '192', opus: '96', aac: '192' }, 'the encoder keeps the setting');
+    }
   });
 
   test(`${s.name}: listener auth still reaches every mount`, () => {
@@ -402,14 +490,72 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: a failed write removes the last render's marker rather than keep it`, () => {
     // A marker left from an earlier render would advertise a burst these
     // mounts no longer hold; with none, the controller falls back to the setting.
+    for (const shim of ['mktemp() { return 1; }', 'mv() { return 1; }']) {
+      const dir = newDir();
+      render(s.path, s.lib, dir, { files: { 'liquidsoap_stream_buffer_seconds.txt': '40' } });
+      assert.ok(existsSync(join(dir, 'stream-mounts.json')));
+      const r = render(s.path, s.lib, dir, { files: { 'liquidsoap_stream_buffer_seconds.txt': '10' }, shim });
+      assert.equal(r.status, 0, r.out);
+      assert.equal(r.marker, null, `a stale marker survived a failed write: ${shim}`);
+      assert.match(r.out, /WARNING could not write/);
+      assert.deepEqual(tempsBeside(dir, 'stream-mounts.json'), []);
+    }
+  });
+
+  test(`${s.name}: the marker's write goes through nothing planted in the state dir`, () => {
+    // The state dir is shared with containers running as other uids, and this
+    // script runs as root. Each shape is what a fixed-name temp, or a rename that
+    // treats the marker as a directory, would have followed.
+    const victim = () => {
+      const path = join(shellTmp, `victim-${caseNo++}`);
+      writeFileSync(path, 'precious');
+      return path;
+    };
+    const absent = () => join(shellTmp, `absent-${caseNo++}`);
+    const victimDir = () => {
+      const path = join(shellTmp, `victim-dir-${caseNo++}`);
+      mkdirSync(path);
+      return path;
+    };
+    for (const [name, target] of [
+      ['stream-mounts.json.tmp', victim()],
+      ['stream-mounts.json.tmp', absent()],
+      ['stream-mounts.json', victim()],
+      ['stream-mounts.json', absent()],
+      ['stream-mounts.json', victimDir()],
+    ] as const) {
+      const dir = newDir();
+      symlinkSync(target, join(dir, name));
+      const r = render(s.path, s.lib, dir);
+      assert.equal(r.status, 0, r.out);
+      assert.doesNotMatch(r.out, /WARNING/);
+      assert.equal(renderedBufferSeconds(r.marker), 22);
+      assert.equal(lstatSync(join(dir, 'stream-mounts.json')).isFile(), true, `${name} is still a symlink`);
+      assert.deepEqual(tempsBeside(dir, 'stream-mounts.json'), [], `${name}: a temp was left behind`);
+      if (!existsSync(target)) continue;
+      if (lstatSync(target).isDirectory()) assert.deepEqual(readdirSync(target), [], `written into ${name}'s target`);
+      else assert.equal(readFileSync(target, 'utf8'), 'precious', `written through ${name}`);
+    }
+    // The dangling links' targets must not have been created either.
+    assert.deepEqual(readdirSync(shellTmp).filter(n => n.startsWith('absent-')), []);
+  });
+
+  test(`${s.name}: a directory left at the old temp path costs nothing`, () => {
     const dir = newDir();
-    render(s.path, s.lib, dir, { files: { 'liquidsoap_stream_buffer_seconds.txt': '40' } });
-    assert.ok(existsSync(join(dir, 'stream-mounts.json')));
-    mkdirSync(join(dir, 'stream-mounts.json.tmp')); // the temp write now fails
-    const r = render(s.path, s.lib, dir, { files: { 'liquidsoap_stream_buffer_seconds.txt': '10' } });
+    mkdirSync(join(dir, 'stream-mounts.json.tmp'));
+    const r = render(s.path, s.lib, dir);
     assert.equal(r.status, 0, r.out);
-    assert.equal(r.marker, null, 'a stale marker survived a failed write');
-    assert.match(r.out, /WARNING could not write/);
+    assert.doesNotMatch(r.out, /WARNING/);
+    assert.equal(renderedBufferSeconds(r.marker), 22);
+  });
+
+  test(`${s.name}: a mount that refuses chmod still gets its marker`, () => {
+    // Such a mount is a working config (state_writable_by_others), and sets each
+    // file's mode itself.
+    const r = render(s.path, s.lib, newDir(), { shim: 'chmod() { return 1; }' });
+    assert.equal(r.status, 0, r.out);
+    assert.doesNotMatch(r.out, /WARNING/);
+    assert.equal(renderedBufferSeconds(r.marker), 22);
   });
 
   test(`${s.name}: no state dir at all is silent, and still renders`, () => {

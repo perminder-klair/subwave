@@ -96,8 +96,10 @@ export const DEFAULTS = {
     // entrypoint converts per mount (#993).
     //
     // This is also how far behind the live edge every listener sits for their
-    // whole connection, so /now-playing publishes it as stream.bufferSeconds and
-    // players subtract it to line titles up with the audio in someone's ears (#1114).
+    // whole connection, so /now-playing publishes the burst it last rendered
+    // (stream-mounts.json, #2142; this setting only until there is one) as
+    // stream.bufferSeconds, and players subtract that to line titles up with the
+    // audio in someone's ears (#1114).
     bufferSeconds: 22,
     // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
     // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep

@@ -3,7 +3,9 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import {
+  mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, lstatSync, writeFileSync, existsSync,
+} from 'node:fs';
 import { createTempDir } from './test-utils/temp-dir.js';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -285,7 +287,40 @@ for (const s of SUPERVISORS) {
     assert.deepEqual(state.proxies, []);
     assert.equal(state.source, 'ICECAST_TRUSTED_PROXY_HOSTS');
     // …and it leaves no temp behind for the state-dir sweep to trip over.
-    assert.equal(existsSync(join(dir, 'trusted-proxies.json.tmp')), false);
+    assert.deepEqual(readdirSync(dir).filter(n => n.startsWith('trusted-proxies.json.')), []);
+  });
+
+  test(`${s.name}: the marker's write goes through nothing planted in the state dir`, () => {
+    // The state dir is shared with containers running as other uids, and this
+    // script runs as root. Each shape is what a fixed-name temp, or a rename that
+    // treats the marker as a directory, would have followed.
+    const scratch = join(shellTmp, `planted-${caseNo++}`);
+    mkdirSync(scratch);
+    const victim = join(scratch, 'victim');
+    writeFileSync(victim, 'precious');
+    const victimDir = join(scratch, 'victim-dir');
+    mkdirSync(victimDir);
+    const absent = join(scratch, 'absent');
+    for (const [name, target] of [
+      ['trusted-proxies.json.tmp', victim],
+      ['trusted-proxies.json.tmp', absent],
+      ['trusted-proxies.json', victim],
+      ['trusted-proxies.json', absent],
+      ['trusted-proxies.json', victimDir],
+    ] as const) {
+      const dir = join(shellTmp, `case-${caseNo++}`);
+      mkdirSync(dir, { recursive: true });
+      symlinkSync(target, join(dir, name));
+      const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100', { stateDir: dir });
+      assert.equal(r.status, 0, r.out);
+      assert.doesNotMatch(r.out, /WARNING/);
+      assert.equal(trustedProxyState(r.marker).count, 1);
+      assert.equal(lstatSync(join(dir, 'trusted-proxies.json')).isFile(), true, `${name} is still a symlink`);
+      assert.deepEqual(readdirSync(dir).filter(n => n.startsWith('trusted-proxies.json.')), []);
+    }
+    assert.equal(readFileSync(victim, 'utf8'), 'precious');
+    assert.deepEqual(readdirSync(victimDir), []);
+    assert.equal(existsSync(absent), false);
   });
 
   test(`${s.name}: the marker is world-READABLE, not world-writable`, () => {

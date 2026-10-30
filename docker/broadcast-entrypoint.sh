@@ -106,15 +106,19 @@ stream_buffer_seconds() {
     read_state_uint liquidsoap_stream_buffer_seconds.txt 22
 }
 
-# A handoff number as a plain decimal, read the way radio.liq reads the same
-# files: surrounding whitespace trimmed (its string.trim, so a CRLF or padded
-# hand-edit hands liquidsoap the bitrate it would have read itself, not the
-# fallback), at most six digits (anything longer is the fallback), and leading
-# zeros as decimal, never as bash arithmetic's octal. Every value that reaches
-# stream-mounts.json is one, so the marker always holds valid JSON numbers.
+# A handoff number as a plain decimal. What the controller writes reads here as
+# it does in radio.liq, and so does a CRLF or padded hand-edit: surrounding
+# whitespace is trimmed (its string.trim), so liquidsoap is handed the bitrate it
+# would have read itself, not the fallback. At most six digits (anything longer
+# is the fallback), and leading zeros as decimal, never as bash arithmetic's
+# octal. Only the first 64 bytes are read, because the trim below is quadratic
+# and a padded or corrupt file must not hold icecast and the dead-air guard back
+# at boot. Other hand-edits part from radio.liq, whose int_of_string also takes
+# 0x80, +128, 1_000 and 7+ digits: each of those is the fallback here, and so is
+# a value behind 64 bytes of padding.
 read_state_uint() {
     local v
-    v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
+    v=$(head -c 64 "$STATE_DIR/$1" 2>/dev/null || true)
     v=${v#"${v%%[![:space:]]*}"}
     v=${v%"${v##*[![:space:]]}"}
     case "$v" in ''|*[!0-9]*) v=$2 ;; esac
@@ -130,6 +134,22 @@ read_state_kbps() {
     v=$(read_state_uint "$1" "$2")
     [ "$v" -gt 0 ] || v=$2
     echo "$v"
+}
+
+# A burst's bitrate, from ICECAST_*_BITRATE or the setting it overrides, as a
+# plain number, so stream-mounts.json always holds valid JSON. $1 = the value,
+# $2 = the default for junk. Bash arithmetic reads it, because the burst sizing
+# always has: a leading zero is octal here (0100 is 64), and reading that as
+# decimal would re-size the burst of a station that sets one. 0128 is not octal,
+# and was an arithmetic error that aborted the render, so it reads as decimal,
+# like a handoff file.
+burst_kbps() {
+    local v=$1
+    case "$v" in
+        ''|*[!0-9]*) v=$2 ;;
+        0*[89]*) v=$(( 10#$v )) ;;
+    esac
+    echo "$(( v ))"
 }
 
 # The Opus mount's encoding, read from the radio.liq liquidsoap is about to load:
@@ -186,24 +206,41 @@ emit_stream_mount() {
     return 0
 }
 
+# Replaces the state marker $1 with the line $2, non-zero if it could not.
+# Through a fresh mktemp file and a rename, like write_icecast_secrets, so a
+# symlink planted at a temp path is never written through and one planted at $1
+# is replaced, not followed. The fixed-name temp this used to write is dropped
+# first. 644 before the rename, so the marker never shows at mktemp's 600; a
+# refused chmod is no failure, because a mount that refuses chmod is a working
+# config (see state_writable_by_others).
+write_state_marker() {
+    local marker=$1 line=$2 tmp
+    rm -f "$marker.tmp" 2>/dev/null || true
+    tmp=$(mktemp "$marker.XXXXXX" 2>/dev/null) || return 1
+    chmod 644 "$tmp" 2>/dev/null || true
+    if printf '%s\n' "$line" > "$tmp" 2>/dev/null \
+        && mv -fT "$tmp" "$marker" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+
 # $STATE_DIR/stream-mounts.json: what this render gave each mount (#2142).
 # /now-playing advertises the MP3 mount's burstSeconds to listeners, so the
-# marker is rewritten on EVERY render and can never describe mounts icecast is
-# not running. A failed write removes the old one rather than leave it
-# describing an earlier render (the controller then advertises the setting), and
-# is never fatal, same rule as the state bootstrap above.
+# marker is rewritten on EVERY render. A failed write removes the old one rather
+# than leave it describing an earlier render (the controller then advertises the
+# setting), and is never fatal, same rule as the state bootstrap above. Only
+# when that removal fails too, as on a read-only state mount, does a marker
+# outlive its render.
 write_stream_mounts_marker() {
     # $1 = the mounts JSON object
     local dir=${STATE_DIR:-}
     [ -n "$dir" ] || return 0
     local marker=$dir/stream-mounts.json
-    local tmp=$marker.tmp
-    if printf '{"mounts":%s,"at":%s}\n' "$1" "$(date +%s)" > "$tmp" 2>/dev/null \
-        && mv -f "$tmp" "$marker" 2>/dev/null; then
-        chmod 644 "$marker" 2>/dev/null || true
-    else
-        rm -f "$tmp" "$marker" 2>/dev/null || true
-        state_warn "could not write $marker — the station is unaffected, but listeners are told the saved buffer setting, which may not be the burst these mounts were rendered with"
+    if ! write_state_marker "$marker" "{\"mounts\":$1,\"at\":$(date +%s)}"; then
+        rm -f "$marker" 2>/dev/null || true
+        state_warn "could not write $marker — the station is unaffected, but listeners may be told a buffer these mounts were not rendered with"
     fi
     return 0
 }
@@ -242,12 +279,9 @@ render_stream_mounts() {
     export SUBWAVE_STREAM_BITRATE SUBWAVE_OPUS_BITRATE SUBWAVE_AAC_BITRATE
     # ICECAST_*_BITRATE re-size a mount's burst and nothing else; the encoder
     # keeps the setting, as it always has.
-    STREAM_BITRATE=${ICECAST_STREAM_BITRATE:-$SUBWAVE_STREAM_BITRATE}
-    OPUS_BITRATE=${ICECAST_OPUS_BITRATE:-$SUBWAVE_OPUS_BITRATE}
-    AAC_BITRATE=${ICECAST_AAC_BITRATE:-$SUBWAVE_AAC_BITRATE}
-    case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
-    case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
-    case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
+    STREAM_BITRATE=$(burst_kbps "${ICECAST_STREAM_BITRATE:-$SUBWAVE_STREAM_BITRATE}" 192)
+    OPUS_BITRATE=$(burst_kbps "${ICECAST_OPUS_BITRATE:-$SUBWAVE_OPUS_BITRATE}" 96)
+    AAC_BITRATE=$(burst_kbps "${ICECAST_AAC_BITRATE:-$SUBWAVE_AAC_BITRATE}" 192)
     # FLAC is VBR with no bitrate setting — ~900 kbps is a typical average for
     # 44.1/16 stereo, close enough for a buffer depth.
     FLAC_BITRATE_EST=900
@@ -301,8 +335,9 @@ resolve_max_clients() {
 #
 # It also writes $STATE_DIR/trusted-proxies.json (count, addresses, source,
 # dropped) so admin can explain what icecast trusted (#1613). Rewritten on EVERY
-# render so it can never describe a config icecast is not running; failing to
-# write it is never fatal, same rule as the state bootstrap above.
+# render, so it describes the config icecast is running unless that write
+# failed, which leaves the last render's marker in place and is never fatal,
+# same rule as the state bootstrap above.
 #
 # docker/aio/supervisor.sh carries the same function and the same messages;
 # scripts/trusted-proxies.test.ts drives both from one table.
@@ -354,14 +389,10 @@ write_trusted_proxy_marker() {
     # $1 = count, $2 = source label, $3 = proxies JSON array, $4 = dropped array
     local dir=${STATE_DIR:-}
     [ -n "$dir" ] || return 0
-    local marker=$dir/trusted-proxies.json
-    local tmp=$marker.tmp
-    if printf '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}\n' \
-            "$1" "$2" "$3" "$4" "$(date +%s)" > "$tmp" 2>/dev/null \
-        && mv -f "$tmp" "$marker" 2>/dev/null; then
-        chmod 644 "$marker" 2>/dev/null || true
-    else
-        rm -f "$tmp" 2>/dev/null || true
+    local marker=$dir/trusted-proxies.json line
+    printf -v line '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}' \
+        "$1" "$2" "$3" "$4" "$(date +%s)"
+    if ! write_state_marker "$marker" "$line"; then
         state_warn "could not write $marker — the station is unaffected, but the admin Listeners table cannot explain a missing trusted proxy"
     fi
     return 0

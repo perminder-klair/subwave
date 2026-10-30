@@ -58,7 +58,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 | `sfx.txt` | 0.5 s poll | sound effect → `sfx_queue` |
 | `auto.m3u` | telnet `auto.reload` | the coast playlist for the current mood |
 | `jingles.m3u` | telnet `jingles.reload` | the mixer's own jingle rotate, rebuilt by `broadcast/jingles.ts` |
-| `liquidsoap_*.txt` | once, at startup | crossfade, jingle ratio, duck depths, per-mount enable/bitrate…, written by `settings.update()`; a change needs `/restart-mixer` |
+| `liquidsoap_*.txt` | once, at startup | crossfade, jingle ratio, duck depths, per-mount enable…, written by `settings.update()`; a change needs `/restart-mixer`. The Icecast renderers read the stream bitrates and hand them on as `SUBWAVE_*_BITRATE` (`infrastructure.md`) |
 
 **Liquidsoap → Controller.** Marker files written by `radio.liq` (the rules are in `liquidsoap/CLAUDE.md`):
 - `now-playing.json`: the live track, from `music_meta`, the pre-cross handle.

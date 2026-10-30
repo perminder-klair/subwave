@@ -1,6 +1,9 @@
 // One value per text file. Liquidsoap reads them once at mixer startup, so a
 // change needs a restart; update() rewrites them on every save. A few are read
-// by docker/broadcast-entrypoint.sh instead, as marked.
+// by the Icecast renderers (docker/broadcast-entrypoint.sh, the AIO's
+// supervisor.sh) instead, as marked. The renderers also read the three stream
+// bitrates, to size each burst, and hand them on as SUBWAVE_*_BITRATE (#2143);
+// radio.liq reads those files itself only when run without that handoff.
 
 import { writeFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
