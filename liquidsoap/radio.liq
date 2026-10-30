@@ -2333,20 +2333,27 @@ def make_stream_outputs() =
   # Opus mandates 48 kHz internally, so this mount also costs a 44.1->48k
   # resample. application="audio" is the music tuning; 96 kbps is the
   # music-transparent default. When off, neither is built.
+  #
+  # Hard CBR (vbr="none", #2138): Icecast's <burst-size> is a byte count sized
+  # from this bitrate, so it holds bufferSeconds only if every second costs the
+  # same. Constrained VBR coded digital silence at ~1.6 kbps, so after an idle
+  # pause the burst reached back past the pause into stale music, and a new
+  # listener waited out the whole pause. CBR pads silence to the bitrate; Ogg
+  # framing adds ~1%, so the burst is a little under bufferSeconds.
   opus_shutdown =
     if opus_enabled() then
       obr = opus_bitrate()
       opus_enc =
         if obr <= 96 then
-          %opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=96, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 128 then
-          %opus(bitrate=128, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=128, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 192 then
-          %opus(bitrate=192, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=192, samplerate=48000, channels=2, application="audio", vbr="none")
         elsif obr <= 256 then
-          %opus(bitrate=256, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=256, samplerate=48000, channels=2, application="audio", vbr="none")
         else
-          %opus(bitrate=320, samplerate=48000, channels=2, application="audio", vbr="constrained")
+          %opus(bitrate=320, samplerate=48000, channels=2, application="audio", vbr="none")
         end
       opus_out = output.icecast(
         opus_enc,
