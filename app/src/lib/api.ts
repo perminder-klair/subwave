@@ -182,8 +182,8 @@ async function readJson(res: Response): Promise<unknown> {
   }
 }
 
-/** A refusal's JSON body, or undefined when it is not JSON or has not arrived
- *  in time (readJson). */
+/** A /station-auth answer's JSON body, or undefined when it is not JSON or has
+ *  not arrived in time (readJson). */
 function refusalBody(res: Response): Promise<unknown> {
   return readJson(res).catch(() => undefined);
 }
