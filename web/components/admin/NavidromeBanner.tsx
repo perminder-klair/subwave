@@ -40,9 +40,9 @@ export default function NavidromeBanner({
     >
       <AlertTriangle size={14} className="shrink-0 text-[var(--danger)]" aria-hidden="true" />
       <span>
-        <b>Can&rsquo;t reach Navidrome.</b> The DJ has no music source
+        <b>Can&rsquo;t reach {status.mode === 'router' ? 'the music router' : 'Navidrome'}.</b> The DJ has no music source
         {status.reason ? <> — {status.reason}</> : null}. Check the connection in Settings &rarr;
-        Music source and that Navidrome is running.
+        Music source and that {status.mode === 'router' ? 'the router service' : 'Navidrome'} is running.
       </span>
       <Link
         href="/admin/settings?section=music"

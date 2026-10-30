@@ -65,7 +65,7 @@ for (const f of [
 ]) assert.equal(duplicateAction(f), 'skip', f);
 
 // --- conversion classification (spec §6) --------------------------------------
-for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found'])
+for (const f of ['stations', 'icecast-secrets.env', 'hf-cache', 'analyze-tmp', 'lost+found', 'router'])
   assert.equal(conversionAction(f), 'keep', f);
 for (const f of ['settings.json', 'library.db', 'jingles', 'logs', 'archive', 'session.json', 'show-preparations.json'])
   assert.equal(conversionAction(f), 'move', f);

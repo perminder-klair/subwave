@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { NAVIDROME_PROFILE_POLICY, resolveNavidrome } from './navidrome-policy.js';
+import { currentSelection, readRouterAuth, readSelection, routerConnection, setCurrentSelection } from './music-source.js';
 import { config, STATE_DIR, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
@@ -25,6 +26,9 @@ export interface SetupConfig {
     user?: string;
     pass?: string;
   };
+  // Music-source selection (#692): direct Navidrome or the music router.
+  // Absent = direct Navidrome. Shape: schemas/music-source.ts.
+  music?: unknown;
   // ISO timestamp written when the wizard saves successfully.
   setupCompletedAt?: string;
   navidromePolicy?: typeof NAVIDROME_PROFILE_POLICY;
@@ -59,10 +63,26 @@ export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<Setu
   return next;
 }
 
-// Used by the controller and both maintenance entrypoints.
+// Used by the controller and both maintenance entrypoints. In router mode the
+// live connection is the music router (setup/music-source.ts); the stored
+// Navidrome credentials stay in the file for switching back.
 export async function loadNavidromeConfig(): Promise<void> {
   const sc = await loadSetupConfig();
-  Object.assign(config.navidrome, resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED));
+  const selection = readSelection(sc);
+  setCurrentSelection(selection);
+  Object.assign(
+    config.navidrome,
+    selection.mode === 'router' ? routerConnection(readRouterAuth()) : resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED),
+  );
+}
+
+// The direct Navidrome connection as stored (env applied), whichever music
+// mode is live. In navidrome mode it equals config.navidrome; in router mode
+// config.navidrome is the ROUTER, which must never be saved or shown as the
+// station's Navidrome (settings, multi-station conversion).
+export async function storedNavidrome(): Promise<{ url: string; user: string; password: string }> {
+  if (currentSelection().mode !== 'router') return config.navidrome;
+  return resolveNavidrome((await loadSetupConfig()).navidrome, NAVIDROME_ENV_ENABLED);
 }
 
 // Kept for callers that previously invalidated the (now-removed) cache.

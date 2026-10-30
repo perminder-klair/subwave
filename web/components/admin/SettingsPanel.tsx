@@ -50,7 +50,7 @@ import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ListenersSection } from './settings/ListenersSection';
-import { NavidromeSection } from './settings/NavidromeSection';
+import { MusicSourceSection } from './settings/MusicSourceSection';
 import { MusicSelectionSection } from './settings/MusicSelectionSection';
 import {
   useLlmSwapMutation,
@@ -583,7 +583,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               />
             )}
             {activeSection === 'music' && (
-              <NavidromeSection data={data} adminFetch={adminFetch} refresh={refresh} />
+              <MusicSourceSection data={data} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

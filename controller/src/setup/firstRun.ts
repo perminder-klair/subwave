@@ -9,12 +9,16 @@
 import { hasNavidrome, resolveNavidrome, navidromeEnvLocks } from './navidrome-policy.js';
 import { config, NAVIDROME_ENV_ENABLED } from '../config.js';
 import { loadSetupConfig } from './config.js';
+import { currentSelection, readSelection, routerSelectionComplete } from './music-source.js';
+import type { MusicMode } from '../schemas/music-source.js';
 
 export interface SetupStatus {
   needsSetup: boolean;
   setupCompletedAt: string | null;
   // Useful for the wizard's "I see you already have NAVIDROME_URL in env" UX.
   navidromeSource: 'env' | 'setup-config' | 'unset';
+  // Which backend the station plays from (#692).
+  musicMode: MusicMode;
 }
 
 // Environment configuration only applies to a legacy single-station install.
@@ -22,24 +26,32 @@ export function envHasNavidrome(): boolean {
   return Object.values(navidromeEnvLocks(NAVIDROME_ENV_ENABLED)).every(Boolean);
 }
 
+// A router-mode station is set up once it has a source; its Navidrome
+// credentials (if any) are kept for switching back but no longer required.
 export async function getSetupStatus(): Promise<SetupStatus> {
   const sc = await loadSetupConfig();
+  const selection = readSelection(sc);
   const nv = resolveNavidrome(sc.navidrome, NAVIDROME_ENV_ENABLED);
-  const filled = hasNavidrome({ ...nv, pass: nv.password });
+  const navidromeFilled = hasNavidrome({ ...nv, pass: nv.password });
+  const filled = selection.mode === 'router' ? routerSelectionComplete(selection) : navidromeFilled;
   return {
     needsSetup: !filled,
     setupCompletedAt: sc.setupCompletedAt || null,
-    navidromeSource: !filled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    navidromeSource: !navidromeFilled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    musicMode: selection.mode,
   };
 }
 
 // /state reads the effective connection already hydrated at boot or save.
 export function getSetupStatusSync(): SetupStatus {
+  const selection = currentSelection();
   const nv = config.navidrome;
-  const filled = hasNavidrome({ ...nv, pass: nv.password });
+  const connected = hasNavidrome({ ...nv, pass: nv.password });
+  const filled = selection.mode === 'router' ? connected && routerSelectionComplete(selection) : connected;
   return {
     needsSetup: !filled,
     setupCompletedAt: null,
-    navidromeSource: !filled ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    navidromeSource: selection.mode === 'router' || !connected ? 'unset' : envHasNavidrome() ? 'env' : 'setup-config',
+    musicMode: selection.mode,
   };
 }

@@ -12,6 +12,7 @@ This file loads into every session, so it holds the map, the commands and one li
 | `liquidsoap/radio.liq` | [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md) |
 | `web/**` | [`web/CLAUDE.md`](web/CLAUDE.md) |
 | `app/**` | [`app/CLAUDE.md`](app/CLAUDE.md) |
+| `router/**`, music sources beyond Navidrome, plugins | [`router/CLAUDE.md`](router/CLAUDE.md) + [`docs/internals/music-sources.md`](docs/internals/music-sources.md) |
 | queue, talk scheduling, speech timing, transitions, TTS, personas | [`docs/internals/broadcast.md`](docs/internals/broadcast.md) |
 | show changes and sign-off/greeting handoffs | [`docs/internals/show-boundary-handoffs.md`](docs/internals/show-boundary-handoffs.md) |
 | library, tagging, picker, requests, blocklist | [`docs/internals/music.md`](docs/internals/music.md) |
@@ -33,8 +34,8 @@ The compose files sit at the repo root: `docker-compose.yml` (prod, with Caddy a
 
 ## Lint and tests
 
-- **Lint is the merge gate.** `npm run lint` in `controller/`, `web/`, `app/` and `mcp-subwave/` runs in `.github/workflows/lint.yml`, alongside the theme-token, schema-mirror and zod-parity checks. Only the controller and web lint jobs are required to merge.
-- **CI does not run the test suites** (apart from two ffmpeg tests in `audio-tests.yml`). Run `npm test` yourself in `controller/`, `web/` or `app/` before pushing changes there.
+- **Lint is the merge gate.** `npm run lint` in `controller/`, `web/`, `app/`, `mcp-subwave/` and `router/` runs in `.github/workflows/lint.yml`, alongside the theme-token, schema-mirror and zod-parity checks. Only the controller and web lint jobs are required to merge.
+- **CI does not run the test suites** (apart from two ffmpeg tests in `audio-tests.yml`). Run `npm test` yourself in `controller/`, `web/`, `app/` or `router/` before pushing changes there. The controller's router tests (`router-contract`, `music-source-route`) spawn the real router, so they need `npm --prefix router install`.
 - **Always run tests through `npm test`** (`npm test -- <substring>` filters). The controller runner gives each file its own temp `STATE_DIR`; `node --test` or `tsx <file>` can write into the repo's `state/`, the dev station's own. Files run one at a time by default (`--jobs N` in the controller). Dropping in `controller/scripts/*.test.ts`, or a web test under a root listed in `web/scripts/run-tests.mjs`, is the whole registration. The `controller/scripts/run-tests.ts` header covers the rest (`node:test`, reserved ports, `createTempDir`). A test removes its temp dir with `await removeTempDir(dir)` (`scripts/test-utils/temp-dir.ts`), never a bare `rmSync`, which races in-flight writes into `ENOTEMPTY`.
 - **Run heavy commands one at a time, never in parallel.** Lint, `tsc`, a test suite, `npm ci` and a build each get the machine to themselves: no two in one message, no second one while a background one runs, and one package's suite at a time. Together they have OOM-killed a 16 GB dev box.
 - The scale benches (`npm run bench:admin`, `bench:lookups`, `bench:observatory`) are outside `npm test` because they seed GB-sized libraries (`bench:observatory` peaks at ~1.3 GB RSS plus a ~0.9 GB DB at its default 200k rows). Run one only when asked or after touching its read path, alone, with its `*_TMP` on real disk (`/tmp` is tmpfs on some hosts, and a full one fails the seed with `SQLITE_IOERR_WRITE`).
@@ -45,7 +46,7 @@ Use `gh pr create --base develop`. `main` is the release branch, and `enforce-ma
 
 ## Architecture
 
-The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeScript), Web (Next.js) and the native app. Controller and Liquidsoap share the `state/` dir (`/var/sub-wave` in containers) and must mount the same host path. Data passes as files in it; control (reloads, restart, skip, probes) goes over Liquidsoap's telnet on `broadcast:1234` (`broadcast/liquidsoap-control.ts`).
+The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeScript), Web (Next.js), the native app and the music router (`router/`, #692), a sidecar that serves the Subsonic API `music/subsonic.ts` already speaks, answered by music-source plugins. Controller and Liquidsoap share the `state/` dir (`/var/sub-wave` in containers) and must mount the same host path. Data passes as files in it; control (reloads, restart, skip, probes) goes over Liquidsoap's telnet on `broadcast:1234` (`broadcast/liquidsoap-control.ts`).
 
 **Controller → Liquidsoap.** Liquidsoap reads; the controller only writes. The five polled files are written only by `Queue` methods, each through its own serialised `writeHandoff` chain, which waits for Liquidsoap to consume the previous write. Each poll interval caps the latency it adds.
 
@@ -110,6 +111,7 @@ The pieces are Broadcast (Icecast + Liquidsoap), Controller (Express, ESM, TypeS
 - Judge era with `resolveEraYear` and `yearUntrusted`, never raw `year`, and keep the JS and SQL era filters in agreement.
 - Silence trim measures against an absolute floor, and `music/silence-trim.ts` owns every onset shift.
 - Library coverage never counts on the read path; only `refresh()` counts it.
+- A new music backend is a router plugin, never a branch in the controller, and every plugin id goes through `router/src/host/ids.ts`. A source switch carries rows across through the existing adoption journal (`music/source-switch.ts`), never a second id-migration path (`docs/internals/music-sources.md`).
 - Anything going to Liquidsoap uses `getAnnotatedUri`.
 - The tagger's own `moods`/`energy` never enter the embed text. Bump `TAGGER_CONTRACT_VERSION` (`music/tagger-core.ts`) when the prompt asks for something different.
 - CLAP cosines are not comparable across moods, so calibrate per mood.
