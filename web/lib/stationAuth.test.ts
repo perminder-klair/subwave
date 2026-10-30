@@ -198,6 +198,15 @@ test("a 429 hands on when to ask again, and only a 429's header counts", async t
   assert.deepEqual(await checkStationAuth('/api', 'pw'), { result: 'unavailable', retryAt: 0 });
 });
 
+test("a 429 is read from its headers alone: a proxy's page still says when to ask again", async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1_000_000 });
+  stubFetch(t, () => new Response('<html>Too Many Requests</html>', {
+    status: 429,
+    headers: { 'Content-Type': 'text/html', 'Retry-After': '30' },
+  }));
+  assert.deepEqual(await checkStationAuth('/api', 'pw'), { result: 'rate-limited', retryAt: 1_030_000 });
+});
+
 const realSetTimeout = globalThis.setTimeout;
 
 /** A mutant that drops the deadline must fail here, not hang the suite. */
