@@ -21,6 +21,8 @@ Mark each box per platform. Note the device + OS version you tested on.
 
 - [ ] **iOS** / [ ] **Android** — Tune in, lock the phone / turn the screen off, leave for **30+ min**: audio keeps playing, no dropout, no silent death.
 - [ ] **iOS** / [ ] **Android** — Lock-screen (and notification) shows **now-playing metadata + cover art**; on a song change the **title / artist / persona / cover swap** within a few seconds.
+- [ ] **iOS** / [ ] **Android** — **Lock screen after a reconnect**: tuned in with the phone locked, turn airplane mode on for ~15 s and off again (or walk off Wi-Fi onto cellular) so the stream reconnects. Once audio is back, the lock screen / notification shows the current song's **title, artist and cover**, not `SUB/WAVE · Live broadcast` with no artwork, and the progress bar resumes. _(validates #2143 — every reload resets the native card to the loaded item's placeholders; `useNowPlayingInfo` re-sends it on `PlaybackActiveTrackChanged`)_
+- [ ] **iOS** — **No cover fetch on a status flip**: tuned in with the phone locked, force a buffering stall that recovers without a reconnect (Network Link Conditioner, briefly at 100% loss). The lock-screen cover stays put, its progress bar is right again once audio resumes, and the station's access log shows no new `/api/cover/…` request for the stall, only on a song change, a DJ persona swap or a reconnect. _(validates #2143 — a status or foreground flip re-anchors progress only; Android's RNTP patch already skipped an unchanged card)_
 - [ ] **iOS** / [ ] **Android** — Lock-screen / notification controls: **Play, Pause, Stop** work. **No Skip/Next** control is present (intentional — shared live stream).
 
 ## Resilience & connectivity
