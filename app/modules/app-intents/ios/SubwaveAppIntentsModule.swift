@@ -27,6 +27,8 @@ private let replyName = Notification.Name("SubwaveIntentReply")
 // by STRING like the names above.
 private let appGroup = "group.com.getsubwave.app"
 private let onAirKey = "subwave.onAir"
+// Read by targets/live-activity/_shared/SubwaveCarPlay.swift.
+private let onAirChangedName = Notification.Name("SubwaveOnAirChanged")
 private let tuneControlKind = "com.getsubwave.app.tune"
 // The saved stations, read by SavedStations in
 // targets/live-activity/_shared/StationEntities.swift, and the app-target class
@@ -102,6 +104,8 @@ public class SubwaveAppIntentsModule: Module {
       if #available(iOS 18.0, *) {
         ControlCenter.shared.reloadControls(ofKind: tuneControlKind)
       }
+      // The CarPlay station list marks the station that is playing.
+      NotificationCenter.default.post(name: onAirChangedName, object: nil)
     }
 
     /// The saved stations and the active one, as JSON from JS:

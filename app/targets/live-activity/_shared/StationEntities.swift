@@ -14,6 +14,9 @@ import Foundation
 // App target only, like SubwaveShortcuts.swift.
 #if canImport(ExpoModulesCore)
 
+/// Posted in-process after a new station list is written and indexed.
+let savedStationsChanged = Notification.Name("SubwaveStationsChanged")
+
 /// The stations as the app last wrote them. The key is matched by STRING with
 /// modules/app-intents/ios/SubwaveAppIntentsModule.swift.
 struct SavedStations: Decodable {
@@ -125,6 +128,8 @@ struct OpenStationIntent: OpenIntent {
 @objc(SubwaveStationIndex)
 final class StationIndex: NSObject {
   @objc static func reindex() {
+    // The CarPlay station list (SubwaveCarPlay.swift) redraws on this.
+    NotificationCenter.default.post(name: savedStationsChanged, object: nil)
     if #available(iOS 17.0, *) {
       SubwaveShortcuts.updateAppShortcutParameters()
     }

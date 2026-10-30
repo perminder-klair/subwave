@@ -10,9 +10,8 @@ import Foundation
 // Only meaningful in the APP's process. Every intent that uses it must be one
 // the system runs there (AudioPlaybackIntent, LiveActivityIntent): in the
 // widget extension nothing is listening and `perform` fails after the ack
-// window.
+// window. The CarPlay scene (SubwaveCarPlay.swift) uses it too, from the app.
 
-@available(iOS 17.0, *)
 enum SubwaveIntentBridge {
   private static let requestName = Notification.Name("SubwaveIntentRequest")
   private static let ackName = Notification.Name("SubwaveIntentAck")
