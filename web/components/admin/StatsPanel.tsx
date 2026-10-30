@@ -1,9 +1,10 @@
 'use client';
 
 // The Stats page, after the "Stats Redesign" design: a front panel that says
-// whether anyone is listening and whether the station is healthy, then numbered
-// sections from the weekly recap down to diagnostics. This file owns the reads
-// and the page header; each section renders from what it is handed (./stats/*).
+// whether anyone is listening and whether the station is healthy, then sections
+// from the weekly recap down to diagnostics, with a tuner dial pinned above them
+// to find your way. This file owns the reads and the page header; each section
+// renders from what it is handed (./stats/*).
 //
 // /stats reports activity since boot, except `transitions`, which is read from
 // the play history; /listeners, /audience and /stats/week read durable records.
@@ -17,6 +18,7 @@ import { Btn } from './ui';
 import { cn } from '../../lib/cn';
 import { statsKeys } from './stats-queries';
 import { LABEL, NOTE } from './stats/parts';
+import { SectionDial } from './stats/SectionDial';
 import { FrontPanel } from './stats/FrontPanel';
 import { WeekRecap } from './stats/WeekRecap';
 import { Listening } from './stats/Listening';
@@ -134,76 +136,80 @@ export default function StatsPanel() {
   const asOf = data?.t ? new Date(data.t) : null;
 
   return (
-    <div className="grid grid-cols-1 gap-11">
-      <header className="flex flex-wrap items-end gap-5">
-        <div className="grid gap-2">
-          <span className={NOTE}>
-            {[
-              recap?.station,
-              asOf && `${asOf.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · ${asOf.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
-            ].filter(Boolean).join(' · ') || ' '}
-          </span>
-          <h1 className="m-0 font-display text-[52px] leading-none font-normal tracking-[-0.02em]">Stats</h1>
-        </div>
+    // A block, not a grid: a sticky grid item can't leave its own row, and the
+    // dial has to ride the whole page.
+    <div>
+      <header className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+        <h1 className="m-0 font-display text-[40px] leading-none font-normal tracking-[-0.02em]">Stats</h1>
+        <span className={NOTE}>
+          {[
+            recap?.station,
+            asOf && `${asOf.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} · ${asOf.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`,
+          ].filter(Boolean).join(' · ') || ' '}
+        </span>
         <div className="ml-auto flex flex-wrap items-center gap-4">
           <span className={cn(LABEL, err ? 'text-[var(--danger)]' : paused ? 'text-muted' : 'text-vermilion')}>
             ● {err ? 'down' : paused ? 'paused' : 'live'}
           </span>
           <span className="font-mono text-[10px] tracking-[0.2em] uppercase">refresh · 5s</span>
-          <span className={NOTE}>rollups since boot · listeners durable</span>
+          <span className={cn(NOTE, 'order-last w-full sm:order-none sm:w-auto')}>rollups since boot · listeners durable</span>
           <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
         </div>
       </header>
 
-      {err && <ErrorState error={err} />}
+      <SectionDial />
 
-      <FrontPanel
-        listeners={{
-          now: listeners?.current ?? null,
-          peak: counts.length ? Math.max(...counts) : null,
-          avg: counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null,
-          low: counts.length ? Math.min(...counts) : null,
-          rangeLabel,
-          loaded: listeners != null,
-        }}
-        llm={data?.llm ?? null}
-        tts={data?.tts ?? null}
-        requests={data?.requests ?? null}
-        host={system?.host ?? null}
-        statsDown={!!err}
-      />
+      <div className="mt-3 grid grid-cols-1 gap-14">
+        {err && <ErrorState error={err} />}
 
-      <WeekRecap recap={recap} />
+        <FrontPanel
+          listeners={{
+            now: listeners?.current ?? null,
+            peak: counts.length ? Math.max(...counts) : null,
+            avg: counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null,
+            low: counts.length ? Math.min(...counts) : null,
+            rangeLabel,
+            loaded: listeners != null,
+          }}
+          llm={data?.llm ?? null}
+          tts={data?.tts ?? null}
+          requests={data?.requests ?? null}
+          host={system?.host ?? null}
+          statsDown={!!err}
+        />
 
-      <Listening
-        range={range}
-        onRange={setRange}
-        rangeLabel={rangeLabel}
-        samples={samples}
-        listenersLoaded={listeners != null}
-        audience={audience}
-        connections={connectionsQuery.data ?? null}
-      />
+        <WeekRecap recap={recap} />
 
-      <OnAir
-        recap={recap}
-        djLog={data?.djLog ?? null}
-        transitions={data?.transitions}
-        onTransitions={() => setOpen(o => ({ ...o, transitions: true }))}
-      />
+        <Listening
+          range={range}
+          onRange={setRange}
+          rangeLabel={rangeLabel}
+          samples={samples}
+          listenersLoaded={listeners != null}
+          audience={audience}
+          connections={connectionsQuery.data ?? null}
+        />
 
-      <EngineRoom llm={data?.llm ?? null} tts={data?.tts ?? null} />
+        <OnAir
+          recap={recap}
+          djLog={data?.djLog ?? null}
+          transitions={data?.transitions}
+          onTransitions={() => setOpen(o => ({ ...o, transitions: true }))}
+        />
 
-      <Rack system={system} />
+        <EngineRoom llm={data?.llm ?? null} tts={data?.tts ?? null} />
 
-      <Diagnostics
-        requests={data?.requests ?? null}
-        llm={data?.llm ?? null}
-        trackSelection={data?.trackSelection}
-        transitions={data ? data.transitions : undefined}
-        open={open}
-        onToggle={key => setOpen(o => ({ ...o, [key]: !o[key] }))}
-      />
+        <Rack system={system} />
+
+        <Diagnostics
+          requests={data?.requests ?? null}
+          llm={data?.llm ?? null}
+          trackSelection={data?.trackSelection}
+          transitions={data ? data.transitions : undefined}
+          open={open}
+          onToggle={key => setOpen(o => ({ ...o, [key]: !o[key] }))}
+        />
+      </div>
     </div>
   );
 }
