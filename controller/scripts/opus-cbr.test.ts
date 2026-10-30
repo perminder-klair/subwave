@@ -83,7 +83,9 @@ const NOT_CBR: Record<string, () => string> = {
 
 for (const [name, source] of Object.entries(NOT_CBR)) {
   test(`fails on ${name}`, () => {
-    assert.throws(() => assertHardCbr(source()), assert.AssertionError);
+    // Built first: radioWith's own failure must not count as the check's.
+    const edited = source();
+    assert.throws(() => assertHardCbr(edited), assert.AssertionError);
   });
 }
 
