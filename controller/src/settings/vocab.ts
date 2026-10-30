@@ -60,6 +60,7 @@ import {
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
   SETTINGS_SEARCH_PROVIDERS,
+  stripSecretControlChars,
 } from '../schemas/settings.js';
 import { EMBEDDING_PROVIDER_IDS, LLM_PROVIDER_IDS } from '../schemas/providers.js';
 
@@ -443,7 +444,7 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
 // sentinel) and undefined leave it untouched.
 export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provider: string, rawApiKey: unknown): void {
   if (rawApiKey === undefined || rawApiKey === 'set') return;
-  const v = String(rawApiKey);
+  const v = stripSecretControlChars(String(rawApiKey));
   if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;

@@ -121,6 +121,7 @@ import {
   type ScheduledBackupSettings,
   type JingleRotateOwner,
   type TtsPatch,
+  stripSecretControlChars,
 } from './schemas/settings.js';
 import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
@@ -1984,7 +1985,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // 'set' is the redaction sentinel from getRedacted() — ignore it so a
       // round-tripped settings form doesn't overwrite the real key.
       if (c.apiKey !== undefined && c.apiKey !== 'set') {
-        next.tts.cloud.apiKey = String(c.apiKey);
+        next.tts.cloud.apiKey = stripSecretControlChars(String(c.apiKey));
       } else if (c.provider !== undefined && c.provider !== savedCloudProvider) {
         // The shared inline slot belongs to the provider that created it. A
         // provider transition without an explicit replacement must clear it,
@@ -1995,7 +1996,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       // Dedicated compatibility bearer. Unlike the legacy shared slot, this
       // may safely persist while another managed provider is selected globally.
       if (c.compatApiKey !== undefined && c.compatApiKey !== 'set') {
-        next.tts.cloud.compatApiKey = String(c.compatApiKey);
+        next.tts.cloud.compatApiKey = stripSecretControlChars(String(c.compatApiKey));
       }
       if (c.baseUrl !== undefined) {
         const v = String(c.baseUrl).trim();
@@ -2328,7 +2329,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       next.embedding.ollamaUrl = v.replace(/\/+$/, '');
     }
     if (e.apiKey !== undefined && e.apiKey !== 'set') {
-      const v = String(e.apiKey).trim();
+      const v = stripSecretControlChars(String(e.apiKey).trim());
       if (v.length > EMBEDDING_API_KEY_MAX) throw new Error(`embedding.apiKey must be 0-${EMBEDDING_API_KEY_MAX} chars`);
       next.embedding.apiKey = v;
     }

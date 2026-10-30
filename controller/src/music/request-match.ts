@@ -68,19 +68,49 @@ export function isRefusedOutcome(outcome: string | null | undefined): boolean {
   return outcome === 'cooldown' || outcome === 'already-queued';
 }
 
+// The five conditions Direct refuses, in the words a model labels them with:
+// the prompt's own list, the backstop's labels below and their variants ("era
+// or year ranges", "previous conversation"). Labels are English because the
+// prompt keeps the field in English.
+const UNSUPPORTED_CATEGORIES = [
+  /\b(?:exclu|negat|except|avoid|without)/i,
+  /\b(?:eras?|years?|decades?|(?:19|20)?\d0s)\b/i,
+  /\b(?:instrumental|acoustic|live|vocals?|recording)\b/i,
+  /\b(?:lyrics?|films?|movies?|tv|television|shows?|series|adverts?|commercials?|trend\w*|viral|tiktok|soundtracks?|external)\b|\bsong[\s-]+identif/i,
+  /\b(?:earlier|previous(?:ly)?|prior|conversations?|discuss(?:ed|ion)?|mentioned)\b/i,
+];
+
+// A model label that names none of the five is not a condition on the tracks:
+// a dedication, an occasion or an invented category ("journey identification")
+// must not refuse the request (#2133). The ignored labels are returned for the
+// request log; a kept label stays as the model wrote it.
+export function classifyUnsupportedLabels(labels: string[] = []): { conditions: string[]; ignored: string[] } {
+  const conditions: string[] = [];
+  const ignored: string[] = [];
+  for (const label of labels) {
+    if (!label.trim()) continue;
+    (UNSUPPORTED_CATEGORIES.some(category => category.test(label)) ? conditions : ignored).push(label);
+  }
+  return { conditions, ignored };
+}
+
 // Backstop for common conditions a small model can silently omit. Quoted
 // names are data: "Everything but the Girl" is not an exclusion instruction.
 // This is deliberately bounded, not a second natural-language interpreter.
 export function directRequestUnsupported(text: string, match: RequestMatch = {}): string[] {
   if (match.kind === 'chat') return [];
   const prose = requestConditionProse(text, match);
-  const reasons = new Set((match.unsupported || []).filter(reason => reason.trim()));
+  const reasons = new Set(classifyUnsupportedLabels(match.unsupported).conditions);
   if (/\b(?:anything|something|music|songs?|tracks?)\s+(?:except|excluding|but(?: not)?)\b|\b(?:but not|but no|excluding|except(?: for)?|other than)\s+\S|\b(?:do not|don['’]?t)\s+play\b/i.test(prose)) reasons.add('exclusions');
   // Require an instruction/clause boundary, not bare no/not or a cue inside
   // a name such as No Doubt, Not Waving, Skip James or Never Shout Never.
   if (/(?:^|[,;.!?]\s*|\s+(?:but|and|please)\s+)(?:please\s+)?(?:avoid\s+|steer\s+clear\s+of\s+|(?:do\s+not|don['’]?t)\s+(?:include|play)\s+|exclude\s+)(?=\S)/iu.test(prose)
     || /(?<![\p{L}\p{N}])with\s+no\s+(?=\S)/iu.test(prose)) reasons.add('exclusions');
   if (/\b(?:19|20)\d0s\b|\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d{2}\b/i.test(prose)) reasons.add('era');
+  // A bare decade ("the 80s", "'90s hip hop", "eighties") is an era too, but
+  // not an age: "my mum in her 60s" and "the over-60s" name people. The prose
+  // has lost its apostrophes, so '80s and 80's arrive as 80s.
+  if (/(?<!\b(?:my|his|her|their|your|our)\s+(?:(?:early|mid|late)[\s-]+)?)(?<!\b(?:over|under)[\s-]+)(?<![\p{L}\p{N}])(?:[2-9]0s|(?:twen|thir|for|fif|six|seven|eigh|nine)ties)(?![\p{L}\p{N}])/iu.test(prose)) reasons.add('era');
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
   if (/\b(?:song|track|one)\s+(?:from|in)\s+(?:that|the|a)\s+(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');
@@ -341,7 +371,7 @@ export function repairRequestMatch(match: RequestMatch, text: string): RequestMa
   if (quoted && !match.title && !match.album && match.scope !== 'album' && !literal.artist
     && !requestArtistMatches(quoted, { id: 'literal', artist: match.artist || '' })) return { ...match, title: quoted };
   if (!literal.artist || !literal.title) return match;
-  if (!match.unsupported?.length
+  if (!classifyUnsupportedLabels(match.unsupported).conditions.length
     && ![match.title, match.album, match.artist, match.genre, match.language, match.mood, ...(match.search_terms || [])].some(Boolean)) {
     // A valid empty plan is not a failure. Keep an unambiguous name pair when
     // the words hold one; generic asks still proceed as "anything".
@@ -382,7 +412,7 @@ export async function resolveDirectRequest(match: RequestMatch, deps: {
 }): Promise<RequestSelection> {
   const { catalog, recentIds, queuedIds, currentId } = deps;
   const errors: string[] = [];
-  const unsupported = deps.text === undefined ? match.unsupported || [] : directRequestUnsupported(deps.text, match);
+  const unsupported = deps.text === undefined ? classifyUnsupportedLabels(match.unsupported).conditions : directRequestUnsupported(deps.text, match);
   if (unsupported.length) return { track: null, source: 'unsupported', outcome: 'unsupported', errors, unsupported };
   // Model-supplied names can hide instructions just as literal names can.
   // Defer those raw cues until an actual catalogue identity proves the name;

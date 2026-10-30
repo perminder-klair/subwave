@@ -26,6 +26,7 @@ import { HealthCell, KvTable } from './debug/bits';
 import { fmtListeners, fmtListenerPeak, kindTone } from './debug/format';
 import type { DebugData } from './debug/types';
 import { debugKeys, fetchDebug } from './debug/queries';
+import { useCardHashJump } from '../../hooks/useCardHashJump';
 
 class DebugShapeError extends Error {}
 
@@ -34,6 +35,8 @@ export default function DebugPanel() {
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const enabled = hydrated && !needsAuth && !paused;
+  // Stats' health lamps link to cards here by hash (#llm-recent-calls).
+  useCardHashJump();
   const debugQuery = useAdminQuery<DebugData>({
     key: debugKeys.status(),
     adminFetch,

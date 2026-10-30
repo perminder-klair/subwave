@@ -14,17 +14,31 @@
 // state event at all, so no check or automatic reload runs while RemoteDuck
 // says one lasts (onDuck).
 //
+// A listener's own loads come through here too: a tune-in, a retune, and a
+// Play from the lock screen, a headset, CarPlay or Bluetooth while the app's
+// player is mounted (#2139, src/lib/remote-play.ts). Those always load, with
+// no clock check, and queue behind a reload in flight rather than overlap it.
+//
+// Every load is checked, whether or not the new item reports a state. iOS
+// drops a state write equal to the current one (SwiftAudioEx), so a reload
+// made while the item is still Loading emits nothing (#2143). An automatic
+// reload counts as a failure until its item plays, so a station that hangs
+// without erroring is retried on the error backoff's curve, never more often
+// than WATCHDOG_MS.
+//
 // One reload runs at a time. Every timer and async continuation carries the
 // listening session and reload attempt it was armed in, and does nothing once
 // either has moved on, so a tune-out, a retune or a newer reload leaves it
 // inert. usePlayer drives this; the decisions all live here.
 
-// How long a stall (Buffering/Loading) may run before the media clock is
-// checked. The first stall of an episode sets the deadline and later ones never
-// push it back, so a storm of state flaps cannot postpone the check.
+// How long a stall (Buffering/Loading), or a new load, may run before the media
+// clock is checked. The first stall of an episode sets the deadline and later
+// ones never push it back, so a storm of state flaps cannot postpone the check.
+// After automatic reloads that never reached Playing it waits the error
+// backoff instead, once that is the longer (watchdogDelay).
 export const WATCHDOG_MS = 6000;
 
-// Error-path reconnect backoff: doubles from 500ms to a 60s ceiling.
+// Reconnect backoff: doubles from 500ms to a 60s ceiling.
 export const RECONNECT_BASE_MS = 500;
 export const RECONNECT_MAX_MS = 60_000;
 
@@ -78,6 +92,12 @@ export function retryDelay(retries: number): number {
   return Math.min(RECONNECT_BASE_MS * 2 ** retries, RECONNECT_MAX_MS);
 }
 
+/** How long a stall or a new load waits for its clock check: WATCHDOG_MS, or
+ *  the backoff once failed reloads have pushed it past that. */
+export function watchdogDelay(retries: number): number {
+  return Math.max(WATCHDOG_MS, retryDelay(retries));
+}
+
 function describe(from: ProgressSample | null, to: ProgressSample | null): string {
   if (!from || !to) return 'media clock unknown';
   const p = pace(from, to);
@@ -86,7 +106,7 @@ function describe(from: ProgressSample | null, to: ProgressSample | null): strin
   ).toFixed(1)}s, pace ${p === null ? '—' : p.toFixed(2)}`;
 }
 
-export type ReloadReason = 'tune' | 'format' | 'watchdog' | 'error' | 'link' | 'churn';
+export type ReloadReason = 'tune' | 'remote' | 'format' | 'watchdog' | 'error' | 'link' | 'churn';
 type CheckReason = 'watchdog' | 'error' | 'link';
 
 export interface StreamRecoveryDeps {
@@ -130,15 +150,17 @@ export class StreamRecovery {
   // Recent entries into Buffering from Playing. Not reset on Playing: brief
   // recoveries between flaps are what the churn guard exists to see through.
   private flaps: Flap[] = [];
-  // Consecutive failures since the last sign of playback; drives the backoff.
+  // Automatic reloads since the last sign of playback, each a failure until
+  // its item plays; drives the backoff.
   private retries = 0;
   // The episode whose deadline an error's backoff has already set.
   private erroredEpisode = -1;
   private reloading = false;
   // Between an interruption's RemoteDuck pause and its end, or the next sign
-  // the listener wants audio (a tune-in, a Playing, a load from service.ts).
+  // the listener wants audio (a tune-in, a remote Play, a Playing, a load
+  // made outside this module).
   private interrupted = false;
-  // An explicit reload (tune, format) asked for while one was in flight.
+  // An explicit reload (tune, remote, format) asked for while one was in flight.
   private queued: ReloadReason | null = null;
   private lastState: string | null = null;
 
@@ -147,13 +169,17 @@ export class StreamRecovery {
     this.now = deps.now ?? Date.now;
   }
 
-  /** A fresh tune-in: a new session that loads the stream. */
-  tuneIn(): void {
+  /** A fresh tune-in: a new session that loads the stream. `remote` is a Play
+   *  from the lock screen, a headset, CarPlay or Bluetooth, which loads the
+   *  same way: the listener asking for audio, so it reloads even over a
+   *  stream that plays, and the backoff starts over. */
+  tuneIn(reason: 'tune' | 'remote' = 'tune'): void {
     this.begin();
-    void this.reload('tune', null, true);
+    void this.reload(reason, null, true);
   }
 
-  /** Playback this hook didn't start (a lock-screen Play): watch it, no reload. */
+  /** Playback this hook didn't start (service.ts loaded it while the player
+   *  wasn't mounted): watch it, no reload. */
   adopt(): void {
     this.begin();
   }
@@ -181,13 +207,13 @@ export class StreamRecovery {
       case 'buffering':
       case 'loading':
         // A new item this module didn't load is the listener asking for audio
-        // again (a lock-screen or headset Play reloads through service.ts), so
-        // like a tune-in it ends an interruption whose end iOS never reported.
+        // again (a load made outside it), so like a tune-in it ends an
+        // interruption whose end iOS never reported.
         if (state === 'loading' && !this.reloading) this.interrupted = false;
         // Only stalls out of Playing count. Loading always means a new item (a
         // tune-in or reload, both platforms), never a mid-stream stall.
         if (prev === 'playing' && state === 'buffering') this.recordFlap();
-        this.arm('watchdog', WATCHDOG_MS);
+        this.arm('watchdog', watchdogDelay(this.retries));
         return;
       case 'error':
       case 'ended':
@@ -199,7 +225,7 @@ export class StreamRecovery {
   }
 
   /** A PlaybackError event, or a failed state. One reported mid-reload belongs
-   *  to the item being replaced; the new item's own Loading arms the watchdog. */
+   *  to the item being replaced; the new load arms a check of its own. */
   onError(): void {
     if (this.active && !this.reloading) this.armRetry();
   }
@@ -223,7 +249,7 @@ export class StreamRecovery {
       this.flaps = [];
     } else if (was) {
       this.deps.log(`interruption over${paused ? ', left paused' : ', resumed: checking the clock'}`);
-      if (!paused) this.arm('watchdog', WATCHDOG_MS);
+      if (!paused) this.arm('watchdog', watchdogDelay(this.retries));
     }
   }
 
@@ -283,14 +309,13 @@ export class StreamRecovery {
 
   // An error is a verdict on the attempt where a stall is only an instant, so
   // its backoff replaces the pending check even when that would fire sooner:
-  // every load's own Loading arms the watchdog, and without this a station that
-  // keeps failing would be retried at the watchdog's pace, never backing off
-  // past it. Once per episode, which keeps the deadline bounded and counts
-  // PlaybackError and State.Error, which arrive as a pair, as one failure.
+  // every load arms a watchdog of its own, and the error, not that, says when
+  // to retry. Once per episode, which keeps the deadline bounded, so
+  // PlaybackError and State.Error, which arrive as a pair, set it once. The
+  // reload the check makes counts the failure, as a stalled load's does.
   private armRetry(): void {
     const replace = this.erroredEpisode !== this.episode;
     if (this.arm('error', retryDelay(this.retries), undefined, replace)) {
-      this.retries += 1;
       this.erroredEpisode = this.episode;
     }
   }
@@ -371,22 +396,25 @@ export class StreamRecovery {
     });
   }
 
-  private async reload(reason: ReloadReason, detail: string | null, queueIfBusy = false): Promise<void> {
+  // `explicit` is a load the listener asked for (tune, remote, format).
+  private async reload(reason: ReloadReason, detail: string | null, explicit = false): Promise<void> {
     if (!this.active) return;
     // A tune or retune still runs during an interruption; nothing automatic
     // does (a churn trip or a regained link), since the new item can't play.
-    if (this.interrupted && !queueIfBusy) {
+    if (this.interrupted && !explicit) {
       this.deps.log(`reload [${reason}] skipped: audio interrupted`);
       return;
     }
     if (this.reloading) {
-      if (queueIfBusy) this.queued = reason;
-      this.deps.log(`reload [${reason}] skipped: one in flight${queueIfBusy ? ', queued after it' : ''}`);
+      if (explicit) this.queued = reason;
+      this.deps.log(`reload [${reason}] skipped: one in flight${explicit ? ', queued after it' : ''}`);
       return;
     }
     this.reloading = true;
     this.endEpisode();
     this.flaps = [];
+    // A failure until its item plays (a Playing or a hold resets it).
+    if (!explicit) this.retries += 1;
     const session = this.session;
     this.attempt += 1;
     this.deps.log(
@@ -394,6 +422,10 @@ export class StreamRecovery {
     );
     try {
       await this.deps.reload(reason);
+      // Check the new item even if it reports nothing: on iOS a reload made
+      // while the old item was Loading emits no new Loading (#2143). Its own
+      // Loading or Buffering keeps whichever deadline is earlier.
+      if (session === this.session) this.arm('watchdog', watchdogDelay(this.retries));
     } catch {
       if (session === this.session) this.armRetry();
     } finally {

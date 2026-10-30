@@ -24,9 +24,11 @@ import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../../setup/secrets.js';
+import { stripSecretControlChars } from '../../schemas/settings.js';
 import { taggerView } from '../../broadcast/tagger.js';
 import { currentMode as budgetCurrentMode } from '../../broadcast/dj-budget.js';
 import { skillCatalog } from '../../skills/_agent.js';
+import { keenableKeySource } from '../../skills/web-search.js';
 import { planLlmSwap, LlmSwapError } from '../../settings/llm-swap.js';
 import { llmSwapFit } from '../../settings/llm-swap-fit.js';
 import { recentCalls } from '../../llm/log.js';
@@ -189,6 +191,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       },
       search: {
         providers: settings.SEARCH_PROVIDERS,
+        // 'settings' | 'env' | null: where the key a Keenable search sends comes
+        // from. The env flag below can't tell a keen_ key from a Tavily one.
+        keenableKeySource: keenableKeySource(),
       },
       // Which writable keys (SECRET_ENV_KEYS) are present in the environment,
       // as booleans only; the UI keys its "key missing" alerts off this.
@@ -333,7 +338,9 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     for (const [key, value] of Object.entries(body)) {
       if (!(SECRET_ENV_KEYS as readonly string[]).includes(key)) continue;
       if (typeof value !== 'string') continue;
-      const trimmed = value.trim();
+      // Stripped before the blank check, so a value of only control characters
+      // keeps the stored key rather than clearing it in saveSecrets.
+      const trimmed = stripSecretControlChars(value).trim();
       if (!trimmed) continue;
       if (trimmed.length > 4096) continue;
       patch[key] = trimmed;

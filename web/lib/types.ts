@@ -179,6 +179,12 @@ export interface QueueEntry {
    *  the air path branches on it. `index`/`size` are stamped from the plan, so
    *  a half-played block still reads "9 of 11". */
   block?: { id: string; label: string; index: number; size: number };
+  /** Current and upcoming rows: playable seconds after silence trim and any
+   *  stamped cue, the same measure as /now-playing's. Absent when unmeasured. */
+  duration?: number;
+  /** Upcoming rows: the forecast start, live-edge like `startedAt`. Absent
+   *  when the on-air clock or any length ahead is unknown. */
+  airsAt?: string;
   [key: string]: unknown;
 }
 

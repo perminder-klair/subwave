@@ -10,6 +10,10 @@ import assert from 'node:assert/strict';
 import {
   bucketSamplesByHour,
   groupConnectionsByDevice,
+  isLongSpan,
+  splitAtGaps,
+  timedSamples,
+  timeTicks,
   type DeviceGroup,
   type HourBucket,
 } from './audienceStats';
@@ -142,6 +146,50 @@ test('clamps a negative connected-for to zero in the average', () => {
   assert.equal(win.device, 'Windows');
   assert.equal(win.avgSeconds, 50); // (0 + 100) / 2
   assert.equal(win.maxSeconds, 100);
+});
+
+console.log('\nlistener trend chart:');
+
+const ms = (h: number, minute = 0, day = 5) => new Date(2026, 0, day, h, minute, 0, 0).getTime();
+
+test('timedSamples drops unparseable timestamps and sorts by time', () => {
+  const s = timedSamples([
+    { t: at(10), count: 2 },
+    { t: 'not a date', count: 9 },
+    { t: at(9), count: 1 },
+  ]);
+  assert.deepEqual(s.map(x => x.count), [1, 2]);
+});
+
+test('a day-long span ticks every six local hours, clear of the edges', () => {
+  const ticks = timeTicks(ms(1, 30), ms(1, 30, 6));
+  assert.deepEqual(ticks.map(t => t.label), ['06:00', '12:00', '18:00', '00:00']);
+  assert.ok(ticks.every((t, i) => t.frac > 0 && t.frac < 1 && (i === 0 || t.frac > (ticks[i - 1]?.frac ?? 1))));
+});
+
+test('a week-long span ticks on local midnights, labelled by weekday', () => {
+  const ticks = timeTicks(ms(12, 0, 5), ms(12, 0, 12));
+  assert.equal(ticks.length, 7);
+  assert.ok(ticks.every(t => new Date(t.ms).getHours() === 0));
+  assert.equal(ticks[0]?.label, new Date(2026, 0, 6).toLocaleDateString('en-GB', { weekday: 'short' }));
+});
+
+test('timeTicks returns nothing for an empty or inverted span', () => {
+  assert.deepEqual(timeTicks(ms(9), ms(9)), []);
+  assert.deepEqual(timeTicks(ms(10), ms(9)), []);
+});
+
+test('splitAtGaps breaks the series where minutes are missing', () => {
+  const s = [ms(9, 0), ms(9, 1), ms(9, 2), ms(9, 30), ms(9, 31)].map(t => ({ ms: t, count: 1 }));
+  assert.deepEqual(splitAtGaps(s).map(r => r.length), [3, 2]);
+  assert.deepEqual(splitAtGaps([]), []);
+  // A gap of exactly the threshold is still one run.
+  assert.equal(splitAtGaps([ms(9, 0), ms(9, 5)].map(t => ({ ms: t, count: 0 }))).length, 1);
+});
+
+test('a span reads as days past a day and a half', () => {
+  assert.equal(isLongSpan(24 * 3_600_000), false);
+  assert.equal(isLongSpan(7 * 24 * 3_600_000), true);
 });
 
 if (failures > 0) {
