@@ -107,6 +107,10 @@ export function directRequestUnsupported(text: string, match: RequestMatch = {})
   if (/(?:^|[,;.!?]\s*|\s+(?:but|and|please)\s+)(?:please\s+)?(?:avoid\s+|steer\s+clear\s+of\s+|(?:do\s+not|don['’]?t)\s+(?:include|play)\s+|exclude\s+)(?=\S)/iu.test(prose)
     || /(?<![\p{L}\p{N}])with\s+no\s+(?=\S)/iu.test(prose)) reasons.add('exclusions');
   if (/\b(?:19|20)\d0s\b|\b(?:from|during|in)\s+(?:the\s+)?(?:19|20)\d{2}\b/i.test(prose)) reasons.add('era');
+  // A bare decade ("the 80s", "'90s hip hop", "eighties") is an era too, but
+  // not an age: "my mum in her 60s" and "the over-60s" name people. The prose
+  // has lost its apostrophes, so '80s and 80's arrive as 80s.
+  if (/(?<!\b(?:my|his|her|their|your|our)\s+(?:(?:early|mid|late)[\s-]+)?)(?<!\b(?:over|under)[\s-]+)(?<![\p{L}\p{N}])(?:[2-9]0s|(?:twen|thir|for|fif|six|seven|eigh|nine)ties)(?![\p{L}\p{N}])/iu.test(prose)) reasons.add('era');
   if (/\b(?:instrumental|acoustic|live)\s+(?:only|music|songs?|tracks?|versions?)\b|\b(?:only|strictly)\s+(?:instrumental|acoustic|live)\b|\bwithout\s+(?:vocals|singing|lyrics)\b/i.test(prose)) reasons.add('recording condition');
   if (/\b(?:song|track|one)\s+(?:from|in)\s+(?:that|the|a)\s+(?:new\s+)?(?:film|movie|show|advert|commercial)\b|\b(?:song|track|one)\s+(?:with|containing|that has)\s+(?:the\s+)?(?:lyrics|words|line)\b/i.test(prose)) reasons.add('external identification');
   if (/\b(?:one|song|track|music)\s+(?:we|you|I)\s+(?:discussed|mentioned|requested|talked about)\s+(?:earlier|before|yesterday|last)\b/i.test(prose)) reasons.add('earlier conversation');

@@ -92,6 +92,39 @@ test('a model label refuses only when it names one of the five conditions (#2133
   assert.equal(r.track?.id, exact.id);
 });
 
+test('a bare decade is an era unless it gives a person’s age', () => {
+  for (const text of ['Play some rock from the 80s, for my brother', 'play 80s rock', "something from the '80s",
+    "play some 80's pop", 'play ’90s hip hop', 'music from the eighties', 'play seventies disco', 'hits from the mid-80s',
+    'late 90s dance please', 'Play some 80s for my dad, he is in his 60s']) {
+    assert.deepEqual(directRequestUnsupported(text), ['era'], text);
+  }
+  for (const text of ['Play something for my mum, she is in her 60s', 'a song for people in their late twenties',
+    'something for my nan in her mid-80s', 'a song for the over-60s club']) {
+    assert.deepEqual(directRequestUnsupported(text), [], text);
+  }
+});
+
+test('a decade inside a named song or artist is not an era condition', async () => {
+  for (const text of ['Play 80s Ladies by K.T. Oslin', 'Play Back to the 80’s by Aqua', 'Play Eighties by Killing Joke',
+    'Play Summer of 69 by Bryan Adams', "Play Summer of '69 by Bryan Adams"]) {
+    assert.deepEqual(directRequestUnsupported(text, modelFreeRequest(text)), [], text);
+  }
+  assert.deepEqual(directRequestUnsupported('Play something by The Eighties Matchbox B-Line Disaster',
+    { artist: 'The Eighties Matchbox B-Line Disaster' }), []);
+  // The raw words still carry the decade, so the name needs catalogue proof
+  // before any stand-in, as a condition word inside any name does.
+  const text = 'Play 80s Ladies by K.T. Oslin';
+  const named = { ...exact, id: 'ladies', title: '80s Ladies', artist: 'K.T. Oslin' };
+  const found = fixture({ searchPage: async () => ({ songs: [named], rawCount: 1 }) });
+  const r = await resolveDirectRequest({ title: named.title, artist: named.artist }, { ...found.deps, text });
+  assert.equal(r.outcome, 'matched');
+  assert.equal(r.track?.id, named.id);
+  const missing = fixture({ searchPage: async () => ({ songs: [], rawCount: 0 }) });
+  const refused = await resolveDirectRequest({ title: named.title, artist: named.artist }, { ...missing.deps, text });
+  assert.equal(refused.outcome, 'unsupported');
+  assert.equal(missing.fallbackCalls(), 0);
+});
+
 test('names and quoted titles are not mistaken for unsupported conditions', () => {
   for (const text of ['play something by No Doubt', 'play Don’t Stop Me Now by Queen', 'play Only You by Yazoo', 'play "Anything Except Queen"', 'play “Live Music” by Example', 'play something by Everything but the Girl', 'play "1990s" by Example']) {
     assert.deepEqual(directRequestUnsupported(text), [], text);

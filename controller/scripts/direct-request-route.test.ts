@@ -263,6 +263,14 @@ for (const text of ['Play some soul, avoid stadium rock', 'Play soul with no met
   });
 }
 
+test('an omitted bare-decade era cannot queue a track', async () => {
+  modelOutput = { genre: 'rock' };
+  const result = await submit('Play some rock from the 80s, for my brother');
+  assert.equal(result.outcome, 'unsupported');
+  assert.deepEqual(requestLog.snapshot(1)[0].unsupported, ['era']);
+  assert.equal(queue.upcoming.length, 0);
+});
+
 for (const title of ['Anything But Love', 'Other Than This']) {
   test(`an exclusion-like title still reaches the queue: ${title}`, async () => {
     catalogueSongs = [{ ...exact, title }];
