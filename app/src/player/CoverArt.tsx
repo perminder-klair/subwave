@@ -7,6 +7,8 @@ import { useTheme } from '@/theme/ThemeContext';
 
 export interface CoverArtProps {
   uri: string;
+  /** The Station login for this image (StationApi.imageHeaders). */
+  headers?: Record<string, string>;
   live: boolean;
   /** ~3s window after a track change or DJ turn — drives the glitch + ticks. */
   burst?: boolean;
@@ -25,7 +27,17 @@ const GLITCH_FRAMES = [
 const TEAL = '#16d6cf';
 
 // RN lacks mix-blend-mode; faint offset copies approximate tinted channels.
-function CoverGlitch({ uri, size, accent }: { uri: string; size: number; accent: string }) {
+function CoverGlitch({
+  uri,
+  headers,
+  size,
+  accent,
+}: {
+  uri: string;
+  headers?: Record<string, string>;
+  size: number;
+  accent: string;
+}) {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setFrame((f) => (f + 1) % GLITCH_FRAMES.length), 90);
@@ -35,12 +47,12 @@ function CoverGlitch({ uri, size, accent }: { uri: string; size: number; accent:
   return (
     <View pointerEvents="none" style={{ position: 'absolute', left: 0, top: 0, right: 0, bottom: 0 }}>
       <Image
-        source={{ uri }}
+        source={{ uri, headers }}
         style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.4, transform: [{ translateX: f.dx1 }] }}
         contentFit="cover"
       />
       <Image
-        source={{ uri }}
+        source={{ uri, headers }}
         style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.4, transform: [{ translateX: f.dx2 }] }}
         contentFit="cover"
       />
@@ -67,7 +79,7 @@ function Tick({ corner, color, opacity }: { corner: 'tl' | 'tr' | 'bl' | 'br'; c
   );
 }
 
-export default function CoverArt({ uri, live, burst = false, size = 160, onPress }: CoverArtProps) {
+export default function CoverArt({ uri, headers, live, burst = false, size = 160, onPress }: CoverArtProps) {
   const { colors } = useTheme();
   const appActive = useAppActive();
   const [scan] = useState(() => new Animated.Value(0));
@@ -125,8 +137,8 @@ export default function CoverArt({ uri, live, burst = false, size = 160, onPress
         : null}
 
       <View style={{ width: size, height: size, borderWidth: 1, borderColor: colors.muted, backgroundColor: colors.field, overflow: 'hidden' }}>
-        <Image source={{ uri }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={280} />
-        {burst ? <CoverGlitch uri={uri} size={size} accent={colors.accent} /> : null}
+        <Image source={{ uri, headers }} style={{ width: '100%', height: '100%' }} contentFit="cover" transition={280} />
+        {burst ? <CoverGlitch uri={uri} headers={headers} size={size} accent={colors.accent} /> : null}
         {live ? (
           <Animated.View
             pointerEvents="none"

@@ -57,7 +57,7 @@ The server is configured entirely through environment variables:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod (behind Caddy) is `http://localhost:7700/api`. |
+| `SUBWAVE_API_URL` | auto-detected | Controller base URL. Unset: probes `http://localhost:7701` (dev), then `http://localhost:7700/api` (prod behind Caddy), at launch; falls back to `:7701`. |
 | `SUBWAVE_ADMIN_USER` | — | Controller `ADMIN_USER`. Required for the DJ control tools. |
 | `SUBWAVE_ADMIN_PASS` | — | Controller `ADMIN_PASS`. Required for the DJ control tools. |
 | `SUBWAVE_STATION_PASSWORD` | — | The station's **listener** password (Settings → Privacy). A different secret from the admin one; only needed for `subwave_similar_tracks` on a station with a privacy lock on. |

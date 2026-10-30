@@ -7,6 +7,8 @@ import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
+import { formatFileFormat } from '../../lib/fileFormat';
+import { FILE_FORMAT_RETRY_MS } from '../../lib/schemas.generated';
 import { clientLabel, fmtConnected } from '../../lib/clientLabel';
 import type { QueueEntry } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
@@ -46,6 +48,22 @@ import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
 import QueueHeldBadge from './dash/QueueHeldBadge';
+import {
+  blockPlayingTrack,
+  neverPlayToast,
+  notifyNeverPlay,
+  notifySkipped,
+  refetchOnAirId,
+  skipDecision,
+  skipFailureOutcome,
+  type SkipChoice,
+  type SkipOutcome,
+  type SkipTarget,
+} from './dash/never-play';
+import { SkipChoices } from './dash/SkipChoices';
+import { deleteBlockEntry, reconcileBlockCaches } from './library/block-actions';
+import type { BlockEntry, BlockType } from './library/types';
+import { deadlineFallbacks, djLatencyMs, failedCallsNote } from './dash/latency-gauge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
   ActResponse,
@@ -74,8 +92,10 @@ import {
   fetchConnections,
   fetchDashStatus,
   fetchHealthStats,
+  fetchNowPlayingFile,
   fetchRequests,
   fetchSuggestions,
+  removeQueuedRow,
   runDashAction,
 } from './dash/queries';
 
@@ -221,8 +241,119 @@ export default function DashPanel() {
     void sendVoice(text);
   };
 
-  // Runs only after the confirm dialog — a skip cuts the track for every listener.
-  const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
+  // The Skip dialog (dash/never-play): one button for a skip, a never-play
+  // block, or both. The track is captured at open time, so a track change
+  // while the dialog is up blocks what the operator was looking at, not its
+  // successor. The choice resets to a plain skip on every open. The target
+  // outlives the close on purpose: the close animation still shows its text,
+  // and clearing it blanked the dialog as it faded.
+  const [skipTarget, setSkipTarget] = useState<SkipTarget | null>(null);
+  const [skipChoice, setSkipChoice] = useState<SkipChoice>('skip');
+  const openSkip = () => {
+    const cur = status?.nowPlaying;
+    if (!cur?.title) return;
+    setSkipTarget({ id: cur.subsonic_id || undefined, title: cur.title, artist: cur.artist || undefined, album: cur.album || undefined });
+    setSkipChoice('skip');
+    setConfirmSkip(true);
+  };
+
+  // Runs only after the confirm dialog — a skip cuts the track for every
+  // listener. Bare on purpose: it ends whatever is on air, a jingle or bed
+  // included. Its toast offers the never-play blocks afterwards.
+  const doSkip = async () => {
+    const target = skipTarget;
+    setBusy('skip');
+    try {
+      await actionMutation.mutateAsync({ path: '/dj/skip', body: {} });
+      if (target) notifySkipped(target, scope => void blockAfterSkip(target, scope));
+      else notify.ok('skip track done');
+    } catch (e) {
+      notify.err(`skip track: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // The same block write and cache reconciliation the Library page uses
+  // (library/block-actions), so its Blocked tab and loaded lists show the
+  // entry whether or not they are mounted.
+  const blockMutation = useAdminMutation({
+    adminFetch,
+    toastOnError: false,
+    request: ({ trackId, scope }: { trackId: string; scope: BlockType }, fetcher) =>
+      blockPlayingTrack(fetcher, trackId, scope),
+    // Not awaited: re-marking cached Library rows must not hold up the skip.
+    onDone: (_data, _vars, client) => { void reconcileBlockCaches(client, adminFetch); },
+  });
+  const unblockMutation = useAdminMutation<void, BlockEntry>({
+    adminFetch,
+    // The Undo toast reports a failure itself.
+    toastOnError: false,
+    request: (entry, fetcher) => deleteBlockEntry(fetcher, entry),
+    onDone: (_data, _vars, client) => reconcileBlockCaches(client, adminFetch),
+  });
+
+  // A never-play choice in the Skip dialog. The block lands FIRST: a failed
+  // block must not leave the operator with a skipped track that will still
+  // air again.
+  const doNeverPlay = async (scope: BlockType, skipToo: boolean) => {
+    const target = skipTarget;
+    if (!target?.id) return;
+    setBusy('never-play');
+    try {
+      const r = await blockMutation.mutateAsync({ trackId: target.id, scope });
+      let skip: SkipOutcome = 'not-asked';
+      let skipError: string | undefined;
+      if (skipToo) {
+        // Decide on a read that landed AFTER the block, never on `status`
+        // from this render: the track can change while the block request is
+        // in flight, and the closure would still show the blocked one
+        // (skipping its successor for every listener). A failed or offline
+        // refetch is no read, and nothing is skipped without one. The read
+        // names a song, never what airs: a bed or pause-talk break leaves
+        // now-playing on the song before it, a jingle's seam moves it on to
+        // the song after it while the outgoing tail and the jingle still
+        // play, and the song can end during the skip's commit wait. So the
+        // skip names its target and the controller refuses (409) unless the
+        // blocked track is what is on air: moot, or behind a jingle, which
+        // tells the operator to skip again in a few seconds.
+        const onAirId = await refetchOnAirId(queryClient);
+        const decision = skipDecision({ targetId: target.id, onAirId });
+        if (decision === 'skip') {
+          setBusy('skip');
+          try {
+            await actionMutation.mutateAsync({ path: '/dj/skip', body: { expectId: target.id } });
+            skip = 'done';
+          } catch (e) {
+            skip = skipFailureOutcome(e);
+            if (skip === 'failed') skipError = errorMessage(e);
+          }
+        } else {
+          skip = decision;
+        }
+      }
+      const t = neverPlayToast({ ...target, scope, block: r.block, skip, purged: r.purged, skipError });
+      notifyNeverPlay(t, r.entry, e => unblockMutation.mutateAsync(e));
+    } catch (e) {
+      notify.err(`never play: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+      void queryClient.invalidateQueries({ queryKey: dashKeys.status() });
+    }
+  };
+
+  // A plain skip's toast follow-up. It only blocks, so it needs no on-air
+  // read, and it leaves `busy` alone: the toast outlives the skip, and `busy`
+  // by then belongs to whatever the Dash is doing next.
+  const blockAfterSkip = async (target: SkipTarget, scope: BlockType) => {
+    if (!target.id) return;
+    try {
+      const r = await blockMutation.mutateAsync({ trackId: target.id, scope });
+      notifyNeverPlay(neverPlayToast({ ...target, scope, block: r.block, purged: r.purged }), r.entry, e => unblockMutation.mutateAsync(e));
+    } catch (e) {
+      notify.err(`never play: ${errorMessage(e)}`);
+    }
+  };
 
   // No confirm: nothing on-air changes, worst case a 409 because the track went
   // on air first. The row drops optimistically; the poll confirms.
@@ -290,19 +421,7 @@ export default function DashPanel() {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
     setBusy(`cancel:${id}`);
-    await queryClient.cancelQueries(
-      { queryKey: dashKeys.status(), exact: true },
-      { silent: true },
-    );
-    queryClient.setQueryData<DashStatus>(dashKeys.status(), current => current
-      ? {
-          ...current,
-          queue: {
-            ...(current.queue || {}),
-            upcoming: (current.queue?.upcoming || []).filter(item => item.subsonic_id !== id),
-          },
-        }
-      : current);
+    await removeQueuedRow(queryClient, id);
     try {
       await cancelQueueItem.mutateAsync(id);
       notify.ok(`removed from queue: ${t.title || 'track'}`);
@@ -320,6 +439,20 @@ export default function DashPanel() {
   };
 
   const np = status?.nowPlaying;
+  // one lookup per track: asked for by its id, never re-polled once known (a
+  // file's format does not change), and an answer about another track is ignored.
+  const npId = np?.subsonic_id || '';
+  const fileQuery = useAdminQuery({
+    key: dashKeys.nowPlayingFile(npId), adminFetch, enabled: ready && !!npId,
+    staleTime: Infinity, request: (fetcher, signal) => fetchNowPlayingFile(fetcher, npId, signal),
+    // Navidrome did not answer, or the request itself failed (queries here
+    // never retry): ask again after the minute the controller backs off,
+    // instead of leaving the format blank for the rest of the track.
+    refetchInterval: (query) => (
+      query.state.status === 'error' || query.state.data?.format === null ? FILE_FORMAT_RETRY_MS : false
+    ),
+  });
+  const fileFormat = fileQuery.data?.id === npId ? formatFileFormat(fileQuery.data.format) : null;
   const ctx = status?.context;
   // On-air timestamps render in the station zone so they match what the DJ
   // speaks, not the operator's browser timezone (#418).
@@ -357,13 +490,17 @@ export default function DashPanel() {
   const lCurrent =
     listenersObj?.current ?? (typeof listenersValue === 'number' ? listenersValue : 0);
   const lPeak = listenersObj?.peak ?? lCurrent;
+  const shortlistSelected = stats?.trackSelection === 'shortlist';
   const healthMetrics: HealthMetrics = {
     listeners: lCurrent,
     listenersPeak: lPeak,
-    latencyMs: stats?.llm?.count ? (stats.llm.latency?.p95 ?? null) : null,
+    latencyMs: djLatencyMs(stats),
+    latencyFallbacks: deadlineFallbacks(stats),
+    llmFailedCalls: failedCallsNote(stats),
     // Redline at the DJ-agent deadline so the gauge tracks the model in use.
     // Null until /stats loads.
-    latencyDeadlineMs: stats?.llm?.agentTimeoutMs ?? null,
+    latencyDeadlineMs: shortlistSelected ? (stats?.shortlist?.warningMs ?? 30_000) : (stats?.llm?.agentTimeoutMs ?? null),
+    latencyAdaptive: shortlistSelected,
     ttsFallbackPct: stats?.tts?.count ? Math.round((stats.tts.fallbackRate ?? 0) * 1000) / 10 : null,
     online: status?.streamOnline ?? null,
     bitrateKbps: status?.streamBitrate ?? null,
@@ -384,7 +521,8 @@ export default function DashPanel() {
         weatherText={weatherText}
         pickerBusy={!!q.pickerBusy}
         busy={busy}
-        onSkip={() => setConfirmSkip(true)}
+        onSkip={openSkip}
+        fileFormat={fileFormat}
       />
 
       {err && <ErrorState error={err} />}
@@ -832,10 +970,15 @@ export default function DashPanel() {
         open={confirmSkip}
         onOpenChange={setConfirmSkip}
         title="Skip current track"
-        description="Skip the current track for all listeners? Everyone tuned in jumps straight to the next track."
-        confirmLabel="skip track"
+        description={skipTarget
+          ? `Skip “${skipTarget.title}”${skipTarget.artist ? ` — ${skipTarget.artist}` : ''} for everyone tuned in, keep it off the air for good, or both.`
+          : ''}
+        details={skipTarget && <SkipChoices target={skipTarget} value={skipChoice} onChange={setSkipChoice} />}
+        altLabel={skipChoice === 'skip' ? undefined : 'block, let it finish'}
+        onAlt={() => { if (skipChoice !== 'skip') void doNeverPlay(skipChoice, false); }}
+        confirmLabel={skipChoice === 'skip' ? 'skip track' : 'block + skip now'}
         danger
-        onConfirm={doSkip}
+        onConfirm={() => void (skipChoice === 'skip' ? doSkip() : doNeverPlay(skipChoice, true))}
       />
     </div>
   );

@@ -1,5 +1,7 @@
 // Tests for music/analyze-capability.ts — whether an analysis pass widens its
 // scope to backfill an optional dimension, and what it says when it doesn't.
+// Tracks missing only an audio vector take embedding-only work; baseline,
+// vocal and stem scopes retain full analysis.
 //
 // This is the decision behind the loudest half of #1300 bug 3. The reported
 // symptom was "audio backfill: +90 already-analysed tracks missing an audio
@@ -16,27 +18,16 @@
 //      had already done. That is what this module fixes, and why the messages
 //      are asserted rather than just the booleans: the string is the entire
 //      user-facing product of a broken analyzer.
-// Run: `tsx scripts/analyze-capability.test.ts` (folded into `npm run test`).
+// Run: `npm test -- analyze-capability`.
 
 import assert from 'node:assert/strict';
+import test from 'node:test';
 import {
+  analysisModeForTrack,
   backfillDecision,
   failureCountsAgainstTrack,
   SYSTEMIC_FAILURE_RUN,
 } from '../src/music/analyze-capability.js';
-
-let failures = 0;
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    console.log(`  ✓ ${name}`);
-  } catch (err: any) {
-    failures++;
-    console.error(`  ✗ ${name}\n      ${err?.message || err}`);
-  }
-}
-
-console.log('analyze capability decision:');
 
 test('a dimension the operator has not enabled says nothing at all', () => {
   const d = backfillDecision({ dimension: 'audio', wanted: false, capable: true, error: null });
@@ -144,8 +135,6 @@ test('the retry names a process that exists on THIS deployment', () => {
   assert.match(unknown.notice!, /controller/);
 });
 
-console.log('systemic failure guard:');
-
 test('a scattered bad file is counted on its first failure', () => {
   // The whole point of the per-track stamp: one throw on a corrupt file, with
   // healthy tracks either side, is evidence about that file.
@@ -162,8 +151,12 @@ test('a run of failures stops counting — that is the pass, not the files', () 
   assert.equal(failureCountsAgainstTrack(500), false);
 });
 
-if (failures > 0) {
-  console.error(`✗ analyze-capability.test.ts: ${failures} failure(s)`);
-  process.exit(1);
-}
-console.log('✓ analyze-capability.test.ts passed');
+test('an already-current track missing only its sounds-like vector uses embedding-only work', () => {
+  assert.equal(analysisModeForTrack('audio-only', new Set(['stale', 'vocal', 'stems']), true), 'embedding-only');
+});
+
+test('baseline, vocal, and stem scopes retain full acoustic analysis', () => {
+  const full = new Set(['stale', 'vocal', 'stems']);
+  for (const id of full) assert.equal(analysisModeForTrack(id, full, true), 'full', id);
+  assert.equal(analysisModeForTrack('ordinary', full, false), 'full');
+});

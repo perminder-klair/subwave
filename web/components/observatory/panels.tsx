@@ -6,7 +6,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   genreText,
-  heat,
   tally,
   trackGenres,
   arcPath,
@@ -19,6 +18,10 @@ import {
   type ObservatoryStats,
   type TrackDetail,
 } from './data';
+
+// On the page, not the night sky: a quiet track is the muted ink, a hot one
+// the accent, so the dot flips with the theme like the bars beside it.
+const energyDot = (v: number) => `color-mix(in oklab, var(--accent) ${Math.round(v * 100)}%, var(--muted))`;
 
 function Bar({ label, value, max, accent }: { label: string; value: number; max: number; accent?: boolean }) {
   const pct = max ? Math.round((value / max) * 100) : 0;
@@ -672,7 +675,7 @@ export function Dossier({
           <div className="mixlist">
             {mixNodes.map((n) => (
               <button key={n.idx} className="mix-row" onClick={() => onSelect(n)}>
-                <span className="mix-dot" style={{ background: heat(n.energyVal) }} />
+                <span className="mix-dot" style={{ background: energyDot(n.energyVal) }} />
                 <span className="mix-tt">
                   <span className="mix-title">{n.title || 'Untitled'}</span>
                   <span className="mix-artist">{n.artist || 'Unknown'}</span>

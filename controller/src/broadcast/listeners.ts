@@ -87,6 +87,22 @@ function audioParam(src: any, key: 'samplerate' | 'channels'): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// Only our broadcast mounts count. Anything else (e.g. an /admin source) is
+// ignored so stray test mounts don't inflate the numbers. Shared by the poll and
+// the idle wake probe so the two can't disagree on what a listener is.
+function broadcastMountSources(ic: any): any[] {
+  const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
+  return sources.filter((s: any) =>
+    BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
+  );
+}
+
+// Un-deduped socket sum. Dedupe only folds Safari's paired sockets, so this is
+// above zero exactly when the deduped count is.
+function rawListenerSum(sources: any[]): number {
+  return sources.reduce((sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+}
+
 // Coalesce overlapping polls into one in-flight run.
 export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
   let inFlight: Promise<T> | null = null;
@@ -97,10 +113,28 @@ export function singleFlight<T>(run: () => Promise<T>): () => Promise<T> {
 }
 
 // pollCount() commits module state and is driven from three cadences at once
-// (15s monitor, the idle monitor's forced 5s refresh, POST /request's
-// refresh()). Without the single-flight guard a slow doomed poll can commit
+// (15s monitor, the idle monitor's forced 5s refresh, brought forward when its
+// wake probe sees a listener, POST /request's refresh()). Without the
+// single-flight guard a slow doomed poll can commit
 // after a younger successful one and overwrite its fresh state.
-const fetchCount = singleFlight(() => pollCount(true));
+//
+// The wake probe never sends a status request while a committed poll's is in
+// flight either: two overlapping status reads are what blew the deadline in
+// #1256. A poll waits out a probe already in flight (bounded by
+// PEEK_TIMEOUT_MS), and a probe stands aside while a poll runs. That holds
+// client-side only, since Icecast may still be serving a probe that timed out,
+// so a timed-out probe also stops probing for a tick (PEEK_BACKOFF_MS).
+let polling = false;
+let peeking: Promise<unknown> | null = null;
+const fetchCount = singleFlight(async () => {
+  polling = true;
+  try {
+    if (peeking) await peeking;
+    return await pollCount(true);
+  } finally {
+    polling = false;
+  }
+});
 
 async function pollCount(persistHistory: boolean) {
   let online = false;
@@ -110,16 +144,9 @@ async function pollCount(persistHistory: boolean) {
   let rawCount = 0; // un-deduped status sum — the fallback when admin is unreachable
   try {
     const r = await fetchWithTimeout(config.icecast.statusUrl, { timeoutMs: STATUS_TIMEOUT_MS });
-    const ic = ((await r.json()) as any)?.icestats;
-    const sources = Array.isArray(ic?.source) ? ic.source : ic?.source ? [ic.source] : [];
-    // Only our two broadcast mounts count. Anything else (e.g. an /admin
-    // source) is ignored so stray test mounts don't inflate the numbers.
-    const broadcastSources = sources.filter((s: any) =>
-      BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
-    );
+    const broadcastSources = broadcastMountSources(((await r.json()) as any)?.icestats);
     online = broadcastSources.length > 0;
-    rawCount = broadcastSources.reduce(
-      (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
+    rawCount = rawListenerSum(broadcastSources);
     // Describe the broadcast off the primary mount (/stream.mp3), not whichever
     // source Icecast listed first — Opus is a different encode and would
     // misreport the figures listeners actually receive.
@@ -200,6 +227,45 @@ export function getStreamStatus(): StreamStatus {
 // connected isn't rejected on a stale cached value.
 export async function refresh() {
   return fetchCount();
+}
+
+// Deadline on the idle wake probe, body read included: one probe interval, so
+// a slow Icecast costs a probe, never a stuck one.
+const PEEK_TIMEOUT_MS = 1000;
+
+// No probe for one idle tick (stream-idle.ts TICK_MS) after one blows that
+// deadline. Icecast may still be serving the abandoned read, and a slow Icecast
+// gets back the single committed reader it had before the probe. A fast failure
+// (refused, non-OK) says nothing about load, so it doesn't back off.
+const PEEK_BACKOFF_MS = 5000;
+let peekBackoffUntil = 0;
+
+// The idle monitor's wake probe (#2072): the raw broadcast-mount sum off one
+// status read, null on any failure. It commits nothing, so it can bring a wake
+// forward but never moves the failure count, the cached status or the gated
+// count the fail-open gates read (#1256). Null without a request while a
+// committed poll or another probe is in flight, or during the backoff.
+export async function peekListeners(): Promise<number | null> {
+  if (polling || peeking || Date.now() < peekBackoffUntil) return null;
+  const read = (async () => {
+    try {
+      const r = await fetchWithTimeout(config.icecast.statusUrl, {
+        timeoutMs: PEEK_TIMEOUT_MS,
+        bodyDeadline: true,
+      });
+      return rawListenerSum(broadcastMountSources(((await r.json()) as any)?.icestats));
+    } catch (err) {
+      // The deadline rejects as AbortError, on the headers or the body.
+      if ((err as Error)?.name === 'AbortError') peekBackoffUntil = Date.now() + PEEK_BACKOFF_MS;
+      return null;
+    }
+  })();
+  peeking = read;
+  try {
+    return await read;
+  } finally {
+    peeking = null;
+  }
 }
 
 // Probe listener count for maintenance children without appending history, whose sole writer

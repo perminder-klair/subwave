@@ -1,6 +1,7 @@
 // Exercise the real pool, queue recency snapshot and SDK selection/failure
 // paths. Only HTTP responses are synthetic; no network or station is touched.
 import assert from 'node:assert/strict';
+import { chatCompletionResponse } from './test-utils/llm.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -67,18 +68,15 @@ before(async () => {
     const id = modelMode === 'unknown' ? 'outside-the-offered-catalogue'
       : modelMode === 'near-miss' ? payload.candidates[0].id + 'x'
         : payload.candidates[0].id;
-    return Response.json({
-      id: 'test-completion', object: 'chat.completion', created: 0, model: 'spacing-test',
-      choices: [{ index: 0, finish_reason: 'tool_calls', message: {
+    return chatCompletionResponse({ id: 'test-completion', created: 0, model: 'spacing-test',
+      message: {
         role: 'assistant', content: null, tool_calls: [{
           id: 'test-tool', type: 'function', function: {
             name: body.tools[0].function.name,
             arguments: JSON.stringify({ id, reason: 'Synthetic choice' }),
           },
         }],
-      } }],
-      usage: { prompt_tokens: 10, completion_tokens: 10, total_tokens: 20 },
-    });
+      } });
   };
 });
 

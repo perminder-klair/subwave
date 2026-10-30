@@ -1,5 +1,5 @@
 // Regression pin for cache-side era overrides (#1418).
-// Run from the repo root: npx tsx web/components/admin/library/queries.test.ts
+// Run from web/: `npm test -- library/queries`.
 
 import assert from 'node:assert/strict';
 import { QueryClient } from '@tanstack/react-query';

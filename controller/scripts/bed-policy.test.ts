@@ -1,7 +1,7 @@
 // Unit tests for the bed policy's pure helpers (broadcast/bed-policy.ts):
 // rampBudgetMs (the three-state vocal read), bedWanted (threshold vs vocal
 // onset), bedLengthFor (the bed/ramp arithmetic) and pickBed (pool selection).
-// Run: `tsx scripts/bed-policy.test.ts`.
+// Run: `npm test -- bed-policy`.
 //
 // node:assert-via-tsx style, matching scripts/programme.test.ts.
 

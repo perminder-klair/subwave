@@ -41,10 +41,6 @@ end
 
 np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
-# Second dir for the SAME marker file: jingle-playing.json has two writers (the
-# rotate's on_metadata and jingle_now_queue's hook) whose feeds can overlap
-# inside one crossfade, and a shared dir would tear the write.
-jingle_now_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-now")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
 pause_talk_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-talk")
 pause_voice_accept_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-voice-accept")
@@ -54,11 +50,15 @@ starve_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/starve")
 # shared dir tears when a heavy-duck segment and a talk-over link land together.
 voice_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/voice")
 intro_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/intro")
+jingle_overlay_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-overlay")
 
 # MUSIC STARVE GUARD (#1300 bug 7) — the latch only; its tick is registered far
 # below, after idle_mode exists. Declared here because the jingles gate reads it
 # from a thunk (same lazy-thunk pattern as bed_on_air).
 music_starved = ref(false)
+idle_mode = ref(false)
+stream_on = ref(false)
+overlay_music_timestamp = ref(0)
 
 # Live safety gates shared by on-demand jingles and the automatic rotate.
 # Declared before the queue sources; on_meta and voice_marker update them.
@@ -92,6 +92,9 @@ jingle_now_on_air = ref(false)
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
+# Plain song-to-song crossfade curve (EQUAL-POWER CROSSFADE below): false =
+# linear, the curve every station had before the setting existed.
+equal_power_crossfade = ref(false)
 # smooth_add's `p` on the two ducking layers (see the DUCKING block below).
 duck_voice = ref(0.22)
 duck_intro = ref(0.30)
@@ -112,8 +115,9 @@ station_name = ref("SUB/WAVE")
 # holds in AUDIO time under any clock (wall-clock envelopes drift).
 #
 # Engine constraints, all measured — do not "simplify" past them:
-#   * v2.4.5 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
-#     every effect transition (see Dockerfile.broadcast).
+#   * v2.4.6 is the MINIMUM runtime; 2.4.4's O(n) clock scan pegs a core on
+#     every effect transition, and 2.4.5 drops a partial frame after every
+#     `cross` (see Dockerfile.broadcast).
 #   * comb, NOT echo: native `echo` (incl. ping_pong) type-checks then passes
 #     audio through bit-for-bit on 2.2.5 and 2.4.4.
 #   * filter.rc, NOT the SVF `filter` (unstable near sr/4, collapses to
@@ -134,6 +138,14 @@ if file.exists("#{state_dir}/liquidsoap_crossfade.txt") then
   v = float_of_string(default=10.0, raw)
   if v >= 0.0 then crossfade_duration := v end
 end
+
+# Only an explicit "true" switches the curve: absent or garbage stays linear.
+if file.exists("#{state_dir}/liquidsoap_equal_power_crossfade.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_equal_power_crossfade.txt"))
+  equal_power_crossfade := (raw == "true")
+end
+crossfade_curve_name = if equal_power_crossfade() then "equal-power" else "linear" end
+log(label="crossfade", "plain crossfade curve: #{crossfade_curve_name}")
 
 # Duck depths. `p` is the fraction of the music LEFT UP under a voice channel:
 # range [0, 1], smaller is deeper, 1.0 no duck, 0.0 a full mute under the voice.
@@ -362,54 +374,185 @@ def jingle_duration(fname) =
   end
 end
 
-# Mark a manual jingle from its own source. It is deliberately outside
-# music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
-# station's now-playing row or ICY title.
-jingle_now_queue.on_metadata(synchronous=false, fun (m) -> begin
-  jingle_now_on_air := true
-  fname = m["filename"]
-  file.write(
-    data=json.stringify(compact=true, {
-      filename = fname,
-      durationSec = jingle_duration(fname),
-      startedAt = time()
-    }),
-    atomic=true,
-    temp_dir=jingle_now_tmp_dir,
-    "#{state_dir}/jingle-playing.json"
-  )
-end)
+# Arm the rotate's gate from a manual jingle's own source. The marker is written
+# where every jingle goes on air instead (JINGLE MARKER, below the
+# music_with_jingle_now switch): like any request source, this queue starts the
+# next queued press in the frame that ends the current one, before the switch
+# has chosen it.
+jingle_now_queue.on_metadata(synchronous=false, fun (_) -> jingle_now_on_air := true)
 
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-appropriate
-# tracks; reload_mode="watch" picks up its rewrites.
-
-auto_playlist = playlist(
-  id="auto",
-  reload_mode="watch",
-  mode="randomize",
-  "#{state_dir}/auto.m3u"
+# tracks and sends `auto.reload` after every write (scheduler.ts).
+#
+# A playlist keeps the track it will play next as its `current` request, apart
+# from its queue, and reload() empties only the queue (stdlib playlist.liq). So
+# while a DJ pick is on air the playlist already holds its next track: after an
+# idle pause that resumes into another show, a reload left that old-show track
+# to air first. The fallback's slot is therefore a source.dynamic: when the
+# playlist is not the one on air, `auto.reload` commits a fresh instance, which
+# drops whatever the old one prepared; when it is on air, a plain reload, and the
+# controller's skip ends the track. `OK` means the old fallback is gone.
+#
+# The instances do not watch auto.m3u themselves: radio.liq watches it once
+# (below) and reloads only contents no reload has read yet. The controller's
+# write is followed by `auto.reload` at once, and a playlist's own watch would
+# reload that same write again 0.5s later, emptying the queue `auto.ready` had
+# just reported, so a resume skip landing then aired the emergency loop. Pinned
+# by scripts/liquidsoap-resume-fallback.py. register_server_commands=false:
+# every instance would register auto.skip/auto.next/auto.uri again (nothing
+# calls them); radio.liq registers auto.reload and auto.ready below.
+auto_m3u = "#{state_dir}/auto.m3u"
+def make_auto_playlist() =
+  playlist(
+    id="auto",
+    register_server_commands=false,
+    reload_mode="never",
+    mode="randomize",
+    auto_m3u
+  )
+end
+auto_playlist = ref(make_auto_playlist())
+pending_auto_playlist = ref(null)
+# self_sync=false: a playlist never drives its own clock, and cross() below
+# refuses a source that may.
+auto_slot = source.dynamic(
+  id="auto_slot",
+  self_sync=false,
+  init=auto_playlist(),
+  # The clock thread calls this, while only the server thread below stores a
+  # source; clearing only what was taken never drops one stored meanwhile.
+  fun () -> begin
+    next = pending_auto_playlist()
+    if null.defined(next) then pending_auto_playlist := null end
+    next
+  end
 )
+
+# Whether the track on air is the playlist's own. Any other track (a DJ pick,
+# a request, a jingle below) means the playlist has moved its next track into
+# its current request. A frozen (idle-paused) track keeps the value, which is
+# what a resume asks about.
+auto_on_air = ref(false)
+dj_queue.on_track(synchronous=true, fun (_) -> auto_on_air := false)
+auto_slot.on_track(synchronous=true, fun (_) -> auto_on_air := true)
+
+# What the last reload read from auto.m3u. The watch below skips a write this
+# already holds; `auto.reload` always reloads.
+def read_auto_m3u() =
+  try
+    file.contents(auto_m3u)
+  catch err do
+    log(label="subwave", "auto.m3u unreadable (#{err})")
+    ""
+  end
+end
+auto_m3u_loaded = ref(read_auto_m3u())
+
+server.register(
+  namespace="auto",
+  "reload",
+  description="Reload auto.m3u; off air, a fresh playlist replaces the one holding a prepared track",
+  usage="reload",
+  fun (_) -> begin
+    auto_m3u_loaded := read_auto_m3u()
+    if auto_on_air() then
+      auto_playlist().reload()
+    else
+      fresh = make_auto_playlist()
+      auto_playlist := fresh
+      # The prepared source carries the activation the slot releases when it
+      # replaces it, which shuts the old instance and its request down.
+      pending_auto_playlist := auto_slot.prepare(fresh)
+      # Commit now: the slot only takes a prepared source when asked whether it
+      # is ready, and while DJ picks air nothing asks, sometimes for hours. A
+      # later reload would then reload the pending instance in place, keeping
+      # the track it had prepared.
+      ignore(auto_slot.is_ready())
+    end
+    "OK"
+  end
+)
+
+# Whether the fallback has a track ready to air: a fresh instance fetches its
+# first track after auto.reload, and the controller waits for it before a resume
+# skip, or the skip would air the emergency loop until it arrives. Reloaded in
+# place (on air), the playlist is ready only for the track it is playing: wait
+# for the next one in its queue (queued requests are resolved).
+server.register(
+  namespace="auto",
+  "ready",
+  description="Report whether the fallback has a track ready: ready / pending",
+  usage="ready",
+  fun (_) -> begin
+    ready = if auto_on_air() then list.length(auto_playlist().queue()) > 0 else auto_slot.is_ready() end
+    ready ? "ready" : "pending"
+  end
+)
+
+# The backup for a write whose `auto.reload` never arrived: reload the playlist
+# in place, as a playlist's own watch would (an off-air one keeps the track it
+# prepared until the next `auto.reload`). Settled like the stdlib's watch, so a
+# writer that truncates first is read once it is done. Only the server thread
+# replaces the instance; this thread never stores one. Never raises: it runs
+# in thread.run.
+auto_watch_scheduled = ref(false)
+def auto_m3u_changed() =
+  if
+    not auto_watch_scheduled()
+  then
+    auto_watch_scheduled := true
+    thread.run(
+      delay=0.5,
+      fun () ->
+        begin
+          auto_watch_scheduled := false
+          contents = read_auto_m3u()
+          if
+            contents != auto_m3u_loaded()
+          then
+            auto_m3u_loaded := contents
+            try
+              auto_playlist().reload()
+            catch err do
+              log(label="subwave", "auto.m3u watch reload failed (#{err})")
+            end
+          end
+        end
+    )
+  end
+end
+try
+  if file.exists(auto_m3u) then ignore(file.watch(auto_m3u, auto_m3u_changed)) end
+catch err do
+  log(label="subwave", "auto.m3u is not watched (#{err}); only auto.reload re-reads it")
+end
 
 # MAIN MUSIC SOURCE — queue takes priority, falls back to autonomous.
 music = fallback(
   id="music",
   track_sensitive=true,
-  [dj_queue, auto_playlist]
+  [dj_queue, auto_slot]
 )
 
 # HARD TRACK-LENGTH CAP (#447) — the controller stamps liq_cue_out on autonomous
 # picks and auto.m3u entries when a max-track-length is set; listener requests
-# are deliberately UN-stamped. Must sit BEFORE the music_meta capture (one clean
-# on_metadata per cut track) and before `cross` (the cut end drives a normal
-# crossfade out).
-music = cue_cut(music)
+# are deliberately UN-stamped. On 2.4.x liq_cue_in/liq_cue_out are applied at
+# request resolution, so every source here is already cut: `cue_cut` was
+# removed upstream in 2.2.4 and is now a no-op that only logs a deprecation.
+# liq_cue_in lands on the next codec-frame boundary at or after the cue, not
+# on the cue itself (CLIP SEAM ALIGNMENT, CUE-IN LANDING below).
 
 # CROSSFADE TRANSITION — equal-amplitude blend across the full cross window.
 #
 # INVARIANT: fade.out/fade.in span the ENTIRE cross() buffer so the tracks curve
 # past each other at ~-6 dB midpoint and sum to ~unity. A shorter fade leaves the
 # outgoing at full level while the incoming ramps: +6 dB, audible doubling. To
-# vary the blend, vary the cross BUFFER, never the fade inside it.
+# vary the blend, vary the cross BUFFER, never the fade inside it. Two measured
+# exceptions in dj_transition: the chop's incoming fade (the outgoing is already
+# gone), and a stem-blend clip seam, where both sides fade over the cue lead
+# inside a slightly longer buffer (CLIP SEAM ALIGNMENT). The delayed side is
+# silent until it enters, so both fades share one window and the +6 dB hazard
+# can't arise.
 #
 # Low-level `cross`, NOT the `crossfade` wrapper: crossfade(smart=false) routes
 # through its internal simple_transition and ignores a custom callback. `a`/`b`
@@ -428,6 +571,14 @@ music = cue_cut(music)
 # distinguishes new airings of the same local file, including repeated jingles;
 # fallback metadata replay keeps that request ID and reuses its stamps.
 cross_prev_end = ref(crossfade_duration())
+# CLIP SEAM SLACK — a stem-blend clip seam (`liq_clip_lead` stamped on the
+# outgoing track and on the clip) buffers this much MORE than its cue lead.
+# `cross` buffers whole frames, so the buffer it reports can land a frame
+# (20ms on 2.4.5: 0.28s measured for a 0.3s stamp) short of the stamp, while
+# the controller's cues assume the overlap is exactly the lead. With the slack
+# the buffer always covers the lead, and dj_transition delays the incoming
+# side by the excess (CLIP SEAM ALIGNMENT). Five frames of margin.
+clip_seam_slack = 0.1
 cross_last_file = ref("")
 cross_last_rid = ref("")
 cross_last_stamps = ref([])
@@ -442,6 +593,8 @@ def cross_stamps(m) =
   else
     own = float_of_string(default=crossfade_duration(), m["liq_cross_duration"])
     own = if own < 0. then crossfade_duration() else own end
+    lead = float_of_string(default=-1., m["liq_clip_lead"])
+    own = if lead >= 0. then lead + clip_seam_slack else own end
     stamps = [
       ("liq_cross_start_duration", string(cross_prev_end())),
       ("liq_cross_end_duration", string(own)),
@@ -482,12 +635,112 @@ end
 # that can never disagree with the buffer. The stamp is only the fallback for a
 # source that cannot report its length. A mismatch is logged so a regression
 # shows up in radio.log, not on air.
+# EQUAL-POWER CROSSFADE (J4, settings.transitions.equalPowerCrossfade, default
+# off). Linear fades meet at 0.5 + 0.5: two different songs are uncorrelated,
+# so their POWERS add, 0.25 + 0.25 = -3 dB at the middle of every plain
+# crossfade (measured on air: -3.3 LU median over 23 seams; offline on real
+# song pairs -3.1 LU, equal-power -0.1). sin/cos gains keep in^2 + out^2 = 1 at
+# every instant. Liquidsoap's own fade type="sin" is NOT this: it is sin^2, an
+# S-curve whose AMPLITUDES sum to 1, so it dips exactly like linear.
+# The INCOMING side rises as sin^1.5, not sin. Heard on air: a quiet live
+# ending into a loud start (Peter Gabriel - D.I.Y. -> Iggy Pop - I Need More,
+# 6 s cross, the outgoing ~12 dB under the incoming) came in abruptly. Such a
+# seam is a fade-in out of near-silence, where the powers-add premise does not
+# hold, and a plain sin brought the incoming up 3-4 dB earlier than linear
+# (offline, that seam: -20.7 vs -23.8 dBFS 2.75 s in). sin^1.5 starts no
+# faster than linear (equal at 25% of the cross, quieter before) and still
+# holds in^2 + out^2 within 0.9 dB of 1 (lowest at sin = 2/3), against the
+# 3 dB linear dip. `fx-render-test.sh eqpower` checks both.
+# The fader still spans the WHOLE buffer d (the INVARIANT above holds), and
+# only song-to-song seams take it (equal_power_seam): two time-ALIGNED copies
+# of the same audio would sum +3 dB under it, and a stem-blend clip seam is
+# exactly that, the clip being rendered from the very tracks it joins.
+# No initial_metadata= here: on fade.in/fade.out it only feeds the per-track
+# liq_fade_* overrides, which nothing on this station stamps; the stream's own
+# metadata flows through a.source/b.source unchanged.
+# override=null is load-bearing: amplify's default override reads liq_amplify,
+# and the incoming source carries its track's liq_amplify from the first sample,
+# so without it the gain curve below is REPLACED by that track's loudness gain
+# (applied a second time, it already ran before the cross): no fade-in, then a
+# step of that gain when the transition hands over (heard on air: -9.2 dB).
+half_pi = acos(-1.) / 2.
+
+def equal_power_fade(~span, ~rising, s) =
+  def gain() =
+    e = source.elapsed(s)
+    x = if span <= 0. then 1. else e / span end
+    x = if x < 0. then 0. elsif x > 1. then 1. else x end
+    if rising then pow(sin(half_pi * x), 1.5) else cos(half_pi * x) end
+  end
+  amplify(override=null, gain, s)
+end
+
 def dj_transition(a, b) =
   stamp = float_of_string(default=crossfade_duration(), a.metadata["liq_cross_end_duration"])
   buffered = min(source.remaining(a.source), source.remaining(b.source))
   d = if buffered > 0. and buffered < 600. then buffered else stamp end
   if abs(d - stamp) > 0.25 then
     log(label="cross.size", level=2, "transition buffer #{d}s differs from the outgoing stamp #{stamp}s — fading over the buffer")
+  end
+  # CLIP SEAM ALIGNMENT. At a stem-blend clip seam (either side is the clip)
+  # the controller cues X out, and Y in, `liq_clip_lead` seconds outside the
+  # clip's edges, so the two sides line up only if the incoming side starts
+  # exactly `lead` before the outgoing one ends. The buffer is `d`, which
+  # cross_stamps sized past the lead by clip_seam_slack: the outgoing side
+  # starts `d` before its end, the incoming side waits `d - lead`, and both
+  # reach the same instant of the music whatever whole number of frames
+  # `cross` buffered. Without it each clip seam was off by the frame cross
+  # dropped (~20ms flam, scripts/stem-seam-test.sh). Both fades run over the
+  # lead, from the clip's entry, so they end together and sum to unity.
+  # The delay is a blank(), which is sample-accurate on 2.4.6 only: on 2.4.5 a
+  # transition that starts mid-frame counts its partial first frame whole, so
+  # the clip arrives up to one frame early (savonet/liquidsoap#5296's family).
+  clip_meta =
+    if b.metadata["subwave_clip"] == "1" then b.metadata
+    elsif a.metadata["subwave_clip"] == "1" then a.metadata
+    else [] end
+  clip_lead = float_of_string(default=-1., clip_meta["liq_clip_lead"])
+  # CUE-IN LANDING (#2003). On 2.4.x liq_cue_in lands on the next codec-frame
+  # boundary at or after the cue (the ffmpeg decoder emits whole packets), up
+  # to ~93ms late. At clip -> Y both sides are Y's own audio, so that is a
+  # comb filter or a flam. The controller probes how late Y lands and stamps
+  # it on Y (liq_clip_cue_late); here Y waits that much longer, so its first
+  # sample meets the clip at the same instant of Y. An MP3 with a LAME header
+  # lands EARLY by its encoder delay (#2077): the stamp is negative and Y waits
+  # that much less, out of clip_seam_slack. Read only when the OUTGOING side is
+  # the clip: X -> clip and every other seam are untouched. Bounded
+  # (-(slack - frame) < late < min(lead, 0.15s)): the buffer can be a frame
+  # short of lead + slack, and an earlier Y would need more than it holds.
+  # Anything else is logged and ignored.
+  cue_late =
+    if a.metadata["subwave_clip"] == "1" then
+      float_of_string(default=0., b.metadata["liq_clip_cue_late"])
+    else 0. end
+  cue_early_max = clip_seam_slack - frame.duration()
+  seam_lead =
+    if clip_lead >= 0. and cue_late > 0. - cue_early_max and cue_late < min(clip_lead, 0.15) then
+      clip_lead - cue_late
+    else clip_lead end
+  if cue_late != 0. and seam_lead == clip_lead then
+    log(label="clip.seam", level=2, "cue-in landing #{cue_late}s is outside (-#{cue_early_max}s, min(#{clip_lead}s, 0.15s)) — ignored, aligned on the cue")
+  end
+  # Bounded: cross_stamps buffers a clip seam lead + slack, give or take one
+  # frame. A larger buffer means the seam was sized by something else (a
+  # non-clip stamp between X and the clip would hold the clip back ~9.7s), so
+  # it is logged and left as a plain crossfade rather than delayed. Sized
+  # from the clip's own lead: a landing moves the aligned lead by less than
+  # the slack, so it never needs a bigger buffer.
+  clip_max_d = clip_lead + clip_seam_slack + frame.duration()
+  b_delay =
+    if clip_lead >= 0. and d > seam_lead and d <= clip_max_d then d - seam_lead
+    else 0. end
+  if clip_lead >= 0. then
+    log(label="clip.seam", level=3, "buffered #{d}s, cue lead #{clip_lead}s, cue-in landing #{cue_late}s: incoming waits #{b_delay}s")
+    if d < seam_lead then
+      log(label="clip.seam", level=2, "buffer #{d}s is shorter than the aligned lead #{seam_lead}s — this seam is #{seam_lead - d}s off")
+    elsif d > clip_max_d then
+      log(label="clip.seam", level=2, "buffer #{d}s is past the cue lead #{clip_lead}s + slack — not aligned, plain crossfade")
+    end
   end
   # EFFECT ARMING. Every effect is APPLIED to the outgoing branch, but which
   # track carries the FLAG differs, which is why there is no arming state and no
@@ -517,11 +770,25 @@ def dj_transition(a, b) =
   # the `b` gestures on seams where the outgoing one used to suppress them.
   boundary_fading = a.metadata["liq_show_fade"] == "true"
   jingle_out = a.metadata["subwave_jingle"] == "true"
+  jingle_in = b.metadata["subwave_jingle"] == "true"
   washing = a.metadata["liq_washout"] == "true" and not boundary_fading
   looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
   sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading and not jingle_out
   dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
   chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading and not jingle_out
+  # A plain song-to-song seam: no gesture flag on either side (a flag the queue
+  # stripped as a loser never reaches here, so any flag present means a gesture
+  # owns the fades), no jingle, no stem-blend clip, no bed or pause break
+  # (subwave_kind is set only on those items, never on a song).
+  def flagged(m, k) = m[k] == "true" end
+  equal_power_seam =
+    equal_power_crossfade()
+    and not jingle_in and not jingle_out
+    and a.metadata["subwave_clip"] != "1" and b.metadata["subwave_clip"] != "1"
+    and a.metadata["subwave_kind"] == "" and b.metadata["subwave_kind"] == ""
+    and not flagged(a.metadata, "liq_washout") and not flagged(a.metadata, "liq_loop")
+    and not flagged(b.metadata, "liq_sweep") and not flagged(b.metadata, "liq_dissolve")
+    and not flagged(b.metadata, "liq_chop") and not flagged(b.metadata, "liq_blend")
   # FADE SHAPE per effect. exp drops the dry EARLY so the washout's tail reads
   # as a dissolve (it dips below unity mid-cross, which is the effect; the +6 dB
   # hazard is only for fades that hold full level early). log does the opposite,
@@ -530,15 +797,22 @@ def dj_transition(a, b) =
   # stab at full level. Loop takes NO fader here: it captures the raw outgoing
   # bar and applies its own complementary ride after the cascade; the hot fade
   # made every loop transition jump in level at its start.
+  # A delayed clip seam (b_delay > 0) fades the outgoing side over the lead
+  # too, so both fades start where the clip enters and sum to unity; over the
+  # full d it was already down to (d - b_delay)/d when the clip came in (0.75,
+  # -2.5 dB, at the 0.4s/0.3s clip seam; arithmetic for linear fades).
+  a_fade = d - b_delay
   a_source =
     if washing then
-      fade.out(duration=d, type="exp", initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, type="exp", initial_metadata=a.metadata, a.source)
     elsif sweeping or chopping then
-      fade.out(duration=d, type="log", initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, type="log", initial_metadata=a.metadata, a.source)
     elsif looping then
       a.source
+    elsif equal_power_seam then
+      equal_power_fade(span=d, rising=false, a.source)
     else
-      fade.out(duration=d, initial_metadata=a.metadata, a.source)
+      fade.out(duration=a_fade, initial_metadata=a.metadata, a.source)
     end
   # SWEEP ENVELOPE — riding the filter out of a track. Cutoffs move in
   # LOG-frequency space (pow) throughout; linear Hz ramps read as
@@ -1005,7 +1279,17 @@ def dj_transition(a, b) =
   # outgoing still up when the incoming arrives; here it is already gone. For
   # d <= 10, chop_dd == d and the render is byte-identical.
   b_fade = if chopping then chop_dd else d end
-  b_source = fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
+  # A clip seam's incoming side waits b_delay (CLIP SEAM ALIGNMENT above) and
+  # fades over the lead, so both fades still end together. b_delay > 0 only on
+  # a clip seam, which equal_power_seam never takes, so the equal-power branch
+  # always spans the full d.
+  b_fade = if b_delay > 0. then d - b_delay else b_fade end
+  b_source =
+    if equal_power_seam then
+      equal_power_fade(span=b_fade, rising=true, b.source)
+    else
+      fade.in(duration=b_fade, initial_metadata=b.metadata, b.source)
+    end
   # INCOMING SIDE. Every effect here releases by driving WETNESS to 0, never by
   # parking the cutoff open: an RC filter at its open cutoff is still not
   # transparent, and the branch operators vanish at the d boundary, so the track
@@ -1081,7 +1365,28 @@ def dj_transition(a, b) =
     else
       b_source
     end
-  strip_cross_stamps(add(normalize=false, [a_source, b_source]))
+  b_source =
+    if b_delay > 0. then
+      sequence(merge=true, [blank(duration=b_delay), b_source])
+    else
+      b_source
+    end
+  # A JINGLE IS NEVER BLENDED. cross sizes this buffer from the SHORTER side, so
+  # for a three-second stinger `d` is the stinger's whole length: summed, it
+  # aired as nothing but its own fade-in under the outgoing track, reaching full
+  # level on its last sample (scripts/fx-render-test.sh jingledry with the old
+  # `add` restored: -58 dB rising to -36 dB against a -36 dB track). The outgoing
+  # track fades over the same buffer as before and the stinger then plays dry,
+  # start to finish. An outgoing jingle is not faded either, so one long enough
+  # to have a tail of its own keeps its last words, into a track or into another
+  # jingle. This is the one seam the INVARIANT above does not describe.
+  seam =
+    if jingle_in or jingle_out then
+      (sequence([(if jingle_out then a.source else a_source end), b.source]) : source)
+    else
+      add(normalize=false, [a_source, b_source])
+    end
+  strip_cross_stamps(seam)
 end
 
 # The PRE-cross handle for the on_metadata hook attached further down. Hooking
@@ -1112,6 +1417,11 @@ VOICE_GATE_MAX_SEC = 120.
 # this, so jingles never reach now-playing. An empty jingles.m3u is fine (rotate
 # skips an unavailable source); jingle_ratio 0 = jingles OFF (#997), the rotate
 # is not built at all.
+#
+# True while a rotate jingle is on air: set where it reaches the source cross
+# reads (below the jingle_now switch), released as the playlist starts its next
+# clip or any other track starts there. The rotate's gate holds open for it.
+rotate_jingle_on_air = ref(false)
 music =
   if jingle_ratio() > 0 then
     jingles = playlist(
@@ -1120,32 +1430,41 @@ music =
       reload_mode="watch",
       "#{state_dir}/jingles.m3u"
     )
-    # Announce each jingle to the controller (#997): jingles are otherwise
-    # invisible to it and play outside its airVoice serialiser. Written at FEED
-    # time — the jingle turns audible ~crossfade_duration later — and the
-    # controller holds its voice chain until start + crossfade + clip length.
-    jingles.on_metadata(synchronous=false, fun (m) ->
-      file.write(
-        data=json.stringify(compact=true, {
-          filename = m["filename"],
-          durationSec = jingle_duration(m["filename"]),
-          startedAt = time()
-        }),
-        atomic=true,
-        temp_dir=jingle_tmp_dir,
-        "#{state_dir}/jingle-playing.json"
-      )
-    )
+    # The playlist starts its next clip in the frame that ends the one on air,
+    # and this hook runs inside that frame, before the gate below sees its track
+    # mark. Re-checked at the mark, a closed gate dropped the rest of the frame,
+    # the next clip's head and metadata with it, so that clip later aired under
+    # the previous one's name and length.
+    jingles.on_track(synchronous=true, fun (_) -> rotate_jingle_on_air := false)
     # Unavailable while a bed is on air (can't split a bed from its song), while
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
-    jingles = source.available(jingles, {
+    #
+    # The gate decides only whether a clip may START. Checked on every frame
+    # (the default), a voice clip or bed that began mid-stinger made the source
+    # unavailable, and the rotate left the clip there and played the rest at a
+    # later turn. track_sensitive holds an open gate while it is true, so it is
+    # true only for the clip on air: an open verdict must not outlive its clip,
+    # nor be re-checked at the clip's own end (the release above).
+    #
+    # Except for the starve guard. Served back to back, the next clip is chosen
+    # in the same cycle the last one ends, on that cycle's verdict, which the
+    # flag had held; so with no music to turn to, a held gate was never asked
+    # again and the rotate served stingers forever over a latched starve (#1300
+    # bug 7, measured on the baked image). Once it latches the gate is asked
+    # every cycle again, as before, and cuts the clip on air.
+    jingles = source.available(jingles, track_sensitive={rotate_jingle_on_air() and not music_starved()}, {
       not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
-    # Mark a stinger for dj_transition's JINGLE SEAMS rule. music_meta is
-    # captured above this rotate, so the key never reaches now-playing.
-    jingles = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingles)
+    # Mark a stinger for dj_transition's JINGLE SEAMS rule, and as the rotate's
+    # own for the gate's flag. music_meta is captured above this rotate, so the
+    # keys never reach now-playing.
+    jingles = metadata.map(
+      update=true,
+      fun (_) -> [("subwave_jingle", "true"), ("subwave_jingle_rotate", "true")],
+      jingles
+    )
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
@@ -1153,17 +1472,117 @@ music =
 
 # Manual presses wrap the automatic rotate so they win the next SAFE boundary,
 # even when dj_queue already holds tracks or the rotate is due. While speech or
-# a bed is live the source is unavailable but the request remains queued.
-jingle_now = source.available(jingle_now_queue, {
-  not bed_on_air() and not pause_talk_on_air() and time() > voice_until()
-})
+# a bed is live the press is not chosen but the request remains queued.
+#
+# The gate is the switch's own predicate, which track_sensitive=true asks only
+# when choosing at a track boundary, so a press that started plays to its end.
+# As a source.available gate it was asked on every frame: a bed pre-started at
+# the boundary the press won, or a DJ clip, closed it mid-clip and the fallback
+# left the clip, to play the rest at a later boundary. Measured on 2.4.6: a 14s
+# announcement aired 10s, two songs played, then its last 4s.
+#
 # The same mark as the rotate's jingles. Every jingle arrives here when the
 # controller owns the rotate (#1619), so this one covers both kinds.
-jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now)
-music = fallback(
+jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now_queue)
+music = switch(
   id="music_with_jingle_now",
   track_sensitive=true,
-  [jingle_now, music]
+  [
+    ({not bed_on_air() and not pause_talk_on_air() and time() > voice_until()}, jingle_now),
+    ({true}, music)
+  ]
+)
+# A jingle on air also means the playlist has moved past its last track.
+music.on_track(synchronous=true, fun (m) -> if m["subwave_jingle"] == "true" then auto_on_air := false end)
+# Holds the rotate's gate open for the clip on air (see the rotate). Set where a
+# clip is chosen, never on the playlist, which starts its next clip as this one
+# ends. Every other track releases it, a press included.
+music.on_track(synchronous=true, fun (m) -> rotate_jingle_on_air := m["subwave_jingle_rotate"] == "true")
+
+# JINGLE MARKER — announce each jingle to the controller (#997): jingles are
+# otherwise invisible to it and play outside its airVoice serialiser. Written at
+# FEED time — the jingle turns audible ~crossfade_duration later — and the
+# controller holds its voice chain until start + crossfade + clip length.
+#
+# ONE writer for both between-song kinds, on the source cross reads, because
+# only here does a jingle starting mean it is going on air. (An over-music
+# overlay ID never reaches this switch; voice_marker marks it as it airs.) The jingles playlist and
+# jingle_now_queue are request sources, and a request source starts its next
+# ready request in the frame that ends the current one, firing that request's
+# hooks before anything downstream has chosen it. The rotate then takes music
+# for jingle_ratio tracks and the clip waits with its hooks already spent:
+# measured on 2.4.6, the playlist's own hook marked each rotate jingle at the
+# END of the one before, ~N tracks early, and its real airing wrote nothing.
+# Below music_meta, so an uploaded clip's retained ID3 tags never reach
+# now-playing.json or the ICY title.
+#
+# BACK TO BACK: cross reads ahead of the air in bursts, taking a jingle shorter
+# than the crossfade whole and then the head of whatever follows, so a second
+# jingle can be fed milliseconds after the first while it airs only once the
+# first has ended. Stamped at its own feed, its window closed early by about the
+# first one's length (the DJ could talk over its tail), and the first one's
+# marker was overwritten before anything could read it. So each marker also
+# carries `queuedSec`, how long the clip waits behind the jingles fed before it
+# since the last other track, worked out here where the feed order is known:
+# each starts at the later of its own feed and the end of the one before. Only
+# a jingle shorter than the crossfade holds back the next one: a longer one is
+# read at the pace it airs, so whatever follows is fed as its last crossfade's
+# worth is buffered, the distance the controller's window already pads for.
+# 0. when it waits for nothing; an unmeasured length (jingle_duration 0.) adds
+# nothing, which is the window an older mixer gave.
+#
+# The bookkeeping runs on the streaming thread, so it is in feed order. The
+# write needs request.duration and file I/O, so it runs off that thread with
+# everything it needs captured, and stands down once a later jingle has been
+# fed: async tasks run on several threads, and the first of a burst landing
+# last would leave its own, shorter window on disk.
+jingle_burst = ref([])
+jingle_marker_seq = ref(0)
+
+def jingle_queued_sec(fed_at, ahead) =
+  def ends(clear, j) =
+    dur = jingle_duration(fst(j))
+    if dur < crossfade_duration() then max(clear, snd(j)) + dur else 0. end
+  end
+  max(0., list.fold(ends, 0., ahead) - fed_at)
+end
+
+def write_jingle_marker(seq, fname, fed_at, ahead) =
+  dur = jingle_duration(fname)
+  queued = jingle_queued_sec(fed_at, ahead)
+  if seq == jingle_marker_seq() then
+    try
+      file.write(
+        data=json.stringify(compact=true, {
+          filename = fname,
+          durationSec = dur,
+          startedAt = fed_at,
+          queuedSec = queued
+        }),
+        atomic=true,
+        temp_dir=jingle_tmp_dir,
+        "#{state_dir}/jingle-playing.json"
+      )
+    catch err do
+      log(label="subwave", "jingle marker write failed for #{fname} (#{err})")
+    end
+  end
+end
+
+music.on_track(synchronous=true, fun (m) ->
+  if m["subwave_jingle"] == "true" then
+    fname = m["filename"]
+    fed_at = time()
+    ahead = jingle_burst()
+    # Only an unbroken run of jingles grows it; eight is past any real burst.
+    kept = if list.length(ahead) < 8 then ahead else list.tl(ahead) end
+    jingle_burst := [...kept, (fname, fed_at)]
+    jingle_marker_seq := jingle_marker_seq() + 1
+    seq = jingle_marker_seq()
+    thread.run(fast=false, fun () -> write_jingle_marker(seq, fname, fed_at, ahead))
+  else
+    jingle_burst := []
+  end
 )
 
 # Per-track loudness normalisation: the controller stamps `liq_amplify`
@@ -1193,6 +1612,55 @@ music = cross(
 # back-announce); intro_queue = talk-over links (light duck).
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
+
+# Gates that remain meaningful DURING an overlay, rechecked on every audio
+# frame because idle/off-air freezes audio while wall-clock holds expire. This
+# runs on the streaming thread, so it reads refs and queues only, never a file.
+# A manual press is not here: it waits for a track boundary and for the
+# voice_until this ID set, so it can never meet the ID mid-clip, and cutting
+# the ID for it would only lose the ID. Presses and the handoff files are
+# checked once, when the offer is consumed (jingle_overlay_safe, below).
+def jingle_overlay_live_safe() =
+  stream_on() and not idle_mode() and not music_starved() and
+  source.is_ready(music_meta) and not bed_on_air() and not pause_talk_on_air() and
+  source.remaining(voice_queue) <= 0. and list.length(voice_queue.queue()) == 0
+end
+
+# One generation for BOTH the lead-in and ID, including requests already
+# prefetched out of queue(). Cancellation is permanent, even on same-song
+# resume. Ordinary DJ intros carry no generation and keep their usual path.
+jingle_overlay_epoch = ref(0)
+intro_overlay_metadata = ref([])
+
+def cancel_jingle_overlay() =
+  jingle_overlay_epoch := jingle_overlay_epoch() + 1
+end
+
+def jingle_overlay_valid(epoch, song_stamp) =
+  epoch == "#{jingle_overlay_epoch()}" and
+  song_stamp == "#{overlay_music_timestamp()}" and jingle_overlay_live_safe()
+end
+
+intro_queue.on_metadata(synchronous=true, fun(m) -> intro_overlay_metadata := m)
+
+def intro_overlay_gain() =
+  m = intro_overlay_metadata()
+  if m["subwave_jingle_overlay"] != "true" then
+    1.
+  elsif jingle_overlay_valid(m["subwave_overlay_epoch"], m["subwave_overlay_track_at"]) then
+    1.
+  else
+    if m["subwave_overlay_epoch"] == "#{jingle_overlay_epoch()}" then
+      cancel_jingle_overlay()
+    end
+    # Skip only from the audio pull for this annotated request. A background
+    # poll using last metadata could skip a following ordinary DJ intro after
+    # the cancelled request ended but before that intro emitted its metadata.
+    intro_queue.skip()
+    intro_overlay_metadata := []
+    0.
+  end
+end
 
 def pause_voice_delivery_id(uri) =
   matches = string.extract(pattern="subwave_pause_delivery=\\\"([^\\\"]+)\\\"", uri)
@@ -1234,7 +1702,8 @@ def voice_marker(channel, tmp_dir) =
   fun (m) ->
     begin
       voice_id = m["subwave_voice"]
-      if voice_id != "" then
+      if voice_id != "" and (m["subwave_jingle_overlay"] != "true" or
+        jingle_overlay_valid(m["subwave_overlay_epoch"], m["subwave_overlay_track_at"])) then
         # ONE clock read for both jobs, taken before either: re-reading time()
         # after the work below would skew the live-edge stamp.
         now = time()
@@ -1293,6 +1762,29 @@ def voice_marker(channel, tmp_dir) =
             30.
           end
         voice_until := now + min(dur, VOICE_GATE_MAX_SEC) + 2.
+        # The second writer of jingle-playing.json (the first is the JINGLE
+        # MARKER on the switch's output). An overlay never reaches that switch,
+        # and intro_queue sits directly under its duck, so this hook fires as
+        # the ID airs. Its duration is jingle_duration's, 0. when unmeasured,
+        # never this hook's 30s gate fallback: the controller reads 0. as
+        # "measure it yourself".
+        if m["subwave_jingle_overlay"] == "true" then
+          try
+            file.write(
+              data=json.stringify(compact=true, {
+                filename = fname,
+                startedAt = now,
+                durationSec = jingle_duration(fname),
+                placement = "over"
+              }),
+              atomic=true,
+              temp_dir=jingle_overlay_tmp_dir,
+              "#{state_dir}/jingle-playing.json"
+            )
+          catch err do
+            log(label="subwave", "overlay jingle marker failed (#{err})")
+          end
+        end
       end
     end
 end
@@ -1302,7 +1794,7 @@ voice_queue.on_metadata(synchronous=false, voice_marker("say", voice_tmp_dir))
 intro_queue.on_metadata(synchronous=false, voice_marker("intro", intro_tmp_dir))
 
 # Sound-effects channel — short pre-rendered stingers the DJ agent plays UNDER
-# its voice, path written into sfx.txt (broadcast/sfx.js + queue.playSfx). Not
+# its voice, path written into sfx.txt (broadcast/sfx.ts + queue.playSfx). Not
 # mic-chained: the audio is already produced.
 sfx_queue = request.queue(id="sfx_queue")
 
@@ -1333,14 +1825,41 @@ def poll_voice() =
 end
 thread.run(every=0.5, poll_voice)
 
+# The offer and the poll share the final safety gate. A press or voice that
+# wins the race costs the optional ID, never its slot. Do not use is_ready on
+# voice queues: it latches true after their first push (see voice_until).
+def jingle_overlay_safe() =
+  jingle_overlay_live_safe() and not jingle_now_on_air() and
+  list.length(jingle_now_queue.queue()) == 0 and
+  not file.exists("#{state_dir}/say.txt") and not file.exists("#{state_dir}/intro.txt") and
+  not file.exists("#{state_dir}/jingle-now.txt") and time() > voice_until() and
+  source.remaining(intro_queue) <= 0. and list.length(intro_queue.queue()) == 0
+end
+
 def poll_intro() =
   if file.exists("#{state_dir}/intro.txt") then
     contents = string.trim(file.contents("#{state_dir}/intro.txt"))
     file.remove("#{state_dir}/intro.txt")
-    if contents != "" then
+    overlay = string.contains(substring='subwave_jingle_overlay="true"', contents)
+    song_stamp = list.assoc(default="", 1, string.extract(pattern="subwave_overlay_track_at=\\\"([0-9]+)\\\"", contents))
+    if contents != "" and (not overlay or (
+      jingle_ratio() == 0 and jingle_overlay_safe() and
+      song_stamp == "#{overlay_music_timestamp()}"
+    )) then
+      # Protect the lead-in until voice_marker installs the measured deadline.
+      # Same 2s poll/duck slack as the clip marker above.
+      if overlay then
+        voice_until := max(voice_until(), time() + 2.)
+        cancel_jingle_overlay()
+      end
+      epoch = "#{jingle_overlay_epoch()}"
+      contents = if overlay then
+        string.replace(pattern="^annotate:", fun(_) -> "annotate:subwave_overlay_epoch=\"#{epoch}\",", contents)
+      else contents end
       log("DJ talk-over: #{contents}")
       if has_leadin then
-        ignore(intro_queue.push(request.create(leadin_path)))
+        leadin = if overlay then "annotate:subwave_jingle_overlay=\"true\",subwave_overlay_epoch=\"#{epoch}\",subwave_overlay_track_at=\"#{song_stamp}\":#{leadin_path}" else leadin_path end
+        ignore(intro_queue.push(request.create(leadin)))
       end
       ignore(intro_queue.push(request.create(contents)))
     end
@@ -1398,11 +1917,12 @@ def edge_fade(s) =
 end
 
 # Per-segment voice trim: the controller stamps `liq_amplify` per spoken clip
-# (settings.tts.gainDb + audio/tts.ts:voiceGainDb), the same mechanism as the
+# (settings.tts.gainDb + audio/tts.ts:voiceGainDb, plus the opt-in clip trim from
+# audio/clip-level.ts), the same mechanism as the
 # music bus. BEFORE mic_chain so the fixed-threshold compressor sees a levelled
 # input; the un-annotated lead-in plays at unity.
 voice = mic_chain(amplify(override="liq_amplify", 1., edge_fade(voice_queue)))
-intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
+intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(amplify(override=null, intro_overlay_gain, intro_queue))))
 
 # SAFETY — the dead-air guard. `emergency` is an always-ready, non-silent
 # single, so the broadcast never has nothing to pull.
@@ -1426,7 +1946,7 @@ intro = mic_chain(amplify(override="liq_amplify", 1., edge_fade(intro_queue)))
 #
 # The fade-in is NOT a debounce and must never become one. track_sensitive=false
 # switches the instant `music` reports not-ready, including on brief real gaps
-# (cold boot before auto.m3u resolves, a seam where dj_queue and auto_playlist
+# (cold boot before auto.m3u resolves, a seam where dj_queue and auto_slot
 # are both momentarily unready). Delaying the switch is the wrong fix: fire
 # immediately and ramp the LEVEL. The music branch keeps the stdlib identity
 # transition because coming BACK must be instant.
@@ -1535,7 +2055,6 @@ radio = smooth_add(
 # where it froze. A plain blank() is safe; the #660 CPU spin was specific to
 # blank.skip. Not persisted — a mixer restart comes back live and the controller
 # re-asserts idle if the room is still empty.
-idle_mode = ref(false)
 radio = switch(
   id="idle_gate",
   track_sensitive=false,
@@ -1713,6 +2232,7 @@ def on_meta(m) =
     jingle_now_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
+    overlay_music_timestamp := ts
     # json.stringify, not interpolation: titles with embedded quotes or
     # backslashes produce invalid JSON.
     payload = json.stringify(compact=true, {
@@ -1778,8 +2298,9 @@ archive_path = {time.string("#{state_dir}/archive/%Y-%m-%d/%H-00.mp3")}
 def make_stream_outputs() =
   # Every encoder below picks its bitrate from a fixed set of branches because
   # %mp3/%opus/%fdkaac(bitrate=…) each need a parse-time literal int — a ref
-  # won't do. Keep the branches in sync with MP3_BITRATES / OPUS_BITRATES /
-  # AAC_BITRATES in settings.ts.
+  # won't do. Keep the branches in sync with SETTINGS_MP3_BITRATES /
+  # SETTINGS_OPUS_BITRATES / SETTINGS_AAC_BITRATES in
+  # controller/src/schemas/settings.ts.
   br = stream_bitrate()
   mp3_enc =
     if br <= 64 then
@@ -1950,7 +2471,6 @@ def make_stream_outputs() =
 end
 
 stream_shutdown = ref(fun () -> ())
-stream_on = ref(false)
 
 def stream_up() =
   if not stream_on() then
@@ -1991,6 +2511,20 @@ server.register(
   end
 )
 
+# An older/unrestarted mixer cannot prove safety: the controller requires both
+# this proof and a running ratio of zero before offering an overlay.
+server.register(
+  "jingle_overlay_status",
+  description="Safety and running rotate ratio for optional over-music IDs",
+  usage="jingle_overlay_status",
+  fun(_) -> json.stringify(compact=true, {
+    safe = jingle_overlay_safe(),
+    mixerRatio = jingle_ratio(),
+    remainingSeconds = source.remaining(music_meta),
+    crossfadeSeconds = crossfade_duration()
+  })
+)
+
 # Off air / back on air on demand — the mounts go away entirely. Contrast the
 # idle gate below, which keeps them up.
 server.register(
@@ -1999,6 +2533,7 @@ server.register(
   usage="stream_off",
   fun(_) -> begin
     log("Stream taken off air via server command")
+    cancel_jingle_overlay()
     stream_down()
     "OK"
   end
@@ -2010,6 +2545,7 @@ server.register(
   usage="stream_on",
   fun(_) -> begin
     log("Stream brought back on air via server command")
+    cancel_jingle_overlay()
     stream_up()
     "OK"
   end
@@ -2032,6 +2568,7 @@ server.register(
     if not idle_mode() then
       log("Idle gate ON via server command — programme paused, mounts stay up")
     end
+    cancel_jingle_overlay()
     idle_mode := true
     "OK"
   end
@@ -2045,6 +2582,7 @@ server.register(
     if idle_mode() then
       log("Idle gate OFF via server command — programme resumed")
     end
+    cancel_jingle_overlay()
     idle_mode := false
     "OK"
   end

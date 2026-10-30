@@ -38,6 +38,11 @@ const defaultOwnershipRegistry = [
     consumers: [{ file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
   },
   {
+    file: 'dash/queries.ts', function: 'fetchNowPlayingFile',
+    reads: [{ callee: 'adminJson', method: 'GET', path: '/now-playing/file?id=${}', signal: 'signal' }],
+    consumers: [{ file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
+  },
+  {
     file: 'dash/queries.ts', function: 'fetchRequests',
     reads: [{ callee: 'adminJson', method: 'GET', path: '/requests', signal: 'signal' }],
     consumers: [{ file: 'DashPanel.tsx', owner: 'useAdminQuery', property: 'request', count: 1 }],
@@ -136,6 +141,10 @@ const allowed = new Map([
     ['diagnosis-command', { callee: 'adminResponse', method: 'GET', path: /^\/doctor$/ }],
     ['diagnosis-stream', { callee: 'adminResponse', method: 'GET', path: /^\/doctor\/stream$/ }],
   ])],
+  ['DiscoveryPanel.tsx', new Map([
+    ['discovery-tool-preview', { callee: 'adminJson', method: 'POST', path: /^\/debug\/discovery\/tool\/\$\{\}$/ }],
+    ['discovery-comparison-preview', { callee: 'adminJson', method: 'POST', path: /^\/debug\/discovery\/compare$/ }],
+  ])],
   ['PersonasPanel.tsx', new Map([
     // Persona bundle (#1620). A one-shot blob download, like backup-export and
     // skill-export next door — the import half is an ordinary useAdminMutation.
@@ -161,6 +170,14 @@ const allowed = new Map([
   ['connect/Playground.tsx', new Map([
     ['operator-api-command', { callee: 'adminResponse', method: 'endpoint.method', path: /^relPath$/ }],
   ])],
+  ['library/useTaggerRunLog.ts', new Map([
+    // One run's log file as a download, byte for byte; nothing cached reads it.
+    ['tagger-log-download', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/library\/tagger\/logs\/\$\{\}$/,
+    }],
+  ])],
   ['personas/helpers.ts', new Map([
     ['random-avatar-download', {
       callee: 'nativeFetch',
@@ -172,6 +189,16 @@ const allowed = new Map([
     ['generation-job-start', { callee: 'rawFetcher', method: 'POST', path: /^\/playlists\/generate\/jobs$/ }],
     ['generation-sync-fallback', { callee: 'rawFetcher', method: 'POST', path: /^\/playlists\/generate$/ }],
     ['generation-job-poll', { callee: 'rawFetcher', method: 'GET', path: /^\/playlists\/generate\/jobs\/\$\{\}$/ }],
+  ])],
+  ['settings/LlmSection.tsx', new Map([
+    // The swap confirm dialog's preview: read once per dialog open, against
+    // settings and live latency that the swap it previews is about to change,
+    // so a cached copy would only ever be stale. Like discovery-tool-preview.
+    ['llm-swap-fit-preview', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/settings\/llm\/swap\/fit$/,
+    }],
   ])],
   ['settings/LibrarySection.tsx', new Map([
     ['locca-discovery-probe', {

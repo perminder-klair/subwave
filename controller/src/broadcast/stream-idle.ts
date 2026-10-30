@@ -4,40 +4,75 @@
 
 import * as settings from '../settings.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
-import { gatedListenerCount, refresh, setStreamIdle } from './listeners.js';
+import { gatedListenerCount, peekListeners, refresh, setStreamIdle } from './listeners.js';
 import { idleOn, idleOff, idleStatus } from './liquidsoap-control.js';
 import { queue } from './queue.js';
 import { nextIdleState, type IdleState } from './stream-idle-pure.js';
+import { showKeyAt } from './show-boundary.js';
+import { programmeShowKey } from './resume-show.js';
 
 // One tick every 5s. Live: read the 15s monitor's cached count. Idle: force a
-// fresh poll, so a new listener waits ~5s (worst case ~8s, since the forced
-// poll is single-flighted). Tightening that would re-race the two pollers
+// fresh poll. Only committed polls (this tick's, the 15s monitor's, a
+// request's) count toward the fail-open budget, so it keeps this cadence:
+// polling faster would shorten the ~20s an outage needs to release the pause
 // (#1256).
 const TICK_MS = 5000;
 
+// While idle, a wake probe reads Icecast every second and runs the tick as soon
+// as it sees a listener (#2072). It is positive evidence only: it commits
+// nothing (listeners.peekListeners), so a failed or empty probe changes
+// nothing, and the tick still decides from its own committed poll. A new
+// listener waits ~1s instead of ~5s, on top of the burst-on-connect, which
+// while idle is bufferSeconds of silence (docs/internals/broadcast.md). A probe
+// that times out stops probing for one tick, leaving a slow Icecast to the tick.
+const WAKE_PROBE_MS = 1000;
+
 // Inject external controls for transition tests; production shares this same
 // monitor. The resume callback is supplied by server to avoid an import cycle.
+export type ResumeInfo = {
+  /** The track frozen by the pause started under a different show than the one on air now. */
+  showChanged: boolean;
+};
+
 export function createStreamIdleMonitor(overrides: Partial<{
   idleStatus: () => Promise<boolean>;
   idleOn: () => Promise<unknown>;
   idleOff: () => Promise<unknown>;
   refresh: () => Promise<unknown>;
   gatedListenerCount: () => number | null;
+  peekListeners: () => Promise<number | null>;
   streamSettings: () => { idleWhenEmpty?: boolean; idleAfterMinutes?: number } | undefined;
   setStreamIdle: (idle: boolean) => void;
   warmHeavy: () => Promise<unknown>;
   log: (kind: string, message: string) => void;
-  onResume: () => Promise<void>;
+  showKeyAt: (ms: number) => string;
+  frozenTrackShowKey: () => string | null;
+  onResume: (info: ResumeInfo) => Promise<void>;
 }> = {}) {
   const deps = {
-    idleStatus, idleOn, idleOff, refresh, gatedListenerCount, setStreamIdle, warmHeavy,
+    idleStatus, idleOn, idleOff, refresh, gatedListenerCount, peekListeners, setStreamIdle, warmHeavy,
     streamSettings: () => settings.get()?.stream,
     log: (kind: string, message: string) => queue.log(kind, message),
-    onResume: async () => {},
+    showKeyAt,
+    // queue.json keeps `current` across a controller restart, so this still
+    // answers for a pause the previous process started. A queued pick carries
+    // the show it was chosen for; a track the fallback started does not, and
+    // is judged by when it started.
+    frozenTrackShowKey: () => programmeShowKey(queue.current),
+    onResume: async (_info: ResumeInfo) => {},
     ...overrides,
   };
   let state: IdleState = { idle: false, zeroSince: null };
   let startupReleasePending = false;
+
+  // The track frozen by the pause was chosen for one show; hours later another
+  // can be on air. Asked of the track rather than remembered from the pause,
+  // so a restart mid-pause does not lose it. The same show again after others
+  // (A, B, A) counts as no change: its music still fits.
+  function frozenTrackIsFromAnotherShow() {
+    const key = deps.frozenTrackShowKey();
+    return key !== null && key !== deps.showKeyAt(Date.now());
+  }
 
   // Read by GET /state so the player can tell "nobody's here" from "broken".
   function isIdle() {
@@ -64,6 +99,8 @@ export function createStreamIdleMonitor(overrides: Partial<{
     // before starting a fresh empty-room grace window, and retry on failure
     // without waiting for the original status read to finish.
     const action = startupReleasePending ? 'resume' : plannedAction;
+    // An unknown startup gate needs releasing, but proves no programme was paused.
+    const showChanged = action === 'resume' && state.idle && frozenTrackIsFromAnotherShow();
     try {
       if (action === 'pause') {
         await deps.idleOn();
@@ -99,11 +136,20 @@ export function createStreamIdleMonitor(overrides: Partial<{
     startupReleasePending = false;
     deps.setStreamIdle(state.idle);
     if (action === 'resume') {
-      // Playback is already live. Catalogue failures must not roll the idle
-      // state back, delay the frozen track, or prevent later monitor ticks.
-      void Promise.resolve().then(() => deps.onResume()).catch(err =>
-        deps.log('error', `Auto-playlist refresh after resume failed: ${err.message}`));
+      // Playback is already live. Failures here must not roll the idle state
+      // back, delay the frozen track, or prevent later monitor ticks.
+      void Promise.resolve()
+        .then(() => deps.onResume({ showChanged }))
+        .catch(err => deps.log('error', `Work after resume failed: ${err.message}`));
     }
+  }
+
+  // True when the room may have filled since the last tick. No I/O while live
+  // or with pausing off; the caller brings the tick forward on true.
+  async function wakeProbe() {
+    if (!state.idle || !deps.streamSettings()?.idleWhenEmpty) return false;
+    const seen = await deps.peekListeners();
+    return seen !== null && seen > 0;
   }
 
   async function initialize(timeoutMs = 2500) {
@@ -131,7 +177,33 @@ export function createStreamIdleMonitor(overrides: Partial<{
     }
   }
 
-  return { isIdle, tick, initialize };
+  return { isIdle, tick, wakeProbe, initialize };
+}
+
+// Drive both cadences. The probe keeps its own guard so a slow one never costs
+// the tick its slot (listeners.ts holds the tick's poll until a probe in flight
+// is done, at most its 1s deadline), and it stands aside while a tick is
+// already polling.
+export function scheduleStreamIdleMonitor(
+  m: Pick<ReturnType<typeof createStreamIdleMonitor>, 'tick' | 'wakeProbe'>,
+  every: (run: () => void, ms: number) => unknown = setInterval,
+) {
+  let ticking = false;
+  let probing = false;
+  const runTick = () => {
+    if (ticking) return;
+    ticking = true;
+    m.tick().catch(() => {}).finally(() => { ticking = false; });
+  };
+  every(runTick, TICK_MS);
+  every(() => {
+    if (probing || ticking) return;
+    probing = true;
+    m.wakeProbe()
+      .then(seen => { if (seen) runTick(); })
+      .catch(() => {})
+      .finally(() => { probing = false; });
+  }, WAKE_PROBE_MS);
 }
 
 let monitor = createStreamIdleMonitor();
@@ -139,13 +211,8 @@ export function isIdle() {
   return monitor.isIdle();
 }
 
-export async function startStreamIdleMonitor(onResume: () => Promise<void> = async () => {}) {
+export async function startStreamIdleMonitor(onResume: (info: ResumeInfo) => Promise<void> = async () => {}) {
   monitor = createStreamIdleMonitor({ onResume });
   await monitor.initialize();
-  let ticking = false;
-  setInterval(() => {
-    if (ticking) return;
-    ticking = true;
-    monitor.tick().catch(() => {}).finally(() => { ticking = false; });
-  }, TICK_MS);
+  scheduleStreamIdleMonitor(monitor);
 }

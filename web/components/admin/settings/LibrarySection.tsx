@@ -12,40 +12,18 @@ import {
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
 import { Advanced } from './section-chrome';
-import { EmbeddingProviderSelector } from '../embedding/EmbeddingProviderSelector';
+import { ProviderPicker } from '../llm/ProviderPicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
-import { LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBED_MODEL_SUGGESTIONS, LLM_ENV_VARS, llmProviderLabel } from '../llm/providerMeta';
+import { EMBEDDING_PROVIDER_IDS } from '../../../lib/schemas.generated';
 import { cn } from '../../../lib/cn';
 import { HeaderRowsEditor } from './LlmSection';
+import { effectiveCompatMode } from './compat-mode';
 import {
   SectionHeader, SaveBar, KeyStatus,
   headerMap,
   type SectionProps,
 } from './shared';
-
-// Ollama wants the short tag, not an HF/locca repo id (those 404). dim is
-// shown so an already-tagged library can be matched.
-const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
-  ollama: [
-    { id: 'nomic-embed-text', dim: 768 },
-    { id: 'mxbai-embed-large', dim: 1024 },
-    { id: 'bge-m3', dim: 1024 },
-    { id: 'all-minilm', dim: 384 },
-  ],
-  openai: [
-    { id: 'text-embedding-3-small', dim: 1536 },
-    { id: 'text-embedding-3-large', dim: 3072 },
-  ],
-  google: [{ id: 'text-embedding-004', dim: 768 }],
-  openrouter: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-  requesty: [
-    { id: 'openai/text-embedding-3-small', dim: 1536 },
-    { id: 'openai/text-embedding-3-large', dim: 3072 },
-  ],
-};
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
 
@@ -126,13 +104,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
   const savedEmbedding = data.values?.embedding || {};
   const llmProvider = data.values?.llm?.provider || 'ollama';
+  // The chat connection's mode as in force, `auto` resolved to its detection.
+  const llmCompatMode = effectiveCompatMode(form.llm.compatibleMode, data.llm?.compatDetection?.primary);
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
   // Embedding-capable subset, not the full LLM list: deepseek, gateway and
   // anthropic have no embeddings endpoint (#493, #522).
-  const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+  const embedProviders = data.embedding?.providers || [...EMBEDDING_PROVIDER_IDS];
   // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
@@ -351,11 +330,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           )}
           <div className="field">
             <Label>Provider</Label>
-            <EmbeddingProviderSelector
+            <ProviderPicker
               // A blank stored provider resolves to the DJ's provider, so the
               // grid always shows an explicit selection (no "Follow LLM" card).
               value={effectiveProvider}
+              // The embedding-capable ids, possibly with a stale explicit choice
+              // prepended.
               providerIds={providers}
+              label="Embedding provider"
               env={data.env}
               onChange={v =>
                 setForm(f => ({ ...f, embedding: { ...f.embedding, provider: v } }))
@@ -485,7 +467,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                {effectiveProvider === 'openai-compatible' && form.llm.compatibleMode === 'hosted'
+                {effectiveProvider === 'openai-compatible' && llmCompatMode === 'hosted'
                   ? <>Leave blank to use the chat service&apos;s embedding endpoint. For Azure, enter a different resource URL ending in <code>/openai/v1</code> only when embeddings live on another resource. Enter the embedding deployment name above. </>
                   : <>Embeddings need a <strong>dedicated</strong> server when a local chat server cannot embed. </>}
                 {effectiveProvider === 'locca' ? (
@@ -495,7 +477,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     with <code>locca embed nomic</code>. Override only for a
                     non-default port or remote host.
                   </>
-                ) : form.llm.compatibleMode === 'hosted' ? null : (
+                ) : llmCompatMode === 'hosted' ? null : (
                   <>
                     Leave blank only if this server itself does embeddings;
                     otherwise run a separate embedding server (

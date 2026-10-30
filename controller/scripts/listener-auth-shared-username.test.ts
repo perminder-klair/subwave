@@ -10,7 +10,7 @@
 // and 200/200/200 with it; an iOS-style range probe followed by the real
 // request hung 4 times in 10 without it and 0 in 150 with it.
 //
-// Run: npx tsx scripts/listener-auth-shared-username.test.ts (auto-discovered by npm test).
+// Run: `npm test -- listener-auth-shared-username`.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

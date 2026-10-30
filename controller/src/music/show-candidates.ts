@@ -6,7 +6,7 @@ import { applyKnownTrackCeiling } from './track-duration.js';
 import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 
-export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; vocalRanges?: unknown[] | null; duration?: number | null; durationSec?: number | null };
+export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; vocalRanges?: unknown[] | null; vocalRangesInvalid?: boolean; duration?: number | null; durationSec?: number | null };
 type Locks = { genres: string[]; eras: Array<{ fromYear?: number | null; toYear?: number | null }>; moods: string[]; energies: string[]; vocals: VocalMode | null };
 export interface ShowCandidateDiagnostic { strict: boolean; library: { indexed: number; matchingFilters: number; afterExclusions: number; effective: number }; playlist: null | { total: number; matchingFilters: number; afterExclusions: number; effective: number }; warnings: string[] }
 export type CandidateCoverage = { mood: boolean; energy: boolean; vocal: boolean };
@@ -15,7 +15,9 @@ function hasMusicFilter(show: any): boolean { return !!(show?.genres?.length || 
 function filtered(rows: Candidate[], locks: Locks): Candidate[] { return applyStrictLocks(rows, locks, { starve: true }); }
 function exclude(rows: Candidate[], ids: Set<string> | null): Candidate[] { return ids?.size ? rows.filter(row => row.id && !ids.has(row.id)) : rows; }
 
-export function candidateCoverage(rows: Candidate[]): CandidateCoverage {
+// Typed by the four fields it reads, so a row from any source (the journey
+// destination's included) can ask without being a full Candidate.
+export function candidateCoverage<T extends Pick<Candidate, 'moods' | 'audioMoods' | 'energy' | 'vocalRanges'>>(rows: readonly T[]): CandidateCoverage {
   let mood = false;
   let energy = false;
   let vocal = false;

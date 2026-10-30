@@ -14,16 +14,15 @@ import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect, JingleRotateOwner, GeminiSafety } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner, JinglePlacement, GeminiSafety } from '../../../lib/schemas.generated';
+import { LLM_PROVIDER_CATALOG } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'sk-ant-...',
-  OPENAI_API_KEY: 'sk-...',
-  GOOGLE_GENERATIVE_AI_API_KEY: 'AIza...',
-  DEEPSEEK_API_KEY: 'sk-...',
-  OPENROUTER_API_KEY: 'sk-or-v1-...',
-  AI_GATEWAY_API_KEY: 'gateway API key',
+  // The LLM providers' key fields, from the provider catalogue.
+  ...Object.fromEntries(
+    LLM_PROVIDER_CATALOG.flatMap(p => (p.envVar && p.keyPlaceholder ? [[p.envVar, p.keyPlaceholder]] : [])),
+  ),
   ELEVENLABS_API_KEY: 'el_...',
   // Fish keys have no documented prefix — point at where to mint one instead.
   FISH_API_KEY: 'key from fish.audio/app/api-keys',
@@ -76,6 +75,7 @@ export interface TtsForm {
   // false = music only: no script is generated at all. Jingles are unaffected
   // (jingleRatio owns those) and manual segment triggers still fire.
   enabled: boolean;
+  voiceLevelling: boolean;
   defaultEngine: string;
   // Operator-chosen rescue voice. When on, this engine AND voice speaks for a
   // persona whose own engine is unavailable or fails mid-render, ahead of the
@@ -138,10 +138,18 @@ export interface LlmFallbackForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
+  // Per-leg, like the primary's: a swap moves it between the legs.
+  toolChoice: string;
   discoverySteps: number;
   geminiSafety: GeminiSafety;
+}
+
+export interface CompatDetectionView {
+  mode: 'local' | 'hosted' | null;
+  server: string | null;
+  evidence: string;
 }
 
 export interface LlmForm {
@@ -152,12 +160,19 @@ export interface LlmForm {
   repeatPenalty: number;
   providerBaseUrls: Record<string, string>;
   headers: LlmHeaderRow[];
-  compatibleMode: 'local' | 'hosted';
+  compatibleMode: 'local' | 'hosted' | 'auto';
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
+  trackSelection: 'agentic' | 'shortlist';
+  shortlistPasses: number;
+  shortlistSearchPreparation: boolean;
+  guestMusicalLeanings: boolean;
+  requestMatching: 'agentic' | 'direct';
+  segmentRuntime: 'agentic' | 'direct';
   noRepeatWindow: string;
   artistVarietyWindow: string;
+  genreVarietyWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
@@ -249,6 +264,13 @@ export interface LikesForm {
   windowDays: string;
 }
 
+/** The listener Lyrics panel — `settings.lyrics`. */
+export interface LyricsForm {
+  enabled: boolean;
+  /** Look up synced lyrics on LRCLIB for tracks the music server has untimed. */
+  lrclib: boolean;
+}
+
 export interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -282,6 +304,7 @@ export interface LoudnessForm {
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  equalPowerCrossfade: boolean;  // plain crossfade curve: false = linear, true = equal-power (mixer restart)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
   /** settings.transitions.effects — which gestures the DJ may reach for. Always
@@ -383,6 +406,7 @@ export interface FormState {
   scrobble: ScrobbleForm;
   privacy: PrivacyForm;
   likes: LikesForm;
+  lyrics: LyricsForm;
   requests: RequestsForm;
 }
 
@@ -398,6 +422,7 @@ export interface JingleEntry {
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
+    jinglePlacement?: JinglePlacement;
     /** Who counts the tracks between jingles (#1619). Absent on an older
      *  controller, which is the same thing as 'mixer'. The union comes from the
      *  mirrored schema rather than being respelled here, so a value added to it
@@ -416,6 +441,7 @@ export interface SettingsData {
     transitions?: {
       pairDrain?: boolean;
       stemBlends?: boolean;
+      equalPowerCrossfade?: boolean;
       effects?: Partial<Record<TransitionEffect, boolean>>;
     };
     audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
@@ -464,6 +490,7 @@ export interface SettingsData {
     };
     tts?: {
       enabled?: boolean;
+      voiceLevelling?: boolean;
       defaultEngine?: string;
       fallback?: Partial<TtsFallbackForm>;
       kokoro?: { voice?: string; lang?: string };
@@ -538,6 +565,10 @@ export interface SettingsData {
       maxTracks?: number;
       windowDays?: number;
     };
+    lyrics?: {
+      enabled?: boolean;
+      lrclib?: boolean;
+    };
   };
   tts?: {
     engines?: string[];
@@ -557,6 +588,11 @@ export interface SettingsData {
   llm?: {
     providers?: string[];
     active?: string;
+    // What an `auto` connection mode resolved to, per leg; null until probed.
+    compatDetection?: {
+      primary?: CompatDetectionView | null;
+      fallback?: CompatDetectionView | null;
+    };
   };
   embedding?: {
     providers?: string[];
@@ -608,6 +644,23 @@ export type FormUpdater = (updater: (f: FormState) => FormState) => void;
  * mirror exists to prevent.
  */
 export type SettingsFieldErrors = Record<string, string>;
+
+/**
+ * The red "… now" block that opens a section's main card: what the station is
+ * running right now, from the SAVED config, so an unsaved edit below it never
+ * reads as live. LLM provider, TTS voice and Music selection all lead with one.
+ */
+export function NowBanner({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2.5 border border-[var(--accent)] bg-[var(--ink-softer)] p-3">
+      <span className="mt-1 size-1.5 flex-none rounded-full bg-vermilion" />
+      <div className="grid min-w-0 gap-0.5">
+        <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">{label}</span>
+        <span className="text-[14px] leading-[1.5] text-muted">{children}</span>
+      </div>
+    </div>
+  );
+}
 
 export interface SectionProps {
   data: SettingsData;

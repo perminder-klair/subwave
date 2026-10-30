@@ -1,7 +1,7 @@
 // Three mixer-side seam rules in radio.liq's dj_transition, pinned as source
 // shapes because none of them is visible to a controller test and the renders
 // that prove them need Docker (`scripts/fx-render-test.sh loopgaps |
-// jingleseam`, plus the chop level tables in liquidsoap/CLAUDE.md).
+// jingleseam`, plus the chop level tables in radio.liq's chop comment).
 //
 //   1. JINGLE SEAMS. The rotate and jingle_now sit upstream of cross, so on
 //      A -> J -> B the J -> B seam reads B's entry flag, which was validated for
@@ -43,6 +43,12 @@ function armingLine(flag: string): string {
   return line;
 }
 
+test('a jingle\'s seam is a sequence, never the blend', () => {
+  assert.match(radio, /^ {2}jingle_in = b\.metadata\["subwave_jingle"\] == "true"$/m, 'the seam reads the INCOMING side too');
+  assert.match(radio, /if jingle_in or jingle_out then\s+\(sequence\(\[\(if jingle_out then a\.source else a_source end\), b\.source\]\) : source\)/,
+    'either side being a jingle takes the dry seam, and an outgoing jingle is not faded');
+});
+
 test('every incoming-side gesture stands down on a jingle\'s seam', () => {
   assert.match(radio, /^ {2}jingle_out = a\.metadata\["subwave_jingle"\] == "true"$/m,
     'the guard reads the OUTGOING track');
@@ -58,15 +64,18 @@ test('every incoming-side gesture stands down on a jingle\'s seam', () => {
 });
 
 test('both jingle sources carry the mark the guard reads', () => {
-  const mark = 'metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], ';
   // The automatic rotate's playlist, and jingle_now — the path every jingle
   // takes when the controller owns the rotate (#1619).
-  assert.ok(radio.includes(`jingles = ${mark}jingles)`), 'the rotate\'s jingles are marked');
-  assert.ok(radio.includes(`jingle_now = ${mark}jingle_now)`), 'on-demand jingles are marked');
-  // Marked AFTER the source.available gate wraps them and BEFORE either joins
-  // the music chain, so the mark rides every jingle that reaches cross.
-  assert.ok(radio.indexOf(`jingles = ${mark}jingles)`) < radio.indexOf('rotate(weights=[1, jingle_ratio()], [jingles, music])'));
-  assert.ok(radio.indexOf(`jingle_now = ${mark}jingle_now)`) < radio.indexOf('[jingle_now, music]'));
+  const rotateMark = radio.search(/jingles = metadata\.map\(\s*update=true,\s*fun \(_\) -> \[\("subwave_jingle", "true"\)/);
+  const nowMark = radio.indexOf('jingle_now = metadata.map(update=true, fun (_) -> [("subwave_jingle", "true")], jingle_now_queue)');
+  assert.ok(rotateMark > 0, 'the rotate\'s jingles are marked');
+  assert.ok(nowMark > 0, 'on-demand jingles are marked');
+  // Marked AFTER the rotate's availability gate wraps its playlist, and BEFORE
+  // either joins the music chain, so the mark rides every jingle that reaches
+  // cross. A press is gated by the switch's own predicate, below its mark.
+  assert.ok(rotateMark > radio.indexOf('jingles = source.available(jingles,'));
+  assert.ok(rotateMark < radio.indexOf('rotate(weights=[1, jingle_ratio()], [jingles, music])'));
+  assert.ok(nowMark < radio.indexOf('id="music_with_jingle_now"'));
 });
 
 for (const [name, body] of [['liquidsoap/radio.liq', radio], ['scripts/fx-render-test.sh', harness]] as const) {

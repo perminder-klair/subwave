@@ -2,6 +2,7 @@
 // ONE shared client address, the shape of a station behind an edge that hides
 // client addresses — where a per-address lock is a station-wide one.
 import assert from 'node:assert/strict';
+import { runMiddleware } from './test-utils/middleware.js';
 import test, { beforeEach } from 'node:test';
 
 process.env.ADMIN_USER = 'test-admin';
@@ -19,16 +20,10 @@ function call(opts: { auth?: string; ip?: string; cookie?: string } = {}): Outco
   if (opts.auth) headers.authorization = opts.auth;
   if (opts.cookie) headers.cookie = opts.cookie;
   const req = { headers, socket: { remoteAddress: '127.0.0.1' }, secure: false };
-  let status = 200;
-  let cookie: string | undefined;
-  const res = {
-    setHeader() {},
-    append(name: string, value: string) { if (name === 'Set-Cookie') cookie = value.split(';')[0]; },
-    status(code: number) { status = code; return { json() {} }; },
-  };
-  let passed = false;
-  requireAdmin(req, res, () => { passed = true; });
-  return { status: passed ? 200 : status, cookie };
+  const out = runMiddleware(requireAdmin, req);
+  const header = out.headers['set-cookie'];
+  const cookie = typeof header === 'string' ? header.split(';')[0] : undefined;
+  return { status: out.nextCalled ? 200 : out.status!, cookie };
 }
 
 function signIn(): string {

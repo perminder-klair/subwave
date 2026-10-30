@@ -57,7 +57,7 @@ const DEPARTMENTS = [
     dept: 'System',
     title: 'Health and diagnostics.',
     body:
-      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, streams) and a danger zone that starts, stops, and restarts the broadcast.',
+      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, streams) and a Broadcast & mixer panel that starts, stops, and restarts the stream.',
   },
 ];
 

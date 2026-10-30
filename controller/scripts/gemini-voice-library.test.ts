@@ -41,6 +41,7 @@ test('the 30 featured studio voices are unaffected by the library index', async 
   // Canonical casing is preserved for the featured set, so existing personas
   // keep the exact string they were saved with.
   assert.equal(usableVoice('kore'), 'Kore');
+  assert.equal(usableVoice('  PUCK '), 'Puck');
 });
 
 // ── Custom ids still pass through unvalidated ────────────────────────────────
@@ -64,19 +65,6 @@ test('an unknown voice is rejected even when it is perfectly well shaped', async
   assert.equal(usableVoice(''), undefined);
   assert.equal(usableVoice(null), undefined);
   assert.equal(usableVoice(undefined), undefined);
-});
-
-test('membership is case-insensitive and accepts the id or the display name', async () => {
-  _resetLibraryIndex();
-  // Both forms are real: the engine takes `Varo` AND `en-us-varo`, and the
-  // picker shows the name while the wire wants the id. Verified against the
-  // live API — a nonsense name 400s while both of these synthesise.
-  const src = await import('node:fs').then(fs =>
-    fs.readFileSync(new URL('../src/audio/gemini-library.ts', import.meta.url), 'utf8'));
-  assert.match(src, /if \(v\.id\) known\.add\(v\.id\.toLowerCase\(\)\)/,
-    'the id must be indexed');
-  assert.match(src, /if \(v\.name\) known\.add\(v\.name\.toLowerCase\(\)\)/,
-    'the display name must be indexed too');
 });
 
 // ── libraryLanguage: a shape rule, never a list ─────────────────────────────
@@ -132,19 +120,7 @@ test('facets tolerate rows missing every optional field', () => {
   assert.deepEqual(f.genders, []);
 });
 
-// ── Save is looser than speak, deliberately ─────────────────────────────────
-test('save accepts an unseen library-shaped id; speak still rejects it', async () => {
-  _resetLibraryIndex();
-  const { usableVoice } = await import('../src/audio/gemini.js');
-  const v = 'en-au-newscaster-7';
-  // The save-time rule: a cold index must not stop an operator saving a real
-  // voice they just browsed to.
-  assert.equal(looksLikeLibraryId(v), true);
-  // The speak-time rule: unseen, so it degrades to the station voice rather
-  // than 400-ing the segment. This is the asymmetry, asserted.
-  assert.equal(usableVoice(v), undefined);
-});
-
+// ── Library ids are distinct from featured and custom ids ───────────────────
 test('looksLikeLibraryId does not admit the featured ids or custom ids', () => {
   // Featured ids are bare, with no hyphen.
   assert.equal(looksLikeLibraryId('kore'), false);
@@ -204,27 +180,21 @@ const CATALOGUE = {
  *  which is evaluated before the async fetch inside `fn` has pushed anything —
  *  so the assertion read an empty query and passed/failed for the wrong reason. */
 async function withStubbedCatalogue<T>(
-  body: unknown,
+  body: Record<string, unknown> | typeof fetch,
   fn: (seen: URLSearchParams[]) => Promise<T>,
   status = 200,
+  key: string | null = 'stub-key-for-voice-list-tests',
 ): Promise<T> {
   const realFetch = globalThis.fetch;
   const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   const seen: URLSearchParams[] = [];
-  globalThis.fetch = (async (input: any) => {
-    seen.push(new URL(String(input)).searchParams);
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    } as unknown as Response;
-  }) as typeof fetch;
-  // Deliberately NOT key-shaped. `apiKey()` only checks that the variable is
-  // non-empty, so any string works — and a realistic-looking `AIza…` literal in
-  // source makes every secret scanner in the pipeline fire and forces a human
-  // to adjudicate whether it is real.
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-voice-list-tests';
+  globalThis.fetch = async (input, init) => {
+    seen.push(new URL(input instanceof Request ? input.url : String(input)).searchParams);
+    if (typeof body === 'function') return body(input, init);
+    return new Response(JSON.stringify(body), { status });
+  };
+  if (key === null) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
+  else process.env.GOOGLE_GENERATIVE_AI_API_KEY = key;
   try {
     return await fn(seen);
   } finally {
@@ -248,6 +218,7 @@ test('a library voice Google served becomes usable; an unserved one does not', a
 
   // The whole point: serving them is what makes them usable.
   assert.equal(usableVoice('Varo'), 'Varo');
+  assert.equal(usableVoice('varo'), 'varo', 'served names resolve case-insensitively');
   assert.equal(usableVoice('en-us-varo'), 'en-us-varo');
   assert.equal(usableVoice('en-au-advisor-1'), 'en-au-advisor-1');
   assert.equal(usableVoice('Authoritative Advisor 1'), 'Authoritative Advisor 1');
@@ -308,20 +279,14 @@ test('an unreachable Google is a normal answer, never a throw', async () => {
 test('a missing key reports instead of calling out', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   _resetLibraryIndex();
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   let called = false;
-  globalThis.fetch = (async () => { called = true; throw new Error('must not fetch'); }) as typeof fetch;
-  delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  try {
+  const handler: typeof fetch = (async () => { called = true; throw new Error('must not fetch'); });
+  await withStubbedCatalogue(handler, async () => {
     const page = await lib.listLibraryVoices({});
     assert.equal(page.ok, false);
     assert.match(String(page.message), /key not set/i);
     assert.equal(called, false, 'no network call without a key');
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey !== undefined) process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  }, 200, null);
 });
 
 // ── The facet vocabulary ────────────────────────────────────────────────────
@@ -376,10 +341,8 @@ test('facets are published only after a COMPLETE walk', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
 
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   let call_ = 0;
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     // page 1 OK with "Sydney English"; page 2 FAILS.
     if (call_++ === 0) {
       return {
@@ -389,15 +352,10 @@ test('facets are published only after a COMPLETE walk', async () => {
       } as unknown as Response;
     }
     return { ok: false, status: 503, json: async () => ({}), text: async () => 'boom' } as unknown as Response;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
-  try {
+  });
+  await withStubbedCatalogue(handler, async () => {
     await lib.prewarm({ force: true });
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 
   const f = lib.catalogueFacets();
   assert.equal(f.ready, false,
@@ -417,12 +375,10 @@ test('a walk stopped at the page cap does NOT publish facets as if complete', as
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
 
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   let call_ = 0;
   // Every page succeeds and every page hands back another token, so the walk
   // runs until the cap rather than finishing or failing.
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     call_ += 1;
     return {
       ok: true, status: 200,
@@ -433,15 +389,10 @@ test('a walk stopped at the page cap does NOT publish facets as if complete', as
       }),
       text: async () => '{}',
     } as unknown as Response;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-cap-tests';
-  try {
+  });
+  await withStubbedCatalogue(handler, async () => {
     await lib.prewarm({ force: true });
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 
   const f = lib.catalogueFacets();
   assert.equal(f.ready, false, 'a capped walk is incomplete and must not publish');
@@ -459,25 +410,18 @@ test('an upstream timeout degrades to the unavailable envelope, it does not reje
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
 
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     const e = new Error('The operation was aborted');
     e.name = 'AbortError';
     throw e;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-timeout-tests';
-  try {
+  });
+  await withStubbedCatalogue(handler, async () => {
     // No caller signal: this is the module's own timeout, and it must resolve.
     const page = await lib.listLibraryVoices({});
     assert.equal(page.ok, false, 'a timeout is an unavailable library, not a thrown error');
     assert.deepEqual(page.voices, []);
     assert.ok(page.message, 'and it carries a message the UI can show');
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 });
 
 test('a genuine caller cancellation still propagates', async () => {
@@ -488,27 +432,20 @@ test('a genuine caller cancellation still propagates', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
 
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     const e = new Error('The operation was aborted');
     e.name = 'AbortError';
     throw e;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-cancel-tests';
+  });
   const ac = new AbortController();
   ac.abort();
-  try {
+  await withStubbedCatalogue(handler, async () => {
     await assert.rejects(
       () => lib.listLibraryVoices({ signal: ac.signal }),
       (err: unknown) => (err as { name?: string }).name === 'AbortError',
       'a caller abort must still reject so the query can settle',
     );
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 });
 
 test('the catalogue walk accumulates facets across pages', async () => {
@@ -520,21 +457,14 @@ test('the catalogue walk accumulates facets across pages', async () => {
   const p1 = { voices: [{ id: 'a', display_name: 'A', language_code: 'en-US', accent: 'General American', gender: 'male', pitch: 'high' }], next_page_token: 'p2' };
   const p2 = { voices: [{ id: 'b', display_name: 'B', language_code: 'en-AU', accent: 'Sydney English', gender: 'female', pitch: 'low' }] };
 
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   let call_ = 0;
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     const body = call_++ === 0 ? p1 : p2;
     return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) } as unknown as Response;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
-  try {
+  });
+  await withStubbedCatalogue(handler, async () => {
     await lib.prewarm({ force: true });
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 
   const f = lib.catalogueFacets();
   assert.equal(f.ready, true);
@@ -548,30 +478,23 @@ test('the catalogue walk accumulates facets across pages', async () => {
 test('ensureFacets returns the catalogue vocabulary without a second walk', async () => {
   const lib = await import('../src/audio/gemini-library.js');
   lib._resetLibraryIndex();
-  const realFetch = globalThis.fetch;
-  const realKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
   let requests = 0;
-  globalThis.fetch = (async () => {
+  const handler: typeof fetch = (async () => {
     requests++;
     return {
       ok: true, status: 200,
       json: async () => ({ voices: [{ id: 'a', display_name: 'A', accent: 'Sydney English', language_code: 'en-AU', gender: 'male', pitch: 'low' }] }),
       text: async () => '{}',
     } as unknown as Response;
-  }) as typeof fetch;
-  process.env.GOOGLE_GENERATIVE_AI_API_KEY = 'stub-key-for-facet-tests';
-  try {
+  });
+  await withStubbedCatalogue(handler, async () => {
     const first = await lib.ensureFacets();
     assert.equal(first.ready, true);
     assert.deepEqual(first.accents, ['Sydney English']);
     const after = requests;
     await lib.ensureFacets();
     assert.equal(requests, after, 'a warm cache must not re-walk the catalogue');
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realKey === undefined) delete process.env.GOOGLE_GENERATIVE_AI_API_KEY;
-    else process.env.GOOGLE_GENERATIVE_AI_API_KEY = realKey;
-  }
+  });
 });
 
 test('the route serves the catalogue vocabulary, not the page it returned', async () => {

@@ -56,8 +56,8 @@ function activeEpisode(now = new Date()) {
   return { show, sess };
 }
 
-// scheduler.skillsTick stands down on this so the generic segment director
-// doesn't compete with the planned beats.
+// The scheduler's segment row (segmentEligible) stands down on this so the
+// generic segment director doesn't compete with the planned beats.
 export function onAir(now = new Date()): boolean {
   return !!activeEpisode(now);
 }

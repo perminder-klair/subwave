@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -17,9 +18,18 @@ import {
   resolveAppearance,
   type Theme,
 } from '@/lib/theme';
+import { pollWhileVisible } from '@/lib/poll';
 // The theme registry belongs to *this* deployment, so it always goes through the
 // same-origin default client, never a showcase station's origin.
 import { defaultStationClient } from '@/lib/stationClient';
+
+/** Keep the previous value when the poll brings back the same content, so an
+ *  unchanged registry doesn't hand every consumer (the whole skin, via
+ *  PlayerShell) a new context value every 30 s. */
+function sameJson<T>(next: T): (prev: T) => T {
+  const nextJson = JSON.stringify(next);
+  return prev => (JSON.stringify(prev) === nextJson ? prev : next);
+}
 
 interface ThemeContextValue {
   /** Every theme the controller knows about (built-ins + state/themes/*.json). */
@@ -35,8 +45,8 @@ interface ThemeContextValue {
   activeShow: { id: string; name: string; themeId: string } | null;
   /** Per-browser override id, or null when none is set. */
   overrideId: string | null;
-  /** Override if set and still in the registry, else the station's — what the
-   *  picker highlights. */
+  /** The theme on screen: the override if still in the registry, else the
+   *  station's, else the registry's first — what the picker highlights. */
   effectiveId: string | null;
   /** Save or clear the override and re-apply immediately. null clears it. */
   setOverride: (id: string | null) => void;
@@ -80,8 +90,7 @@ export default function ThemeProvider({ children }: { children?: ReactNode }) {
   const applyEffective = useCallback(
     (registry: Theme[], stationId: string | null, override: string | null) => {
       const resolved = resolveAppearance(registry, stationId, override);
-      applyAppearance(resolved);
-      cacheAppearance(resolved);
+      if (applyAppearance(resolved)) cacheAppearance(resolved);
     },
     [],
   );
@@ -101,23 +110,20 @@ export default function ThemeProvider({ children }: { children?: ReactNode }) {
     try {
       const j = await defaultStationClient.themes();
       if (goneRef.current) return;
-      setThemes(j.themes);
+      setThemes(sameJson(j.themes));
       setStationActiveId(j.active);
       // Absent on an older controller, which reads as "no provenance to show".
       setActiveSource(j.activeSource ?? null);
       setStationDefault(j.stationDefault ?? null);
-      setActiveShow(j.activeShow ?? null);
+      setActiveShow(sameJson(j.activeShow ?? null));
       applyEffective(j.themes, j.active, overrideRef.current);
     } catch {
       // Network blip — keep the existing CSS variables for the next poll.
     }
   }, [applyEffective]);
 
-  useEffect(() => {
-    refreshThemes();
-    const id = setInterval(refreshThemes, 30_000);
-    return () => clearInterval(id);
-  }, [refreshThemes]);
+  // Paused while the tab is hidden; a return to it refetches at once.
+  useEffect(() => pollWhileVisible(() => { void refreshThemes(); }, 30_000), [refreshThemes]);
 
   // Applies without waiting for the next poll.
   const setOverride = useCallback(
@@ -130,26 +136,26 @@ export default function ThemeProvider({ children }: { children?: ReactNode }) {
     [applyEffective, stationActiveId],
   );
 
-  // Mirrors resolveAppearance's palette precedence so consumers don't
-  // re-implement it.
-  const effectiveId =
-    (overrideId && themes.some(t => t.id === overrideId) ? overrideId : stationActiveId) ?? null;
+  // The theme actually painted, read through resolveAppearance itself so
+  // consumers don't re-implement its precedence. That includes its last resort:
+  // a station id the registry no longer has (a deleted theme) paints the first
+  // theme, and the picker must mark that one rather than nothing.
+  const effectiveId = resolveAppearance(themes, stationActiveId, overrideId).theme?.id ?? null;
 
-  return (
-    <ThemeContext.Provider
-      value={{
-        themes,
-        stationActiveId,
-        activeSource,
-        stationDefault,
-        activeShow,
-        overrideId,
-        effectiveId,
-        setOverride,
-        refreshThemes,
-      }}
-    >
-      {children}
-    </ThemeContext.Provider>
+  const value = useMemo<ThemeContextValue>(
+    () => ({
+      themes,
+      stationActiveId,
+      activeSource,
+      stationDefault,
+      activeShow,
+      overrideId,
+      effectiveId,
+      setOverride,
+      refreshThemes,
+    }),
+    [themes, stationActiveId, activeSource, stationDefault, activeShow, overrideId, effectiveId, setOverride, refreshThemes],
   );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }

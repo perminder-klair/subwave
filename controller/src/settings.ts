@@ -37,6 +37,7 @@ import {
   DJ_HOUSE_RULES_MAX,
   DJ_PROMPT_LIMIT,
   DjPromptEntry,
+  EMBEDDING_API_KEY_MAX,
   FESTIVAL_DEFAULTS,
   KOKORO_LANGS,
   KOKORO_LANG_RE,
@@ -64,7 +65,7 @@ import {
   clampMaxOutputTokens,
   clampDiscoverySteps,
   clampNoRepeatWindow,
-  clampArtistVarietyWindow,
+  clampVarietyWindow,
   clampNumCtx,
   clampRepeatPenalty,
   clampTtsGain,
@@ -108,6 +109,7 @@ import {
   DJ_RECAP_MINUTES_BOUNDS,
   PAUSE_TALK_MIN_SECONDS_BOUNDS,
   PICKER_ALBUM_HOURS_BOUNDS,
+  SHORTLIST_PASSES_BOUNDS,
   STREAM_BUFFER_SECONDS_BOUNDS,
   STREAM_COUNTRY_HEADER_RE,
   STREAM_GEOIP_DB_PATH_MAX,
@@ -115,10 +117,12 @@ import {
   maxTrackSecondsValueSchema,
   isGeminiLibraryLanguage,
   normalizeGeminiLibraryLanguage,
+  ttsVoiceLevellingSchema,
   type ScheduledBackupSettings,
   type JingleRotateOwner,
+  type TtsPatch,
 } from './schemas/settings.js';
-import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { jinglePlacement, jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -263,6 +267,9 @@ export {
   resolveActiveShow,
   resolveOnAirLocation,
   resolvePersonaById,
+  resolveShowById,
+  spokenContext,
+  spokenOnAirLocation,
   spokenProperNounDirective,
 } from './settings/persona.js';
 export { writeLiquidsoapSettings } from './settings/liquidsoap.js';
@@ -323,6 +330,35 @@ const parsedIntIn = (
   return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : def;
 };
 
+// Unlike Agentic discoverySteps, zero has no useful meaning for controller-led
+// shortlist construction: one pass is the smallest real shortlist.
+const clampShortlistPasses = (v: unknown, def: number) => intIn(v, def, SHORTLIST_PASSES_BOUNDS.min, SHORTLIST_PASSES_BOUNDS.max);
+
+// The three route choices that replaced the single legacy `pickerAgent`
+// toggle. Anything else stored under these keys is treated as ABSENT rather
+// than as a choice, so a hand-edited or truncated value falls back to the
+// legacy toggle exactly as a missing one does.
+// compatibleMode as loaded. A valid stored value wins; a stored block that
+// lacks the key was written before 'auto' existed, so it keeps 'local' and an
+// upgraded station is driven exactly as before; no block at all is a new
+// station, which takes the default.
+const storedCompatibleMode = (v: unknown, blockStored: boolean, fallback: 'local' | 'hosted' | 'auto'): 'local' | 'hosted' | 'auto' =>
+  v === 'local' || v === 'hosted' || v === 'auto' ? v : blockStored ? 'local' : fallback;
+
+const storedTrackSelection = (v: unknown): 'agentic' | 'shortlist' | undefined =>
+  v === 'agentic' || v === 'shortlist' ? v : undefined;
+const storedRuntime = (v: unknown): 'agentic' | 'direct' | undefined =>
+  v === 'agentic' || v === 'direct' ? v : undefined;
+
+// The one upgrade that is not byte-identical (#1687): a station still carrying
+// the retired Candidate Pool toggle and no route of its own is moved to Track
+// Shortlist by load(). Remembered so the operator is TOLD — in the booth at boot
+// and in DJ Doc — until a save writes the route down and the note retires.
+let candidatePoolMigrated = false;
+export function migratedFromCandidatePool(): boolean {
+  return candidatePoolMigrated;
+}
+
 export async function load() {
   const cached = peek();
   if (cached) return cached;
@@ -350,6 +386,9 @@ export async function load() {
       }
     } catch {}
   }
+
+  candidatePoolMigrated = stored.llm?.pickerAgent === false
+    && storedTrackSelection(stored.llm?.trackSelection) === undefined;
 
   // ── personas ──────────────────────────────────────────────────────────────
   // No valid persona roster in settings.json (fresh install) → ship the seed
@@ -435,7 +474,8 @@ export async function load() {
     // Repaired, never trusted: a hand-edited settings.json is load()'s input
     // and an unrecognised owner here would decide whether TWO rotates run.
     // Anything but the explicit opt-in reads as the mixer (#1619).
-    jingleRotate: jingleRotateOwner(stored),
+    jingleRotate: jingleRotateOwner({ jingleRotate: stored.jingleRotate }),
+    jinglePlacement: jinglePlacement(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
     // Bounded here as well as at the save path: a hand-edited settings.json is
     // load()'s input, so it repairs rather than throws — and an out-of-range `p`
@@ -766,6 +806,7 @@ export async function load() {
     schedule,
     scheduleOverride,
     tts: {
+      voiceLevelling: ttsVoiceLevellingSchema.catch(DEFAULTS.tts.voiceLevelling).parse(stored.tts?.voiceLevelling),
       // Station-wide voice switch. Coerce missing/non-boolean (every settings.json
       // written before this key existed) to the default `true`, so an upgrade is
       // byte-identical. See DEFAULTS.tts.enabled.
@@ -968,7 +1009,10 @@ export async function load() {
       // settings.json written before the field existed loads as {}, which sends
       // no extra headers at all.
       headers: normalizeLlmHeaders(stored.llm?.headers),
-      compatibleMode: stored.llm?.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.compatibleMode,
+      // A stored llm block without the key predates 'auto' and keeps the
+      // historical 'local'; only a station with no llm block yet gets the
+      // 'auto' default. Same rule for the fallback leg below.
+      compatibleMode: storedCompatibleMode(stored.llm?.compatibleMode, !!stored.llm, DEFAULTS.llm.compatibleMode),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -985,26 +1029,48 @@ export async function load() {
       // llama.cpp fell back to its own 1.0 default with nothing in the logs.
       repeatPenalty: clampRepeatPenalty(stored.llm?.repeatPenalty, DEFAULTS.llm.repeatPenalty),
       geminiSafety: normalizeGeminiSafety(stored.llm?.geminiSafety),
+      // `pickerAgent` is now derived, kept only so older API clients and the
+      // settings file still read a coherent value. Nothing on the pick path
+      // reads it: `trackSelection` is the route.
       pickerAgent:
-        typeof stored.llm?.pickerAgent === 'boolean'
-          ? stored.llm.pickerAgent
-          : DEFAULTS.llm.pickerAgent,
+        (storedTrackSelection(stored.llm?.trackSelection)
+          ?? (stored.llm?.pickerAgent === false ? 'shortlist' : DEFAULTS.llm.trackSelection)) === 'agentic',
+      // The one deliberate exception to "absent settings keep the pre-existing
+      // behaviour" (#1687, signed off by the maintainer): `pickerAgent: false`
+      // was the retired Candidate Pool setting, a controller-led pool plus one
+      // final model choice, so those stations move to its named replacement
+      // rather than presenting Agentic Tools while silently using the old
+      // fallback. An explicit stored `trackSelection` always wins.
+      trackSelection:
+        storedTrackSelection(stored.llm?.trackSelection)
+          ?? (stored.llm?.pickerAgent === false ? 'shortlist' : DEFAULTS.llm.trackSelection),
+      shortlistPasses: clampShortlistPasses(stored.llm?.shortlistPasses, DEFAULTS.llm.shortlistPasses),
+      shortlistSearchPreparation: stored.llm?.shortlistSearchPreparation === true,
       // A new explicit opt-in. Older settings files and malformed values remain
       // off, so guests never become an invisible source of editorial influence.
       guestMusicalLeanings:
         typeof stored.llm?.guestMusicalLeanings === 'boolean'
           ? stored.llm.guestMusicalLeanings
           : DEFAULTS.llm.guestMusicalLeanings,
+      // Before #1687 the legacy toggle also switched requests and segments, so a
+      // `pickerAgent: false` station without its own choice keeps both direct.
+      requestMatching:
+        storedRuntime(stored.llm?.requestMatching)
+          ?? (stored.llm?.pickerAgent === false ? 'direct' : DEFAULTS.llm.requestMatching),
+      segmentRuntime:
+        storedRuntime(stored.llm?.segmentRuntime)
+          ?? (stored.llm?.pickerAgent === false ? 'direct' : DEFAULTS.llm.segmentRuntime),
       // Clamped to [0, 1000] (≤ the 2500-entry sidecar cap); pre-field
       // settings.json picks up the config/env-seeded default.
       noRepeatWindow: clampNoRepeatWindow(stored.llm?.noRepeatWindow, DEFAULTS.llm.noRepeatWindow),
       // Clamped to [0, 25]; a settings.json written before the field existed
       // picks up the shipped default, so an upgrade turns spacing on rather
       // than silently keeping the on-air-only guard it was filed against.
-      artistVarietyWindow: clampArtistVarietyWindow(
+      artistVarietyWindow: clampVarietyWindow(
         stored.llm?.artistVarietyWindow,
         DEFAULTS.llm.artistVarietyWindow,
       ),
+      genreVarietyWindow: clampVarietyWindow(stored.llm?.genreVarietyWindow, DEFAULTS.llm.genreVarietyWindow),
       requestWebResolve:
         typeof stored.llm?.requestWebResolve === 'boolean'
           ? stored.llm.requestWebResolve
@@ -1055,7 +1121,7 @@ export async function load() {
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           headers: normalizeLlmHeaders(fb.headers),
-          compatibleMode: fb.compatibleMode === 'hosted' ? 'hosted' : DEFAULTS.llm.fallback.compatibleMode,
+          compatibleMode: storedCompatibleMode(fb.compatibleMode, !!stored.llm?.fallback, DEFAULTS.llm.fallback.compatibleMode),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -1175,6 +1241,7 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      equalPowerCrossfade: typeof stored.transitions?.equalPowerCrossfade === 'boolean' ? stored.transitions.equalPowerCrossfade : DEFAULTS.transitions.equalPowerCrossfade,
       // Per-effect kill switches (#1565) — same absent-means-default repair as
       // every sibling, and the default is `true`, so a stored block missing a
       // field (or missing entirely) normalises to the whole kit on.
@@ -1302,6 +1369,16 @@ export async function load() {
         ? Math.min(365, Math.max(0, Math.round(Number(stored.likes.windowDays))))
         : DEFAULTS.likes.windowDays,
     },
+    lyrics: {
+      enabled:
+        typeof stored.lyrics?.enabled === 'boolean'
+          ? stored.lyrics.enabled
+          : DEFAULTS.lyrics.enabled,
+      lrclib:
+        typeof stored.lyrics?.lrclib === 'boolean'
+          ? stored.lyrics.lrclib
+          : DEFAULTS.lyrics.lrclib,
+    },
   };
   setCache(loaded);
   if (typeof stored.timezone === 'string' && stored.timezone.trim() && !loaded.timezone) {
@@ -1311,7 +1388,7 @@ export async function load() {
   // Same shape, same reason (#1619): the queue subscribes to a real ownership
   // change so it can restart the rotate's boundary count, and it cannot be
   // called from here directly without closing a settings ↔ queue cycle.
-  setJingleRotateOwner(loaded.jingleRotate);
+  setJingleRotateOwner(jingleRotateOwner(loaded), loaded.jinglePlacement);
   return loaded;
 }
 
@@ -1344,6 +1421,13 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
     if (v !== cur.jingleRotate) {
       next.jingleRotate = v;
+      restart = true;
+    }
+  }
+  if ('jinglePlacement' in patch) {
+    const v = parseSettingsPatchKey<typeof cur.jinglePlacement>('jinglePlacement', patch.jinglePlacement);
+    if (v !== cur.jinglePlacement) {
+      next.jinglePlacement = v;
       restart = true;
     }
   }
@@ -1711,6 +1795,8 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
   }
   if ('tts' in patch) {
     const t = patch.tts || {};
+    const levelling = parseSettingsPatchKey<TtsPatch>('tts', t);
+    if (levelling.voiceLevelling !== undefined) next.tts.voiceLevelling = levelling.voiceLevelling;
     if (t.defaultEngine !== undefined) {
       if (!TTS_ENGINES.includes(t.defaultEngine)) {
         throw new Error(`tts.defaultEngine must be one of: ${TTS_ENGINES.join(', ')}`);
@@ -2039,19 +2125,46 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     // Route the primary inline key into keys[provider] AFTER the provider is
     // resolved, so it's stored under the identity it belongs to (issue #657).
     applyInlineKey(next.llm, next.llm.provider, l.apiKey);
-    if (l.pickerAgent !== undefined) {
+    if (l.pickerAgent !== undefined && l.trackSelection === undefined) {
       next.llm.pickerAgent = !!l.pickerAgent;
+      next.llm.trackSelection = next.llm.pickerAgent ? 'agentic' : 'shortlist';
+      // Preserve the legacy single-toggle behaviour for API callers and older
+      // admin builds that do not yet send the three independent choices. The
+      // toggle moved all three together, in BOTH directions: switching it back
+      // on must restore agentic requests and segments too.
+      const legacyRuntime = next.llm.pickerAgent ? 'agentic' : 'direct';
+      if (l.requestMatching === undefined) next.llm.requestMatching = legacyRuntime;
+      if (l.segmentRuntime === undefined) next.llm.segmentRuntime = legacyRuntime;
+    }
+    if (l.trackSelection !== undefined) {
+      next.llm.trackSelection = l.trackSelection === 'shortlist' ? 'shortlist' : 'agentic';
+      next.llm.pickerAgent = next.llm.trackSelection === 'agentic';
+    }
+    if (typeof l.shortlistSearchPreparation === 'boolean') {
+      next.llm.shortlistSearchPreparation = l.shortlistSearchPreparation;
+    }
+    if (l.shortlistPasses !== undefined) {
+      next.llm.shortlistPasses = clampShortlistPasses(Number(l.shortlistPasses), next.llm.shortlistPasses);
     }
     if (l.guestMusicalLeanings !== undefined) {
       next.llm.guestMusicalLeanings = !!l.guestMusicalLeanings;
+    }
+    if (l.requestMatching !== undefined) {
+      next.llm.requestMatching = l.requestMatching === 'direct' ? 'direct' : 'agentic';
+    }
+    if (l.segmentRuntime !== undefined) {
+      next.llm.segmentRuntime = l.segmentRuntime === 'direct' ? 'direct' : 'agentic';
     }
     if (l.noRepeatWindow !== undefined) {
       next.llm.noRepeatWindow = clampNoRepeatWindow(Number(l.noRepeatWindow), next.llm.noRepeatWindow);
     }
     if (l.artistVarietyWindow !== undefined) {
-      next.llm.artistVarietyWindow = clampArtistVarietyWindow(
+      next.llm.artistVarietyWindow = clampVarietyWindow(
         Number(l.artistVarietyWindow), next.llm.artistVarietyWindow,
       );
+    }
+    if (l.genreVarietyWindow !== undefined) {
+      next.llm.genreVarietyWindow = clampVarietyWindow(Number(l.genreVarietyWindow), next.llm.genreVarietyWindow);
     }
     if (l.requestWebResolve !== undefined) {
       next.llm.requestWebResolve = !!l.requestWebResolve;
@@ -2216,7 +2329,7 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     }
     if (e.apiKey !== undefined && e.apiKey !== 'set') {
       const v = String(e.apiKey).trim();
-      if (v.length > 200) throw new Error('embedding.apiKey must be 0-200 chars');
+      if (v.length > EMBEDDING_API_KEY_MAX) throw new Error(`embedding.apiKey must be 0-${EMBEDDING_API_KEY_MAX} chars`);
       next.embedding.apiKey = v;
     }
     if (e.headers !== undefined) {
@@ -2344,6 +2457,13 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
     for (const k of ['pairDrain', 'stemBlends'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
+    }
+    // Read once by the mixer at startup (liquidsoap_equal_power_crossfade.txt),
+    // so only an actual change costs a restart, as with crossfadeDuration: the
+    // admin form posts the whole block on every save.
+    if (tr.equalPowerCrossfade !== undefined && tr.equalPowerCrossfade !== cur.transitions.equalPowerCrossfade) {
+      next.transitions.equalPowerCrossfade = tr.equalPowerCrossfade as boolean;
+      restart = true;
     }
     // Nested block, so it needs its own per-field loop like scrobble.* does: the
     // flat copy above would replace the whole `effects` object, and a patch that
@@ -2534,6 +2654,11 @@ export async function prepareUpdate(patch, { themeIds }: { themeIds?: ReadonlySe
       if (lk[k] !== undefined) (next.likes as Record<string, unknown>)[k] = lk[k];
     }
   }
+  if ('lyrics' in patch) {
+    const ly = parseSettingsPatchKey<Record<string, unknown>>('lyrics', patch.lyrics);
+    if (ly.enabled !== undefined) next.lyrics.enabled = ly.enabled as boolean;
+    if (ly.lrclib !== undefined) next.lyrics.lrclib = ly.lrclib as boolean;
+  }
 
   // Post-patch integrity sweep — a personas/shows change in this patch may
   // have orphaned a show owner, a schedule slot, or the active persona.
@@ -2598,7 +2723,7 @@ export async function update(patch) {
   // Applied-on-save too, and unlike the zone this one DOES also need the mixer
   // restart the flag above raises — the counter reset is only the controller's
   // half (#1619).
-  setJingleRotateOwner(next.jingleRotate);
+  setJingleRotateOwner(jingleRotateOwner(next), next.jinglePlacement);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so
@@ -2610,6 +2735,9 @@ export async function update(patch) {
   // inline credential getRedacted() masks, in a state dir other accounts can
   // list. schedule.json holds none and keeps whatever mode it has.
   await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2), { mode: 0o600 });
+  // Every save writes the whole llm block, the derived trackSelection with it,
+  // so the Candidate Pool migration is now on disk as an ordinary choice.
+  candidatePoolMigrated = false;
   await writeFileAtomic(
     SCHEDULE_PATH,
     JSON.stringify(

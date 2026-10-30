@@ -15,7 +15,7 @@
 //      without the other trades a loud failure for a quiet wrong-accent one;
 //   2. legacy codes must canonicalise rather than vanish, so an operator who
 //      picked French before the fix still gets French after upgrading.
-// Run: `tsx scripts/kokoro-lang.test.ts`.
+// Run: `npm test -- kokoro-lang`.
 //
 // node:assert-via-tsx style, matching scripts/tts-fallback.test.ts.
 

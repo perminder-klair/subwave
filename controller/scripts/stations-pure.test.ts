@@ -1,5 +1,5 @@
 // Unit pins for the pure multi-station helpers.
-// Run: npx tsx scripts/stations-pure.test.ts — auto-discovered by npm test.
+// Run: `npm test -- stations-pure`.
 
 import assert from 'node:assert/strict';
 import {

@@ -3,6 +3,8 @@
 // audio remain untouched.
 
 import assert from 'node:assert/strict';
+import { deferred } from './test-utils/async.js';
+import { weekFor as fullScheduleWeek } from './test-utils/fixtures.js';
 import { after, beforeEach, test } from 'node:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,11 +29,7 @@ const A = { ...template, id: 'p_a', name: 'Host A' };
 const B = { ...template, id: 'p_b', name: 'Host B' };
 const SHOW = 's_active';
 
-function week() {
-  const out: Record<number, string[]> = {};
-  for (let day = 0; day < 7; day++) out[day] = Array(24).fill(SHOW);
-  return out;
-}
+function week() { return fullScheduleWeek(SHOW); }
 
 function show(personaId: string) {
   return { id: SHOW, name: 'Active Show', topic: 'tests', personaId };
@@ -300,11 +298,6 @@ test('a stale uncommitted deferred host clip is settled false, while a committed
 });
 
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
-}
 
 function bedItem() {
   const queued = item();

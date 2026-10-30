@@ -10,6 +10,7 @@ import {
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import { StreamRecovery } from '@/lib/stream-recovery';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
@@ -31,21 +32,6 @@ export interface Player {
   muted: boolean;
 }
 
-const WATCHDOG_MS = 6000;
-
-// Error-path reconnect backoff: doubles from 500ms to a 60s ceiling.
-const RECONNECT_BASE_MS = 500;
-const RECONNECT_MAX_MS = 60_000;
-
-// Buffering-churn guard. On a throttled network the native player retries the
-// same URL internally every ~9s forever — Buffering→Playing flaps too short
-// for the watchdog and with no PlaybackError, each abandoned connection
-// lingering at Icecast as a phantom listener. Past CHURN_LIMIT entries into
-// Buffering inside CHURN_WINDOW_MS, force a full reload to release the wedged
-// native source.
-const CHURN_WINDOW_MS = 60_000;
-const CHURN_LIMIT = 4;
-
 export function usePlayer(
   api: StationApi | null,
   initialVolume = 1,
@@ -62,17 +48,35 @@ export function usePlayer(
   const tunedInRef = useRef(tunedIn);
   const apiRef = useRef(api);
   const formatRef = useRef(streamFormat);
-  const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const retryCount = useRef(0);
-  // Recent entries into Buffering. Not reset on 'playing': brief recoveries
-  // between flaps are what the churn guard exists to see through.
-  const bufferFlapsRef = useRef<number[]>([]);
-  // Last raw PlaybackState. A ref, not `status` from the closure — two quick
-  // events can land between renders and read a stale value.
-  const lastPlaybackStateRef = useRef<State | null>(null);
+  const volumeRef = useRef(volume);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
   useEffect(() => { formatRef.current = streamFormat; }, [streamFormat]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
+
+  // Every reload (tune-in, retune, watchdog, churn, error backoff, regained
+  // link) goes through this: one at a time, and never over audio the native
+  // clock shows is still playing (#2114, #1936). The events below only report.
+  const recoveryRef = useRef<StreamRecovery | null>(null);
+  useEffect(() => {
+    const recovery = new StreamRecovery({
+      position: () => TrackPlayer.getProgress().then((p) => p.position),
+      reload: async () => {
+        const a = apiRef.current;
+        if (!a) return;
+        setStatus('connecting');
+        await loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() });
+        await TrackPlayer.setVolume(volumeRef.current);
+      },
+      onAdvancing: () => setStatus('playing'),
+      log: plog,
+    });
+    recoveryRef.current = recovery;
+    return () => {
+      recovery.tuneOut();
+      recoveryRef.current = null;
+    };
+  }, []);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
 
@@ -104,54 +108,15 @@ export function usePlayer(
     return () => clearTimeout(id);
   }, [volume]);
 
-  // Reset on the next successful 'playing', a fresh tune, or a regained link.
-  const nextRetryDelay = useCallback(() => {
-    const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
-    retryCount.current += 1;
-    return delay;
-  }, []);
-
-  const clearWatchdog = useCallback(() => {
-    if (watchdog.current) {
-      clearTimeout(watchdog.current);
-      watchdog.current = null;
-    }
-  }, []);
-
-  // reconnect() needs armWatchdog, which needs reconnect — bridge with a ref.
-  const armWatchdogRef = useRef<(delay: number) => void>(() => {});
-
-  const reconnect = useCallback(async () => {
-    clearWatchdog();
-    const a = apiRef.current;
-    if (!tunedInRef.current || !a) return;
-    plog(`reconnect → loadAndPlay (${formatRef.current})`);
-    setStatus('connecting');
-    try {
-      await loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() });
-      await TrackPlayer.setVolume(volume);
-    } catch {
-      // A throw here may not surface as a PlaybackError event, so re-arm here.
-      if (tunedInRef.current) armWatchdogRef.current(nextRetryDelay());
-    }
-  }, [clearWatchdog, volume, nextRetryDelay]);
-
-  const armWatchdog = useCallback(
-    (delay: number) => {
-      if (!tunedInRef.current) return;
-      clearWatchdog();
-      watchdog.current = setTimeout(() => { reconnect(); }, delay);
-    },
-    [clearWatchdog, reconnect],
-  );
-  useEffect(() => { armWatchdogRef.current = armWatchdog; }, [armWatchdog]);
-
-  // Drive `status` from RNTP playback state + reconnect on error/stall.
-  // RemotePause/RemoteStop are handled here as well as in service.ts: the
-  // Stopped/Ended state a lock-screen pause produces is indistinguishable from
-  // a stream failure, so without this the watchdog reconnects 500ms later.
+  // Drive `status` from RNTP playback state, and report every event to the
+  // StreamRecovery. RemotePause/RemoteStop are handled here as well as in
+  // service.ts: the Stopped/Ended state a lock-screen pause produces is
+  // indistinguishable from a stream failure, so without this the error
+  // backoff reconnects 500ms later. RemoteDuck only tells the recovery an iOS
+  // interruption began or ended: iOS pauses the audio, RNTP resumes it
+  // (autoHandleInterruptions), and nothing here touches playback.
   useTrackPlayerEvents(
-    [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop],
+    [Event.PlaybackState, Event.PlaybackError, Event.RemotePause, Event.RemoteStop, Event.RemoteDuck],
     (event) => {
       plog(
         `event ${event.type}${'state' in event ? ` state=${String(event.state)}` : ''}${
@@ -159,31 +124,26 @@ export function usePlayer(
         }`,
       );
       if (event.type === Event.RemotePause || event.type === Event.RemoteStop) {
-        // A tune-out, not a failure. The ref flips synchronously so the
-        // trailing Stopped event can't re-arm the watchdog before the
-        // re-render.
-        clearWatchdog();
-        retryCount.current = 0;
-        bufferFlapsRef.current = [];
+        // A tune-out, not a failure. Both flip synchronously so the trailing
+        // Stopped event can't arm a reconnect before the re-render.
+        recoveryRef.current?.tuneOut();
         tunedInRef.current = false;
         setTunedIn(false);
         setStatus('idle');
         return;
       }
+      if (event.type === Event.RemoteDuck) {
+        recoveryRef.current?.onDuck(event.paused, event.permanent);
+        return;
+      }
       if (event.type === Event.PlaybackError) {
-        if (tunedInRef.current) {
-          setStatus('connecting');
-          armWatchdog(nextRetryDelay());
-        }
+        if (tunedInRef.current) setStatus('connecting');
+        recoveryRef.current?.onError();
         return;
       }
       // PlaybackState
       const state = event.state;
-      const prevState = lastPlaybackStateRef.current;
-      lastPlaybackStateRef.current = state;
       if (state === State.Playing) {
-        clearWatchdog();
-        retryCount.current = 0;
         setStatus('playing');
         // A lock-screen Play resumes via service.ts without touching this
         // hook; re-adopt so the UI matches the audio. getLastLiveMeta() is
@@ -192,30 +152,12 @@ export function usePlayer(
         if (!tunedInRef.current && getLastLiveMeta()) {
           tunedInRef.current = true;
           setTunedIn(true);
+          recoveryRef.current?.adopt();
         }
       } else if (state === State.Buffering || state === State.Loading) {
         setStatus((s) => (s === 'playing' ? 'connecting' : s));
-        // Churn guard: only stalls out of Playing count, so tune-in and
-        // watchdog reloads never feed the window.
-        if (prevState === State.Playing && tunedInRef.current) {
-          const now = Date.now();
-          const flaps = bufferFlapsRef.current.filter((t) => now - t < CHURN_WINDOW_MS);
-          flaps.push(now);
-          bufferFlapsRef.current = flaps;
-          if (flaps.length >= CHURN_LIMIT) {
-            bufferFlapsRef.current = [];
-            plog(`churn guard: ${CHURN_LIMIT} stalls inside ${CHURN_WINDOW_MS / 1000}s — forcing reload`);
-            reconnect();
-            return;
-          }
-        }
-        armWatchdog(WATCHDOG_MS);
-      } else if (state === State.Error) {
-        if (tunedInRef.current) armWatchdog(nextRetryDelay());
-      } else if (state === State.Ended || state === State.Stopped) {
-        // A live stream shouldn't "end" — if it does while tuned in, reconnect.
-        if (tunedInRef.current) armWatchdog(nextRetryDelay());
       }
+      recoveryRef.current?.onState(state);
     },
   );
 
@@ -229,10 +171,8 @@ export function usePlayer(
     const sub = addAudioRouteChangeListener((e) => {
       plog(`route change reason=${e.reason} outputs=${e.outputs}`);
       if (e.reason !== ROUTE_REASON_OLD_DEVICE_UNAVAILABLE || !tunedInRef.current) return;
-      // Same synchronous ref flip as the RemotePause handler above.
-      clearWatchdog();
-      retryCount.current = 0;
-      bufferFlapsRef.current = [];
+      // Same synchronous flip as the RemotePause handler above.
+      recoveryRef.current?.tuneOut();
       tunedInRef.current = false;
       setTunedIn(false);
       setStatus('idle');
@@ -242,7 +182,7 @@ export function usePlayer(
       TrackPlayer.stop().catch(() => {});
     });
     return () => sub?.remove();
-  }, [clearWatchdog]);
+  }, []);
 
   // Keyed on the false → true transition so a steady-state `true` never fires
   // it. The watchdog still covers stream-side deaths where the link held.
@@ -251,18 +191,16 @@ export function usePlayer(
     const prev = prevConnectedRef.current;
     prevConnectedRef.current = isConnected;
     if (prev === false && isConnected === true && tunedInRef.current && status !== 'playing') {
-      retryCount.current = 0;
-      reconnect();
+      recoveryRef.current?.linkRegained();
     }
-  }, [isConnected, status, reconnect]);
+  }, [isConnected, status]);
 
   const stop = useCallback(() => {
-    clearWatchdog();
-    bufferFlapsRef.current = [];
+    recoveryRef.current?.tuneOut();
     setTunedIn(false);
     setStatus('idle');
     teardown().catch(() => {});
-  }, [clearWatchdog]);
+  }, []);
 
   // On a station switch selectStation has already torn the stream down at the
   // RNTP level; drop local tuned-in state so the UI doesn't claim "on air"
@@ -283,25 +221,19 @@ export function usePlayer(
     if (prevFormatRef.current === streamFormat) return;
     prevFormatRef.current = streamFormat;
     if (!tunedInRef.current) return;
-    retryCount.current = 0;
-    reconnect();
-  }, [streamFormat, reconnect]);
+    recoveryRef.current?.retune();
+  }, [streamFormat]);
 
   const tune = useCallback(() => {
     if (tunedInRef.current) {
       stop();
       return;
     }
-    const a = apiRef.current;
-    if (!a) return;
-    retryCount.current = 0;
-    bufferFlapsRef.current = [];
+    if (!apiRef.current) return;
     setTunedIn(true);
     setStatus('connecting');
-    loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() })
-      .then(() => TrackPlayer.setVolume(volume))
-      .catch(() => { if (tunedInRef.current) armWatchdog(nextRetryDelay()); });
-  }, [stop, volume, armWatchdog, nextRetryDelay]);
+    recoveryRef.current?.tuneIn();
+  }, [stop]);
 
   const setVolume = useCallback((v: number) => {
     setVolumeState(Math.max(0, Math.min(1, v)));
@@ -316,8 +248,6 @@ export function usePlayer(
       return preMuteVolume.current || 1;
     });
   }, []);
-
-  useEffect(() => () => clearWatchdog(), [clearWatchdog]);
 
   return {
     tunedIn,

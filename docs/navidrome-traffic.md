@@ -21,9 +21,10 @@ There are two independent empty-room settings, both off by default:
 | `llm.pauseWhenEmpty` | Stops autonomous DJ model calls. Liquidsoap continues broadcasting music from the fallback playlist and fetching tracks. |
 | `stream.idleWhenEmpty` | After `stream.idleAfterMinutes`, freezes the programme mid-track. Icecast mounts stay connected and serve silence. A listener connection resumes the programme. |
 
-The idle monitor polls **Icecast**, not Navidrome, every five seconds while
-paused so it can detect a new listener. A sustained Icecast status failure
-releases the pause to keep the station available. Check `streamIdle` on
+The idle monitor polls **Icecast**, not Navidrome, while paused so it can
+detect a new listener: a light status read every second, and the poll that
+decides every five seconds. A sustained Icecast status failure releases the
+pause to keep the station available. Check `streamIdle` on
 `GET /state` and the booth log's pause/resume lines (admin → Debug) to establish whether the
 programme actually stayed idle. A running broadcast is expected to fetch
 tracks even if its DJ is asleep. For scale, four-minute tracks played
@@ -43,12 +44,15 @@ Entering idle also does not cancel downloads or maintenance already in flight.
 | Producer | Navidrome work | Trigger / limits |
 | --- | --- | --- |
 | Liquidsoap `proto_subhttp` | Whole-track `stream` download through curl | Tracks resolved for playback, including prefetch; local music mounts avoid these HTTP downloads. |
+| Controller cue-landing probe | An `ffprobe` read of the incoming track's `stream` (`format=raw`) around its cue-in, seeking where the server allows it, else up to the cue plus one second | Only when a stem-blend clip seam's incoming track drains (#2003), once per seam. It waits at most 2 seconds, less when the track airs soon (`drain-policy.cueProbeBudgetMs`), and is skipped when no runway is left past the drain's commit reserve. Local music mounts probe the file instead. |
 | Fallback playlist builder | Random songs, playlists, genres, a sample of recent/frequent albums, starred songs and ReplayGain lookups | Boot, periodic refresh, show changes and explicit refreshes. Automatic builds defer while programme-idle; an explicit refresh still runs. The period defaults to 60 minutes. |
 | DJ picker | Discovery API calls and optional ReplayGain lookups | Picks while autonomous DJ work is allowed; explicit requests/operator actions have their own rules. |
 | Library count | Album pages and one `getAlbum` per album | Count-library command and the guarded start/end of a tagging run. Coverage GETs and library reset do not start a count, per #1570. |
 | Tagger / reconcile | Catalogue walk, optional per-track enrichment, post-run recipe playlist sync | A maintenance run, including confirmed Navidrome ID-rotation recovery. No periodic full-catalogue scan. |
 | Acoustic analysis | Capped audio prefetch and optional structured lyrics | An active analysis pass. A remote backend unable to see the shared file, or a failed prefetch, may download by URL itself. |
 | Artwork proxy | `getCoverArt` on an in-process cache miss | Cover requests from players/admin pages; successful covers also receive a browser/edge cache header. |
+| Lyrics panel | One `getLyricsBySongId` per track, cached 30 seconds and shared by every listener's read. With the LRCLIB fallback on, one more as each track is queued, and a `getSong` for a track the library index lacks | On by default; off under Settings → Listeners → Lyrics. A track LRCLIB has already answered for costs nothing at queue or air time. |
+| Dash file format | One `getSong` per track on air | Only while an admin Dash is open (`GET /now-playing/file`). An answer is held for the last 16 tracks, and a failed lookup is retried at most once a minute. |
 | Connectivity / Doctor | `ping` | Connection tests, open admin banner polls with a 20-second cache, Doctor runs including the nightly run. |
 | Navidrome scrobbling | Now-playing and eligible completed-play `scrobble` calls | Opt-in, disabled by default; continues for empty-room broadcasts to rotate smart playlists. |
 

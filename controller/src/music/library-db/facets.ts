@@ -1,8 +1,7 @@
 // Per-facet analysis status: which parts of a track's acoustic analysis exist,
 // at which version, and why a missing one is missing. A shadow of the analysis
-// columns on `tracks` for now — every row here is DERIVED from those columns
-// (deriveFacetRows), so the two can't disagree. Nothing reads this table to
-// decide what to analyse yet; the facet planner will.
+// columns on `tracks` and explicit unmeasurable answers — every status here is
+// DERIVED from those facts (deriveFacetRows), so the two can't disagree.
 //
 // Why a separate table: one ANALYSIS_VERSION on `tracks` marks a track done for
 // every feature at once, so a track whose download was too large to reach its
@@ -64,7 +63,7 @@ export interface FacetSourceRow {
   has_tail_silence: number;  // tail_silence_ms IS NOT NULL
   has_outro: number;         // outro_json IS NOT NULL
   outro_has_vocals: number;  // outro_json carries a "vocalRanges" key
-  has_vocal: number;         // vocal_ranges_json IS NOT NULL ('[]' = instrumental, counts)
+  has_vocal: number;         // vocal_ranges_json IS NOT NULL ('[]' is measured, counts)
   has_stems: number;         // stems_at IS NOT NULL
   analyze_fail_count: number | null;
   analyze_error: string | null;
@@ -91,6 +90,8 @@ export interface DerivedFacet {
 export interface DeriveOpts {
   // How an unmeasured tail is explained (a capped download can't reach it).
   tailReason?: string;
+  // A facet-only attempt need not have a head-analysis stamp to explain it.
+  unmeasurable?: Partial<Record<Facet, string>>;
 }
 
 // The one place a facet status is decided. Pure: same row in, same rows out —
@@ -134,21 +135,55 @@ export function deriveFacetRows(
 
   if (row.has_stems) ok('stems');
 
+  for (const facet of FACETS) {
+    const reason = opts.unmeasurable?.[facet];
+    if (reason == null) continue;
+    const prior = out.find(r => r.facet === facet);
+    if (!prior) unmeasurable(facet, reason);
+    else if (prior.status === 'unmeasurable') prior.reason = reason;
+  }
+
   // A failed analysis counts against every facet it would have produced.
+  // A facet-protocol failure also names its facets ("tail: …"); a named facet
+  // is failed even where the columns alone read 'unmeasurable' (an analysed
+  // track without a tail). Otherwise a tail that keeps failing stays
+  // 'unmeasurable / tail-not-measured': invisible as a failure, and planned
+  // again by every `--where unmeasurable:tail-not-measured` run.
   if (fails > 0) {
+    const named = failedFacetsOf(row.analyze_error);
+    const failed = (facet: Facet): DerivedFacet => ({
+      facet,
+      status: 'failed',
+      version: FACET_VERSIONS[facet],
+      reason: (row.analyze_error || 'analysis failed').slice(0, 500),
+      attempts: fails,
+    });
+    for (let i = 0; i < out.length; i++) {
+      if (out[i].status === 'unmeasurable' && named.has(out[i].facet)) out[i] = failed(out[i].facet);
+    }
     const have = new Set(out.map(r => r.facet));
     for (const facet of FACETS) {
-      if (have.has(facet)) continue;
-      out.push({
-        facet,
-        status: 'failed',
-        version: FACET_VERSIONS[facet],
-        reason: (row.analyze_error || 'analysis failed').slice(0, 500),
-        attempts: fails,
-      });
+      if (!have.has(facet)) out.push(failed(facet));
     }
   }
   return out;
+}
+
+// How a facet-protocol pass words one facet's failure in analyze_error
+// ("tail: window starts …"; several are joined by '; '), and the reverse.
+// Both live here so the writer and deriveFacetRows can't drift apart.
+export function facetFailure(facet: string, reason: string | null | undefined): string {
+  return `${facet}: ${reason ?? 'failed'}`;
+}
+
+export function failedFacetsOf(error: string | null | undefined): Set<Facet> {
+  const named = new Set<Facet>();
+  if (!error) return named;
+  for (const part of error.split('; ')) {
+    const facet = part.slice(0, part.indexOf(': '));
+    if ((FACETS as readonly string[]).includes(facet)) named.add(facet as Facet);
+  }
+  return named;
 }
 
 interface StoredFacet {
@@ -158,6 +193,8 @@ interface StoredFacet {
   reason: string | null;
   attempts: number;
   source: string | null;
+  // The terminal attempt is a fact even when no measurement column exists.
+  unmeasurable_reason: string | null;
 }
 
 export interface SyncOpts extends DeriveOpts {
@@ -191,21 +228,29 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     return;
   }
   const hasClap = !!d.prepare('SELECT 1 FROM track_audio_vectors WHERE id = ? LIMIT 1').get(id);
-  const derived = deriveFacetRows(row, hasClap, opts);
   const stored = new Map(
     (d
-      .prepare('SELECT facet, status, version, reason, attempts, source FROM track_facet_status WHERE track_id = ?')
+      .prepare('SELECT facet, status, version, reason, attempts, source, unmeasurable_reason FROM track_facet_status WHERE track_id = ?')
       .all(id) as StoredFacet[]).map(r => [r.facet, r]),
   );
+  const unmeasurable: Partial<Record<Facet, string>> = {};
+  for (const r of stored.values()) {
+    if (r.unmeasurable_reason != null) unmeasurable[r.facet] = r.unmeasurable_reason;
+  }
+  Object.assign(unmeasurable, opts.unmeasurable);
+  if (opts.tailReason != null) unmeasurable.tail = opts.tailReason;
+  for (const facet of opts.fresh ?? []) delete unmeasurable[facet];
+  const derived = deriveFacetRows(row, hasClap, { ...opts, unmeasurable });
   const fresh = new Set(opts.fresh ?? []);
   const tried = new Set(opts.tried ?? []);
   const now = new Date().toISOString();
   const upsert = d.prepare(
-    `INSERT INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at, unmeasurable_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(track_id, facet) DO UPDATE SET
        version = excluded.version, status = excluded.status, reason = excluded.reason,
-       attempts = excluded.attempts, source = excluded.source, at = excluded.at`,
+       attempts = excluded.attempts, source = excluded.source, at = excluded.at,
+       unmeasurable_reason = excluded.unmeasurable_reason`,
   );
   for (const r of derived) {
     const prev = stored.get(r.facet);
@@ -218,7 +263,8 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
     // reason. A failure's reason is the latest error.
     if (!isFresh && prev && prev.status === r.status && r.status !== 'failed' && r.facet !== 'vocal') r.reason = prev.reason;
     const version =
-      isFresh || !prev || prev.status !== r.status ? r.version : Math.min(prev.version, r.version);
+      isFresh || !prev || (prev.status !== r.status && unmeasurable[r.facet] == null)
+        ? r.version : Math.min(prev.version, r.version);
     // 'seed' is reserved for rows the seed wrote; a live write that creates a
     // row without measuring it (a failure, a re-derive) records what it knows.
     const source = isFresh ? (opts.source ?? 'unknown') : (prev?.source ?? opts.source ?? null);
@@ -228,11 +274,12 @@ function syncTrackFacetsOn(d: Database.Database, id: string, opts: SyncOpts): vo
       prev.status === r.status &&
       prev.version === version &&
       prev.reason === r.reason &&
-      prev.attempts === r.attempts
+      prev.attempts === r.attempts &&
+      prev.unmeasurable_reason === (unmeasurable[r.facet] ?? null)
     ) {
       continue;
     }
-    upsert.run(id, r.facet, version, r.status, r.reason, r.attempts, source, now);
+    upsert.run(id, r.facet, version, r.status, r.reason, r.attempts, source, now, unmeasurable[r.facet] ?? null);
   }
   // Whatever the columns no longer support (cleared, or a failure wiped by a
   // success) goes: no row = not done.
@@ -291,6 +338,10 @@ export function ensureFacetStatus(d: Database.Database): number {
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_facet_status'`)
     .get();
   if (exists) {
+    const columns = d.pragma('table_info(track_facet_status)') as Array<{ name: string }>;
+    if (!columns.some(c => c.name === 'unmeasurable_reason')) {
+      d.exec('ALTER TABLE track_facet_status ADD COLUMN unmeasurable_reason TEXT');
+    }
     // An unchanged stamp means every row is still derived under the current
     // versions: nothing to do, and no per-open scan of the table. A missing
     // stamp (a table created before the meta row existed) re-derives once.
@@ -312,6 +363,7 @@ export function ensureFacetStatus(d: Database.Database): number {
         attempts  INTEGER NOT NULL DEFAULT 0,
         source    TEXT,
         at        TEXT    NOT NULL,
+        unmeasurable_reason TEXT,
         PRIMARY KEY (track_id, facet)
       ) WITHOUT ROWID;
       CREATE INDEX idx_facet_status ON track_facet_status(facet, status, version);
@@ -351,8 +403,8 @@ export function ensureFacetStatus(d: Database.Database): number {
 export function moveFacetRows(oldId: string, newId: string): void {
   const d = requireDb();
   d.prepare(
-    `INSERT OR IGNORE INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at)
-     SELECT ?, facet, version, status, reason, attempts, source, at
+    `INSERT OR IGNORE INTO track_facet_status (track_id, facet, version, status, reason, attempts, source, at, unmeasurable_reason)
+     SELECT ?, facet, version, status, reason, attempts, source, at, unmeasurable_reason
        FROM track_facet_status WHERE track_id = ?`,
   ).run(newId, oldId);
   d.prepare('DELETE FROM track_facet_status WHERE track_id = ?').run(oldId);
@@ -383,14 +435,22 @@ export function clearFacetRows(opts: { keepVocal?: boolean; clearStems?: boolean
   }
 }
 
-// Mirror of clearAnalysisFailures(): a cleared history means "not attempted".
+// Mirror of clearAnalysisFailures(), called after it cleared the columns: a
+// cleared history means "not attempted". Re-derived rather than deleted, so a
+// facet the columns still explain (an analysed track's unmeasured tail or
+// loudness) goes back to that row instead of to no row at all.
 export function clearFacetFailures(id?: string): void {
   const d = requireDb();
-  if (id) d.prepare(`DELETE FROM track_facet_status WHERE status = 'failed' AND track_id = ?`).run(id);
-  else d.prepare(`DELETE FROM track_facet_status WHERE status = 'failed'`).run();
-  const reset = 'UPDATE track_facet_status SET attempts = 0 WHERE attempts > 0';
-  if (id) d.prepare(`${reset} AND track_id = ?`).run(id);
-  else d.prepare(reset).run();
+  // Re-derive rather than delete: a failure-history clear changes `attempts`
+  // on every row of the track (each status mirrors analyze_fail_count), and a
+  // named-facet failure may sit on a facet the columns read as unmeasurable.
+  const ids = (id
+    ? d.prepare(`SELECT DISTINCT track_id FROM track_facet_status WHERE (status = 'failed' OR attempts > 0) AND track_id = ?`).all(id)
+    : d.prepare(`SELECT DISTINCT track_id FROM track_facet_status WHERE status = 'failed' OR attempts > 0`).all()
+  ) as Array<{ track_id: string }>;
+  d.transaction(() => {
+    for (const r of ids) syncTrackFacetsOn(d, r.track_id, {});
+  })();
 }
 
 // Tracks with work for `facet`: never attempted, measured by an older version,

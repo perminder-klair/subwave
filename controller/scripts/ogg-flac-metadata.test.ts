@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { coldLoadSettings } from './test-utils/settings.js';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { createTempDir } from './test-utils/temp-dir.js';
 
-const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-ogg-metadata-'));
+const stateRoot = createTempDir(path.join(tmpdir(), 'subwave-ogg-metadata-'));
 process.env.STATE_DIR = stateRoot;
 
 const { setCache } = await import('../src/settings/store.js');
@@ -12,16 +14,12 @@ const settings = await import('../src/settings.js');
 const { writeLiquidsoapSettings } = await import('../src/settings/liquidsoap.js');
 const { DEFAULTS } = await import('../src/settings/defaults.js');
 
-const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 const HANDOFF_PATH = path.join(stateRoot, 'liquidsoap_ogg_icy_metadata.txt');
 const RADIO_PATH = new URL('../../liquidsoap/radio.liq', import.meta.url);
 
 async function coldLoad(oggIcyMetadata: unknown, present = true) {
   const stream = present ? { oggIcyMetadata } : {};
-  writeFileSync(SETTINGS_PATH, JSON.stringify({ stream }));
-  setCache(null);
-  await settings.load();
-  return settings.get();
+  return (await coldLoadSettings({ stream }));
 }
 
 function outputBlock(source: string, id: string) {
